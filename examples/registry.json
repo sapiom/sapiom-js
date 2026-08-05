@@ -6,12 +6,7 @@
       "id": "autonomous-pr",
       "name": "Autonomous PR",
       "description": "A coding agent implements your task, runs the repo's checks, deploys a live preview, and pushes a self-reviewed branch.",
-      "tags": [
-        "coding-agent",
-        "git",
-        "self-review",
-        "automation"
-      ],
+      "tags": ["coding-agent", "git", "self-review", "automation"],
       "category": "product-engineering",
       "discipline": "Engineering",
       "cadence": "on-demand",
@@ -31,56 +26,42 @@
           "name": "plan",
           "description": "Resolves the repo, opening an existing one you name or Sapiom's persistent demo repo when none is given.",
           "kind": "compute",
-          "next": [
-            "implement",
-            "rejected"
-          ]
+          "next": ["implement", "rejected"]
         },
         {
           "name": "implement",
           "description": "Launches a coding agent to do the task in a sandbox, then pauses until the run finishes.",
           "kind": "llm",
           "capability": "models.coding",
-          "next": [
-            "verify"
-          ]
+          "next": ["verify"]
         },
         {
           "name": "verify",
           "description": "Re-attaches that sandbox and runs the install and check commands over the agent's changes; a failed run or a red check is rejected.",
           "kind": "capability",
           "capability": "sandboxes.exec",
-          "next": [
-            "push",
-            "rejected"
-          ]
+          "next": ["push", "rejected"]
         },
         {
           "name": "push",
           "description": "Creates a branch, adds a small preview server, and pushes the agent's changes to it.",
           "kind": "capability",
           "capability": "repositories.pushFromSandbox",
-          "next": [
-            "preview"
-          ]
+          "next": ["preview"]
         },
         {
           "name": "preview",
           "description": "Deploys a live preview of the pushed branch so you can look at the actual result.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
-          "next": [
-            "review"
-          ]
+          "next": ["review"]
         },
         {
           "name": "review",
           "description": "Asks a model to self-review the diff and write a verdict, a summary, and what it would flag.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "summary"
-          ]
+          "next": ["summary"]
         },
         {
           "name": "summary",
@@ -99,9 +80,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 4,
-        "provisions": [
-          "repository"
-        ],
+        "provisions": ["repository"],
         "degradedWithoutSetup": "With no repo given, it opens Sapiom's persistent demo repo, has a coding agent add one new example, checks it, deploys a live preview of the branch, and pushes it with a self-review, never touching a repo you didn't give it."
       },
       "rank": 3
@@ -111,12 +90,7 @@
       "name": "Personalized Cold Outreach",
       "description": "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip follow-ups that stop the moment someone replies.",
       "rank": 9,
-      "tags": [
-        "outreach",
-        "sales",
-        "drip",
-        "personalization"
-      ],
+      "tags": ["outreach", "sales", "drip", "personalization"],
       "category": "revenue-marketing",
       "discipline": "Revenue",
       "cadence": "on-demand",
@@ -138,64 +112,48 @@
           "description": "Resolve a real contact for each lead through email search, looking up the named person or surfacing a decision-maker when you only have the company.",
           "kind": "capability",
           "capability": "email.domain.search",
-          "next": [
-            "scrape"
-          ]
+          "next": ["scrape"]
         },
         {
           "name": "scrape",
           "description": "Read each company's website for a few lines of context to personalize with.",
           "kind": "capability",
           "capability": "web.scrape",
-          "next": [
-            "personalize"
-          ]
+          "next": ["personalize"]
         },
         {
           "name": "personalize",
           "description": "Ask the live model to write one specific opener per prospect, falling back to a safe generic line when it returns nothing usable.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "verify"
-          ]
+          "next": ["verify"]
         },
         {
           "name": "verify",
           "description": "Check each address for deliverability and drop the ones that would bounce before anything sends.",
           "kind": "capability",
           "capability": "email.verify",
-          "next": [
-            "launch"
-          ]
+          "next": ["launch"]
         },
         {
           "name": "launch",
           "description": "Persist the campaign roster to a Postgres store the engine owns, then start the drip. A dry run stops here and returns the full plan without sending or persisting.",
           "kind": "capability",
           "capability": "database.create",
-          "next": [
-            "send"
-          ]
+          "next": ["send"]
         },
         {
           "name": "send",
           "description": "Deliver the current touch to everyone still active and log it, then pause until the drip interval elapses or a prospect replies.",
           "kind": "pause",
           "capability": "email.send",
-          "next": [
-            "advance",
-            "done"
-          ]
+          "next": ["advance", "done"]
         },
         {
           "name": "advance",
           "description": "Wake on the reply-or-timeout, mark anyone who replied as done, then loop back for the next touch or end the run.",
           "kind": "compute",
-          "next": [
-            "send",
-            "done"
-          ]
+          "next": ["send", "done"]
         },
         {
           "name": "done",
@@ -208,9 +166,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "provisions": [
-          "postgres"
-        ],
+        "provisions": ["postgres"],
         "degradedWithoutSetup": "Works 3 built-in demo leads end to end: enrichment and verification are simulated for these fabricated companies, but the opener comes from a real model call and the first touch is a real, inspectable send to this agent's own Sapiom-hosted demo inbox. Pass your own `leads` to run a real campaign, including the multi-touch drip and reply-to-stop."
       }
     },
@@ -218,12 +174,7 @@
       "id": "content-repurposing-pipeline",
       "name": "Content Pack",
       "description": "Turn one post into a full channel pack, including a thread, LinkedIn post, newsletter, quote graphics, and a short clip, then email it to your list.",
-      "tags": [
-        "content",
-        "marketing",
-        "media",
-        "fan-out"
-      ],
+      "tags": ["content", "marketing", "media", "fan-out"],
       "category": "revenue-marketing",
       "discipline": "Marketing",
       "cadence": "scheduled",
@@ -242,54 +193,40 @@
           "description": "An LLM rewrites your source into every channel at once: the tweet thread, LinkedIn post, newsletter, pull-quotes, and a video script. If you set dryRun, it stops here and returns the copy.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "graphics"
-          ]
+          "next": ["graphics"]
         },
         {
           "name": "graphics",
           "description": "Launch a quote-graphic image job for the next pull-quote and pause until it's ready.",
           "kind": "pause",
           "capability": "contentGeneration.images",
-          "next": [
-            "collectGraphic"
-          ]
+          "next": ["collectGraphic"]
         },
         {
           "name": "collectGraphic",
           "description": "Save the finished quote graphic, then loop back for the next quote or move on once every graphic is in.",
           "kind": "compute",
-          "next": [
-            "graphics",
-            "clip",
-            "package"
-          ]
+          "next": ["graphics", "clip", "package"]
         },
         {
           "name": "clip",
           "description": "Launch a video job that animates the first quote graphic into a short teaser clip, then pause until it finishes.",
           "kind": "pause",
           "capability": "contentGeneration.video",
-          "next": [
-            "collectClip"
-          ]
+          "next": ["collectClip"]
         },
         {
           "name": "collectClip",
           "description": "Save the finished teaser clip.",
           "kind": "compute",
-          "next": [
-            "package"
-          ]
+          "next": ["package"]
         },
         {
           "name": "package",
           "description": "Assemble the whole pack as one markdown document and upload it to file storage for a durable download link.",
           "kind": "capability",
           "capability": "fileStorage",
-          "next": [
-            "deliver"
-          ]
+          "next": ["deliver"]
         },
         {
           "name": "deliver",
@@ -311,55 +248,39 @@
       "id": "eval-gate",
       "name": "Self-Editing Writer",
       "description": "Draft a piece against your brief, grade it against your own rubric with an LLM judge, and revise in a bounded loop until it clears the bar.",
-      "tags": [
-        "writing",
-        "llm-judge",
-        "self-revision",
-        "bounded-loop"
-      ],
+      "tags": ["writing", "llm-judge", "self-revision", "bounded-loop"],
       "category": "product-engineering",
       "discipline": "AI operations",
       "cadence": "on-demand",
       "complexity": "advanced",
       "sourcePath": "examples/eval-gate",
-      "capabilities": [
-        "models.run"
-      ],
+      "capabilities": ["models.run"],
       "steps": [
         {
           "name": "parse",
           "description": "Validate the brief and rubric, defaulting to a built-in sample, and seed the attempt counter.",
           "kind": "compute",
-          "next": [
-            "draft"
-          ]
+          "next": ["draft"]
         },
         {
           "name": "draft",
           "description": "Write the piece from the brief. On a revision, address the rejected draft and the judge's critique too.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "judge"
-          ]
+          "next": ["judge"]
         },
         {
           "name": "judge",
           "description": "Score the draft against your rubric with a second model call and parse a 0-to-1 score plus a critique.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "decide"
-          ]
+          "next": ["decide"]
         },
         {
           "name": "decide",
           "description": "Compare the score to your threshold and the attempt count to the cap: below both, loop back to draft; otherwise publish. No model call here.",
           "kind": "compute",
-          "next": [
-            "draft",
-            "publish"
-          ]
+          "next": ["draft", "publish"]
         },
         {
           "name": "publish",
@@ -380,12 +301,7 @@
       "id": "logged-in-screenshots",
       "name": "Website QA Crawler",
       "description": "Crawl a site's pages, screenshot each one, audit content with a model, and check that Terms and Privacy links resolve.",
-      "tags": [
-        "crawler",
-        "qa",
-        "content-audit",
-        "broken-links"
-      ],
+      "tags": ["crawler", "qa", "content-audit", "broken-links"],
       "category": "reliability-governance",
       "discipline": "Reliability",
       "cadence": "on-demand",
@@ -403,36 +319,27 @@
           "description": "Read the homepage's markdown and links, then crawl a bounded set of internal pages, prioritizing anything that looks like a Terms or Privacy link.",
           "kind": "capability",
           "capability": "web.scrape",
-          "next": [
-            "render",
-            "rejected"
-          ]
+          "next": ["render", "rejected"]
         },
         {
           "name": "render",
           "description": "Open one browser session and screenshot every crawled page in it; a page that fails to render becomes a row, the rest are still captured.",
           "kind": "capability",
           "capability": "browser.session",
-          "next": [
-            "audit"
-          ]
+          "next": ["audit"]
         },
         {
           "name": "audit",
           "description": "Ask a model to read every crawled page's content in one call and flag concrete content and structure issues.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "linkCheck"
-          ]
+          "next": ["linkCheck"]
         },
         {
           "name": "linkCheck",
           "description": "Turn the crawl and render results into a link-integrity verdict: which pages didn't resolve, and whether Terms and Privacy are present and resolve.",
           "kind": "compute",
-          "next": [
-            "report"
-          ]
+          "next": ["report"]
         },
         {
           "name": "report",
@@ -459,12 +366,7 @@
       "id": "newsletter-autopilot",
       "name": "Newsletter Autopilot",
       "description": "On a schedule, it researches a niche, dedupes and self-edits the issue against a quality bar, and emails it to your list.",
-      "tags": [
-        "newsletter",
-        "scheduled",
-        "llm-judge",
-        "email"
-      ],
+      "tags": ["newsletter", "scheduled", "llm-judge", "email"],
       "category": "revenue-marketing",
       "discipline": "Marketing",
       "cadence": "scheduled",
@@ -483,46 +385,35 @@
           "description": "Search the web for the niche and collect candidate sources.",
           "kind": "capability",
           "capability": "web.search",
-          "next": [
-            "dedupe"
-          ]
+          "next": ["dedupe"]
         },
         {
           "name": "dedupe",
           "description": "Read the top candidates for full text, drop near-duplicate stories, and rank the survivors down to the strongest few.",
           "kind": "capability",
           "capability": "web.scrape",
-          "next": [
-            "write"
-          ]
+          "next": ["write"]
         },
         {
           "name": "write",
           "description": "Hand the deduped sources to an LLM to curate them and write this week's issue: a subject, a body that cites each source, and a header-image prompt.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "selfEdit"
-          ]
+          "next": ["selfEdit"]
         },
         {
           "name": "selfEdit",
           "description": "Grade the draft against a fixed quality bar with a second model call; below the bar it revises once via write, otherwise it moves on.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "write",
-            "illustrate"
-          ]
+          "next": ["write", "illustrate"]
         },
         {
           "name": "illustrate",
           "description": "Generate a header image for the issue; if none comes back, the issue still goes out without it.",
           "kind": "capability",
           "capability": "contentGeneration.images",
-          "next": [
-            "deliver"
-          ]
+          "next": ["deliver"]
         },
         {
           "name": "deliver",
@@ -545,80 +436,52 @@
       "name": "Ask Your Database",
       "description": "Deploy a live endpoint that turns a plain-English question into a read-only SQL query and returns the answer.",
       "rank": 4,
-      "tags": [
-        "database",
-        "sql",
-        "endpoint",
-        "llm",
-        "natural-language"
-      ],
+      "tags": ["database", "sql", "endpoint", "llm", "natural-language"],
       "category": "data-knowledge",
       "discipline": "Data",
       "cadence": "on-event",
       "complexity": "involved",
       "sourcePath": "examples/nl-db-query-endpoint",
-      "capabilities": [
-        "database.get",
-        "models.run",
-        "sandboxes.deployPreview"
-      ],
+      "capabilities": ["database.get", "models.run", "sandboxes.deployPreview"],
       "steps": [
         {
           "name": "validate",
           "description": "Checks the input (a database handle or connection string) and resolves config.",
           "kind": "compute",
-          "next": [
-            "resolve",
-            "rejected"
-          ]
+          "next": ["resolve", "rejected"]
         },
         {
           "name": "resolve",
           "description": "Reads the target Postgres connection string from a Sapiom database handle; on the built-in demo database it also seeds the sample schema so the query returns real rows.",
           "kind": "capability",
           "capability": "database.get",
-          "next": [
-            "plan",
-            "rejected"
-          ]
+          "next": ["plan", "rejected"]
         },
         {
           "name": "plan",
           "description": "Translates the sample question into SQL with an LLM, or, for the built-in demo question, uses a fixed known-safe SELECT so the zero-setup path needs no model.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "guard"
-          ]
+          "next": ["guard"]
         },
         {
           "name": "guard",
           "description": "Applies the read-only guardrail to the SQL; anything that isn’t a single read-only statement is rejected.",
           "kind": "compute",
-          "next": [
-            "execute",
-            "rejected"
-          ]
+          "next": ["execute", "rejected"]
         },
         {
           "name": "execute",
           "description": "Runs the guarded SELECT for real inside a READ ONLY transaction, statement-timeout-bounded and row-capped, and returns the actual rows.",
           "kind": "compute",
-          "next": [
-            "deploy",
-            "query_failed"
-          ]
+          "next": ["deploy", "query_failed"]
         },
         {
           "name": "deploy",
           "description": "Write the endpoint server into a sandbox and expose it at a stable URL, injecting DATABASE_URL and the endpoint’s own minted API key. With no key, nothing is deployed.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
-          "next": [
-            "deployed",
-            "deploy_failed",
-            "endpoint_skipped"
-          ]
+          "next": ["deployed", "deploy_failed", "endpoint_skipped"]
         },
         {
           "name": "deployed",
@@ -653,25 +516,17 @@
       ],
       "setup": {
         "runsWithNoSetup": true,
-        "connectionCount": 1,
+        "connectionCount": 0,
         "settingCount": 0,
-        "provisions": [
-          "postgres"
-        ],
-        "degradedWithoutSetup": "Runs the built-in sample question against the seeded demo database for real rows, mints the endpoint its own scoped key, and deploys a working /query endpoint."
+        "provisions": ["postgres"],
+        "degradedWithoutSetup": "Translates the built-in sample question into SQL, runs it against the seeded demo database for real rows, then deploys and verifies a working /query endpoint that executes read-only SQL, no Sapiom credential required."
       }
     },
     {
       "id": "proposal-generator",
       "name": "Client Proposal Generator",
       "description": "Draft a client proposal from a request, render it to a PDF, then wait for a person to approve it before it emails the client.",
-      "tags": [
-        "sales",
-        "pdf",
-        "approval",
-        "human-in-the-loop",
-        "quote"
-      ],
+      "tags": ["sales", "pdf", "approval", "human-in-the-loop", "quote"],
       "category": "revenue-marketing",
       "discipline": "Revenue",
       "cadence": "on-demand",
@@ -689,19 +544,14 @@
           "description": "An LLM turns the request into a structured proposal, including a title, summary, scope, and priced line items, then the totals are computed in code, not trusted from the model.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "render",
-            "rejected"
-          ]
+          "next": ["render", "rejected"]
         },
         {
           "name": "render",
           "description": "Spin up a sandbox, lay the proposal out as a PDF with a small Node script, save the file to storage, then tear the sandbox down.",
           "kind": "capability",
           "capability": "sandboxes.create",
-          "next": [
-            "review"
-          ]
+          "next": ["review"]
         },
         {
           "name": "review",
@@ -709,19 +559,13 @@
           "kind": "pause",
           "checkpoint": true,
           "capability": "email.send",
-          "next": [
-            "onDecision",
-            "pending"
-          ]
+          "next": ["onDecision", "pending"]
         },
         {
           "name": "onDecision",
           "description": "Read the approval reply: approve emails the client, anything else stops safely with nothing sent.",
           "kind": "compute",
-          "next": [
-            "send",
-            "rejected"
-          ]
+          "next": ["send", "rejected"]
         },
         {
           "name": "send",
@@ -747,9 +591,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "provisions": [
-          "sandbox"
-        ],
+        "provisions": ["sandbox"],
         "degradedWithoutSetup": "Drafts the built-in sample brief into a priced proposal and renders it to a real PDF, then stops at the sign-off gate — no approver is configured, so nothing is emailed yet."
       },
       "rank": 7
@@ -758,12 +600,7 @@
       "id": "research-to-microsite",
       "name": "Research Micro-Site",
       "description": "Research a topic, self-critique and revise the write-up, illustrate it, then build and deploy a live, cited micro-site.",
-      "tags": [
-        "research",
-        "coding-agent",
-        "media",
-        "self-critique"
-      ],
+      "tags": ["research", "coding-agent", "media", "self-critique"],
       "category": "data-knowledge",
       "discipline": "Research",
       "cadence": "on-demand",
@@ -783,88 +620,62 @@
           "name": "plan",
           "description": "Plan a couple of complementary search queries from the topic.",
           "kind": "compute",
-          "next": [
-            "gather"
-          ]
+          "next": ["gather"]
         },
         {
           "name": "gather",
           "description": "Run each query, dedupe the hits by URL, then read the survivors for full article text.",
           "kind": "capability",
           "capability": "web.search",
-          "next": [
-            "synthesize"
-          ]
+          "next": ["synthesize"]
         },
         {
           "name": "synthesize",
           "description": "Hand the sources to an LLM to write a structured, cited report, or revise one after a critique. No sources at all stops here with an empty report.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "critique",
-            "drafted"
-          ]
+          "next": ["critique", "drafted"]
         },
         {
           "name": "critique",
           "description": "Grade the report against a fixed editorial rubric; below the bar with attempts left, send it back to synthesize for a revision, bounded by maxDraftAttempts.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "synthesize",
-            "illustrate",
-            "drafted"
-          ]
+          "next": ["synthesize", "illustrate", "drafted"]
         },
         {
           "name": "illustrate",
           "description": "Launch an image-generation job for the next section, then pause until it finishes, or skip straight to the build when no illustrations are wanted.",
           "kind": "pause",
           "capability": "contentGeneration.images",
-          "next": [
-            "collectIllustration",
-            "build"
-          ]
+          "next": ["collectIllustration", "build"]
         },
         {
           "name": "collectIllustration",
           "description": "Record the finished illustration, or note it produced nothing usable, then loop for the next section or move on to the build.",
           "kind": "compute",
-          "next": [
-            "illustrate",
-            "build"
-          ]
+          "next": ["illustrate", "build"]
         },
         {
           "name": "build",
           "description": "Launch a coding agent to build a self-contained static site from the report and any illustrations, then pause until it finishes.",
           "kind": "pause",
           "capability": "models.coding",
-          "next": [
-            "publish"
-          ]
+          "next": ["publish"]
         },
         {
           "name": "publish",
           "description": "Re-attach the coding agent's sandbox and deploy the site to a stable public URL.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
-          "next": [
-            "mapDomain",
-            "live",
-            "failed",
-            "builtNotPublished"
-          ]
+          "next": ["mapDomain", "live", "failed", "builtNotPublished"]
         },
         {
           "name": "mapDomain",
           "description": "If a domain you own is configured, point a subdomain at the live site with a CNAME; otherwise this is skipped.",
           "kind": "capability",
           "capability": "domains.dns.create",
-          "next": [
-            "live"
-          ]
+          "next": ["live"]
         },
         {
           "name": "live",
@@ -904,12 +715,7 @@
       "name": "Scene to Video",
       "description": "Turn one scene description into a short, multi-shot video with a consistent style.",
       "rank": 5,
-      "tags": [
-        "generative",
-        "video",
-        "pipeline",
-        "media"
-      ],
+      "tags": ["generative", "video", "pipeline", "media"],
       "category": "revenue-marketing",
       "discipline": "Marketing",
       "cadence": "on-demand",
@@ -926,54 +732,40 @@
           "description": "An LLM turns your scene into a style guide and an ordered shot list. A zero-setup run plans a single shot; pass dryRun to stop here and return just the plan.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "keyframe"
-          ]
+          "next": ["keyframe"]
         },
         {
           "name": "keyframe",
           "description": "Launch an image job for one shot’s keyframe, then pause until it finishes.",
           "kind": "pause",
           "capability": "contentGeneration.images",
-          "next": [
-            "collectKeyframe"
-          ]
+          "next": ["collectKeyframe"]
         },
         {
           "name": "collectKeyframe",
           "description": "Save the finished keyframe, then loop back for the next shot’s frame, or move on once every keyframe is in.",
           "kind": "compute",
-          "next": [
-            "keyframe",
-            "animate"
-          ]
+          "next": ["keyframe", "animate"]
         },
         {
           "name": "animate",
           "description": "Launch a video job that animates one keyframe into a clip, then pause until it finishes.",
           "kind": "pause",
           "capability": "contentGeneration.video",
-          "next": [
-            "collect"
-          ]
+          "next": ["collect"]
         },
         {
           "name": "collect",
           "description": "Save the finished clip, then loop back for the next shot, or move on once every clip is in.",
           "kind": "compute",
-          "next": [
-            "animate",
-            "stitch"
-          ]
+          "next": ["animate", "stitch"]
         },
         {
           "name": "stitch",
           "description": "Join every clip with the synchronous merge endpoint; a single clip skips the merge, and a bounded polling fallback covers a provider that unexpectedly queues it.",
           "kind": "capability",
           "capability": "contentGeneration.video",
-          "next": [
-            "finalize"
-          ]
+          "next": ["finalize"]
         },
         {
           "name": "finalize",
@@ -993,12 +785,7 @@
       "id": "scheduled-db-insight-report",
       "name": "Scheduled Metrics Report",
       "description": "On a schedule, query a database, write the narrative and render charts, then email the insight report.",
-      "tags": [
-        "scheduled",
-        "database",
-        "analytics",
-        "report"
-      ],
+      "tags": ["scheduled", "database", "analytics", "report"],
       "category": "data-knowledge",
       "discipline": "Data",
       "cadence": "scheduled",
@@ -1019,45 +806,35 @@
           "description": "Resolve the target database (self-provisioning and seeding the demo DB if needed) and snapshot its current catalog metrics.",
           "kind": "capability",
           "capability": "database.get",
-          "next": [
-            "detectAnomalies"
-          ]
+          "next": ["detectAnomalies"]
         },
         {
           "name": "detectAnomalies",
           "description": "A model flags the one table most worth attention, trusting only labels the snapshot actually returned.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "narrate"
-          ]
+          "next": ["narrate"]
         },
         {
           "name": "narrate",
           "description": "A model writes the narrative around the movement, leading with the flagged anomaly.",
           "kind": "llm",
           "capability": "models.run",
-          "next": [
-            "followUp"
-          ]
+          "next": ["followUp"]
         },
         {
           "name": "followUp",
           "description": "Run a parameterized read into the flagged table's recent write activity for a second, data-driven angle.",
           "kind": "capability",
           "capability": "database.get",
-          "next": [
-            "chart"
-          ]
+          "next": ["chart"]
         },
         {
           "name": "chart",
           "description": "Render the metrics and the follow-up read into a chart image in a sandbox and upload it.",
           "kind": "capability",
           "capability": "sandboxes.create",
-          "next": [
-            "deliver"
-          ]
+          "next": ["deliver"]
         },
         {
           "name": "deliver",
@@ -1071,9 +848,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 1,
         "settingCount": 1,
-        "provisions": [
-          "postgres"
-        ],
+        "provisions": ["postgres"],
         "degradedWithoutSetup": "Snapshots the seeded demo database's own catalog, has a model flag the one table most worth attention, runs a second query into that table's write activity, writes a real narrative around both, and returns the full report with a rendered chart inline — nothing is emailed, because no `deliverTo` recipient is set."
       },
       "rank": 8

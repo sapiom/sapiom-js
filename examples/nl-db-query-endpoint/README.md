@@ -34,25 +34,29 @@ validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ execute ─┬─�
    the deployed endpoint enforces. The returned rows ARE the zero-setup artifact.
    A connection or query failure → `query_failed`, rather than faking rows.
 6. **deploy** — writes a small server into a sandbox and exposes it at a stable URL
-   (`sandboxes.deployPreview`). `DATABASE_URL` and the server's own
-   `SAPIOM_API_KEY` are passed as env — never baked into source. The key is minted
-   for the endpoint (`ctx.sapiom.keys.mintScoped`): a durable, narrowly-scoped
-   credential, since the engine's per-run token expires with the step. (Set
-   `ENDPOINT_SAPIOM_API_KEY` to override with a key you control.)
-7. **deployed** / **deploy_failed** / **endpoint_skipped** / **query_failed** /
-   **rejected** — terminal; report the endpoint URL and the real sample rows,
-   surface the deploy logs, or explain the failure/rejection.
+   (`sandboxes.deployPreview`). Only `DATABASE_URL` and the vetted sample
+   (`SEED_QUESTION`/`SEED_SQL`/`SEED_ROWS`) are passed as env — the server
+   **executes read-only SQL and needs no Sapiom credential**. NL→SQL happens here
+   in the run (`plan`), never at request time. Before publishing, deploy **probes
+   the live `/query`** with the sample SQL; if it doesn't return rows, the run
+   reports `deploy_failed` rather than handing back a URL that can't answer.
+7. **deployed** / **deploy_failed** / **query_failed** / **rejected** — terminal;
+   report the endpoint URL and the real sample rows, surface the deploy logs, or
+   explain the failure/rejection.
 
 ## The endpoint
 
 The deployed server exposes:
 
-- `POST /query` with `{ "question": "…" }` → `{ question, sql, columns, rows, rowCount, truncated }`
-- `GET /health` → `{ "ok": true }`
+- `POST /query` with `{ "sql": "SELECT …" }` → `{ sql, columns, rows, rowCount, truncated }` — runs the read-only SELECT you send.
+- `POST /query` with `{ "question": "…" }` → returns the agent's vetted sample when it matches the seeded question; otherwise a 400 pointing you to `/` (live NL→SQL runs in the agent during setup, not per request).
+- `GET /` → the vetted sample: `{ question, sql, columns, rows, note }`.
+- `GET /health` → `{ "ok": true }`.
 
-Per request it introspects the schema (cached), asks the LLM for a read-only
-`SELECT`, re-checks it with the same guardrail, then runs it inside
-`BEGIN TRANSACTION READ ONLY` with a statement timeout and a `LIMIT` cap.
+It needs only `DATABASE_URL` — no Sapiom credential, and it makes no Sapiom calls
+at request time. Every query it runs is re-checked by the same read-only
+guardrail and executed inside `BEGIN TRANSACTION READ ONLY` with a statement
+timeout and a `LIMIT` cap.
 
 ## The read-only guardrail
 
