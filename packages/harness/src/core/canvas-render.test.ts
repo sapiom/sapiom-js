@@ -225,6 +225,74 @@ describe("renderCanvasForSession", () => {
   });
 });
 
+describe("dependencies not installed yet (fresh scaffold, pre-`npm install`)", () => {
+  // A temp dir under os.tmpdir() is OUTSIDE the repo, so no ancestor
+  // node_modules resolves @sapiom/agent — exactly a freshly scaffolded,
+  // not-yet-installed project. (The repo's own __fixtures__ resolve the SDK via
+  // the monorepo's node_modules, so they are NOT deps-missing.)
+  async function depsMissingProject(): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-render-noinstall-"));
+    tmpDirs.push(dir);
+    await fs.writeFile(
+      path.join(dir, "index.ts"),
+      `import { defineAgent } from "@sapiom/agent";\nexport default defineAgent({ name: "x", entry: "s", steps: {} });\n`,
+      "utf8",
+    );
+    return dir;
+  }
+
+  it("shows the calm 'preparing' placeholder — not the esbuild error — and flags depsMissing", async () => {
+    const cwd = await tmpCwd();
+    const project = await depsMissingProject();
+    const workflows: RenderableWorkflow[] = [{ path: project, name: "enrich-list-leads", definitionId: null }];
+
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: project }, workflows);
+
+    expect(outcome.depsMissing).toBe(true);
+    expect(outcome.extractionFailed).toEqual([]);
+    const html = await readRender(cwd, project);
+    expect(html).toContain("Preparing your agent");
+    // Crucially NOT the honest-error panel: no "render failed" badge, and no
+    // #sapiom-render-error script (which the SPA turns into the Retry card).
+    expect(html).not.toContain("render failed");
+    expect(html).not.toContain("Could not resolve");
+    expect(html).not.toContain('id="sapiom-render-error"');
+  });
+
+  it("preserves an existing good render on an unprompted deps-missing pass", async () => {
+    const cwd = await tmpCwd();
+    const project = await depsMissingProject();
+    const renderPath = renderFileFor(cwd, project);
+    await fs.mkdir(path.dirname(renderPath), { recursive: true });
+    await fs.writeFile(renderPath, "<!doctype html><!-- good -->", "utf8");
+    const workflows: RenderableWorkflow[] = [{ path: project, name: "enrich-list-leads", definitionId: null }];
+
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: project }, workflows, {
+      preserveExistingOnFailure: true,
+    });
+
+    expect(outcome.depsMissing).toBe(true);
+    expect(outcome.preservedExisting).toBe(true);
+    expect(await readRender(cwd, project)).toBe("<!doctype html><!-- good -->");
+  });
+
+  it("surfaceErrorOnMissingDeps forces the honest error (the install-timeout safety valve)", async () => {
+    const cwd = await tmpCwd();
+    const project = await depsMissingProject();
+    const workflows: RenderableWorkflow[] = [{ path: project, name: "enrich-list-leads", definitionId: null }];
+
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: project }, workflows, {
+      surfaceErrorOnMissingDeps: true,
+    });
+
+    // Extraction runs and genuinely fails to resolve the SDK — the error panel
+    // (and its Retry/Ask actions) is restored, and depsMissing is NOT set.
+    expect(outcome.depsMissing).toBeUndefined();
+    expect(outcome.extractionFailed).toEqual(["enrich-list-leads"]);
+    expect(await readRender(cwd, project)).toContain("render failed");
+  });
+});
+
 describe("deterministic enrichment merged into renders", () => {
   const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
 

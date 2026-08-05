@@ -83,6 +83,7 @@ import {
 } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
+import { InstallWatcherManager } from "../core/install-watcher.js";
 import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
@@ -874,6 +875,34 @@ export const startServer = async (
     },
   });
 
+  // Bridges the scaffold→`npm install` gap: a brand-new project renders a calm
+  // "preparing" placeholder (core/canvas-render.ts's depsMissing path) because
+  // its deps aren't installed yet, and neither watcher above re-fires when
+  // install completes (both ignore node_modules). This one notices deps landing
+  // and re-renders, so the placeholder becomes the step graph with no Retry.
+  const installWatcher = new InstallWatcherManager({
+    onInstalled: (harnessSessionId) => {
+      const session = sessionManager.get(harnessSessionId);
+      if (session && session.status !== "exited") {
+        void autoRenderCanvas(session).catch((err: unknown) => {
+          console.error("[harness] post-install canvas render failed:", err);
+        });
+      }
+    },
+    onTimeout: (harnessSessionId) => {
+      // Install never completed within the window (offline, npm missing on
+      // PATH in a stripped host). Restore the honest error panel so the user
+      // regains the Retry / Ask-coding-agent actions instead of a placeholder
+      // that would wait forever.
+      const session = sessionManager.get(harnessSessionId);
+      if (session && session.status !== "exited") {
+        void renderCanvasSurfacingDepErrors(session).catch((err: unknown) => {
+          console.error("[harness] install-timeout canvas render failed:", err);
+        });
+      }
+    },
+  });
+
   // Sessions that have already had their one-time on-start workspace rescan.
   // onStatusChange also fires on later status broadcasts (including the
   // bind/unbind frames setBoundWorkflowPath emits), so this guard keeps the
@@ -911,6 +940,7 @@ export const startServer = async (
     } else if (session.status === "exited") {
       canvasWatcher.stop(session.id);
       workspaceWatcher.stop(session.id);
+      installWatcher.stop(session.id);
       portDetector.reset(session.id);
       executionDetector.reset(session.id);
       // Let a resumed session get a fresh on-start rescan.
@@ -1007,13 +1037,49 @@ export const startServer = async (
   // autoRenderCanvas is the UNPROMPTED variant (session-create/boot) that
   // won't replace a workflow's existing render with an error panel when its
   // extraction fails.
+  // A depsMissing render (fresh scaffold, pre-install) shows the "preparing"
+  // placeholder; arm the install watcher to re-render once deps land. Any other
+  // outcome means we no longer need to wait — cancel a pending watcher (no-op
+  // if none). Shared by every render trigger so the arm/disarm stays in lockstep
+  // with what the pane is actually showing.
+  const reactToRenderOutcome = (
+    session: HarnessSession,
+    outcome: Awaited<ReturnType<typeof renderCanvasForSession>>,
+  ): void => {
+    if (outcome.depsMissing && outcome.workflowPath) {
+      installWatcher.start(session.id, outcome.workflowPath);
+    } else {
+      installWatcher.stop(session.id);
+    }
+  };
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
-    await renderCanvasForSession(session, await canvasWorkflowsForSession(session));
+    const outcome = await renderCanvasForSession(
+      session,
+      await canvasWorkflowsForSession(session),
+    );
+    reactToRenderOutcome(session, outcome);
   };
   const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
-    await renderCanvasForSession(session, await canvasWorkflowsForSession(session), {
-      preserveExistingOnFailure: true,
-    });
+    const outcome = await renderCanvasForSession(
+      session,
+      await canvasWorkflowsForSession(session),
+      { preserveExistingOnFailure: true },
+    );
+    reactToRenderOutcome(session, outcome);
+  };
+  // Used only by the install-watcher timeout: forces extraction even with deps
+  // missing so the honest esbuild error panel (and its Retry/Ask actions) is
+  // written instead of the placeholder. Does NOT re-arm the watcher — its
+  // outcome is an extraction failure, not depsMissing.
+  const renderCanvasSurfacingDepErrors = async (
+    session: HarnessSession,
+  ): Promise<void> => {
+    const outcome = await renderCanvasForSession(
+      session,
+      await canvasWorkflowsForSession(session),
+      { surfaceErrorOnMissingDeps: true },
+    );
+    reactToRenderOutcome(session, outcome);
   };
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch(
@@ -1568,6 +1634,7 @@ export const startServer = async (
       clearInterval(ndjsonRetentionTimer);
       canvasWatcher.stopAll();
       workspaceWatcher.stopAll();
+      installWatcher.stopAll();
       for (const tailer of codexTailers.values()) tailer.stop();
       codexTailers.clear();
       // Closing the HTTP/WS server doesn't touch unrelated child processes

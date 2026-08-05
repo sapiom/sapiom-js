@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CANVAS_RENDERS_DIR } from "../shared/types.js";
+import { agentDepsInstalled } from "./agent-deps.js";
 import { renderCanvasDocument } from "./canvas-template.js";
 import { extractWorkflowGraphCached } from "./canvas-cache.js";
 import type { CanvasGraph } from "./canvas-graph.js";
@@ -33,6 +34,7 @@ import { deriveEnrichment } from "./canvas-derive.js";
 import {
   assembleCanvasBody,
   buildErrorPanelHtml,
+  buildPreparingPanelHtml,
   buildWorkflowPanelHtml,
 } from "./canvas-body.js";
 
@@ -89,6 +91,11 @@ export interface CanvasRenderOutcome {
   writeError?: string;
   /** True when `preserveExistingOnFailure` kept the existing render instead of writing an error panel over it. */
   preservedExisting?: boolean;
+  /** True when the workflow's `node_modules` isn't present yet, so extraction
+   *  was skipped and a calm "preparing" placeholder was written instead of an
+   *  esbuild error panel. The server arms an install watcher on this to
+   *  re-render once dependencies land — see server/index.ts. */
+  depsMissing?: boolean;
 }
 
 export interface RenderCanvasOptions {
@@ -101,6 +108,15 @@ export interface RenderCanvasOptions {
    * page IS the answer the user asked for.
    */
   preserveExistingOnFailure?: boolean;
+  /**
+   * Force extraction even when the project's dependencies aren't installed,
+   * so the honest esbuild error panel is written instead of the calm
+   * "preparing" placeholder. The install watcher's timeout path sets this to
+   * restore the Retry / Ask-coding-agent actions when an install never
+   * completes — otherwise the placeholder (and its `depsMissing` re-arm) would
+   * wait forever. Normal renders leave it off.
+   */
+  surfaceErrorOnMissingDeps?: boolean;
 }
 
 function badgesFor(workflow: RenderableWorkflow): string[] {
@@ -169,6 +185,35 @@ export async function renderWorkflowRenderFile(
   bound: RenderableWorkflow,
   options: RenderCanvasOptions = {},
 ): Promise<CanvasRenderOutcome> {
+  const renderPath = renderFileFor(cwd, bound.path);
+
+  // A freshly scaffolded project — between `scaffold` and the coding agent's
+  // `npm install` — has no installed SDK, so extraction (an esbuild bundle of
+  // the project's own index.ts) is guaranteed to fail with "Could not resolve
+  // @sapiom/agent / zod/v4". That's not an error the user caused or can act on;
+  // it self-resolves when install finishes. So skip extraction entirely and
+  // write a calm "preparing" placeholder, flagging `depsMissing` so the server
+  // arms an install watcher that re-renders once dependencies land. A bundle
+  // failure WITH deps installed stays a genuine error (below).
+  if (!options.surfaceErrorOnMissingDeps && !(await agentDepsInstalled(bound.path))) {
+    const outcome: CanvasRenderOutcome = {
+      mode: "single",
+      workflowPath: bound.path,
+      renderPath,
+      extractionFailed: [],
+      depsMissing: true,
+    };
+    // Preserve semantics: an unprompted render must not replace an existing
+    // (possibly good) diagram just because deps went missing — but still flag
+    // depsMissing so the watcher re-renders when they return.
+    if (options.preserveExistingOnFailure && (await pathExists(renderPath))) {
+      outcome.preservedExisting = true;
+      return outcome;
+    }
+    await writeRenderFile(renderPath, buildPreparingPanelHtml(bound.name), outcome);
+    return outcome;
+  }
+
   const { result, cached } = await extractWorkflowGraphCached(bound.path);
   const failed = !result.ok;
 
@@ -180,7 +225,6 @@ export async function renderWorkflowRenderFile(
 
   const body = buildSingleBody(bound, result.ok ? result.graph : null, result.ok ? null : result.reason, enrichment);
 
-  const renderPath = renderFileFor(cwd, bound.path);
   const outcome: CanvasRenderOutcome = {
     mode: "single",
     workflowPath: bound.path,
@@ -191,26 +235,39 @@ export async function renderWorkflowRenderFile(
   };
 
   // An unprompted render that failed to extract must not destroy an existing
-  // (possibly good) diagram for this workflow — e.g. a project that merely
-  // hasn't run `npm install` yet after a fresh clone.
-  if (options.preserveExistingOnFailure && failed) {
-    const exists = await fs
-      .access(renderPath)
-      .then(() => true)
-      .catch(() => false);
-    if (exists) {
-      outcome.preservedExisting = true;
-      return outcome;
-    }
+  // (possibly good) diagram for this workflow — e.g. an agent mid-edit whose
+  // sources are transiently un-buildable. (The deps-not-installed case is
+  // handled above; this is a genuine extraction failure with deps present.)
+  if (options.preserveExistingOnFailure && failed && (await pathExists(renderPath))) {
+    outcome.preservedExisting = true;
+    return outcome;
   }
 
+  await writeRenderFile(renderPath, body, outcome);
+  return outcome;
+}
+
+/** True if `p` exists (any type). */
+async function pathExists(p: string): Promise<boolean> {
+  return fs
+    .access(p)
+    .then(() => true)
+    .catch(() => false);
+}
+
+/** Writes the render file, skipping an identical rewrite (which would bump the
+ *  mtime and make the canvas watcher fire a needless iframe reload — a true
+ *  no-op now that any workflow source edit triggers a re-render). A write
+ *  failure (e.g. an unwritable cwd) is captured on `outcome.writeError`;
+ *  extraction success/failure is unaffected. */
+async function writeRenderFile(
+  renderPath: string,
+  body: string,
+  outcome: CanvasRenderOutcome,
+): Promise<void> {
   try {
     const document = renderCanvasDocument(body);
     const existing = await fs.readFile(renderPath, "utf8").catch(() => null);
-    // Skip the write when nothing changed: an identical rewrite would still
-    // bump the render file's mtime and make the canvas watcher fire a needless
-    // iframe reload. This matters now that any workflow source edit triggers a
-    // re-render — a save that doesn't change the diagram is a true no-op.
     if (existing !== document) {
       await fs.mkdir(path.dirname(renderPath), { recursive: true });
       await fs.writeFile(renderPath, document, "utf8");
@@ -218,5 +275,4 @@ export async function renderWorkflowRenderFile(
   } catch (err) {
     outcome.writeError = err instanceof Error ? err.message : String(err);
   }
-  return outcome;
 }

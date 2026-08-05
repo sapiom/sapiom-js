@@ -403,6 +403,44 @@ ${bodyHtml}
 `;
 }
 
+/**
+ * A minimal, THEME-AWARE document for the canvas pane's non-graph states —
+ * the empty state and the "rendering…" placeholder the server serves for a
+ * session with nothing (yet) to draw. It reuses the SAME theme mechanism as
+ * `renderCanvasDocument` (the `?theme` reader + the ported token block), so
+ * these pages follow the app's light/dark theme instead of always painting a
+ * white panel inside a dark app. No graph, so it deliberately omits the
+ * run-state/pan-zoom script and SVG defs — just a centered title + subtitle on
+ * the themed canvas backdrop. `title`/`subtitle` are trusted, static server
+ * copy (never user input), so they're inlined without escaping.
+ */
+export function renderCanvasMessageDocument(title: string, subtitle: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Studio canvas</title>
+<script>
+${THEME_SCRIPT}
+</script>
+<style>
+${themeStyleBlock()}
+.canvas-message { text-align: center; padding: 0 2rem; max-width: 520px; }
+.canvas-message h1 { margin: 0 0 0.5rem; font-size: 1.1rem; font-weight: 600; color: var(--canvas-text); }
+.canvas-message p { margin: 0; font-size: 13px; color: var(--canvas-text-dim); }
+</style>
+</head>
+<body>
+<div class="canvas-message">
+  <h1>${title}</h1>
+  <p>${subtitle}</p>
+</div>
+</body>
+</html>
+`;
+}
+
 const TEMPLATE_BODY = `
 <!--
   ═══════════════════════════════════════════════════════════════════════

@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { Router, type Router as ExpressRouter, type Request, type Response } from "express";
 import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { slugForWorkflowPath } from "../core/canvas-render.js";
+import { renderCanvasMessageDocument } from "../core/canvas-template.js";
 import { isMachineGeneratedCanvas } from "../core/canvas-index-classify.js";
 import { resolveWithinRoot } from "../core/path-safety.js";
 
@@ -60,31 +61,22 @@ const CANVAS_CSP =
   "style-src 'self' 'unsafe-inline'; img-src * data: blob:; connect-src *; " +
   "object-src 'none'; frame-ancestors 'self'";
 
-const EMPTY_STATE_HTML = `<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Canvas — nothing here yet</title></head>
-<body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #444; text-align: center; padding: 0 2rem;">
-  <div>
-    <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Nothing rendered yet</h1>
-    <p style="margin: 0;">Select an agent in the rail and its step graph renders here automatically.</p>
-  </div>
-</body>
-</html>`;
+// Theme-aware (via renderCanvasMessageDocument's `?theme` reader) so these
+// follow the app's light/dark theme — the iframe src carries `?theme=<theme>`.
+// A plain white panel here read as broken inside a dark-themed app.
+const EMPTY_STATE_HTML = renderCanvasMessageDocument(
+  "Nothing rendered yet",
+  "Select an agent in the rail and its step graph renders here automatically.",
+);
 
 /** Served for a BOUND session whose render file hasn't been written yet
  *  (render in flight, or a server restart before any re-render). The pane
  *  hot-reloads the moment the render lands, so this is only ever briefly
  *  visible. */
-const PENDING_RENDER_HTML = `<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Canvas — rendering</title></head>
-<body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #444; text-align: center; padding: 0 2rem;">
-  <div>
-    <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Rendering agent diagram…</h1>
-    <p style="margin: 0;">This pane reloads automatically when the diagram is ready.</p>
-  </div>
-</body>
-</html>`;
+const PENDING_RENDER_HTML = renderCanvasMessageDocument(
+  "Rendering agent diagram…",
+  "This pane reloads automatically when the diagram is ready.",
+);
 
 export interface CanvasSession {
   cwd: string;

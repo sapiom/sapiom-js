@@ -196,6 +196,27 @@ export function buildErrorPanelHtml(title: string, reason: string): string {
 </section>`;
 }
 
+/** A calm, transient panel for a workflow whose dependencies aren't installed
+ *  yet (a freshly scaffolded project between `scaffold` and `npm install`).
+ *  Extraction WOULD fail here with esbuild "Could not resolve …" noise, so we
+ *  don't run it — we show this instead and let the install watcher re-render
+ *  once `node_modules` lands. Crucially it emits NO `#sapiom-render-error`
+ *  script, so the SPA shows no "render failed" card / Retry buttons: this is a
+ *  normal setup state, not an error the user has to act on. */
+export function buildPreparingPanelHtml(title: string): string {
+  return `<section class="canvas-panel">
+  <header class="canvas-header">
+    <div class="canvas-title-row">
+      <h1 class="canvas-title">${esc(title)}</h1>
+      <span class="canvas-badge">preparing</span>
+    </div>
+  </header>
+  <div class="canvas-diagram-panel">
+    <p class="canvas-empty-note">Preparing your agent — installing dependencies. The step graph appears here automatically once setup finishes.</p>
+  </div>
+</section>`;
+}
+
 /** Joins the workflow panel(s) into the final `#canvas-root` body — the string
  *  `renderCanvasDocument()` wraps. Each panel already carries its own legend
  *  footer (see `buildWorkflowPanelHtml`); there is no document-level footer. */
