@@ -443,18 +443,21 @@ const verify = defineStep({
     const cwd = resolved.cwd;
     ctx.shared.set("checkoutCwd", cwd);
 
-    // Capture what changed, for the self-review — uncommitted, so a plain
-    // `diff --stat` (no ref range) is exactly the agent's working-tree edits.
-    // `git -C <abs>` (not the `cwd` exec option) targets the checkout: `exec`'s
-    // `cwd` is relative to the sandbox's `workspaceRoot`, and `sandboxes.attach`
-    // has no way to know a coding run's checkout root, so it defaults that to
-    // `/` — a bare `{ cwd }` here would silently run against the sandbox's
-    // filesystem root instead of the checkout. Baking the confirmed absolute
-    // path straight into the command sidesteps that mismatch entirely.
+    // Capture what changed, for the self-review. The coding agent's edits are
+    // almost all NEW files, and a plain `git diff --stat` (working tree vs
+    // index) never shows untracked files — so it came back empty and the
+    // reviewer withheld approval, citing "conformance asserted, not
+    // demonstrated." Stage first (`add -A`, before install so no `node_modules`
+    // exists yet) and diff the index (`--cached`), which surfaces new files as
+    // additions against HEAD (or the empty tree on a first commit). `git -C
+    // <abs>` (not the `cwd` exec option) targets the checkout — see the
+    // resolveCheckoutCwd note for why the absolute path is baked in.
     try {
-      const diff = await box.exec(`git -C "${cwd}" --no-pager diff --stat`, {
-        timeout: 30_000,
-      });
+      await box.exec(`git -C "${cwd}" add -A`, { timeout: 30_000 });
+      const diff = await box.exec(
+        `git -C "${cwd}" --no-pager diff --cached --stat`,
+        { timeout: 30_000 },
+      );
       ctx.shared.set(
         "diffStat",
         (diff.stdout || diff.stderr || "").slice(0, 4000),
@@ -488,7 +491,16 @@ const verify = defineStep({
     const check = await box.exec(`cd "${cwd}" && ${checkCommand}`, {
       timeout: 300_000,
     });
-    ctx.shared.set("checkTail", tail(check.stdout, check.stderr));
+    // A passing check (e.g. `tsc --noEmit`) prints nothing, which left the
+    // review's "Check output" empty and undersold a green run — record the
+    // exit-0 explicitly so the reviewer sees the check actually ran and passed.
+    const checkOutput = tail(check.stdout, check.stderr);
+    ctx.shared.set(
+      "checkTail",
+      check.exitCode === 0
+        ? `\`${checkCommand}\` passed (exit 0).${checkOutput ? `\n${checkOutput}` : ""}`
+        : checkOutput,
+    );
     if (check.exitCode !== 0) {
       return goto("rejected", {
         reason: "check-failed",
@@ -572,8 +584,21 @@ const push = defineStep({
       workingDirectory: cwd,
     });
 
+    // `pushFromSandbox` doesn't always return the commit sha; read it back from
+    // the checkout it just committed so `summary` reports a real sha, not null.
+    let pushSha = result.sha;
+    if (!pushSha) {
+      try {
+        const rev = await box.exec(`git -C "${cwd}" rev-parse HEAD`, {
+          timeout: 15_000,
+        });
+        pushSha = rev.stdout.trim() || null;
+      } catch {
+        pushSha = null;
+      }
+    }
     ctx.shared.set("pushed", result.pushed);
-    ctx.shared.set("pushSha", result.sha);
+    ctx.shared.set("pushSha", pushSha);
     ctx.shared.set("pushBranch", result.branch ?? branchName);
     ctx.logger.info("pushed branch", {
       branch: result.branch ?? branchName,
