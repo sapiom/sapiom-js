@@ -80,7 +80,7 @@
     "id": "canvas-body-node-kind",
     "path": "packages/harness/src/core/canvas-body.ts",
     "pattern": "launched-workflow",
-    "occurrences": 2,
+    "occurrences": 3,
     "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
   },
   {
@@ -283,7 +283,7 @@
     "id": "web-canvas-node-kind",
     "path": "packages/harness/web/src/lib/canvas-graph.ts",
     "pattern": "^launched-workflow$",
-    "occurrences": 1,
+    "occurrences": 2,
     "reason": "The private Canvas node-kind literal remains stable."
   },
   {
