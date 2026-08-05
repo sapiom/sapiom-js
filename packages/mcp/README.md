@@ -1,15 +1,16 @@
 # @sapiom/mcp
 
 The **local developer** MCP server for Sapiom. It runs on your machine over
-stdio under the server name `sapiom-dev` — the unmetered `sapiom_dev_*` surface
-for building and operating on Sapiom. Today it gives a coding agent the tools to
-scaffold, test, deploy, and inspect Sapiom orchestrations; the namespace leaves
-room for other non-capability developer tooling later.
+stdio under the server name `sapiom-dev`. Today it gives a coding agent the
+tools to scaffold, test, deploy, and inspect Sapiom agents; the namespace leaves
+room for other developer tooling later.
 
-> **Not the capability surface.** This is *not* the remote "Sapiom" MCP (the
+> **Not the capability surface.** This is _not_ the remote "Sapiom" MCP (the
 > hosted connector with `sapiom_sandbox_*`, scrape, search, … capability tools).
-> `sapiom-dev` is the local developer surface; it makes no paid capability calls
-> and exposes no capability tools. See
+> `sapiom-dev` exposes no direct capability tools. Its local check and Local
+> Run path uses stubbed capabilities without Sapiom capability spend; deploys,
+> cloud builds, production runs, signals, and schedules operate Sapiom cloud
+> state and may be metered. See
 > [the two Sapiom MCP servers](../../docs/mcp-servers.md) for which to use when.
 
 ## Install
@@ -21,16 +22,16 @@ No global install — run it on demand with `npx`:
   "mcpServers": {
     "sapiom-dev": {
       "command": "npx",
-      "args": ["-y", "@sapiom/mcp"]
-    }
-  }
+      "args": ["-y", "@sapiom/mcp"],
+    },
+  },
 }
 ```
 
 In Claude Code:
 
 ```sh
-claude mcp add sapiom-dev -- npx -y @sapiom/mcp
+claude mcp add sapiom -- npx -y @sapiom/mcp
 ```
 
 ## Configuration
@@ -44,9 +45,9 @@ The server targets the `production` environment by default. Override it with the
     "sapiom-dev": {
       "command": "npx",
       "args": ["-y", "@sapiom/mcp"],
-      "env": { "SAPIOM_ENVIRONMENT": "staging" }
-    }
-  }
+      "env": { "SAPIOM_ENVIRONMENT": "staging" },
+    },
+  },
 }
 ```
 
@@ -66,30 +67,33 @@ login flow, then caches the resulting key per environment in
 `sapiom_status` reports who you're authenticated as; `sapiom_logout` clears the
 cached credentials.
 
-The local authoring tools (`scaffold`, `check`, `run_local`) need no
-authentication — they run entirely offline.
+The local authoring tools (`scaffold`, `check`, `run_local`) need no Sapiom
+authentication. `scaffold` may query npm for current dependency versions;
+`check` imports the definition; and `run_local` executes the author's ordinary
+local code. Only `ctx.sapiom.*` calls are replaced by stubs, so direct network,
+filesystem, environment, and process effects in author code remain real.
 
 ## Tools
 
-| Tool | Network | What it does |
-| --- | --- | --- |
-| `sapiom_authenticate` | browser | Log in and cache an API key for the current environment |
-| `sapiom_status` | — | Report authentication status |
-| `sapiom_logout` | — | Clear cached credentials |
-| `sapiom_send_feedback` | ✓ | Relay the user's product feedback to the Sapiom team |
-| `sapiom_dev_agents_scaffold` | — | Create a new orchestration project |
-| `sapiom_dev_agents_check` | — | Bundle + validate the step graph offline |
-| `sapiom_dev_agents_run_local` | — | Run the workflow locally, resolving capability calls from stubs (no cost) |
-| `sapiom_dev_agents_link` | ✓ | Resolve/create the hosted orchestration and cache its id |
-| `sapiom_dev_agents_clone` | ✓ | Fork a gallery template (or re-clone a fork) into a local project |
-| `sapiom_dev_agents_deploy` | ✓ | Push the current commit, build, and wait for it |
-| `sapiom_dev_agents_run` | ✓ | Start a real cloud execution |
-| `sapiom_dev_agents_inspect` | ✓ | Inspect an execution or build (optionally waiting for it) |
-| `sapiom_dev_agents_signal` | ✓ | Resume a paused execution by delivering a signal |
-| `sapiom_dev_agents_schedule` | ✓ | Create a recurring (cron) or one-off schedule for a deployed agent |
-| `sapiom_dev_agents_schedule_inspect` | ✓ | Inspect one schedule (with fire history) or list an agent's schedules |
-| `sapiom_dev_agents_schedule_cancel` | ✓ | Cancel a schedule (stops all future fires) |
-| `sapiom_dev_agents_cron_preview` | ✓ | Validate a cron expression and preview its next occurrences |
+| Tool                                 | Network          | What it does                                                               |
+| ------------------------------------ | ---------------- | -------------------------------------------------------------------------- |
+| `sapiom_authenticate`                | browser          | Log in and cache an API key for the current environment                    |
+| `sapiom_status`                      | —                | Report authentication status                                               |
+| `sapiom_logout`                      | —                | Clear cached credentials                                                   |
+| `sapiom_send_feedback`               | ✓                | Relay the user's product feedback to the Sapiom team                       |
+| `sapiom_dev_agents_scaffold`         | npm optional     | Create a new agent project; may query npm for current dependency versions  |
+| `sapiom_dev_agents_check`            | author code only | Typecheck, import, bundle, and validate the definition and step graph      |
+| `sapiom_dev_agents_run_local`        | author code only | Run locally with `ctx.sapiom.*` calls stubbed (no Sapiom capability spend) |
+| `sapiom_dev_agents_link`             | ✓                | Resolve/create the hosted orchestration and cache its id                   |
+| `sapiom_dev_agents_clone`            | ✓                | Fork a gallery template (or re-clone a fork) into a local project          |
+| `sapiom_dev_agents_deploy`           | ✓                | Bundle current local source, build in the cloud, and wait                  |
+| `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                               |
+| `sapiom_dev_agents_inspect`          | ✓                | Inspect an execution or build (optionally waiting for it)                  |
+| `sapiom_dev_agents_signal`           | ✓                | Resume a paused execution by delivering a signal                           |
+| `sapiom_dev_agents_schedule`         | ✓                | Create a recurring (cron) or one-off schedule for a deployed agent         |
+| `sapiom_dev_agents_schedule_inspect` | ✓                | Inspect one schedule (with fire history) or list an agent's schedules      |
+| `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a schedule (stops all future fires)                                 |
+| `sapiom_dev_agents_cron_preview`     | ✓                | Validate a cron expression and preview its next occurrences                |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
@@ -99,8 +103,9 @@ A typical loop: `scaffold` → write step code → `run_local` until green → `
 Workflows authored here call Sapiom capabilities — sandboxes, repositories,
 coding agents, search, storage, content generation — through
 [`@sapiom/tools`](../tools) (`ctx.sapiom.*`). `run_local` resolves those calls
-from stubs; a real `run`/`deploy` executes them in the cloud (metered). This MCP
-never grows a per-capability tool of its own — capabilities live in
+from stubs; deploy and production run cross into authenticated cloud operations
+and can be metered. This MCP never grows a per-capability tool of its own —
+capabilities live in
 `@sapiom/tools` and the remote `sapiom` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
 

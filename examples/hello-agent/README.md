@@ -23,13 +23,13 @@ greet  (terminal)
    claude mcp add sapiom -- npx -y @sapiom/mcp
    ```
 
-2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
-   `sapiom_status`.
+2. From this directory, run `npm install`, then use
+   `sapiom_dev_agents_check` and `sapiom_dev_agents_run_local`. Neither local
+   operation needs a Sapiom account.
 
-3. From this directory: `npm install`, then drive the lifecycle via the MCP —
-   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` →
-   `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
-   `sapiom_dev_agents_run`.
+3. Before cloud work, run `sapiom_authenticate` and confirm with
+   `sapiom_status`. Then continue with `sapiom_dev_agents_link` →
+   `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run`.
 
 ## Files
 

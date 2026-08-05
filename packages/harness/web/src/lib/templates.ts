@@ -5,13 +5,13 @@
  * the harness server relays from core's `GET /v1/workflows/templates` (the same
  * endpoint the dashboard's Template library renders). This module used to ship a
  * hardcoded pin of two entries because no listing API existed; it does now, and
- * the pin was the reason the Studio showed 2 templates while the app showed 26.
+ * the pin was the reason the Studio showed only 2 templates while the app showed the full catalog.
  * There is no local copy of the gallery any more — a stale copy IS the bug.
  *
  * **Starters** stay local, and should: they are the templates bundled with
  * `@sapiom/agent-core` (`templates/{default,coding-pause}`), scaffolded by the
  * local `sapiom_dev_agents_scaffold` tool with no Sapiom account or capability
- * calls. They are the offline-capable floor — what the dialog can still offer
+ * calls. They are the bundled fallback — what the dialog can still offer
  * when the catalog is unreachable — so describing them from the package is
  * correct, not a shortcut.
  *
@@ -22,7 +22,11 @@
  *   allowlist — so every catalog id works, not just the two once pinned here.
  * - Starters: `sapiom_dev_agents_scaffold` (`{dir, template}`), local.
  */
-import type { TemplateComplexity, TemplateDetailView, TemplateSummary } from "@shared/types";
+import type {
+  TemplateComplexity,
+  TemplateDetailView,
+  TemplateSummary,
+} from "@shared/types";
 
 import type { CanvasGraph } from "./canvas-graph";
 import { FALLBACK_PROJECT_NAME, projectDirSuggestion } from "./project-dir";
@@ -30,7 +34,7 @@ import { FALLBACK_PROJECT_NAME, projectDirSuggestion } from "./project-dir";
 /** A live catalog entry. `kind` discriminates it from a bundled starter. */
 export type GalleryTemplate = TemplateSummary & { kind: "gallery" };
 
-/** A template bundled with @sapiom/agent-core — scaffolds offline. */
+/** A template bundled with @sapiom/agent-core — no live catalog required. */
 export interface StarterTemplate {
   kind: "starter";
   /** The bundled template directory name passed as the scaffold tool's `template`. */
@@ -56,7 +60,8 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     kind: "starter",
     id: "coding-pause",
     name: "Coding pause",
-    description: "The launch + pauseUntilSignal + resume pattern for a non-blocking coding-agent run.",
+    description:
+      "The launch + pauseUntilSignal + resume pattern for a non-blocking coding-agent run.",
   },
 ];
 
@@ -101,7 +106,11 @@ const CATEGORY_ORDER = [
 
 export function groupByCategory(
   templates: GalleryTemplate[],
-): Array<{ category: string | null; label: string; templates: GalleryTemplate[] }> {
+): Array<{
+  category: string | null;
+  label: string;
+  templates: GalleryTemplate[];
+}> {
   const buckets = new Map<string, GalleryTemplate[]>();
   for (const template of templates) {
     const key = template.category ?? "";
@@ -142,9 +151,13 @@ export function groupByCategory(
  * than printed as `0/5`, which would read as a real band at the bottom of the
  * scale — the same mistake `$0.00` would have been for the cost this replaced.
  */
-export function formatComplexity(complexity: TemplateComplexity | null): string {
+export function formatComplexity(
+  complexity: TemplateComplexity | null,
+): string {
   if (!complexity?.label) return "—";
-  return complexity.score > 0 ? `${complexity.label} ${complexity.score}/5` : complexity.label;
+  return complexity.score > 0
+    ? `${complexity.label} ${complexity.score}/5`
+    : complexity.label;
 }
 
 /**
@@ -160,22 +173,31 @@ export function complexityBasisParts(complexity: TemplateComplexity): string {
   const { basis } = complexity;
   const parts: string[] = [];
   if (basis.llmSteps > 0) {
-    parts.push(`${basis.llmSteps} model ${basis.llmSteps === 1 ? "step" : "steps"}`);
+    parts.push(
+      `${basis.llmSteps} model ${basis.llmSteps === 1 ? "step" : "steps"}`,
+    );
   }
   if (basis.chainedLlmSteps > 0) {
     parts.push(`${basis.chainedLlmSteps} chained`);
   }
   if (basis.mediaCapabilities > 0) {
-    parts.push(`${basis.mediaCapabilities} media ${basis.mediaCapabilities === 1 ? "generator" : "generators"}`);
+    parts.push(
+      `${basis.mediaCapabilities} media ${basis.mediaCapabilities === 1 ? "generator" : "generators"}`,
+    );
   }
   parts.push(`${basis.stepCount} ${basis.stepCount === 1 ? "step" : "steps"}`);
   if (basis.capabilityCount > 0) {
-    parts.push(`${basis.capabilityCount} ${basis.capabilityCount === 1 ? "capability" : "capabilities"}`);
+    parts.push(
+      `${basis.capabilityCount} ${basis.capabilityCount === 1 ? "capability" : "capabilities"}`,
+    );
   }
   // No model call and no media means the run is fully deterministic — worth
   // saying outright, because it is why an elaborate saga can score below a
   // two-step pipeline.
-  const suffix = basis.llmSteps === 0 && basis.mediaCapabilities === 0 ? " · deterministic" : "";
+  const suffix =
+    basis.llmSteps === 0 && basis.mediaCapabilities === 0
+      ? " · deterministic"
+      : "";
   return `${parts.join(", ")}${suffix}`;
 }
 
@@ -208,13 +230,16 @@ export function matchesQuery(template: StudioTemplate, query: string): boolean {
  * The prompt handed to the session's agent after "Use template" starts a session
  * in the destination folder. Both branches name the REAL operation: the clone
  * MCP tool for gallery templates (with its auth failure path), the local
- * scaffold MCP tool for starters. Both end with the same next move (a free
- * local test run), so use → edit → run is one continuous path rather than a
+ * scaffold MCP tool for starters. Both end with the same next move (a local
+ * test with no Sapiom capability spend), so use → edit → run is one continuous path rather than a
  * journey that stops at the clone.
  */
-export function useTemplatePrompt(template: StudioTemplate, dir: string): string {
+export function useTemplatePrompt(
+  template: StudioTemplate,
+  dir: string,
+): string {
   const runContinuation =
-    "When the project is ready, offer a free local test run (sapiom_dev_agents_run_local) as the next step.";
+    "When the project is ready, offer a local test run with no Sapiom capability spend (sapiom_dev_agents_run_local) as the next step.";
   if (template.kind === "gallery") {
     return (
       `Clone the Sapiom gallery template "${template.id}" into this directory: ` +
@@ -233,8 +258,14 @@ export function useTemplatePrompt(template: StudioTemplate, dir: string): string
 }
 
 /** Exact local MCP handoff shared by every bundled-starter entry point. */
-export function starterScaffoldInstruction(dir: string, template: string): string {
-  return "call the sapiom_dev_agents_scaffold tool with " + JSON.stringify({ dir, template });
+export function starterScaffoldInstruction(
+  dir: string,
+  template: string,
+): string {
+  return (
+    "call the sapiom_dev_agents_scaffold tool with " +
+    JSON.stringify({ dir, template })
+  );
 }
 
 /**
@@ -255,7 +286,11 @@ export function templateGraph(detail: TemplateDetailView): CanvasGraph {
     // a green success exit.
     kind: step.kind as CanvasGraph["nodes"][number]["kind"],
     label: step.name,
-    role: step.kind.startsWith("terminal") ? "terminal" : step.kind === "entry" ? "entry" : "step",
+    role: step.kind.startsWith("terminal")
+      ? "terminal"
+      : step.kind === "entry"
+        ? "entry"
+        : "step",
     description: step.description ?? "",
     timeoutMs: null,
     inputSchema: null,
@@ -266,7 +301,10 @@ export function templateGraph(detail: TemplateDetailView): CanvasGraph {
   const continueOutDegree = new Map<string, number>();
   for (const edge of detail.transitions) {
     if (edge.kind !== "continue") continue;
-    continueOutDegree.set(edge.from, (continueOutDegree.get(edge.from) ?? 0) + 1);
+    continueOutDegree.set(
+      edge.from,
+      (continueOutDegree.get(edge.from) ?? 0) + 1,
+    );
   }
   const edges: CanvasGraph["edges"] = detail.transitions.map((edge) => ({
     from: edge.from,
@@ -281,7 +319,10 @@ export function templateGraph(detail: TemplateDetailView): CanvasGraph {
   }));
   return {
     name: detail.name,
-    entry: detail.steps.find((s) => s.kind === "entry")?.name ?? detail.steps[0]?.name ?? "",
+    entry:
+      detail.steps.find((s) => s.kind === "entry")?.name ??
+      detail.steps[0]?.name ??
+      "",
     nodes,
     edges,
     groups: [],
@@ -298,8 +339,13 @@ export function templateGraph(detail: TemplateDetailView): CanvasGraph {
  *  or how a root is combined with a name. `root` is what
  *  `resolveProjectRoot()` returned — historically the launch dir, which is
  *  still what that resolves to on the CLI host. */
-export function templateDirSuggestion(template: StudioTemplate, root: string | null): string {
+export function templateDirSuggestion(
+  template: StudioTemplate,
+  root: string | null,
+): string {
   const folder =
-    template.kind === "starter" && template.id === "default" ? FALLBACK_PROJECT_NAME : template.id;
+    template.kind === "starter" && template.id === "default"
+      ? FALLBACK_PROJECT_NAME
+      : template.id;
   return projectDirSuggestion(folder, root);
 }

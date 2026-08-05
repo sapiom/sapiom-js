@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { TemplateComplexity, TemplateDetailView, TemplateSummary } from "@shared/types";
+import type {
+  TemplateComplexity,
+  TemplateDetailView,
+  TemplateSummary,
+} from "@shared/types";
 
 import {
   STARTER_TEMPLATES,
@@ -17,7 +21,9 @@ import {
 } from "./templates";
 
 /** A complexity band as core would serve it. */
-function complexity(over: Partial<TemplateComplexity> = {}): TemplateComplexity {
+function complexity(
+  over: Partial<TemplateComplexity> = {},
+): TemplateComplexity {
   return {
     score: 3,
     label: "Moderate",
@@ -39,7 +45,8 @@ function summary(over: Partial<TemplateSummary> = {}): GalleryTemplate {
     kind: "gallery",
     id: "web-research-digest",
     name: "Web Research Digest",
-    description: "Search the web for a topic and return a concise, sourced digest.",
+    description:
+      "Search the web for a topic and return a concise, sourced digest.",
     tags: ["research", "search"],
     category: "data-knowledge",
     cadence: "on-demand",
@@ -54,7 +61,10 @@ describe("bundled starters", () => {
   it("carries exactly the bundled template directory names `init -t` resolves", () => {
     // These ids are a contract with @sapiom/agent-core's templates/ dir, not
     // fixtures — unlike the gallery, they are NOT fetched.
-    expect(STARTER_TEMPLATES.map((t) => t.id)).toEqual(["default", "coding-pause"]);
+    expect(STARTER_TEMPLATES.map((t) => t.id)).toEqual([
+      "default",
+      "coding-pause",
+    ]);
   });
 
   it("never carries an em dash into starter copy (house style)", () => {
@@ -146,14 +156,18 @@ describe("complexityBasisSummary", () => {
   it("prefixes the label for a standalone tooltip, matching the dashboard's sentence", () => {
     // The card's tooltip has no band rendered beside it, so unlike the detail
     // pane's line it must name the band itself.
-    expect(complexityBasisSummary(complexity())).toBe("Moderate: 1 model step, 2 steps, 1 capability");
+    expect(complexityBasisSummary(complexity())).toBe(
+      "Moderate: 1 model step, 2 steps, 1 capability",
+    );
   });
 });
 
 describe("categoryLabel", () => {
   it("maps known registry ids to the dashboard's labels", () => {
     expect(categoryLabel("revenue-marketing")).toBe("Revenue and marketing");
-    expect(categoryLabel("finance-legal-people")).toBe("Finance, legal and people");
+    expect(categoryLabel("finance-legal-people")).toBe(
+      "Finance, legal and people",
+    );
   });
 
   it("humanizes an unknown id rather than dropping it (the taxonomy is upstream)", () => {
@@ -172,7 +186,11 @@ describe("groupByCategory", () => {
       summary({ id: "b", category: "starter" }),
       summary({ id: "c", category: "product-engineering" }),
     ]);
-    expect(groups.map((g) => g.category)).toEqual(["starter", "product-engineering", "revenue-marketing"]);
+    expect(groups.map((g) => g.category)).toEqual([
+      "starter",
+      "product-engineering",
+      "revenue-marketing",
+    ]);
   });
 
   it("sorts an unknown category after the known ones and uncategorised last", () => {
@@ -181,7 +199,11 @@ describe("groupByCategory", () => {
       summary({ id: "b", category: "zzz-unknown" }),
       summary({ id: "c", category: "starter" }),
     ]);
-    expect(groups.map((g) => g.category)).toEqual(["starter", "zzz-unknown", null]);
+    expect(groups.map((g) => g.category)).toEqual([
+      "starter",
+      "zzz-unknown",
+      null,
+    ]);
   });
 
   it("keeps every template — grouping never drops a card", () => {
@@ -190,7 +212,10 @@ describe("groupByCategory", () => {
       summary({ id: "b", category: "starter" }),
       summary({ id: "c", category: null }),
     ];
-    const total = groupByCategory(templates).reduce((sum, g) => sum + g.templates.length, 0);
+    const total = groupByCategory(templates).reduce(
+      (sum, g) => sum + g.templates.length,
+      0,
+    );
     expect(total).toBe(3);
   });
 });
@@ -222,22 +247,27 @@ describe("useTemplatePrompt", () => {
   it("works for any catalog id, not just the two once pinned in this module", () => {
     // clone's templateId is relayed to core's fork endpoint with no allowlist,
     // which is why fetching the full catalog needed no other change.
-    const prompt = useTemplatePrompt(summary({ id: "cold-outreach-engine" }), "/tmp/x");
+    const prompt = useTemplatePrompt(
+      summary({ id: "cold-outreach-engine" }),
+      "/tmp/x",
+    );
     expect(prompt).toContain('templateId "cold-outreach-engine"');
   });
 
   it("starter: names the local scaffold tool with exact arguments", () => {
     const prompt = useTemplatePrompt(STARTER_TEMPLATES[1], "/tmp/coding-pause");
     expect(prompt).toContain("sapiom_dev_agents_scaffold");
-    expect(prompt).toContain('{"dir":"/tmp/coding-pause","template":"coding-pause"}');
+    expect(prompt).toContain(
+      '{"dir":"/tmp/coding-pause","template":"coding-pause"}',
+    );
     expect(prompt).toContain("Keep the shipped starter unchanged");
     expect(prompt.toLowerCase()).not.toContain("workflow");
   });
 
-  it("both paths end with the free local test continuation (use to run is one path)", () => {
+  it("both paths end with the no-capability-spend local test continuation", () => {
     for (const template of [summary(), STARTER_TEMPLATES[1]]) {
       expect(useTemplatePrompt(template, "/tmp/x")).toContain(
-        "free local test run (sapiom_dev_agents_run_local)",
+        "local test run with no Sapiom capability spend (sapiom_dev_agents_run_local)",
       );
     }
   });
@@ -252,7 +282,13 @@ describe("templateGraph", () => {
       whatItDoes: "Searches and summarizes.",
       sourcePath: "examples/web-research-digest",
       steps: [
-        { name: "search", description: "Query the web.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
+        {
+          name: "search",
+          description: "Query the web.",
+          capabilities: ["web.search"],
+          kind: "entry",
+          sublabel: "entry",
+        },
         {
           name: "summarize",
           description: "Condense the results.",
@@ -261,7 +297,14 @@ describe("templateGraph", () => {
           sublabel: "terminal · success",
         },
       ],
-      transitions: [{ from: "search", to: "summarize", label: null, kind: "continue" as const }],
+      transitions: [
+        {
+          from: "search",
+          to: "summarize",
+          label: null,
+          kind: "continue" as const,
+        },
+      ],
       author: { name: "Sapiom", url: "https://sapiom.ai/" },
       useCases: [],
       notes: null,
@@ -274,9 +317,14 @@ describe("templateGraph", () => {
   it("projects core's graph faithfully: entry first, transitions as edges, terminals marked", () => {
     const graph = templateGraph(detail());
     expect(graph.entry).toBe("search");
-    expect(graph.nodes.map((n) => `${n.id}:${n.kind}`)).toEqual(["search:entry", "summarize:terminal-success"]);
+    expect(graph.nodes.map((n) => `${n.id}:${n.kind}`)).toEqual([
+      "search:entry",
+      "summarize:terminal-success",
+    ]);
     expect(graph.nodes[0].capabilities).toEqual(["web.search"]);
-    expect(graph.edges).toEqual([{ from: "search", to: "summarize", kind: "sequential", label: "" }]);
+    expect(graph.edges).toEqual([
+      { from: "search", to: "summarize", kind: "sequential", label: "" },
+    ]);
   });
 
   it("a single terminal step yields one node and no edges", () => {
@@ -305,13 +353,41 @@ describe("templateGraph", () => {
     const graph = templateGraph(
       detail({
         steps: [
-          { name: "check", description: null, capabilities: [], kind: "entry", sublabel: "entry" },
-          { name: "approve", description: null, capabilities: [], kind: "terminal-success", sublabel: "terminal · success" },
-          { name: "reject", description: null, capabilities: [], kind: "terminal-warn", sublabel: "terminal · needs attention" },
+          {
+            name: "check",
+            description: null,
+            capabilities: [],
+            kind: "entry",
+            sublabel: "entry",
+          },
+          {
+            name: "approve",
+            description: null,
+            capabilities: [],
+            kind: "terminal-success",
+            sublabel: "terminal · success",
+          },
+          {
+            name: "reject",
+            description: null,
+            capabilities: [],
+            kind: "terminal-warn",
+            sublabel: "terminal · needs attention",
+          },
         ],
         transitions: [
-          { from: "check", to: "approve", label: null, kind: "continue" as const },
-          { from: "check", to: "reject", label: null, kind: "continue" as const },
+          {
+            from: "check",
+            to: "approve",
+            label: null,
+            kind: "continue" as const,
+          },
+          {
+            from: "check",
+            to: "reject",
+            label: null,
+            kind: "continue" as const,
+          },
         ],
       }),
     );
@@ -321,21 +397,28 @@ describe("templateGraph", () => {
     ]);
     // Kinds come straight from the server-side classifier — a fail-only exit
     // stays amber rather than being flattened into the success dot.
-    expect(graph.nodes.map((n) => n.kind)).toEqual(["entry", "terminal-success", "terminal-warn"]);
+    expect(graph.nodes.map((n) => n.kind)).toEqual([
+      "entry",
+      "terminal-success",
+      "terminal-warn",
+    ]);
   });
 });
 
 describe("templateDirSuggestion", () => {
   it("joins the launch dir with the template id", () => {
-    expect(templateDirSuggestion(summary({ id: "hello-agent" }), "/Users/demo/acme-app")).toBe(
-      "/Users/demo/acme-app/hello-agent",
-    );
+    expect(
+      templateDirSuggestion(
+        summary({ id: "hello-agent" }),
+        "/Users/demo/acme-app",
+      ),
+    ).toBe("/Users/demo/acme-app/hello-agent");
   });
 
   it("gives the 'default' starter a descriptive folder name", () => {
-    expect(templateDirSuggestion(STARTER_TEMPLATES[0], "/Users/demo/acme-app")).toBe(
-      "/Users/demo/acme-app/sapiom-agent",
-    );
+    expect(
+      templateDirSuggestion(STARTER_TEMPLATES[0], "/Users/demo/acme-app"),
+    ).toBe("/Users/demo/acme-app/sapiom-agent");
   });
 
   it("is empty without a launch dir (the field asks instead of guessing)", () => {

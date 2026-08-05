@@ -42,13 +42,13 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-} from 'node:fs';
-import path from 'node:path';
+} from "node:fs";
+import path from "node:path";
 
-import { GatewayClient } from './client.js';
-import { writeConfig } from './config.js';
-import { AgentOperationError } from './errors.js';
-import { cloneRepo as defaultCloneRepo, type CloneRepoOptions } from './git.js';
+import { GatewayClient } from "./client.js";
+import { writeConfig } from "./config.js";
+import { AgentOperationError } from "./errors.js";
+import { cloneRepo as defaultCloneRepo, type CloneRepoOptions } from "./git.js";
 
 /** Response of `POST /v1/workflows/templates/:id/fork`. */
 interface ForkTemplateResponse {
@@ -69,6 +69,28 @@ interface CloneTokenResponse {
   /** Token-bearing HTTPS URL — SECRET, never surfaced. */
   cloneUrl: string;
   expiresAt: string;
+}
+
+/** GitHub can acknowledge the seeded branch through its REST API before the
+ * smart-HTTP Git endpoint can resolve that ref. A clone started in that narrow
+ * propagation window reports that the requested remote branch does not exist.
+ * Retry only those explicit eventual-consistency signals; authentication,
+ * authorization, and ordinary Git errors remain immediate failures. */
+const CLONE_PROPAGATION_MAX_ATTEMPTS = 8;
+const CLONE_PROPAGATION_DELAY_MS = 500;
+const CLONE_PROPAGATION_ERROR =
+  /remote branch .* not found|couldn't find remote ref|repository appears to be empty/i;
+
+function isClonePropagationError(error: unknown): boolean {
+  return (
+    error instanceof AgentOperationError &&
+    error.code === "GIT_CLONE" &&
+    CLONE_PROPAGATION_ERROR.test(error.hint ?? "")
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export interface CloneOptions {
@@ -128,24 +150,28 @@ export interface CloneResult {
  * Throws `AgentOperationError` on bad input (`BAD_INPUT`, `DIR_NOT_EMPTY`), gateway
  * failures (`HTTP_*`, `NETWORK`), or git failures (`GIT_CLONE`).
  */
-export async function clone(opts: CloneOptions, client: GatewayClient): Promise<CloneResult> {
+export async function clone(
+  opts: CloneOptions,
+  client: GatewayClient,
+): Promise<CloneResult> {
   const { templateId, forkId, definitionId, targetDir } = opts;
   const runClone = opts.cloneRepo ?? defaultCloneRepo;
 
-  const provided = [templateId, forkId, definitionId].filter((v) => v !== undefined).length;
+  const provided = [templateId, forkId, definitionId].filter(
+    (v) => v !== undefined,
+  ).length;
   if (provided === 0) {
     throw new AgentOperationError({
-      code: 'BAD_INPUT',
+      code: "BAD_INPUT",
       message:
-        'Provide a templateId (to fork then clone), a forkId (to clone an existing fork), or a definitionId (to clone a deployed agent).',
+        "Provide a templateId (to fork then clone), a forkId (to clone an existing fork), or a definitionId (to clone a deployed agent).",
     });
   }
   if (provided > 1) {
     throw new AgentOperationError({
-      code: 'BAD_INPUT',
-      message: 'Provide only one of templateId, forkId, or definitionId.',
-      hint:
-        'Use templateId to start from a gallery template, forkId to re-clone an existing fork, or definitionId to pull a deployed agent locally.',
+      code: "BAD_INPUT",
+      message: "Provide only one of templateId, forkId, or definitionId.",
+      hint: "Use templateId to start from a gallery template, forkId to re-clone an existing fork, or definitionId to pull a deployed agent locally.",
     });
   }
 
@@ -155,13 +181,14 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   let preserveStudioState = false;
   if (existsSync(targetDir)) {
     const entries = readdirSync(targetDir);
-    if (entries.length === 1 && entries[0] === '.sapiom') {
-      const studioState = lstatSync(path.join(targetDir, '.sapiom'));
-      preserveStudioState = studioState.isDirectory() && !studioState.isSymbolicLink();
+    if (entries.length === 1 && entries[0] === ".sapiom") {
+      const studioState = lstatSync(path.join(targetDir, ".sapiom"));
+      preserveStudioState =
+        studioState.isDirectory() && !studioState.isSymbolicLink();
     }
     if (entries.length > 0 && !preserveStudioState) {
       throw new AgentOperationError({
-        code: 'DIR_NOT_EMPTY',
+        code: "DIR_NOT_EMPTY",
         message: `Target directory '${targetDir}' already exists and is not empty.`,
       });
     }
@@ -196,47 +223,73 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   // argument. `cloneRepo` already terminates option parsing with `--`, but also
   // require an https:// URL here so a malformed/`-`-leading value from a
   // misbehaving endpoint can never reach git as anything but a URL.
-  if (!token.cloneUrl.startsWith('https://')) {
+  if (!token.cloneUrl.startsWith("https://")) {
     throw new AgentOperationError({
-      code: 'BAD_CLONE_URL',
-      message: 'The clone token endpoint returned an unexpected clone URL.',
+      code: "BAD_CLONE_URL",
+      message: "The clone token endpoint returned an unexpected clone URL.",
     });
   }
 
-  // 3. Clone into the local checkout. The parent must exist for git's cwd.
-  // When Studio state is present, clone into an isolated sibling first and
-  // move the completed checkout beside `.sapiom/`. A failed clone therefore
-  // leaves Studio's existing state untouched.
+  // 3. Clone into an isolated sibling, then move the completed checkout into
+  // the destination. This keeps an empty target or Studio's existing `.sapiom/`
+  // state untouched across failures and gives each propagation retry a clean
+  // path. The parent must exist for git's cwd.
   const parent = path.dirname(path.resolve(targetDir));
   mkdirSync(parent, { recursive: true });
-  const stagedTarget = preserveStudioState
-    ? mkdtempSync(path.join(parent, '.sapiom-clone-'))
-    : null;
-  const cloneTarget = stagedTarget ?? targetDir;
+  let stagedRoot: string | null = null;
+  let cloneTarget: string | null = null;
   try {
-    runClone({
-      cloneUrl: token.cloneUrl,
-      targetDir: cloneTarget,
-      branch: token.defaultBranch,
-      repoFullName: token.repoFullName,
-      cwd: parent,
-    });
-
-    if (stagedTarget) {
-      const clonedEntries = readdirSync(stagedTarget);
-      if (clonedEntries.includes('.sapiom')) {
-        throw new AgentOperationError({
-          code: 'STUDIO_STATE_CONFLICT',
-          message: 'The cloned repository contains a reserved .sapiom directory.',
-          hint: 'Remove .sapiom from the template repository, then try again.',
+    for (
+      let attempt = 1;
+      attempt <= CLONE_PROPAGATION_MAX_ATTEMPTS;
+      attempt++
+    ) {
+      stagedRoot = mkdtempSync(path.join(parent, ".sapiom-clone-"));
+      cloneTarget = stagedRoot;
+      try {
+        runClone({
+          cloneUrl: token.cloneUrl,
+          targetDir: cloneTarget,
+          branch: token.defaultBranch,
+          repoFullName: token.repoFullName,
+          cwd: parent,
         });
-      }
-      for (const entry of clonedEntries) {
-        renameSync(path.join(stagedTarget, entry), path.join(targetDir, entry));
+        break;
+      } catch (error) {
+        rmSync(stagedRoot, { recursive: true, force: true });
+        stagedRoot = null;
+        cloneTarget = null;
+        if (
+          attempt === CLONE_PROPAGATION_MAX_ATTEMPTS ||
+          !isClonePropagationError(error)
+        ) {
+          throw error;
+        }
+        await delay(CLONE_PROPAGATION_DELAY_MS);
       }
     }
+
+    if (!cloneTarget) {
+      throw new AgentOperationError({
+        code: "GIT_CLONE",
+        message: "git clone failed.",
+      });
+    }
+
+    const clonedEntries = readdirSync(cloneTarget);
+    if (clonedEntries.includes(".sapiom")) {
+      throw new AgentOperationError({
+        code: "STUDIO_STATE_CONFLICT",
+        message: "The cloned repository contains a reserved .sapiom directory.",
+        hint: "Remove .sapiom from the template repository, then try again.",
+      });
+    }
+    mkdirSync(targetDir, { recursive: true });
+    for (const entry of clonedEntries) {
+      renameSync(path.join(cloneTarget, entry), path.join(targetDir, entry));
+    }
   } finally {
-    if (stagedTarget) rmSync(stagedTarget, { recursive: true, force: true });
+    if (stagedRoot) rmSync(stagedRoot, { recursive: true, force: true });
   }
 
   // 4. Record the provenance so `link`/`deploy`/`run` know what this is. The

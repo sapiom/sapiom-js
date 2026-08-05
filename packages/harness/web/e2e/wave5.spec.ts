@@ -228,14 +228,16 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
 // Overview mode canvas
 // ---------------------------------------------------------------------------
 
-test("overview mode shows the fresh-install canvas state, not the previous session's empty state", async ({
+test("the composer home hides the canvas, not showing the previous session's board", async ({
   page,
 }) => {
   await page.getByTestId("brand-identity").click();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("welcome-panel")).toBeVisible();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
-  await expect(page.locator(".canvas-empty")).toContainText("Start a session to see its canvas here.");
+  // No canvas while composing — the previous session's board is not on show,
+  // and there is nothing to Visualize because there is no session yet.
+  await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 });
 

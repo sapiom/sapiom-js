@@ -33,8 +33,8 @@ async function main(): Promise<void> {
   const server = new McpServer(
     {
       // The local developer surface — distinct from the remote Sapiom
-      // capabilities MCP. This is the unmetered `sapiom_dev_*` namespace for
-      // building and operating on Sapiom (today: agent authoring &
+      // capabilities MCP. This is the `sapiom_dev_*` namespace for building
+      // and operating on Sapiom (today: agent authoring &
       // lifecycle; room for more dev tooling later). The `name` is the stable
       // wire identifier; `title` and `description` are what MCP clients show, so
       // they spell out which Sapiom this is to keep it from reading as a
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
       name: "sapiom-dev",
       title: "Sapiom Dev — local developer tools",
       description:
-        "The local, unmetered Sapiom developer MCP (sapiom_dev_*). Today it scaffolds, tests, deploys, and inspects agents. Not the remote Sapiom capability MCP — it makes no paid capability calls.",
+        "The local Sapiom developer MCP (sapiom_dev_*). Scaffold, check, and run with stubbed capabilities locally; authenticated deploys and production runs use Sapiom cloud. It is not the hosted direct-capability MCP.",
       version: "0.1.0",
     },
     {

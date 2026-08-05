@@ -6,7 +6,7 @@
  * one — a local copy of the catalog is the exact bug `lib/templates.ts` was
  * written to kill. So facets are derived from whatever `GET /api/templates`
  * actually returned, which also means they degrade correctly: an unreachable
- * catalog yields no facets rather than a sidebar advertising 26 templates that
+ * catalog yields no facets rather than a sidebar advertising templates that
  * are not on screen.
  *
  * The two axes are the registry's own, from `examples/registry.schema.json`:
@@ -52,10 +52,18 @@ export interface TemplateFilter {
   cadence: string | null;
 }
 
-export const NO_FILTER: TemplateFilter = { query: "", category: null, cadence: null };
+export const NO_FILTER: TemplateFilter = {
+  query: "",
+  category: null,
+  cadence: null,
+};
 
 export function isFiltered(filter: TemplateFilter): boolean {
-  return filter.query.trim() !== "" || filter.category !== null || filter.cadence !== null;
+  return (
+    filter.query.trim() !== "" ||
+    filter.category !== null ||
+    filter.cadence !== null
+  );
 }
 
 /**
@@ -73,7 +81,8 @@ const CADENCE_LABELS: Record<string, string> = {
 export function cadenceLabel(cadence: string | null): string {
   if (!cadence) return "No trigger declared";
   return (
-    CADENCE_LABELS[cadence] ?? cadence.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase())
+    CADENCE_LABELS[cadence] ??
+    cadence.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase())
   );
 }
 
@@ -117,7 +126,8 @@ export function cadenceFacets(templates: GalleryTemplate[]): Facet[] {
   return facetsOf(
     templates,
     (template) => template.cadence,
-    (value) => (value === UNDECLARED ? "No trigger declared" : cadenceLabel(value)),
+    (value) =>
+      value === UNDECLARED ? "No trigger declared" : cadenceLabel(value),
   );
 }
 

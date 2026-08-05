@@ -11,6 +11,7 @@ import {
   type AgentManifest,
 } from "@sapiom/agent";
 import { CODING_RESULT_SIGNAL } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 import { runLocal } from "./run-local.js";
 import type { StubFile } from "./stubs.js";
@@ -25,6 +26,72 @@ function manifestFor(def: AgentDefinition): AgentManifest {
 }
 
 describe("runLocal", () => {
+  it("applies Zod defaults before author code runs", async () => {
+    let capturedInput: unknown;
+    const entry = defineStep({
+      name: "entry",
+      next: [],
+      terminal: true,
+      inputSchema: z.object({
+        name: z.string().default("world"),
+      }),
+      async run(input) {
+        capturedInput = input;
+        return terminate({ greeting: `hello ${input.name}` });
+      },
+    });
+    const def = defineAgent({
+      name: "parsed-input",
+      entry: "entry",
+      steps: { entry },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(capturedInput).toEqual({ name: "world" });
+    expect(result.output).toEqual({ greeting: "hello world" });
+    expect(result.steps[0]?.input).toEqual({ name: "world" });
+  });
+
+  it("parses downstream step input with its declared Zod schema", async () => {
+    const start = defineStep({
+      name: "start",
+      next: ["finish"],
+      terminal: false,
+      async run() {
+        return goto("finish", { value: "  hello  ", extra: true });
+      },
+    });
+    const finish = defineStep({
+      name: "finish",
+      next: [],
+      terminal: true,
+      inputSchema: z.object({ value: z.string() }),
+      async run(input) {
+        return terminate(input);
+      },
+    });
+    const def = defineAgent({
+      name: "downstream-parse",
+      entry: "start",
+      steps: { start, finish },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: {},
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.output).toEqual({ value: "  hello  " });
+    expect(result.steps[1]?.input).toEqual({ value: "  hello  " });
+  });
+
   // The regression test: a handle-heavy workflow (the repo-helper shape) runs to
   // completion on built-in defaults — including `repo.pushFromSandbox(...)`, the
   // instance method that previously had no method body under stubs.
@@ -231,9 +298,12 @@ describe("runLocal", () => {
       next: [],
       pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "finish" },
       async run(_input, ctx) {
-        return pauseUntilSignal(ctx.sapiom.models.coding.launch({ task: "t" }), {
-          resumeStep: "finish",
-        });
+        return pauseUntilSignal(
+          ctx.sapiom.models.coding.launch({ task: "t" }),
+          {
+            resumeStep: "finish",
+          },
+        );
       },
     });
     const finish = defineStep({
@@ -338,9 +408,12 @@ describe("runLocal", () => {
       next: [],
       pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "done" },
       async run(_input, ctx) {
-        return pauseUntilSignal(ctx.sapiom.models.coding.launch({ task: "t" }), {
-          resumeStep: "done",
-        });
+        return pauseUntilSignal(
+          ctx.sapiom.models.coding.launch({ task: "t" }),
+          {
+            resumeStep: "done",
+          },
+        );
       },
     });
     const done = defineStep({
@@ -383,9 +456,12 @@ describe("runLocal", () => {
       next: [],
       pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "review" },
       async run(_input, ctx) {
-        return pauseUntilSignal(ctx.sapiom.models.coding.launch({ task: "t" }), {
-          resumeStep: "review",
-        });
+        return pauseUntilSignal(
+          ctx.sapiom.models.coding.launch({ task: "t" }),
+          {
+            resumeStep: "review",
+          },
+        );
       },
     });
     const review = defineStep({
@@ -435,9 +511,12 @@ describe("runLocal", () => {
       next: [],
       pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "finalize" },
       async run(_input, ctx) {
-        return pauseUntilSignal(ctx.sapiom.models.coding.launch({ task: "t" }), {
-          resumeStep: "finalize",
-        });
+        return pauseUntilSignal(
+          ctx.sapiom.models.coding.launch({ task: "t" }),
+          {
+            resumeStep: "finalize",
+          },
+        );
       },
     });
     const finalize = defineStep({
@@ -584,7 +663,8 @@ describe("runLocal", () => {
         capturedInput = input;
         // mirrors the real failure mode: reading a property of what could be
         // undefined if the default is missing
-        const trimmed = (input as { topic?: string })?.topic?.trim() ?? "(none)";
+        const trimmed =
+          (input as { topic?: string })?.topic?.trim() ?? "(none)";
         return terminate({ trimmed });
       },
     });

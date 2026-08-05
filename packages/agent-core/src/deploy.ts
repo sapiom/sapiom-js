@@ -1,19 +1,19 @@
 /**
- * deploy — mint push credentials, push the current commit, trigger a build,
- * and poll until the build reaches a terminal state.
+ * deploy — bundle the current local source, push a synthesized build tree,
+ * trigger a build, and poll until the build reaches a terminal state.
  *
  * Networked operation: requires a GatewayClient. All inputs passed explicitly;
  * no process.cwd() reads — the caller supplies the project directory and client.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-import { getOrchestrationAnalytics, telemetryErrorCode } from './analytics.js';
-import { bundleForDeploy } from './bundle.js';
-import { GatewayClient } from './client.js';
-import { AgentOperationError } from './errors.js';
-import { assertDeployable, pushHead, pushSynthesizedTree } from './git.js';
+import { getOrchestrationAnalytics, telemetryErrorCode } from "./analytics.js";
+import { bundleForDeploy } from "./bundle.js";
+import { GatewayClient } from "./client.js";
+import { AgentOperationError } from "./errors.js";
+import { assertDeployable, pushHead, pushSynthesizedTree } from "./git.js";
 
 /**
  * Whether a git push error looks like an auth failure — a short-lived push
@@ -22,13 +22,13 @@ import { assertDeployable, pushHead, pushSynthesizedTree } from './git.js';
  * rejection, checking the already-redacted hint so the match is safe to log.
  */
 function isPushAuthError(err: unknown): boolean {
-  if (!(err instanceof AgentOperationError) || err.code !== 'GIT') return false;
-  const text = ((err.hint ?? '') + ' ' + err.message).toLowerCase();
+  if (!(err instanceof AgentOperationError) || err.code !== "GIT") return false;
+  const text = ((err.hint ?? "") + " " + err.message).toLowerCase();
   return (
-    text.includes('authentication failed') ||
-    text.includes('could not read from') ||
-    text.includes('the requested url returned error: 401') ||
-    text.includes('the requested url returned error: 403')
+    text.includes("authentication failed") ||
+    text.includes("could not read from") ||
+    text.includes("the requested url returned error: 401") ||
+    text.includes("the requested url returned error: 403")
   );
 }
 
@@ -39,11 +39,12 @@ interface BuildRun {
   error?: { name?: string; message?: string; stack?: string } | null;
 }
 
-const TERMINAL = new Set(['ready', 'failed', 'cancelled', 'superseded']);
+const TERMINAL = new Set(["ready", "failed", "cancelled", "superseded"]);
 const POLL_DELAYS_MS = [1000, 2000, 3000, 5000, 5000, 8000, 10000];
 const POLL_BUDGET_MS = 300_000;
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface DeployOptions {
   /** Absolute path to the agent project directory. */
@@ -61,10 +62,11 @@ export interface DeployResult {
 }
 
 /**
- * Deploy the current commit of an agent project.
+ * Deploy the current local source of an agent project.
  *
- * Validates the git state, mints push credentials, pushes HEAD, triggers a
- * build, and polls until the build reaches a terminal status.
+ * Requires a git repository with at least one commit, then bundles the working
+ * tree (including uncommitted source), mints push credentials, pushes a
+ * synthesized build tree, triggers a build, and polls until terminal status.
  *
  * Throws `AgentOperationError` on git, network, or build failures.
  *
@@ -72,24 +74,27 @@ export interface DeployResult {
  * status, duration). Live by default — see ./analytics.ts; telemetry never
  * changes the operation's behavior.
  */
-export async function deploy(opts: DeployOptions, client: GatewayClient): Promise<DeployResult> {
+export async function deploy(
+  opts: DeployOptions,
+  client: GatewayClient,
+): Promise<DeployResult> {
   const startedAt = Date.now();
   try {
     const result = await deployOperation(opts, client);
-    getOrchestrationAnalytics().track('workflow.deploy', {
+    getOrchestrationAnalytics().track("workflow.deploy", {
       workflow_id: opts.definitionId,
-      branch: opts.branch ?? 'main',
+      branch: opts.branch ?? "main",
       build_run_id: result.buildRunId,
       build_status: result.status,
-      status: 'success',
+      status: "success",
       duration_ms: Date.now() - startedAt,
     });
     return result;
   } catch (err) {
-    getOrchestrationAnalytics().track('workflow.deploy', {
+    getOrchestrationAnalytics().track("workflow.deploy", {
       workflow_id: opts.definitionId,
-      branch: opts.branch ?? 'main',
-      status: 'error',
+      branch: opts.branch ?? "main",
+      status: "error",
       error_code: telemetryErrorCode(err),
       duration_ms: Date.now() - startedAt,
     });
@@ -98,8 +103,11 @@ export async function deploy(opts: DeployOptions, client: GatewayClient): Promis
 }
 
 /** The operation body — unchanged from before the analytics wrapper. */
-async function deployOperation(opts: DeployOptions, client: GatewayClient): Promise<DeployResult> {
-  const { projectDir, definitionId, branch = 'main' } = opts;
+async function deployOperation(
+  opts: DeployOptions,
+  client: GatewayClient,
+): Promise<DeployResult> {
+  const { projectDir, definitionId, branch = "main" } = opts;
 
   assertDeployable(projectDir);
 
@@ -116,12 +124,21 @@ async function deployOperation(opts: DeployOptions, client: GatewayClient): Prom
     {},
   );
 
-  const treeDir = mkdtempSync(path.join(tmpdir(), 'sapiom-deploy-'));
+  const treeDir = mkdtempSync(path.join(tmpdir(), "sapiom-deploy-"));
   try {
-    writeFileSync(path.join(treeDir, 'index.ts'), code);
+    writeFileSync(path.join(treeDir, "index.ts"), code);
     writeFileSync(
-      path.join(treeDir, 'package.json'),
-      JSON.stringify({ name: 'agent-definition', private: true, type: 'module', dependencies }, null, 2) + '\n',
+      path.join(treeDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "agent-definition",
+          private: true,
+          type: "module",
+          dependencies,
+        },
+        null,
+        2,
+      ) + "\n",
     );
     try {
       pushSynthesizedTree(treeDir, pushUrl, branch);
@@ -145,31 +162,34 @@ async function deployOperation(opts: DeployOptions, client: GatewayClient): Prom
     rmSync(treeDir, { recursive: true, force: true });
   }
 
-  const triggered = await client.post<BuildRun>(`/definitions/${definitionId}/builds`, {});
+  const triggered = await client.post<BuildRun>(
+    `/definitions/${definitionId}/builds`,
+    {},
+  );
   const buildRunId = triggered.buildRunId ?? triggered.id;
   if (!buildRunId) {
     throw new AgentOperationError({
-      code: 'BUILD_NO_ID',
-      message: 'The build was triggered but no build id was returned.',
+      code: "BUILD_NO_ID",
+      message: "The build was triggered but no build id was returned.",
     });
   }
 
   const final = await pollBuild(client, definitionId, buildRunId);
-  if (final.status !== 'ready') {
-    if (final.status === 'superseded') {
+  if (final.status !== "ready") {
+    if (final.status === "superseded") {
       // A newer deploy replaced this one while the build was in flight —
       // expected when the user re-deploys quickly. Surface a distinct code so
       // the UI can treat this as informational rather than a hard failure.
       throw new AgentOperationError({
-        code: 'BUILD_SUPERSEDED',
-        message: 'A newer deploy superseded this build.',
-        step: 'build',
+        code: "BUILD_SUPERSEDED",
+        message: "A newer deploy superseded this build.",
+        step: "build",
       });
     }
     throw new AgentOperationError({
-      code: 'BUILD_FAILED',
+      code: "BUILD_FAILED",
       message: `Build ${final.status}.`,
-      step: 'build',
+      step: "build",
       hint: final.error?.stack || final.error?.message,
     });
   }
@@ -177,20 +197,26 @@ async function deployOperation(opts: DeployOptions, client: GatewayClient): Prom
   return { definitionId, buildRunId, status: final.status };
 }
 
-async function pollBuild(client: GatewayClient, definitionId: string, buildRunId: string): Promise<BuildRun> {
+async function pollBuild(
+  client: GatewayClient,
+  definitionId: string,
+  buildRunId: string,
+): Promise<BuildRun> {
   let elapsed = 0;
   let i = 0;
   while (elapsed < POLL_BUDGET_MS) {
-    const build = await client.get<BuildRun>(`/definitions/${definitionId}/builds/${buildRunId}`);
+    const build = await client.get<BuildRun>(
+      `/definitions/${definitionId}/builds/${buildRunId}`,
+    );
     if (TERMINAL.has(build.status)) return build;
     const delay = POLL_DELAYS_MS[Math.min(i++, POLL_DELAYS_MS.length - 1)];
     await sleep(delay);
     elapsed += delay;
   }
   throw new AgentOperationError({
-    code: 'BUILD_TIMEOUT',
-    message: 'Build did not finish in time.',
-    step: 'build',
+    code: "BUILD_TIMEOUT",
+    message: "Build did not finish in time.",
+    step: "build",
     hint: `Check it later via the logs API for build ${buildRunId}`,
   });
 }

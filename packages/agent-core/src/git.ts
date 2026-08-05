@@ -3,21 +3,27 @@
  * directly (passed as the remote argument) rather than persisting it via
  * `remote set-url`, so the short-lived token never lands in `.git/config`.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from "node:child_process";
 
-import { AgentOperationError } from './errors.js';
+import { AgentOperationError } from "./errors.js";
 
 function git(args: string[], cwd: string): string {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   } catch (err) {
     const raw = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
     // Redact any embedded credential (e.g. a token-bearing push URL echoed by
     // git into stderr) before it reaches the caller, the CLI, or the browser
     // stream. Applies to every git command so no path can leak a token.
-    const hint = redactCredentials(raw || (err instanceof Error ? err.message : String(err)));
+    const hint = redactCredentials(
+      raw || (err instanceof Error ? err.message : String(err)),
+    );
     throw new AgentOperationError({
-      code: 'GIT',
+      code: "GIT",
       message: `git ${args[0]} failed.`,
       hint,
     });
@@ -27,20 +33,23 @@ function git(args: string[], cwd: string): string {
 /** Fail clearly unless `dir` is a git repo with at least one commit. */
 export function assertDeployable(dir: string): void {
   try {
-    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: dir, stdio: 'ignore' });
+    execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: dir,
+      stdio: "ignore",
+    });
   } catch {
     throw new AgentOperationError({
-      code: 'NOT_GIT',
-      message: 'Not a git repository.',
+      code: "NOT_GIT",
+      message: "Not a git repository.",
       hint: 'Initialize one: git init && git add -A && git commit -m "init"',
     });
   }
   try {
-    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, stdio: 'ignore' });
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, stdio: "ignore" });
   } catch {
     throw new AgentOperationError({
-      code: 'NO_COMMITS',
-      message: 'This repository has no commits yet.',
+      code: "NO_COMMITS",
+      message: "This repository has no commits yet.",
       hint: 'Commit your work: git add -A && git commit -m "…"',
     });
   }
@@ -54,7 +63,7 @@ export function assertDeployable(dir: string): void {
  * short-lived GitHub App token.
  */
 export function redactCredentials(text: string): string {
-  return text.replace(/(https?:\/\/)[^@\s/]+@/gi, '$1***@');
+  return text.replace(/(https?:\/\/)[^@\s/]+@/gi, "$1***@");
 }
 
 export interface CloneRepoOptions {
@@ -92,19 +101,30 @@ export function cloneRepo(opts: CloneRepoOptions): void {
   const { cloneUrl, targetDir, branch, repoFullName, cwd } = opts;
   try {
     execFileSync(
-      'git',
+      "git",
       // `--` terminates option parsing so a cloneUrl/targetDir that begins with
       // `-` can never be read as a git flag (e.g. `--upload-pack=<cmd>`, which
       // would run an arbitrary command) — second-order argv injection hardening.
-      ['clone', '--depth', '1', '--single-branch', '--branch', branch, '--', cloneUrl, targetDir],
-      { cwd, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' },
+      [
+        "clone",
+        "--depth",
+        "1",
+        "--single-branch",
+        "--branch",
+        branch,
+        "--",
+        cloneUrl,
+        targetDir,
+      ],
+      { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
     );
   } catch (err) {
     const stderr = (err as { stderr?: Buffer | string }).stderr?.toString();
-    const raw = stderr?.trim() || (err instanceof Error ? err.message : String(err));
+    const raw =
+      stderr?.trim() || (err instanceof Error ? err.message : String(err));
     throw new AgentOperationError({
-      code: 'GIT_CLONE',
-      message: 'git clone failed.',
+      code: "GIT_CLONE",
+      message: "git clone failed.",
       hint: redactCredentials(raw),
     });
   }
@@ -115,18 +135,21 @@ export function cloneRepo(opts: CloneRepoOptions): void {
   // best-effort attempt is the right trade-off: worst case the ~1h token lingers
   // in .git/config, which the caller was told to treat as ephemeral anyway.
   try {
-    git(['remote', 'set-url', 'origin', `https://github.com/${repoFullName}.git`], targetDir);
+    git(
+      ["remote", "set-url", "origin", `https://github.com/${repoFullName}.git`],
+      targetDir,
+    );
   } catch {
     // Non-fatal — see comment above.
   }
 }
 
 export function pushHead(dir: string, pushUrl: string, branch: string): void {
-  // Force-push: `deploy` ships the author's current commit, and the freshly
-  // provisioned repo is auto-initialized (a starting commit on the branch), so
-  // a plain push is non-fast-forward. The author's working tree is the source
-  // of truth for their definition; the remote is only a build source.
-  git(['push', '--force', pushUrl, `HEAD:${branch}`], dir);
+  // Force-push the already-committed synthesized deploy tree. This helper is
+  // used only when retrying a credential-rejected push; the freshly
+  // provisioned repo may already contain a starting commit, so a plain push is
+  // non-fast-forward. The remote is only a build source.
+  git(["push", "--force", pushUrl, `HEAD:${branch}`], dir);
 }
 
 /**
@@ -136,9 +159,25 @@ export function pushHead(dir: string, pushUrl: string, branch: string): void {
  * author's raw commit — so relative imports that escape the author's repo root
  * (shared local utils) are already inlined and the remote build can resolve them.
  */
-export function pushSynthesizedTree(treeDir: string, pushUrl: string, branch: string): void {
-  git(['init', '-q', '-b', branch], treeDir);
-  git(['add', '-A'], treeDir);
-  git(['-c', 'user.email=deploy@sapiom.ai', '-c', 'user.name=Sapiom Deploy', 'commit', '-q', '-m', 'deploy'], treeDir);
-  git(['push', '--force', pushUrl, `HEAD:${branch}`], treeDir);
+export function pushSynthesizedTree(
+  treeDir: string,
+  pushUrl: string,
+  branch: string,
+): void {
+  git(["init", "-q", "-b", branch], treeDir);
+  git(["add", "-A"], treeDir);
+  git(
+    [
+      "-c",
+      "user.email=deploy@sapiom.ai",
+      "-c",
+      "user.name=Sapiom Deploy",
+      "commit",
+      "-q",
+      "-m",
+      "deploy",
+    ],
+    treeDir,
+  );
+  git(["push", "--force", pushUrl, `HEAD:${branch}`], treeDir);
 }

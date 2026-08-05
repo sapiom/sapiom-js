@@ -30,6 +30,8 @@
     "examples:check:test": "node --test scripts/*.test.mjs",
     "terminology:check": "node scripts/agent-studio-terminology-check.mjs",
     "terminology:check:test": "node --test scripts/agent-studio-terminology-check.test.mjs",
+    "provider-copy:check": "node scripts/provider-neutral-copy-check.mjs",
+    "provider-copy:check:test": "node --test scripts/provider-neutral-copy-check.test.mjs",
     "examples:sort": "node scripts/examples-sort.mjs",
     "examples:sync-setup": "node scripts/examples-sync-setup.mjs"
   },

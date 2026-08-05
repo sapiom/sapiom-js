@@ -52,7 +52,7 @@ export interface SandboxCreateOptions {
 
   /**
    * If true, returns a presigned S3 upload URL for a ZIP containing a Dockerfile.
-   * Blaxel builds a reusable Docker image from the upload.
+   * The platform builds a reusable Docker image from the upload.
    *
    * The Dockerfile **must** include the sandbox-api runtime agent:
    * ```dockerfile
@@ -106,13 +106,13 @@ export interface ExecOptions {
 
   /**
    * Prevent the sandbox from entering standby while this process runs.
-   * Passed through to the Blaxel process API.
+   * Passed through to the sandbox process API.
    */
   keepAlive?: boolean;
 
   /**
    * Auto-terminate the process after this many seconds.
-   * 0 means no auto-termination. Passed through to the Blaxel process API.
+   * 0 means no auto-termination. Passed through to the sandbox process API.
    */
   processTimeout?: number;
 

@@ -14,7 +14,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code end-to-end and returns a per-step trace. This template has no capabilities, so `run_local` and a real `run` behave identically.
+- **run_local** — runs your **real** step code on this machine and returns a per-step trace. This template has no capabilities to stub, so the agent logic and parsed input/output match a cloud run; the process environment is still local.
 - **deploy**, then **run** — ship it, then run it for real.
 
 Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev tools (`sapiom_dev_agents_*`). See `README.md` for the full lifecycle.

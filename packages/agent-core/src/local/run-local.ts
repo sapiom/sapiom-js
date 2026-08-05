@@ -1,8 +1,10 @@
 /**
  * runLocal — execute an agent entirely in-process, resolving every
  * `ctx.sapiom.*` capability call from a stub file. Runs the author's actual
- * step bodies on the `@sapiom/agent-runtime` walker, so a local pass is
- * real evidence, offline and at zero cost.
+ * step bodies on the `@sapiom/agent-runtime` walker, so a local pass is real
+ * evidence without a Sapiom account, capability request, or capability spend.
+ * Author code remains ordinary local code and can still read files, inspect
+ * environment variables, start processes, or make its own network requests.
  *
  * Returns a structured per-step trace plus `unusedStubs` (supplied keys that
  * matched no call) and `stubWarnings` (keys that matched but carried the wrong
@@ -11,10 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import type {
-  AgentDefinition,
-  AgentManifest,
-} from "@sapiom/agent";
+import type { AgentDefinition, AgentManifest } from "@sapiom/agent";
 import {
   DEFAULT_MAX_ATTEMPTS_PER_STEP,
   InMemoryExecutionStore,
@@ -61,8 +60,8 @@ export interface RunLocalOptions {
 export type LocalRunOutcome = "completed" | "failed" | "paused" | "running";
 
 /** A supplied stub key that no capability call in its step ever matched — almost
- *  always a typo or the wrong path form (e.g. `models.coding.launch` instead of
- *  `models.coding.run`, or the plural `repositories.pushFromSandbox` instead of
+ *  always a typo or the wrong path form (e.g. `agent.coding.launch` instead of
+ *  `models.coding.launch`, or the plural `repositories.pushFromSandbox` instead of
  *  the handle-method `repository.pushFromSandbox`). */
 export interface UnusedStub {
   step: string;

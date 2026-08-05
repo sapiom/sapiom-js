@@ -35,15 +35,17 @@ Rule of thumb: author an agent for anything multi-step, scheduled, or deployable
 remote MCP or the SDK for a single action.
 
 ## Lifecycle (in order)
-1. \`sapiom_authenticate\` — browser login; caches an API key (makes you an API-key principal,
-   required for deploy/run). Confirm with \`sapiom_status\`.
-2. Start a project — \`sapiom_dev_agents_scaffold\` (a fresh starter) or \`sapiom_dev_agents_clone\`
+1. Start a project — \`sapiom_dev_agents_scaffold\` (a fresh starter) or \`sapiom_dev_agents_clone\`
    (materialize a gallery template or an existing fork — the "use this template" handoff).
    READ the project's \`AGENTS.md\` first, plus the \`sapiom-agent-authoring\` skill in
    \`.claude/skills/\` where present (scaffolded projects include it; auto-loads in Claude Code).
    Then \`npm install\`.
-3. Test for free: \`npm run typecheck\` → \`sapiom_dev_agents_check\` (validates the step graph,
-   offline) → \`sapiom_dev_agents_run_local\` (capabilities are stubbed; zero spend).
+2. Test locally: \`npm run typecheck\` → \`sapiom_dev_agents_check\` (typechecks, imports the
+   definition, and validates its graph; no Sapiom account or service call) →
+   \`sapiom_dev_agents_run_local\` (\`ctx.sapiom.*\` calls are stubbed, so there is no Sapiom
+   capability spend; the author's own local code and side effects remain real).
+3. Before cloud work, run \`sapiom_authenticate\` — browser login caches an API key and makes
+   you an API-key principal. Confirm with \`sapiom_status\`; auth is required for link/deploy/run.
 4. Ship: \`sapiom_dev_agents_link\` → \`_deploy\` → \`_run\` (real, billed) → \`_inspect\`.
 
 ## Preview a web app

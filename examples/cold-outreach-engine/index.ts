@@ -19,13 +19,13 @@ import { z } from "zod/v4";
  * and then sends the sequence one touch at a time — pausing at $0 between
  * touches and stopping the moment someone replies.
  *
- *   enrich (Hunter) ─▶ scrape (web) ─▶ personalize (models.run) ─▶ verify (Hunter)
+ *   enrich (email search) ─▶ scrape (web) ─▶ personalize (models.run) ─▶ verify (email)
  *      └─▶ launch (database) ─▶ send (email) ⇄ advance ─▶ done
  *
  *   - **enrich** takes a lead list — a company domain, optionally a person —
- *     and resolves a real contact with Hunter: `findEmail` when you name the
- *     person, `domainSearch` to surface a decision-maker when you only have the
- *     company. Per-lead failures are skipped, never fatal. Pass no `leads` at
+ *     and resolves a real contact through email search: `findEmail` when you
+ *     name the person, `domainSearch` to surface a decision-maker when you only
+ *     have the company. Per-lead failures are skipped, never fatal. Pass no `leads` at
  *     all and it works the built-in demo batch instead (see below).
  *   - **scrape** reads each company's site (`web.scrape`) for a few lines of
  *     context. The bodies are bounded and die here — they never enter shared
@@ -33,7 +33,7 @@ import { z } from "zod/v4";
  *   - **personalize** hands those snippets to the live model (`models.run`) and
  *     gets back one concrete first line per prospect, falling back to a safe
  *     generic opener when the model returns nothing usable.
- *   - **verify** checks each address for deliverability (Hunter `verifyEmail`)
+ *   - **verify** checks each address for deliverability (`verifyEmail`)
  *     and drops the ones that would bounce before a single email goes out.
  *   - **launch** persists the campaign and its contacts to a Postgres store the
  *     engine owns, then hands off to the drip. A `dryRun` stops here and returns
@@ -51,8 +51,8 @@ import { z } from "zod/v4";
  *
  * Zero-setup demo: with no `leads`, the run works `DEMO_LEADS` — three
  * fabricated companies and contacts — instead of stopping with nobody to write
- * to. Hunter has no real person to find at a company that doesn't exist, so
- * `enrich` and `verify` simulate its response for these deterministically
+ * to. Email search has no real person to find at a company that doesn't exist,
+ * so `enrich` and `verify` simulate the capability response deterministically
  * rather than calling it. Everything else is real: `personalize` still calls
  * the live model, `launch` still persists the campaign, and `send` still
  * delivers the first touch — to this agent's own Sapiom-hosted demo inbox
@@ -75,7 +75,7 @@ const MAX_LEADS = 25;
 const MAX_CONTEXT_CHARS = 1500;
 /** Days between drip touches when the caller doesn't pass one. */
 const DEFAULT_DRIP_DAYS = 3;
-/** Below this Hunter confidence score, treat an address as undeliverable. */
+/** Below this verification confidence score, treat an address as undeliverable. */
 const VERIFY_MIN_SCORE = 50;
 /** Default cadence documented for the cron trigger: 09:00 on weekdays. */
 const DEFAULT_SCHEDULE = "0 9 * * 1-5";
@@ -135,7 +135,7 @@ interface Contact {
   firstLine?: string;
   /** Whether the address cleared verification (added by `verify`). */
   deliverable?: boolean;
-  /** Hunter's verification verdict, for the summary (added by `verify`). */
+  /** The verification verdict, for the summary (added by `verify`). */
   verifyStatus?: string;
   /** Drip state: "active" until it replies or the sequence ends. */
   status?: "active" | "replied" | "done";
@@ -177,8 +177,8 @@ interface DemoLead {
 
 /**
  * The zero-setup stand-in: three fabricated companies and contacts, used only
- * when a run supplies no `leads` at all. Hunter has no real person to find at
- * a company that doesn't exist, so `enrich` and `verify` simulate its
+ * when a run supplies no `leads` at all. Email search has no real person to
+ * find at a company that doesn't exist, so `enrich` and `verify` simulate its
  * response deterministically for these instead of calling it — `scrape`'s
  * context is likewise canned here rather than fetched. `personalize` (the
  * live model call), `launch` (the real persist), and `send` (a real email to
@@ -641,7 +641,7 @@ const verify = defineStep({
     const checked: Contact[] = [];
     for (const c of contacts) {
       if (c.demo) {
-        // Same stand-in as `enrich`: Hunter can't verify an address at a
+        // Same stand-in as `enrich`: email search can't verify an address at a
         // company that doesn't exist. Deterministically deliverable, so the
         // demo reaches a real send rather than stopping for a reason the
         // caller didn't cause.
@@ -742,7 +742,7 @@ const launch = defineStep({
           unmet: ["leads"],
           note:
             contacts.length === 0
-              ? "None of the supplied leads could be enriched into a contact — Hunter found nobody for any of them — so there was nobody to write to and nothing was sent."
+              ? "None of the supplied leads could be enriched into a contact, so there was nobody to write to and nothing was sent."
               : `None of the ${contacts.length} lead(s) verified as deliverable, so nothing was sent.`,
         },
         { reason: "no deliverable contacts" },
@@ -972,7 +972,7 @@ const done = defineStep({
       })),
       ...(demoRun
         ? {
-            note: "This is a zero-setup demo: enrichment and verification simulated Hunter's response for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior.",
+            note: "This is a zero-setup demo: enrichment and verification used simulated responses for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior.",
           }
         : {}),
     };

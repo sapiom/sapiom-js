@@ -332,7 +332,9 @@ function readProjectConfigState(
   }
   const definitionId = config?.definitionId;
   if (definitionId) return { kind: "linked", definitionId };
-  return config?.name ? { kind: "unlinked", name: config.name } : { kind: "unlinked" };
+  return config?.name
+    ? { kind: "unlinked", name: config.name }
+    : { kind: "unlinked" };
 }
 
 /**
@@ -410,8 +412,9 @@ async function withKeyRefreshRetry<T>(
  *   - `POST /api/runs` — `{ executionId }` for a started prod execution.
  *   - `POST /api/runs/local` — NDJSON local stub-run trace + summary.
  *
- * Deploy and prod-run run server-side with the held API key; run-local is fully
- * offline and needs no key. None of them ever involve an AI coding agent.
+ * Deploy and prod-run run server-side with the held API key; run-local needs no
+ * key and replaces ctx.sapiom calls with stubs, while ordinary author-code side
+ * effects remain real. None of them ever involve an AI coding agent.
  */
 export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const router = Router();
@@ -529,8 +532,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       } catch (cacheErr) {
         write({
           phase: "warning",
-          message:
-            `The agent "${linked.name}" was created on Sapiom (${linked.definitionId}) but not recorded locally: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves it by name.`,
+          message: `The agent "${linked.name}" was created on Sapiom (${linked.definitionId}) but not recorded locally: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves it by name.`,
         });
       }
       // Best-effort, same as the cache write above, and run whether or not it
@@ -727,7 +729,9 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
             kind: "error",
             outcome: "failed",
             error:
-              stderrTail.trim() || crashReason || "run-local produced no output",
+              stderrTail.trim() ||
+              crashReason ||
+              "run-local produced no output",
           }) + "\n",
         );
       }

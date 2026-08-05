@@ -4,7 +4,12 @@ import type { JSX } from "react";
 import type { TemplateDetailView, TemplateListResponse } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
-import { NO_FILTER, filterTemplates, isFiltered, type TemplateFilter } from "../lib/template-facets";
+import {
+  NO_FILTER,
+  filterTemplates,
+  isFiltered,
+  type TemplateFilter,
+} from "../lib/template-facets";
 import {
   STARTER_TEMPLATES,
   matchesQuery,
@@ -48,7 +53,7 @@ interface TemplatesPanelProps {
  * Three properties are load-bearing and easy to lose in a redesign:
  *
  * 1. **The catalog is fetched, never bundled.** A hardcoded copy is why the
- *    Studio once offered two templates while the dashboard had twenty-six.
+ *    Studio once offered only two templates while the dashboard had the full catalog.
  * 2. **A degraded fetch says so.** Signed out or core unreachable, the notice
  *    names the reason. Silence is what let a short list read as a whole catalog.
  * 3. **Bundled starters keep their own block.** They do not require the live
@@ -84,7 +89,8 @@ export function TemplatesPanel({
         if (!cancelled) setCatalog(response);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+        if (!cancelled)
+          setLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -95,10 +101,17 @@ export function TemplatesPanel({
   }, []);
 
   const gallery = useMemo<GalleryTemplate[]>(
-    () => (catalog?.templates ?? []).map((template) => ({ ...template, kind: "gallery" as const })),
+    () =>
+      (catalog?.templates ?? []).map((template) => ({
+        ...template,
+        kind: "gallery" as const,
+      })),
     [catalog],
   );
-  const results = useMemo(() => filterTemplates(gallery, filter, matchesQuery), [gallery, filter]);
+  const results = useMemo(
+    () => filterTemplates(gallery, filter, matchesQuery),
+    [gallery, filter],
+  );
   // Starters answer the query but not the facets: they declare neither axis, so
   // selecting a category or a trigger is a statement about the gallery, and
   // leaving them on screen under one would misrepresent them as matching it.
@@ -106,7 +119,9 @@ export function TemplatesPanel({
     () =>
       filter.category !== null || filter.cadence !== null
         ? []
-        : STARTER_TEMPLATES.filter((template) => matchesQuery(template, filter.query)),
+        : STARTER_TEMPLATES.filter((template) =>
+            matchesQuery(template, filter.query),
+          ),
     [filter],
   );
 
@@ -122,7 +137,11 @@ export function TemplatesPanel({
   })();
 
   return (
-    <section className="templates-panel" data-testid="templates-panel" aria-label="Templates">
+    <section
+      className="templates-panel"
+      data-testid="templates-panel"
+      aria-label="Templates"
+    >
       {/* Matches the session bar's height, so the shell's top edge does not
           shift as you enter and leave the browser. */}
       <div className="templates-bar">
@@ -136,7 +155,9 @@ export function TemplatesPanel({
         >
           <Icon name="ArrowLeft" size={14} />
         </button>
-        <span className="templates-bar-title">{opened ? opened.name : "Templates"}</span>
+        <span className="templates-bar-title">
+          {opened ? opened.name : "Templates"}
+        </span>
         {opened && (
           <button
             ref={useTriggerRef}
@@ -168,18 +189,29 @@ export function TemplatesPanel({
               </header>
 
               {degraded && (
-                <div className="templates-degraded" data-testid="templates-degraded" role="status">
+                <div
+                  className="templates-degraded"
+                  data-testid="templates-degraded"
+                  role="status"
+                >
                   <Icon name="TriangleAlert" size={14} />
                   <span>{degraded}</span>
                 </div>
               )}
 
               <div className="templates-layout">
-                <TemplateFilters catalog={gallery} filter={filter} onChange={setFilter} />
+                <TemplateFilters
+                  catalog={gallery}
+                  filter={filter}
+                  onChange={setFilter}
+                />
 
                 <div className="templates-results">
                   {results.length > 0 && (
-                    <div className="templates-grid" data-testid="templates-grid">
+                    <div
+                      className="templates-grid"
+                      data-testid="templates-grid"
+                    >
                       {results.map((template) => (
                         <TemplateCard
                           key={template.id}
@@ -214,10 +246,14 @@ export function TemplatesPanel({
                   )}
 
                   {starters.length > 0 && (
-                    <section className="templates-starters" data-testid="templates-starters">
+                    <section
+                      className="templates-starters"
+                      data-testid="templates-starters"
+                    >
                       <span className="facet-title">Bundled starters</span>
                       <p className="templates-starters-copy">
-                        Shipped with the CLI. No Sapiom account or capability spend; setup may access npm.
+                        Shipped with the CLI. No Sapiom account or capability
+                        spend; setup may access npm.
                       </p>
                       <div className="templates-grid">
                         {starters.map((template) => (

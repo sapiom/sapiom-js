@@ -39,7 +39,7 @@ export {
 } from "./config.js";
 export type { SapiomConfig, LinkedSapiomConfig } from "./config.js";
 
-// scaffold (local, no network)
+// scaffold (local filesystem; version resolution may query npm)
 export {
   scaffold,
   resolveVersions,
@@ -53,7 +53,7 @@ export type {
   ResolvedVersions,
 } from "./scaffold.js";
 
-// check (local, no network)
+// check (no Sapiom service call; imports author code while deriving the manifest)
 export { check } from "./check.js";
 export type { CheckOptions, CheckResult } from "./check.js";
 
@@ -130,7 +130,13 @@ export { sendFeedback } from "./feedback.js";
 export type { SendFeedbackOptions, SendFeedbackResult } from "./feedback.js";
 
 // schedules / triggers (networked)
-export { createSchedule, listSchedules, getSchedule, cancelSchedule, previewCron } from "./schedule.js";
+export {
+  createSchedule,
+  listSchedules,
+  getSchedule,
+  cancelSchedule,
+  previewCron,
+} from "./schedule.js";
 export type {
   ScheduleKind,
   ScheduleStatus,
@@ -145,7 +151,12 @@ export type {
 } from "./schedule.js";
 
 // git helpers (used by deploy/clone; exported for consumers that need them directly)
-export { assertDeployable, pushHead, cloneRepo, redactCredentials } from "./git.js";
+export {
+  assertDeployable,
+  pushHead,
+  cloneRepo,
+  redactCredentials,
+} from "./git.js";
 export type { CloneRepoOptions } from "./git.js";
 
 // local stub file model (per-step capability overrides for run_local)

@@ -6,7 +6,7 @@
  * two registry entries (`web/src/lib/templates.ts`, pinned at harness 0.1.4 /
  * f0e3406) because — as that module's header said — "no listing API, MCP tool,
  * or CLI command exposes the gallery to any client today". That is no longer
- * true: core serves `GET /v1/workflows/templates` (26 templates) and
+ * true: core serves `GET /v1/workflows/templates` and
  * `GET /v1/workflows/templates/:id`, which is exactly what the dashboard's
  * gallery renders. Reading the same endpoint is what keeps the two surfaces from
  * drifting; re-deriving the list from `registry.json` would just recreate the
@@ -76,13 +76,17 @@ function nullableStr(value: unknown): string | null {
 }
 
 function strArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string")
+    : [];
 }
 
 /** A basis count. Absent or nonsense reads as 0 — the basis only ever explains a
  *  band, so a missing count should drop out of the explanation, not sink it. */
 function count(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
 }
 
 /**
@@ -103,7 +107,10 @@ function toComplexity(value: unknown): TemplateComplexity | null {
   const raw = value as Json;
   const label = nullableStr(raw.label);
   if (!label) return null;
-  const basis = typeof raw.basis === "object" && raw.basis !== null ? (raw.basis as Json) : {};
+  const basis =
+    typeof raw.basis === "object" && raw.basis !== null
+      ? (raw.basis as Json)
+      : {};
   return {
     label,
     score: count(raw.score),
@@ -152,7 +159,10 @@ function toSummary(raw: Json): TemplateSummary {
  * before the view can use them. Getting this wrong renders a step list with no
  * connectors and nothing marked as an exit.
  */
-function toGraph(rawSteps: unknown, rawTransitions: unknown): {
+function toGraph(
+  rawSteps: unknown,
+  rawTransitions: unknown,
+): {
   steps: TemplateStepView[];
   transitions: TemplateTransitionView[];
 } {
@@ -160,7 +170,9 @@ function toGraph(rawSteps: unknown, rawTransitions: unknown): {
     ? rawSteps.filter((s): s is Json => typeof s === "object" && s !== null)
     : [];
   const edges = Array.isArray(rawTransitions)
-    ? rawTransitions.filter((t): t is Json => typeof t === "object" && t !== null)
+    ? rawTransitions.filter(
+        (t): t is Json => typeof t === "object" && t !== null,
+      )
     : [];
 
   // `<templateId>::<stepName>` → `stepName`. Fall back to `name` so a future
@@ -181,7 +193,10 @@ function toGraph(rawSteps: unknown, rawTransitions: unknown): {
   // `fail` are sinks with a null target (never drawn edges, but they decide the
   // node's kind), and a step that can `continue` AND terminate is a mid-flow
   // step, not an exit.
-  const outgoing = new Map<string, Array<{ kind: string; signal: string | null }>>();
+  const outgoing = new Map<
+    string,
+    Array<{ kind: string; signal: string | null }>
+  >();
   for (const edge of edges) {
     const from = resolve(edge.fromStepDefinitionId ?? edge.from);
     const list = outgoing.get(from) ?? [];
@@ -190,12 +205,16 @@ function toGraph(rawSteps: unknown, rawTransitions: unknown): {
   }
 
   // Entry is the lowest `ordinal` — core documents that on DefinitionStepDto.
-  const entry = steps
-    .map((step) => ({
-      name: str(step.stepName) || str(step.name),
-      ordinal: typeof step.ordinal === "number" ? step.ordinal : Number.MAX_SAFE_INTEGER,
-    }))
-    .sort((a, b) => a.ordinal - b.ordinal)[0]?.name ?? "";
+  const entry =
+    steps
+      .map((step) => ({
+        name: str(step.stepName) || str(step.name),
+        ordinal:
+          typeof step.ordinal === "number"
+            ? step.ordinal
+            : Number.MAX_SAFE_INTEGER,
+      }))
+      .sort((a, b) => a.ordinal - b.ordinal)[0]?.name ?? "";
 
   const DRAWN_KINDS = new Set(["continue", "pause"]);
 
@@ -227,7 +246,10 @@ function toGraph(rawSteps: unknown, rawTransitions: unknown): {
         // A pause edge names the signal it waits for; that IS its label. Nothing
         // else in the DTO is a label, so nothing else is invented.
         label: nullableStr(edge.signal),
-        kind: str(edge.kind) === "pause" ? ("pause" as const) : ("continue" as const),
+        kind:
+          str(edge.kind) === "pause"
+            ? ("pause" as const)
+            : ("continue" as const),
       }))
       .filter((edge) => edge.from !== "" && edge.to !== ""),
   };
@@ -240,9 +262,13 @@ function toGraph(rawSteps: unknown, rawTransitions: unknown): {
  */
 function toDetail(raw: Json): TemplateDetailView {
   const manifest: Json =
-    typeof raw.manifest === "object" && raw.manifest !== null ? (raw.manifest as Json) : {};
+    typeof raw.manifest === "object" && raw.manifest !== null
+      ? (raw.manifest as Json)
+      : {};
   const author: Json | null =
-    typeof manifest.author === "object" && manifest.author !== null ? (manifest.author as Json) : null;
+    typeof manifest.author === "object" && manifest.author !== null
+      ? (manifest.author as Json)
+      : null;
   const graph = toGraph(raw.steps, raw.transitions);
   return {
     ...toSummary(raw),
@@ -250,7 +276,9 @@ function toDetail(raw: Json): TemplateDetailView {
     sourcePath: nullableStr(raw.sourcePath),
     steps: graph.steps,
     transitions: graph.transitions,
-    author: author ? { name: str(author.name), url: nullableStr(author.url) } : null,
+    author: author
+      ? { name: str(author.name), url: nullableStr(author.url) }
+      : null,
     useCases: strArray(manifest.useCases),
     notes: nullableStr(manifest.notes),
     examples: Array.isArray(manifest.examples)
@@ -290,7 +318,10 @@ export function createTemplateCatalog(opts: {
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   let listCache: { at: number; value: TemplateListResponse } | null = null;
-  const detailCache = new Map<string, { at: number; value: TemplateDetailView }>();
+  const detailCache = new Map<
+    string,
+    { at: number; value: TemplateDetailView }
+  >();
   // One line per distinct failure reason, not per poll — the dialog may reopen
   // repeatedly and a persistent misconfiguration shouldn't flood the log.
   const logged = new Set<string>();
@@ -378,7 +409,9 @@ export function createTemplateCatalog(opts: {
       const cached = detailCache.get(id);
       if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
 
-      const body = await getJson(`/v1/workflows/templates/${encodeURIComponent(id)}`);
+      const body = await getJson(
+        `/v1/workflows/templates/${encodeURIComponent(id)}`,
+      );
       if (typeof body !== "object" || body === null) return null;
       const value = toDetail(body as Json);
       if (value.id === "") return null;

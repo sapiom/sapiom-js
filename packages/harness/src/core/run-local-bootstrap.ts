@@ -6,8 +6,10 @@
  * (`runLocalFromDir` from @sapiom/agent-core) and writes the result as an
  * NDJSON stream to stdout: one line per {@link LocalStepTrace}, then a single
  * terminal summary line `{ outcome, output, error, unusedStubs, stubWarnings }`.
- * Fully offline and zero-cost — run-local resolves every `ctx.sapiom.*` call
- * from stubs and never touches the network.
+ * It needs no Sapiom account and resolves every `ctx.sapiom.*` call from stubs,
+ * so it creates no Sapiom capability request or capability spend. The imported
+ * definition and author step code are ordinary local code and may still perform
+ * their own filesystem, process, environment, or network effects.
  *
  * Why a separate child process (not an in-process import):
  *  1. `runLocalFromDir` esbuild-bundles and dynamically `import()`s a workflow

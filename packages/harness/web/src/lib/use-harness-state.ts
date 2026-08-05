@@ -14,7 +14,11 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import type { HarnessEntry, TemplateDetailView, TemplateListResponse } from "@shared/types";
+import type {
+  HarnessEntry,
+  TemplateDetailView,
+  TemplateListResponse,
+} from "@shared/types";
 
 import {
   ApiError,
@@ -124,7 +128,10 @@ export interface HarnessStateHook {
    *  (installed/experimental/external flags) and the MCP setup prompts. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /** Binds a workflow to a session ("what am I working on") — null unbinds. */
-  bindWorkflow: (sessionId: string, workflowPath: string | null) => Promise<void>;
+  bindWorkflow: (
+    sessionId: string,
+    workflowPath: string | null,
+  ) => Promise<void>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
   /**
@@ -157,17 +164,26 @@ export interface HarnessStateHook {
    * poller so the run shows up in the Steps tab exactly as a CLI-launched run
    * does. Errors go to the toast slot.
    */
-  startProdRun: (sessionId: string, definitionId: string, input?: unknown) => Promise<void>;
+  startProdRun: (
+    sessionId: string,
+    definitionId: string,
+    input?: unknown,
+  ) => Promise<void>;
   /**
-   * Runs the workflow at `sourceDir` OFFLINE against stub capabilities and
+   * Runs the workflow at `sourceDir` locally against stub capabilities and
    * streams the result into the SAME run store the prod poller feeds — so the
    * click-into-step inspector renders a local stub run exactly as it renders a
    * prod run (per-step logs + pass/fail + IO), just `target: "local"` (free,
    * untimed). Resolves when the stream ends; a failed *run* is a normal
-   * terminal state (surfaced in the run), not a rejection. Fully offline: no
-   * key, no cost, works signed-out.
+   * terminal state (surfaced in the run), not a rejection. It needs no Sapiom
+   * key, creates no Sapiom capability spend, and works signed-out; author
+   * code's own side effects remain real.
    */
-  runLocal: (sessionId: string, sourceDir: string, input?: unknown) => Promise<void>;
+  runLocal: (
+    sessionId: string,
+    sourceDir: string,
+    input?: unknown,
+  ) => Promise<void>;
   /**
    * Submits text to a session's pty via POST /api/sessions/:id/input.
    * Throws `ApiError` on HTTP errors — callers handle 409 (session not ready)
@@ -242,17 +258,23 @@ export function useHarnessState(): HarnessStateHook {
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
   // connectivity classifier so the shell can pick a recoverable offline vs
   // auth vs generic state instead of a dead "Failed to load" screen.
-  const [errorKind, setErrorKind] = useState<ConnectivityErrorInput | null>(null);
+  const [errorKind, setErrorKind] = useState<ConnectivityErrorInput | null>(
+    null,
+  );
   // Bumped by reload() to re-run the one-shot boot fetch (the recovery path).
   const [reloadSeq, setReloadSeq] = useState(0);
-  const [selectedWorkflowPath, setSelectedWorkflowPath] = useState<string | null>(null);
+  const [selectedWorkflowPath, setSelectedWorkflowPath] = useState<
+    string | null
+  >(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
   // affects the render, and both are read/written within a single call.
-  const inFlightHistory = useRef<Map<string, Promise<SessionSummary[]>>>(new Map());
+  const inFlightHistory = useRef<Map<string, Promise<SessionSummary[]>>>(
+    new Map(),
+  );
   const historyLoads = useRef(0);
   // Deploys in flight, keyed by workflow path. A second click while one is
   // running must not start another: for an UNLINKED project each deploy calls
@@ -263,26 +285,40 @@ export function useHarnessState(): HarnessStateHook {
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
-  const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   // Runs (upstream runtime-analytics contract): an execution.started bus
   // message starts polling /api/runs/:id/state until the run is terminal.
   // Snapshots accumulate per executionId — never replaced by a later run —
   // so a new execution can't erase the one you were reading (or its costs).
-  const [runsByExecution, setRunsByExecution] = useState<Map<string, ObservedRun>>(new Map());
+  const [runsByExecution, setRunsByExecution] = useState<
+    Map<string, ObservedRun>
+  >(new Map());
   // Ordered executionIds observed per session, oldest first.
-  const [runIdsBySession, setRunIdsBySession] = useState<Map<string, string[]>>(new Map());
+  const [runIdsBySession, setRunIdsBySession] = useState<Map<string, string[]>>(
+    new Map(),
+  );
   // Explicit run picks per session; absent = follow the latest run.
-  const [pickedRunBySession, setPickedRunBySession] = useState<Map<string, string>>(new Map());
-  const runPollers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  const [pickedRunBySession, setPickedRunBySession] = useState<
+    Map<string, string>
+  >(new Map());
+  const runPollers = useRef<Map<string, ReturnType<typeof setInterval>>>(
+    new Map(),
+  );
   // One-click preview loop: the server's PortDetector announces a
   // dev server the agent started; the session surfaces a Preview chip.
-  const [previewBySession, setPreviewBySession] = useState<Map<string, { port: number; url: string }>>(new Map());
+  const [previewBySession, setPreviewBySession] = useState<
+    Map<string, { port: number; url: string }>
+  >(new Map());
   // Per-workflow deploy error: set when a deploy stream ends with phase:"error",
   // cleared when a later deploy for that workflow succeeds. Keyed by workflow
   // path — survives toast dismissal so the disabled-reason in the action bar
   // stays accurate ("Last deploy failed — retry Deploy") instead of reverting
   // to "Not deployed yet" which would be misleading.
-  const [lastDeployErrorByPath, setLastDeployErrorByPath] = useState<Map<string, string>>(new Map());
+  const [lastDeployErrorByPath, setLastDeployErrorByPath] = useState<
+    Map<string, string>
+  >(new Map());
   // Monotonic settle counter for direct actions: bumped each time a deploy or
   // run (prod/local) reaches its terminal state — success OR failure. The
   // SessionStepsBar adds this to its useEffect deps so the pending ring clears
@@ -318,7 +354,9 @@ export function useHarnessState(): HarnessStateHook {
       .then((run) =>
         setRunsByExecution((prev) => {
           const stored = prev.get(executionId);
-          return stored ? new Map(prev).set(executionId, { ...stored, run }) : prev;
+          return stored
+            ? new Map(prev).set(executionId, { ...stored, run })
+            : prev;
         }),
       )
       .catch(() => {});
@@ -326,49 +364,64 @@ export function useHarnessState(): HarnessStateHook {
 
   // Poll one run until terminal. A new run for the same session replaces the
   // old POLLER only — the previous run's snapshot stays in runsByExecution.
-  const startRunPolling = useCallback((sessionId: string, executionId: string, target: RunTarget) => {
-    const existing = runPollers.current.get(sessionId);
-    if (existing) clearInterval(existing);
-    // Attribution facts are captured NOW, not at read time: the workflow the
-    // session is bound to when the run is announced owns the run's cost.
-    // Attributing later through the current binding would lie whenever a
-    // session re-binds mid-session.
-    const workflowPath = boundWorkflowPathOf(sessionsRef.current.find((s) => s.id === sessionId));
-    const observedAt = Date.now();
-    setRunIdsBySession((prev) => {
-      const ids = prev.get(sessionId) ?? [];
-      if (ids.includes(executionId)) return prev;
-      return new Map(prev).set(sessionId, [...ids, executionId]);
-    });
-    // A freshly started run takes the Steps tab over: drop any explicit pick
-    // so the session follows its latest run again (the picker gets back to
-    // any past run — nothing is lost, unlike the old overwrite model).
-    setPickedRunBySession((prev) => {
-      if (!prev.has(sessionId)) return prev;
-      const next = new Map(prev);
-      next.delete(sessionId);
-      return next;
-    });
-    const poll = async (): Promise<void> => {
-      try {
-        const run = await api.getRunState(executionId);
-        setRunsByExecution((prev) => new Map(prev).set(executionId, { run, target, workflowPath, observedAt }));
-        if (run.status !== "running") {
+  const startRunPolling = useCallback(
+    (sessionId: string, executionId: string, target: RunTarget) => {
+      const existing = runPollers.current.get(sessionId);
+      if (existing) clearInterval(existing);
+      // Attribution facts are captured NOW, not at read time: the workflow the
+      // session is bound to when the run is announced owns the run's cost.
+      // Attributing later through the current binding would lie whenever a
+      // session re-binds mid-session.
+      const workflowPath = boundWorkflowPathOf(
+        sessionsRef.current.find((s) => s.id === sessionId),
+      );
+      const observedAt = Date.now();
+      setRunIdsBySession((prev) => {
+        const ids = prev.get(sessionId) ?? [];
+        if (ids.includes(executionId)) return prev;
+        return new Map(prev).set(sessionId, [...ids, executionId]);
+      });
+      // A freshly started run takes the Steps tab over: drop any explicit pick
+      // so the session follows its latest run again (the picker gets back to
+      // any past run — nothing is lost, unlike the old overwrite model).
+      setPickedRunBySession((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+      const poll = async (): Promise<void> => {
+        try {
+          const run = await api.getRunState(executionId);
+          setRunsByExecution((prev) =>
+            new Map(prev).set(executionId, {
+              run,
+              target,
+              workflowPath,
+              observedAt,
+            }),
+          );
+          if (run.status !== "running") {
+            const timer = runPollers.current.get(sessionId);
+            if (timer) clearInterval(timer);
+            runPollers.current.delete(sessionId);
+          }
+        } catch {
+          // Endpoint absent (server predates runtime analytics) or transient
+          // failure: stop polling quietly - the UI simply shows no run state.
           const timer = runPollers.current.get(sessionId);
           if (timer) clearInterval(timer);
           runPollers.current.delete(sessionId);
         }
-      } catch {
-        // Endpoint absent (server predates runtime analytics) or transient
-        // failure: stop polling quietly - the UI simply shows no run state.
-        const timer = runPollers.current.get(sessionId);
-        if (timer) clearInterval(timer);
-        runPollers.current.delete(sessionId);
-      }
-    };
-    void poll();
-    runPollers.current.set(sessionId, setInterval(() => void poll(), 2000));
-  }, []);
+      };
+      void poll();
+      runPollers.current.set(
+        sessionId,
+        setInterval(() => void poll(), 2000),
+      );
+    },
+    [],
+  );
 
   // Monotonic counter for synthesizing local-run execution ids. A local run has
   // no server-issued id (it never touches the backend), so the store mints one;
@@ -386,12 +439,18 @@ export function useHarnessState(): HarnessStateHook {
    * failed step so the failure is still visible rather than silent.
    */
   const runLocal = useCallback(
-    async (sessionId: string, sourceDir: string, input?: unknown): Promise<void> => {
+    async (
+      sessionId: string,
+      sourceDir: string,
+      input?: unknown,
+    ): Promise<void> => {
       localRunSeq.current += 1;
       const executionId = `local-${Date.now()}-${localRunSeq.current}`;
       // Attribution + observation facts captured now, exactly like a prod run
       // (see startRunPolling) — a later re-bind must not re-attribute this run.
-      const workflowPath = boundWorkflowPathOf(sessionsRef.current.find((s) => s.id === sessionId));
+      const workflowPath = boundWorkflowPathOf(
+        sessionsRef.current.find((s) => s.id === sessionId),
+      );
       const observedAt = Date.now();
       const traces: LocalStepTrace[] = [];
       let outcome: LocalRunOutcome | undefined;
@@ -416,9 +475,19 @@ export function useHarnessState(): HarnessStateHook {
       });
 
       const publish = (): void => {
-        const run = renderLocalRun(traces, { executionId, outcome, unusedStubs, stubWarnings });
+        const run = renderLocalRun(traces, {
+          executionId,
+          outcome,
+          unusedStubs,
+          stubWarnings,
+        });
         setRunsByExecution((prev) =>
-          new Map(prev).set(executionId, { run, target: "local", workflowPath, observedAt }),
+          new Map(prev).set(executionId, {
+            run,
+            target: "local",
+            workflowPath,
+            observedAt,
+          }),
         );
       };
       // Seed an empty running RunView up front so the Steps tab switches to this
@@ -460,7 +529,11 @@ export function useHarnessState(): HarnessStateHook {
         // it doesn't spin as "running" forever, and toast the reason.
         outcome = "failed";
         publish();
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        setToast(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        );
       } finally {
         // Signal settle so the SessionStepsBar clears the Local Run button's
         // pending ring — the stream ended (success or failure), the button's
@@ -473,7 +546,9 @@ export function useHarnessState(): HarnessStateHook {
 
   const selectRun = useCallback(
     (sessionId: string, executionId: string) => {
-      setPickedRunBySession((prev) => new Map(prev).set(sessionId, executionId));
+      setPickedRunBySession((prev) =>
+        new Map(prev).set(sessionId, executionId),
+      );
       // Refetch so a past run shows current server truth, not a stale
       // mid-poll snapshot (refreshRun keeps the captured start facts).
       refreshRun(executionId);
@@ -536,9 +611,12 @@ export function useHarnessState(): HarnessStateHook {
         setSettings(harnessSettings);
         setErrorKind(null);
         if (appState.tasks) setTasks(appState.tasks);
-        const running = appState.sessions.find((session) => session.status !== "exited");
+        const running = appState.sessions.find(
+          (session) => session.status !== "exited",
+        );
         if (running) setActiveSessionId(running.id);
-        if (appState.workflows[0]) setSelectedWorkflowPath(appState.workflows[0].path);
+        if (appState.workflows[0])
+          setSelectedWorkflowPath(appState.workflows[0].path);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -547,7 +625,11 @@ export function useHarnessState(): HarnessStateHook {
         // generic); anything else is a network-level throw the browser raises
         // when it never got a response (offline / unreachable) — recorded as
         // such so the classifier picks the offline state, not a dead end.
-        setErrorKind(err instanceof ApiError ? { status: err.status } : { networkError: true });
+        setErrorKind(
+          err instanceof ApiError
+            ? { status: err.status }
+            : { networkError: true },
+        );
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -580,9 +662,13 @@ export function useHarnessState(): HarnessStateHook {
       if (message.type === "session.status") {
         setState((prev) => {
           if (!prev) return prev;
-          const exists = prev.sessions.some((session) => session.id === message.session.id);
+          const exists = prev.sessions.some(
+            (session) => session.id === message.session.id,
+          );
           const sessions = exists
-            ? prev.sessions.map((session) => (session.id === message.session.id ? message.session : session))
+            ? prev.sessions.map((session) =>
+                session.id === message.session.id ? message.session : session,
+              )
             : [...prev.sessions, message.session];
           return { ...prev, sessions };
         });
@@ -606,22 +692,33 @@ export function useHarnessState(): HarnessStateHook {
       } else if (message.type === "workflows.changed") {
         void refreshWorkflows();
       } else if (message.type === "execution.started") {
-        startRunPolling(message.harnessSessionId, message.executionId, message.target);
+        startRunPolling(
+          message.harnessSessionId,
+          message.executionId,
+          message.target,
+        );
       } else if (message.type === "port.detected") {
         setPreviewBySession((prev) =>
-          new Map(prev).set(message.harnessSessionId, { port: message.port, url: message.url }),
+          new Map(prev).set(message.harnessSessionId, {
+            port: message.port,
+            url: message.url,
+          }),
         );
       } else if (message.type === "task.status") {
         // Each frame is a full snapshot of one task — upsert by id.
         setTasks((prev) => {
           const exists = prev.some((task) => task.id === message.task.id);
           return exists
-            ? prev.map((task) => (task.id === message.task.id ? message.task : task))
+            ? prev.map((task) =>
+                task.id === message.task.id ? message.task : task,
+              )
             : [...prev, message.task];
         });
       } else if (message.type === "session.activity") {
         const id = message.harnessSessionId;
-        setBusySessionIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+        setBusySessionIds((prev) =>
+          prev.has(id) ? prev : new Set(prev).add(id),
+        );
         const existingTimer = busyTimers.current.get(id);
         if (existingTimer) clearTimeout(existingTimer);
         busyTimers.current.set(
@@ -710,57 +807,77 @@ export function useHarnessState(): HarnessStateHook {
     }
   }, []);
 
-  const createSession = useCallback(async (req: CreateSessionRequest): Promise<HarnessSession> => {
-    const session = await api.createSession(req);
-    // The event bus can deliver this session's first `session.status` before
-    // the POST response resolves (the server broadcasts starting/running
-    // during create) — appending unconditionally then renders a duplicate
-    // tab. When it's already in the list, the bus copy is also the fresher
-    // one, so keep it rather than overwrite with this response's snapshot.
-    setState((prev) =>
-      prev && !prev.sessions.some((s) => s.id === session.id)
-        ? { ...prev, sessions: [...prev.sessions, session] }
-        : prev,
-    );
-    selectSession(session.id);
+  const createSession = useCallback(
+    async (req: CreateSessionRequest): Promise<HarnessSession> => {
+      const session = await api.createSession(req);
+      // The event bus can deliver this session's first `session.status` before
+      // the POST response resolves (the server broadcasts starting/running
+      // during create) — appending unconditionally then renders a duplicate
+      // tab. When it's already in the list, the bus copy is also the fresher
+      // one, so keep it rather than overwrite with this response's snapshot.
+      setState((prev) =>
+        prev && !prev.sessions.some((s) => s.id === session.id)
+          ? { ...prev, sessions: [...prev.sessions, session] }
+          : prev,
+      );
+      selectSession(session.id);
 
-    // Built from the ref BEFORE touching state, because this value is also the
-    // PATCH body below and must exist synchronously.
-    //
-    // It used to be assigned INSIDE the setSettings updater on the line below.
-    // That worked only by accident: React invokes a useState updater eagerly —
-    // synchronously, inside the dispatch — when that hook has no pending update,
-    // as a bail-out optimization. It is NOT a guarantee. With an update already
-    // queued on this hook (a session create landing near the boot settings
-    // fetch, say) the updater runs later instead, and the PATCH ships the
-    // initializer: `[]`. The server MERGES a settings patch, so that is a real
-    // erasure of the persisted list, not a no-op.
-    //
-    // Verified: reintroducing the old form still passes the e2e below, because
-    // the eager path covers the common case. The bug is the dependence on it.
-    const nextRecentDirs = [
-      req.cwd,
-      ...(settingsRef.current?.recentDirs ?? []).filter((dir) => dir !== req.cwd),
-    ].slice(0, RECENT_DIRS_UI_CAP);
-    setSettings((prev) => (prev ? { ...prev, recentDirs: nextRecentDirs } : prev));
-    // The server is the source of truth for what actually qualifies as a
-    // recent dir (must resolve to a real, existing directory) — replace the
-    // optimistic guess with its sanitized response so invalid input (e.g.
-    // stray free text typed into the directory field) never lingers in the UI.
-    try {
-      const updated = await api.updateSettings({ recentDirs: nextRecentDirs });
-      setSettings((prev) => (prev ? { ...prev, recentDirs: updated.recentDirs } : prev));
-    } catch {
-      // Non-fatal — session creation itself already succeeded.
-    }
-    return session;
-  }, [selectSession]);
+      // Built from the ref BEFORE touching state, because this value is also the
+      // PATCH body below and must exist synchronously.
+      //
+      // It used to be assigned INSIDE the setSettings updater on the line below.
+      // That worked only by accident: React invokes a useState updater eagerly —
+      // synchronously, inside the dispatch — when that hook has no pending update,
+      // as a bail-out optimization. It is NOT a guarantee. With an update already
+      // queued on this hook (a session create landing near the boot settings
+      // fetch, say) the updater runs later instead, and the PATCH ships the
+      // initializer: `[]`. The server MERGES a settings patch, so that is a real
+      // erasure of the persisted list, not a no-op.
+      //
+      // Verified: reintroducing the old form still passes the e2e below, because
+      // the eager path covers the common case. The bug is the dependence on it.
+      const nextRecentDirs = [
+        req.cwd,
+        ...(settingsRef.current?.recentDirs ?? []).filter(
+          (dir) => dir !== req.cwd,
+        ),
+      ].slice(0, RECENT_DIRS_UI_CAP);
+      setSettings((prev) =>
+        prev ? { ...prev, recentDirs: nextRecentDirs } : prev,
+      );
+      // The server is the source of truth for what actually qualifies as a
+      // recent dir (must resolve to a real, existing directory) — replace the
+      // optimistic guess with its sanitized response so invalid input (e.g.
+      // stray free text typed into the directory field) never lingers in the UI.
+      try {
+        const updated = await api.updateSettings({
+          recentDirs: nextRecentDirs,
+        });
+        setSettings((prev) =>
+          prev ? { ...prev, recentDirs: updated.recentDirs } : prev,
+        );
+      } catch {
+        // Non-fatal — session creation itself already succeeded.
+      }
+      return session;
+    },
+    [selectSession],
+  );
 
-  const listTemplates = useCallback((): Promise<TemplateListResponse> => api.listTemplates(), []);
-  const getTemplate = useCallback((id: string): Promise<TemplateDetailView> => api.getTemplate(id), []);
+  const listTemplates = useCallback(
+    (): Promise<TemplateListResponse> => api.listTemplates(),
+    [],
+  );
+  const getTemplate = useCallback(
+    (id: string): Promise<TemplateDetailView> => api.getTemplate(id),
+    [],
+  );
   // Stable identity matters here: the past-session pane fetches from an effect
   // keyed on this callback, so a fresh closure per render would refetch forever.
-  const sessionRecord = useCallback((id: string): Promise<SessionRecord | null> => api.sessionRecord(id), []);
+  const sessionRecord = useCallback(
+    (id: string): Promise<SessionRecord | null> => api.sessionRecord(id),
+    [],
+  );
 
   const resumeSession = useCallback(
     async (harnessSessionId: string): Promise<HarnessSession> => {
@@ -768,7 +885,14 @@ export function useHarnessState(): HarnessStateHook {
       try {
         const session = await api.resumeSession(harnessSessionId);
         setState((prev) =>
-          prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
+          prev
+            ? {
+                ...prev,
+                sessions: prev.sessions.map((s) =>
+                  s.id === session.id ? session : s,
+                ),
+              }
+            : prev,
         );
         // Only claim focus if the user hasn't explicitly switched sessions
         // while the resume was in flight — their pick outranks this resolve.
@@ -777,7 +901,11 @@ export function useHarnessState(): HarnessStateHook {
       } catch (err) {
         // Surface resume failures as a toast so a failed resume is never silent
         // (the caller fires this with void and swallows the rejection).
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        setToast(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        );
         throw err;
       }
     },
@@ -797,10 +925,24 @@ export function useHarnessState(): HarnessStateHook {
    * continuation.
    */
   const rehydrateSession = useCallback(
-    async ({ cwd, harness, from }: { cwd: string; harness: HarnessKind; from: string }) => {
-      const session = await createSession({ cwd, harness, rehydrateFrom: from });
+    async ({
+      cwd,
+      harness,
+      from,
+    }: {
+      cwd: string;
+      harness: HarnessKind;
+      from: string;
+    }) => {
+      const session = await createSession({
+        cwd,
+        harness,
+        rehydrateFrom: from,
+      });
       if (!session.rehydratedFrom) {
-        setToast("Nothing was recorded for that session, so this one starts fresh.");
+        setToast(
+          "Nothing was recorded for that session, so this one starts fresh.",
+        );
       }
       return session;
     },
@@ -831,7 +973,9 @@ export function useHarnessState(): HarnessStateHook {
     async (summary: SessionSummary): Promise<HarnessSession> => {
       const harnessSessionId =
         summary.harnessSessionId ??
-        state?.sessions.find((session) => session.agentSessionId === summary.agentSessionId)?.id;
+        state?.sessions.find(
+          (session) => session.agentSessionId === summary.agentSessionId,
+        )?.id;
       if (summary.resumeMode === "rehydrate") {
         // Prefer our own id: it resolves the whole conversation (every harness
         // session that shares this agent session), where the agent session id
@@ -864,7 +1008,11 @@ export function useHarnessState(): HarnessStateHook {
         selectSession(adopted.id);
         return adopted;
       } catch (err) {
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        setToast(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        );
         throw err;
       }
     },
@@ -879,26 +1027,45 @@ export function useHarnessState(): HarnessStateHook {
         // Surface the failure as a toast and keep the user on the dead-session
         // overlay: the re-throw below skips the local removal, so a failed kill
         // never makes the session vanish from the UI as if it had succeeded.
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        setToast(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        );
         throw err;
       }
-      const remaining = (state?.sessions ?? []).filter((session) => session.id !== id);
+      const remaining = (state?.sessions ?? []).filter(
+        (session) => session.id !== id,
+      );
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
-        const nextRunning = remaining.find((session) => session.status !== "exited");
+        const nextRunning = remaining.find(
+          (session) => session.status !== "exited",
+        );
         selectSession(nextRunning ? nextRunning.id : null);
       }
     },
     [state, activeSessionId, selectSession],
   );
 
-  const connectWorkflow = useCallback(async (path: string): Promise<WorkflowInfo> => {
-    const workflow = await api.connectWorkflow(path);
-    setState((prev) =>
-      prev ? { ...prev, workflows: [...prev.workflows.filter((w) => w.path !== workflow.path), workflow] } : prev,
-    );
-    return workflow;
-  }, []);
+  const connectWorkflow = useCallback(
+    async (path: string): Promise<WorkflowInfo> => {
+      const workflow = await api.connectWorkflow(path);
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              workflows: [
+                ...prev.workflows.filter((w) => w.path !== workflow.path),
+                workflow,
+              ],
+            }
+          : prev,
+      );
+      return workflow;
+    },
+    [],
+  );
 
   const scanWorkflows = useCallback(
     async (root: string): Promise<WorkflowInfo[]> => {
@@ -911,43 +1078,73 @@ export function useHarnessState(): HarnessStateHook {
     [refreshWorkflows],
   );
 
-  const listHarnesses = useCallback((): Promise<HarnessEntry[]> => api.listHarnesses(), []);
+  const listHarnesses = useCallback(
+    (): Promise<HarnessEntry[]> => api.listHarnesses(),
+    [],
+  );
 
-  const bindWorkflow = useCallback(async (sessionId: string, workflowPath: string | null): Promise<void> => {
-    const session = await api.bindWorkflow(sessionId, workflowPath);
-    setState((prev) =>
-      prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
-    );
-  }, []);
-
-  const updateSettings = useCallback(async (patch: Partial<HarnessSettings>): Promise<HarnessSettings> => {
-    const updated = await api.updateSettings(patch);
-    setSettings(updated);
-    if (patch.telemetryOptIn !== undefined) {
-      setState((prev) => (prev ? { ...prev, telemetryOptIn: updated.telemetryOptIn } : prev));
-    }
-    // Mirror the light-analytics opt-in into AppState so the PostHog consent
-    // gate (App's initAnalytics effect) re-syncs immediately on toggle. Absent
-    // === on, matching the server's resolution.
-    if (patch.productAnalyticsOptIn !== undefined) {
+  const bindWorkflow = useCallback(
+    async (sessionId: string, workflowPath: string | null): Promise<void> => {
+      const session = await api.bindWorkflow(sessionId, workflowPath);
       setState((prev) =>
-        prev ? { ...prev, productAnalyticsOptIn: updated.productAnalyticsOptIn !== false } : prev,
+        prev
+          ? {
+              ...prev,
+              sessions: prev.sessions.map((s) =>
+                s.id === session.id ? session : s,
+              ),
+            }
+          : prev,
       );
-    }
-    return updated;
-  }, []);
+    },
+    [],
+  );
 
-  const runMacro = useCallback(async (id: string, req: RunMacroRequest): Promise<void> => {
-    try {
-      await api.runMacro(id, req);
-    } catch (err) {
-      // App.tsx fires this without awaiting — surface failures as a toast
-      // instead of an invisible unhandled rejection (which is exactly how
-      // the trust-dialog race originally went unnoticed: the macro's input
-      // vanished and nothing told the user why).
-      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
-    }
-  }, []);
+  const updateSettings = useCallback(
+    async (patch: Partial<HarnessSettings>): Promise<HarnessSettings> => {
+      const updated = await api.updateSettings(patch);
+      setSettings(updated);
+      if (patch.telemetryOptIn !== undefined) {
+        setState((prev) =>
+          prev ? { ...prev, telemetryOptIn: updated.telemetryOptIn } : prev,
+        );
+      }
+      // Mirror the light-analytics opt-in into AppState so the PostHog consent
+      // gate (App's initAnalytics effect) re-syncs immediately on toggle. Absent
+      // === on, matching the server's resolution.
+      if (patch.productAnalyticsOptIn !== undefined) {
+        setState((prev) =>
+          prev
+            ? {
+                ...prev,
+                productAnalyticsOptIn: updated.productAnalyticsOptIn !== false,
+              }
+            : prev,
+        );
+      }
+      return updated;
+    },
+    [],
+  );
+
+  const runMacro = useCallback(
+    async (id: string, req: RunMacroRequest): Promise<void> => {
+      try {
+        await api.runMacro(id, req);
+      } catch (err) {
+        // App.tsx fires this without awaiting — surface failures as a toast
+        // instead of an invisible unhandled rejection (which is exactly how
+        // the trust-dialog race originally went unnoticed: the macro's input
+        // vanished and nothing told the user why).
+        setToast(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        );
+      }
+    },
+    [],
+  );
 
   // Deploy via the direct route: stream build status to the toast, then refresh
   // the registry so a linked/rebuilt workflow's Deployed chip flips. Swallows
@@ -978,7 +1175,9 @@ export function useHarnessState(): HarnessStateHook {
             // created first — say so, rather than claiming we're building.
             if (event.phase === "linking") {
               lastNonTerminalPhase = "linking";
-              setToast(`Deploying — creating the agent "${event.name}" on Sapiom…`);
+              setToast(
+                `Deploying — creating the agent "${event.name}" on Sapiom…`,
+              );
             } else if (event.phase === "warning") {
               // Non-terminal and advisory: the agent was created but its id
               // couldn't be written back to sapiom.json. The message is
@@ -997,7 +1196,11 @@ export function useHarnessState(): HarnessStateHook {
             }
           });
           if (terminal.phase === "ready") {
-            setToast(pendingWarning ? `Deployed to Sapiom. ${pendingWarning}` : "Deployed to Sapiom.");
+            setToast(
+              pendingWarning
+                ? `Deployed to Sapiom. ${pendingWarning}`
+                : "Deployed to Sapiom.",
+            );
             // Clear any prior deploy error for this workflow — it succeeded.
             setLastDeployErrorByPath((prev) => {
               if (!prev.has(workflowPath)) return prev;
@@ -1012,7 +1215,10 @@ export function useHarnessState(): HarnessStateHook {
           } else if (terminal.phase === "error") {
             // Same error shape for a link failure and a build failure —
             // distinguish them by whichever non-terminal phase preceded it.
-            const prefix = lastNonTerminalPhase === "linking" ? "Couldn't create the agent" : "Deploy failed";
+            const prefix =
+              lastNonTerminalPhase === "linking"
+                ? "Couldn't create the agent"
+                : "Deploy failed";
             const msg = terminal.hint
               ? `${prefix}: ${terminal.message} (${terminal.hint})`
               : `${prefix}: ${terminal.message}`;
@@ -1028,11 +1234,16 @@ export function useHarnessState(): HarnessStateHook {
             await refreshWorkflows();
           }
         } catch (err) {
-          const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+          const msg =
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message;
           setToast(msg);
           // An exception from the deploy stream (e.g. network error) also counts
           // as a deploy failure — persist so the action bar reflects it.
-          setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
+          setLastDeployErrorByPath((prev) =>
+            new Map(prev).set(workflowPath, msg),
+          );
         } finally {
           // Signal that a deploy action settled (success or failure) so the
           // SessionStepsBar can clear its pending ring for this button.
@@ -1051,12 +1262,20 @@ export function useHarnessState(): HarnessStateHook {
   // the returned executionId into the SAME poller a CLI-launched run uses
   // (startRunPolling) so it lands in the Steps tab / run picker identically.
   const startProdRun = useCallback(
-    async (sessionId: string, definitionId: string, input?: unknown): Promise<void> => {
+    async (
+      sessionId: string,
+      definitionId: string,
+      input?: unknown,
+    ): Promise<void> => {
       try {
         const { executionId } = await api.run({ definitionId, input });
         startRunPolling(sessionId, executionId, "prod");
       } catch (err) {
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        setToast(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        );
       } finally {
         // Signal settle so the SessionStepsBar clears its pending ring for
         // the Prod Run button — the run has been handed off to the poller
@@ -1075,7 +1294,11 @@ export function useHarnessState(): HarnessStateHook {
     try {
       await api.disconnect();
     } catch (err) {
-      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      setToast(
+        err instanceof ApiError && err.reason
+          ? err.reason
+          : (err as Error).message,
+      );
     }
   }, []);
 
@@ -1084,20 +1307,27 @@ export function useHarnessState(): HarnessStateHook {
   // Unlike runMacro (which swallows errors into a toast), injectInput lets the
   // error propagate so callers can handle 409 "not ready" inline without a
   // generic toast message.
-  const injectInput = useCallback(async (sessionId: string, text: string): Promise<void> => {
-    await api.injectInput(sessionId, { text, submit: true });
-  }, []);
+  const injectInput = useCallback(
+    async (sessionId: string, text: string): Promise<void> => {
+      await api.injectInput(sessionId, { text, submit: true });
+    },
+    [],
+  );
 
   const showToast = useCallback((message: string): void => {
     setToast(message);
   }, []);
 
   const lastDeployErrorFor = useCallback(
-    (workflowPath: string): string | null => lastDeployErrorByPath.get(workflowPath) ?? null,
+    (workflowPath: string): string | null =>
+      lastDeployErrorByPath.get(workflowPath) ?? null,
     [lastDeployErrorByPath],
   );
 
-  const listDir = useCallback((path?: string): Promise<FsListResponse> => api.listDir(path), []);
+  const listDir = useCallback(
+    (path?: string): Promise<FsListResponse> => api.listDir(path),
+    [],
+  );
 
   return {
     state,

@@ -262,8 +262,8 @@ const DEFAULT_IMAGE_TIMEOUT_MS = 2 * 60_000;
 
 /**
  * The routed async-submit handle the Core capability router returns for a
- * `dispatch: 'async'` image request — camelCase (the router normalizes fal's
- * snake_case away), with `servedBy` stripped at the public `/v1` boundary. Mirrors
+ * `dispatch: 'async'` image request — camelCase (the router normalizes the
+ * upstream snake_case), with `servedBy` stripped at the public `/v1` boundary. Mirrors
  * the video dispatch handle; the image is NOT here yet (completion is out-of-band).
  */
 interface ImageDispatchResponse {
@@ -578,7 +578,7 @@ interface QueueHandle {
 }
 
 /**
- * Fal occasionally omits `response_url` while still returning the canonical
+ * The upstream service occasionally omits `response_url` while still returning the canonical
  * `.../requests/:id/status` URL. The result endpoint is the same URL without
  * the final `/status` segment, so keep async video launches usable in that
  * valid response shape.

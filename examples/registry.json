@@ -108,7 +108,7 @@
       "steps": [
         {
           "name": "enrich",
-          "description": "Resolve a real contact for each lead with Hunter, looking up the named person or surfacing a decision-maker when you only have the company.",
+          "description": "Resolve a real contact for each lead through email search, looking up the named person or surfacing a decision-maker when you only have the company.",
           "kind": "capability",
           "capability": "email.domain.search",
           "next": ["scrape"]

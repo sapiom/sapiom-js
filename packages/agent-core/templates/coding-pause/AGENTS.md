@@ -25,7 +25,8 @@ const start = defineStep({
     repo: z.string().default("sapiom/sapiom"),
     window: z.enum(["day", "week", "month"]).default("week"),
   }),
-  async run(input, ctx) {           // input: { repo: string; window: "day" | "week" | "month" }
+  async run(input, ctx) {
+    // input: { repo: string; window: "day" | "week" | "month" }
     return terminate({ scanned: input.repo });
   },
 });
@@ -39,8 +40,10 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code locally against **stub capabilities**: every `ctx.sapiom.*` call (namespace calls *and* handle methods like `repo.pushFromSandbox`) returns a built-in default, so an agent run completes end-to-end with zero setup. Returns a per-step trace.
+- **run_local** — runs your **real** step code locally against **stub capabilities**: every `ctx.sapiom.*` call (namespace calls _and_ handle methods like `repo.pushFromSandbox`) returns a built-in default, so an agent run completes end-to-end with zero setup. Returns a per-step trace.
 - **deploy** — ship it.
+
+Only `ctx.sapiom.*` calls are replaced. Definition imports and step bodies are ordinary local code, so direct network requests, filesystem writes, environment reads, and child processes still happen during `check` or `run_local`.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.
 
@@ -53,7 +56,7 @@ When you've made a coherent change and want to validate it — the same point yo
 ```
 
 - Capability paths are namespace methods (`repositories.list`, `repositories.create`, `models.coding.run`) or handle methods, which use the **singular** handle type (`repository.pushFromSandbox`, `sandbox.exec`) — not the plural namespace.
-- `<response>` is returned **verbatim** — it is the value that call would return, so match its real shape. `repositories.list` takes the array `list()` returns: `[{ "slug": "...", "cloneUrl": "..." }]` (each element a repository — *not* `[[ … ]]`). `repositories.create`/`get`/`attach` take a single `{ "slug", "cloneUrl" }`.
+- `<response>` is returned **verbatim** — it is the value that call would return, so match its real shape. `repositories.list` takes the array `list()` returns: `[{ "slug": "...", "cloneUrl": "..." }]` (each element a repository — _not_ `[[ … ]]`). `repositories.create`/`get`/`attach` take a single `{ "slug", "cloneUrl" }`.
 - `run_local` reports **`unusedStubs`** (a key that matched no call — usually a typo or the plural/singular mistake) and **`stubWarnings`** (a key matched but the value was the wrong shape). A green run with either non-empty means a stub silently didn't take effect — check them.
 
 ## Dispatched runs: pause & resume
@@ -61,13 +64,16 @@ When you've made a coherent change and want to validate it — the same point yo
 A long-running capability (today the coding agent) is launched fire-and-forget and the agent run suspends until it finishes:
 
 ```ts
-const run = await ctx.sapiom.models.coding.launch({ task, gitRepository: repo }); // returns a handle, not a result
-return pauseUntilSignal(run, { resumeStep: "finalize" });                         // suspend on the run's result signal
+const run = await ctx.sapiom.models.coding.launch({
+  task,
+  gitRepository: repo,
+}); // returns a handle, not a result
+return pauseUntilSignal(run, { resumeStep: "finalize" }); // suspend on the run's result signal
 ```
 
 - **The resumed step's `input` IS the run's result signal payload.** Annotate it with `CodingResultPayload` (from `@sapiom/tools`) — you don't have to hand-roll the shape.
 - That payload crossed a wire boundary, so it carries **no live handles** — to act on the run's sandbox, re-attach one from **`executionEnvironment`** with `ctx.sapiom.sandboxes.attach(result.executionEnvironment.id)` (`executionEnvironment` is `null` when the run provisioned none, e.g. a launch failure). Anything else the resumed step needs, stash in `ctx.shared` before pausing.
-- **To stub the resume payload** (e.g. to exercise the failure branch), override `models.coding.run` *in the launching step* — that one value is both the `run()` result and the payload the paused step resumes with. `models.coding.launch` is accepted there too.
+- **To stub the resume payload** (e.g. to exercise the failure branch), override `models.coding.run` _in the launching step_ — that one value is both the `run()` result and the payload the paused step resumes with. `models.coding.launch` is accepted there too.
 
 ## Determinism
 

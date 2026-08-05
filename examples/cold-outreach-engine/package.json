@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom agent template: enrich a lead list with Hunter, scrape each company site, write personalized first lines (models.run), verify deliverability, then drip touches with durable waits between them.",
+  "description": "Sapiom agent template: enrich a lead list, scrape each company site, write personalized first lines (models.run), verify deliverability, then drip touches with durable waits between them.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",

@@ -134,7 +134,7 @@ function checkpointFileName(jobId: string): string {
 }
 
 /**
- * Blaxel sandbox names are lowercase alphanumeric + hyphens, 2–49 chars. Derive
+ * Sandbox names are lowercase alphanumeric + hyphens, 2–49 chars. Derive
  * a legal, retry-specific name from the job id and chunk offset.
  */
 export function sandboxName(
@@ -147,7 +147,7 @@ export function sandboxName(
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  // Blaxel enforces 49 characters (stricter than the generic SDK's 63-char
+  // The runtime enforces 49 characters (stricter than the generic SDK's 63-char
   // validation). Preserve an attempt suffix so a retry never collides with a
   // sandbox whose cleanup was delayed after the prior attempt.
   const suffix = `-a${attempt}`;

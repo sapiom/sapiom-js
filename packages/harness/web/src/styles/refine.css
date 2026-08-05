@@ -339,6 +339,69 @@ body {
   }
 }
 
+/* ---- New-session + canvas motion --------------------------------------- */
+/* The composer drops away on submit / template pick to make room for the
+   terminal; the parent delays the actual session start until this has played. */
+.composer-home.is-leaving {
+  animation: composer-leave var(--base, 0.22s) var(--ease) forwards;
+  pointer-events: none;
+}
+
+/* The workbench eases up into place when it takes over from the composer (and
+   on first load). It mounts once and persists across session switches, so this
+   plays on the handoff, not on every switch. */
+.agent-view {
+  animation: refine-content-in var(--base, 0.22s) var(--ease) both;
+}
+
+/* The canvas slides open/shut horizontally: App gives the .app grid two columns
+   and animates the canvas column's width to/from 0 (right-to-left on open, and
+   the reverse on close). On desktop the collapsed pane stays in layout at
+   0 width (clipped) rather than display:none, so the pane AND its left-edge lift
+   shadow actually slide, both directions. The mobile sheet keeps its own
+   display:none + bottom-up entrance (it is out of the grid). */
+@media (min-width: 769px) {
+  /* The canvas column eases open/shut. The transition is ALWAYS present on the
+     workbench (not gated on the slide) because grid-template-columns only
+     animates when the transition is already established a frame before the width
+     changes — adding it in the same commit as the collapse makes the browser
+     jump instead. The pin below (what stops the squish) is what's scoped to the
+     slide; a resize drag/reset instead suppresses this via .canvas-dragging. */
+  .app.canvas-animated {
+    transition: grid-template-columns var(--base, 0.22s) var(--ease);
+  }
+  .app.canvas-animated.canvas-dragging {
+    transition: none;
+  }
+  /* During the slide the collapsed pane stays in layout at 0 width (clipped) so
+     the pane AND its left-edge lift shadow slide, rather than vanishing. Once
+     settled it reverts to the base display:none (no lingering shadow sliver). */
+  .app.canvas-animated.canvas-sliding .right-pane.is-collapsed {
+    display: flex;
+  }
+  /* DURING the slide only: pin the pane content to the expanded width (--rp-w,
+     kept current by a ResizeObserver, frozen for the slide) and right-align it,
+     so as the column shrinks the content is CLIPPED from the left rather than
+     reflowing — a clean drawer slide, not a squish. Gated on .canvas-sliding so
+     that once settled the content sizes naturally: a collapsed pane's content
+     goes to zero width (reads as hidden), an expanded pane's tracks the column. */
+  .app.canvas-animated.canvas-sliding .right-pane > * {
+    width: var(--rp-w, 100%);
+    align-self: flex-end;
+  }
+}
+
+@keyframes composer-leave {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .btn-ghost:hover:not(:disabled),
   .btn-primary:hover:not(:disabled) {
@@ -347,7 +410,12 @@ body {
   .canvas-frame-wrap,
   .modal,
   .command-palette,
-  .settings-popover {
+  .settings-popover,
+  .agent-view,
+  .composer-home.is-leaving {
     animation-duration: 1ms;
+  }
+  .app.canvas-animated {
+    transition-duration: 1ms;
   }
 }

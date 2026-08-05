@@ -31,7 +31,7 @@ const DEFAULT_POLL_INTERVAL = 1000;
 const DEFAULT_EXEC_TIMEOUT = 60_000;
 
 /**
- * Process statuses that mean the process has finished. The Blaxel sandbox-api
+ * Process statuses that mean the process has finished. The sandbox process API
  * reports a non-zero exit as `"failed"` (enum: running/completed/failed/killed/
  * stopped), so polling must treat all of these — not just `"completed"` — as
  * done. Any unrecognized status keeps polling and ultimately hits the exec

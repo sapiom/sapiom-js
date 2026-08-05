@@ -13,6 +13,7 @@ import {
   type AgentExecutionContext,
   type AgentDefinition,
   InMemoryContextStore,
+  StepInputValidationError,
 } from "@sapiom/agent";
 import {
   type StepCompletionPayload,
@@ -139,15 +140,37 @@ export class LocalStubDispatcher implements StepDispatcher {
       sapiom,
     } as unknown as AgentExecutionContext;
 
+    // Match the production step runner: the manifest's JSON Schema is a cheap
+    // pre-gate in AgentRunnerCore, while the definition's Zod schema is the
+    // authoritative parse immediately before author code runs. Besides
+    // validation, this applies defaults and object-key stripping.
+    // Without it, run_local could pass even though the same step saw a different
+    // value after deployment (the default starter's `.default("world")` was the
+    // simplest reproduction).
+    let stepInput = request.input;
     let directive: NextStepDirective;
     try {
-      directive = await step.run(request.input, ctx);
+      if (step.inputSchema) {
+        const parsedInput = step.inputSchema.safeParse(request.input);
+        if (!parsedInput.success) {
+          throw new StepInputValidationError(
+            request.stepName,
+            parsedInput.error.issues,
+          );
+        }
+        stepInput = parsedInput.data;
+      }
+      directive = await step.run(stepInput, ctx);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       const traceEntry: LocalStepTrace = {
         step: request.stepName,
         attempt: request.attempt,
-        input: request.input,
+        // Validation failed before the step body ran, so retain the rejected
+        // wire payload. For author-code throws after a successful parse, record
+        // the value the step actually received.
+        input:
+          e instanceof StepInputValidationError ? request.input : stepInput,
         status: "threw",
         error: { name: e.name, message: e.message, stack: e.stack },
         logs,
@@ -172,7 +195,7 @@ export class LocalStubDispatcher implements StepDispatcher {
     const traceEntry: LocalStepTrace = {
       step: request.stepName,
       attempt: request.attempt,
-      input: request.input,
+      input: stepInput,
       status: "succeeded",
       output,
       directive,

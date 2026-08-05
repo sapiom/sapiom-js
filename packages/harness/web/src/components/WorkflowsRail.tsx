@@ -48,10 +48,12 @@ interface WorkflowsRailProps {
   onCollapse: () => void;
   /** Selects a session from the history menu (a past/exited session). */
   onSelectSession: (id: string) => void;
-  /** Overview lives in the account menu: it shows the intro panel in the
+  /** Overview lives in the account menu: it shows the composer home in the
    *  main slot. Selecting any session leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
+  /** The "Create new" CTA opens the composer-first "new session" home. */
+  onNewSession: () => void;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
   history: SessionSummary[];
@@ -66,9 +68,10 @@ interface WorkflowsRailProps {
   /** Session-plus-scaffold-prompt at a folder that doesn't exist yet. `idea`
    *  is the "start from an idea" door's text, passed verbatim to the agent. */
   onScaffoldSession: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
-  /** Where NEW projects are created (resolveProjectRoot in App) — the Start
-   *  dialog's last-resort picker default. */
+  /** Where NEW projects are created (resolveProjectRoot in App). */
   projectRoot: string | null;
+  /** Persist a changed project root as the user's default. */
+  onSaveProjectRoot: (root: string) => Promise<void>;
   /** Bare-scaffold folder affordance: ask the folder's live session to
    *  scaffold its first agent (sapiom.json) in place. */
   onScaffoldInSession: (sessionId: string) => void;
@@ -294,6 +297,7 @@ export function WorkflowsRail({
   onSelectSession,
   overviewSelected,
   onSelectOverview,
+  onNewSession,
   onReviewSummary,
   history,
   historyLoading,
@@ -306,6 +310,7 @@ export function WorkflowsRail({
   onScaffoldSession,
   onScaffoldInSession,
   projectRoot,
+  onSaveProjectRoot,
   onBrowseTemplates,
   templatesActive,
   onScanWorkflows,
@@ -325,25 +330,14 @@ export function WorkflowsRail({
   settingsOpen,
   onSetSettingsOpen,
 }: WorkflowsRailProps): JSX.Element {
+  // "Add existing agents" opens the detection-driven StartDialog (register a
+  // folder that already holds an agent project). "Create new" goes to the
+  // composer home instead. connectTriggerRef anchors Escape focus return.
+  const [startOpen, setStartOpen] = useState(false);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
-  // The prominent "Create new" CTA in the nav opens the SAME dialog as the header
-  // +. Escape returns focus to whichever the user pressed (see `startFrom`).
-  const createTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
-
-  /**
-   * The unified Add dialog (StartDialog): one detection-driven surface, reached
-   * directly from the + / "Create new".
-   *
-   * It replaces the old two-layer nesting — a popover of intents that opened a
-   * dialog of the same intents, where "New session" and "Open a folder" both
-   * landed on the identical folder picker. `startFrom` records which trigger
-   * opened it so Escape returns focus to the right button.
-   */
-  const [startOpen, setStartOpen] = useState(false);
-  const [startFrom, setStartFrom] = useState<"header" | "cta">("header");
 
   // The ⋯ overflow menu: how the tree is grouped, how it is sorted, and the
   // sessions that have ended. Grouping and sort are persisted so the explorer
@@ -468,22 +462,18 @@ export function WorkflowsRail({
         </button>
 
         {/* The primary creative action, promoted out of the header + into a
-            standing CTA directly under Search: the fastest path to a first
-            agent. It opens the same Add menu as the + (anchored to itself), and
-            when the rail has nothing yet it becomes the filled primary button so
-            an empty workspace has an obvious next step. */}
+            standing CTA directly under Search: the fastest path to a new agent.
+            It opens the composer-first "new session" home; when the rail has
+            nothing yet it becomes the filled primary button so an empty
+            workspace has an obvious next step. */}
         <button
           type="button"
-          ref={createTriggerRef}
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
           data-testid="rail-create-new"
-          aria-label="Create new agent or workspace"
-          aria-haspopup="dialog"
-          aria-expanded={startOpen && startFrom === "cta"}
+          aria-label="Create a new agent"
           onClick={() => {
             setHistoryOpen(false);
-            setStartFrom("cta");
-            setStartOpen(true);
+            onNewSession();
           }}
         >
           <Icon name="Plus" size={14} />
@@ -499,6 +489,24 @@ export function WorkflowsRail({
         >
           <Icon name="LayoutTemplate" size={14} />
           <span>Templates</span>
+        </button>
+
+        {/* Add EXISTING agents — a folder that already holds an agent project.
+            Creating a new one is "Create new" (the composer). */}
+        <button
+          type="button"
+          ref={connectTriggerRef}
+          className="rail-nav-row"
+          data-testid="add-existing-agents"
+          aria-haspopup="dialog"
+          aria-expanded={startOpen}
+          onClick={() => {
+            setHistoryOpen(false);
+            setStartOpen(true);
+          }}
+        >
+          <Icon name="FolderOpen" size={14} />
+          <span>Add existing agents</span>
         </button>
       </nav>
 
@@ -517,23 +525,6 @@ export function WorkflowsRail({
             onClick={toggleHistory}
           >
             <Icon name="MoreHorizontal" size={14} />
-          </button>
-
-          <button
-            ref={connectTriggerRef}
-            className="theme-toggle rail-header-btn"
-            data-testid="add-workspace"
-            aria-label="Add workspace"
-            aria-haspopup="dialog"
-            aria-expanded={startOpen && startFrom === "header"}
-            title="Add a folder to Studio: open an agent project, scaffold a new agent, or start a session."
-            onClick={() => {
-              setHistoryOpen(false);
-              setStartFrom("header");
-              setStartOpen(true);
-            }}
-          >
-            <Icon name="Plus" size={14} />
           </button>
         </div>
       </div>
@@ -838,10 +829,9 @@ export function WorkflowsRail({
         />
       </div>
 
-      {/* One detection-driven dialog for every "add" intent. Point at a folder;
-          it detects what the folder is and the single ink CTA becomes the one
-          right action (register / add-all / scaffold / start a session). No
-          intent step, no doors, no two-identical-pickers. */}
+      {/* Add EXISTING agents: one detection-driven dialog that registers a
+          folder holding an agent project (or a folder of them). Creating a NEW
+          agent is "Create new" → the composer home (onNewSession). */}
       {startOpen && (
         <StartDialog
           recentDirs={recentDirs}
@@ -851,7 +841,7 @@ export function WorkflowsRail({
           onClose={() => setStartOpen(false)}
           onConnect={onConnect}
           onScan={onScanWorkflows}
-          triggerRef={startFrom === "cta" ? createTriggerRef : connectTriggerRef}
+          triggerRef={connectTriggerRef}
         />
       )}
 

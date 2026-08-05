@@ -72,6 +72,9 @@ interface CanvasPaneProps {
    *  navigating to a launched workflow is an explicit act on it, so it
    *  rebinds, same as running a macro against it. */
   onOpenWorkflow: (path: string) => void;
+  /** Fired once per session the first time it paints canvas content, so the
+   *  workbench can reveal the pane it had kept collapsed until then. */
+  onCanvasContent?: () => void;
 }
 
 export function CanvasPane({
@@ -96,6 +99,7 @@ export function CanvasPane({
   onSelectRun,
   workflows,
   onOpenWorkflow,
+  onCanvasContent,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -690,6 +694,18 @@ export function CanvasPane({
   // GitHub's 404 page rendered inside the pane.
   const sessionHasServableDoc = sessionId != null && (!isMockMode() || hasMockCanvasDoc(sessionId));
   const showsContent = hasGeneratedContent && sessionHasServableDoc;
+
+  // Announce the first paint of content for THIS session, once, so the
+  // workbench can slide in a canvas pane it had kept collapsed until now. The
+  // per-session ref makes it fire once even though the pane re-renders and the
+  // callback identity may change.
+  const contentFiredForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (showsContent && sessionId && contentFiredForRef.current !== sessionId) {
+      contentFiredForRef.current = sessionId;
+      onCanvasContent?.();
+    }
+  }, [showsContent, sessionId, onCanvasContent]);
 
   return (
     <aside className="canvas-pane">

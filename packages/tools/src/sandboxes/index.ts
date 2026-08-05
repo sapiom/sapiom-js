@@ -2,10 +2,10 @@
  * `sandbox` capability — an isolated, ephemeral compute instance for running code
  * or agents securely: create, exec (sync / fire-and-forget / streaming), read &
  * write files, then destroy. Ported from the legacy `@sapiom/sandbox` onto the
- * `_client` transport, with the Blaxel specifics removed:
+ * `_client` transport, with implementation-specific details removed:
  *   - auth comes from the transport (ambient or explicit), not per-call apiKey
- *   - the host is a platform routing detail (overridable), not a "blaxel" concept
- *   - custom image build (the Blaxel-runtime Dockerfile) is deferred, not exposed
+ *   - the host is a platform routing detail (overridable), not a public concept
+ *   - custom image build is deferred, not exposed
  *
  *   import { sandbox } from "@sapiom/tools";          // ambient auth
  *   const box = await sandbox.create({ name: "demo" });
@@ -103,7 +103,7 @@ function parseOutputLine(line: string): OutputLine {
 }
 
 /**
- * Process statuses that mean the process has finished. The Blaxel sandbox-api
+ * Process statuses that mean the process has finished. The sandbox process API
  * reports a non-zero exit as `"failed"` (enum: running/completed/failed/killed/
  * stopped), so polling must treat all of these — not just `"completed"` — as
  * done. Any unrecognized status keeps polling and ultimately hits the exec

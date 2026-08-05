@@ -51,7 +51,7 @@ function SpecSheet({
     {
       term: "Complexity",
       // How involved the template is, which replaced a per-run cost estimate
-      // core could only compute for 5 of 26 templates. The basis is the tooltip
+      // core could only compute for a subset of templates. The basis is the tooltip
       // rather than the value: a band with nothing behind it is an opaque
       // verdict, and saying what produced it is what keeps it honest.
       value: formatComplexity(template.complexity),
@@ -61,7 +61,10 @@ function SpecSheet({
     },
     {
       term: "Capabilities",
-      value: template.capabilities.length > 0 ? String(template.capabilities.length) : "None",
+      value:
+        template.capabilities.length > 0
+          ? String(template.capabilities.length)
+          : "None",
     },
   ];
 
@@ -149,11 +152,16 @@ export function TemplateCard({
   onOpen: (template: StudioTemplate) => void;
   onUse: (template: StudioTemplate) => void;
 }): JSX.Element {
-  const tags = template.kind === "gallery" ? template.tags.slice(0, FACE_TAGS) : [];
-  const overflow = template.kind === "gallery" ? template.tags.length - tags.length : 0;
+  const tags =
+    template.kind === "gallery" ? template.tags.slice(0, FACE_TAGS) : [];
+  const overflow =
+    template.kind === "gallery" ? template.tags.length - tags.length : 0;
 
   return (
-    <article className="template-card" data-testid={`template-card-${template.id}`}>
+    <article
+      className="template-card"
+      data-testid={`template-card-${template.id}`}
+    >
       <button
         type="button"
         className="template-card-hitbox"
@@ -176,9 +184,9 @@ export function TemplateCard({
 
       {template.kind === "starter" ? (
         <div className="template-card-tags">
-          {/* The one fact about a starter worth the card's face: it needs
-              neither an account nor a network. */}
-          <Pill>offline</Pill>
+          {/* The one fact about a starter worth the card's face: its source is
+              bundled rather than fetched from the authenticated catalog. */}
+          <Pill>bundled</Pill>
         </div>
       ) : (
         tags.length > 0 && (
@@ -187,7 +195,10 @@ export function TemplateCard({
               <Pill key={tag}>{tag}</Pill>
             ))}
             {overflow > 0 && (
-              <Pill variant="count" title={template.tags.slice(FACE_TAGS).join(", ")}>
+              <Pill
+                variant="count"
+                title={template.tags.slice(FACE_TAGS).join(", ")}
+              >
                 +{overflow}
               </Pill>
             )}

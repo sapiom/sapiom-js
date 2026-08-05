@@ -33,12 +33,12 @@ import { z } from "zod/v4";
  *      `keyframe` for the next shot, or advance to `animate` once every
  *      keyframe is in.
  *   4. animate — one shot at a time: launch an async image-to-video job
- *      (`video.launch`) and `pauseUntilSignal` on it; the FAL webhook resumes
- *      `collect` when that clip is ready.
+ *      (`video.launch`) and `pauseUntilSignal` on it; the completion webhook
+ *      resumes `collect` when that clip is ready.
  *   5. collect — record the finished clip, then loop back to `animate` for the
  *      next shot, or advance to `stitch` once every clip is in.
- *   6. stitch — concat the N clips with FAL's synchronous merge endpoint; the
- *      SDK's bounded poll fallback handles an unexpected queue.
+ *   6. stitch — concat the N clips with the synchronous video merge capability;
+ *      the SDK's bounded poll fallback handles an unexpected queue.
  *   7. finalize — terminal; return the stitched video's `videoFileId` when
  *      persistence succeeded, plus the available `downloadUrl`.
  *
@@ -130,11 +130,11 @@ const SAMPLE_SCENE =
   "a paper boat drifting down a rain-soaked city gutter at night";
 
 /**
- * Default FAL image-to-video model. Kling 2.1 Pro is chosen for quality (the v1
+ * Default image-to-video model. Kling 2.1 Pro is chosen for quality (the v1
  * default); swap for a budget model (Wan i2v, Seedance i2v) via the `model` input.
  */
 const DEFAULT_VIDEO_MODEL = "fal-ai/kling-video/v2.1/pro/image-to-video";
-/** FAL ffmpeg merge endpoint used by `stitch` — concats the clips into one video. */
+/** Video merge model used by `stitch` — concats the clips into one video. */
 const MERGE_MODEL = "fal-ai/ffmpeg-api/merge-videos";
 /** Fan-out bounds on the planned shot list. */
 const DEFAULT_NUM_SHOTS = 3;
@@ -435,7 +435,7 @@ const animate = defineStep({
   name: "animate",
   next: [],
   // Async pause/resume: the launched video job fires VIDEO_RESULT_SIGNAL on
-  // completion (the FAL webhook), resuming `collect` with the clip's result.
+  // completion (the routed webhook), resuming `collect` with the clip's result.
   pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: "collect" },
   async run(_input: unknown, ctx: AgentExecutionContext<Shared>) {
     const shots = must(ctx.shared.get("shots"), "shots");
@@ -502,7 +502,7 @@ const collect = defineStep({
 const stitch = defineStep({
   name: "stitch",
   next: ["finalize"],
-  // FAL ffmpeg merge is contractually synchronous today. `create()` returns
+  // Video merge is contractually synchronous today. `create()` returns
   // immediately for that shape; its explicit 12-minute bound only covers an
   // unexpected queue and stays below the runner's 15-minute step deadline.
   async run(_input: unknown, ctx: AgentExecutionContext<Shared>) {
@@ -517,7 +517,7 @@ const stitch = defineStep({
     const videoUrls = resolved.map(({ url }) => url);
     ctx.logger.info("stitching clips", { clips: resolved.length });
 
-    // FAL's merge endpoint requires at least two URLs. A one-shot scene is
+    // The merge endpoint requires at least two URLs. A one-shot scene is
     // already a finished video, so bypass the merge rather than making an
     // invalid request.
     if (clips.length === 1) {

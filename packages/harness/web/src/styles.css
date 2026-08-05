@@ -7967,3 +7967,327 @@ input {
     transition: none;
   }
 }
+
+/* ── New-session composer (the "add new" home) ────────────────────────────
+   The centre-pane screen shown when there is no active session (first run, or
+   the user asks for a new one): a greeting, the "what should your agent do?"
+   composer, and a starter template row. No terminal, no canvas yet — the grid
+   is single-column while it's up (App's gridTemplateColumns). */
+.composer-home {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp6);
+  padding: var(--sp7) var(--sp5) var(--sp6);
+  animation: refine-content-in var(--base, 0.22s) var(--ease) both;
+}
+
+/* Back to the session the composer was opened over (rendered only then). */
+.composer-back {
+  position: absolute;
+  top: var(--sp4);
+  left: var(--sp4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.composer-back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.composer-hero {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.composer-greeting {
+  margin: 0 0 var(--sp2);
+  font-size: var(--type-ui);
+  color: var(--text-dim);
+}
+
+.composer-heading {
+  margin: 0 0 var(--sp4);
+  font-size: 1.6rem;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* Quick-start chips PREFILL the box, so they read as suggestions, not actions. */
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp2);
+  margin-bottom: var(--sp4);
+}
+.composer-chip {
+  height: var(--control-h-xs);
+  padding: 0 var(--sp3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+.composer-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+/* The composer box: a raised, rounded field with a two-part action row. */
+.composer-box {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--r-lg, 14px);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  text-align: left;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.composer-box:focus-within {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--ui-line-strong));
+  box-shadow: var(--shadow);
+}
+.composer-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-ui);
+  line-height: 1.5;
+  min-height: calc(1.5em * 2);
+}
+.composer-input::placeholder {
+  color: var(--text-faint);
+}
+.composer-input:focus-visible {
+  outline: none;
+}
+.composer-box-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  margin-top: var(--sp2);
+}
+.composer-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.composer-attach:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.composer-box-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+/* The provider selector reuses .harness-select; only its resting fill differs
+   so it doesn't fight the box it sits inside. */
+.composer-harness {
+  background: transparent;
+}
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--btn);
+  color: var(--btn-ink);
+  cursor: pointer;
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.composer-send:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+.composer-send:active {
+  transform: translateY(0);
+}
+
+/* Starter template row. */
+.composer-templates {
+  width: 100%;
+  max-width: 880px;
+}
+.composer-templates-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--sp3);
+}
+.composer-templates-title {
+  font-size: var(--type-label);
+  font-weight: 590;
+  color: var(--text-dim);
+}
+.composer-templates-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.composer-templates-all:hover {
+  color: var(--text);
+}
+.composer-template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp3);
+}
+@media (max-width: 900px) {
+  .composer-template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.composer-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.composer-template-card:hover {
+  border-color: var(--ui-line-strong);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+.composer-template-cardhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp2);
+}
+.composer-template-name {
+  font-size: var(--type-ui);
+  font-weight: 590;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-template-suggested {
+  flex: 0 0 auto;
+  padding: 1px var(--sp2);
+  border-radius: var(--radius-full, 999px);
+  background: var(--brand-wash, var(--accent-dim));
+  color: var(--green-text, var(--brand));
+  font-size: var(--type-micro);
+  font-weight: 600;
+}
+.composer-template-desc {
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.composer-template-meta {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+/* First-run footer: the one-time telemetry opt-in + docs link. */
+.composer-footer {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp3);
+  text-align: center;
+}
+.composer-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp2);
+  max-width: 520px;
+  text-align: left;
+}
+.composer-consent-copy {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.composer-docs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  text-decoration: none;
+}
+.composer-docs:hover {
+  color: var(--text);
+}

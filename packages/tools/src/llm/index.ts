@@ -100,7 +100,7 @@ export interface LlmRunSpec {
    * gateway's own direct default is OFF (drop-in callers get plain 429 +
    * backoff), but a workflow step usually can't retry-with-backoff cheaply, so
    * the SDK opts workflows in. Set `false` to take 429s and handle them.
-   * Note: spilling can serve a costlier deployment (usually Anthropic).
+   * Note: spilling can serve a costlier deployment.
    */
   neverFail?: boolean;
   /** Explicit complexity/capacity weight override (gateway clamps to its bounds). */

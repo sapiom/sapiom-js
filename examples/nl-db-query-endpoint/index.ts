@@ -847,12 +847,28 @@ const deploy = defineStep({
         name: config.sandboxName,
         port: config.port,
       });
-      await box.writeFile("server.js", SERVER_SOURCE);
-      await box.writeFile("package.json", SERVER_PACKAGE_JSON);
+      // Write the server into an explicit absolute directory via `exec`, NOT
+      // `box.writeFile`: a relative `writeFile("server.js")` resolves against
+      // the sandbox's file root, which is one level below where the `fs` deploy
+      // actually runs `npm install` — so the files land outside the build's cwd
+      // and `npm install` fails with "no package.json". Anchoring the write AND
+      // the build/start to the same absolute `APP_DIR` (base64-piped so the
+      // source survives shell quoting) removes that mismatch entirely.
+      const appDir = "/blaxel/nl-db-app";
+      const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+      await box.exec(`mkdir -p "${appDir}"`, { timeout: 30_000 });
+      await box.exec(
+        `printf %s '${b64(SERVER_SOURCE)}' | base64 -d > "${appDir}/server.js"`,
+        { timeout: 30_000 },
+      );
+      await box.exec(
+        `printf %s '${b64(SERVER_PACKAGE_JSON)}' | base64 -d > "${appDir}/package.json"`,
+        { timeout: 30_000 },
+      );
       const res = await box.deployPreview({
         source: { kind: "fs" },
-        build: "npm install",
-        start: "node server.js",
+        build: `cd "${appDir}" && npm install`,
+        start: `cd "${appDir}" && node server.js`,
         port: config.port,
         env,
       });
