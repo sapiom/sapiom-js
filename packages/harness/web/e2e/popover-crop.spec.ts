@@ -59,14 +59,6 @@ test("history menu opens uncropped off the rail header", async ({ page }) => {
   await expectUncropped(page, page.getByTestId("history-menu"));
 });
 
-test("add menu opens uncropped beside the rail header", async ({ page }) => {
-  // The only `right-start` placement in the app: it grows across the rail's
-  // right edge rather than down its inside, so it is the one most likely to be
-  // clipped by the rail's own scroller.
-  await page.getByTestId("add-workspace").click();
-  await expectUncropped(page, page.getByTestId("add-menu"));
-});
-
 test("profile menu opens uncropped off the rail footer", async ({ page }) => {
   await page.getByTestId("brand-identity").click();
   await expectUncropped(page, page.getByTestId("profile-menu"));
@@ -81,13 +73,6 @@ test("settings popover opens uncropped off the rail footer", async ({ page }) =>
 test("session bar menu opens uncropped at the header's right cluster", async ({ page }) => {
   await page.getByTestId("session-menu").click();
   await expectUncropped(page, page.getByTestId("session-menu-popover"));
-});
-
-test("harness picker opens uncropped over the new-session dialog", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  await page.getByTestId("harness-select").click();
-  await expectUncropped(page, page.getByTestId("harness-select-menu"));
 });
 
 test("canvas run picker and step detail menu open uncropped at the right pane's edge", async ({ page }) => {

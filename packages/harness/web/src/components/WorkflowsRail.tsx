@@ -16,11 +16,9 @@ import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
-import { AddWorkspaceDialog, DoorList, DoorRow } from "./AddWorkspaceDialog";
-import type { Door } from "./AddWorkspaceDialog";
+import { StartDialog } from "./StartDialog";
 import { DEMO_ACCOUNT_PLAN, PlanCard } from "./PlanCard";
 import { MenuChoice } from "./MenuChoice";
-import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { WorkflowRow } from "./WorkflowRow";
@@ -50,10 +48,12 @@ interface WorkflowsRailProps {
   onCollapse: () => void;
   /** Selects a session from the history menu (a past/exited session). */
   onSelectSession: (id: string) => void;
-  /** Overview lives in the account menu: it shows the intro panel in the
+  /** Overview lives in the account menu: it shows the composer home in the
    *  main slot. Selecting any session leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
+  /** The "Create new" CTA opens the composer-first "new session" home. */
+  onNewSession: () => void;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
   history: SessionSummary[];
@@ -297,6 +297,7 @@ export function WorkflowsRail({
   onSelectSession,
   overviewSelected,
   onSelectOverview,
+  onNewSession,
   onReviewSummary,
   history,
   historyLoading,
@@ -329,33 +330,14 @@ export function WorkflowsRail({
   settingsOpen,
   onSetSettingsOpen,
 }: WorkflowsRailProps): JSX.Element {
-  const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
+  // "Add existing agents" opens the detection-driven StartDialog (register a
+  // folder that already holds an agent project). "Create new" goes to the
+  // composer home instead. connectTriggerRef anchors Escape focus return.
+  const [startOpen, setStartOpen] = useState(false);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
-  // The prominent "Create new" CTA in the nav opens the SAME Add menu as the
-  // header +; the popover anchors to whichever trigger the user pressed.
-  const createTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
-
-  /**
-   * The Add menu — the intent question, asked in a popover hanging off the +
-   * rather than in a full modal.
-   *
-   * A centred, scrimmed dialog to pick one of three words was the heaviest
-   * possible container for the lightest possible choice, and it read as a
-   * different surface from the History menu one button to its left. Same
-   * primitive, same card, same rows now.
-   *
-   * `addDoor` is which door the modal that follows opens at. Only ever set from
-   * here, so the modal is never re-asked the question this menu just answered.
-   */
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const [addDoor, setAddDoor] = useState<Door>("have");
-  // Which trigger the Add menu hangs off — the compact header + or the nav CTA
-  // — so the popover anchors to the button the user actually pressed.
-  const [addMenuFrom, setAddMenuFrom] = useState<"header" | "cta">("header");
-  const closeAddMenu = useCallback(() => setAddMenuOpen(false), []);
 
   // The ⋯ overflow menu: how the tree is grouped, how it is sorted, and the
   // sessions that have ended. Grouping and sort are persisted so the explorer
@@ -402,9 +384,6 @@ export function WorkflowsRail({
 
   const toggleHistory = (): void => {
     const next = !historyOpen;
-    // Two popovers hanging off adjacent buttons: opening one closes the other,
-    // or they overlap and the top one looks like a child of the wrong trigger.
-    if (next) setAddMenuOpen(false);
     // Every open lands on the menu, never mid-flyout.
     setPastOpen(false);
     setHistoryOpen(next);
@@ -483,22 +462,18 @@ export function WorkflowsRail({
         </button>
 
         {/* The primary creative action, promoted out of the header + into a
-            standing CTA directly under Search: the fastest path to a first
-            agent. It opens the same Add menu as the + (anchored to itself), and
-            when the rail has nothing yet it becomes the filled primary button so
-            an empty workspace has an obvious next step. */}
+            standing CTA directly under Search: the fastest path to a new agent.
+            It opens the composer-first "new session" home; when the rail has
+            nothing yet it becomes the filled primary button so an empty
+            workspace has an obvious next step. */}
         <button
           type="button"
-          ref={createTriggerRef}
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
           data-testid="rail-create-new"
-          aria-label="Create new agent or workspace"
-          aria-haspopup="menu"
-          aria-expanded={addMenuOpen && addMenuFrom === "cta"}
+          aria-label="Create a new agent"
           onClick={() => {
             setHistoryOpen(false);
-            setAddMenuFrom("cta");
-            setAddMenuOpen((open) => !open);
+            onNewSession();
           }}
         >
           <Icon name="Plus" size={14} />
@@ -514,6 +489,24 @@ export function WorkflowsRail({
         >
           <Icon name="LayoutTemplate" size={14} />
           <span>Templates</span>
+        </button>
+
+        {/* Add EXISTING agents — a folder that already holds an agent project.
+            Creating a new one is "Create new" (the composer). */}
+        <button
+          type="button"
+          ref={connectTriggerRef}
+          className="rail-nav-row"
+          data-testid="add-existing-agents"
+          aria-haspopup="dialog"
+          aria-expanded={startOpen}
+          onClick={() => {
+            setHistoryOpen(false);
+            setStartOpen(true);
+          }}
+        >
+          <Icon name="FolderOpen" size={14} />
+          <span>Add existing agents</span>
         </button>
       </nav>
 
@@ -533,85 +526,9 @@ export function WorkflowsRail({
           >
             <Icon name="MoreHorizontal" size={14} />
           </button>
-
-          <button
-            ref={connectTriggerRef}
-            className="theme-toggle rail-header-btn"
-            data-testid="add-workspace"
-            aria-label="Add workspace"
-            aria-expanded={addMenuOpen && addMenuFrom === "header"}
-            title="Add a workspace: a folder containing an agent project (sapiom.json). Its agent appears in the rail."
-            onClick={() => {
-              setHistoryOpen(false);
-              setAddMenuFrom("header");
-              setAddMenuOpen((open) => !open);
-            }}
-          >
-            <Icon name="Plus" size={14} />
-          </button>
         </div>
       </div>
       <div className="rail-tree">
-        {/* The intent question. Same primitive and same card as the History
-            menu beside it — and the SAME rows the dialog used to show, so the
-            list moved out of the modal rather than being reworded into a
-            second copy of itself. Picking a door opens the dialog already at
-            that door; picking templates leaves for the destination that owns
-            the catalog. */}
-        <AnchoredPopover
-          open={addMenuOpen}
-          anchorRef={addMenuFrom === "cta" ? createTriggerRef : connectTriggerRef}
-          onDismiss={closeAddMenu}
-          // Beside the rail, not over it. Both triggers are pinned to the rail's
-          // right edge, so a downward panel grows back across the workspace tree
-          // it is about to add to — covering the list you are checking against.
-          placement="right-start"
-          className="connect-card add-card"
-          testid="add-menu"
-        >
-          <div className="connect-card-header">
-            <span>Add</span>
-            <button
-              className="theme-toggle connect-card-close"
-              onClick={closeAddMenu}
-              aria-label="Close"
-              title="Close"
-            >
-              <Icon name="X" size={13} />
-            </button>
-          </div>
-          <div className="connect-card-body">
-            <DoorList
-              // "New session…" leads the menu: it is the most common thing the
-              // + is pressed for, and it is an ADD — it was only ever in the
-              // Sessions menu because that menu existed first. That put the
-              // one action you take daily behind the button for reviewing
-              // finished work, and split "start something" across two popovers.
-              leading={
-                <DoorRow
-                  icon="Plus"
-                  title="New session…"
-                  sub="Start an agent in a folder"
-                  testid="new-session-btn"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    setAddDialogMode("session");
-                  }}
-                />
-              }
-              onPick={(door) => {
-                setAddMenuOpen(false);
-                if (door === "template") {
-                  onBrowseTemplates();
-                  return;
-                }
-                setAddDoor(door);
-                setAddDialogMode("workspace");
-              }}
-            />
-          </div>
-        </AnchoredPopover>
-
         {/* The ⋯ overflow menu. The popover is the TRACK, not the card: it
             opens BESIDE the rail (never over the tree it configures), and its
             one unbounded set — Past sessions — opens as a sub-card beside the
@@ -912,44 +829,19 @@ export function WorkflowsRail({
         />
       </div>
 
-      {/* Two intents, two dialogs — deliberately not one component with a
-          `mode`. The workspace intent is three doors (AddWorkspaceDialog); a
-          session is one question (which folder) plus which agent. They shared
-          375 lines and almost no UI, which is how the workspace side ended up
-          showing five jobs at once.
-
-          The workspace dialog now always opens AT a door: the Add popover above
-          is the door list, so reaching here means the intent is already known. */}
-      {addDialogMode === "workspace" && (
-        <AddWorkspaceDialog
-          recentDirs={recentDirs}
-          projectRoot={projectRoot}
-          listDir={listDir}
-          onClose={() => setAddDialogMode(null)}
-          onConnect={async (cwd) => {
-            await onConnect(cwd);
-          }}
-          onScan={onScanWorkflows}
-          onScaffold={onScaffoldSession}
-          onSaveProjectRoot={onSaveProjectRoot}
-          listHarnesses={listHarnesses}
-          onBrowseTemplates={() => {
-            setAddDialogMode(null);
-            onBrowseTemplates();
-          }}
-          triggerRef={connectTriggerRef}
-          initialDoor={addDoor}
-        />
-      )}
-      {addDialogMode === "session" && (
-        <NewSessionModal
+      {/* Add EXISTING agents: one detection-driven dialog that registers a
+          folder holding an agent project (or a folder of them). Creating a NEW
+          agent is "Create new" → the composer home (onNewSession). */}
+      {startOpen && (
+        <StartDialog
           recentDirs={recentDirs}
           launchDir={launchDir}
+          projectRoot={projectRoot}
           listDir={listDir}
-          onClose={() => setAddDialogMode(null)}
-          onCreate={onCreateSession}
-          listHarnesses={listHarnesses}
-          triggerRef={historyTriggerRef}
+          onClose={() => setStartOpen(false)}
+          onConnect={onConnect}
+          onScan={onScanWorkflows}
+          triggerRef={connectTriggerRef}
         />
       )}
 

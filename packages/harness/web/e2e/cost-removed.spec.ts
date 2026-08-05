@@ -291,6 +291,8 @@ test.describe("cost-removed guard", () => {
   test("steps tab has no cost affordances (empty state)", async ({ page }) => {
     // Scratch session has no board — clean empty state on the Steps tab
     await page.getByTestId("workspace-focus-scratch").click();
+    // Focusing scratch (no canvas board) auto-collapses the right pane — reopen it first.
+    await page.getByTestId("right-expand").click();
     await page.getByTestId("right-tab-steps").click();
 
     const stepsEmpty = page.locator(".canvas-empty");

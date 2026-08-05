@@ -55,6 +55,21 @@ export const APP_VERSION_ARG = "--sapiom-app-version=";
 
 /** SPA → main (invoke): check for an update now. Returns `UpdateCheckOutcome`. */
 export const UPDATE_CHECK = "update:check";
+
+/**
+ * SPA → main (invoke): open the OS-native "choose folder" dialog. Resolves with
+ * the chosen absolute path, or `null` when the user cancels.
+ *
+ * Desktop-only, like everything here: the same SPA served by `npx @sapiom/harness`
+ * has no bridge, so the folder field keeps its in-app directory listing there. The
+ * native picker is strictly a shortcut the SPA feature-detects, never a dependency.
+ *
+ * Guarded by the same `isTrustedSender` check as `UPDATE_CHECK` — a filesystem
+ * chooser triggered by same-origin agent-authored content (served at
+ * `/canvas/:sessionId/*`) would be an escalation, so only the SPA at the top frame
+ * `/` may open it.
+ */
+export const CHOOSE_DIRECTORY = "dialog:choose-directory";
 /*
  * There is deliberately NO "apply the update" channel. The restart is destructive —
  * it ends every running agent session — and the page that would call it is the same

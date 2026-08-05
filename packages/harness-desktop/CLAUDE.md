@@ -253,13 +253,15 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
 - **There is no "apply the update" channel, and there must not be.** A restart ends every running
   agent session, and page code shares an origin with agent-authored files. The confirmation is a
   native dialog only; an on-demand check with something already downloaded re-raises it. The
-  `desktop-bridge` smoke check asserts the bridge exposes NOTHING beyond `appVersion` and
-  `checkForUpdates`, so a future addition has to be deliberate.
-- **Validate the IPC sender.** `isTrustedSender` requires the main window's `webContents` *and* a top
-  frame at `/`, because the main window could itself navigate to agent content on the same origin. It
-  reads the window from `host` (set every launch) and not from `active` (set only when updates are
-  on) — deriving it from `active` made a disabled build reject every sender and report
-  "not available here" instead of the real reason.
+  `desktop-bridge` smoke check asserts the bridge exposes NOTHING beyond `appVersion`,
+  `checkForUpdates`, and `chooseDirectory` (the read-only native folder picker behind the SPA's
+  Browse button — it returns only a path and opens no file), so a future addition has to be deliberate.
+- **Validate the IPC sender.** `isTrustedSender` (`trusted-sender.ts`, shared by the updater and the
+  folder-picker channels) requires the main window's `webContents` *and* a top frame at `/`, because
+  the main window could itself navigate to agent content on the same origin. It reads the window set
+  once at boot by `index.ts` via `setTrustedWindow`, so it works even in a build with updates disabled
+  — deriving it from the updater's `active` state once made a disabled build reject every sender and
+  report "not available here" instead of the real reason.
 - **The app version reaches the preload via `webPreferences.additionalArguments`**, not `process.env`.
   Setting env in main and reading it in a renderer depends on inheriting a variable mutated after
   startup. The `desktop-bridge` smoke check fails on an empty `appVersion` precisely so this stays

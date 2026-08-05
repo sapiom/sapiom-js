@@ -20,6 +20,8 @@ interface SessionBarProps {
   openedAgentName?: string | null;
   /** Set while a PAST session is under review. */
   reviewTitle?: string | null;
+  /** Set while the composer-first "new session" home is up — no session yet. */
+  composing?: boolean;
   /** The session the main panel is showing, if any. */
   activeSession: HarnessSession | null;
   /** The active session's display name (rename > transcript title > folder). */
@@ -64,6 +66,7 @@ export function SessionBar({
   overviewMode = false,
   openedAgentName = null,
   reviewTitle = null,
+  composing = false,
   activeSession,
   sessionName,
   onRenameSession,
@@ -151,6 +154,15 @@ export function SessionBar({
             >
               <span className="session-dot" data-status="exited" />
               past
+            </span>
+          </div>
+        ) : composing ? (
+          /* Composer-first "new session": no session exists yet, so the bar is
+             a single quiet placeholder pill (the + still starts another). */
+          <div className="session-current session-current-static">
+            <Icon name="MessageSquare" size={13} />
+            <span className="session-context-title" data-testid="session-context-title">
+              new session
             </span>
           </div>
         ) : activeSession ? (
@@ -315,7 +327,7 @@ export function SessionBar({
 
       {/* + : add a session — OUTSIDE the scrollable queue so it stays visible
           however long the session list grows. */}
-      {onNewSession && activeSession && (
+      {onNewSession && (activeSession || composing) && (
         <button
           className="session-new"
           data-testid="session-new"

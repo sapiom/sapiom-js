@@ -77,32 +77,30 @@ test.describe("settings popover", () => {
   });
 });
 
-test.describe("new-session modal", () => {
-  test("closes on Escape and returns focus to the history trigger that spawned it", async ({
+test.describe("Start dialog", () => {
+  test("closes on Escape and returns focus to the button that spawned it", async ({
     page,
   }) => {
-    await page.getByTestId("add-workspace").click();
-    await page.getByTestId("new-session-btn").click();
-    await expect(page.locator(".modal-new-session")).toBeVisible();
+    await page.getByTestId("add-existing-agents").click();
+    await expect(page.locator(".modal-start")).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(page.locator(".modal-new-session")).toBeHidden();
-    await expect(page.getByTestId("history-trigger")).toBeFocused();
+    await expect(page.locator(".modal-start")).toBeHidden();
+    await expect(page.getByTestId("add-existing-agents")).toBeFocused();
   });
 
   test("still closes on a backdrop click, but not on clicks inside the panel", async ({
     page,
   }) => {
-    await page.getByTestId("add-workspace").click();
-    await page.getByTestId("new-session-btn").click();
-    await expect(page.locator(".modal-new-session")).toBeVisible();
+    await page.getByTestId("add-existing-agents").click();
+    await expect(page.locator(".modal-start")).toBeVisible();
 
     await page.getByTestId("dir-picker-input").click();
-    await expect(page.locator(".modal-new-session")).toBeVisible();
+    await expect(page.locator(".modal-start")).toBeVisible();
 
     // The panel is centered, so the backdrop's top-left corner is outside it.
     await page.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
-    await expect(page.locator(".modal-new-session")).toBeHidden();
+    await expect(page.locator(".modal-start")).toBeHidden();
   });
 });
 

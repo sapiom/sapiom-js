@@ -606,20 +606,31 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   const shape = (await win.webContents.executeJavaScript(
     "({ bridge: typeof window.sapiomDesktop," +
       " check: typeof window.sapiomDesktop?.checkForUpdates," +
+      " choose: typeof window.sapiomDesktop?.chooseDirectory," +
       " version: window.sapiomDesktop?.appVersion })",
-  )) as { bridge: string; check: string; version: unknown };
+  )) as { bridge: string; check: string; choose: string; version: unknown };
 
   if (shape.bridge !== "object") {
     throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
   }
   if (shape.check !== "function") {
-    throw new Error(`bridge incomplete: ${JSON.stringify(shape)}`);
+    throw new Error(`bridge incomplete — checkForUpdates missing: ${JSON.stringify(shape)}`);
   }
-  // The bridge must stay MINIMAL as well as present. A restart method would let
-  // same-origin agent-authored content end every running session, which is why
-  // applying an update is a native dialog and has no channel (ipc.ts).
+  // Shape-only for chooseDirectory: unlike checkForUpdates, we must NOT invoke it —
+  // it opens a real OS folder sheet that would block a headless CI run forever. Its
+  // ipcMain handler is registered on every boot path (dialogs.ts, alongside the
+  // updater's), so presence of the wrapped method is the honest thing to assert here.
+  if (shape.choose !== "function") {
+    throw new Error(`bridge incomplete — chooseDirectory missing: ${JSON.stringify(shape)}`);
+  }
+  // The bridge must stay MINIMAL as well as present. Only two members are allowed
+  // beyond appVersion: checkForUpdates (no destructive counterpart — applying an
+  // update is a native dialog, see ipc.ts) and chooseDirectory (returns only a
+  // user-picked path, opens no file, and is itself gated by isTrustedSender). A
+  // restart method, by contrast, would let same-origin agent-authored content end
+  // every running session — so anything new here has to be a deliberate addition.
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates')",
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);
@@ -669,7 +680,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates only (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }

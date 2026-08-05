@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 
 import type { FsDirEntry, FsListResponse } from "../lib/api";
+import { getDesktopBridge } from "../lib/desktop";
 import { Icon } from "./Icon";
 
 /** "/Users/…/onboarding-flow" — middle-truncates a long path so a chip row
@@ -10,6 +11,23 @@ function middleTruncatePath(path: string): string {
   const segments = path.split("/").filter(Boolean);
   if (segments.length <= 2) return path;
   return `/${segments[0]}/…/${segments[segments.length - 1]}`;
+}
+
+/**
+ * The resolved state of the field, handed to `onResolve` so a host can classify
+ * the target (existing project / container / plain / new) WITHOUT issuing its own
+ * listing — the picker already did the fetch.
+ */
+export interface DirectoryResolution {
+  /** Where the listing actually resolved: the typed path, or its nearest existing
+   *  ancestor when the typed tail doesn't exist yet. */
+  resolvedPath: string;
+  /** Subdirectories of `resolvedPath`, each carrying `hasAgentProject`. */
+  dirs: FsDirEntry[];
+  /** Parent of `resolvedPath`. */
+  parent: string;
+  /** True when the typed value names a folder that doesn't exist yet. */
+  isNew: boolean;
 }
 
 interface DirectoryPickerProps {
@@ -21,6 +39,9 @@ interface DirectoryPickerProps {
   listDir: (path?: string) => Promise<FsListResponse>;
   /** Fires when the typed tail flips between existing and not-yet-existing. */
   onNewDirChange?: (newDir: boolean) => void;
+  /** Fires after the listing settles, handing the host the resolved directory
+   *  state so it can drive detection reactively (no "Continue", no second fetch). */
+  onResolve?: (resolution: DirectoryResolution) => void;
 }
 
 /**
@@ -36,6 +57,7 @@ export function DirectoryPicker({
   recentDirs,
   listDir,
   onNewDirChange,
+  onResolve,
 }: DirectoryPickerProps): JSX.Element {
   const [browsePath, setBrowsePath] = useState(value);
   const [dirs, setDirs] = useState<FsDirEntry[]>([]);
@@ -135,7 +157,44 @@ export function DirectoryPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typedNewDir]);
 
+  // Hand the settled resolution to the host so it can classify the target without a
+  // second fetch. Skipped while a fetch is in flight or errored, so the host only
+  // ever sees a stable state (its own `value` names the target; this describes it).
+  useEffect(() => {
+    if (loading || error) return;
+    onResolve?.({ resolvedPath: browsePath, dirs, parent, isNew: typedNewDir });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browsePath, dirs, parent, typedNewDir, loading, error]);
+
   const navigate = (path: string): void => onChange(path);
+
+  // Under the desktop app the field's Browse button opens the OS-native folder
+  // chooser; in a plain browser (npx) there is no bridge, so Browse keeps toggling
+  // the in-app listing. Either way the listing itself stays — it shows the "Agent"
+  // detection badges a native picker cannot.
+  const nativePicker = getDesktopBridge()?.chooseDirectory ?? null;
+
+  const handleBrowseClick = (): void => {
+    if (nativePicker) {
+      void nativePicker(value || browsePath || undefined)
+        .then((picked) => {
+          if (picked) onChange(picked);
+        })
+        .catch(() => {
+          /* a cancelled or failed native pick leaves the field as-is */
+        });
+      return;
+    }
+    // Browser: open the listing, and if the typed tail is a dead end (matches
+    // nothing), step back to the nearest real directory so there is something to
+    // browse.
+    if (!listingOpen) {
+      setListingOpen(true);
+      return;
+    }
+    if (typedNewDir && browsePath && browsePath !== value) navigate(browsePath);
+    else setListingOpen(false);
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     // Arrow keys drive the listing ONLY while there is a listing to drive —
@@ -184,27 +243,20 @@ export function DirectoryPicker({
         />
         <button
           type="button"
-          className={"dir-picker-up dir-picker-browse" + (listingOpen ? " is-active" : "")}
+          className={"dir-picker-up dir-picker-browse" + (!nativePicker && listingOpen ? " is-active" : "")}
           data-testid="dir-picker-browse"
-          aria-pressed={listingOpen}
-          onClick={() => {
-            // Browse semantics: open the listing, and if the typed tail is a
-            // dead end (matches nothing), step back to the nearest real
-            // directory so there is something to browse.
-            if (!listingOpen) {
-              setListingOpen(true);
-              return;
-            }
-            if (typedNewDir && browsePath && browsePath !== value) navigate(browsePath);
-            else setListingOpen(false);
-          }}
-          aria-label="Browse subdirectories"
+          // A toggle only in the browser; the native chooser is a one-shot action.
+          aria-pressed={nativePicker ? undefined : listingOpen}
+          onClick={handleBrowseClick}
+          aria-label={nativePicker ? "Choose a folder" : "Browse subdirectories"}
           data-tooltip={
-            listingOpen
-              ? typedNewDir
-                ? "Browse the nearest existing folder"
-                : "Hide the directory listing"
-              : "Browse subdirectories"
+            nativePicker
+              ? "Choose a folder…"
+              : listingOpen
+                ? typedNewDir
+                  ? "Browse the nearest existing folder"
+                  : "Hide the directory listing"
+                : "Browse subdirectories"
           }
         >
           <Icon name="Folder" size={14} />

@@ -93,16 +93,16 @@ test.describe("theme — follows the system preference until the user chooses", 
   });
 });
 
-test("rail: the Create-new CTA sits below Search and opens the Add menu", async ({ page }) => {
+test("rail: the Create-new CTA sits below Search and opens the composer", async ({ page }) => {
   const cta = page.getByTestId("rail-create-new");
   await expect(cta).toBeVisible();
   await expect(cta).toContainText("Create new");
 
-  // It opens the SAME Add menu as the header + — anchored to itself — so the
-  // primary creative action is reachable straight from the nav.
+  // It opens the composer-first "new session" home — the primary creative
+  // action, reachable straight from the nav.
   await cta.click();
-  await expect(page.getByTestId("add-menu")).toBeVisible();
-  await expect(page.getByTestId("new-session-btn")).toBeVisible();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({ page }) => {
@@ -153,9 +153,8 @@ test("session header: compact identity (name only; path in the tooltip); New ses
 
   await page.screenshot({ path: "web/e2e/screenshots/session-header.png" });
 
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  await expect(page.locator(".modal-new-session")).toBeVisible();
+  await page.getByTestId("add-existing-agents").click();
+  await expect(page.locator(".modal-start")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 });
 
@@ -193,8 +192,8 @@ test("the active session shows a busy pulse that clears once output goes quiet",
   await expect(busy).toHaveCount(0, { timeout: 6_000 });
 });
 
-test("Overview heads the account menu, shows the intro panel, and any session leaves it", async ({ page }) => {
-  // Reference material lives in the account menu now, not as a pinned rail
+test("Overview heads the account menu and opens the composer home; opening an agent leaves it", async ({ page }) => {
+  // Reference/new-session home lives in the account menu now, not a pinned rail
   // row — one click deep but always available, not just on first run.
   await page.getByTestId("brand-identity").click();
   await expect(page.getByTestId("profile-menu")).toBeVisible();
@@ -202,98 +201,54 @@ test("Overview heads the account menu, shows the intro panel, and any session le
   await expect(item).toBeVisible();
   await item.click();
 
-  // Selection closes the menu and raises the intro OVER the shell.
+  // Selection closes the menu and opens the composer-first "new session" home
+  // in the centre pane; the session bar reads "new session" while composing.
   await expect(page.getByTestId("profile-menu")).toHaveCount(0);
-  await expect(page.getByTestId("welcome-panel")).toBeVisible();
-  // The session bar keeps describing the session behind the card. It used to
-  // read "Overview" and drop its menu, because Overview replaced the slot; as an
-  // overlay it takes nothing away, so the work behind it stays addressable and
-  // re-reading what Studio is never costs you your place.
-  await expect(page.getByTestId("session-context-title")).not.toHaveText("Overview");
-
-  // It is a real modal: the scrim owns the pointer, so nothing behind it can be
-  // clicked through. This replaced a step that reopened the account menu while
-  // the intro was up to inspect its selected state — reachable back when
-  // Overview was a view occupying the slot, impossible for a card on top of it.
-  const blocked = await page
-    .getByTestId("brand-identity")
-    .click({ timeout: 700 })
-    .then(() => false)
-    .catch(() => true);
-  expect(blocked).toBe(true);
-
-  // Escape puts it away and hands the shell straight back.
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("session-context-title")).toHaveText("new session");
 
   // Opening the leasing agent returns to the terminal — acme-app's one live
-  // session is bound to it, so opening the agent attaches to that session.
+  // session is bound to it, so opening the agent attaches to that session and
+  // leaves the composer.
   await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
-  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
-test("Overview is dismissable — scrim, close button, and Escape all put it away", async ({ page }) => {
-  // An overlay must never be a trap. Three exits, and none of them may disturb
-  // what is behind: the whole reason it is a card on top.
-  const open = async (): Promise<void> => {
-    await page.getByTestId("brand-identity").click();
-    await page.getByTestId("rail-overview").click();
-    await expect(page.getByTestId("welcome-panel")).toBeVisible();
-  };
+test("Overview opens the composer, and Back returns to the session behind it", async ({ page }) => {
+  // The composer is a centre-pane screen, not an overlay: Back is how you return
+  // to the session it was opened over, and it leaves that session untouched.
+  await page.getByTestId("brand-identity").click();
+  await page.getByTestId("rail-overview").click();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
-  await open();
-  await page.getByTestId("welcome-close").click();
-  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-
-  await open();
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-
-  await open();
-  // The scrim, well clear of the card.
-  await page.getByTestId("welcome-panel").click({ position: { x: 8, y: 8 } });
-  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-  // The session it was covering is untouched.
+  await page.getByTestId("composer-back").click();
+  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
-test("creation IA: the rail + adds projects; the tab strip + adds a session to the focused agent", async ({
+test("creation IA: Add existing agents opens the detection dialog; the tab strip + opens the composer", async ({
   page,
 }) => {
-  // The rail's + is the PROJECT entry: it opens the three-door add menu. No
-  // mode tabs (the entry point fixed the intent, docs/IA.md) and no agent
-  // picker — each door asks exactly one question.
-  await page.getByTestId("add-workspace").click();
-  const menu = page.getByTestId("add-menu");
-  await expect(menu).toBeVisible();
-  await expect(menu.locator(".connect-card-header")).toContainText("Add");
-  await expect(menu.getByTestId("aw-doors")).toBeVisible();
-  await expect(menu.getByTestId("add-mode-session")).toHaveCount(0);
-  await expect(menu.getByTestId("add-mode-project")).toHaveCount(0);
-  await expect(menu.getByTestId("harness-select")).toHaveCount(0);
-  // "Add workspace" is now the OUTCOME of picking a folder that holds a
-  // project, not a button offered before anything is known.
-  await expect(menu.getByRole("button", { name: "Add workspace" })).toHaveCount(0);
+  // Adding what already exists is ONE detection-driven dialog — no doors, no
+  // modes, no agent picker.
+  await page.getByTestId("add-existing-agents").click();
+  const modal = page.locator(".modal-start");
+  await expect(modal).toBeVisible();
+  await expect(page.getByTestId("add-menu")).toHaveCount(0);
+  await expect(page.getByTestId("aw-doors")).toHaveCount(0);
+  await expect(modal.locator(".dir-picker")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(menu).toHaveCount(0);
+  await expect(modal).toHaveCount(0);
 
-  // Session creation lives in the session bar: the trailing + starts a NEW
-  // session on the focused agent (leasing), no dialog. Leasing has two live
-  // sessions on load (listed in the switcher menu); the + makes it three and
-  // the new session becomes active.
+  // Creating something NEW lives in the composer: the session bar's + opens it,
+  // not a dialog and not a silent direct add.
   const newBtn = page.getByTestId("session-new");
   await expect(newBtn).toHaveAttribute("aria-label", "New session");
-  await page.getByTestId("session-menu").click();
-  await expect(page.locator(".session-switch-item")).toHaveCount(2);
-  await page.keyboard.press("Escape");
   await newBtn.click();
-  await expect(page.getByTestId("session-context-title")).toContainText("leasing");
-  await page.getByTestId("session-menu").click();
-  await expect(page.locator(".session-switch-item")).toHaveCount(3);
-  await page.keyboard.press("Escape");
-  // No dialog — the + is a direct action.
-  await expect(page.locator(".modal-new-session")).toHaveCount(0);
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("composer-input")).toBeVisible();
+  await expect(page.locator(".modal-start")).toHaveCount(0);
 });
 
 test("workflows rail lists the fixtures and the FOCUSED one drives macro gating", async ({ page }) => {
@@ -384,42 +339,36 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await page.screenshot({ path: "web/e2e/screenshots/session-tab-strip.png", fullPage: true });
   });
 
-  test("switching sessions swaps the active session AND the right panel", async ({ page }) => {
+  test("switching sessions makes the canvas follow the new session's content", async ({ page }) => {
     // Zone 3 keys off the active session. sess-boot ships a bundled doc (board);
-    // the second leasing session ships none (empty state) — so the right pane
-    // visibly swaps between them.
+    // the second leasing session ships none — so the canvas pane OPENS for the
+    // populated session and HIDES for the empty one, rather than swapping to an
+    // empty-state placeholder.
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
     await expect(page.locator(".canvas-iframe")).toBeVisible();
+    await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
 
-    // Switch to the other session from the current session's menu.
+    // Switch to the empty session — nothing to show, so the canvas hides.
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-switch-sess-leasing-2").click();
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-leasing-2");
-    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+    await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
 
-    // The Steps projection follows the same active session.
-    await page.getByTestId("right-tab-steps").click();
-    await expect(page.locator(".canvas-empty")).toContainText("No steps yet");
-
-    // Switching back from the menu returns to the board.
+    // Switch back to the populated session — the canvas opens again.
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-switch-sess-boot").click();
-    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
+    await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
     await expect(page.locator(".canvas-iframe")).toBeVisible();
   });
 
-  test("the + starts a new session on the focused agent", async ({ page }) => {
-    await page.getByTestId("session-menu").click();
-    await expect(page.locator(".session-switch-item")).toHaveCount(2);
-    await page.keyboard.press("Escape");
+  test("the + opens the composer to start a new session", async ({ page }) => {
+    // The + is the New-session entry: it opens the composer-first home rather
+    // than silently spawning a session, so a new agent starts from an outcome.
     await page.getByTestId("session-new").click();
-
-    // A third session joins, bound to the same agent, and becomes active — the
-    // switcher menu now lists three.
-    await expect(page.getByTestId("session-context-title")).toContainText("leasing");
-    await page.getByTestId("session-menu").click();
-    await expect(page.locator(".session-switch-item")).toHaveCount(3);
-    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toBeVisible();
+    // Leasing stays the focused agent behind the composer.
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
   });
 
@@ -551,42 +500,12 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 });
 
-test("add project: the rail's + registers a bare folder through the 'Open a folder' door", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("aw-door-have").click();
-
-  const modal = page.locator(".modal-add-workspace");
+test("Add existing agents: directory picker navigates and validates", async ({ page }) => {
+  await page.getByTestId("add-existing-agents").click();
+  const modal = page.locator(".modal-start");
   await expect(modal).toBeVisible();
-  await expect(modal.getByTestId("harness-select")).toHaveCount(0);
 
-  const input = modal.getByTestId("dir-picker-input");
-  await input.fill("/Users/demo/scratch");
-  await modal.getByTestId("aw-have-continue").click();
-
-  // scratch holds no sapiom.json, so detection says so — and registering it as
-  // a bare workspace stays available (the rail supports agent-less folders).
-  await expect(modal.getByTestId("aw-result")).toContainText("No agent project");
-  await modal.getByTestId("aw-add-anyway").click();
-
-  await expect(modal).toBeHidden();
-  // The connected path joins the rail as a workspace-owned workflow row.
-  await expect(page.getByTestId("workflow-scratch")).toBeVisible();
-});
-
-test("new-session modal: directory picker navigates and validates", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  const modal = page.locator(".modal-new-session");
-  await expect(modal).toBeVisible();
-  await expect(modal.locator(".modal-field-hint")).toHaveText(
-    "Pick the workspace folder the coding agent runs in; the session is named after the folder.",
-  );
-  await expect(modal.getByTestId("harness-select")).toHaveAttribute(
-    "aria-label",
-    "Coding agent for this session",
-  );
-
-  const startButton = page.getByRole("button", { name: "Start session" });
+  const primary = modal.locator(".modal-primary-cta");
   const input = page.getByTestId("dir-picker-input");
 
   // Seeded from launchDir; browsing shows its subdirectories.
@@ -608,25 +527,26 @@ test("new-session modal: directory picker navigates and validates", async ({ pag
   await expect(input).toHaveValue("/Users/demo");
   await expect(page.getByTestId("dir-picker-item-acme-app")).toBeVisible();
 
-  await page.screenshot({ path: "web/e2e/screenshots/new-session-modal.png" });
+  await page.screenshot({ path: "web/e2e/screenshots/add-existing-agents.png" });
 
-  await input.fill("");
-  await expect(startButton).toBeDisabled();
-  await input.fill("/tmp/example-project");
-  await expect(startButton).toBeEnabled();
+  // Only a folder that already holds an agent enables the action; a plain one
+  // (and an empty field) leave it disabled.
+  await input.fill("/Users/demo/rfq-agent");
+  await expect(primary).toBeEnabled();
+  await input.fill("/Users/demo/scratch");
+  await expect(primary).toBeDisabled();
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.locator(".modal-new-session")).toBeHidden();
+  await expect(page.locator(".modal-start")).toBeHidden();
 });
 
-test("new-session modal: a failed directory read shows an error, not an empty listing", async ({ page }) => {
+test("Add existing agents: a failed directory read shows an error, not an empty listing", async ({ page }) => {
   // ?mockError=listDir makes the filesystem probe reject.
   await page.goto("/?mockError=listDir&seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  await expect(page.locator(".modal-new-session")).toBeVisible();
+  await page.getByTestId("add-existing-agents").click();
+  await expect(page.locator(".modal-start")).toBeVisible();
 
   const err = page.getByTestId("dir-picker-error");
   await expect(err).toBeVisible({ timeout: 3_000 });
@@ -1065,6 +985,8 @@ test("steps tab shows its own empty state (not canvas copy) before anything is r
   // the same early-return state as the board — but must talk about steps. (The
   // boot session opens on its board, which does post a step graph.)
   await page.getByTestId("workspace-focus-scratch").click();
+  // Focusing the empty-board scratch session auto-collapses the right pane; reopen it to inspect the Steps tab.
+  await page.getByTestId("right-expand").click();
   await page.getByTestId("right-tab-steps").click();
   const empty = page.locator(".canvas-empty");
   await expect(empty).toContainText("No steps yet");
@@ -1475,6 +1397,9 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
+    // The rfq draft session has an empty canvas board, so starting it auto-collapses the right pane; reopen it.
+    await page.getByTestId("right-expand").click();
+
     // A Draft has no lifecycle pill: the deployed dashboard link is absent, and
     // Deploy is the filled primary CTA instead.
     await page.getByTestId("right-tab-canvas").click();
@@ -1749,8 +1674,7 @@ test.describe("session menu copy path", () => {
 });
 
 test("directory picker: arrow keys move the highlight and Enter drills into it", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
+  await page.getByTestId("add-existing-agents").click();
   const input = page.getByTestId("dir-picker-input");
   await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
 
@@ -2038,6 +1962,8 @@ test("an observed run renders its real steps even before anything is visualized"
   // session opens on its board, which already posts a graph — the fallback is
   // exactly this no-graph path.)
   await page.getByTestId("workspace-focus-scratch").click();
+  // Focusing the empty-board scratch session auto-collapses the right pane; reopen it before reading the Steps tab.
+  await page.getByTestId("right-expand").click();
   await page.evaluate(() => {
     (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
       type: "execution.started",

@@ -204,6 +204,9 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
     await expect(deployBtn).toHaveClass(/session-action-primary/);
     // The mock persists a definition id before the failed first build, just
     // like production. That link must not enable Prod Run or Code snippets.
+    // Starting the rfq session collapsed the right pane (empty canvas — the
+    // failed build produced no doc); reopen it before inspecting canvas-tab-bar.
+    await page.getByTestId("right-expand").click();
     const dashboardLink = page.getByTestId("workflow-dashboard-link");
     await expect(dashboardLink).toContainText("deploy failed");
     await expect(dashboardLink).toHaveAttribute("data-deployment-state", "failed");
@@ -248,6 +251,9 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
     // Fresh draft state: no "deployed" pill on the Canvas tab, Deploy is primary,
     // and Run reads "Not deployed yet". (The lifecycle chip that used to say
     // "Draft" is gone; draft-ness is now Deploy-as-primary + no deployed pill.)
+    // The fresh rfq session started with an empty canvas, collapsing the right
+    // pane; reopen it before inspecting the Canvas tab.
+    await page.getByTestId("right-expand").click();
     await page.getByTestId("right-tab-canvas").click();
     await expect(page.getByTestId("workflow-dashboard-link")).toHaveCount(0);
     await expect(deployBtn).toHaveClass(/session-action-primary/);

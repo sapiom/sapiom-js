@@ -1055,27 +1055,6 @@ input {
   background: var(--active-shade);
 }
 
-/* Add-menu variant: the same door rows the dialog shows, on the menu inset.
-   Matched to .history-card so the two popovers hanging off adjacent buttons
-   are visibly one control, not two designs. */
-.add-card {
-  width: min(320px, calc(100vw - var(--sp4)));
-}
-
-.add-card .connect-card-body {
-  padding: 6px;
-}
-
-/* In the modal a door is a full-bleed row on modal padding, separated from its
-   neighbours by a rule. In the menu it is an inset, rounded item like every
-   other popover row — and the rule above the first door would otherwise sit
-   directly under the header's own border, reading as a double line. */
-.add-card .aw-door {
-  padding: 6px 8px;
-  border-top: none;
-  border-radius: var(--radius-sm);
-}
-
 .rail-list {
   flex: 1;
   min-height: 0;
@@ -6168,8 +6147,7 @@ input {
 /* Full-bleed dialog anatomy: the dialog owns no padding; header / body /
    footer blocks own theirs and are separated by hairlines — mirrors the
    design system's .sapiom-dialog. */
-.modal-new-session,
-.modal-add-workspace,
+.modal-start,
 .modal-confirm {
   /* Every block (header, body, full-bleed rows, actions) shares the app's
      standard pane inset, so dialog content aligns with panel content. */
@@ -6246,8 +6224,7 @@ input {
   outline-offset: 2px;
 }
 
-.modal-new-session .modal-header,
-.modal-add-workspace .modal-header {
+.modal-start .modal-header {
   display: flex;
   align-items: center;
   min-height: var(--pane-header-h);
@@ -6290,24 +6267,54 @@ input {
   min-width: 0;
 }
 
-.modal-new-session .modal-actions,
-.modal-add-workspace .modal-actions {
+.modal-start .modal-actions {
   margin-top: 0;
   padding: var(--sp3) var(--modal-pad-x);
 }
 
 /* Keep each action button's label on one line and let the row wrap to stack
    whole buttons when the dialog is narrow — otherwise flexbox shrinks them
-   below their content width and labels like "Start from a template" and
-   "Scaffold an agent here" break mid-word (the "no agent project" state). */
-.modal-add-workspace .modal-actions {
+   below their content width and labels like "Start bare session" and
+   "Scaffold here" break mid-word (the plain/new states carry several actions). */
+.modal-start .modal-actions {
   flex-wrap: wrap;
 }
 
-.modal-add-workspace .modal-actions > button {
+.modal-start .modal-actions > button {
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+/* --- StartDialog: the unified, detection-driven Add dialog --------------- */
+
+/* A flex column so the BODY scrolls (picker listing + detection status + the
+   "Start from" tray can be tall) while the header and the morphing footer stay
+   put — the primary action never scrolls out of reach. */
+.modal-start {
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 760px);
+}
+
+.modal-start .modal-header,
+.modal-start .modal-actions {
+  flex: none;
+}
+
+.modal-start .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* The first body row is prose (the subtitle), not the full-bleed picker, so
+     restore the top inset the picker variant deliberately drops. */
+  padding-top: var(--sp3);
+}
+
+.modal-start-title {
+  font-weight: var(--fw-strong, 600);
+  font-size: var(--type-h2, 1rem);
+}
+
 
 /* Harness dropdown: compact trigger in the footer — [brand icon][label]
    [caret], same anatomy as the composer's provider control. The menu itself
@@ -6869,79 +6876,6 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.aw-back {
-  margin-right: var(--sp2);
-  flex: 0 0 auto;
-}
-
-/* Doors are full-bleed rows: the GROUP owns its separators, so no row draws a
-   perimeter line and the dividers reach the dialog edge. */
-.aw-doors {
-  display: flex;
-  flex-direction: column;
-}
-
-.aw-door {
-  display: flex;
-  align-items: center;
-  gap: var(--sp3);
-  width: 100%;
-  padding: var(--sp3) var(--modal-pad-x);
-  border: none;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  border-radius: 0;
-  text-align: left;
-  color: var(--text);
-  transition: background-color var(--transition-fast);
-}
-
-.aw-door:hover,
-.aw-door:focus-visible {
-  background: var(--surface-hover);
-}
-
-.aw-door-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-2);
-  color: var(--text-dim);
-}
-
-.aw-door-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.aw-door-title {
-  font-size: var(--type-ui);
-  font-weight: 500;
-}
-
-.aw-door-sub {
-  font-size: var(--type-meta);
-  color: var(--text-faint);
-}
-
-.aw-door-arrow {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  transition: transform var(--transition-fast);
-}
-
-.aw-door:hover .aw-door-arrow {
-  transform: translateX(2px);
 }
 
 /* Detection outcome. Scaffold / template / bulk-scan / MCP-setup all live
@@ -7947,4 +7881,328 @@ input {
   .template-example-summary {
     transition: none;
   }
+}
+
+/* ── New-session composer (the "add new" home) ────────────────────────────
+   The centre-pane screen shown when there is no active session (first run, or
+   the user asks for a new one): a greeting, the "what should your agent do?"
+   composer, and a starter template row. No terminal, no canvas yet — the grid
+   is single-column while it's up (App's gridTemplateColumns). */
+.composer-home {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp6);
+  padding: var(--sp7) var(--sp5) var(--sp6);
+  animation: refine-content-in var(--base, 0.22s) var(--ease) both;
+}
+
+/* Back to the session the composer was opened over (rendered only then). */
+.composer-back {
+  position: absolute;
+  top: var(--sp4);
+  left: var(--sp4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.composer-back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.composer-hero {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.composer-greeting {
+  margin: 0 0 var(--sp2);
+  font-size: var(--type-ui);
+  color: var(--text-dim);
+}
+
+.composer-heading {
+  margin: 0 0 var(--sp4);
+  font-size: 1.6rem;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* Quick-start chips PREFILL the box, so they read as suggestions, not actions. */
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp2);
+  margin-bottom: var(--sp4);
+}
+.composer-chip {
+  height: var(--control-h-xs);
+  padding: 0 var(--sp3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+.composer-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+/* The composer box: a raised, rounded field with a two-part action row. */
+.composer-box {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--r-lg, 14px);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  text-align: left;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.composer-box:focus-within {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--ui-line-strong));
+  box-shadow: var(--shadow);
+}
+.composer-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-ui);
+  line-height: 1.5;
+  min-height: calc(1.5em * 2);
+}
+.composer-input::placeholder {
+  color: var(--text-faint);
+}
+.composer-input:focus-visible {
+  outline: none;
+}
+.composer-box-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  margin-top: var(--sp2);
+}
+.composer-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.composer-attach:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.composer-box-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+/* The provider selector reuses .harness-select; only its resting fill differs
+   so it doesn't fight the box it sits inside. */
+.composer-harness {
+  background: transparent;
+}
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--btn);
+  color: var(--btn-ink);
+  cursor: pointer;
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.composer-send:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+.composer-send:active {
+  transform: translateY(0);
+}
+
+/* Starter template row. */
+.composer-templates {
+  width: 100%;
+  max-width: 880px;
+}
+.composer-templates-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--sp3);
+}
+.composer-templates-title {
+  font-size: var(--type-label);
+  font-weight: 590;
+  color: var(--text-dim);
+}
+.composer-templates-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.composer-templates-all:hover {
+  color: var(--text);
+}
+.composer-template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp3);
+}
+@media (max-width: 900px) {
+  .composer-template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.composer-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.composer-template-card:hover {
+  border-color: var(--ui-line-strong);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+.composer-template-cardhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp2);
+}
+.composer-template-name {
+  font-size: var(--type-ui);
+  font-weight: 590;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-template-suggested {
+  flex: 0 0 auto;
+  padding: 1px var(--sp2);
+  border-radius: var(--radius-full, 999px);
+  background: var(--brand-wash, var(--accent-dim));
+  color: var(--green-text, var(--brand));
+  font-size: var(--type-micro);
+  font-weight: 600;
+}
+.composer-template-desc {
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.composer-template-meta {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+/* First-run footer: the one-time telemetry opt-in + docs link. */
+.composer-footer {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp3);
+  text-align: center;
+}
+.composer-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp2);
+  max-width: 520px;
+  text-align: left;
+}
+.composer-consent-copy {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.composer-docs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  text-decoration: none;
+}
+.composer-docs:hover {
+  color: var(--text);
 }

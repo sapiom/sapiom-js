@@ -77,18 +77,32 @@ function persist(widths: PaneWidths): void {
  */
 export function usePaneWidths(): {
   widths: PaneWidths;
+  /** True while the canvas handle is being dragged OR reset — a DIRECT
+   *  manipulation of the canvas width, as opposed to the collapse/expand
+   *  drawer toggle. The shell suppresses the open/close ease while it's set,
+   *  so the pane snaps to the cursor / the equal split instead of lagging it. */
+  canvasResizing: boolean;
   startRailDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
   startCanvasDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
   resetRail: () => void;
   resetCanvas: () => void;
 } {
   const [widths, setWidths] = useState<PaneWidths>(loadStoredWidths);
+  const [canvasResizing, setCanvasResizing] = useState(false);
 
   const startDrag =
-    (key: keyof PaneWidths, sign: 1 | -1, min: number, max: number, resolveStart: () => number) =>
+    (
+      key: keyof PaneWidths,
+      sign: 1 | -1,
+      min: number,
+      max: number,
+      resolveStart: () => number,
+      onResizing?: (v: boolean) => void,
+    ) =>
     (e: ReactPointerEvent<HTMLDivElement>): void => {
       const handle = e.currentTarget;
       handle.setPointerCapture(e.pointerId);
+      onResizing?.(true);
       const startX = e.clientX;
       const startValue = resolveStart();
 
@@ -99,6 +113,7 @@ export function usePaneWidths(): {
       const handleUp = (): void => {
         handle.removeEventListener("pointermove", handleMove);
         handle.removeEventListener("pointerup", handleUp);
+        onResizing?.(false);
         setWidths((current) => {
           persist(current);
           return current;
@@ -118,15 +133,30 @@ export function usePaneWidths(): {
 
   return {
     widths,
+    canvasResizing,
     startRailDrag: startDrag("rail", 1, RAIL_MIN, RAIL_MAX, () => widths.rail),
     // Dragging away from the equal split needs a concrete starting px —
     // measure the live pane, since "equal" has no stored number.
-    startCanvasDrag: startDrag("canvas", -1, CANVAS_MIN, CANVAS_MAX, () => {
-      if (widths.canvas != null) return widths.canvas;
-      const pane = document.querySelector(".canvas-pane");
-      return pane ? pane.getBoundingClientRect().width : CANVAS_MIN;
-    }),
+    startCanvasDrag: startDrag(
+      "canvas",
+      -1,
+      CANVAS_MIN,
+      CANVAS_MAX,
+      () => {
+        if (widths.canvas != null) return widths.canvas;
+        const pane = document.querySelector(".canvas-pane");
+        return pane ? pane.getBoundingClientRect().width : CANVAS_MIN;
+      },
+      setCanvasResizing,
+    ),
     resetRail: () => reset("rail", RAIL_DEFAULT),
-    resetCanvas: () => reset("canvas", null),
+    // A double-click SNAPS to the equal split (direct manipulation), so flag
+    // the change as a resize for the frame it lands: the transition is
+    // suppressed, the grid jumps, then the flag clears with nothing left to ease.
+    resetCanvas: () => {
+      setCanvasResizing(true);
+      reset("canvas", null);
+      window.setTimeout(() => setCanvasResizing(false), 0);
+    },
   };
 }

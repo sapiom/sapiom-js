@@ -13,7 +13,7 @@
  * on and `ipcRenderer` is never handed to the page.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import { APP_VERSION_ARG, UPDATE_CHECK, type UpdateCheckOutcome } from "../main/ipc.js";
+import { APP_VERSION_ARG, CHOOSE_DIRECTORY, UPDATE_CHECK, type UpdateCheckOutcome } from "../main/ipc.js";
 
 const api = {
   /** The desktop app's version — NOT the harness's (the SPA already knows that one). */
@@ -22,6 +22,14 @@ const api = {
   /** Check now, on the user's behalf. Resolves with what happened; never rejects. */
   checkForUpdates(): Promise<UpdateCheckOutcome> {
     return ipcRenderer.invoke(UPDATE_CHECK) as Promise<UpdateCheckOutcome>;
+  },
+  /**
+   * Open the OS-native folder chooser, optionally starting at `defaultPath`.
+   * Resolves with the chosen absolute path, or null when cancelled. Read-only: it
+   * only returns a path the user picked — the main process opens no file.
+   */
+  chooseDirectory(defaultPath?: string): Promise<string | null> {
+    return ipcRenderer.invoke(CHOOSE_DIRECTORY, defaultPath) as Promise<string | null>;
   },
   // No restart method, on purpose — see ipc.ts. An update that is ready to install
   // is confirmed through a native dialog, so nothing the page can call ends a

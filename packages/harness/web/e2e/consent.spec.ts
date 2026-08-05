@@ -196,19 +196,11 @@ test.describe("UI event tracking (track() calls)", () => {
   });
 
   test("new session creation emits track('session.created')", async ({ page }) => {
-    // Open new session modal.
-    await page.getByTestId("add-workspace").click();
-    await page.getByTestId("new-session-btn").click();
-    await expect(page.locator(".modal-new-session")).toBeVisible();
-
-    // Use the existing MOCK_LAUNCH_DIR path from the picker.
-    // The directory field is prefilled — just click Start.
-    const startBtn = page.locator(".modal-new-session .btn-primary");
-    await expect(startBtn).toBeEnabled();
-    await startBtn.click();
-
-    // Wait for the modal to close (session created successfully in mock).
-    await expect(page.locator(".modal-new-session")).toHaveCount(0, { timeout: 3_000 });
+    // Creating a new agent starts a session from the composer.
+    await page.getByTestId("rail-create-new").click();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await page.getByTestId("composer-input").fill("Summarize new issues each morning.");
+    await page.getByTestId("composer-send").click();
 
     await waitForTrackEvent(page, "session.created");
     const events = await getTrackEvents(page);
