@@ -28,13 +28,14 @@ import { AgentOperationError } from "./errors.js";
  * success. Throws `TYPECHECK_FAILED` with the compiler output on type errors.
  */
 export function runTypecheck(sourceDir: string): string | null {
-  const tscBin = path.join(sourceDir, "node_modules", ".bin", "tsc");
+  const projectDir = path.resolve(sourceDir);
+  const tscBin = path.join(projectDir, "node_modules", ".bin", "tsc");
   if (!existsSync(tscBin)) {
     return "typecheck skipped — TypeScript is not installed (run npm install first)";
   }
   try {
     execFileSync(tscBin, ["--noEmit"], {
-      cwd: sourceDir,
+      cwd: projectDir,
       stdio: ["ignore", "pipe", "pipe"],
     });
     return null;
