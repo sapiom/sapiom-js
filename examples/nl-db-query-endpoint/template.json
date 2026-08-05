@@ -5,14 +5,14 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Stand up a live endpoint that turns plain-English questions into safe, read-only database queries. One run deploys the endpoint and demonstrates it end to end with a sample question.",
-  "longDescription": "Deploy a live endpoint that answers questions about your database in plain English. One run stands up the endpoint. After that, anyone can `POST /query` a question and get the data back.\n\nEach request introspects your schema, asks an LLM for a single `SELECT`, and returns the rows. The read-only guardrail is the point. The query is checked: a single statement, `SELECT` or `WITH` only, no writes or DDL. It runs inside a `READ ONLY` transaction that Postgres enforces at the engine level, with a statement timeout and a row cap.",
+  "whatItDoes": "During setup, an agent run translates a plain-English question into a read-only SQL query, verifies it, and deploys a live endpoint that executes read-only SQL against your database. One run does the translation and demonstrates it end to end with a sample question.",
+  "longDescription": "Deploy a live endpoint that runs read-only SQL against your database. One run does the natural-language work. It translates a sample question into a single `SELECT`, checks it against a read-only guardrail (a single statement, `SELECT` or `WITH` only, no writes or DDL), and executes it for real inside a `READ ONLY` transaction with a statement timeout and a row cap. The rows returned are genuine.\n\nThe deployed endpoint never calls an LLM. It only executes SQL it is given. `POST /query { sql: \"SELECT ...\" }` runs your own read-only query, re-checked with the same guardrail before it touches the database. `GET /` shows the vetted sample, including the question, the SQL the agent translated it into, and the real rows, as a demonstration of the translation step. Because the endpoint has no LLM call to make, it needs no Sapiom credential at all, only `DATABASE_URL`.",
   "useCases": [
-    "Plain-English question box",
-    "Read-only SQL",
+    "Natural language to SQL",
+    "Read-only SQL endpoint",
     "Live POST endpoint"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it to stand up the endpoint.\n\nNothing is required to get started. With no `dbHandle` or `connectionString`, the run provisions and seeds a small demo database (`customers`, `invoices`), answers the built-in sample question with a known-safe query, and reports the real rows. It then deploys the endpoint and mints it a scoped Sapiom key automatically. Pass your own Sapiom Postgres handle as `dbHandle` (or a full `connectionString`) to query yours instead. Once deployed, send `POST /query { \"question\": \"...\" }` to the returned URL. Advanced: set `ENDPOINT_SAPIOM_API_KEY` to make the endpoint run as a key you control instead.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow. `database.get` is stubbed to an unreachable connection string, so on defaults the built-in sample SQL still passes the guardrail but the real query at `execute` fails, giving a legible trace of `query_failed`. Pass `{ \"dryRun\": true }` to trace the whole graph offline over fixed sample rows instead (see `AGENTS.md`). Then edit and deploy with the Sapiom MCP.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it to stand up the endpoint.\n\nNothing is required to get started. With no `dbHandle` or `connectionString`, the run provisions and seeds a small demo database (`customers`, `invoices`), translates the built-in sample question into a known-safe query, executes it for real, and reports the real rows. It then deploys an endpoint that executes read-only SQL against that database, no Sapiom credential needed, only `DATABASE_URL`. Pass your own Sapiom Postgres handle as `dbHandle` (or a full `connectionString`) to query yours instead. Once deployed, `GET /` on the returned URL shows the vetted sample; `POST /query { \"sql\": \"SELECT ...\" }` runs your own read-only query.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow. `database.get` is stubbed to an unreachable connection string, so on defaults the built-in sample SQL still passes the guardrail but the real query at `execute` fails, giving a legible trace of `query_failed`. Pass `{ \"dryRun\": true }` to trace the whole graph offline over fixed sample rows instead (see `AGENTS.md`). Then edit and deploy with the Sapiom MCP.",
   "resources": [
     {
       "kind": "postgres",
@@ -23,16 +23,6 @@
       "reuse": {
         "key": "dbHandle"
       }
-    }
-  ],
-  "requiredSecrets": [
-    {
-      "key": "ENDPOINT_SAPIOM_API_KEY",
-      "label": "API key for the deployed endpoint (optional override)",
-      "provider": "sapiom",
-      "credentialKind": "api_key",
-      "description": "Optional. The endpoint mints its own scoped Sapiom key by default; set this only to make it run as a specific key you control instead.",
-      "optional": true
     }
   ],
   "defaultInput": {
@@ -98,6 +88,6 @@
         "assert": "nonEmptyString"
       }
     ],
-    "narrative": "Runs the built-in sample question against the seeded demo database for real rows, mints the endpoint its own scoped key, and deploys a working /query endpoint."
+    "narrative": "Translates the built-in sample question into SQL, runs it against the seeded demo database for real rows, then deploys and verifies a working /query endpoint that executes read-only SQL, no Sapiom credential required."
   }
 }

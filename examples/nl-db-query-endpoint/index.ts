@@ -10,17 +10,20 @@ import postgres from "postgres";
 import { z } from "zod/v4";
 
 /**
- * Natural-Language DB Query Endpoint — deploy a live HTTP endpoint that turns a
- * plain-English question into a read-only SQL query and returns the answer.
+ * Natural-Language DB Query Endpoint — an agent run translates a plain-English
+ * question into a read-only SQL query, vets it, and deploys a live HTTP endpoint
+ * that executes read-only SQL against your database.
  *
- * One run stands up the endpoint AND proves the pipeline for real: it runs the
- * sample question against the seeded demo database and returns the actual rows.
+ * The NL→SQL translation happens ONCE, during the run (where `models.run` has a
+ * real per-run engine token). The DEPLOYED endpoint never calls an LLM — it only
+ * executes SQL it is given, so it needs no Sapiom credential at all, just
+ * `DATABASE_URL`. `GET /` on the deployed endpoint shows the vetted sample
+ * (question, SQL, and the real rows it returned) as a demo of the translation.
  *
- *   validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ execute ─┬─▶ deploy ─┬─▶ deployed         (terminal)
- *              (database   (models  (read- │            │          ├─▶ deploy_failed   (terminal)
- *               .get)       .run)   only    │            │          └─▶ endpoint_skipped(terminal)
- *                                   check)  │            └─▶ query_failed              (terminal)
- *                                           └─▶ rejected                                (terminal)
+ *   validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ execute ─┬─▶ deploy ─┬─▶ deployed       (terminal)
+ *              (database   (models  (read- │            │          └─▶ deploy_failed (terminal)
+ *               .get)       .run)   only    │            └─▶ query_failed            (terminal)
+ *                                   check)  └─▶ rejected                             (terminal)
  *
  *   1. validate — check the input (a database handle or connection string) and
  *      resolve config (sample question, port, row cap, model).
@@ -42,16 +45,15 @@ import { z } from "zod/v4";
  *      the deployed endpoint enforces. The returned rows ARE the zero-setup
  *      artifact — a connection or query failure routes honestly to `query_failed`
  *      rather than fabricating rows.
- *   6. deploy   — write a small server (which re-runs translate → guard → execute
- *      per request) into a sandbox and expose it at a stable URL
- *      (`sandboxes.deployPreview`). DATABASE_URL and the server's own API key are
- *      passed as env — never baked into source. The endpoint's key is MINTED for it
- *      (`ctx.sapiom.keys.mintScoped`): a durable, narrowly-scoped credential the
- *      long-lived server uses to call `models.run`, since the engine's per-run token
- *      expires with this step. Only if minting is unavailable and no key was supplied
- *      does the run stop at `endpoint_skipped`: a URL whose only route cannot answer
- *      is worse than no URL — but it still reports the real rows `execute` fetched.
- *   7. deployed / endpoint_skipped / deploy_failed / query_failed / rejected — terminal.
+ *   6. deploy   — write a small server into a sandbox and expose it at a stable
+ *      URL (`sandboxes.deployPreview`). Only `DATABASE_URL` and the vetted sample
+ *      (`SEED_QUESTION`/`SEED_SQL`/`SEED_COLUMNS`/`SEED_ROWS`) are passed as env —
+ *      no Sapiom credential, since the deployed server never calls `models.run`.
+ *      After the sandbox reports a URL, this step PROBES it for real — POSTs the
+ *      vetted sample SQL to `/query` and requires a 200 with rows back — before
+ *      calling the run `deployed`. A URL that can't answer its own vetted query is
+ *      worse than no URL, so an unverified endpoint routes to `deploy_failed`.
+ *   7. deployed / deploy_failed / query_failed / rejected — terminal.
  *
  * The read-only guardrail is defense-in-depth: the SQL source is *told* (an LLM
  * system prompt) or *known* (the built-in zero-setup query) to be a SELECT, the
@@ -59,7 +61,9 @@ import { z } from "zod/v4";
  * keywords) at `guard`, and both `execute` and the deployed endpoint *run* it
  * inside `BEGIN ... READ ONLY` with a statement timeout and a row cap — the last
  * of which Postgres enforces at the engine level, so a write can't slip through
- * even if the earlier layers are wrong.
+ * even if the earlier layers are wrong. The deployed endpoint re-applies the same
+ * guard to any SQL a caller posts to it, since it, too, only ever executes SQL —
+ * never natural language — at request time.
  *
  * `run_local` stubs `database.get`, so on defaults the built-in sample SQL passes
  * `guard` (it never called the model) but `execute`'s real query against the
@@ -87,8 +91,6 @@ interface EntryInput {
   maxRows?: number;
   /** Port the endpoint listens on (default 3000). */
   port?: number;
-  /** Dev-only fallback: inject the server's SAPIOM_API_KEY directly. */
-  sapiomApiKey?: string;
   /**
    * Assemble everything but skip the real `deployPreview` — so `run_local` traces
    * the full graph offline, with no sandbox and no real deploy.
@@ -104,7 +106,6 @@ interface Config {
   model: string;
   maxRows: number;
   port: number;
-  sapiomApiKey: string;
   dryRun: boolean;
   /** True when the run defaulted to the managed demo database. */
   usingDemoDatabase: boolean;
@@ -139,26 +140,6 @@ const DEFAULT_PORT = 3000;
  * schema that does not exist is not a demonstration of anything.
  */
 const DEFAULT_DB_HANDLE = "nl-db-query-demo";
-/**
- * Optional OVERRIDE env key for the API key the DEPLOYED endpoint uses to call
- * `models.run` on each request. The default path needs none: the deploy step mints
- * the endpoint its own durable, narrowly-scoped key via `ctx.sapiom.keys.mintScoped`
- * (SAP-2300) and forwards it to the server as `SAPIOM_API_KEY`. This secret only
- * exists as an escape hatch — bring-your-own key when you want to control which
- * credential the endpoint runs as. The declared key cannot itself be named
- * `SAPIOM_*` — that namespace belongs to the engine and a template may never
- * override it.
- */
-const ENDPOINT_API_KEY = "ENDPOINT_SAPIOM_API_KEY";
-
-/**
- * Lifetime of the scoped key minted for the deployed endpoint. The key is durable
- * relative to the run (the per-run `sat_` the engine injects expires with the step)
- * but still bounded — long enough for the preview to serve requests, short enough
- * that a leaked key is not forever. It carries transaction (payment) authority only,
- * and can be revoked by its id before the TTL.
- */
-const ENDPOINT_KEY_TTL = "30d";
 
 /** Per-query statement timeout for `execute`'s real sample-query run. Mirrors the
  * deployed endpoint's own default (see `SERVER_SOURCE`'s `STATEMENT_TIMEOUT_MS`). */
@@ -209,7 +190,6 @@ function resolveConfig(input: EntryInput | undefined): Config {
     model: input?.model?.trim() ?? "",
     maxRows: input?.maxRows ?? DEFAULT_MAX_ROWS,
     port: input?.port ?? DEFAULT_PORT,
-    sapiomApiKey: input?.sapiomApiKey ?? "",
     dryRun: input?.dryRun === true,
   };
 }
@@ -275,22 +255,36 @@ function ensureLimit(sql: string, max: number): string {
 
 // ─────────────────────────────────────────────────────── the endpoint app ──
 // Uploaded verbatim to the sandbox. Reads all config from env (injected at
-// deploy time). On POST /query it introspects the schema (cached), asks the LLM
-// for a read-only SELECT, re-checks it with the same guardrail, then runs it in a
-// READ ONLY transaction with a statement timeout and a row cap. No backticks / no
-// ${} here so it embeds cleanly as a template-literal string above.
+// deploy time). It never calls an LLM — the natural-language translation
+// happened once, in the run, at `plan`. It only EXECUTES read-only SQL: on
+// POST /query it re-checks the given SQL with the same guardrail, then runs it
+// in a READ ONLY transaction with a statement timeout and a row cap. GET /
+// serves the vetted sample (question/SQL/rows) the run produced, seeded in as
+// env. No backticks / no ${} here so it embeds cleanly as a template-literal
+// string above.
 
 const SERVER_SOURCE = `import http from "node:http";
-import { createClient } from "@sapiom/tools";
 import pg from "pg";
 
 const PORT = Number(process.env.PORT || 3000);
-const MODEL = process.env.SAPIOM_MODEL || "";
 const MAX_ROWS = Number(process.env.MAX_ROWS || 100);
 const STATEMENT_TIMEOUT_MS = Number(process.env.STATEMENT_TIMEOUT_MS || 10000);
 
-const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
+
+function parseJsonEnv(name) {
+  try {
+    const parsed = JSON.parse(process.env[name] || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+const SEED_QUESTION = process.env.SEED_QUESTION || "";
+const SEED_SQL = process.env.SEED_SQL || "";
+const SEED_COLUMNS = parseJsonEnv("SEED_COLUMNS");
+const SEED_ROWS = parseJsonEnv("SEED_ROWS");
 
 const WRITE_KEYWORDS =
   /\\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|call|do|copy|vacuum|analyze|reindex|refresh|lock|comment|attach|detach|set|reset|begin|commit|rollback|savepoint|prepare|execute|listen|notify|discard|cluster|reassign|security|import)\\b/i;
@@ -321,42 +315,8 @@ function ensureLimit(sql, max) {
   return /\\blimit\\b/i.test(sql) ? sql : sql + " LIMIT " + max;
 }
 
-let schemaCache = null;
-async function describeSchema() {
-  if (schemaCache) return schemaCache;
-  const { rows } = await pool.query(
-    "SELECT table_name, column_name, data_type FROM information_schema.columns " +
-      "WHERE table_schema NOT IN ('pg_catalog','information_schema') " +
-      "ORDER BY table_name, ordinal_position",
-  );
-  const byTable = new Map();
-  for (const r of rows) {
-    if (!byTable.has(r.table_name)) byTable.set(r.table_name, []);
-    byTable.get(r.table_name).push(r.column_name + " " + r.data_type);
-  }
-  const lines = [];
-  for (const [t, cols] of byTable) lines.push(t + "(" + cols.join(", ") + ")");
-  schemaCache = lines.join("\\n") || "(no user tables)";
-  return schemaCache;
-}
-
-const SYSTEM = [
-  "You translate a natural-language question into ONE read-only SQL query for PostgreSQL.",
-  "Rules:",
-  "- Output ONLY the SQL. No prose, no markdown fences, no trailing semicolon.",
-  "- It MUST be a single SELECT (a leading WITH/CTE is fine). Never write or modify data.",
-  "- Use only the tables and columns in the provided schema.",
-].join("\\n");
-
-async function answer(question) {
-  const schema = await describeSchema();
-  const res = await sapiom.models.run({
-    system: SYSTEM,
-    prompt: "Schema:\\n" + schema + "\\n\\nQuestion: " + question,
-    model: MODEL || undefined,
-    maxTokens: 500,
-  });
-  const guard = guardReadOnly(res.output || "");
+async function runSql(rawSql) {
+  const guard = guardReadOnly(rawSql || "");
   if (!guard.ok) {
     const err = new Error(guard.reason);
     err.statusCode = 400;
@@ -371,7 +331,6 @@ async function answer(question) {
     const result = await client.query(sql);
     await client.query("ROLLBACK");
     return {
-      question,
       sql,
       columns: result.fields.map((f) => f.name),
       rows: result.rows,
@@ -391,17 +350,52 @@ function send(res, code, body) {
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true });
+
+  if (req.method === "GET" && (req.url || "").split("?")[0] === "/") {
+    return send(res, 200, {
+      question: SEED_QUESTION,
+      sql: SEED_SQL,
+      columns: SEED_COLUMNS,
+      rows: SEED_ROWS,
+      note:
+        "This endpoint runs read-only SQL against your database. The sample above was translated from a plain-English question by the agent during setup. POST /query { sql } to run your own read-only SELECT.",
+    });
+  }
+
   if (req.method !== "POST" || (req.url || "").split("?")[0] !== "/query")
-    return send(res, 404, { error: "POST /query { question } or GET /health" });
+    return send(res, 404, { error: "POST /query, GET /, GET /health" });
+
   let raw = "";
   req.on("data", (c) => {
     raw += c;
   });
   req.on("end", async () => {
     try {
-      const question = (JSON.parse(raw || "{}").question || "").trim();
-      if (!question) return send(res, 400, { error: "missing 'question'" });
-      send(res, 200, await answer(question));
+      const body = JSON.parse(raw || "{}");
+      const sql = typeof body.sql === "string" ? body.sql.trim() : "";
+      const question = typeof body.question === "string" ? body.question.trim() : "";
+
+      if (sql) return send(res, 200, await runSql(sql));
+
+      if (question) {
+        if (question === SEED_QUESTION) {
+          return send(res, 200, {
+            question: SEED_QUESTION,
+            sql: SEED_SQL,
+            columns: SEED_COLUMNS,
+            rows: SEED_ROWS,
+          });
+        }
+        return send(res, 400, {
+          error:
+            "This endpoint executes read-only SQL, not live natural language. See GET / for the agent's vetted sample; POST { sql: <SELECT> } to run your own.",
+        });
+      }
+
+      return send(res, 400, {
+        error:
+          "POST /query { sql } (a read-only SELECT), or { question } for the seeded sample. GET /health, GET / for the sample.",
+      });
     } catch (err) {
       send(res, err && err.statusCode ? err.statusCode : 500, {
         error: String(err && err.message ? err.message : err),
@@ -419,7 +413,7 @@ const SERVER_PACKAGE_JSON = JSON.stringify(
     name: "nl-db-query-endpoint-server",
     private: true,
     type: "module",
-    dependencies: { "@sapiom/tools": "^0.20.0", pg: "^8.11.0" },
+    dependencies: { pg: "^8.11.0" },
   },
   null,
   2,
@@ -520,12 +514,6 @@ const entryInput = z.object({
     .number()
     .optional()
     .describe("Port the endpoint listens on (default 3000)."),
-  sapiomApiKey: z
-    .string()
-    .optional()
-    .describe(
-      "Dev-only fallback: inject the server's SAPIOM_API_KEY directly.",
-    ),
   dryRun: z
     .boolean()
     .optional()
@@ -746,85 +734,90 @@ const execute = defineStep({
   },
 });
 
+/**
+ * POST the vetted sample SQL to the freshly deployed `/query` and require a real
+ * 200 with a rows array back. `deployPreview` returning a URL only means the
+ * process started listening — it says nothing about whether the endpoint can
+ * actually execute a query, which is the one thing this template promises.
+ */
+async function probeQueryEndpoint(
+  url: string,
+  sql: string,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sql }),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      return { ok: false, detail: `HTTP ${res.status}: ${text.slice(0, 500)}` };
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return { ok: false, detail: `non-JSON response: ${text.slice(0, 500)}` };
+    }
+    if (!body || !Array.isArray((body as { rows?: unknown }).rows)) {
+      return {
+        ok: false,
+        detail: `no rows array in response: ${text.slice(0, 500)}`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, detail: String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Write the endpoint server into a sandbox and expose it at a stable URL. */
 const deploy = defineStep({
   name: "deploy",
-  next: ["deployed", "deploy_failed", "endpoint_skipped"],
+  next: ["deployed", "deploy_failed"],
   async run(_input: unknown, ctx: Ctx) {
     const config = ctx.shared.get("config")!;
     const connectionString = ctx.shared.get("connectionString") ?? "";
     const sampleSql = ctx.shared.get("sampleSql") ?? "";
     // The rows `execute` actually fetched (or, under dryRun, the fixed sample
     // rows) — the zero-setup artifact, carried through regardless of how the
-    // endpoint deploy itself turns out.
+    // endpoint deploy itself turns out. They're also seeded into the deployed
+    // server's env as its `GET /` demo — the endpoint itself never re-derives
+    // them, since it never calls an LLM.
     const sampleColumns = ctx.shared.get("sampleColumns") ?? [];
     const sampleRows = ctx.shared.get("sampleRows") ?? [];
     const sampleRowCount = ctx.shared.get("sampleRowCount") ?? sampleRows.length;
     const sampleTruncated = ctx.shared.get("sampleTruncated") ?? false;
 
-    // The server's own API key (used to call models.run per request). A caller can
-    // bring one — the dev-only input, or the optional ENDPOINT_SAPIOM_API_KEY
-    // override — but the zero-setup default is to MINT the endpoint its own durable,
-    // narrowly-scoped key. The engine's per-run `sat_` expires with this step, so it
-    // can't be handed to a long-lived artifact; `keys.mintScoped` returns one that can.
-    let apiKey =
-      config.sapiomApiKey || process.env[ENDPOINT_API_KEY]?.trim() || "";
-    if (!apiKey && !config.dryRun) {
-      try {
-        const minted = await ctx.sapiom.keys.mintScoped({
-          ttl: ENDPOINT_KEY_TTL,
-        });
-        apiKey = minted.key;
-        ctx.logger.info("minted scoped endpoint credential", {
-          keyId: minted.id,
-          expiresAt: minted.expiresAt,
-        });
-      } catch (err) {
-        // Fail honest, not silent: if minting is unavailable we still translate and
-        // guard, then stop at endpoint_skipped rather than publishing a dead URL.
-        ctx.logger.warn("could not mint an endpoint credential", {
-          err: String(err),
-        });
-      }
-    }
-
+    // No Sapiom credential of any kind: the deployed server only executes SQL it
+    // is given, so DATABASE_URL is the only thing it needs to do its job.
     const env: Record<string, string> = {
       PORT: String(config.port),
       DATABASE_URL: connectionString,
-      SAPIOM_MODEL: config.model,
       MAX_ROWS: String(config.maxRows),
+      STATEMENT_TIMEOUT_MS: String(STATEMENT_TIMEOUT_MS),
+      SEED_QUESTION: config.sampleQuestion,
+      SEED_SQL: sampleSql,
+      SEED_COLUMNS: JSON.stringify(sampleColumns),
+      SEED_ROWS: JSON.stringify(sampleRows),
     };
-    if (apiKey) env.SAPIOM_API_KEY = apiKey;
-
-    // No key means the deployed server cannot call `models.run`, so `/query` — the
-    // only interesting route — would return an error for every request. Publishing
-    // that URL is the worst failure mode this template has. Stop with the
-    // translated, guarded SQL instead and name what is missing. Reached now only if
-    // minting failed AND no key was supplied — the default zero-setup run deploys.
-    if (!apiKey && !config.dryRun) {
-      ctx.logger.warn("no endpoint credential — not deploying", {
-        key: ENDPOINT_API_KEY,
-      });
-      return goto("endpoint_skipped", {
-        sampleQuestion: config.sampleQuestion,
-        sampleSql,
-        sampleColumns,
-        sampleRows,
-        sampleRowCount,
-        sampleTruncated,
-      });
-    }
 
     const queryEndpoint = (url: string) => `${url.replace(/\/$/, "")}/query`;
     const healthEndpoint = (url: string) => `${url.replace(/\/$/, "")}/health`;
 
     // Dry run: report the assembled env keys (names only, never values) and the
-    // generated server, then stop before any real actuation.
+    // generated server, then stop before any real actuation — no sandbox, no
+    // deployPreview, no probe.
     if (config.dryRun) {
       ctx.logger.info("dry run — skipping deployPreview", {
         sandbox: config.sandboxName,
         envKeys: Object.keys(env),
-        hasApiKey: Boolean(apiKey),
       });
       return goto("deployed", {
         dryRun: true,
@@ -888,10 +881,32 @@ const deploy = defineStep({
           sampleTruncated,
         });
       }
+
+      // A URL is not proof the endpoint works — POST its own vetted sample SQL
+      // and require real rows back before calling the run `deployed`. A route
+      // that can't answer its own query is worse than no route.
+      const endpoint = queryEndpoint(res.url);
+      const probe = await probeQueryEndpoint(endpoint, sampleSql);
+      if (!probe.ok) {
+        ctx.logger.warn("deployed endpoint failed its own vetted-query probe", {
+          endpoint,
+          detail: probe.detail,
+        });
+        return goto("deploy_failed", {
+          status: "endpoint-unverified",
+          detail: probe.detail,
+          sampleSql,
+          sampleColumns,
+          sampleRows,
+          sampleRowCount,
+          sampleTruncated,
+        });
+      }
+
       return goto("deployed", {
         dryRun: false,
         url: res.url,
-        queryEndpoint: queryEndpoint(res.url),
+        queryEndpoint: endpoint,
         healthEndpoint: healthEndpoint(res.url),
         sampleQuestion: config.sampleQuestion,
         sampleSql,
@@ -962,60 +977,18 @@ const deployed = defineStep({
 });
 
 /**
- * Translated, guarded, and executed for real — but no endpoint was stood up
- * because the server had no credential of its own. Terminal, and honest: the
- * SQL and rows below are real, and no URL is reported because none exists.
+ * The deploy failed — either `deployPreview` itself failed, or it returned a URL
+ * that failed the post-deploy probe (its own vetted sample query didn't come
+ * back with real rows). Terminal.
  */
-const endpoint_skipped = defineStep({
-  name: "endpoint_skipped",
-  next: [],
-  terminal: true,
-  async run(
-    input: {
-      sampleQuestion: string;
-      sampleSql: string;
-      sampleColumns: string[];
-      sampleRows: Record<string, unknown>[];
-      sampleRowCount: number;
-      sampleTruncated: boolean;
-    },
-    ctx: Ctx,
-  ) {
-    const note = ctx.shared.get("note");
-    return terminate(
-      {
-        deployed: false,
-        url: null,
-        queryEndpoint: null,
-        sampleQuestion: input?.sampleQuestion ?? null,
-        sampleSql: input?.sampleSql ?? null,
-        sampleColumns: input?.sampleColumns ?? [],
-        sampleRows: input?.sampleRows ?? [],
-        sampleRowCount: input?.sampleRowCount ?? 0,
-        sampleTruncated: input?.sampleTruncated ?? false,
-        unmet: [ENDPOINT_API_KEY],
-        note: [
-          "The question was translated to SQL, passed the read-only guardrail, and ran for real against the database — the rows above are genuine.",
-          `No endpoint was deployed: the server needs its own \`${ENDPOINT_API_KEY}\` to translate each request, and none is set.`,
-          "Supply one to stand the endpoint up.",
-          note,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      },
-      { reason: "no endpoint credential" },
-    );
-  },
-});
-
-/** The deploy failed — surface the deployPreview logs. Terminal. */
 const deploy_failed = defineStep({
   name: "deploy_failed",
   next: [],
   terminal: true,
   async run(input: {
     status: string;
-    logs: string | null;
+    logs?: string | null;
+    detail?: string;
     sampleSql?: string;
     sampleColumns?: string[];
     sampleRows?: Record<string, unknown>[];
@@ -1027,6 +1000,9 @@ const deploy_failed = defineStep({
       failed: true,
       status: input?.status ?? null,
       logs: input?.logs ?? null,
+      // Set only for the post-deploy probe failure path (`endpoint-unverified`):
+      // the probe's HTTP status / response-body tail, not deployPreview logs.
+      detail: input?.detail ?? null,
       // The sample query genuinely ran even though the sandbox deploy failed —
       // report it rather than discarding a real result on a partial failure.
       sampleSql: input?.sampleSql ?? null,
@@ -1076,7 +1052,6 @@ export const agent = defineAgent<EntryInput, Shared>({
   name: "nl-db-query-endpoint",
   entry: "validate",
   steps: {
-    endpoint_skipped,
     validate,
     resolve,
     plan,
