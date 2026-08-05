@@ -37,12 +37,13 @@ Input contract: `{ input, output, rubric, threshold=0.7, model? }`.
 - `threshold` — the pass bar in `[0,1]` (default `0.7`).
 - `model` — optional judge-model alias.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
@@ -240,8 +241,8 @@ The child's terminal output (`{ decision, score, threshold, rationale }`) is
 delivered as `decision`'s input via the `CHILD_DONE` signal, correlated by the
 parent's `executionId`. In dev you fire that signal yourself with local MCP
 `sapiom_dev_agents_signal` once the child run finishes — the same manual stand-in
-the Wait-for-Webhook template uses. Run Inspector does not provide a one-click
-signal control. The request is:
+the Wait-for-Webhook template uses. The **Resume run** form in Run Inspector can
+deliver the same signal. The request is:
 
 ```json
 {

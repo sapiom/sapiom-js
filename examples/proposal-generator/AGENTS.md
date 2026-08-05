@@ -63,8 +63,8 @@ after every small edit.
 ### Firing the resume signal in dev
 
 A real `run` pauses once, at `review`. To resume without a real approver, fire the
-signal via local MCP `sapiom_dev_agents_signal` — the manual stand-in. Run Inspector
-does not provide a one-click signal control. The request is:
+signal via local MCP `sapiom_dev_agents_signal` — the manual stand-in. The
+**Resume run** form in Run Inspector can deliver the same signal. The request is:
 
 ```json
 {

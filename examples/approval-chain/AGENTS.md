@@ -79,8 +79,8 @@ after every small edit.
 A real `run` pauses at every gate. To resume without a real approver, fire the
 signals via local MCP `sapiom_dev_agents_signal` — the manual
 stand-in. The `correlationId` is the paused run's `executionId`, and each
-`payload` arrives as `decide`'s input.
-Run Inspector does not provide a one-click signal control.
+`payload` arrives as `decide`'s input. The **Resume run** form in Run Inspector
+can deliver the same signal.
 
 ```json
 {

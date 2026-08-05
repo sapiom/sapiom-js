@@ -10,6 +10,7 @@ import { register as registerAgents } from "./tools/agents.js";
 import { register as registerSandbox } from "./tools/sandbox.js";
 import { register as registerFeedback } from "./tools/feedback.js";
 import { fetchInstructions } from "./instructions-fetch.js";
+import { createServerInfo } from "./server-info.js";
 
 async function main(): Promise<void> {
   // Resolve environment: SAPIOM_ENVIRONMENT env var > file > "production"
@@ -31,20 +32,10 @@ async function main(): Promise<void> {
   const instructions = await fetchInstructions(env);
 
   const server = new McpServer(
-    {
-      // The local developer surface — distinct from the remote Sapiom
-      // capabilities MCP. This is the `sapiom_dev_*` namespace for building
-      // and operating on Sapiom (today: agent authoring &
-      // lifecycle; room for more dev tooling later). The `name` is the stable
-      // wire identifier; `title` and `description` are what MCP clients show, so
-      // they spell out which Sapiom this is to keep it from reading as a
-      // duplicate of the capability server.
-      name: "sapiom-dev",
-      title: "Sapiom Dev — local developer tools",
-      description:
-        "The local Sapiom developer MCP (sapiom_dev_*). Scaffold, check, and run with stubbed capabilities locally; authenticated deploys and production runs use Sapiom cloud. It is not the hosted direct-capability MCP.",
-      version: "0.1.0",
-    },
+    // The stable name identifies the local authoring server. The description
+    // distinguishes account-free local work from authenticated cloud actions,
+    // and the wire version follows the package users actually launched.
+    createServerInfo(),
     {
       // Returned in the MCP `initialize` handshake; capable clients surface it to the
       // model on connect, so an agent that adds this server gets the authoring primer

@@ -15,7 +15,8 @@ import type {
 /** Printed to stderr once per machine, on the first-ever tracked event. */
 export const FIRST_RUN_NOTICE =
   "Sapiom collects anonymous usage analytics to improve the SDK. " +
-  "Opt out: SAPIOM_TELEMETRY_DISABLED=1 (https://docs.sapiom.ai/telemetry)";
+  "Opt out: SAPIOM_TELEMETRY_DISABLED=1 " +
+  "(https://docs.sapiom.ai/agent-studio/account-and-privacy)";
 
 let processSessionId: string | null = null;
 

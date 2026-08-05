@@ -94,7 +94,10 @@ import { startServer } from "../src/server/index.js";
 import { createClaudeCodeAdapter } from "../src/core/adapters/claude-code.js";
 import { createCodexAdapter } from "../src/core/adapters/codex.js";
 import { ensureSpawnHelperExecutable } from "../src/core/session-manager.js";
-import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML } from "../src/core/canvas-template.js";
+import {
+  CANVAS_TEMPLATE_FILE,
+  TEMPLATE_HTML,
+} from "../src/core/canvas-template.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = path.join(SCRIPT_DIR, "fixtures", "fake-claude.mjs");
@@ -108,7 +111,10 @@ function assert(condition: unknown, message: string): asserts condition {
   console.log(`ok - ${message}`);
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs = 8000): Promise<T> {
+async function waitFor<T>(
+  fn: () => Promise<T | undefined>,
+  timeoutMs = 8000,
+): Promise<T> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const result = await fn();
@@ -146,7 +152,10 @@ async function preflightNodePty(): Promise<void> {
       cwd: process.cwd(),
     });
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("node-pty preflight spawn timed out")), 3000);
+      const timer = setTimeout(
+        () => reject(new Error("node-pty preflight spawn timed out")),
+        3000,
+      );
       probe.onExit(() => {
         clearTimeout(timer);
         resolve();
@@ -160,7 +169,9 @@ async function preflightNodePty(): Promise<void> {
         "Try: pnpm rebuild node-pty — or manually chmod +x the spawn-helper under\n" +
         "node_modules/.pnpm/node-pty*/node_modules/node-pty/prebuilds/<platform>-<arch>/spawn-helper\n",
     );
-    console.error(`Original error: ${err instanceof Error ? err.message : String(err)}\n`);
+    console.error(
+      `Original error: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
     throw err;
   }
 }
@@ -179,7 +190,10 @@ async function testCoreFlow(): Promise<void> {
   // reads its canvas synchronously right after creation, which would race a
   // real workflow's auto-render. The deterministic-render proof (item 14)
   // uses a separate, dedicated workflow directory instead — see below.
-  await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 4821 }));
+  await fs.writeFile(
+    path.join(projectDir, "sapiom.json"),
+    JSON.stringify({ definitionId: 4821 }),
+  );
   const collectorCwd = path.join(tmpRoot, "collector");
   await fs.mkdir(collectorCwd, { recursive: true });
   console.log(`scratch dir: ${tmpRoot}`);
@@ -195,7 +209,14 @@ async function testCoreFlow(): Promise<void> {
   const deadWorkflowPath = path.join(tmpRoot, "deleted-project");
   await fs.writeFile(
     path.join(tmpRoot, "workflows.json"),
-    JSON.stringify([{ name: "deleted-project", path: deadWorkflowPath, definitionId: 1, source: "scan" }]),
+    JSON.stringify([
+      {
+        name: "deleted-project",
+        path: deadWorkflowPath,
+        definitionId: 1,
+        source: "scan",
+      },
+    ]),
   );
 
   // SessionManager builds each spawned process's env starting from this
@@ -216,7 +237,9 @@ async function testCoreFlow(): Promise<void> {
   let mockCollectorOutput = "";
   mockCollector.stdout.on("data", (chunk) => (mockCollectorOutput += chunk));
   mockCollector.stderr.on("data", (chunk) => (mockCollectorOutput += chunk));
-  await waitFor(async () => (mockCollectorOutput.includes("listening on") ? true : undefined));
+  await waitFor(async () =>
+    mockCollectorOutput.includes("listening on") ? true : undefined,
+  );
   console.log("mock-collector is up");
 
   const server = await startServer({
@@ -224,7 +247,12 @@ async function testCoreFlow(): Promise<void> {
     bootToken,
     telemetryOptIn: true,
     collectorUrl: `http://127.0.0.1:${MOCK_COLLECTOR_PORT}`,
-    identity: { userId: "e2e-user", tenantId: "e2e-tenant", organizationName: "E2E Org", apiKey: "e2e-key" },
+    identity: {
+      userId: "e2e-user",
+      tenantId: "e2e-tenant",
+      organizationName: "E2E Org",
+      apiKey: "e2e-key",
+    },
     // No machineId and no per-file path overrides: stateRoot alone must be
     // enough for a boot to leave the real ~/.sapiom/harness completely
     // untouched — machine-id, sessions.json, workflows.json, events.ndjson,
@@ -244,13 +272,18 @@ async function testCoreFlow(): Promise<void> {
   console.log(`harness server listening on http://127.0.0.1:${server.port}`);
 
   const baseUrl = `http://127.0.0.1:${server.port}`;
-  const headers = { "Content-Type": "application/json", "X-Harness-Token": bootToken };
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Harness-Token": bootToken,
+  };
   let ws: WebSocket | undefined;
 
   try {
     // --- connect to /ws/events before anything happens, so we don't race the frames ---
     const wsMessages: Array<Record<string, unknown>> = [];
-    ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws/events?token=${bootToken}`);
+    ws = new WebSocket(
+      `ws://127.0.0.1:${server.port}/ws/events?token=${bootToken}`,
+    );
     ws.on("message", (data) => {
       try {
         wsMessages.push(JSON.parse(data.toString()));
@@ -269,9 +302,13 @@ async function testCoreFlow(): Promise<void> {
     // home dir), and the pre-seeded registry entry with a nonexistent path
     // was pruned before the registry was ever served — persisted, not just
     // filtered from the response. ---
-    const machineIdContent = (await fs.readFile(path.join(tmpRoot, "machine-id"), "utf8")).trim();
+    const machineIdContent = (
+      await fs.readFile(path.join(tmpRoot, "machine-id"), "utf8")
+    ).trim();
     assert(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(machineIdContent),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        machineIdContent,
+      ),
       "machine-id was created under the scratch stateRoot",
     );
     const workflowsAfterBoot = (await (
@@ -296,12 +333,22 @@ async function testCoreFlow(): Promise<void> {
       body: JSON.stringify({ cwd: projectDir, harness: "claude-code" }),
     });
     assert(createRes.status === 201, "POST /api/sessions returns 201");
-    const session = (await createRes.json()) as { id: string; boundWorkflowPath: string | null };
+    const session = (await createRes.json()) as {
+      id: string;
+      boundWorkflowPath: string | null;
+    };
     const sessionId = session.id;
     console.log(`created session ${sessionId}`);
-    assert(session.boundWorkflowPath === null, "a freshly created session reports boundWorkflowPath: null");
+    assert(
+      session.boundWorkflowPath === null,
+      "a freshly created session reports boundWorkflowPath: null",
+    );
 
-    type HarnessContextAgentLike = { name: string; path: string; definitionId: number | null };
+    type HarnessContextAgentLike = {
+      name: string;
+      path: string;
+      definitionId: number | null;
+    };
     type HarnessContextLike = {
       boundAgent: HarnessContextAgentLike | null;
       agents: HarnessContextAgentLike[];
@@ -309,11 +356,19 @@ async function testCoreFlow(): Promise<void> {
       updatedAt: string;
     };
     const readContext = async (): Promise<HarnessContextLike> =>
-      JSON.parse(await fs.readFile(path.join(projectDir, ".sapiom", "harness-context.json"), "utf8")) as HarnessContextLike;
+      JSON.parse(
+        await fs.readFile(
+          path.join(projectDir, ".sapiom", "harness-context.json"),
+          "utf8",
+        ),
+      ) as HarnessContextLike;
 
     // Written synchronously before POST /api/sessions responds — should already be there.
     const initialContext = await readContext();
-    assert(initialContext.boundAgent === null, "harness-context.json is written on session create with boundAgent: null");
+    assert(
+      initialContext.boundAgent === null,
+      "harness-context.json is written on session create with boundAgent: null",
+    );
     assert(
       !("boundWorkflow" in initialContext) && !("workflows" in initialContext),
       "harness-context.json emits only boundAgent/agents public keys",
@@ -322,12 +377,18 @@ async function testCoreFlow(): Promise<void> {
     // The canvas kit's template is also backfilled before the pty spawns —
     // the canvas pane must never open to a bare empty iframe, and a pristine
     // clone source must already exist for the visualize macro to clone from.
-    const initialCanvasHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
+    const initialCanvasHtml = await fs.readFile(
+      path.join(projectDir, ".sapiom", "canvas", "index.html"),
+      "utf8",
+    );
     assert(
       initialCanvasHtml === TEMPLATE_HTML,
       "the canvas kit's empty-state template is already on disk when the session is created",
     );
-    const initialTemplateHtml = await fs.readFile(path.join(projectDir, CANVAS_TEMPLATE_FILE), "utf8");
+    const initialTemplateHtml = await fs.readFile(
+      path.join(projectDir, CANVAS_TEMPLATE_FILE),
+      "utf8",
+    );
     assert(
       initialTemplateHtml === TEMPLATE_HTML,
       "a pristine _template.html clone source is also already on disk when the session is created",
@@ -336,7 +397,9 @@ async function testCoreFlow(): Promise<void> {
     // --- 2. the fixture captured its own argv/env — proves the launch-opts wiring ---
     const capture = await waitFor<FakeClaudeCapture>(async () => {
       try {
-        return JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+        return JSON.parse(
+          await fs.readFile(captureFile, "utf8"),
+        ) as FakeClaudeCapture;
       } catch {
         return undefined;
       }
@@ -352,12 +415,30 @@ async function testCoreFlow(): Promise<void> {
     const settingsPath = capture.argv[settingsIdx + 1];
     const mcpConfigPath = capture.argv[mcpConfigIdx + 1];
     const systemPromptText = capture.argv[promptIdx + 1];
-    assert(settingsPath?.includes(sessionId), "--settings path is scoped to this session");
-    assert(mcpConfigPath?.includes(sessionId), "--mcp-config path is scoped to this session");
-    assert((systemPromptText?.length ?? 0) > 0, "--append-system-prompt carries non-empty text");
-    assert(systemPromptText?.includes("Agent Studio") === true, "the delivered prompt names Agent Studio");
-    assert(systemPromptText?.includes('"boundAgent"') === true, "the delivered prompt teaches boundAgent");
-    assert(systemPromptText?.includes('"agents"') === true, "the delivered prompt teaches agents");
+    assert(
+      settingsPath?.includes(sessionId),
+      "--settings path is scoped to this session",
+    );
+    assert(
+      mcpConfigPath?.includes(sessionId),
+      "--mcp-config path is scoped to this session",
+    );
+    assert(
+      (systemPromptText?.length ?? 0) > 0,
+      "--append-system-prompt carries non-empty text",
+    );
+    assert(
+      systemPromptText?.includes("Agent Studio") === true,
+      "the delivered prompt names Agent Studio",
+    );
+    assert(
+      systemPromptText?.includes('"boundAgent"') === true,
+      "the delivered prompt teaches boundAgent",
+    );
+    assert(
+      systemPromptText?.includes('"agents"') === true,
+      "the delivered prompt teaches agents",
+    );
     assert(
       systemPromptText?.includes("The Canvas follows that selection") === true,
       "the delivered Claude prompt teaches automatic Canvas selection",
@@ -367,7 +448,8 @@ async function testCoreFlow(): Promise<void> {
       "the delivered Claude prompt names the real action bar",
     );
     assert(
-      !systemPromptText?.includes("Visualize button") && !systemPromptText?.includes("⌘K"),
+      !systemPromptText?.includes("Visualize button") &&
+        !systemPromptText?.includes("⌘K"),
       "the delivered Claude prompt omits stale Visualize and command-palette lifecycle guidance",
     );
     assert(
@@ -375,33 +457,51 @@ async function testCoreFlow(): Promise<void> {
       "the delivered prompt does not teach Workflow terminology",
     );
 
-    const settingsJson = JSON.parse(await fs.readFile(settingsPath, "utf8")) as { hooks?: Record<string, unknown> };
-    assert(Object.keys(settingsJson.hooks ?? {}).length === 6, "generated settings.json registers all 6 hooks");
+    const settingsJson = JSON.parse(
+      await fs.readFile(settingsPath, "utf8"),
+    ) as { hooks?: Record<string, unknown> };
+    assert(
+      Object.keys(settingsJson.hooks ?? {}).length === 6,
+      "generated settings.json registers all 6 hooks",
+    );
 
-    const mcpConfigJson = JSON.parse(await fs.readFile(mcpConfigPath, "utf8")) as {
+    const mcpConfigJson = JSON.parse(
+      await fs.readFile(mcpConfigPath, "utf8"),
+    ) as {
       mcpServers?: Record<string, { type?: string; command?: string }>;
     };
     assert(
-      mcpConfigJson.mcpServers?.["sapiom-direct"]?.type === "http",
-      "generated mcp-config registers the hosted sapiom-direct MCP",
+      mcpConfigJson.mcpServers?.["sapiom-cloud"]?.type === "http",
+      "generated mcp-config registers the hosted MCP as sapiom-cloud",
     );
     assert(
-      mcpConfigJson.mcpServers?.sapiom?.command === "npx",
-      "generated mcp-config registers the local sapiom MCP alias",
+      mcpConfigJson.mcpServers?.["sapiom-project"]?.command === "npx",
+      "generated mcp-config registers Sapiom Project MCP as sapiom-project",
     );
 
-    assert(capture.env.SAPIOM_HARNESS_INGEST_URL?.endsWith("/ingest"), "pty env carries SAPIOM_HARNESS_INGEST_URL");
+    assert(
+      capture.env.SAPIOM_HARNESS_INGEST_URL?.endsWith("/ingest"),
+      "pty env carries SAPIOM_HARNESS_INGEST_URL",
+    );
     assert(
       capture.env.SAPIOM_HARNESS_INGEST_TOKEN === bootToken,
       "pty env carries the boot token as SAPIOM_HARNESS_INGEST_TOKEN",
     );
-    assert(capture.env.SAPIOM_HARNESS_SESSION_ID === sessionId, "pty env carries SAPIOM_HARNESS_SESSION_ID");
+    assert(
+      capture.env.SAPIOM_HARNESS_SESSION_ID === sessionId,
+      "pty env carries SAPIOM_HARNESS_SESSION_ID",
+    );
 
     // --- 3. wait for the session to report "running" (this is what starts the canvas watcher) ---
     await waitFor(async () => {
       const res = await fetch(`${baseUrl}/api/sessions`, { headers });
-      const sessions = (await res.json()) as Array<{ id: string; status: string }>;
-      return sessions.find((s) => s.id === sessionId)?.status === "running" ? true : undefined;
+      const sessions = (await res.json()) as Array<{
+        id: string;
+        status: string;
+      }>;
+      return sessions.find((s) => s.id === sessionId)?.status === "running"
+        ? true
+        : undefined;
     });
     console.log("session reported running");
 
@@ -413,7 +513,10 @@ async function testCoreFlow(): Promise<void> {
     // wouldn't be interactive before its own hooks fire. Simulating that
     // event before injecting input mirrors real production ordering, not
     // just satisfying the script.
-    const ingestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${bootToken}` };
+    const ingestHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${bootToken}`,
+    };
     const agentSessionId = "e2e-agent-session-1";
 
     const sessionStartRes = await fetch(`${baseUrl}/ingest`, {
@@ -422,10 +525,17 @@ async function testCoreFlow(): Promise<void> {
       body: JSON.stringify({
         hookEvent: "SessionStart",
         harnessSessionId: sessionId,
-        payload: { session_id: agentSessionId, cwd: projectDir, source: "startup" },
+        payload: {
+          session_id: agentSessionId,
+          cwd: projectDir,
+          source: "startup",
+        },
       }),
     });
-    assert(sessionStartRes.status === 200, "POST /ingest (SessionStart) returns 200");
+    assert(
+      sessionStartRes.status === 200,
+      "POST /ingest (SessionStart) returns 200",
+    );
 
     // --- 4b. wait for the session to actually flip ready — /ingest responds
     // 200 immediately and processes the hook payload after responding (so a
@@ -433,8 +543,13 @@ async function testCoreFlow(): Promise<void> {
     // so `ready` isn't guaranteed true the instant the POST above resolves. ---
     await waitFor(async () => {
       const res = await fetch(`${baseUrl}/api/sessions`, { headers });
-      const sessions = (await res.json()) as Array<{ id: string; ready: boolean }>;
-      return sessions.find((s) => s.id === sessionId)?.ready === true ? true : undefined;
+      const sessions = (await res.json()) as Array<{
+        id: string;
+        ready: boolean;
+      }>;
+      return sessions.find((s) => s.id === sessionId)?.ready === true
+        ? true
+        : undefined;
     });
     console.log("session reported ready");
 
@@ -461,7 +576,10 @@ async function testCoreFlow(): Promise<void> {
         },
       }),
     });
-    assert(toolCallRes.status === 200, "POST /ingest (PostToolUse) returns 200");
+    assert(
+      toolCallRes.status === 200,
+      "POST /ingest (PostToolUse) returns 200",
+    );
 
     // --- 6. assert both events landed in events.ndjson ---
     const eventLines = await waitFor(async () => {
@@ -473,12 +591,23 @@ async function testCoreFlow(): Promise<void> {
         return undefined;
       }
     });
-    const events = eventLines.map((line) => JSON.parse(line) as { type: string });
-    assert(events.some((e) => e.type === "session.start"), "session.start event landed in events.ndjson");
-    assert(events.some((e) => e.type === "tool.call"), "tool.call event landed in events.ndjson");
+    const events = eventLines.map(
+      (line) => JSON.parse(line) as { type: string },
+    );
+    assert(
+      events.some((e) => e.type === "session.start"),
+      "session.start event landed in events.ndjson",
+    );
+    assert(
+      events.some((e) => e.type === "tool.call"),
+      "tool.call event landed in events.ndjson",
+    );
 
     // --- 7. assert the batch reached the mock collector (natural flush interval, no manual trigger available) ---
-    const receivedFile = path.join(collectorCwd, "mock-collector-received.ndjson");
+    const receivedFile = path.join(
+      collectorCwd,
+      "mock-collector-received.ndjson",
+    );
     const receivedLines = await waitFor(async () => {
       try {
         const content = await fs.readFile(receivedFile, "utf8");
@@ -492,13 +621,23 @@ async function testCoreFlow(): Promise<void> {
 
     // --- 8. assert port.detected arrived on /ws/events from the tool.call above ---
     const portMsg = await waitFor(async () => {
-      return wsMessages.find((m) => m.type === "port.detected" && m.harnessSessionId === sessionId);
+      return wsMessages.find(
+        (m) => m.type === "port.detected" && m.harnessSessionId === sessionId,
+      );
     });
-    assert(portMsg.port === 5544, "port.detected frame reports port 5544 from the tool.call output");
-    assert(portMsg.url === "http://localhost:5544", "port.detected frame carries the right url");
+    assert(
+      portMsg.port === 5544,
+      "port.detected frame reports port 5544 from the tool.call output",
+    );
+    assert(
+      portMsg.url === "http://localhost:5544",
+      "port.detected frame carries the right url",
+    );
 
     // --- 8b. the harness's own port and the collector's port must never surface as "discovered" ---
-    const portDetectedCountBefore = wsMessages.filter((m) => m.type === "port.detected").length;
+    const portDetectedCountBefore = wsMessages.filter(
+      (m) => m.type === "port.detected",
+    ).length;
     const selfPortToolCallRes = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
       headers: ingestHeaders,
@@ -513,12 +652,17 @@ async function testCoreFlow(): Promise<void> {
         },
       }),
     });
-    assert(selfPortToolCallRes.status === 200, "POST /ingest (self-port echo) returns 200");
+    assert(
+      selfPortToolCallRes.status === 200,
+      "POST /ingest (self-port echo) returns 200",
+    );
     // ingest → portDetector.feed/flush → bus.publish → ws send all happen
     // synchronously within the request above, so a short wait is enough to
     // let an (incorrect) broadcast have time to arrive if the filter failed.
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const portDetectedCountAfter = wsMessages.filter((m) => m.type === "port.detected").length;
+    const portDetectedCountAfter = wsMessages.filter(
+      (m) => m.type === "port.detected",
+    ).length;
     assert(
       portDetectedCountAfter === portDetectedCountBefore,
       "the harness's own port and the collector's port are excluded from port.detected",
@@ -527,30 +671,49 @@ async function testCoreFlow(): Promise<void> {
     // --- 9. write to the session's canvas dir, assert canvas.reload arrives, and the file is served ---
     const canvasDir = path.join(projectDir, ".sapiom", "canvas");
     await fs.mkdir(canvasDir, { recursive: true });
-    await fs.writeFile(path.join(canvasDir, "index.html"), "<html><body>e2e</body></html>");
+    await fs.writeFile(
+      path.join(canvasDir, "index.html"),
+      "<html><body>e2e</body></html>",
+    );
 
     await waitFor(async () => {
-      return wsMessages.find((m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId);
+      return wsMessages.find(
+        (m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId,
+      );
     });
     console.log("canvas.reload frame received");
 
     const canvasRes = await fetch(`${baseUrl}/canvas/${sessionId}/`);
-    assert(canvasRes.status === 200, "GET /canvas/:id/ serves the written index.html");
-    assert((await canvasRes.text()).includes("e2e"), "served canvas content matches what was written");
+    assert(
+      canvasRes.status === 200,
+      "GET /canvas/:id/ serves the written index.html",
+    );
+    assert(
+      (await canvasRes.text()).includes("e2e"),
+      "served canvas content matches what was written",
+    );
 
     // --- 11. the launch directory's sapiom.json (written before startServer) was scanned at boot ---
     // Note: WorkflowInfo.name comes from package.json (or the directory's own
     // basename) — the sapiom.json marker itself only carries definitionId —
     // so that's what distinguishes "found the real marker" from "found some
     // other directory".
-    type WorkflowInfoLike = { name: string; path: string; definitionId: number | null };
+    type WorkflowInfoLike = {
+      name: string;
+      path: string;
+      definitionId: number | null;
+    };
     const bootWorkflows = await waitFor(async () => {
       const res = await fetch(`${baseUrl}/api/workflows`, { headers });
       const workflows = (await res.json()) as WorkflowInfoLike[];
-      return workflows.some((w) => w.path === projectDir) ? workflows : undefined;
+      return workflows.some((w) => w.path === projectDir)
+        ? workflows
+        : undefined;
     });
     assert(
-      bootWorkflows.some((w) => w.path === projectDir && w.definitionId === 4821),
+      bootWorkflows.some(
+        (w) => w.path === projectDir && w.definitionId === 4821,
+      ),
       "boot-time scan of the CLI's launch directory discovered its sapiom.json (definitionId read from the marker)",
     );
 
@@ -559,12 +722,17 @@ async function testCoreFlow(): Promise<void> {
     // auto-bind the project concurrently, so either binding state is valid here. ---
     const scannedContext = await waitFor(async () => {
       const context = await readContext();
-      return context.agents.some((w) => w.path === projectDir) ? context : undefined;
+      return context.agents.some((w) => w.path === projectDir)
+        ? context
+        : undefined;
     });
-    const scannedAgent = scannedContext.agents.find((agent) => agent.path === projectDir);
+    const scannedAgent = scannedContext.agents.find(
+      (agent) => agent.path === projectDir,
+    );
     assert(
       scannedAgent?.definitionId === 4821 &&
-        (scannedContext.boundAgent === null || scannedContext.boundAgent.path === scannedAgent.path),
+        (scannedContext.boundAgent === null ||
+          scannedContext.boundAgent.path === scannedAgent.path),
       "workflows.changed rewrites harness-context.json's agents array and any concurrent auto-bind stays schema-consistent",
     );
     assert(
@@ -581,38 +749,62 @@ async function testCoreFlow(): Promise<void> {
       headers,
       body: JSON.stringify({ harnessSessionId: sessionId }),
     });
-    assert(unboundMacroRes.status === 200, "POST /api/macros/visualize/run succeeds independent of binding");
+    assert(
+      unboundMacroRes.status === 200,
+      "POST /api/macros/visualize/run succeeds independent of binding",
+    );
 
     // --- 11a. bind the session to that discovered workflow ---
-    const workflowStatusBefore = wsMessages.filter((m) => m.type === "session.status").length;
-    const bindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ workflowPath: projectDir }),
-    });
-    assert(bindRes.status === 200, "PATCH /api/sessions/:id/workflow (bind) returns 200");
-    const boundSession = (await bindRes.json()) as { boundWorkflowPath: string | null };
-    assert(boundSession.boundWorkflowPath === projectDir, "response reports the new boundWorkflowPath");
+    const workflowStatusBefore = wsMessages.filter(
+      (m) => m.type === "session.status",
+    ).length;
+    const bindRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workflow`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ workflowPath: projectDir }),
+      },
+    );
+    assert(
+      bindRes.status === 200,
+      "PATCH /api/sessions/:id/workflow (bind) returns 200",
+    );
+    const boundSession = (await bindRes.json()) as {
+      boundWorkflowPath: string | null;
+    };
+    assert(
+      boundSession.boundWorkflowPath === projectDir,
+      "response reports the new boundWorkflowPath",
+    );
 
     if (scannedContext.boundAgent?.path !== projectDir) {
       await waitFor(async () => {
-        const count = wsMessages.filter((m) => m.type === "session.status").length;
+        const count = wsMessages.filter(
+          (m) => m.type === "session.status",
+        ).length;
         return count > workflowStatusBefore ? true : undefined;
       });
       const lastStatusFrame = wsMessages
         .filter((m) => m.type === "session.status")
-        .at(-1) as { session?: { id: string; boundWorkflowPath: string | null } } | undefined;
+        .at(-1) as
+        | { session?: { id: string; boundWorkflowPath: string | null } }
+        | undefined;
       assert(
-        lastStatusFrame?.session?.id === sessionId && lastStatusFrame.session.boundWorkflowPath === projectDir,
+        lastStatusFrame?.session?.id === sessionId &&
+          lastStatusFrame.session.boundWorkflowPath === projectDir,
         "binding broadcasts a session.status frame reflecting the new boundWorkflowPath",
       );
     } else {
-      console.log("workspace watcher had already auto-bound this path; the idempotent PATCH needs no new status frame");
+      console.log(
+        "workspace watcher had already auto-bound this path; the idempotent PATCH needs no new status frame",
+      );
     }
 
     const boundContext = await readContext();
     assert(
-      boundContext.boundAgent?.path === projectDir && boundContext.boundAgent.definitionId === 4821,
+      boundContext.boundAgent?.path === projectDir &&
+        boundContext.boundAgent.definitionId === 4821,
       "harness-context.json reflects the bound agent's {name, path, definitionId}",
     );
 
@@ -625,7 +817,10 @@ async function testCoreFlow(): Promise<void> {
       headers,
       body: JSON.stringify({ harnessSessionId: sessionId }),
     });
-    assert(macroRes.status === 200, "POST /api/macros/visualize/run returns 200");
+    assert(
+      macroRes.status === 200,
+      "POST /api/macros/visualize/run returns 200",
+    );
     const macroBody = (await macroRes.json()) as { ok: boolean };
     assert(macroBody.ok === true, "macro run responds { ok: true }");
 
@@ -644,10 +839,23 @@ async function testCoreFlow(): Promise<void> {
     // needs the one package resolvable, exactly like any real consumer
     // project's own install.
     const workflowDir = path.join(tmpRoot, "order-triage");
-    await fs.mkdir(path.join(workflowDir, "node_modules", "@sapiom"), { recursive: true });
-    await fs.writeFile(path.join(workflowDir, "sapiom.json"), JSON.stringify({ definitionId: 5150 }));
+    await fs.mkdir(path.join(workflowDir, "node_modules", "@sapiom"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(workflowDir, "sapiom.json"),
+      JSON.stringify({ definitionId: 5150 }),
+    );
     await fs.copyFile(
-      path.join(SCRIPT_DIR, "..", "src", "core", "__fixtures__", "order-triage", "index.ts"),
+      path.join(
+        SCRIPT_DIR,
+        "..",
+        "src",
+        "core",
+        "__fixtures__",
+        "order-triage",
+        "index.ts",
+      ),
       path.join(workflowDir, "index.ts"),
     );
     await fs.symlink(
@@ -661,35 +869,58 @@ async function testCoreFlow(): Promise<void> {
       headers,
       body: JSON.stringify({ path: workflowDir }),
     });
-    assert(connectRes.status === 200, "POST /api/workflows/connect registers the real order-triage project");
+    assert(
+      connectRes.status === 200,
+      "POST /api/workflows/connect registers the real order-triage project",
+    );
 
     const reloadFramesBefore = wsMessages.filter(
-      (message) => message.type === "canvas.reload" && message.harnessSessionId === sessionId,
+      (message) =>
+        message.type === "canvas.reload" &&
+        message.harnessSessionId === sessionId,
     ).length;
-    const renderBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ workflowPath: workflowDir }),
-    });
-    assert(renderBindRes.status === 200, "binds the session to the real order-triage workflow");
+    const renderBindRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workflow`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ workflowPath: workflowDir }),
+      },
+    );
+    assert(
+      renderBindRes.status === 200,
+      "binds the session to the real order-triage workflow",
+    );
 
     // --- 14a. annotations are derived in-process from the extracted graph.
     // Binding/rendering must not launch a second coding-agent process or add
     // a background task for this agent. ---
-    const captureAfterBind = JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+    const captureAfterBind = JSON.parse(
+      await fs.readFile(captureFile, "utf8"),
+    ) as FakeClaudeCapture;
     assert(
       !captureAfterBind.argv.includes("--max-turns"),
       "deterministic Canvas enrichment launches no bounded coding-agent task",
     );
-    const stateAfterBind = (await (await fetch(`${baseUrl}/api/state`, { headers })).json()) as {
-      tasks?: Array<{ macroId: string; workflowPath: string | null; harnessSessionId: string; status: string }>;
+    const stateAfterBind = (await (
+      await fetch(`${baseUrl}/api/state`, { headers })
+    ).json()) as {
+      tasks?: Array<{
+        macroId: string;
+        workflowPath: string | null;
+        harnessSessionId: string;
+        status: string;
+      }>;
     };
     assert(
       !stateAfterBind.tasks?.some((task) => task.workflowPath === workflowDir),
       "AppState.tasks contains no coding-agent enrichment task for the deterministic render",
     );
 
-    const renderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
+    const renderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, {
+      method: "POST",
+      headers,
+    });
     assert(renderRes.status === 200, "POST /api/canvas/:id/render returns 200");
     const renderBody = (await renderRes.json()) as {
       ok: boolean;
@@ -697,13 +928,18 @@ async function testCoreFlow(): Promise<void> {
       extractionFailed: string[];
       renderPath?: string;
     };
-    assert(renderBody.ok === true && renderBody.mode === "single", "render reports { ok: true, mode: 'single' }");
+    assert(
+      renderBody.ok === true && renderBody.mode === "single",
+      "render reports { ok: true, mode: 'single' }",
+    );
     assert(
       renderBody.extractionFailed.length === 0,
       `extraction succeeded (no degraded panels): ${JSON.stringify(renderBody.extractionFailed)}`,
     );
     assert(
-      (renderBody.renderPath ?? "").startsWith(path.join(projectDir, ".sapiom", "canvas", "renders") + path.sep),
+      (renderBody.renderPath ?? "").startsWith(
+        path.join(projectDir, ".sapiom", "canvas", "renders") + path.sep,
+      ),
       "the render landed in the session cwd's .sapiom/canvas/renders/ (per-workflow file, not index.html)",
     );
 
@@ -713,85 +949,148 @@ async function testCoreFlow(): Promise<void> {
       ).length;
       return count > reloadFramesBefore ? true : undefined;
     });
-    console.log("canvas.reload frame received for the deterministic bind/render write");
+    console.log(
+      "canvas.reload frame received for the deterministic bind/render write",
+    );
 
     // GET /canvas/:id/ resolves the session's binding at request time and
     // serves the bound workflow's render file.
-    const renderedHtml = await (await fetch(`${baseUrl}/canvas/${sessionId}/`)).text();
-    for (const step of ["intake", "classify", "route", "auto_resolve", "escalate"]) {
-      assert(renderedHtml.includes(`>${step}<`), `served canvas contains the real step name '${step}'`);
+    const renderedHtml = await (
+      await fetch(`${baseUrl}/canvas/${sessionId}/`)
+    ).text();
+    for (const step of [
+      "intake",
+      "classify",
+      "route",
+      "auto_resolve",
+      "escalate",
+    ]) {
+      assert(
+        renderedHtml.includes(`>${step}<`),
+        `served canvas contains the real step name '${step}'`,
+      );
     }
-    assert(renderedHtml.includes("canvas-node-rect"), "served canvas contains real SVG node markup, not just text");
+    assert(
+      renderedHtml.includes("canvas-node-rect"),
+      "served canvas contains real SVG node markup, not just text",
+    );
     // index.html was NOT rewritten by the deterministic render — the agent's
     // own canvas (written in step 9) is still exactly what it wrote.
-    const indexAfterRender = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
-    assert(indexAfterRender.includes("e2e"), "index.html (the agent-authored canvas) is untouched by the render");
+    const indexAfterRender = await fs.readFile(
+      path.join(projectDir, ".sapiom", "canvas", "index.html"),
+      "utf8",
+    );
+    assert(
+      indexAfterRender.includes("e2e"),
+      "index.html (the agent-authored canvas) is untouched by the render",
+    );
 
     // A second render of the unchanged workflow comes from the extraction
     // cache — no child check() process runs at all.
-    const cachedRenderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
-    const cachedRenderBody = (await cachedRenderRes.json()) as { ok: boolean; cachedExtraction?: boolean };
+    const cachedRenderRes = await fetch(
+      `${baseUrl}/api/canvas/${sessionId}/render`,
+      { method: "POST", headers },
+    );
+    const cachedRenderBody = (await cachedRenderRes.json()) as {
+      ok: boolean;
+      cachedExtraction?: boolean;
+    };
     assert(
-      cachedRenderBody.ok === true && cachedRenderBody.cachedExtraction === true,
+      cachedRenderBody.ok === true &&
+        cachedRenderBody.cachedExtraction === true,
       "re-rendering the unchanged workflow is served from the extraction cache (no child process)",
     );
 
     // --- 11b. unbind — the context file gets boundAgent: null, not deleted ---
-    const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ workflowPath: null }),
-    });
-    assert(unbindRes.status === 200, "PATCH /api/sessions/:id/workflow (unbind) returns 200");
+    const unbindRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workflow`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ workflowPath: null }),
+      },
+    );
+    assert(
+      unbindRes.status === 200,
+      "PATCH /api/sessions/:id/workflow (unbind) returns 200",
+    );
 
     const unboundContext = await waitFor(async () => {
       const context = await readContext();
       return context.boundAgent === null ? context : undefined;
     });
-    assert(unboundContext.boundAgent === null, "unbinding writes boundAgent: null to harness-context.json");
+    assert(
+      unboundContext.boundAgent === null,
+      "unbinding writes boundAgent: null to harness-context.json",
+    );
 
     // Unbound again, the canvas root falls back to the legacy agent-authored
     // index.html — the render files stay on disk for the next bind.
-    const unboundCanvas = await (await fetch(`${baseUrl}/canvas/${sessionId}/`)).text();
+    const unboundCanvas = await (
+      await fetch(`${baseUrl}/canvas/${sessionId}/`)
+    ).text();
     assert(
-      unboundCanvas.includes("e2e") && !unboundCanvas.includes("canvas-node-rect"),
+      unboundCanvas.includes("e2e") &&
+        !unboundCanvas.includes("canvas-node-rect"),
       "unbinding flips GET /canvas/:id/ back to the agent-authored index.html",
     );
 
     // --- 11c. binding to a path that isn't a registered workflow is rejected ---
-    const badBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ workflowPath: "/not/a/registered/workflow" }),
-    });
-    assert(badBindRes.status === 400, "binding to an unregistered workflow path 400s");
+    const badBindRes = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/workflow`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ workflowPath: "/not/a/registered/workflow" }),
+      },
+    );
+    assert(
+      badBindRes.status === 400,
+      "binding to an unregistered workflow path 400s",
+    );
 
     // --- 12. opening a session in a brand-new directory scans it too, and broadcasts workflows.changed ---
     const secondProjectDir = path.join(tmpRoot, "second-project");
     await fs.mkdir(secondProjectDir, { recursive: true });
-    await fs.writeFile(path.join(secondProjectDir, "sapiom.json"), JSON.stringify({ definitionId: 9001 }));
+    await fs.writeFile(
+      path.join(secondProjectDir, "sapiom.json"),
+      JSON.stringify({ definitionId: 9001 }),
+    );
 
-    const workflowsChangedBefore = wsMessages.filter((m) => m.type === "workflows.changed").length;
+    const workflowsChangedBefore = wsMessages.filter(
+      (m) => m.type === "workflows.changed",
+    ).length;
     const secondSessionRes = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
       headers,
       body: JSON.stringify({ cwd: secondProjectDir, harness: "claude-code" }),
     });
-    assert(secondSessionRes.status === 201, "POST /api/sessions (second directory) returns 201");
+    assert(
+      secondSessionRes.status === 201,
+      "POST /api/sessions (second directory) returns 201",
+    );
 
     await waitFor(async () => {
-      const count = wsMessages.filter((m) => m.type === "workflows.changed").length;
+      const count = wsMessages.filter(
+        (m) => m.type === "workflows.changed",
+      ).length;
       return count > workflowsChangedBefore ? true : undefined;
     });
-    console.log("workflows.changed frame received for the new session directory");
+    console.log(
+      "workflows.changed frame received for the new session directory",
+    );
 
     const afterSecondSession = await waitFor(async () => {
       const res = await fetch(`${baseUrl}/api/workflows`, { headers });
       const workflows = (await res.json()) as WorkflowInfoLike[];
-      return workflows.some((w) => w.path === secondProjectDir) ? workflows : undefined;
+      return workflows.some((w) => w.path === secondProjectDir)
+        ? workflows
+        : undefined;
     });
     assert(
-      afterSecondSession.some((w) => w.path === secondProjectDir && w.definitionId === 9001),
+      afterSecondSession.some(
+        (w) => w.path === secondProjectDir && w.definitionId === 9001,
+      ),
       "creating a session in a new directory scanned and discovered its sapiom.json",
     );
   } finally {
@@ -807,7 +1106,12 @@ async function testCoreFlow(): Promise<void> {
     // handles under tmpRoot for a moment after we've resolved past killing
     // it — rm's own maxRetries (ENOTEMPTY-safe, linear backoff) covers that
     // race properly instead of a fixed sleep.
-    await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await fs.rm(tmpRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
   }
 }
 
@@ -818,13 +1122,18 @@ async function testCoreFlow(): Promise<void> {
  * proves it flows into the generated mcp-config's auth headers.
  */
 async function testAutoSessionAndMcpAuth(): Promise<void> {
-  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-boot-"));
+  const tmpRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "harness-e2e-live-boot-"),
+  );
   const projectDir = path.join(tmpRoot, "project");
   await fs.mkdir(projectDir, { recursive: true });
   // Seeded before startServer(), same as testCoreFlow's launch-dir marker —
   // proves the auto-created boot session's harness-context.json reflects the
   // boot-time scan's `agents` array, not just its own (unbound) session.
-  await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 7331 }));
+  await fs.writeFile(
+    path.join(projectDir, "sapiom.json"),
+    JSON.stringify({ definitionId: 7331 }),
+  );
 
   const bootToken = crypto.randomUUID();
   const captureFile = path.join(tmpRoot, "fake-claude-capture.json");
@@ -835,7 +1144,12 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     port: 0,
     bootToken,
     telemetryOptIn: false,
-    identity: { userId: "boot-user", tenantId: "boot-tenant", organizationName: "Boot Org", apiKey },
+    identity: {
+      userId: "boot-user",
+      tenantId: "boot-tenant",
+      organizationName: "Boot Org",
+      apiKey,
+    },
     machineId: "e2e-boot-machine",
     adapters: {
       "claude-code": createClaudeCodeAdapter({ binary: FAKE_CLAUDE }),
@@ -846,7 +1160,10 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     // Left at its default (true) — this is exactly the behavior under test.
   });
   const baseUrl = `http://127.0.0.1:${server.port}`;
-  const headers = { "Content-Type": "application/json", "X-Harness-Token": bootToken };
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Harness-Token": bootToken,
+  };
 
   try {
     type StateLike = {
@@ -871,7 +1188,11 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     // Polled, not a single read: the session appears in GET /api/state as
     // soon as it's added to the in-memory registry, which happens before
     // create()'s own await on the context-file write completes.
-    type HarnessContextAgentLike = { name: string; path: string; definitionId: number | null };
+    type HarnessContextAgentLike = {
+      name: string;
+      path: string;
+      definitionId: number | null;
+    };
     type HarnessContextLike = {
       boundAgent: HarnessContextAgentLike | null;
       agents: HarnessContextAgentLike[];
@@ -886,54 +1207,86 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     const autoSessionContext = await waitFor<HarnessContextLike>(async () => {
       try {
         const context = JSON.parse(
-          await fs.readFile(path.join(projectDir, ".sapiom", "harness-context.json"), "utf8"),
+          await fs.readFile(
+            path.join(projectDir, ".sapiom", "harness-context.json"),
+            "utf8",
+          ),
         ) as HarnessContextLike;
-        return context.agents.some((w) => w.path === projectDir) ? context : undefined;
+        return context.agents.some((w) => w.path === projectDir)
+          ? context
+          : undefined;
       } catch {
         return undefined;
       }
     });
-    const autoAgent = autoSessionContext.agents.find((agent) => agent.path === projectDir);
+    const autoAgent = autoSessionContext.agents.find(
+      (agent) => agent.path === projectDir,
+    );
     assert(
-      autoSessionContext.boundAgent === null || autoSessionContext.boundAgent.path === autoAgent?.path,
+      autoSessionContext.boundAgent === null ||
+        autoSessionContext.boundAgent.path === autoAgent?.path,
       "the auto-created boot session's context is unbound or carries the workspace watcher's schema-consistent auto-bind",
     );
     assert(
-      autoSessionContext.agents.some((w) => w.path === projectDir && w.definitionId === 7331),
+      autoSessionContext.agents.some(
+        (w) => w.path === projectDir && w.definitionId === 7331,
+      ),
       "the auto-created boot session's harness-context.json agents array is populated from the seeded launch dir",
     );
 
     const capture = await waitFor<FakeClaudeCapture>(async () => {
       try {
-        return JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+        return JSON.parse(
+          await fs.readFile(captureFile, "utf8"),
+        ) as FakeClaudeCapture;
       } catch {
         return undefined;
       }
     });
     const mcpConfigIdx = capture.argv.indexOf("--mcp-config");
     assert(mcpConfigIdx !== -1, "boot session launched with --mcp-config");
-    const mcpConfigJson = JSON.parse(await fs.readFile(capture.argv[mcpConfigIdx + 1], "utf8")) as {
-      mcpServers?: { "sapiom-direct"?: { headers?: Record<string, string> } };
+    const mcpConfigJson = JSON.parse(
+      await fs.readFile(capture.argv[mcpConfigIdx + 1], "utf8"),
+    ) as {
+      mcpServers?: {
+        "sapiom-cloud"?: { headers?: Record<string, string> };
+      };
     };
     assert(
-      mcpConfigJson.mcpServers?.["sapiom-direct"]?.headers?.["x-api-key"] === apiKey,
-      "generated mcp-config's hosted sapiom-direct entry carries the cached apiKey as x-api-key",
+      mcpConfigJson.mcpServers?.["sapiom-cloud"]?.headers?.["x-api-key"] ===
+        apiKey,
+      "generated mcp-config's hosted sapiom-cloud entry carries the cached apiKey as x-api-key",
     );
 
     // --- fs.ts's directory-autocomplete router (path picker) is mounted behind the boot token ---
-    const fsUnauthedRes = await fetch(`${baseUrl}/api/fs/list?path=${encodeURIComponent(tmpRoot)}`);
-    assert(fsUnauthedRes.status === 401, "GET /api/fs/list requires the boot token, like the rest of /api");
+    const fsUnauthedRes = await fetch(
+      `${baseUrl}/api/fs/list?path=${encodeURIComponent(tmpRoot)}`,
+    );
+    assert(
+      fsUnauthedRes.status === 401,
+      "GET /api/fs/list requires the boot token, like the rest of /api",
+    );
 
-    const fsRes = await fetch(`${baseUrl}/api/fs/list?path=${encodeURIComponent(tmpRoot)}`, { headers });
+    const fsRes = await fetch(
+      `${baseUrl}/api/fs/list?path=${encodeURIComponent(tmpRoot)}`,
+      { headers },
+    );
     assert(fsRes.status === 200, "GET /api/fs/list (with token) returns 200");
-    const fsBody = (await fsRes.json()) as { dirs: Array<{ name: string; path: string }> };
+    const fsBody = (await fsRes.json()) as {
+      dirs: Array<{ name: string; path: string }>;
+    };
     assert(
       fsBody.dirs.some((d) => d.path === projectDir),
       "GET /api/fs/list lists the boot project directory it was pointed at",
     );
   } finally {
     await server.close();
-    await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await fs.rm(tmpRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
   }
 }
 
@@ -947,7 +1300,9 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
  * codex-specific argv shape (that's covered by codex.test.ts).
  */
 async function testAutoSessionKindSelection(): Promise<void> {
-  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-kind-"));
+  const tmpRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "harness-e2e-live-kind-"),
+  );
   const projectDir = path.join(tmpRoot, "project");
   await fs.mkdir(projectDir, { recursive: true });
 
@@ -959,7 +1314,12 @@ async function testAutoSessionKindSelection(): Promise<void> {
     port: 0,
     bootToken,
     telemetryOptIn: false,
-    identity: { userId: "kind-user", tenantId: "kind-tenant", organizationName: "Kind Org", apiKey: "e2e-key" },
+    identity: {
+      userId: "kind-user",
+      tenantId: "kind-tenant",
+      organizationName: "Kind Org",
+      apiKey: "e2e-key",
+    },
     machineId: "e2e-kind-machine",
     // No claude-code adapter registered at all — if defaultHarnessKind were
     // ignored and the auto-create fell back to its old hardcoded
@@ -973,7 +1333,10 @@ async function testAutoSessionKindSelection(): Promise<void> {
     availableHarnesses: ["codex"],
   });
   const baseUrl = `http://127.0.0.1:${server.port}`;
-  const headers = { "Content-Type": "application/json", "X-Harness-Token": bootToken };
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Harness-Token": bootToken,
+  };
 
   try {
     type StateLike = {
@@ -986,9 +1349,13 @@ async function testAutoSessionKindSelection(): Promise<void> {
       return body.sessions.some((s) => s.cwd === projectDir) ? body : undefined;
     });
     const bootSession = state.sessions.find((s) => s.cwd === projectDir);
-    assert(bootSession?.harness === "codex", "defaultHarnessKind: codex drives the auto-created session's harness");
     assert(
-      state.availableHarnesses?.length === 1 && state.availableHarnesses[0] === "codex",
+      bootSession?.harness === "codex",
+      "defaultHarnessKind: codex drives the auto-created session's harness",
+    );
+    assert(
+      state.availableHarnesses?.length === 1 &&
+        state.availableHarnesses[0] === "codex",
       "GET /api/state reports availableHarnesses as supplied",
     );
 
@@ -996,7 +1363,9 @@ async function testAutoSessionKindSelection(): Promise<void> {
     // launch() always prepends this config-override flag (see codex.ts).
     const capture = await waitFor<FakeClaudeCapture>(async () => {
       try {
-        return JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+        return JSON.parse(
+          await fs.readFile(captureFile, "utf8"),
+        ) as FakeClaudeCapture;
       } catch {
         return undefined;
       }
@@ -1006,12 +1375,20 @@ async function testAutoSessionKindSelection(): Promise<void> {
       "the auto-created session actually launched via the codex adapter, not claude-code",
     );
     const developerInstructionsPrefix = "developer_instructions=";
-    const developerInstructionsArg = capture.argv.find((arg) => arg.startsWith(developerInstructionsPrefix));
-    assert(developerInstructionsArg !== undefined, "the codex adapter receives developer instructions");
+    const developerInstructionsArg = capture.argv.find((arg) =>
+      arg.startsWith(developerInstructionsPrefix),
+    );
+    assert(
+      developerInstructionsArg !== undefined,
+      "the codex adapter receives developer instructions",
+    );
     const codexSystemPromptText = JSON.parse(
       developerInstructionsArg.slice(developerInstructionsPrefix.length),
     ) as string;
-    assert(codexSystemPromptText.includes("Agent Studio"), "the delivered Codex prompt names Agent Studio");
+    assert(
+      codexSystemPromptText.includes("Agent Studio"),
+      "the delivered Codex prompt names Agent Studio",
+    );
     assert(
       codexSystemPromptText.includes("The Canvas follows that selection"),
       "the delivered Codex prompt teaches automatic Canvas selection",
@@ -1021,20 +1398,30 @@ async function testAutoSessionKindSelection(): Promise<void> {
       "the delivered Codex prompt names the real action bar",
     );
     assert(
-      !codexSystemPromptText.includes("Visualize button") && !codexSystemPromptText.includes("⌘K"),
+      !codexSystemPromptText.includes("Visualize button") &&
+        !codexSystemPromptText.includes("⌘K"),
       "the delivered Codex prompt omits stale Visualize and command-palette lifecycle guidance",
     );
   } finally {
     await server.close();
-    await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await fs.rm(tmpRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
   }
 }
 
 /** Sends SIGTERM, escalates to SIGKILL if it's still alive shortly after,
  *  and waits for the process to actually exit (or a hard timeout) before
  *  returning — so callers can safely assume its file handles are released. */
-function killChildAndWait(child: ReturnType<typeof spawn>, timeoutMs = 3000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+function killChildAndWait(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 3000,
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null)
+    return Promise.resolve();
 
   return new Promise((resolve) => {
     const done = (): void => {
@@ -1046,7 +1433,8 @@ function killChildAndWait(child: ReturnType<typeof spawn>, timeoutMs = 3000): Pr
 
     child.kill();
     const escalation = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill("SIGKILL");
     }, 1000);
     const hardStop = setTimeout(done, timeoutMs);
   });
@@ -1057,13 +1445,17 @@ async function main(): Promise<void> {
   console.log("node-pty preflight ok");
 
   await testCoreFlow();
-  console.log("phase 1/3 ok (core session/ingest/canvas/macro/workflow-scan loop)\n");
+  console.log(
+    "phase 1/3 ok (core session/ingest/canvas/macro/workflow-scan loop)\n",
+  );
 
   await testAutoSessionAndMcpAuth();
   console.log("phase 2/3 ok (autoCreateSession + mcp-config auth headers)\n");
 
   await testAutoSessionKindSelection();
-  console.log("phase 3/3 ok (defaultHarnessKind drives auto-session + availableHarnesses in AppState)\n");
+  console.log(
+    "phase 3/3 ok (defaultHarnessKind drives auto-session + availableHarnesses in AppState)\n",
+  );
 
   console.log("PASS — live integration proof succeeded\n");
 }

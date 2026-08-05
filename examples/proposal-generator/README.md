@@ -56,12 +56,13 @@ The `approver` and client `email` fall back to `config.APPROVER_EMAIL` /
 `config.CLIENT_EMAIL` when omitted. Pass `dryRun: true` to run everything but skip
 the client email.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
@@ -79,8 +80,8 @@ the client email.
 A real `run` pauses once, at `review`. Instead of a real approver, fire the signal
 yourself via local MCP `sapiom_dev_agents_signal`. The
 `correlationId` is the paused run's `executionId`, and the `payload` becomes the
-resumed step's input.
-Run Inspector does not provide a one-click signal control.
+resumed step's input. The **Resume run** form in Run Inspector can deliver the
+same signal.
 
 **Approve** (resumes `onDecision` → `send`, emailing the client):
 

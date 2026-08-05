@@ -19,13 +19,17 @@ describe("conductorAdapterInfo", () => {
 
   it("guides MCP setup through Claude Code project scope", () => {
     const prompt = conductorAdapterInfo.installMcpPrompt();
-    expect(prompt).toContain("claude mcp add --scope project sapiom -- npx -y @sapiom/mcp");
+    expect(prompt).toContain(
+      "claude mcp add --scope project sapiom-project -- npx -y @sapiom/mcp",
+    );
     expect(prompt).toContain(".mcp.json");
     expect(prompt).toContain("@sapiom/mcp");
   });
 
   it("detectInstalled resolves to a boolean without throwing", async () => {
-    await expect(conductorAdapterInfo.detectInstalled()).resolves.toEqual(expect.any(Boolean));
+    await expect(conductorAdapterInfo.detectInstalled()).resolves.toEqual(
+      expect.any(Boolean),
+    );
   });
 });
 

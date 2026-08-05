@@ -289,15 +289,15 @@ function readVersion(): string {
 /**
  * Real launch-opts wiring: generates the per-session --settings, --mcp-config,
  * and --append-system-prompt source files. Generated uniformly for every
- * harness kind — an adapter that doesn't use one of these fields (codex,
- * today) simply ignores it, same as the claude-code adapter already does for
- * whichever of the three a given launch doesn't set. `apiKey` (from CLI auth,
- * null when unauthenticated / --no-auth) flows into the generated mcp-config
- * so the hosted `sapiom-direct` MCP is actually authenticated — a factory rather
- * than a plain function since it's per-server-instance state.
+ * harness kind; each adapter consumes the fields it supports and ignores the
+ * rest. `getApiKey` reads the
+ * live credential provider when each session starts, so a session opened after
+ * in-app sign-in receives an authenticated `sapiom-cloud` connection without a
+ * Studio restart. Existing coding-agent processes keep the configuration they
+ * launched with and must be restarted after an account change.
  */
-function createDefaultBuildLaunchOpts(
-  apiKey: string | null,
+export function createDefaultBuildLaunchOpts(
+  getApiKey: () => string | null,
   generatedRoot?: string,
   rehydration?: {
     /** Brief text for a prior session id, or null when nothing was recorded. */
@@ -336,7 +336,7 @@ function createDefaultBuildLaunchOpts(
         generateClaudeSettings({ harnessSessionId, generatedRoot }),
         generateMcpConfig(harnessSessionId, {
           environment: process.env.SAPIOM_ENVIRONMENT,
-          apiKey,
+          apiKey: getApiKey(),
           generatedRoot,
           harnessVersion: readVersion(),
         }),
@@ -710,7 +710,7 @@ export const startServer = async (
 
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ??
-    createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot, {
+    createDefaultBuildLaunchOpts(() => apiKeyProvider.getKey(), generatedRoot, {
       buildBrief: resolveRehydrationBrief,
       deliveryFor: (harness) => systemPromptDeliveryFor(adapters[harness]),
     });

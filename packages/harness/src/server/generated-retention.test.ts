@@ -6,11 +6,23 @@
  * survives while the pty is alive and is deleted once it exits.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startServer, type HarnessServer } from "./index.js";
+import {
+  createDefaultBuildLaunchOpts,
+  startServer,
+  type HarnessServer,
+} from "./index.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -21,7 +33,12 @@ function fakeClaudeAdapter(): HarnessAdapter {
     id: "claude-code",
     eventSource: "hooks",
     doctor: async () => [],
-    launch: (opts: LaunchOpts): SpawnSpec => ({ command: "bash", args: [], env: {}, cwd: opts.cwd }),
+    launch: (opts: LaunchOpts): SpawnSpec => ({
+      command: "bash",
+      args: [],
+      env: {},
+      cwd: opts.cwd,
+    }),
     resume: (_agentSessionId: string, opts: LaunchOpts): SpawnSpec => ({
       command: "bash",
       args: [],
@@ -94,7 +111,10 @@ describe("generated-dir retention wiring", () => {
   it("keeps a running session's dir and deletes it once the session exits", async () => {
     server = await boot();
 
-    const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
+    const session = await server.sessionManager.create({
+      cwd,
+      harness: "claude-code",
+    });
     expect(session.status).toBe("running");
 
     // The real default buildLaunchOpts wrote this session's config dir —
@@ -113,4 +133,33 @@ describe("generated-dir retention wiring", () => {
       { timeout: 10_000, interval: 100 },
     );
   }, 15_000);
+
+  it("reads the current account key for each newly generated session", async () => {
+    let currentApiKey: string | null = null;
+    const buildLaunchOpts = createDefaultBuildLaunchOpts(
+      () => currentApiKey,
+      generatedRoot,
+    );
+
+    const signedOut = await buildLaunchOpts("signed-out", {
+      cwd,
+      harness: "codex",
+    });
+    const signedOutConfig = JSON.parse(
+      await readFile(signedOut.mcpConfigFile!, "utf8"),
+    );
+    expect(signedOutConfig.mcpServers["sapiom-cloud"].headers).toBeUndefined();
+
+    currentApiKey = "sk_live_after_sign_in";
+    const signedIn = await buildLaunchOpts("signed-in", {
+      cwd,
+      harness: "codex",
+    });
+    const signedInConfig = JSON.parse(
+      await readFile(signedIn.mcpConfigFile!, "utf8"),
+    );
+    expect(signedInConfig.mcpServers["sapiom-cloud"].headers).toEqual({
+      "x-api-key": "sk_live_after_sign_in",
+    });
+  });
 });

@@ -22,7 +22,7 @@ This is a monorepo of focused packages. Install only what you need.
 | [@sapiom/agent](./packages/agent) | [![npm](https://img.shields.io/npm/v/@sapiom/agent)](https://www.npmjs.com/package/@sapiom/agent) | The authoring contract: `defineAgent`, `defineStep`, directives (`goto`/`terminate`), and types |
 | [@sapiom/tools](./packages/tools) | [![npm](https://img.shields.io/npm/v/@sapiom/tools)](https://www.npmjs.com/package/@sapiom/tools) | Typed client for Sapiom capabilities — the same tools your agents call, callable from your code |
 | [@sapiom/cli](./packages/cli)     | [![npm](https://img.shields.io/npm/v/@sapiom/cli)](https://www.npmjs.com/package/@sapiom/cli)     | Command line: scaffold, validate, deploy, and schedule agents                                   |
-| [@sapiom/mcp](./packages/mcp)     | [![npm](https://img.shields.io/npm/v/@sapiom/mcp)](https://www.npmjs.com/package/@sapiom/mcp)     | Local developer MCP server (`sapiom-dev`) — build & operate agents from your coding agent       |
+| [@sapiom/mcp](./packages/mcp)     | [![npm](https://img.shields.io/npm/v/@sapiom/mcp)](https://www.npmjs.com/package/@sapiom/mcp)     | Sapiom Project MCP (`sapiom-project` client alias; `sapiom-dev` wire identity)                  |
 
 ### Runtime internals
 
@@ -36,7 +36,7 @@ directly, but they're published for advanced/host integrations.
 
 ## 🚀 Quick Start
 
-**New to Sapiom?** The fastest path is the CLI or the developer MCP — both
+**New to Sapiom?** The fastest path is the CLI or Sapiom Project MCP — both
 scaffold a working agent for you. See the [examples folder](./examples) for
 complete, runnable projects.
 
@@ -106,29 +106,33 @@ if (run.result?.success) {
 }
 ```
 
-### Build agents from your coding agent (MCP)
+### Build agents from your coding agent
 
-Add the local developer MCP so your coding agent can scaffold, test, deploy, and
-inspect Sapiom agents. In Claude Code:
+Add Sapiom Project MCP so your coding agent can scaffold, test, deploy, and
+inspect Sapiom agents:
 
 ```sh
-claude mcp add sapiom -- npx -y @sapiom/mcp
+claude mcp add sapiom-project -- npx -y @sapiom/mcp
 ```
 
-> `sapiom` is the recommended client alias for `@sapiom/mcp`, the **local
-> developer** surface (`sapiom_dev_*`). Its internal MCP `serverInfo.name`
-> remains `sapiom-dev`. Use `sapiom-direct` for the hosted capability MCP that
-> services paid tool calls —
-> see [docs/mcp-servers.md](./docs/mcp-servers.md) for which to use when.
+```sh
+codex mcp add sapiom-project -- npx -y @sapiom/mcp
+```
+
+> `@sapiom/mcp` reports the wire identity `sapiom-dev`, but `sapiom-project` above
+> is the supported client-local registration alias. It exposes the project
+> authoring surface (`sapiom_dev_*`), distinct from Sapiom Cloud MCP
+> registered as `sapiom-cloud`. See
+> [docs/mcp-servers.md](./docs/mcp-servers.md) for the boundary.
 
 ## 📚 Documentation
 
 - **[Examples](./examples/README.md)** — runnable example projects
-- **[The two Sapiom MCP servers](./docs/mcp-servers.md)** — local dev vs. remote capabilities
+- **[Sapiom MCP connections](./docs/mcp-servers.md)** — project work vs. direct cloud capabilities
 - **[@sapiom/agent](./packages/agent/README.md)** — authoring contract
 - **[@sapiom/tools](./packages/tools/README.md)** — capability client
 - **[@sapiom/cli](./packages/cli/README.md)** — command line
-- **[@sapiom/mcp](./packages/mcp/README.md)** — developer MCP
+- **[@sapiom/mcp](./packages/mcp/README.md)** — Sapiom Project MCP
 
 ## 🏗️ Package Architecture
 
@@ -139,7 +143,7 @@ claude mcp add sapiom -- npx -y @sapiom/mcp
     └── @sapiom/agent-core      Scaffold / validate / operate (pure functions)
             ↑
             ├── @sapiom/cli     Command line
-            └── @sapiom/mcp     Local developer MCP (sapiom-dev)
+            └── @sapiom/mcp     Project MCP (client alias: sapiom-project)
 
 @sapiom/tools            Typed capability client (sandboxes, repos, models, …)
 ```

@@ -90,7 +90,7 @@ export function SessionStepsBar({
           ? "The latest deploy did not produce a ready build. Retry Deploy after fixing the agent."
           : deploymentState === "linked"
             ? "Linked to Sapiom, but Studio cannot confirm a ready cloud build yet."
-            : "Draft: exists locally only. Authoring prompts use Claude Code; direct Deploy does not.";
+            : "Draft: exists locally only. Authoring prompts use your coding agent; direct Deploy does not.";
 
   // Launched-but-not-durable feedback: a clicked action shows a dotted
   // "in flight" ring until a durable signal lands. The ring clears on ANY
@@ -189,7 +189,8 @@ export function SessionStepsBar({
           <Icon name="ExternalLink" size={12} />
           {/* Below 380px only the word hides; the port stays as the chip's
               compact identity. */}
-          <span className="session-preview-label">{"Preview "}</span>:{preview.port}
+          <span className="session-preview-label">{"Preview "}</span>:
+          {preview.port}
         </a>
       )}
 
@@ -223,17 +224,26 @@ export function SessionStepsBar({
             authReason ??
             funnelReason ??
             readyReason ??
-            (action.macro ? macroDisabledReason(action.macro, workflow, activeSessionId) : null);
+            (action.macro
+              ? macroDisabledReason(action.macro, workflow, activeSessionId)
+              : null);
           const a11yLabel = action.label;
           return (
             <button
               key={action.id}
-              className={"session-step" + (action.primary ? " session-action-primary" : "")}
+              className={
+                "session-step" +
+                (action.primary ? " session-action-primary" : "")
+              }
               data-testid={action.testId}
               data-pending={pendingId === action.id || undefined}
               disabled={Boolean(disabledReason)}
-              data-tooltip={disabledReason ? `${a11yLabel}: ${disabledReason}` : action.hint}
-              aria-label={disabledReason ? `${a11yLabel}: ${disabledReason}` : a11yLabel}
+              data-tooltip={
+                disabledReason ? `${a11yLabel}: ${disabledReason}` : action.hint
+              }
+              aria-label={
+                disabledReason ? `${a11yLabel}: ${disabledReason}` : a11yLabel
+              }
               onClick={() => {
                 if (!action.macro) return;
                 onRunMacro(action.macro);

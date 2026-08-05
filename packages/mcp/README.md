@@ -1,57 +1,42 @@
 # @sapiom/mcp
 
-The **local developer** MCP server for Sapiom. It runs on your machine over
-stdio and should be registered under the client alias `sapiom`; the MCP handshake
-still reports the internal wire identifier `sapiom-dev`. Today its `sapiom_dev_*`
-tools let a coding agent scaffold, test, deploy, and inspect Sapiom agents; the
-namespace leaves room for other non-capability developer tooling later.
+The **local authoring** MCP server for Sapiom. It runs on your machine over
+stdio and should be registered under the supported client alias `sapiom-project`; its
+MCP handshake reports the internal wire identity `sapiom-dev`. Its
+`sapiom_dev_*` tools let a coding agent scaffold, test, deploy, and inspect
+Sapiom agents.
 
 > **Not the capability surface.** This is _not_ the remote "Sapiom" MCP (the
 > hosted connector with `sapiom_sandbox_*`, scrape, search, … capability tools).
-> Use `sapiom` for this local authoring connection and `sapiom-direct` for the
-> hosted capability connection. The local server exposes no direct capability
-> tools. Its check and Local Run path uses stubbed capabilities without Sapiom
-> capability spend; deploys,
-> cloud builds, production runs, signals, and schedules operate Sapiom cloud
-> state and may be metered. See
+> Use `sapiom-project` for this project connection and `sapiom-cloud` for the
+> hosted cloud connection. The project server exposes no direct capability
+> tools. Check and Local Run use no Sapiom capability spend, but authored code
+> and its ordinary side effects still run. Deploys, cloud builds, production
+> runs, signals, and schedules operate Sapiom cloud state and may be metered. See
 > [the two Sapiom MCP servers](../../docs/mcp-servers.md) for which to use when.
 
 ## Install
 
-No global install — run it on demand with `npx`:
-
-```jsonc
-{
-  "mcpServers": {
-    "sapiom": {
-      "command": "npx",
-      "args": ["-y", "@sapiom/mcp"],
-    },
-  },
-}
-```
-
-In Claude Code:
+No global install is required. Register Project MCP in the coding agent you use:
 
 ```sh
-claude mcp add sapiom -- npx -y @sapiom/mcp
+claude mcp add sapiom-project -- npx -y @sapiom/mcp
 ```
+
+```sh
+codex mcp add sapiom-project -- npx -y @sapiom/mcp
+```
+
+The registration alias is `sapiom-project`; the package's MCP handshake still
+reports the server identity `sapiom-dev`.
 
 ## Configuration
 
-The server targets the `production` environment by default. Override it with the
-`SAPIOM_ENVIRONMENT` environment variable:
+The server targets the `production` environment by default. Register a
+staging-specific local server with:
 
-```jsonc
-{
-  "mcpServers": {
-    "sapiom": {
-      "command": "npx",
-      "args": ["-y", "@sapiom/mcp"],
-      "env": { "SAPIOM_ENVIRONMENT": "staging" },
-    },
-  },
-}
+```sh
+claude mcp add sapiom-project -e SAPIOM_ENVIRONMENT=staging -- npx -y @sapiom/mcp
 ```
 
 - `production` (alias `prod`) → `app.sapiom.ai` / `api.sapiom.ai` — the default.
@@ -63,9 +48,10 @@ expected shape if it encounters an unknown environment name).
 
 ## Authentication
 
-The first networked call (`link`, `deploy`, `run`, `inspect`, `signal`, or a schedule tool) needs a
-Sapiom API key. Run **`sapiom_authenticate`** and the server opens a browser
-login flow, then caches the resulting key per environment in
+Cloud operations such as `clone`, `link`, `deploy`, production `run`,
+`inspect`, schedules, and signals need a Sapiom API key. Run
+**`sapiom_authenticate`** and the server opens a browser login flow, then
+caches the resulting key per environment in
 `~/.sapiom/credentials.json`. After that, tools work without re-authenticating.
 `sapiom_status` reports who you're authenticated as; `sapiom_logout` clears the
 cached credentials.
@@ -108,7 +94,7 @@ coding agents, search, storage, content generation — through
 [`@sapiom/tools`](../tools) (`ctx.sapiom.*`). `run_local` resolves those calls
 from stubs; deploy and production run cross into authenticated cloud operations
 and can be metered. This MCP never grows a per-capability tool of its own —
-capabilities live in `@sapiom/tools` and the hosted `sapiom-direct` MCP. See
+capabilities live in `@sapiom/tools` and the hosted `sapiom-cloud` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
 
 ## Sending feedback

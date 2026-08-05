@@ -111,6 +111,11 @@ win:
   asar: false
 
 nsis:
+  # Keep the installer filename byte-identical to the URL electron-builder writes
+  # into latest.yml. The default contains spaces; GitHub normalizes those to dots
+  # when uploading the asset while the manifest uses hyphens, leaving installed
+  # Windows apps with a permanent updater 404.
+  artifactName: Sapiom-Setup-${version}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

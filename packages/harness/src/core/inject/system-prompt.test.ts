@@ -35,8 +35,15 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain('"agents"');
     expect(content).toContain("The Canvas follows that selection");
     expect(content).toContain("Local Run, Prod Run, and Deploy");
-    expect(content).toContain("**sapiom-direct** (hosted, HTTP)");
+    expect(content).toContain(
+      "**sapiom-cloud** (Sapiom Cloud MCP, remote HTTP)",
+    );
+    expect(content).toContain(
+      "**sapiom-project** (Sapiom Project MCP, local stdio; wire identity **sapiom-dev**)",
+    );
+    expect(content).toContain("not through this client MCP configuration");
     expect(content).toContain("no Sapiom capability spend");
+    expect(content).not.toContain("unmetered authoring surface");
     expect(content).not.toContain("stub capabilities, no cost");
     expect(content).not.toContain("Visualize button");
     expect(content).not.toContain("⌘K");

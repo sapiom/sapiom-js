@@ -37,26 +37,47 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).not.toContain("defineOrchestration");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("@sapiom/orchestration");
     // Pointer to the full docs + the scaffold-shipped guidance (AGENTS.md + skill)
-    expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/agents");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://docs.sapiom.ai/agents/authoring",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://docs.sapiom.ai/guides/connect-claude-code-with-mcp",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
-    // The two-MCP frame: agents learn the hosted MCP exists for direct tool calls
-    expect(AUTHORING_INSTRUCTIONS).toContain("hosted capability MCP");
+    // The two-MCP frame: agents learn Cloud MCP exists for direct tool calls
+    expect(AUTHORING_INSTRUCTIONS).toContain("Sapiom Cloud MCP");
     expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
-    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-direct");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-cloud");
     expect(AUTHORING_INSTRUCTIONS).not.toContain(
       "claude mcp add sapiom --transport http",
     );
-    expect(AUTHORING_INSTRUCTIONS).toContain("tool_discover");
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "claude mcp add --scope user --transport http sapiom-direct",
+      "reports `sapiom-dev` as its MCP wire identity",
     );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "claude mcp add sapiom-project -- npx -y @sapiom/mcp",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "codex mcp add sapiom-project -- npx -y @sapiom/mcp",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "claude mcp add --scope user --transport http sapiom-cloud",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "codex mcp add sapiom-cloud --url https://api.sapiom.ai/v1/mcp",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("one flat list");
+    expect(AUTHORING_INSTRUCTIONS).toContain("never use\n`sapiom_*`");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("exposes every capability");
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "Before the first cloud action, call `sapiom_authenticate`",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "authored code and its ordinary side effects still execute",
+    );
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "# Sapiom dev MCP (sapiom-dev)",
     );
   });
 

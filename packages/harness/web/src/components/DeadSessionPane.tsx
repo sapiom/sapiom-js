@@ -156,7 +156,7 @@ export function DeadSessionPane({
               disabled={action !== "resume"}
               title={
                 action === "checking"
-                  ? "Checking Claude Code history…"
+                  ? "Checking coding-agent history…"
                   : action === "resume"
                     ? undefined
                     : resumeBlockedReason(session)

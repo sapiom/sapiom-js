@@ -263,22 +263,41 @@ test("manifest copy uses the same precise Local Run boundary", () => {
   );
 });
 
-test("registered project copy rejects a nonexistent Run Inspector resume control", () => {
+test("registered project copy accepts the implemented Run Inspector signal form", () => {
   const errors = checkRegisteredProjectCopyAsset(
     template,
     "examples/fixture/README.md",
     "Click **Resume run** in Run Inspector to deliver the signal.",
   );
 
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /^copy-unsupported-control: "fixture" /);
-  assert.match(errors[0], /sapiom_dev_agents_signal/);
+  assert.deepEqual(errors, []);
 });
 
-test("manifest copy rejects the same nonexistent control", () => {
+test("manifest copy accepts the implemented Run Inspector signal form", () => {
   const errors = check(
     {},
     { notes: "Use **Resume run** in Run Inspector to deliver the signal." },
+  );
+
+  assert.deepEqual(errors, []);
+});
+
+test("registered project copy rejects unavailable generic Run Inspector controls", () => {
+  const errors = checkRegisteredProjectCopyAsset(
+    template,
+    "examples/fixture/README.md",
+    "Click **Cancel run** in Run Inspector to stop the execution.",
+  );
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^copy-unsupported-control: "fixture" /);
+  assert.match(errors[0], /generic run control/);
+});
+
+test("manifest copy rejects the same unavailable generic control", () => {
+  const errors = check(
+    {},
+    { notes: "Use **Retry run** in Run Inspector after a failure." },
   );
 
   assert.equal(errors.length, 1);

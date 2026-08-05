@@ -67,17 +67,19 @@ export function stripAnsi(text: string): string {
   /* eslint-disable no-control-regex -- matching literal ESC (\x1b) / BEL
    * (\x07) bytes is the entire point of an ANSI-sequence stripper; there's
    * no non-control-character way to express "a real escape sequence". */
-  return text
-    // Lazy (`*?`), not greedy: a greedy `[^\x07]*` doesn't exclude `\x1b\\`
-    // (ST) from what it can consume, so it backtracks from the END of the
-    // whole string looking for the last reachable terminator instead of the
-    // next one — silently swallowing everything (including real prompt
-    // text) between an OSC sequence and some unrelated, much-later BEL/ST.
-    // Confirmed against a real capture: this exact bug made the trust-
-    // prompt regex below never match a full multi-KB scrollback buffer.
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "") // OSC ... BEL or ST
-    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "") // CSI sequences
-    .replace(/\x1b[()>=][A-Za-z0-9]?/g, ""); // charset/keypad-mode selection
+  return (
+    text
+      // Lazy (`*?`), not greedy: a greedy `[^\x07]*` doesn't exclude `\x1b\\`
+      // (ST) from what it can consume, so it backtracks from the END of the
+      // whole string looking for the last reachable terminator instead of the
+      // next one — silently swallowing everything (including real prompt
+      // text) between an OSC sequence and some unrelated, much-later BEL/ST.
+      // Confirmed against a real capture: this exact bug made the trust-
+      // prompt regex below never match a full multi-KB scrollback buffer.
+      .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "") // OSC ... BEL or ST
+      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "") // CSI sequences
+      .replace(/\x1b[()>=][A-Za-z0-9]?/g, "")
+  ); // charset/keypad-mode selection
   /* eslint-enable no-control-regex */
 }
 
@@ -86,6 +88,23 @@ export interface CodexAdapterOptions {
   binary?: string;
   /** Overridable for tests. Defaults to the real home directory. */
   homeDir?: string;
+}
+
+interface GeneratedMcpServerConfig {
+  command?: unknown;
+  args?: unknown;
+  env?: unknown;
+  url?: unknown;
+  headers?: unknown;
+}
+
+interface GeneratedMcpConfig {
+  mcpServers?: Record<string, GeneratedMcpServerConfig>;
+}
+
+interface CodexConfig {
+  args: string[];
+  env: Record<string, string | null>;
 }
 
 interface RolloutSessionMeta {
@@ -102,7 +121,10 @@ interface RolloutLine {
 /** Read only the head of a (possibly huge) rollout file and extract its
  * `session_meta` entry. Codex always writes `session_meta` as the first
  * line, but this tolerates a few leading blank/malformed lines defensively. */
-async function readSessionMeta(filePath: string, maxBytes = ROLLOUT_HEAD_BYTES): Promise<RolloutSessionMeta | null> {
+async function readSessionMeta(
+  filePath: string,
+  maxBytes = ROLLOUT_HEAD_BYTES,
+): Promise<RolloutSessionMeta | null> {
   let content: string;
   try {
     const handle = await open(filePath, "r");
@@ -133,7 +155,10 @@ async function readSessionMeta(filePath: string, maxBytes = ROLLOUT_HEAD_BYTES):
     const id = typeof payload?.id === "string" ? payload.id : undefined;
     const cwd = typeof payload?.cwd === "string" ? payload.cwd : undefined;
     if (!id || !cwd) return null;
-    const timestamp = typeof payload?.timestamp === "string" ? Date.parse(payload.timestamp) : NaN;
+    const timestamp =
+      typeof payload?.timestamp === "string"
+        ? Date.parse(payload.timestamp)
+        : NaN;
     return { id, cwd, timestampMs: Number.isNaN(timestamp) ? null : timestamp };
   }
   return null;
@@ -152,7 +177,8 @@ function extractTitleFromHead(content: string, fallback: string): string {
     } catch {
       continue;
     }
-    if (parsed.type !== "event_msg" || parsed.payload?.type !== "user_message") continue;
+    if (parsed.type !== "event_msg" || parsed.payload?.type !== "user_message")
+      continue;
     const message = parsed.payload.message;
     if (typeof message === "string" && message.trim()) {
       const text = message.trim();
@@ -223,8 +249,12 @@ export class CodexAdapter implements HarnessAdapter {
 
   async doctor(): Promise<DoctorCheck[]> {
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000 });
-      return [{ name: "codex", ok: true, detail: stdout.trim() || "installed" }];
+      const { stdout } = await execFileAsync(this.binary, ["--version"], {
+        timeout: 5_000,
+      });
+      return [
+        { name: "codex", ok: true, detail: stdout.trim() || "installed" },
+      ];
     } catch {
       return [
         {
@@ -237,21 +267,21 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   launch(opts: LaunchOpts): SpawnSpec {
+    const config = buildConfig(opts);
     return {
       command: this.binary,
-      args: buildConfigArgs(opts),
-      // Codex has no analog to Claude's CLAUDECODE nested-agent guard; no env
-      // overrides are needed for a fresh launch.
-      env: {},
+      args: config.args,
+      env: config.env,
       cwd: opts.cwd,
     };
   }
 
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec {
+    const config = buildConfig(opts);
     return {
       command: this.binary,
-      args: ["resume", agentSessionId, ...buildConfigArgs(opts)],
-      env: {},
+      args: ["resume", agentSessionId, ...config.args],
+      env: config.env,
       cwd: opts.cwd,
     };
   }
@@ -307,7 +337,9 @@ export class CodexAdapter implements HarnessAdapter {
       if (!meta || !cwds.has(meta.cwd)) continue;
 
       const fileStat = await stat(filePath).catch(() => undefined);
-      const lastActiveAt = fileStat ? fileStat.mtime.toISOString() : new Date(0).toISOString();
+      const lastActiveAt = fileStat
+        ? fileStat.mtime.toISOString()
+        : new Date(0).toISOString();
 
       let title = basename(filePath, ".jsonl");
       try {
@@ -340,12 +372,11 @@ export class CodexAdapter implements HarnessAdapter {
 }
 
 /**
- * Codex has no single-flag equivalent to Claude's `--append-system-prompt` /
- * `--mcp-config` — MCP servers are registered globally via `codex mcp add`
- * (a persistent config.toml mutation, which the harness's "zero config
- * mutation" design deliberately avoids), so `opts.mcpConfigFile` /
- * `opts.settingsFile` are intentionally unused here. System-prompt injection
- * uses the generic `-c key=value` override mechanism instead.
+ * Codex has no single-file equivalent to Claude's `--append-system-prompt` /
+ * `--mcp-config`, but its generic `-c key=value` mechanism accepts nested
+ * `mcp_servers.<alias>.*` overrides. Studio translates its generated MCP JSON
+ * into those process-local overrides, preserving the zero-config-mutation
+ * contract while giving Claude Code and Codex the same Sapiom connections.
  *
  * Confirmed against a locally installed codex-cli 0.134.0: `-c
  * model_instructions_file=<path>` is a real, recognized key — but if that
@@ -366,7 +397,79 @@ export class CodexAdapter implements HarnessAdapter {
  * one rather than passing a broken reference that's guaranteed to kill the
  * process on startup.
  */
-function buildConfigArgs(opts: LaunchOpts): string[] {
+function tomlInlineTable(entries: Record<string, string>): string {
+  return `{${Object.entries(entries)
+    .map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`)
+    .join(",")}}`;
+}
+
+function appendMcpConfig(
+  args: string[],
+  env: Record<string, string | null>,
+  mcpConfigFile: string,
+): void {
+  let config: GeneratedMcpConfig;
+  try {
+    config = JSON.parse(
+      readFileSync(mcpConfigFile, "utf8"),
+    ) as GeneratedMcpConfig;
+  } catch (err) {
+    console.error(
+      `[codex adapter] could not read mcpConfigFile "${mcpConfigFile}" — launching without session-scoped MCP servers: ${(err as Error).message}`,
+    );
+    return;
+  }
+
+  let headerIndex = 0;
+  for (const [alias, server] of Object.entries(config.mcpServers ?? {})) {
+    const prefix = `mcp_servers.${alias}`;
+    if (typeof server.command === "string") {
+      args.push("-c", `${prefix}.command=${JSON.stringify(server.command)}`);
+    }
+    if (
+      Array.isArray(server.args) &&
+      server.args.every((value) => typeof value === "string")
+    ) {
+      args.push("-c", `${prefix}.args=${JSON.stringify(server.args)}`);
+    }
+    if (
+      server.env &&
+      typeof server.env === "object" &&
+      !Array.isArray(server.env)
+    ) {
+      for (const [key, value] of Object.entries(server.env)) {
+        if (typeof value === "string") {
+          args.push("-c", `${prefix}.env.${key}=${JSON.stringify(value)}`);
+        }
+      }
+    }
+    if (typeof server.url === "string") {
+      args.push("-c", `${prefix}.url=${JSON.stringify(server.url)}`);
+    }
+    if (
+      server.headers &&
+      typeof server.headers === "object" &&
+      !Array.isArray(server.headers)
+    ) {
+      const headerEnv: Record<string, string> = {};
+      for (const [header, value] of Object.entries(server.headers)) {
+        if (typeof value !== "string") continue;
+        const envName = `SAPIOM_STUDIO_MCP_HEADER_${headerIndex}`;
+        headerIndex += 1;
+        env[envName] = value;
+        headerEnv[header] = envName;
+      }
+      if (Object.keys(headerEnv).length > 0) {
+        args.push(
+          "-c",
+          `${prefix}.env_http_headers=${tomlInlineTable(headerEnv)}`,
+        );
+      }
+    }
+  }
+}
+
+function buildConfig(opts: LaunchOpts): CodexConfig {
   const args = [
     "-c",
     "check_for_update_on_startup=false",
@@ -386,6 +489,7 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
     "-c",
     'sandbox_mode="workspace-write"',
   ];
+  const env: Record<string, string | null> = {};
   if (opts.systemPromptFile) {
     try {
       const prompt = readFileSync(opts.systemPromptFile, "utf8");
@@ -396,9 +500,12 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
       );
     }
   }
-  return args;
+  if (opts.mcpConfigFile) appendMcpConfig(args, env, opts.mcpConfigFile);
+  return { args, env };
 }
 
-export function createCodexAdapter(options?: CodexAdapterOptions): HarnessAdapter {
+export function createCodexAdapter(
+  options?: CodexAdapterOptions,
+): HarnessAdapter {
   return new CodexAdapter(options);
 }

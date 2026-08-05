@@ -277,6 +277,14 @@ jobs:
           # A plain string, not an array: unquoted it expands to NOTHING when
           # empty, whereas "${arr[@]:-}" would hand pack.mjs an empty argument.
           notarize_flag=""
+          if [ "${{ runner.os }}" != "macOS" ]; then
+            # CSC_LINK contains the Apple Developer ID certificate. Passing it
+            # through to electron-builder on Windows produced a PE signature
+            # carrying an Apple certificate, which Windows cannot trust. Keep
+            # Apple signing and notarization credentials on the macOS leg only.
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
           if [ "${{ runner.os }}" = "macOS" ]; then
             if [ -z "${CSC_LINK:-}" ]; then
               # No certificate → skip signing altogether. UNSET rather than leave
@@ -447,6 +455,8 @@ jobs:
     permissions:
       contents: write # create/update the GitHub Release and upload assets
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -505,6 +515,18 @@ jobs:
             exit 1
           fi
           echo "All three channel manifests present for \"$channel\"."
+
+      # Presence is not enough: the 0.1.5 Windows manifest named
+      # `Sapiom-Setup-0.1.5.exe`, while the uploaded default NSIS filename was
+      # normalized by GitHub to `Sapiom.Setup.0.1.5.exe`. Both files existed in
+      # isolation, but every installed Windows app received a 404. Prove each
+      # URL emitted by electron-builder has an exact basename match in the asset
+      # set before publishing any release.
+      - name: Verify update manifests reference uploaded artifacts
+        run: >-
+          node scripts/verify-update-manifests.mjs
+          dist-artifacts
+          "${{ needs.prepare.outputs.channel }}"
 
       # Make the channels a hierarchy rather than two dead ends.
       #
@@ -581,10 +603,11 @@ jobs:
             **Linux** — make the AppImage executable (`chmod +x Sapiom-Linux-x86_64.AppImage`) and
             run it, or install the `.deb` with `sudo apt install ./Sapiom-Linux-amd64.deb`.
 
-            On first launch Sapiom checks for Claude Code or Codex. If neither is available, it
-            tries to install Claude Code and shows manual setup steps if that fails. It reuses a
-            cached Sapiom sign-in when present; otherwise it opens your browser to sign in, then
-            prepares a workspace folder for you.
+            On first launch Sapiom checks for Claude Code or Codex. If neither is available,
+            Sapiom tries to install Claude Code and shows both manual setup options if that fails.
+            It reuses a cached
+            Sapiom sign-in when present; otherwise it opens your browser to sign in, then prepares
+            a workspace folder for you.
 
             ## Updates are automatic
 

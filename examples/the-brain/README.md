@@ -103,12 +103,13 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
   **launch nothing**; the briefing shows what it WOULD launch. Run a live cron in
   observe-only for a few days to calibrate before switching actuation on.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. From this directory: `npm install`, then drive the local lifecycle via the MCP —

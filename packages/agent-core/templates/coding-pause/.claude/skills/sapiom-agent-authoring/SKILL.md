@@ -1,43 +1,65 @@
 ---
 name: sapiom-agent-authoring
-description: Build, test, and deploy a Sapiom agent — a controlled, multi-step,
-  deployable automation defined in TypeScript. Use when the user wants to
+description: Build, test, and deploy a Sapiom agent project — a controlled,
+  multi-step, deployable automation. Use when the user wants to
   automate a multi-step, scheduled, recurring, or deployable task ("build an
   agent that checks competitor prices every morning", "automate our weekly
   report", "make a bot that reviews PRs"), or names Sapiom, defineAgent,
-  @sapiom/agent, or the sapiom-dev MCP. Also use to run, inspect, or resume an
+  @sapiom/agent, or Sapiom Project MCP. Also use to run, inspect, or resume an
   existing Sapiom agent. Do NOT use for a single one-off capability call
-  (a web search, one scrape, one image) with no automation to keep — use
-  Sapiom's remote MCP or SDK for that.
+  (a web search, one scrape, one image) with no automation to keep — use Sapiom
+  Cloud MCP for that.
 ---
 
-# Building Sapiom Agents
+# Building Sapiom Agent Projects
 
-A Sapiom **agent** is a small TypeScript project you author with your coding agent: a
-`defineAgent({ name, entry, steps })` where each step's `run(input, ctx)` does work — calling
-paid Sapiom capabilities through the typed `ctx.sapiom.*` client — and returns a directive.
-You test it locally without a Sapiom account or capability spend, then deploy it to run on
-Sapiom's cloud: on demand, on a schedule, or resumed by signals. All from the terminal; no
-dashboard required.
+A Sapiom **agent project** is work you keep: describe a recurring or multi-step outcome, test
+it locally with Sapiom capability calls stubbed, then deploy it to run on demand, on a schedule,
+or resumed by signals. The current scaffold uses TypeScript and `@sapiom/agent`, but users do
+not need to be JavaScript developers to describe, test, or operate it through Claude Code or Codex.
+
+Keep the three developer surfaces distinct:
+
+- **Place you work:** the local project and its coding-agent session.
+- **MCP connections:** Project MCP operates a project; Cloud MCP calls a capability directly.
+- **Imported packages:** `@sapiom/agent` and `@sapiom/tools` implement scaffolded code; Cloud
+  MCP does not require them.
+
+Local Run creates no Sapiom capability request or spend, but ordinary project side effects run.
 
 **Load this skill before scaffolding — it drives the whole lifecycle from zero.** Inside a
 scaffolded project, `AGENTS.md` is the quick reference; this skill is the deep guide.
 
-## If the Sapiom dev MCP isn't connected yet
+## Connect the Coding Agent
 
-The lifecycle below runs through the **sapiom-dev** MCP server (`@sapiom/mcp`). If its tools
-(`sapiom_authenticate`, `sapiom_dev_agents_*`) aren't available, add the server first:
+The lifecycle uses **Sapiom Project MCP** (`@sapiom/mcp`). Register it as `sapiom-project`:
 
 ```bash
-claude mcp add sapiom -- npx -y @sapiom/mcp
+claude mcp add sapiom-project -- npx -y @sapiom/mcp
+codex mcp add sapiom-project -- npx -y @sapiom/mcp
 ```
 
-Other clients: run `npx -y @sapiom/mcp` as a local (stdio) MCP server — see
-[docs.sapiom.ai](https://docs.sapiom.ai/integration/mcp-servers/setup) for per-client config.
+For a direct capability without a project, create an API key, expose it as `SAPIOM_API_KEY`,
+and register **Sapiom Cloud MCP** separately as `sapiom-cloud`:
+
+```bash
+claude mcp add --scope user --transport http sapiom-cloud https://api.sapiom.ai/v1/mcp --header "x-api-key: $SAPIOM_API_KEY"
+codex mcp add sapiom-cloud --url https://api.sapiom.ai/v1/mcp --bearer-token-env-var SAPIOM_API_KEY
+```
+
+Cloud MCP needs the key when it connects. Project MCP works locally while signed out; its first
+cloud action uses `sapiom_authenticate` for browser sign-in. See
+[Connect your coding agent](https://docs.sapiom.ai/guides/connect-claude-code-with-mcp) for scope,
+verification, and removal.
+
+Aliases label client config; they do not rename tools. Project MCP still reports `sapiom-dev`
+and exposes `sapiom_dev_*` lifecycle IDs. Some clients flatten every connection's tools, so
+`sapiom_*` is not a cloud-only allowlist: it also matches project lifecycle tools. Allow exact
+operations when this is a security boundary.
 
 ## Lifecycle from Zero
 
-### 1. Scaffold
+### 1. Scaffold locally
 
 Call `sapiom_dev_agents_scaffold` with a target directory. The scaffold writes:
 
@@ -56,30 +78,33 @@ Install deps: `npm install`. Templates: `"default"` (minimal two-step starter) o
 
 ### 2. Write steps → typecheck → check → run_local
 
-| Command                       | What it does                                                                                                         |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `npm run typecheck`           | Confirms types compile and every `ctx.sapiom.*` call exists                                                          |
-| `sapiom_dev_agents_check`     | Typechecks, bundles and imports `index.ts`, then validates the manifest and graph; no Sapiom account or service call |
-| `sapiom_dev_agents_run_local` | Runs real step code with `ctx.sapiom.*` calls stubbed — no Sapiom capability spend                                   |
+| Command                       | What it does                                                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`           | Confirms types compile and every `ctx.sapiom.*` call exists                                                                   |
+| `sapiom_dev_agents_check`     | Typechecks, bundles, and imports `index.ts`, then validates its manifest and graph; top-level author code can execute locally |
+| `sapiom_dev_agents_run_local` | Runs real step code with `ctx.sapiom.*` calls stubbed; no Sapiom capability request or spend                                  |
 
-`check` imports your definition, and `run_local` executes your real step bodies. Neither
-contacts a Sapiom service, but author-written top-level or step code can still use the local
-filesystem, process, environment, network, and third-party services.
+Neither tool contacts a Sapiom service, but `check` imports your definition and `run_local`
+executes your real step bodies. Author-written code can still use the local filesystem,
+process, environment, network, and third-party services.
 
-### 3. Authenticate before cloud work
+### 3. Authenticate before the first cloud action
 
 Run `sapiom_authenticate` — it opens a browser login and caches an API key in
-`~/.sapiom/credentials.json`. Confirm with `sapiom_status`. This makes your coding agent an
-API-key principal; link, deploy, and cloud run require it.
+`~/.sapiom/credentials.json`. Confirm with `sapiom_status`. Authentication is not required
+for scaffold, typecheck, check, or Local Run; it is required before link, deploy, production
+run, inspection, signals, and schedules.
 
-### 4. Link → deploy → run → inspect
+### 4. Link, deploy, run, and inspect
 
-| Command                     | What it does                                        |
-| --------------------------- | --------------------------------------------------- |
-| `sapiom_dev_agents_link`    | Registers the agent under your tenant               |
-| `sapiom_dev_agents_deploy`  | Builds and deploys to Sapiom's cloud                |
-| `sapiom_dev_agents_run`     | Starts a real (billed) execution                    |
-| `sapiom_dev_agents_inspect` | Watch status, pinned build, steps, logs, and output |
+Cloud actions operate on your organization's state:
+
+| Command                     | What it does                                                      |
+| --------------------------- | ----------------------------------------------------------------- |
+| `sapiom_dev_agents_link`    | Registers the agent under your tenant                             |
+| `sapiom_dev_agents_deploy`  | Builds and deploys to Sapiom's cloud                              |
+| `sapiom_dev_agents_run`     | Starts a real cloud execution; costs depend on the work performed |
+| `sapiom_dev_agents_inspect` | Read a cost-agnostic execution or build audit and optionally wait |
 
 ## The Step Model — Hard Rules
 
@@ -262,12 +287,13 @@ databases, email, domains, memory, and more as they land. **Do not memorize the 
 types are the source of truth.** The full surface is the `Sapiom` interface in `@sapiom/tools`
 — installed in your project's `node_modules`, so its types match the exact version you're on.
 `ctx.sapiom.` autocompletes what exists, `npm run typecheck` rejects what doesn't, and the full
-catalog with pricing lives at [docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
+surface guide lives at [docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
 
 ## Failure Handling & Retries
 
-There is no automatic per-step retry. Express it explicitly — this keeps the graph readable.
-The common pattern is a bounded loop that escalates:
+Thrown step errors and explicit `retry()` directives both consume the same three-attempt
+default ceiling. Use explicit, bounded control flow when the retry decision belongs in the
+agent graph:
 
 ```typescript
 const reconsider = defineStep({
@@ -452,10 +478,11 @@ Write each step the way it should run in production — never weaken logic to sh
 - **One `defineAgent` export per file.** The scaffold wraps a single `index.ts`.
 - **`ctx.shared` for fanout.** When three steps all need the entry input, write it into
   `ctx.shared` in the entry step — don't thread it through every `goto` payload.
-- **One-off capability call, no automation to keep?** That's not an agent — use Sapiom's
-  [remote MCP](https://docs.sapiom.ai/integration/mcp-servers/remote) (`https://api.sapiom.ai/v1/mcp`,
-  direct `sapiom_*` tools, `tool_discover` to find the right one) or the typed SDK client
-  ([`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools)) instead of scaffolding.
+- **One-off capability call, no automation to keep?** That's not an agent project — use
+  [Sapiom Cloud MCP](https://docs.sapiom.ai/integration/mcp-servers/remote), ask for the
+  outcome, and let the coding agent discover the current catalog. Import
+  [`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools) only when JavaScript or
+  TypeScript code itself must call a capability.
 
 ## Troubleshooting
 
@@ -475,6 +502,6 @@ Write each step the way it should run in production — never weaken logic to sh
 | Resource                                                   | What it covers                                               |
 | ---------------------------------------------------------- | ------------------------------------------------------------ |
 | [Authoring guide](https://docs.sapiom.ai/agents/authoring) | Full step model, failure patterns, pause/resume, determinism |
-| [Quickstart](https://docs.sapiom.ai/agents/quick-start)    | Scaffold → write → test → deploy walkthrough                 |
-| [Capabilities](https://docs.sapiom.ai/capabilities)        | The full `ctx.sapiom.*` catalog with pricing                 |
+| [Quickstart](https://docs.sapiom.ai/agents/quick-start)    | Scaffold → check → Local Run walkthrough                     |
+| [Capabilities](https://docs.sapiom.ai/capabilities)        | Current typed and direct-access surface boundaries           |
 | `AGENTS.md` in your scaffold                               | The quick in-project reference                               |

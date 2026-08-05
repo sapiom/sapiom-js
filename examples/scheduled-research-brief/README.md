@@ -37,12 +37,13 @@ Fork [`web-research-digest`](../web-research-digest) for a **one-shot** digest
 that formats in-process — no LLM, no delivery. Fork **this** for a **standing**
 brief: LLM-curated, emailed, on a cron cadence.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with

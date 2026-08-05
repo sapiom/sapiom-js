@@ -11,7 +11,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_authenticate",
-    "Authenticate this local Sapiom developer MCP (sapiom-dev) by opening a browser login flow. Run this when a networked agent tool (link/deploy/run/inspect/signal) reports that authentication is required.",
+    "Authenticate Sapiom Project MCP (wire identity sapiom-dev) by opening a browser login flow. Run this when a networked project tool (link/deploy/run/inspect/signal) reports that authentication is required.",
     {},
     async () => {
       // Check if already authenticated

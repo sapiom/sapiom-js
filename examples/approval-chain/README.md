@@ -93,12 +93,13 @@ Input:
 `config.LEDGER_HANDLE` when omitted. Omit `ledgerHandle` to keep the audit trail
 in `ctx.shared` only (no Postgres touched).
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
@@ -121,8 +122,8 @@ capability spend. Keep
 A real `run` pauses at each gate. Instead of a real approver, fire the signals
 yourself via local MCP `sapiom_dev_agents_signal`. The
 `correlationId` is the paused run's `executionId`, and each `payload` becomes the
-resumed `decide` step's input.
-Run Inspector does not provide a one-click signal control.
+resumed `decide` step's input. The **Resume run** form in Run Inspector can
+deliver the same signal.
 
 **Approve** the current gate (advances to the next, or finalises on the last):
 

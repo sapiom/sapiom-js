@@ -6,20 +6,20 @@
  * consumed by the harness listing endpoint and the skills panel Install MCP
  * modal: the human label, spawn mode, MCP install guidance, and PATH detection.
  */
-import { LOCAL_AUTHORING_MCP_ALIAS } from "../mcp-registration.js";
+import { PROJECT_MCP_ALIAS } from "../mcp-registration.js";
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";
 
 const INSTALL_MCP_PROMPT = [
   "Set up the Sapiom MCP server for Claude Code.",
   "",
-  `1. Register it under the client alias \`${LOCAL_AUTHORING_MCP_ALIAS}\`:`,
+  `1. Register Sapiom Project MCP under the client alias \`${PROJECT_MCP_ALIAS}\`:`,
   "",
-  `   claude mcp add ${LOCAL_AUTHORING_MCP_ALIAS} -- npx -y @sapiom/mcp`,
+  `   claude mcp add ${PROJECT_MCP_ALIAS} -- npx -y @sapiom/mcp`,
   "",
   "   The `@sapiom/mcp` npm package ships the `sapiom-mcp` binary, a local",
   "   MCP server that speaks stdio — no global install or daemon needed.",
-  `2. Verify the registration: \`claude mcp list\` should show \`${LOCAL_AUTHORING_MCP_ALIAS}\`.`,
+  `2. Verify the registration: \`claude mcp list\` should show \`${PROJECT_MCP_ALIAS}\`.`,
   "3. Restart Claude Code (or start a new session) so the server is loaded.",
   "4. Networked Sapiom tools need an API key: run the `sapiom_authenticate`",
   "   tool once and complete the browser login it opens.",

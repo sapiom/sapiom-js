@@ -12,7 +12,12 @@ import {
 } from "./registry.js";
 import { HarnessError } from "../errors.js";
 import { SPAWNABLE_HARNESS_KINDS } from "../../shared/types.js";
-import type { EmbeddedHarnessAdapterInfo, ExternalHarnessAdapterInfo, HarnessAdapterId } from "./adapter.js";
+import type {
+  EmbeddedHarnessAdapterInfo,
+  ExternalHarnessAdapterInfo,
+  HarnessAdapterId,
+} from "./adapter.js";
+import { PROJECT_MCP_ALIAS } from "../mcp-registration.js";
 
 const EXPECTED_IDS: HarnessAdapterId[] = [
   "claude-code",
@@ -46,8 +51,12 @@ describe("harness adapter registry — built-in adapters", () => {
 
 describe("harness adapter registry — lookup errors", () => {
   it("throws UnknownHarnessAdapterError for an unknown id", () => {
-    expect(() => getHarnessAdapter("not-a-harness")).toThrow(UnknownHarnessAdapterError);
-    expect(() => getHarnessAdapter("not-a-harness")).toThrow(/Unknown harness adapter/);
+    expect(() => getHarnessAdapter("not-a-harness")).toThrow(
+      UnknownHarnessAdapterError,
+    );
+    expect(() => getHarnessAdapter("not-a-harness")).toThrow(
+      /Unknown harness adapter/,
+    );
     expect(() => getHarnessAdapter("not-a-harness")).toThrow(/"not-a-harness"/);
   });
 
@@ -87,7 +96,10 @@ describe("harness adapter registry — lookup errors", () => {
 describe("createHarnessAdapterRegistry — custom registries", () => {
   it("rejects duplicate adapter ids at construction time", () => {
     expect(() =>
-      createHarnessAdapterRegistry([...HARNESS_ADAPTER_INFOS, HARNESS_ADAPTER_INFOS[0]]),
+      createHarnessAdapterRegistry([
+        ...HARNESS_ADAPTER_INFOS,
+        HARNESS_ADAPTER_INFOS[0],
+      ]),
     ).toThrow(/Duplicate harness adapter id/);
   });
 
@@ -102,7 +114,10 @@ describe("createHarnessAdapterRegistry — custom registries", () => {
       detectInstalled: async () => false,
     };
 
-    const registry = createHarnessAdapterRegistry([...HARNESS_ADAPTER_INFOS, fictional]);
+    const registry = createHarnessAdapterRegistry([
+      ...HARNESS_ADAPTER_INFOS,
+      fictional,
+    ]);
     expect(registry.list()).toHaveLength(HARNESS_ADAPTER_INFOS.length + 1);
     expect(registry.list()[registry.list().length - 1]).toBe(fictional);
     expect(registry.get("fictional")).toBe(fictional);
@@ -114,40 +129,48 @@ describe("createHarnessAdapterRegistry — custom registries", () => {
 });
 
 describe("adapter contract — shape of every built-in entry", () => {
-  it.each(listHarnessAdapters().map((adapter) => [adapter.id, adapter] as const))(
-    "%s has the full HarnessAdapterInfo shape",
-    async (_id, adapter) => {
-      expect(typeof adapter.id).toBe("string");
-      expect(adapter.id.length).toBeGreaterThan(0);
+  it.each(
+    listHarnessAdapters().map((adapter) => [adapter.id, adapter] as const),
+  )("%s has the full HarnessAdapterInfo shape", async (_id, adapter) => {
+    expect(typeof adapter.id).toBe("string");
+    expect(adapter.id.length).toBeGreaterThan(0);
 
-      expect(typeof adapter.label).toBe("string");
-      expect(adapter.label.length).toBeGreaterThan(0);
+    expect(typeof adapter.label).toBe("string");
+    expect(adapter.label.length).toBeGreaterThan(0);
 
-      expect(["embedded", "external"]).toContain(adapter.mode);
+    expect(["embedded", "external"]).toContain(adapter.mode);
 
-      if (adapter.experimental !== undefined) {
-        expect(typeof adapter.experimental).toBe("boolean");
-      }
+    if (adapter.experimental !== undefined) {
+      expect(typeof adapter.experimental).toBe("boolean");
+    }
 
-      // Image-input support is a required, explicit boolean on every adapter.
-      expect(typeof adapter.imageInput).toBe("boolean");
+    // Image-input support is a required, explicit boolean on every adapter.
+    expect(typeof adapter.imageInput).toBe("boolean");
 
-      const prompt = adapter.installMcpPrompt();
-      expect(typeof prompt).toBe("string");
-      expect(prompt.length).toBeGreaterThan(0);
-      // Every install prompt names the Sapiom MCP server package.
-      expect(prompt).toContain("@sapiom/mcp");
-      // `sapiom-dev` is the package's wire identifier, not a client config
-      // alias. All supported clients register the local authoring MCP as
-      // `sapiom`, leaving `sapiom-direct` available for the hosted connection.
-      expect(prompt).not.toContain("mcp add sapiom-dev");
-      expect(prompt).not.toContain("mcp_servers.sapiom-dev");
-      expect(prompt).not.toContain('"sapiom-dev":');
+    const prompt = adapter.installMcpPrompt();
+    expect(typeof prompt).toBe("string");
+    expect(prompt.length).toBeGreaterThan(0);
+    // Every install prompt names the Sapiom MCP server package.
+    expect(prompt).toContain("@sapiom/mcp");
+    // `sapiom-dev` is the package/server identity, not the supported
+    // client-local registration alias. Keep every adapter on the Project
+    // MCP alias so
+    // its setup copy agrees with the public Claude authoring path.
+    expect(prompt).not.toMatch(/\bmcp add(?: --scope project)? sapiom-dev\b/);
+    expect(prompt).not.toContain("[mcp_servers.sapiom-dev]");
+    expect(prompt).not.toContain('"sapiom-dev":');
+    expect(prompt).toContain(PROJECT_MCP_ALIAS);
+    expect(prompt).not.toContain("under the name `sapiom-dev`");
 
-      const installed = await adapter.detectInstalled();
-      expect(typeof installed).toBe("boolean");
-    },
-  );
+    const installed = await adapter.detectInstalled();
+    expect(typeof installed).toBe("boolean");
+  });
+
+  it("keeps Claude Code on the exact supported local authoring command", () => {
+    expect(getHarnessAdapter("claude-code").installMcpPrompt()).toContain(
+      "claude mcp add sapiom-project -- npx -y @sapiom/mcp",
+    );
+  });
 
   it("embedded adapters have mode 'embedded'; external adapters have mode 'external'", () => {
     for (const adapter of listHarnessAdapters()) {

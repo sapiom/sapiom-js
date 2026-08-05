@@ -46,12 +46,13 @@ default indefinite wait. A non-numeric or non-positive value is rejected at
 `kickoff` (a silently-ignored cap would just reintroduce the forever-park it's
 meant to prevent).
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
@@ -67,10 +68,9 @@ meant to prevent).
 ## Resuming a paused run in dev
 
 A real `run` pauses at `kickoff` and waits for the `webhook.callback` signal.
-Instead of a real webhook, fire it yourself with local MCP
-`sapiom_dev_agents_signal`. Run Inspector does not provide a one-click signal
-control. The `correlationId` is the paused run's `executionId`, and the `payload`
-becomes `decide`'s input:
+Instead of a real webhook, fire it yourself with the **Resume run** form in Run
+Inspector or local MCP `sapiom_dev_agents_signal`. The `correlationId` is the
+paused run's `executionId`, and the `payload` becomes `decide`'s input:
 
 ```json
 {

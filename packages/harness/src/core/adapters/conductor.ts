@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { LOCAL_AUTHORING_MCP_ALIAS } from "../mcp-registration.js";
+import { PROJECT_MCP_ALIAS } from "../mcp-registration.js";
 import type { ExternalHarnessAdapterInfo } from "./adapter.js";
 
 const INSTALL_MCP_PROMPT = [
@@ -19,7 +19,7 @@ const INSTALL_MCP_PROMPT = [
   "",
   "1. From the repository root, run:",
   "",
-  `   claude mcp add --scope project ${LOCAL_AUTHORING_MCP_ALIAS} -- npx -y @sapiom/mcp`,
+  `   claude mcp add --scope project ${PROJECT_MCP_ALIAS} -- npx -y @sapiom/mcp`,
   "",
   "   This writes the server into the repository's `.mcp.json`, which",
   "   Conductor workspaces pick up. The `@sapiom/mcp` npm package ships the",

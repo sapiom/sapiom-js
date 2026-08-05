@@ -54,8 +54,8 @@ When you've made a coherent change and want to validate it — the same point yo
 ### Firing the resume signal in dev
 
 A real `run` pauses at `watch`. To resume it without a real webhook, fire the signal
-via local MCP `sapiom_dev_agents_signal` — the manual stand-in for the PR webhook.
-Run Inspector does not provide a one-click signal control. The request is:
+with the **Resume run** form in Run Inspector or via local MCP
+`sapiom_dev_agents_signal` — the manual stand-in for the PR webhook. The request is:
 
 ```json
 {

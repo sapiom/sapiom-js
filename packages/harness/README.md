@@ -1,41 +1,51 @@
 # Agent Studio
 
-Agent Studio is a local web app for building on Sapiom with your own coding agent.
+Agent Studio is a local workspace for building, testing, deploying, and running
+Sapiom agents with Claude Code or Codex.
 
 ```bash
 npx @sapiom/agent-studio@latest [dir]
-# supported direct implementation command:
-npx @sapiom/harness@latest [dir]
-# also available via the Sapiom CLI (npm i -g @sapiom/cli @sapiom/harness):
-sapiom dev [dir]
 ```
 
-One command checks your environment, signs you in, and opens Agent Studio
-with your coding agent (Claude Code or Codex) running in an embedded
-terminal — pre-wired with the Sapiom MCP servers and an agent-authoring
-system prompt, in whatever project directory you choose.
+The optional directory defaults to the current working directory. The command
+requires Node.js 20 or newer and at least one supported coding agent on `PATH`:
+Claude Code or Codex. It reports environment checks, starts a token-protected
+loopback server, and opens the complete local URL in your browser. It does not
+install a coding agent, require Sapiom sign-in, or start a coding-agent session
+automatically. Sign in before the first cloud action, then choose a folder or
+template when you are ready to start a session.
 
 ## What you get
 
-- **Terminal sessions** — your agent, your subscription, your machine; the
-  Agent Studio only configures it. Multiple sessions, resumable chat history.
+- **Terminal sessions** — Claude Code or Codex runs on your machine and account.
+  Studio can manage multiple sessions and resume only when the coding agent's
+  recorded conversation is still available.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
-  tracked, with one-click local test run, deploy, production run, and
+  tracked, with direct Local Run, Deploy, production run, and
   open-in-Sapiom actions.
-- **Canvas** — a live pane that renders static HTML your agent writes to
-  `.sapiom/canvas/` (visualize your agent, your docs, anything), plus a
-  preview mode for dev servers the agent starts.
+- **Canvas** — a deterministic projection generated from the current agent
+  source. Studio-generated renders live under `.sapiom/canvas/renders/` and are
+  not an authoring surface.
 - **Zero config mutation** — everything is injected per-session via flags;
   your global agent settings are never touched.
 
-Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
+Local Run replaces `ctx.sapiom.*` calls with configured stubs and creates no
+Sapiom capability request or spend. It still runs authored JavaScript on your
+machine, including ordinary file, process, and network side effects. Deploy and
+production runs require authentication and operate on Sapiom cloud resources.
 
-## Telemetry
+## Privacy and local state
 
-With explicit opt-in, Agent Studio collects usage events (prompts, tool calls,
-session lifecycle) to improve Sapiom. Opt out any time; `--no-telemetry`
-disables collection entirely. Events are also written locally to
-`~/.sapiom/harness/events.ndjson` for your own inspection.
+Detailed prompts, tool calls, and session events are shared only with explicit
+opt-in. Product interaction analytics are a separate setting. Normalized
+events are written locally whether remote sharing is enabled or not.
+
+Removing `~/.sapiom/harness` removes Harness-owned global state only. It does
+not remove project `.sapiom/` directories, shared credentials, or coding-agent
+history. Read [Install Agent Studio](https://docs.sapiom.ai/agent-studio/install),
+[Account and privacy](https://docs.sapiom.ai/agent-studio/account-and-privacy),
+and the [CLI and files reference](https://docs.sapiom.ai/reference/agent-studio)
+before deleting state.
 
 ## Development
 
@@ -76,8 +86,8 @@ pnpm --filter @sapiom/harness exec playwright test \
 pnpm --filter @sapiom/harness test:ui
 ```
 
-**E2E live tier** (real agent binaries, real pty, no CI). Requires Claude Code
-or Codex installed and a valid `SAPIOM_API_KEY` in your environment.
+**E2E live tier** (real agent binary, real pty, no CI). Requires Claude Code
+and a valid `SAPIOM_API_KEY` in your environment.
 
 ```bash
 pnpm --filter @sapiom/harness e2e:live

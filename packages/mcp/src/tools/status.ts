@@ -10,7 +10,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_status",
-    "Check authentication status for this local Sapiom developer MCP (sapiom-dev). Returns whether you're authenticated and which organization.",
+    "Check authentication status for Sapiom Project MCP (wire identity sapiom-dev). Returns whether you're authenticated and which organization.",
     {},
     async () => {
       const creds = await readCredentials(env.name);

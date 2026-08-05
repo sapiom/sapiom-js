@@ -34,12 +34,13 @@ Input: `{ "repo": { "owner": "acme", "name": "api" }, "via": "email", "to": "you
 With no `WEBHOOK_REGISTER_URL` (or `DRY_RUN` set), `watch` skips registration via
 its `dryRun` guard and the report step skips the real send.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
@@ -64,9 +65,9 @@ degrades to a skip (it still completes) so you can trace the graph first.
 ## Resuming a paused run in dev
 
 A real `run` pauses at `watch` and waits for the `pr.opened` signal. Instead of
-a real webhook, fire it yourself with local MCP `sapiom_dev_agents_signal`. Run
-Inspector does not provide a one-click signal control. The `correlationId` is the
-paused run's `executionId`, and the `payload` becomes `review`'s input:
+a real webhook, fire it yourself with the **Resume run** form in Run Inspector
+or local MCP `sapiom_dev_agents_signal`. The `correlationId` is the paused run's
+`executionId`, and the `payload` becomes `review`'s input:
 
 ```json
 {

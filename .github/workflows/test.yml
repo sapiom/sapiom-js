@@ -70,6 +70,9 @@ jobs:
       - name: Check Agent Studio visible terminology
         run: pnpm terminology:check
 
+      - name: Check product documentation links
+        run: pnpm docs:links:check
+
       # Fixture tests for the gate itself: a typo'd declaration field must fail
       # rather than be silently stripped downstream. This glob also runs the
       # terminology guard's forbidden-copy, compatibility, and stale-allowlist

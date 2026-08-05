@@ -63,7 +63,11 @@ const PROJECT_DEPLOYABLE_TERM_RE = /\b(?:workflows?|orchestrations?)\b/i;
 const LOCAL_RUN_TERM_RE = /\b(?:run_local|local run)\b/i;
 const OVERBROAD_LOCAL_RUN_GUARANTEE_RE =
   /\b(?:offline|for free|zero[- ]cost|no cost)\b/i;
-const UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE = /\bResume run\b/i;
+// Run Inspector exposes a schema-aware `Resume run` signal form for human and
+// webhook pauses. The generic run-operate controls remain disabled previews,
+// so example copy must not promise that Pause/Cancel/Retry are live there.
+const UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE =
+  /\b(?:Pause run|Cancel run|Retry run)\b/i;
 
 function overbroadLocalRunClaims(source) {
   const lines = String(source).split(/\r?\n/);
@@ -186,7 +190,7 @@ export function checkRegisteredProjectCopyAsset(template, assetPath, source) {
   for (let index = 0; index < lines.length; index++) {
     if (!UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE.test(lines[index])) continue;
     errors.push(
-      `copy-unsupported-control: "${id}" ${assetPath}:${index + 1} promises a Resume run control that Run Inspector does not expose — use sapiom_dev_agents_signal or the API.`,
+      `copy-unsupported-control: "${id}" ${assetPath}:${index + 1} promises a generic run control that Run Inspector does not expose as a live action — use the implemented signal form or API where applicable.`,
     );
   }
 
@@ -322,7 +326,7 @@ export function checkCopy(template, manifest) {
     if (UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE.test(copy)) {
       fail(
         "copy-unsupported-control",
-        `manifest${path.slice(1)} promises a Resume run control that Run Inspector does not expose — use sapiom_dev_agents_signal or the API.`,
+        `manifest${path.slice(1)} promises a generic run control that Run Inspector does not expose as a live action — use the implemented signal form or API where applicable.`,
       );
     }
   }

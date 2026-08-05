@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +19,13 @@ function sessionMetaLine(id: string, cwd: string, timestamp: string): string {
   return JSON.stringify({
     timestamp,
     type: "session_meta",
-    payload: { id, timestamp, cwd, originator: "codex-cli", cli_version: "0.134.0" },
+    payload: {
+      id,
+      timestamp,
+      cwd,
+      originator: "codex-cli",
+      cli_version: "0.134.0",
+    },
   });
 }
 
@@ -49,7 +62,11 @@ describe("CodexAdapter", () => {
       await writeFile(promptFile, DEFAULT_SYSTEM_PROMPT, "utf8");
 
       const adapter = new CodexAdapter({ binary: "fake-codex" });
-      const spec = adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj", systemPromptFile: promptFile });
+      const spec = adapter.launch({
+        harnessSessionId: "h1",
+        cwd: "/tmp/proj",
+        systemPromptFile: promptFile,
+      });
 
       // Reading the file's content in and embedding it (rather than passing
       // codex a path to re-read at its own startup) is the actual fix here —
@@ -120,22 +137,52 @@ describe("CodexAdapter", () => {
       expect(spec.env).toEqual({});
     });
 
-    it("ignores mcpConfigFile/settingsFile — Codex has no per-session injection point for either", () => {
+    it("translates Studio's generated MCP file into process-local Codex config without exposing headers in argv", async () => {
+      const configDir = await mkdtemp(join(tmpdir(), "harness-codex-mcp-"));
+      const configFile = join(configDir, "mcp.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          mcpServers: {
+            "sapiom-project": {
+              command: "npx",
+              args: ["-y", "@sapiom/mcp@latest"],
+              env: { SAPIOM_ENVIRONMENT: "staging" },
+            },
+            "sapiom-cloud": {
+              type: "http",
+              url: "https://api.sapiom.ai/v1/mcp",
+              headers: { "x-api-key": "secret-value" },
+            },
+          },
+        }),
+        "utf8",
+      );
+
       const adapter = new CodexAdapter({ binary: "fake-codex" });
       const spec = adapter.launch({
         harnessSessionId: "h1",
         cwd: "/tmp/proj",
-        mcpConfigFile: "/tmp/proj/.sapiom/mcp.json",
+        mcpConfigFile: configFile,
         settingsFile: "/tmp/proj/.sapiom/settings.json",
       });
-      expect(spec.args).toEqual([
-        "-c",
-        "check_for_update_on_startup=false",
-        "-c",
-        'approval_policy="never"',
-        "-c",
-        'sandbox_mode="workspace-write"',
-      ]);
+      expect(spec.args).toContain('mcp_servers.sapiom-project.command="npx"');
+      expect(spec.args).toContain(
+        'mcp_servers.sapiom-project.args=["-y","@sapiom/mcp@latest"]',
+      );
+      expect(spec.args).toContain(
+        'mcp_servers.sapiom-project.env.SAPIOM_ENVIRONMENT="staging"',
+      );
+      expect(spec.args).toContain(
+        'mcp_servers.sapiom-cloud.url="https://api.sapiom.ai/v1/mcp"',
+      );
+      expect(spec.args).toContain(
+        'mcp_servers.sapiom-cloud.env_http_headers={"x-api-key"="SAPIOM_STUDIO_MCP_HEADER_0"}',
+      );
+      expect(spec.args.join(" ")).not.toContain("secret-value");
+      expect(spec.env).toEqual({ SAPIOM_STUDIO_MCP_HEADER_0: "secret-value" });
+
+      await rm(configDir, { recursive: true, force: true });
     });
   });
 
@@ -155,7 +202,9 @@ describe("CodexAdapter", () => {
 
     it("detects the trust prompt in a real, unmodified pty capture", () => {
       const adapter = new CodexAdapter();
-      expect(adapter.detectBlockingPrompt(REAL_TRUST_PROMPT_CAPTURE)).toBe(true);
+      expect(adapter.detectBlockingPrompt(REAL_TRUST_PROMPT_CAPTURE)).toBe(
+        true,
+      );
     });
 
     it("does not false-positive on ordinary composer/output text", () => {
@@ -184,13 +233,19 @@ describe("CodexAdapter", () => {
 
     it("returns false for plain text with no escape sequences at all", () => {
       const adapter = new CodexAdapter();
-      expect(adapter.detectBlockingPrompt("just some ordinary agent output, nothing special")).toBe(false);
+      expect(
+        adapter.detectBlockingPrompt(
+          "just some ordinary agent output, nothing special",
+        ),
+      ).toBe(false);
     });
   });
 
   describe("doctor", () => {
     it("reports ok:false when the binary isn't on PATH", async () => {
-      const adapter = new CodexAdapter({ binary: "definitely-not-a-real-binary-xyz" });
+      const adapter = new CodexAdapter({
+        binary: "definitely-not-a-real-binary-xyz",
+      });
       const checks = await adapter.doctor();
       expect(checks).toHaveLength(1);
       expect(checks[0]).toMatchObject({ name: "codex", ok: false });
@@ -215,7 +270,9 @@ describe("CodexAdapter", () => {
 
     it("returns [] when no sessions directory exists", async () => {
       const adapter = new CodexAdapter({ homeDir });
-      expect(await adapter.listPastSessions("/nonexistent/project")).toEqual([]);
+      expect(await adapter.listPastSessions("/nonexistent/project")).toEqual(
+        [],
+      );
     });
 
     it("finds rollout files whose session_meta.cwd matches, ignoring others", async () => {
@@ -235,7 +292,11 @@ describe("CodexAdapter", () => {
       const otherId = "019e62d5-a020-75f1-b5e8-253383076f84";
       await writeFile(
         join(dir, `rollout-2026-01-01T00-05-00-${otherId}.jsonl`),
-        sessionMetaLine(otherId, "/some/other/project", "2026-01-01T00:05:00.000Z") + "\n",
+        sessionMetaLine(
+          otherId,
+          "/some/other/project",
+          "2026-01-01T00:05:00.000Z",
+        ) + "\n",
         "utf8",
       );
 
@@ -271,7 +332,11 @@ describe("CodexAdapter", () => {
     it("skips files that don't start with a session_meta line instead of throwing", async () => {
       const dir = rolloutDir(homeDir);
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, "rollout-not-a-real-session.jsonl"), "not json at all\n", "utf8");
+      await writeFile(
+        join(dir, "rollout-not-a-real-session.jsonl"),
+        "not json at all\n",
+        "utf8",
+      );
       await writeFile(join(dir, "notes.txt"), "irrelevant, not .jsonl", "utf8");
 
       const adapter = new CodexAdapter({ homeDir });
@@ -316,12 +381,19 @@ describe("CodexAdapter", () => {
       await rm(homeDir, { recursive: true, force: true });
     });
 
-    async function writeRollout(id: string, rolloutCwd: string, day = "01"): Promise<void> {
+    async function writeRollout(
+      id: string,
+      rolloutCwd: string,
+      day = "01",
+    ): Promise<void> {
       const dir = join(homeDir, ".codex", "sessions", "2026", "01", day);
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, `rollout-2026-01-${day}T00-00-00-${id}.jsonl`),
-        [sessionMetaLine(id, rolloutCwd, `2026-01-${day}T00:00:00.000Z`), userMessageLine("hello")].join("\n") + "\n",
+        [
+          sessionMetaLine(id, rolloutCwd, `2026-01-${day}T00:00:00.000Z`),
+          userMessageLine("hello"),
+        ].join("\n") + "\n",
         "utf8",
       );
     }
@@ -351,7 +423,9 @@ describe("CodexAdapter", () => {
       await writeRollout(sessionId, "/Users/test/other-project");
       const adapter = new CodexAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(false);
-      expect(await adapter.canResume(sessionId, "/Users/test/other-project")).toBe(true);
+      expect(
+        await adapter.canResume(sessionId, "/Users/test/other-project"),
+      ).toBe(true);
     });
 
     it("finds a match across the YYYY/MM/DD shards, not just the first day", async () => {

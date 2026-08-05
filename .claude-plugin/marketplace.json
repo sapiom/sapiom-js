@@ -12,7 +12,7 @@
     {
       "name": "sapiom",
       "source": "./plugins/sapiom",
-      "description": "Build, test, and deploy Sapiom agents: registers the sapiom-dev MCP server and ships the sapiom-agent-authoring skill so your agent knows when and how to use Sapiom.",
+      "description": "Build, test, and deploy Sapiom agents: registers local @sapiom/mcp under the sapiom alias and ships the sapiom-agent-authoring skill so your agent knows when and how to use Sapiom.",
       "category": "development",
       "keywords": ["sapiom", "agents", "automation", "mcp"]
     }

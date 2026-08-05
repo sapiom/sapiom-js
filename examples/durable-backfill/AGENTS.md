@@ -32,8 +32,8 @@ When you've made a coherent change and want to validate it — the same point yo
 ### Advancing a paused run in dev
 
 A real `run` pauses after each chunk. To advance it without a schedule, fire the heartbeat
-via local MCP `sapiom_dev_agents_signal`. Run Inspector does not provide a one-click
-signal control. The request is:
+with the **Resume run** form in Run Inspector or via local MCP
+`sapiom_dev_agents_signal`. The request is:
 
 ```json
 {

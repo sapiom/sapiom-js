@@ -3,7 +3,7 @@
  * Scaffold adapter: detection is real; launch support is best-effort and
  * marked `experimental` until exercised by an end-to-end suite.
  */
-import { LOCAL_AUTHORING_MCP_ALIAS } from "../mcp-registration.js";
+import { PROJECT_MCP_ALIAS } from "../mcp-registration.js";
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";
 
@@ -15,7 +15,7 @@ const INSTALL_MCP_PROMPT = [
   "",
   "   {",
   '     "mcp": {',
-  `       "${LOCAL_AUTHORING_MCP_ALIAS}": {`,
+  `       "${PROJECT_MCP_ALIAS}": {`,
   '         "type": "local",',
   '         "command": ["npx", "-y", "@sapiom/mcp"],',
   '         "enabled": true',

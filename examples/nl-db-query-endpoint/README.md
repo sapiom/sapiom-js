@@ -52,12 +52,13 @@ Defense-in-depth, so a write can't slip through even if one layer is wrong:
 3. The endpoint **executes** it in a `READ ONLY` transaction, which Postgres
    enforces at the engine level, with a statement timeout and a row cap.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with

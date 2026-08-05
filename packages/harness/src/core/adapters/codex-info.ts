@@ -5,21 +5,21 @@
  * lives in codex.ts. This file carries only the registry-level metadata
  * consumed by the harness listing endpoint and the skills panel Install MCP modal.
  */
-import { LOCAL_AUTHORING_MCP_ALIAS } from "../mcp-registration.js";
+import { PROJECT_MCP_ALIAS } from "../mcp-registration.js";
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";
 
 const INSTALL_MCP_PROMPT = [
   "Set up the Sapiom MCP server for the Codex CLI.",
   "",
-  `1. Register it under the client alias \`${LOCAL_AUTHORING_MCP_ALIAS}\`. Recent Codex versions`,
+  `1. Register Sapiom Project MCP under the client alias \`${PROJECT_MCP_ALIAS}\`. Recent Codex versions`,
   "   support:",
   "",
-  `   codex mcp add ${LOCAL_AUTHORING_MCP_ALIAS} -- npx -y @sapiom/mcp`,
+  `   codex mcp add ${PROJECT_MCP_ALIAS} -- npx -y @sapiom/mcp`,
   "",
   "   Otherwise add it to `~/.codex/config.toml` yourself:",
   "",
-  `   [mcp_servers.${LOCAL_AUTHORING_MCP_ALIAS}]`,
+  `   [mcp_servers.${PROJECT_MCP_ALIAS}]`,
   '   command = "npx"',
   '   args = ["-y", "@sapiom/mcp"]',
   "",

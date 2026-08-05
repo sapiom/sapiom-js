@@ -60,6 +60,13 @@ function coerceJson(value: unknown): unknown {
 
 const nodeRequire = createRequire(import.meta.url);
 
+export const RUN_LOCAL_TOOL_DESCRIPTION = [
+  "Execute an agent on the local machine, running the author's actual step code with every ctx.sapiom.* capability call resolved from stubs. This creates no Sapiom capability request or spend. Author code is ordinary local code: its own file, process, and network side effects still run; environment reads also remain real.",
+  "Returns { outcome, output, steps[], unusedStubs[], stubWarnings[] }. outcome is 'completed' | 'failed' | 'paused' | 'running'. A paused dispatch (e.g. models.coding.launch) is auto-resumed locally with its stub result, so the happy path runs end-to-end.",
+  "Returns `unusedStubs` (supplied stub keys that matched no call — a typo or wrong path form) and `stubWarnings` (a stub key matched but its value was the wrong shape for the capability). Check both: a green run with a non-empty unusedStubs/stubWarnings usually means your stub didn't take effect.",
+  "Stub shape: { version: 1, steps: { <stepName>: { <methodPath>: <response> } } }. The response is the value that call returns verbatim — e.g. `repositories.list` takes the array list() should return ([{ slug, cloneUrl }]), not a wrapped/sequence form. For a dispatched run, stub `models.coding.run` (or `models.coding.launch`) in the step that launches it; that value becomes both the run result and the payload the paused step resumes with — set status:'failed' there to exercise the failure branch.",
+].join("\n");
+
 /**
  * Locate the bundled templates directory of @sapiom/agent-core. This
  * ESM server has no `__dirname`, so the templates dir is resolved from the
@@ -151,12 +158,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_run_local",
-    [
-      "Execute an agent on the local machine, running the author's actual step code with every ctx.sapiom.* capability call resolved from stubs (no Sapiom account, capability request, or capability spend). Author code is ordinary local code: its own filesystem, process, environment, and network effects remain real.",
-      "Returns { outcome, output, steps[], unusedStubs[], stubWarnings[] }. outcome is 'completed' | 'failed' | 'paused' | 'running'. A paused dispatch (e.g. models.coding.launch) is auto-resumed locally with its stub result, so the happy path runs end-to-end.",
-      "Returns `unusedStubs` (supplied stub keys that matched no call — a typo or wrong path form) and `stubWarnings` (a stub key matched but its value was the wrong shape for the capability). Check both: a green run with a non-empty unusedStubs/stubWarnings usually means your stub didn't take effect.",
-      "Stub shape: { version: 1, steps: { <stepName>: { <methodPath>: <response> } } }. The response is the value that call returns verbatim — e.g. `repositories.list` takes the array list() should return ([{ slug, cloneUrl }]), not a wrapped/sequence form. For a dispatched run, stub `models.coding.run` (or `models.coding.launch`) in the step that launches it; that value becomes both the run result and the payload the paused step resumes with — set status:'failed' there to exercise the failure branch.",
-    ].join("\n"),
+    RUN_LOCAL_TOOL_DESCRIPTION,
     {
       dir: z
         .string()

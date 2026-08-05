@@ -176,9 +176,7 @@ export function WelcomePanel({
         data-testid="welcome-panel"
         role="dialog"
         aria-modal="true"
-        aria-label={
-          firstRun ? "Welcome to Agent Studio" : "Agent Studio"
-        }
+        aria-label={firstRun ? "Welcome to Agent Studio" : "Agent Studio"}
       >
         <div className="welcome-card" ref={cardRef}>
           <button
@@ -192,7 +190,10 @@ export function WelcomePanel({
             <Icon name="X" size={14} />
           </button>
 
-          <div className="welcome-body" {...trackingAttrs({ surface: "welcome" })}>
+          <div
+            className="welcome-body"
+            {...trackingAttrs({ surface: "welcome" })}
+          >
             {/* One greeting, two readings: "Welcome to" is a thing you say once.
                 This card used to fork into two whole layouts — a product pitch for
                 a first run, an Overview list for a return — which meant the
@@ -201,9 +202,7 @@ export function WelcomePanel({
                 both: the recents block below simply has nothing to show on a
                 brand-new install, so it renders nothing. */}
             <h1 className="welcome-title">
-              {firstRun
-                ? "Welcome to Agent Studio"
-                : "Agent Studio"}
+              {firstRun ? "Welcome to Agent Studio" : "Agent Studio"}
             </h1>
             {/* Three beats, in the order the product earns trust: what it makes of
                 your code, what a run costs and shows, who decides to ship. The
@@ -212,9 +211,9 @@ export function WelcomePanel({
                 about to be given. */}
             <p className="welcome-intro">
               Agent Studio turns the agents in your codebase into diagrams you
-              can inspect and run. Local runs need no sign-in and stub Sapiom
-              capability calls, with every step&rsquo;s input, output and call on
-              screen. Nothing ships until you say so.
+              can inspect and run. Local Run replaces Sapiom capability calls
+              with stubs and creates no Sapiom capability spend; your code still
+              runs on this machine. Nothing ships until you say so.
             </p>
             {error && <div className="welcome-error">{error}</div>}
 
@@ -231,8 +230,7 @@ export function WelcomePanel({
               <span className="welcome-open-copy">
                 <span className="welcome-open-title">Open a folder</span>
                 <span className="welcome-open-desc">
-                  Agents in the folder appear in the rail. Nothing is
-                  uploaded.
+                  Agents in the folder appear in the rail. Nothing is uploaded.
                 </span>
               </span>
               <button
@@ -241,7 +239,10 @@ export function WelcomePanel({
                 className="btn-primary welcome-open-cta"
                 data-testid="welcome-start-project"
                 onClick={() => setModalOpen(true)}
-                {...trackingAttrs({ object: "workspace", intent: "open_folder" })}
+                {...trackingAttrs({
+                  object: "workspace",
+                  intent: "open_folder",
+                })}
               >
                 Open folder
               </button>
@@ -257,7 +258,7 @@ export function WelcomePanel({
                   Start from a template
                 </span>
                 <span className="welcome-open-desc">
-                  Runnable starters, cloned locally and free to test.
+                  Runnable starters, cloned locally and ready to test.
                 </span>
               </span>
               <button
@@ -266,7 +267,10 @@ export function WelcomePanel({
                 className="btn-line welcome-open-cta"
                 data-testid="welcome-browse-templates"
                 onClick={onBrowseTemplates}
-                {...trackingAttrs({ object: "template", intent: "browse_templates" })}
+                {...trackingAttrs({
+                  object: "template",
+                  intent: "browse_templates",
+                })}
               >
                 Browse templates
               </button>
@@ -275,7 +279,7 @@ export function WelcomePanel({
             <a
               className="welcome-docs-btn"
               data-testid="welcome-docs"
-              href="https://docs.sapiom.ai/agents/quick-start"
+              href="https://docs.sapiom.ai/agent-studio/overview"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -299,9 +303,9 @@ export function WelcomePanel({
                 <span className="toggle-knob" />
               </button>
               <span className="welcome-consent-copy">
-                Help us optimize your experience — share your session details with
-                Sapiom so we can improve how Agent Studio works for you. Off by
-                default; change it anytime in Settings.
+                Help us optimize your experience — share your session details
+                with Sapiom so we can improve how Agent Studio works for you.
+                Off by default; change it anytime in Settings.
               </span>
             </label>
 

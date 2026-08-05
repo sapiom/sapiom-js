@@ -63,7 +63,11 @@ interface AddWorkspaceDialogProps {
   onScan: (root: string) => Promise<number>;
   /** Start a session at `cwd` and hand the agent a scaffold prompt carrying
    *  `idea` (door 1's `plain`/`new` outcomes and door 3). */
-  onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  onScaffold: (
+    cwd: string,
+    harness: HarnessKind,
+    idea?: string,
+  ) => Promise<void>;
   /** Door 2 — hands off to the templates destination rather than duplicating the catalog. */
   onBrowseTemplates: () => void;
   /** Adapter registry — supplies the per-agent MCP setup prompts offered when
@@ -90,10 +94,30 @@ interface AddWorkspaceDialogProps {
  *  the rail's Add popover renders this same list — two hand-maintained copies
  *  of three labels is exactly how "Open a folder" and "I have a project" came
  *  to name the same action on two surfaces. */
-export const DOORS: { id: Door; title: string; sub: string; icon: "Folder" | "LayoutTemplate" | "Sparkles" }[] = [
-  { id: "have", title: "Open a folder", sub: "Add a folder that already holds an agent project", icon: "Folder" },
-  { id: "template", title: "Start from a template", sub: "Ready-made agents you can edit", icon: "LayoutTemplate" },
-  { id: "idea", title: "Start from an idea", sub: "Describe it; the agent scaffolds it", icon: "Sparkles" },
+export const DOORS: {
+  id: Door;
+  title: string;
+  sub: string;
+  icon: "Folder" | "LayoutTemplate" | "Sparkles";
+}[] = [
+  {
+    id: "have",
+    title: "Open a folder",
+    sub: "Add a folder that already holds an agent project",
+    icon: "Folder",
+  },
+  {
+    id: "template",
+    title: "Start from a template",
+    sub: "Ready-made agents you can edit",
+    icon: "LayoutTemplate",
+  },
+  {
+    id: "idea",
+    title: "Start from an idea",
+    sub: "Describe it; the agent scaffolds it",
+    icon: "Sparkles",
+  },
 ];
 
 export function AddWorkspaceDialog({
@@ -127,7 +151,11 @@ export function AddWorkspaceDialog({
     };
   }, [listHarnesses]);
   const panelRef = useRef<HTMLDivElement>(null);
-  useDismissable(true, { onDismiss: onClose, containerRef: panelRef, triggerRef });
+  useDismissable(true, {
+    onDismiss: onClose,
+    containerRef: panelRef,
+    triggerRef,
+  });
 
   const activeDoor = DOORS.find((entry) => entry.id === door) ?? null;
 
@@ -164,8 +192,15 @@ export function AddWorkspaceDialog({
               <Icon name="ArrowLeft" size={14} />
             </button>
           )}
-          <span className="aw-title">{activeDoor ? activeDoor.title : "Add a workspace"}</span>
-          <button className="theme-toggle modal-close" aria-label="Close" title="Close" onClick={onClose}>
+          <span className="aw-title">
+            {activeDoor ? activeDoor.title : "Add a workspace"}
+          </span>
+          <button
+            className="theme-toggle modal-close"
+            aria-label="Close"
+            title="Close"
+            onClick={onClose}
+          >
             <Icon name="X" size={14} />
           </button>
         </div>
@@ -221,7 +256,12 @@ export function DoorRow({
   onClick: () => void;
 }): JSX.Element {
   return (
-    <button type="button" className="aw-door" data-testid={testid} onClick={onClick}>
+    <button
+      type="button"
+      className="aw-door"
+      data-testid={testid}
+      onClick={onClick}
+    >
       <span className="aw-door-icon" aria-hidden="true">
         <Icon name={icon} size={15} />
       </span>
@@ -289,7 +329,11 @@ function HaveProjectDoor({
   listDir: (path?: string) => Promise<FsListResponse>;
   onConnect: (cwd: string) => Promise<void>;
   onScan: (root: string) => Promise<number>;
-  onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  onScaffold: (
+    cwd: string,
+    harness: HarnessKind,
+    idea?: string,
+  ) => Promise<void>;
   onBrowseTemplates: () => void;
   entries: HarnessEntry[];
   onDone: () => void;
@@ -322,7 +366,10 @@ function HaveProjectDoor({
       // entry in its parent's listing.
       const self = parent ? await listDir(parent) : null;
       const isProject = Boolean(
-        self?.dirs.some((dir) => stripTrailingSlash(dir.path) === target && dir.hasAgentProject),
+        self?.dirs.some(
+          (dir) =>
+            stripTrailingSlash(dir.path) === target && dir.hasAgentProject,
+        ),
       );
       if (isProject) {
         setOutcome({ kind: "project" });
@@ -341,7 +388,9 @@ function HaveProjectDoor({
         return;
       }
       const inside = children.dirs.filter((dir) => dir.hasAgentProject).length;
-      setOutcome(inside > 0 ? { kind: "multi", found: inside } : { kind: "plain" });
+      setOutcome(
+        inside > 0 ? { kind: "multi", found: inside } : { kind: "plain" },
+      );
     } catch {
       // Unreadable target, readable parent → a folder that doesn't exist yet
       // (the real server's 404 path). Both unreadable is a real error.
@@ -383,10 +432,13 @@ function HaveProjectDoor({
               const found = await onScan(cwd.trim());
               // Zero found keeps the dialog open so the path can be adjusted —
               // closing on nothing would look like it worked.
-              if (found === 0) throw new Error("No agent projects found under this folder.");
+              if (found === 0)
+                throw new Error("No agent projects found under this folder.");
             })
           }
-          onScaffold={() => void run(() => onScaffold(cwd.trim(), preferredHarness()))}
+          onScaffold={() =>
+            void run(() => onScaffold(cwd.trim(), preferredHarness()))
+          }
           onBrowseTemplates={onBrowseTemplates}
           entries={entries}
         />
@@ -441,11 +493,15 @@ function HaveProjectDoor({
  * claiming that the server is absent.
  *
  * Still copy-a-prompt for now. What the prompt contains is a shell command
- * (`claude mcp add sapiom -- npx -y @sapiom/mcp`), so a desktop build can
+ * (`claude mcp add sapiom-project -- npx -y @sapiom/mcp`), so a desktop build can
  * run it for you — that needs the Electron preload and is deliberately a
  * separate change; this is the same capability, minus the clutter.
  */
-function McpOffer({ entries }: { entries: HarnessEntry[] }): JSX.Element | null {
+function McpOffer({
+  entries,
+}: {
+  entries: HarnessEntry[];
+}): JSX.Element | null {
   const [open, setOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -456,12 +512,15 @@ function McpOffer({ entries }: { entries: HarnessEntry[] }): JSX.Element | null 
     [],
   );
 
-  const withPrompts = entries.filter((entry) => entry.installMcpPrompt.trim().length > 0);
+  const withPrompts = entries.filter(
+    (entry) => entry.installMcpPrompt.trim().length > 0,
+  );
   if (withPrompts.length === 0) return null;
 
   // The agent the user actually runs leads; everything else is behind the caret.
   const preferred = preferredHarness();
-  const primary = withPrompts.find((entry) => entry.id === preferred) ?? withPrompts[0];
+  const primary =
+    withPrompts.find((entry) => entry.id === preferred) ?? withPrompts[0];
   const rest = withPrompts.filter((entry) => entry.id !== primary.id);
 
   const copy = (entry: HarnessEntry): void => {
@@ -481,7 +540,9 @@ function McpOffer({ entries }: { entries: HarnessEntry[] }): JSX.Element | null 
       <div className="aw-mcp-row">
         <span className="aw-mcp-text">
           Also drive this project from your own terminal?{" "}
-          <span className="aw-mcp-dim">Copy the authoring setup for Claude Code.</span>
+          <span className="aw-mcp-dim">
+            Copy the Project MCP setup for {primary.label}.
+          </span>
         </span>
         <button
           type="button"
@@ -556,7 +617,12 @@ function ResultBlock({
   const good = outcome.kind === "project" || outcome.kind === "multi";
   return (
     <>
-      <div className="aw-result" data-tone={good ? "good" : "todo"} data-testid="aw-result" aria-live="polite">
+      <div
+        className="aw-result"
+        data-tone={good ? "good" : "todo"}
+        data-testid="aw-result"
+        aria-live="polite"
+      >
         <div className="aw-result-head">
           <span className="aw-result-glyph" aria-hidden="true">
             <Icon name={good ? "Check" : "TriangleAlert"} size={14} />
@@ -573,7 +639,12 @@ function ResultBlock({
               {path}
             </span>
           </span>
-          <button type="button" className="btn-ghost aw-result-change" onClick={onChange} disabled={busy}>
+          <button
+            type="button"
+            className="btn-ghost aw-result-change"
+            onClick={onChange}
+            disabled={busy}
+          >
             Change
           </button>
         </div>
@@ -583,18 +654,33 @@ function ResultBlock({
 
       <div className="modal-actions">
         {outcome.kind === "project" && (
-          <button className="btn-primary modal-primary-cta" data-testid="aw-add" onClick={onConnect} disabled={busy}>
+          <button
+            className="btn-primary modal-primary-cta"
+            data-testid="aw-add"
+            onClick={onConnect}
+            disabled={busy}
+          >
             {busy ? "Adding…" : "Add workspace"}
           </button>
         )}
         {outcome.kind === "multi" && (
-          <button className="btn-primary modal-primary-cta" data-testid="aw-add-all" onClick={onScan} disabled={busy}>
+          <button
+            className="btn-primary modal-primary-cta"
+            data-testid="aw-add-all"
+            onClick={onScan}
+            disabled={busy}
+          >
             {busy ? "Adding…" : `Add all ${outcome.found}`}
           </button>
         )}
         {(outcome.kind === "plain" || outcome.kind === "new") && (
           <>
-            <button type="button" className="btn-ghost" onClick={onBrowseTemplates} disabled={busy}>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={onBrowseTemplates}
+              disabled={busy}
+            >
               <Icon name="LayoutTemplate" size={13} />
               Start from a template
             </button>
@@ -653,7 +739,11 @@ function IdeaDoor({
 }: {
   projectRoot: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  onScaffold: (
+    cwd: string,
+    harness: HarnessKind,
+    idea?: string,
+  ) => Promise<void>;
   onSaveProjectRoot: (root: string) => Promise<void>;
   onDone: () => void;
 }): JSX.Element {
@@ -697,11 +787,13 @@ function IdeaDoor({
   const nameValid = isValidProjectName(trimmedName);
   const collides = nameValid && taken.has(trimmedName);
   const target = projectDirSuggestion(trimmedName, root);
-  const canSubmit = Boolean(idea.trim()) && nameValid && !collides && Boolean(target) && !busy;
+  const canSubmit =
+    Boolean(idea.trim()) && nameValid && !collides && Boolean(target) && !busy;
 
   const hint = (): string => {
     if (!trimmedName) return "Becomes the agent's name.";
-    if (!nameValid) return "Lowercase letters, numbers and dashes only — it becomes the package name.";
+    if (!nameValid)
+      return "Lowercase letters, numbers and dashes only — it becomes the package name.";
     if (collides) return "That folder already exists here. Pick another name.";
     return "Becomes the agent's name.";
   };
@@ -774,17 +866,29 @@ function IdeaDoor({
               listDir={listDir}
             />
             <div className="aw-root-actions">
-              <button type="button" className="btn-ghost" onClick={() => setRootEditing(false)}>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setRootEditing(false)}
+              >
                 Cancel
               </button>
-              <button type="button" className="btn-ghost" onClick={() => void saveRoot(root)}>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => void saveRoot(root)}
+              >
                 Use this folder
               </button>
             </div>
           </section>
         ) : (
           <div className="aw-target">
-            <span className="aw-target-path" data-testid="aw-target" title={target || root}>
+            <span
+              className="aw-target-path"
+              data-testid="aw-target"
+              title={target || root}
+            >
               {target || `${root}/…`}
             </span>
             <button
@@ -798,10 +902,17 @@ function IdeaDoor({
           </div>
         )}
 
-        <p className="modal-field-hint" data-invalid={Boolean(trimmedName) && (!nameValid || collides)}>
+        <p
+          className="modal-field-hint"
+          data-invalid={Boolean(trimmedName) && (!nameValid || collides)}
+        >
           {hint()}
         </p>
-        {rootSaved && <p className="modal-field-hint">Saved as your default projects folder.</p>}
+        {rootSaved && (
+          <p className="modal-field-hint">
+            Saved as your default projects folder.
+          </p>
+        )}
         {error && <div className="modal-error">{error}</div>}
       </div>
 

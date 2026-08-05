@@ -63,12 +63,13 @@ Input:
   attestation.
 - `dryRun: true` returns the attestation as a preview without archiving anything.
 
-## Run it with Claude + the Sapiom MCP
+## Run it with your coding agent + Sapiom Project MCP
 
-1. Add the MCP:
+1. Add Project MCP to Claude Code or Codex:
 
    ```bash
-   claude mcp add sapiom -- npx -y @sapiom/mcp
+   claude mcp add sapiom-project -- npx -y @sapiom/mcp
+   codex mcp add sapiom-project -- npx -y @sapiom/mcp
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
@@ -90,8 +91,8 @@ Input:
 A real `run` pauses at `review`. Instead of a real approver, fire the sign-off
 signal yourself via local MCP `sapiom_dev_agents_signal`. The
 `correlationId` is the paused run's `executionId`, and the `payload` becomes
-`onSignoff`'s input.
-Run Inspector does not provide a one-click signal control.
+`onSignoff`'s input. The **Resume run** form in Run Inspector can deliver the
+same signal.
 
 **Approve** (resumes `onSignoff` → `archive`):
 
