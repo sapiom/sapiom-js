@@ -317,7 +317,9 @@ HOME=$(mktemp -d) SAPIOM_TELEMETRY_DISABLED=1 \
 
 `--smoke` (`src/main/smoke.ts`) boots the app and asserts the SPA is served from inside the asar, the
 REST surface answers and rejects an untokened request, a real session spawns, the setup window's
-preload bridge loaded, node-pty loads under Electron's ABI and can spawn, the plain-Node subprocess's
+preload bridge loaded and that window resolved its design-system layer in the Studio brand (tokens, the
+`themes/studio.css` preset and its nested agent-cloud import), node-pty loads under Electron's ABI and
+can spawn, the plain-Node subprocess's
 imports exist on disk, a deploy can bundle and a local run's child really starts (both spawn-from-asar
 bugs — see below), the agent inherits a clean environment, and the auto-update config is baked in. Exit
 code is the signal; CI runs it per OS after packaging.

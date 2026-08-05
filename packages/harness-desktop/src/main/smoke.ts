@@ -16,7 +16,11 @@
  *   http-state      the REST surface answers with the boot token …
  *   http-authz      … and rejects a request without it
  *   preload-bridge  the setup window's preload actually loaded (an ESM/sandbox
- *                   mismatch once made onboarding hang forever with no error)
+ *                   mismatch once made onboarding hang forever with no error),
+ *                   and that window resolved its design-system layer in the
+ *                   STUDIO brand — that layer is a build-time COPY, so a path
+ *                   regression silently reverts the first screen's entire look
+ *                   (it shipped in the retired teal brand for months)
  *   node-pty        the native module loads under Electron's ABI and can spawn
  *                   (covers the rebuild AND the +x spawn-helper) — no agent needed
  *   unpacked-deps   what the plain-Node Canvas subprocess imports exists ON DISK,
@@ -124,19 +128,69 @@ async function checkPreloadBridge(): Promise<string> {
     // unstyled first-run window that every other check still passes. Assert the
     // tokens RESOLVE rather than that the files exist: a <link> that 404s and a
     // stylesheet that loaded but defined nothing fail identically here.
+    //
+    // Each probe names a token exactly ONE file defines, so nothing here
+    // hardcodes a brand value — the design system owns those and this gate must
+    // not pin them. Three layers, three independent silent failures:
+    //   --bg           tokens.css loaded
+    //   --type-display studio.css loaded AND its [data-product] scope matched,
+    //                  i.e. the window is in the Studio brand and not the old
+    //                  agent-cloud teal it silently shipped in for months
+    //   --violet       agent-cloud.css loaded — reachable ONLY through
+    //                  `@import "./agent-cloud.css"` inside themes/studio.css, so
+    //                  this is the only check that themes/ was copied as a
+    //                  directory rather than flattened. A failed CSS @import
+    //                  throws nothing, anywhere.
+    // Geist is REPORTED, not asserted: --font falls through to system-ui, so a
+    // face the renderer refuses to fetch over file:// is a legible window, not a
+    // broken one — and this line is how we learn, per OS, whether it fetches.
     const theme = (await win.webContents.executeJavaScript(
-      "(() => { const s = getComputedStyle(document.documentElement);" +
-        " return { sheets: document.styleSheets.length, bg: s.getPropertyValue('--bg').trim()," +
-        " brand: s.getPropertyValue('--brand').trim() }; })()",
-    )) as { sheets: number; bg: string; brand: string };
+      "(async () => { const s = getComputedStyle(document.documentElement);" +
+        " const faces = [...document.fonts].map((f) => f.family).join(',');" +
+        " const geist = await document.fonts.load('600 1rem Geist').then((f) => f.length" +
+        " ? 'loaded' : 'no-match', (e) => 'error: ' + e.message);" +
+        " return { sheets: document.styleSheets.length," +
+        " product: document.documentElement.dataset.product || ''," +
+        " mode: document.documentElement.dataset.theme || ''," +
+        " bg: s.getPropertyValue('--bg').trim(), brand: s.getPropertyValue('--brand').trim()," +
+        " display: s.getPropertyValue('--type-display').trim()," +
+        " violet: s.getPropertyValue('--violet').trim(), faces, geist }; })()",
+    )) as {
+      sheets: number;
+      product: string;
+      mode: string;
+      bg: string;
+      brand: string;
+      display: string;
+      violet: string;
+      faces: string;
+      geist: string;
+    };
     if (!theme.bg || !theme.brand) {
       throw new Error(
         `design-system tokens did not resolve (--bg="${theme.bg}", --brand="${theme.brand}", ` +
           `${theme.sheets} stylesheet(s) loaded) — check copy-renderer.mjs`,
       );
     }
+    if (theme.product !== "sapiom-studio" || !theme.display) {
+      throw new Error(
+        `the Studio preset is not applied (data-product="${theme.product}", ` +
+          `--type-display="${theme.display}") — setup.html must carry ` +
+          `data-product="sapiom-studio" on <html> and link ./themes/studio.css`,
+      );
+    }
+    if (!theme.violet) {
+      throw new Error(
+        'themes/studio.css loaded but its `@import "./agent-cloud.css"` did not ' +
+          "(--violet is unset) — copy-renderer.mjs must copy themes/ as a directory",
+      );
+    }
 
-    return `window.sapiomSetup exposes onProgress + submitConsent; tokens resolve (--bg ${theme.bg})`;
+    return (
+      "window.sapiomSetup exposes onProgress + submitConsent; Studio tokens resolve " +
+      `(${theme.mode}, --bg ${theme.bg}, --brand ${theme.brand}); Geist ${theme.geist}` +
+      `${theme.faces.includes("Geist") ? "" : ` (WARNING: no Geist @font-face registered — faces: ${theme.faces || "none"})`}`
+    );
   } finally {
     if (!win.isDestroyed()) win.destroy();
   }

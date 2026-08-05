@@ -4,10 +4,19 @@
  * Tokens come from the design system, resolved through the SAME seam the SPA
  * uses: `scripts/copy-renderer.mjs` probes for the private
  * `@sapiom/design-system` package and falls back to the harness's committed
- * `web/src/styles/ds-neutral` token set, then copies the resolved files in as
- * `ds-tokens.css` + `ds-agent-cloud.css`. So this window and the SPA read the
- * same token VALUES from the same source, and a public clone still renders
- * legibly. See `packages/harness/web/vite.config.ts` for the seam's rationale.
+ * `web/src/styles/ds-neutral` token set, then copies the resolved layer in as
+ * `ds-fonts.css` + `ds-tokens.css` + `themes/` (a directory) + `assets/fonts/`.
+ * `setup.html` links fonts → tokens → `themes/studio.css` → this file: the same
+ * three design-system files, in the same order, as the SPA's `styles.css`
+ * imports. So this window and the SPA read the same token VALUES from the same
+ * source, in the same brand, and a public clone still renders legibly. See
+ * `packages/harness/web/vite.config.ts` for the seam's rationale and
+ * `setup.html` for why agent-cloud.css is never linked separately.
+ *
+ * The Studio preset is scoped to `[data-product="sapiom-studio"]`, set on <html>
+ * in `setup.html`. It owns the deliberate overrides of shared names — `--radius`,
+ * `--type-label`, `--type-meta`, `--focus-ring`, `--brand*` — so this file must
+ * NOT restate them.
  *
  * The one rule this file inherits: **never redefine a design-system token.**
  * Everything below reads tokens via `var()` and declares no `--custom-property`
@@ -47,6 +56,18 @@ body {
   padding: var(--sp5);
 }
 
+/* Form controls do NOT inherit the document font — Chromium's UA sheet pins them
+   to Arial 13.333px, so without this the CTA and the checkbox render in Arial
+   while the card around them is Geist. The SPA resets this globally
+   (styles.css's `button`/`input` rules); this window needs the same reset or
+   loading the faces above buys nothing for the one control it has. `inherit`
+   redefines no token — it reads whatever `body` resolved. */
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
 .card {
   width: 100%;
   max-width: 420px;
@@ -54,11 +75,7 @@ body {
   text-align: center;
   background: var(--s1);
   border: 1px solid var(--line);
-  /* Literal, not a token override: the app pins ONE 0.5rem radius for every
-     surface (its documented deviation from the system's r-sm/r/r-lg/r-xl
-     scale — see styles.css). Matching that literally keeps the first screen a
-     user sees consistent with the app, without redeclaring `--radius` here. */
-  border-radius: 0.5rem;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 
@@ -71,6 +88,9 @@ body {
 }
 
 h1 {
+  /* Off-ladder on purpose: Studio steps 16px (--type-h2) → 22px (--type-title),
+     and this is the hero line of a 420px card, not an app pane. Either token is a
+     visible re-scale of the most prominent element in the window. */
   font-size: 19px;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -127,7 +147,7 @@ h1[data-status="error"] {
   border: 1px solid transparent;
   color: var(--brand-ink);
   font-weight: 500;
-  border-radius: 0.5rem;
+  border-radius: var(--radius);
   transition: background-color var(--fast) var(--ease);
 }
 .btn-primary:hover:not(:disabled) {
@@ -142,7 +162,8 @@ h1[data-status="error"] {
   cursor: not-allowed;
 }
 
-/* Centers the CTA and matches the SPA welcome panel's CTA sizing. */
+/* Centers the CTA. Its size is off-ladder too (Studio: --type-meta 12px,
+   --type-label 14px) and deliberately smaller than the body copy above it. */
 .consent .btn-primary,
 .error .btn-primary {
   display: block;

@@ -1,5 +1,11 @@
 <!doctype html>
-<html lang="en">
+<!-- data-product scopes the design-system's named "sapiom-studio" preset
+     (compact IDE density, scarce green brand, neutral focus/selection), exactly
+     as the SPA does in web/index.html. It must sit on the SAME element as
+     data-theme, which the script below sets on <html>: studio.css keys the brand
+     on the compound selector [data-product="sapiom-studio"][data-theme="…"], so
+     on <body> or .card light mode would silently lose its brand and its --bg. -->
+<html lang="en" data-product="sapiom-studio">
   <head>
     <meta charset="utf-8" />
     <meta
@@ -27,13 +33,23 @@
         document.documentElement.dataset.theme = theme;
       })();
     </script>
-    <!-- Design-system token layer, resolved at build time through the same seam
-         the SPA uses (private @sapiom/design-system if installed, else the
-         harness's committed ds-neutral set) and copied in by
-         scripts/copy-renderer.mjs. Order matters: tokens → accent/brand layer →
-         this window's own layout. -->
+    <!-- Design-system layer, resolved at build time through the same seam the SPA
+         uses (private @sapiom/design-system if installed, else the harness's
+         committed ds-neutral set) and copied in by scripts/copy-renderer.mjs.
+         The same three files in the same order as the SPA's styles.css imports:
+         fonts register the Geist faces (fonts.css: "Import this BEFORE
+         tokens.css"), tokens.css is the token source of truth, and the named
+         studio.css preset layers the Studio decisions on top. Then this window's
+         own layout.
+
+         agent-cloud.css is NEVER linked here. studio.css @imports it as its first
+         rule, and the two carry equal specificity — so a second <link> after
+         studio.css would win on source order alone and silently restore the old
+         teal accent. themes/ is a real subdirectory for the same reason: that
+         @import is a sibling lookup. -->
+    <link rel="stylesheet" href="./ds-fonts.css" />
     <link rel="stylesheet" href="./ds-tokens.css" />
-    <link rel="stylesheet" href="./ds-agent-cloud.css" />
+    <link rel="stylesheet" href="./themes/studio.css" />
     <link rel="stylesheet" href="./setup.css" />
   </head>
   <body>

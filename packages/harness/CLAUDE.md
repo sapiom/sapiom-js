@@ -124,10 +124,14 @@ The SPA resolves `@sapiom/design-system` through a build seam (`web/vite.config.
 `designSystemAlias()`): the private branded package when it's installed, else the committed
 `web/src/styles/ds-neutral` token set — this repo is public, so a clone with no private assets must
 still build and render. `harness-desktop/scripts/copy-renderer.mjs` runs the **same probe** and copies
-the resolved `tokens.css` / `themes/agent-cloud.css` into the Electron setup window as
-`ds-tokens.css` / `ds-agent-cloud.css` (that window has no bundler — `setup.html` links plain
-stylesheets — so a copy replaces the alias). Change the probe or the file layout in one and you must
-change the other; nothing else fails first.
+the resolved layer into the Electron setup window: `tokens.css` → `ds-tokens.css`, `fonts.css` →
+`ds-fonts.css`, and `themes/` plus `assets/fonts/` with their **layout intact** (that window has no
+bundler — `setup.html` links plain stylesheets — so a copy replaces the alias). The layout is preserved
+because the design-system files reference each other relatively: `themes/studio.css` opens with
+`@import "./agent-cloud.css"` and `fonts.css` asks for `./assets/fonts/*.woff2`. Flattening either
+breaks it in total silence — a failed CSS `@import` throws nothing and a missing face just renders
+system-ui. Change the probe or the file layout in one and you must change the other; nothing else
+fails first.
 
 - Never redefine a design-system token. Read tokens with `var()`; a local snapshot of token VALUES
   drifts the moment a token changes, which is exactly what the seam exists to prevent.
@@ -137,6 +141,12 @@ change the other; nothing else fails first.
   which addresses system tokens directly since it can't load the SPA's bridge.
 - Dark mode keys on `[data-theme="dark"]`, not `prefers-color-scheme` alone — the onboarding window
   sets the attribute itself before first paint.
+- The onboarding window links the SAME three design-system files in the SAME order as `styles.css`
+  imports them (fonts → tokens → `themes/studio.css`) and carries `data-product="sapiom-studio"` on
+  `<html>`, next to `data-theme` — studio.css keys its brand on the compound
+  `[data-product="sapiom-studio"][data-theme="…"]`, so both attributes must be on one element. Never
+  link `agent-cloud.css` separately: studio.css `@import`s it, the two tie on specificity, and a second
+  link after it wins on source order and restores the retired teal.
 - Compose stylesheets through JS imports in `web/src/main.tsx`, not CSS `@import` (an `@import`
   triggers a stricter re-parse that chokes on our CSS nesting).
 
