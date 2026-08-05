@@ -808,6 +808,11 @@ const deploy = defineStep({
       SEED_ROWS: JSON.stringify(sampleRows),
     };
 
+    // Unique per run: `sandboxes.create` is not idempotent, so a fixed name
+    // 409s (SANDBOX_ALREADY_EXISTS) on the second run against the same tenant.
+    // Suffix the execution id so every run gets its own sandbox.
+    const sandboxName = `${config.sandboxName}-${ctx.executionId}`;
+
     const queryEndpoint = (url: string) => `${url.replace(/\/$/, "")}/query`;
     const healthEndpoint = (url: string) => `${url.replace(/\/$/, "")}/health`;
 
@@ -837,7 +842,7 @@ const deploy = defineStep({
 
     try {
       const box = await ctx.sapiom.sandboxes.create({
-        name: config.sandboxName,
+        name: sandboxName,
         port: config.port,
       });
       // Write the server into an explicit absolute directory via `exec`, NOT
@@ -866,7 +871,7 @@ const deploy = defineStep({
         env,
       });
       ctx.logger.info("deployPreview result", {
-        sandbox: config.sandboxName,
+        sandbox: sandboxName,
         status: res.status,
         url: res.url,
       });
@@ -919,7 +924,7 @@ const deploy = defineStep({
       });
     } catch (err) {
       ctx.logger.error("deploy threw", {
-        sandbox: config.sandboxName,
+        sandbox: sandboxName,
         err: String(err),
       });
       return goto("deploy_failed", {
