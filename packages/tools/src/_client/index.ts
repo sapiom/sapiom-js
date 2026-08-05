@@ -75,7 +75,7 @@ export interface Attribution {
 }
 
 export interface TransportConfig {
-  /** Explicit tenant API key. Omit inside a workflow step — the engine injects it ambiently. */
+  /** Explicit tenant API key. Omit inside an agent step — the engine injects it ambiently. */
   apiKey?: string;
   /** Inject a fetch (tests / non-standard runtimes). Defaults to global fetch. */
   fetch?: typeof globalThis.fetch;
@@ -234,7 +234,7 @@ export class Transport {
     if (!this.apiKey) {
       throw new Error(
         "@sapiom/tools: no tenant credential. Pass createClient({ apiKey }) for standalone use, " +
-          "or run inside a Sapiom workflow (the engine injects SAPIOM_API_KEY).",
+          "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
     const startedAt = Date.now();

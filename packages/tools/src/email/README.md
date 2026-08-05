@@ -3,7 +3,7 @@
 Programmatic transactional email. Create real, addressable inboxes, send and
 receive messages, manage custom sending domains, read conversation threads, and
 register webhooks for inbound events. Call it directly from your code, or from
-within Sapiom workflow steps.
+within Sapiom agent steps.
 
 ```typescript
 import { createClient } from "@sapiom/tools";

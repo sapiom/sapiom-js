@@ -41,7 +41,7 @@ There are two ways to authenticate, both exposing the identical capability surfa
   const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
   await sapiom.sandboxes.create({ name: "demo" });
   ```
-- **Ambient** — import the namespaces directly and they resolve credentials from `SAPIOM_API_KEY` (or, inside a Sapiom workflow step, from the client the runtime provides):
+- **Ambient** — import the namespaces directly and they resolve credentials from `SAPIOM_API_KEY` (or, inside a Sapiom agent step, from the client the runtime provides):
   ```typescript
   import { sandboxes, repositories, agent } from "@sapiom/tools";
   await sandboxes.create({ name: "demo" });
@@ -59,7 +59,7 @@ const sapiom = createClient({
 // every call this client makes is now attributed to digest-bot / traceId
 ```
 
-Inside a Sapiom workflow you don't set this at all — the runtime constructs the client with the running execution's attribution, so every tool call is attributed automatically.
+Inside a Sapiom agent run you don't set this at all — the runtime constructs the client with the running execution's attribution, so every tool call is attributed automatically.
 
 If a single process makes calls on behalf of more than one agent or trace, derive a client per context with `sapiom.withAttribution({ ... })`.
 

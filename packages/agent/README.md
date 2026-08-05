@@ -145,7 +145,7 @@ Things to know:
     return pauseUntilSignal(run, { resumeStep: "review" });
   }
   ```
-- **Outside a workflow nothing changes** — `await launch().wait()` the capability as
+- **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
 
 ### Compatible capabilities

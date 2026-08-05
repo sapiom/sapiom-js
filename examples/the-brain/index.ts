@@ -10,9 +10,9 @@ import { z } from "zod/v4";
 
 /**
  * the-brain — a fleet orchestrator ("central nervous system") over a set of
- * child workflows. The flagship "agents managing agents" template.
+ * child agents. The flagship "agents managing agents" template.
  *
- * A fleet is a handful of independent `@sapiom/agent` workflows (its *members*),
+ * A fleet is a handful of independent `@sapiom/agent` definitions (its *members*),
  * each firing on its own cron and doing its own job. Nothing watches the *whole*:
  * no one notices that a daily member silently missed its run today, or that a
  * weekly member is now past its cadence, or that a launch never reported back.
@@ -32,7 +32,7 @@ import { z } from "zod/v4";
  *   - actuate  executes the plan deterministically behind six guardrails
  *              (allow-list re-check, escalate-only, only-surfaced-targets,
  *              per-day cooldown, single-open, fan-out cap), launching each member
- *              as a child workflow and appending a member.launched row.
+ *              as a child agent and appending a member.launched row.
  *   - report   posts a briefing to a low-noise channel, appends a brain.briefing
  *              row, advances the cursor, and terminates.
  *
@@ -537,18 +537,18 @@ async function slackPost(
     throw new Error(`slack chat.postMessage failed: ${String(json.error)}`);
 }
 
-// ── child-workflow launch (the key detail + risk) ──
+// ── child-agent launch (the key detail + risk) ──
 // This launches children directly against the engine API by definitionId, using
 // the API key present in the runtime, rather than through the SDK's
 // ctx.sapiom.agents.launch. That route was reported as 404ing, but the report was
 // never reproduced against production — treat it as unverified, and prefer the SDK
 // once it is confirmed working.
 // Derived from the environment, NOT hardcoded: a fork running against a local or
-// staging stack must not launch child workflows into production, which is exactly
+// staging stack must not launch child agents into production, which is exactly
 // what a baked-in prod URL does.
 const WF_BASE = `${(process.env.SAPIOM_API_BASE_URL ?? "https://api.sapiom.ai").replace(/\/+$/, "")}/v1/workflows`;
 // Static fallback slug->definitionId map. definitionIds are ENVIRONMENT-SPECIFIC:
-// they don't exist until you deploy the child workflows. After deploying your
+// they don't exist until you deploy the child agents. After deploying your
 // children (e.g. `hello-agent`), capture each definitionId and seed it here.
 // Left empty by default: resolveDefId first tries the live /definitions lookup,
 // and launchChild throws a clear error if a slug still can't be resolved.
@@ -608,9 +608,9 @@ async function resolveDefId(
 /** Human-readable reasons a play produced no launch. */
 const LAUNCH_SKIP_REASONS: Record<string, string> = {
   "no-api-key":
-    "no API key was available in the run, so no child workflow was started",
+    "no API key was available in the run, so no child agent was started",
   "child-not-deployed":
-    "the child workflow is not deployed in this tenant yet, so there was nothing to launch",
+    "the child agent is not deployed in this tenant yet, so there was nothing to launch",
   "no-tenant-id":
     "the execution had no tenant id, so the child definition could not be resolved safely",
   "no-execution-id":
@@ -618,7 +618,7 @@ const LAUNCH_SKIP_REASONS: Record<string, string> = {
 };
 
 /**
- * Launch a child workflow fire-and-forget.
+ * Launch a child agent fire-and-forget.
  *
  * Returns `{ skipped }` rather than throwing when the child cannot be resolved: a
  * fresh tenant has not deployed the children yet, and a missing sibling is an
@@ -862,7 +862,7 @@ const assess = defineStep({
     }
 
     const system =
-      "You are the brain (a fleet coordinator) for a set of child workflows. Given the situations that " +
+      "You are the brain (a fleet coordinator) for a set of child agents. Given the situations that " +
       "need attention and the plays available, decide what to do. You may ONLY choose from these plays: " +
       `${ALLOWED_PLAYS.join(", ")}. launch_member(target=memberId) launches the named fleet member; ` +
       "escalate_to_human(target=short description) flags something for a person; no_action to skip. Rules: " +

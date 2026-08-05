@@ -5,7 +5,7 @@ external async job, then **suspends indefinitely at $0** until a webhook/callbac
 fires — no polling loop, no held worker, no billed idle time — and resumes
 exactly where it left off when the external world is ready.
 
-The direct counter to "agents are too expensive to run": a workflow can wait
+The direct counter to "agents are too expensive to run": an agent run can wait
 days on a third-party callback and cost nothing until the signal arrives.
 
 ## What it does

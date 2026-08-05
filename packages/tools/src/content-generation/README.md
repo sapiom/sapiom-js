@@ -85,8 +85,8 @@ const handle = await sapiom.contentGeneration.video.launch({
 const out = await handle.wait(); // polls until ready
 out.video?.fileId; // + out.video?.downloadUrl for a ready-to-use URL
 
-// Option B — suspend a workflow step until the video is ready, then resume:
-// (Inside a Sapiom workflow step; the orchestration engine handles the rest.)
+// Option B — suspend an agent step until the video is ready, then resume:
+// (Inside a Sapiom agent step; the orchestration engine handles the rest.)
 const handle = await sapiom.contentGeneration.video.launch({
   prompt: "a calm ocean wave at sunset",
 });
@@ -101,7 +101,7 @@ defaults when `wait()` is called without arguments, so the two APIs stay in sync
 ### `VIDEO_RESULT_SIGNAL`
 
 The capability-stable signal constant — use it in the static `pause: { signal }`
-declaration on a workflow step so the engine knows which signal to listen for:
+declaration on an agent step so the engine knows which signal to listen for:
 
 ```typescript
 import { VIDEO_RESULT_SIGNAL } from "@sapiom/tools";

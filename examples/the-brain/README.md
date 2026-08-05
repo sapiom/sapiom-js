@@ -1,9 +1,9 @@
 # The Brain
 
-A **fleet orchestrator** — a meta-workflow that coordinates a fleet of child
-workflows. The flagship "agents managing agents" template.
+A **fleet orchestrator** — a meta-agent that coordinates a fleet of child
+agents. The flagship "agents managing agents" template.
 
-A fleet is a handful of independent `@sapiom/agent` workflows (its _members_),
+A fleet is a handful of independent `@sapiom/agent` definitions (its _members_),
 each firing on its own cron and doing its own job. Nothing watches the _whole_:
 no one notices when a daily member silently missed today, or a weekly member is
 past its cadence, or a launch never reported back. The members are limbs with no
@@ -25,7 +25,7 @@ scan     read the event bus + fold the log into cadence/idempotency facts;
 assess   hand the situations to models.run with a FIXED allow-list of plays;
          re-validate the JSON against the allow-list (deterministic fallback).
 actuate  execute the plan behind six guardrails; launch each due member as a
-         child workflow with an idempotency key; append a member.launched row.
+         child agent with an idempotency key; append a member.launched row.
 report   post a briefing to a low-noise channel, append a brain.briefing row,
          advance the cursor, terminate.
 ```
@@ -88,7 +88,7 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
   slug→definitionId from a cached `/definitions` list plus a static fallback map
   (`DEF_IDS` in `index.ts`). **Migrate to `agents.launch` if/when it is fixed.**
 - **definitionIds are environment-specific** — a child's definitionId does not
-  exist until it is deployed. **Deploy your child workflows first** (e.g.
+  exist until it is deployed. **Deploy your child agents first** (e.g.
   `hello-agent`), capture each definitionId, and seed it into `DEF_IDS`. The live
   `/definitions` lookup will also resolve them if it lists them; `launchChild`
   throws a clear error if a slug still can't be resolved.

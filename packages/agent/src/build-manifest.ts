@@ -8,7 +8,7 @@ import type { StepDefinition } from "./step.js";
 import type { AgentDefinition } from "./agent.js";
 
 /**
- * Generate a AgentManifest from a workflow definition and build metadata.
+ * Generate an AgentManifest from an agent definition and build metadata.
  *
  * - Walks def.steps; for each step:
  *   - timeoutMs: step.timeoutMs if declared, null otherwise.
@@ -143,7 +143,7 @@ export function assertValidGraph(manifest: AgentManifest): string[] {
   const { errors, warnings } = validateGraph(manifest);
   if (errors.length > 0) {
     throw new Error(
-      `Invalid workflow graph for '${manifest.name}':\n  - ${errors.join("\n  - ")}`,
+      `Invalid agent graph for '${manifest.name}':\n  - ${errors.join("\n  - ")}`,
     );
   }
   return warnings;
@@ -199,7 +199,7 @@ function terminalReachabilityWarnings(
     .map(([name]) => name);
   if (sinks.length === 0) {
     return [
-      "no step can terminate or fail — the workflow has no terminal state",
+      "no step can terminate or fail — the agent has no terminal state",
     ];
   }
 

@@ -34,7 +34,7 @@
  *   // …and in the resumed step (input: LlmRouteResultPayload):
  *   const reply = await ctx.sapiom.llm.redeem(input.link!, savedRequestBody);
  *
- * Inside a workflow the engine's resume token (ambient on the transport) rides the
+ * Inside an agent run the engine's resume token (ambient on the transport) rides the
  * `x-sapiom-workflow-token` header; the gateway echoes it in its webhook so the
  * engine's forwarder can resume the paused step. Standalone callers can instead
  * poll `handle.wait()` — same admission, no pause.
@@ -63,7 +63,7 @@ const DEFAULT_BASE_URL = resolveServiceUrl("llm", process.env.SAPIOM_LLM_URL);
 /**
  * Capability-stable signal a routed job fires when it reaches a terminal state
  * (granted OR failed — it carries the result either way, the resumed step
- * branches). A workflow step paused on a submit handle resumes on this; it is the
+ * branches). An agent step paused on a submit handle resumes on this; it is the
  * value carried in the handle's `dispatch.resultSignal`.
  */
 export const LLM_ROUTE_RESULT_SIGNAL = "llm.route.result";
@@ -98,8 +98,8 @@ export interface LlmRunSpec {
    * Guarantee an answer by spilling to the label's declared fallback when the
    * preferred capacity is saturated (never-429). DEFAULTS TO TRUE here: the
    * gateway's own direct default is OFF (drop-in callers get plain 429 +
-   * backoff), but a workflow step usually can't retry-with-backoff cheaply, so
-   * the SDK opts workflows in. Set `false` to take 429s and handle them.
+   * backoff), but an agent step usually can't retry-with-backoff cheaply, so
+   * the SDK opts agent runs in. Set `false` to take 429s and handle them.
    * Note: spilling can serve a costlier deployment.
    */
   neverFail?: boolean;
@@ -131,7 +131,7 @@ export interface LlmSubmitSpec {
   /** Explicit complexity/capacity weight override (gateway clamps to its bounds). */
   complexity?: number;
   /**
-   * Where the gateway reports the grant (or failure). Inside a workflow leave it
+   * Where the gateway reports the grant (or failure). Inside an agent run leave it
    * unset — the engine injects `SAPIOM_LLM_WEBHOOK_URL` (its resume forwarder).
    * Standalone callers must pass one, or rely purely on `handle.wait()` polling
    * via a URL of their own.
@@ -205,7 +205,7 @@ export const llmRouteResultSchema = {
 /**
  * A submitted-but-not-awaited routed job. Satisfies {@link DispatchHandle}, so it
  * can be handed straight to `pauseUntilSignal(handle, { resumeStep })` to suspend
- * a workflow step until the gateway grants (or fails) it — or `wait()`-ed inline
+ * an agent step until the gateway grants (or fails) it — or `wait()`-ed inline
  * for standalone use (polls the gateway's status endpoint).
  */
 export interface LlmRouteHandle extends DispatchHandle {
@@ -284,7 +284,7 @@ function submitHeaders(spec: LlmSubmitSpec, resumeToken: string | undefined) {
   const webhookUrl = spec.webhookUrl ?? process.env.SAPIOM_LLM_WEBHOOK_URL;
   if (!webhookUrl) {
     throw new Error(
-      "llm.submit: no webhook URL. Inside a workflow the engine injects " +
+      "llm.submit: no webhook URL. Inside an agent run the engine injects " +
         "SAPIOM_LLM_WEBHOOK_URL; standalone callers must pass { webhookUrl }.",
     );
   }
@@ -319,7 +319,7 @@ export async function run<T = Record<string, unknown>>(
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (spec.model) headers["x-sapiom-model"] = spec.model;
-  // Workflow surface defaults to never-fail ON (see LlmRunSpec.neverFail) —
+  // Agent surface defaults to never-fail ON (see LlmRunSpec.neverFail) —
   // sent explicitly either way so the behavior never rides a gateway default.
   headers["x-sapiom-never-fail"] = String(spec.neverFail ?? true);
   if (spec.complexity !== undefined)
@@ -455,7 +455,7 @@ export interface LlmSessionCreateSpec {
    */
   neverFail?: boolean;
   /**
-   * Where the gateway reports readiness. Inside a workflow leave it unset —
+   * Where the gateway reports readiness. Inside an agent run leave it unset —
    * the engine's `SAPIOM_LLM_WEBHOOK_URL` (resume forwarder) is used when
    * present. Unlike `submit`, a webhook is OPTIONAL: standalone callers may
    * rely purely on `handle.wait()` polling.
@@ -548,7 +548,7 @@ export async function createSession(
     body.budget = budget;
   }
   if (spec.neverFail !== undefined) body.never_fail = spec.neverFail;
-  // Webhook is optional (poll-only is a legitimate mode). Inside a workflow the
+  // Webhook is optional (poll-only is a legitimate mode). Inside an agent run the
   // engine's forwarder URL + the ambient resume token wire up pause/resume.
   const webhookUrl = spec.webhookUrl ?? process.env.SAPIOM_LLM_WEBHOOK_URL;
   if (webhookUrl) {

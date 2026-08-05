@@ -100,7 +100,7 @@ A typical loop: `scaffold` → write step code → `run_local` until green → `
 
 ## How capabilities fit in
 
-Workflows authored here call Sapiom capabilities — sandboxes, repositories,
+Agents authored here call Sapiom capabilities — sandboxes, repositories,
 coding agents, search, storage, content generation — through
 [`@sapiom/tools`](../tools) (`ctx.sapiom.*`). `run_local` resolves those calls
 from stubs; deploy and production run cross into authenticated cloud operations

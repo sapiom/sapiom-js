@@ -1,7 +1,7 @@
 # Authoring Sapiom templates
 
 A **template** is a working Sapiom agent, published in this repo, that anyone can browse in
-the gallery and turn into their own workflow with one click. This guide takes you from an
+the gallery and turn into their own agent with one click. This guide takes you from an
 empty directory to a merged, live template. Contributions are welcome — a human or an agent
 can follow it end to end.
 
@@ -469,7 +469,7 @@ it produces, then walk the flow in plain terms. Name capabilities in passing, ne
 words on who it's for instead of what it makes. 19 of the original 26 did this; none do now, and
 `pnpm examples:check` rejects a leading "For".
 
-Think of it as **named beats** — each sentence is one move the workflow makes:
+Think of it as **named beats** — each sentence is one move the agent makes:
 
 > Do the legwork, then wait for a person before spending money or doing anything irreversible.
 > It ranks your candidates by fit and emails the top pick for approval, falling to the next on
@@ -506,7 +506,7 @@ This is the field users hit when they want to actually run the thing. **Lead wit
 one-click webapp path; put the code/MCP path second, clearly optional.**
 
 1. **Use this template.** "Click **Use this template** — Sapiom builds and deploys it for you,
-   then run it from the workflow page. Your $5 signup credit covers first runs."
+   then run it from the agent page. Your $5 signup credit covers first runs."
 2. **Anything template-specific** the user must know to see it work — e.g. required inputs,
    a secret to set (BYO-API templates), or that it pauses on a real signal.
 3. **Advanced (only if relevant):** "Prefer to work from the code? Run it locally with

@@ -31,7 +31,7 @@ await sapiom.database.delete(db.id); // or delete("analytics")
 ```
 
 `list()` is **read-only** — it never creates, mutates, or removes anything. Use it
-to discover a handle you (or another of your workflows) already provisioned before
+to discover a handle you (or another of your agents) already provisioned before
 deciding whether to reuse it.
 
 Ambient import works too: `import { database } from "@sapiom/tools"`.

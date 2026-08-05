@@ -169,7 +169,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       input: z
         .unknown()
         .optional()
-        .describe("The workflow's entry-step input (any JSON value)."),
+        .describe("The agent's entry-step input (any JSON value)."),
       stubs: z
         .unknown()
         .optional()
@@ -266,7 +266,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     server,
     "sapiom_dev_agents_clone",
     [
-      "Materialize a Sapiom workflow locally. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork; given a deployed workflow's definitionId it clones the engine's live build-repo source directly (no fork step, always current) and pre-links the checkout. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the provenance.",
+      "Materialize a Sapiom agent locally. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork; given a deployed agent's definitionId it clones the engine's live build-repo source directly (no fork step, always current) and pre-links the checkout. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the provenance.",
       "After cloning: read the project's AGENTS.md, install its dependencies, then _check → _run_local. Before cloud work, authenticate and run _link → _deploy → _run → _inspect. A templateId/forkId clone is source only and has no dashboard agent until link/deploy; a definitionId clone is already linked because sapiom.json contains its definitionId.",
       "Pass exactly one of templateId, forkId, or definitionId. The clone credential is single-repo, read-only, and ~1h-lived — it is used for the clone and discarded (never stored in sapiom.json).",
     ].join("\n"),
@@ -293,7 +293,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .union([z.string(), z.number()])
         .optional()
         .describe(
-          "Deployed workflow's definition id to pull local (e.g. from the dashboard URL or a prior link/deploy). Clones the engine's current build-repo source directly, skipping the fork step, and pre-links the checkout (sapiom.json is written with this id, so sapiom_dev_agents_link is not needed before deploy). Accepts a number or string — the engine id is a bigint. Mutually exclusive with templateId and forkId.",
+          "Deployed agent's definition id to pull local (e.g. from the dashboard URL or a prior link/deploy). Clones the engine's current build-repo source directly, skipping the fork step, and pre-links the checkout (sapiom.json is written with this id, so sapiom_dev_agents_link is not needed before deploy). Accepts a number or string — the engine id is a bigint. Mutually exclusive with templateId and forkId.",
         ),
     },
     async ({ dir, templateId, forkId, definitionId }) => {
@@ -371,7 +371,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       input: z
         .unknown()
         .optional()
-        .describe("The workflow's entry-step input (any JSON value)."),
+        .describe("The agent's entry-step input (any JSON value)."),
     },
     async ({ dir, input }) => {
       const client = await gatewayClient(env);

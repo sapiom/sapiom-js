@@ -2,7 +2,7 @@
 
 Register domain names and manage their DNS. The same domains capability your
 agents call over MCP, callable directly from your code or from within a Sapiom
-workflow step.
+agent step.
 
 ```typescript
 import { createClient } from "@sapiom/tools";
