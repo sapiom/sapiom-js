@@ -29,6 +29,12 @@ export interface SapiomConfig {
   templateId?: string;
   /** Fork record id (`github_user_repos.id`) — re-mint a clone token against it. */
   forkId?: string;
+  /**
+   * Bundled-starter provenance: the starter id `scaffold` was given;
+   * `"default"` = bare scaffold. Written by `scaffold` itself (template clones
+   * get their provenance from `clone` as `templateId`). Never a credential.
+   */
+  starterId?: string;
   /** Full repo name `owner/repo` of the per-fork repo. */
   repoFullName?: string;
   /** Default branch of the per-fork repo. */

@@ -58,6 +58,13 @@ test.describe("agent-lifecycle product events → PostHog", () => {
     expect(started?.properties?.workflow_slug).toBe("leasing");
     expect(succeeded?.properties?.workflow_slug).toBe("leasing");
     expect(typeof succeeded?.properties?.duration_ms).toBe("number");
+    // Provenance: leasing is a gallery-template clone in mock data (it also
+    // carries a forkId — template must win), and both terminals must agree
+    // with started: provenance is computed once at deploy start.
+    expect(started?.properties?.source).toBe("template");
+    expect(started?.properties?.template_id).toBe("leasing-copilot");
+    expect(succeeded?.properties?.source).toBe("template");
+    expect(succeeded?.properties?.template_id).toBe("leasing-copilot");
 
     // Honest payloads: no absolute paths, no cost anywhere.
     const json = JSON.stringify(events);
@@ -90,6 +97,9 @@ test.describe("agent-lifecycle product events → PostHog", () => {
       (e) => e.event === "agent.template_cloned",
     );
     expect(cloned?.properties?.template_slug).toBe("web-research-digest");
+    // template_id duplicates template_slug (deprecated) so all lifecycle
+    // events speak one name — this is the only automated check of that emit.
+    expect(cloned?.properties?.template_id).toBe("web-research-digest");
     expect(cloned?.properties?.surface).toBe("template_gallery");
   });
 });

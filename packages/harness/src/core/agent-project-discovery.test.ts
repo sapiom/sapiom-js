@@ -21,14 +21,22 @@ describe("agent project marker reads", () => {
   });
 
   it("reads the fixed marker directly beneath the selected directory", async () => {
+    // Includes the provenance fields to pin the parser's wholesale cast:
+    // fields it doesn't know by name still round-trip.
+    const marker = {
+      definitionId: 42,
+      name: "approval-agent",
+      templateId: "tmpl-1",
+      forkId: "fork-1",
+      starterId: "coding-pause",
+    };
     await fs.writeFile(
       path.join(root, AGENT_PROJECT_MARKER),
-      JSON.stringify({ definitionId: 42, name: "approval-agent" }),
+      JSON.stringify(marker),
     );
 
-    const expected = { definitionId: 42, name: "approval-agent" };
-    expect(await readAgentProjectMarker(root)).toEqual(expected);
-    expect(readAgentProjectMarkerSync(root)).toEqual(expected);
+    expect(await readAgentProjectMarker(root)).toEqual(marker);
+    expect(readAgentProjectMarkerSync(root)).toEqual(marker);
   });
 
   it("rejects a marker symlink instead of following it to another file", async () => {

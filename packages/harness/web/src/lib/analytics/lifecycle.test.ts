@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { deployErrorKind, newAgentPaths, slugFromPath } from "./lifecycle";
+import {
+  agentProvenance,
+  agentSource,
+  deployErrorKind,
+  newAgentPaths,
+  slugFromPath,
+} from "./lifecycle";
 
 describe("slugFromPath", () => {
   it("returns the last segment of an absolute path", () => {
@@ -51,6 +57,71 @@ describe("newAgentPaths", () => {
     expect(newAgentPaths(seen, [wf("/a")])).toEqual([]);
     // /a still seen; nothing new.
     expect(newAgentPaths(seen, [wf("/a")])).toEqual([]);
+  });
+});
+
+describe("agentSource", () => {
+  it("templateId → template", () => {
+    expect(agentSource({ templateId: "web-research-digest" })).toBe("template");
+  });
+
+  it("templateId wins over forkId — every gallery clone writes BOTH", () => {
+    expect(agentSource({ templateId: "web-research-digest", forkId: "fork-1" })).toBe(
+      "template",
+    );
+  });
+
+  it("a named starterId → starter", () => {
+    expect(agentSource({ starterId: "coding-pause" })).toBe("starter");
+  });
+
+  it("starterId 'default' is the bare-scaffold marker → scratch", () => {
+    expect(agentSource({ starterId: "default" })).toBe("scratch");
+  });
+
+  it("forkId alone (a re-clone of an existing fork) → fork", () => {
+    expect(agentSource({ forkId: "fork-1" })).toBe("fork");
+  });
+
+  it("check order: a default starterId does not shadow a forkId", () => {
+    expect(agentSource({ starterId: "default", forkId: "fork-1" })).toBe("fork");
+  });
+
+  it("no provenance at all → scratch (pre-provenance agents, older servers)", () => {
+    expect(agentSource({})).toBe("scratch");
+    // The registry's normal form: fields present but null.
+    expect(agentSource({ templateId: null, forkId: null, starterId: null })).toBe(
+      "scratch",
+    );
+  });
+
+  it("non-string junk in the user-editable marker does not count", () => {
+    expect(agentSource({ templateId: "" })).toBe("scratch");
+  });
+});
+
+describe("agentProvenance", () => {
+  it("returns {} when the registry entry was not found — omit, don't claim scratch", () => {
+    expect(agentProvenance(undefined)).toEqual({});
+    expect(agentProvenance(null)).toEqual({});
+  });
+
+  it("template carries template_id = templateId", () => {
+    expect(
+      agentProvenance({ templateId: "web-research-digest", forkId: "fork-1" }),
+    ).toEqual({ source: "template", template_id: "web-research-digest" });
+  });
+
+  it("starter carries template_id = starterId", () => {
+    expect(agentProvenance({ starterId: "coding-pause" })).toEqual({
+      source: "starter",
+      template_id: "coding-pause",
+    });
+  });
+
+  it("fork and scratch carry source only — a fork id is a per-user record id", () => {
+    expect(agentProvenance({ forkId: "fork-1" })).toEqual({ source: "fork" });
+    expect(agentProvenance({ starterId: "default" })).toEqual({ source: "scratch" });
   });
 });
 

@@ -362,7 +362,9 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
 
   // The marker is intentionally valid but unlinked. Agent Studio discovers
   // agent projects by this file; deploy/link fill in server identity later.
-  writeConfig(targetDir, {});
+  // It also records which starter produced the project — the provenance the
+  // Studio's lifecycle metrics read ("default" = bare/from-scratch scaffold).
+  writeConfig(targetDir, { starterId: template });
 
   const gitInitialized = initGitRepo(targetDir);
 

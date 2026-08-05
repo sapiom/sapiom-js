@@ -848,6 +848,10 @@ export const MOCK_WORKFLOWS: WorkflowInfo[] = [
     definitionSlug: "leasing",
     activeBuildRunId: "build-leasing-ready",
     activeBuildRunStatus: "ready",
+    // A gallery clone writes templateId AND forkId — the deploy e2e asserts
+    // this provenance resolves to source "template".
+    templateId: "leasing-copilot",
+    forkId: "fork-leasing-1",
     source: "scan",
   },
   {
@@ -868,6 +872,9 @@ export const MOCK_WORKFLOWS: WorkflowInfo[] = [
     definitionSlug: "onboarding-flow",
     activeBuildRunId: "build-onboarding-ready",
     activeBuildRunStatus: "ready",
+    // Scaffolded from a bundled starter — keeps all three provenance buckets
+    // visible in mock mode (rfq stays bare = scratch).
+    starterId: "coding-pause",
     source: "connect",
   },
 ];

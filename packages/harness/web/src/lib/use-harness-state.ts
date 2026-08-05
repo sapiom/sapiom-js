@@ -34,7 +34,12 @@ import { type ConnectivityErrorInput } from "./connectivity";
 import { mergeHistory } from "./history-meta";
 import { subscribeEvents } from "./events";
 import { track as trackProduct } from "./analytics/events";
-import { deployErrorKind, newAgentPaths, slugFromPath } from "./analytics/lifecycle";
+import {
+  agentProvenance,
+  deployErrorKind,
+  newAgentPaths,
+  slugFromPath,
+} from "./analytics/lifecycle";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
@@ -273,6 +278,15 @@ export function useHarnessState(): HarnessStateHook {
    */
   const settingsRef = useRef<HarnessSettings | null>(null);
   settingsRef.current = settings;
+  /**
+   * Mirror of `state.workflows` for deploy()'s provenance lookup. deploy is
+   * memoised WITHOUT state in its deps on purpose — inFlightDeploys dedupes
+   * double-clicks by handing back the same in-flight promise, which only works
+   * while the callback stays stable — so it reads the registry through this
+   * ref. Same render-phase mirror contract as settingsRef above.
+   */
+  const workflowsRef = useRef<WorkflowInfo[]>([]);
+  workflowsRef.current = state?.workflows ?? [];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -756,7 +770,10 @@ export function useHarnessState(): HarnessStateHook {
           }
           for (const path of newAgentPaths(seen, workflows)) {
             seen.add(path);
-            trackProduct("agent.created", { workflow_slug: slugFromPath(path) });
+            trackProduct("agent.created", {
+              workflow_slug: slugFromPath(path),
+              ...agentProvenance(workflows.find((w) => w.path === path)),
+            });
           }
         });
       } else if (message.type === "execution.started") {
@@ -1236,8 +1253,15 @@ export function useHarnessState(): HarnessStateHook {
         // Product metric — "agents deployed". Slug is the folder basename (never
         // the absolute path); duration is measured across the stream.
         const slug = slugFromPath(workflowPath);
+        // Provenance (source/template_id) is computed ONCE from the registry
+        // snapshot at deploy start, so all deploy_* events for this deploy
+        // agree even though refreshWorkflows() runs mid-deploy (on `building`
+        // and after both terminals).
+        const provenance = agentProvenance(
+          workflowsRef.current.find((w) => w.path === workflowPath),
+        );
         const startedAt = performance.now();
-        trackProduct("agent.deploy_started", { workflow_slug: slug });
+        trackProduct("agent.deploy_started", { workflow_slug: slug, ...provenance });
         // Which non-terminal phase was last seen, so a terminal `error` can
         // say whether linking or building failed — both are the same wire
         // shape, told apart only by what preceded them.
@@ -1288,6 +1312,7 @@ export function useHarnessState(): HarnessStateHook {
             trackProduct("agent.deploy_succeeded", {
               workflow_slug: slug,
               duration_ms: Math.round(performance.now() - startedAt),
+              ...provenance,
             });
             outcomeSettled = true;
             setToast(
@@ -1320,6 +1345,7 @@ export function useHarnessState(): HarnessStateHook {
             trackProduct("agent.deploy_failed", {
               workflow_slug: slug,
               error_kind: deployErrorKind(lastNonTerminalPhase, false),
+              ...provenance,
             });
             outcomeSettled = true;
             setToast(msg);
@@ -1346,6 +1372,7 @@ export function useHarnessState(): HarnessStateHook {
             trackProduct("agent.deploy_failed", {
               workflow_slug: slug,
               error_kind: deployErrorKind(lastNonTerminalPhase, true),
+              ...provenance,
             });
           }
           setToast(msg);

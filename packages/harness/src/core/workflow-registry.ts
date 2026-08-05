@@ -95,6 +95,9 @@ async function scanDir(
       path: safeDir,
       definitionId: marker.definitionId ?? null,
       definitionSlug: marker.name ?? null,
+      templateId: marker.templateId ?? null,
+      forkId: marker.forkId ?? null,
+      starterId: marker.starterId ?? null,
       source: "scan",
     });
     return;
@@ -284,6 +287,9 @@ export class WorkflowRegistry {
         path: absolutePath,
         definitionId: marker?.definitionId ?? null,
         definitionSlug: marker?.name ?? null,
+        templateId: marker?.templateId ?? null,
+        forkId: marker?.forkId ?? null,
+        starterId: marker?.starterId ?? null,
         source: "connect",
       };
       const idx = this.workflows.findIndex((workflow) => workflow.path === absolutePath);

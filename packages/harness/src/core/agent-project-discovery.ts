@@ -25,6 +25,12 @@ export interface AgentProjectMarker {
   definitionId?: number | null;
   /** The agent's `defineAgent({ name })`, cached by `link`. */
   name?: string;
+  /** Gallery-template provenance, written by clone (a clone carries `forkId` too). */
+  templateId?: string | null;
+  /** Fork record id, written by clone. */
+  forkId?: string | null;
+  /** Bundled-starter id, written by scaffold; `"default"` = bare scaffold. */
+  starterId?: string | null;
 }
 
 /**

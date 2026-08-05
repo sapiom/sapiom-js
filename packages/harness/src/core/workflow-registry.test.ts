@@ -5,9 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowRegistry } from "./workflow-registry.js";
 
-async function writeMarker(dir: string, definitionId: number | null): Promise<void> {
+async function writeMarker(
+  dir: string,
+  definitionId: number | null,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "sapiom.json"), JSON.stringify({ definitionId }));
+  await fs.writeFile(
+    path.join(dir, "sapiom.json"),
+    JSON.stringify({ definitionId, ...extra }),
+  );
 }
 
 describe("WorkflowRegistry", () => {
@@ -58,6 +65,9 @@ describe("WorkflowRegistry", () => {
       path: path.join(tmpRoot, "proj-a"),
       definitionId: 42,
       definitionSlug: null,
+      templateId: null,
+      forkId: null,
+      starterId: null,
       source: "scan",
     });
     expect(byPath.get(path.join(tmpRoot, "proj-b"))).toEqual({
@@ -65,6 +75,9 @@ describe("WorkflowRegistry", () => {
       path: path.join(tmpRoot, "proj-b"),
       definitionId: null,
       definitionSlug: null,
+      templateId: null,
+      forkId: null,
+      starterId: null,
       source: "scan",
     });
     expect(byPath.has(path.join(tmpRoot, "a", "b", "c"))).toBe(true);
@@ -113,6 +126,9 @@ describe("WorkflowRegistry", () => {
       path: projectDir,
       definitionId: null,
       definitionSlug: null,
+      templateId: null,
+      forkId: null,
+      starterId: null,
       source: "connect",
     });
     expect(await registry.list()).toEqual([info]);
@@ -124,6 +140,55 @@ describe("WorkflowRegistry", () => {
 
     const info = await registry.connectPath(projectDir);
     expect(info.definitionId).toBe(99);
+  });
+
+  it("passes marker provenance through both scan and connectPath", async () => {
+    // A gallery clone writes templateId AND forkId; a scaffold writes starterId.
+    const cloned = path.join(tmpRoot, "cloned");
+    await writeMarker(cloned, null, {
+      templateId: "web-research-digest",
+      forkId: "fork-1",
+    });
+    const scaffolded = path.join(tmpRoot, "scaffolded");
+    await writeMarker(scaffolded, null, { starterId: "coding-pause" });
+
+    const byPath = new Map(
+      (await registry.scan(tmpRoot)).map((workflow) => [workflow.path, workflow]),
+    );
+    expect(byPath.get(cloned)).toMatchObject({
+      templateId: "web-research-digest",
+      forkId: "fork-1",
+      starterId: null,
+    });
+    expect(byPath.get(scaffolded)).toMatchObject({
+      templateId: null,
+      forkId: null,
+      starterId: "coding-pause",
+    });
+
+    // The connect flow must carry the same fields — provenance that appears
+    // for scanned agents but not connected ones reads as flaky analytics.
+    expect(await registry.connectPath(cloned)).toMatchObject({
+      templateId: "web-research-digest",
+      forkId: "fork-1",
+      starterId: null,
+    });
+  });
+
+  it("a re-scan refreshes provenance written to the marker after first discovery", async () => {
+    // Clone writes provenance after the files land — a row registered from a
+    // pre-provenance marker must pick the fields up on the next scan's merge.
+    const projectDir = path.join(tmpRoot, "late-provenance");
+    await writeMarker(projectDir, null);
+    await registry.scan(tmpRoot);
+
+    await writeMarker(projectDir, null, { templateId: "tmpl-x" });
+    await registry.scan(tmpRoot);
+
+    const entry = (await registry.list()).find(
+      (workflow) => workflow.path === projectDir,
+    );
+    expect(entry?.templateId).toBe("tmpl-x");
   });
 
   it("a scan does not overwrite a connect-sourced entry's source", async () => {

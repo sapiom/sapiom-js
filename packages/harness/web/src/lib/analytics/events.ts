@@ -1,6 +1,7 @@
 import posthog from "posthog-js";
 
 import { type HarnessView, type Journey, journeyForView } from "./journeys";
+import { type AgentSource } from "./lifecycle";
 
 /**
  * Typed event registry for the Studio (SAP-1988; ported from the web app's
@@ -46,7 +47,13 @@ export interface AnalyticsEventMap {
    * scaffolding (already autocaptured) — the scaffold itself runs async in the
    * coding agent, so we count the agent that actually appeared, not the intent.
    */
-  "agent.created": { workflow_slug?: string };
+  "agent.created": {
+    workflow_slug?: string;
+    /** Provenance bucket from the project's sapiom.json — see lifecycle.ts `agentSource`. */
+    source?: AgentSource;
+    /** Public id of what it was made from: gallery template id or bundled starter id. Absent for fork/scratch. */
+    template_id?: string;
+  };
 
   /** A workflow/agent run was triggered from the Studio. */
   "agent.run_started": {
@@ -67,16 +74,36 @@ export interface AnalyticsEventMap {
     error_kind?: string;
   };
 
-  /** A deploy was initiated from the Studio. */
-  "agent.deploy_started": { workflow_slug?: string };
+  /** A deploy was initiated from the Studio. `source`/`template_id` as on `agent.created` — built and deployed split on the same dimension. */
+  "agent.deploy_started": {
+    workflow_slug?: string;
+    source?: AgentSource;
+    template_id?: string;
+  };
   /** A deploy completed successfully. */
-  "agent.deploy_succeeded": { workflow_slug?: string; duration_ms?: number };
+  "agent.deploy_succeeded": {
+    workflow_slug?: string;
+    duration_ms?: number;
+    source?: AgentSource;
+    template_id?: string;
+  };
   /** A deploy failed. `error_kind` is an enum, never a message. */
-  "agent.deploy_failed": { workflow_slug?: string; error_kind?: string };
+  "agent.deploy_failed": {
+    workflow_slug?: string;
+    error_kind?: string;
+    source?: AgentSource;
+    template_id?: string;
+  };
 
   /** A template was cloned into a new workspace/agent. */
   "agent.template_cloned": {
+    /**
+     * @deprecated Pre-provenance name — always the same value as `template_id`.
+     * Kept so existing dashboard breakdowns keep working; do not add readers.
+     */
     template_slug?: string;
+    /** The template's public id — the one name the registry speaks, matching the other lifecycle events. */
+    template_id?: string;
     /** Where the clone was initiated from, for the on-ramp breakdown. */
     surface?: "welcome" | "template_gallery" | "template_detail";
   };

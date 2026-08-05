@@ -644,7 +644,11 @@ export const App = (): JSX.Element => {
     // Product metric — "templates used". Fires at the choke point every
     // template surface funnels through; `agent.created` fires later when the
     // clone produces a real sapiom.json, so built ≥ templates holds.
-    trackProduct("agent.template_cloned", { template_slug: template.id, surface });
+    trackProduct("agent.template_cloned", {
+      template_slug: template.id,
+      template_id: template.id,
+      surface,
+    });
     injectPromptWithRetry(
       session.id,
       useTemplatePrompt(template, cwd),

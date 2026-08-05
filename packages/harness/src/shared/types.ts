@@ -1390,6 +1390,17 @@ export interface WorkflowInfo {
    */
   activeBuildRunId?: string | null;
   activeBuildRunStatus?: string | null;
+  /**
+   * Provenance from sapiom.json: the gallery template this project was cloned
+   * from. Distinct from `source` below, which records how the REGISTRY learned
+   * of the path. Optional for compatibility with older harness servers; null
+   * when the marker doesn't carry the field.
+   */
+  templateId?: string | null;
+  /** Fork record id from sapiom.json (a gallery clone carries this too). */
+  forkId?: string | null;
+  /** Bundled-starter id from sapiom.json; `"default"` = bare scaffold. */
+  starterId?: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
 }

@@ -67,13 +67,33 @@ describe("scaffold", () => {
       expect(result.projectName).toBe("my-orch");
       expect(result.template).toBe("default");
       expect(existsSync(path.join(targetDir, "index.ts"))).toBe(true);
-      expect(readFileSync(path.join(targetDir, "sapiom.json"), "utf8")).toBe("{}\n");
+      // The marker is unlinked but records starter provenance.
+      expect(
+        JSON.parse(readFileSync(path.join(targetDir, "sapiom.json"), "utf8")),
+      ).toEqual({ starterId: "default" });
 
       // Replacements applied: __PROJECT_NAME__ → my-orch in package.json
       const pkg = JSON.parse(
         readFileSync(path.join(targetDir, "package.json"), "utf8"),
       );
       expect(pkg.name).toBe("my-orch");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("records starterId 'default' when template is omitted (the from-scratch marker)", async () => {
+    const base = makeTmp();
+    const targetDir = path.join(base, "bare");
+    try {
+      await scaffold({
+        targetDir,
+        versions: { agent: "1.0.0", tools: "1.0.0", zod: "3.0.0" },
+      });
+
+      expect(
+        JSON.parse(readFileSync(path.join(targetDir, "sapiom.json"), "utf8")),
+      ).toEqual({ starterId: "default" });
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -228,6 +248,10 @@ describe("scaffold", () => {
         expect(text).not.toMatch(
           /\b(?:workflow|workflows|orchestration|orchestrations)\b/i,
         );
+        expect(
+          JSON.parse(readFileSync(path.join(targetDir, "sapiom.json"), "utf8"))
+            .starterId,
+        ).toBe(template);
       } finally {
         rmSync(base, { recursive: true, force: true });
       }

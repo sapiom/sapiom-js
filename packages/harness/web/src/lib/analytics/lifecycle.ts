@@ -49,3 +49,52 @@ export function deployErrorKind(
   if (isException) return "exception";
   return lastNonTerminalPhase === "linking" ? "link_failed" : "build_failed";
 }
+
+/** The provenance bucket carried as `source` on the lifecycle events. */
+export type AgentSource = "template" | "starter" | "fork" | "scratch";
+
+/**
+ * The marker-derived provenance subset of WorkflowInfo. Deliberately excludes
+ * `WorkflowInfo["source"]` ("scan"/"connect" — how the REGISTRY learned of the
+ * path), which is a different dimension from the event `source` computed here.
+ */
+type ProvenanceFields = Pick<WorkflowInfo, "templateId" | "forkId" | "starterId">;
+
+/** Only a non-empty string counts — the marker is user-editable JSON that the
+ *  server casts wholesale, and events.ts promises ids stay strings. */
+function asId(value: string | null | undefined): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * Which provenance bucket a project falls in, from its sapiom.json fields.
+ * Order matters: a gallery clone writes `templateId` AND `forkId`, so template
+ * must win over fork; `starterId === "default"` is the bare/from-scratch
+ * scaffold marker, not a named starter. No fields at all is `scratch` too —
+ * that covers agents that predate provenance (and older harness servers).
+ */
+export function agentSource(workflow: ProvenanceFields): AgentSource {
+  if (asId(workflow.templateId)) return "template";
+  const starter = asId(workflow.starterId);
+  if (starter && starter !== "default") return "starter";
+  if (asId(workflow.forkId)) return "fork";
+  return "scratch";
+}
+
+/**
+ * The spreadable `source`/`template_id` payload fragment for the lifecycle
+ * events. `template_id` is the public id of what the agent was made from —
+ * gallery template id or bundled starter id; omitted for fork (a fork id is a
+ * per-user record id, useless for breakdowns) and scratch. `{}` when the
+ * registry entry wasn't found at all: an absent property reads "(not set)" in
+ * PostHog and points at a wiring bug instead of silently inflating `scratch`.
+ */
+export function agentProvenance(
+  workflow: ProvenanceFields | null | undefined,
+): { source?: AgentSource; template_id?: string } {
+  if (!workflow) return {};
+  const source = agentSource(workflow);
+  if (source === "template") return { source, template_id: asId(workflow.templateId) };
+  if (source === "starter") return { source, template_id: asId(workflow.starterId) };
+  return { source };
+}
