@@ -73,9 +73,9 @@ export const CHOOSE_DIRECTORY = "dialog:choose-directory";
 
 /**
  * main → renderer (push): a `sapiom://` deep link was received; navigate the SPA
- * to the target agent. A main→renderer SEND, not an invoke, so it is NOT subject
- * to `isTrustedSender` (which guards renderer→main invokes) — it opens no attack
- * surface, it only pushes a target the SPA is free to act on or ignore.
+ * to the target (an agent or a template). A main→renderer SEND, not an invoke, so
+ * it is NOT subject to `isTrustedSender` (which guards renderer→main invokes) — it
+ * opens no attack surface, it only pushes a target the SPA is free to act on or ignore.
  *
  * Cold-start links (the one that launched the app) are delivered instead as an
  * `agent=` query param on the load URL, so the first render already has them with
@@ -84,16 +84,35 @@ export const CHOOSE_DIRECTORY = "dialog:choose-directory";
 export const DEEP_LINK_NAVIGATE = "deep-link:navigate";
 
 /**
- * A parsed `sapiom://agent/<definitionId>` deep link. `definitionId` is the raw
- * URL segment (a string); the SPA stringifies its numeric `WorkflowInfo.definitionId`
- * to match. `slug` is a display-only hint; `org` lets the SPA notice a link minted
- * for a different signed-in organization. Mirrored on the SPA side in
+ * A parsed `sapiom://` deep link. Discriminated on `kind` so a new target type
+ * can't be silently handled as an agent — the same reasoning the discriminated
+ * `UpdateCheckOutcome` above is built on. Mirrored on the SPA side in
  * `harness/web/src/lib/desktop.ts`.
  */
-export interface DeepLinkTarget {
+export type DeepLinkTarget = DeepLinkAgentTarget | DeepLinkTemplateTarget;
+
+/**
+ * `sapiom://agent/<definitionId>`. `definitionId` is the raw URL segment (a
+ * string); the SPA stringifies its numeric `WorkflowInfo.definitionId` to match.
+ * `slug` is a display-only hint; `org` lets the SPA notice a link minted for a
+ * different signed-in organization.
+ */
+export interface DeepLinkAgentTarget {
+  kind: "agent";
   definitionId: string;
   slug?: string;
   org?: string;
+}
+
+/**
+ * `sapiom://templates/<id>` — the web app's template-detail "Open in Studio".
+ * `templateId` is a registry slug (the same id the gallery route uses); `slug` is
+ * an optional display/folder hint.
+ */
+export interface DeepLinkTemplateTarget {
+  kind: "template";
+  templateId: string;
+  slug?: string;
 }
 /*
  * There is deliberately NO "apply the update" channel. The restart is destructive —

@@ -39,6 +39,14 @@ interface TemplatesPanelProps {
   /** The live catalog fetchers (the server relays core; the key stays there). */
   listTemplates: () => Promise<TemplateListResponse>;
   getTemplate: (id: string) => Promise<TemplateDetailView>;
+  /**
+   * A template id to open on arrival — a `sapiom://templates/<id>` deep link,
+   * routed here by App. Resolved against the live catalog (and bundled starters)
+   * once they load; an unknown id falls through to the gallery. Applied only when
+   * the id changes, so the user can navigate back afterwards without being yanked
+   * forward again.
+   */
+  openTemplateId?: string | null;
 }
 
 /**
@@ -72,6 +80,7 @@ export function TemplatesPanel({
   onUse,
   listTemplates,
   getTemplate,
+  openTemplateId,
 }: TemplatesPanelProps): JSX.Element {
   const [catalog, setCatalog] = useState<TemplateListResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -124,6 +133,21 @@ export function TemplatesPanel({
           ),
     [filter],
   );
+
+  // Open a deep-linked template's detail once it can be resolved. Keyed on the id
+  // via a ref so navigating back (setOpened(null)) isn't undone on the next render,
+  // while a later, different deep link still opens. Unknown/not-yet-loaded ids just
+  // leave the gallery showing.
+  const openedByDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openTemplateId || openedByDeepLinkRef.current === openTemplateId) return;
+    const match =
+      gallery.find((template) => template.id === openTemplateId) ??
+      STARTER_TEMPLATES.find((template) => template.id === openTemplateId);
+    if (!match) return;
+    openedByDeepLinkRef.current = openTemplateId;
+    setOpened(match);
+  }, [openTemplateId, gallery]);
 
   const loading = catalog === null && loadError === null;
 

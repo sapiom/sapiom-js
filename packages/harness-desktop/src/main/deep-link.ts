@@ -13,10 +13,11 @@ export type { DeepLinkTarget };
 export const DEEP_LINK_SCHEME = "sapiom";
 
 /**
- * Parse `sapiom://agent/<definitionId>` into a target. Tolerates the `agents`
- * alias, a trailing slash, and mixed case in the scheme/host. Returns null for
- * anything that isn't a well-formed agent deep link, so the caller can safely
- * hand it any string (argv token, OS-delivered URL).
+ * Parse a `sapiom://` deep link into a target — either `sapiom://agent/<id>` or
+ * `sapiom://templates/<id>`. Tolerates the `agents`/`template` aliases, a trailing
+ * slash, and mixed case in the scheme/host. Returns null for anything that isn't a
+ * well-formed link of either kind, so the caller can safely hand it any string
+ * (argv token, OS-delivered URL).
  */
 export function parseDeepLink(rawUrl: string): DeepLinkTarget | null {
   let url: URL;
@@ -26,15 +27,21 @@ export function parseDeepLink(rawUrl: string): DeepLinkTarget | null {
     return null;
   }
   if (url.protocol !== `${DEEP_LINK_SCHEME}:`) return null;
-  // `sapiom://agent/<id>` parses with host="agent", pathname="/<id>". URL only
+  // `sapiom://<host>/<id>` parses with host=<host>, pathname="/<id>". URL only
   // lower-cases the host for special schemes, so normalise it ourselves.
   const host = url.hostname.toLowerCase();
-  if (host !== "agent" && host !== "agents") return null;
-  const definitionId = decodeURIComponent(url.pathname.replace(/^\/+/, "").replace(/\/+$/, ""));
-  if (!definitionId) return null;
-  const slug = url.searchParams.get("slug") ?? undefined;
-  const org = url.searchParams.get("org") ?? undefined;
-  return { definitionId, ...(slug ? { slug } : {}), ...(org ? { org } : {}) };
+  const id = decodeURIComponent(url.pathname.replace(/^\/+/, "").replace(/\/+$/, ""));
+  if (!id) return null;
+  if (host === "agent" || host === "agents") {
+    const slug = url.searchParams.get("slug") ?? undefined;
+    const org = url.searchParams.get("org") ?? undefined;
+    return { kind: "agent", definitionId: id, ...(slug ? { slug } : {}), ...(org ? { org } : {}) };
+  }
+  if (host === "template" || host === "templates") {
+    const slug = url.searchParams.get("slug") ?? undefined;
+    return { kind: "template", templateId: id, ...(slug ? { slug } : {}) };
+  }
+  return null;
 }
 
 /**

@@ -406,7 +406,7 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   });
 
   // 9. Load the SPA in the main window; close setup once it renders.
-  const url = withAgentParam(`http://127.0.0.1:${server.port}/?token=${bootToken}`, mode.deepLink);
+  const url = withDeepLinkParams(`http://127.0.0.1:${server.port}/?token=${bootToken}`, mode.deepLink);
   const mainWindow = createMainWindow(url);
   mainWindow.webContents.once("did-finish-load", () => {
     if (!setupWin.isDestroyed()) setupWin.close();
@@ -420,14 +420,20 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
  * Thread a cold-start deep link's target onto the SPA load URL as query params.
  * Query only — never a path segment: `isTrustedSender` (trusted-sender.ts) fails
  * closed unless the top frame's pathname is exactly "/", so a path-based route
- * here would break the update + folder-picker IPC.
+ * here would break the update + folder-picker IPC. The SPA reads these back in
+ * `web/src/lib/deep-link.ts`.
  */
-function withAgentParam(loadUrl: string, target: DeepLinkTarget | undefined): string {
+function withDeepLinkParams(loadUrl: string, target: DeepLinkTarget | undefined): string {
   if (!target) return loadUrl;
   try {
     const u = new URL(loadUrl);
-    u.searchParams.set("agent", target.definitionId);
-    if (target.slug) u.searchParams.set("agentSlug", target.slug);
+    if (target.kind === "agent") {
+      u.searchParams.set("agent", target.definitionId);
+      if (target.slug) u.searchParams.set("agentSlug", target.slug);
+    } else {
+      u.searchParams.set("template", target.templateId);
+      if (target.slug) u.searchParams.set("templateSlug", target.slug);
+    }
     return u.toString();
   } catch {
     return loadUrl;

@@ -51,8 +51,8 @@ import {
 } from "./lib/project-dir";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
-import { getDesktopBridge } from "./lib/desktop";
-import { agentFromSearch, type DeepLinkAgentTarget } from "./lib/deep-link";
+import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
+import { deepLinkFromSearch } from "./lib/deep-link";
 import { CloneAgentConfirm } from "./components/CloneAgentConfirm";
 import {
   cloneDefinitionPrompt,
@@ -126,16 +126,20 @@ export const App = (): JSX.Element => {
   // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
   // because it needs `state`/`handleFocusAgent`, which exist only past the loading
   // guard; the effects below reach it through the ref. The cold-start target rides
-  // in on the ?agent= load-URL param; warm links come via the desktop bridge.
-  const applyDeepLinkRef = useRef<((target: DeepLinkAgentTarget) => void) | null>(null);
+  // in on the ?agent=/?template= load-URL param; warm links come via the desktop bridge.
+  const applyDeepLinkRef = useRef<((target: DeepLinkTarget) => void) | null>(null);
   const focusExistingRef = useRef<((definitionId: string) => boolean) | null>(null);
-  const coldDeepLinkRef = useRef<DeepLinkAgentTarget | null>(agentFromSearch());
+  const coldDeepLinkRef = useRef<DeepLinkTarget | null>(deepLinkFromSearch());
   const coldDeepLinkHandledRef = useRef(false);
   // A clone kicked off from a remote-only deep link: focus the agent once the
   // workspace rescan surfaces it locally.
   const pendingCloneFocusRef = useRef<string | null>(null);
   // The remote-only agent a deep link is offering to clone (drives the confirm).
   const [cloneRequest, setCloneRequest] = useState<DeepLinkAgentTarget | null>(null);
+  // A template a deep link asked to open (`sapiom://templates/<id>`): the id is
+  // handed to the templates browser, which resolves it against the live catalog
+  // and opens its detail. Null when no template deep link is pending.
+  const [deepLinkTemplateId, setDeepLinkTemplateId] = useState<string | null>(null);
   // Lifted so the telemetry chip in the session bar can open the settings
   // popover from outside SessionBar's own gear button.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -813,9 +817,15 @@ export const App = (): JSX.Element => {
     return true;
   };
 
-  // Resolve a deep-link target (`sapiom://agent/<id>`): focus it if present, else
-  // offer to clone it locally — the remote-only fallback.
-  applyDeepLinkRef.current = (target: DeepLinkAgentTarget): void => {
+  // Resolve a deep-link target. A template (`sapiom://templates/<id>`) opens the
+  // templates browser on that template; an agent (`sapiom://agent/<id>`) focuses
+  // it if present, else offers to clone it locally — the remote-only fallback.
+  applyDeepLinkRef.current = (target: DeepLinkTarget): void => {
+    if (target.kind === "template") {
+      setDeepLinkTemplateId(target.templateId);
+      setTemplatesOpen(true);
+      return;
+    }
     if (focusExistingRef.current?.(target.definitionId)) return;
     setCloneRequest(target);
   };
@@ -1142,6 +1152,7 @@ export const App = (): JSX.Element => {
               onUse={handleUseTemplate}
               listTemplates={harness.listTemplates}
               getTemplate={harness.getTemplate}
+              openTemplateId={deepLinkTemplateId}
             />
           )}
 

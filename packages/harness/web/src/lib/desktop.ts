@@ -17,11 +17,25 @@
  * "no bridge".
  */
 
-/** A `sapiom://` deep-link target. Mirrors the desktop app's `DeepLinkTarget` (ipc.ts). */
-export interface DeepLinkTarget {
+/**
+ * A `sapiom://` deep-link target. Mirrors the desktop app's `DeepLinkTarget`
+ * (harness-desktop `ipc.ts`) — a discriminated union of the two link kinds.
+ */
+export type DeepLinkTarget = DeepLinkAgentTarget | DeepLinkTemplateTarget;
+
+/** `sapiom://agent/<definitionId>` — focus or clone that agent locally. */
+export interface DeepLinkAgentTarget {
+  kind: "agent";
   definitionId: string;
   slug?: string;
   org?: string;
+}
+
+/** `sapiom://templates/<id>` — open that template in the gallery. */
+export interface DeepLinkTemplateTarget {
+  kind: "template";
+  templateId: string;
+  slug?: string;
 }
 
 /** Result of an on-demand update check. Mirrors the desktop app's `UpdateCheckOutcome`. */
