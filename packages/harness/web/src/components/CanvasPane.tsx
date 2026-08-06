@@ -90,9 +90,13 @@ interface CanvasPaneProps {
    *  navigating to a launched workflow is an explicit act on it, so it
    *  rebinds, same as running a macro against it. */
   onOpenWorkflow: (path: string) => void;
-  /** Fired once per session the first time it paints canvas content, so the
-   *  workbench can reveal the pane it had kept collapsed until then. */
-  onCanvasContent?: () => void;
+  /** Reports whether THIS session currently has a servable canvas board, so the
+   *  workbench can follow it: shown when it has one, hidden when it doesn't.
+   *  Fires on the mount probe, on every canvas.reload, and whenever the session
+   *  changes — the reload case is what opens the pane the moment an agent
+   *  renders a board (a fresh build, a switch to a populated agent), even one
+   *  the user had collapsed. */
+  onCanvasState?: (hasContent: boolean) => void;
 }
 
 export function CanvasPane({
@@ -121,9 +125,14 @@ export function CanvasPane({
   onOpenCode,
   workflows,
   onOpenWorkflow,
-  onCanvasContent,
+  onCanvasState,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
+  // Latest reporter, read from the content effects without listing it in their
+  // deps — otherwise a new inline callback each render would re-run them and
+  // re-report stale content (re-opening a pane the user just collapsed).
+  const onCanvasStateRef = useRef(onCanvasState);
+  onCanvasStateRef.current = onCanvasState;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
   // True while the initial HEAD probe for this session is still in flight —
@@ -613,6 +622,7 @@ export function CanvasPane({
     setFrameLoading(true);
     if (!sessionId) {
       setHasGeneratedContent(false);
+      onCanvasStateRef.current?.(false);
       return;
     }
     // Mock mode ships no live probe. A mock session that ships a bundled canvas
@@ -621,14 +631,20 @@ export function CanvasPane({
     // empty pane. Sessions without a bundled doc stay honestly empty and never
     // mount an iframe (the invariant smoke.spec guards); no fabricated docs.
     if (isMockMode()) {
-      setHasGeneratedContent(hasMockCanvasDoc(sessionId));
+      const has = hasMockCanvasDoc(sessionId);
+      setHasGeneratedContent(has);
+      onCanvasStateRef.current?.(has);
       return;
     }
     setHasGeneratedContent(false);
     let cancelled = false;
     setProbing(true);
     fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
-      .then((res) => !cancelled && setHasGeneratedContent(res.ok))
+      .then((res) => {
+        if (cancelled) return;
+        setHasGeneratedContent(res.ok);
+        onCanvasStateRef.current?.(res.ok);
+      })
       .catch(() => {})
       .finally(() => !cancelled && setProbing(false));
     return () => {
@@ -645,6 +661,9 @@ export function CanvasPane({
       // keeps its honest empty state instead.
       if (isMockMode() && !hasMockCanvasDoc(sessionId)) return;
       setHasGeneratedContent(true);
+      // A live render just delivered a board — announce it so the workbench
+      // opens the pane, even one the user had collapsed.
+      onCanvasStateRef.current?.(true);
       setFrameLoading(true);
       setReloadKey((key) => key + 1);
     }
@@ -705,17 +724,6 @@ export function CanvasPane({
   const sessionHasServableDoc = sessionId != null && (!isMockMode() || hasMockCanvasDoc(sessionId));
   const showsContent = hasGeneratedContent && sessionHasServableDoc;
 
-  // Announce the first paint of content for THIS session, once, so the
-  // workbench can slide in a canvas pane it had kept collapsed until now. The
-  // per-session ref makes it fire once even though the pane re-renders and the
-  // callback identity may change.
-  const contentFiredForRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (showsContent && sessionId && contentFiredForRef.current !== sessionId) {
-      contentFiredForRef.current = sessionId;
-      onCanvasContent?.();
-    }
-  }, [showsContent, sessionId, onCanvasContent]);
 
   // The observability header for the Steps surface: a deploy landing (if one is
   // in flight/just landed) and the run summary card (if a run has been

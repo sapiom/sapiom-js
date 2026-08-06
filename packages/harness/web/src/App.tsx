@@ -38,8 +38,7 @@ import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { ApiError, boundWorkflowPathOf, isMockMode } from "./lib/api";
-import { hasMockCanvasDoc } from "./lib/mock-data";
+import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
 import {
@@ -107,18 +106,6 @@ export const App = (): JSX.Element => {
   // intent (Create new / the +); the home also shows whenever nothing else
   // claims the centre pane (first run, or every session closed).
   const [composing, setComposing] = useState(false);
-  // Sessions started terminal-first FROM THE COMPOSER, eligible for the canvas
-  // auto-reveal on first content — and, once revealed, the set of those already
-  // done so a later manual fold is never fought. A pre-existing session that
-  // simply loads with content (the boot session, or any session on mobile) is
-  // never in `pendingReveal`, so the reveal only ever applies to a brand-new
-  // composer session. Refs: they gate a callback, they must not trigger renders.
-  const pendingReveal = useRef<Set<string>>(new Set());
-  const autoRevealed = useRef<Set<string>>(new Set());
-  // Sessions known to have painted canvas content (from CanvasPane's
-  // onCanvasContent). Lets a session SWITCH show the pane immediately for a
-  // session whose board we've already seen, and hide it for one that has none.
-  const sessionsWithCanvas = useRef<Set<string>>(new Set());
   // The focused agent (or bare-scaffold folder) path — the rail's single
   // selection and the main panel's tab-strip subject. The active tab's
   // session is harness.activeSessionId.
@@ -549,10 +536,6 @@ export const App = (): JSX.Element => {
     setFocusedAgentPath(cwd);
     closeMobileDrawer();
     const session = await harness.createSession({ cwd, harness: agentHarness });
-    // Any new session is eligible for the canvas auto-reveal: the first time it
-    // paints a board (e.g. starting one on a populated/deployed workflow), the
-    // pane opens itself.
-    if (!isMobile) pendingReveal.current.add(session.id);
     track("session.created");
     trackProduct("session.started", { harness_kind: agentHarness, origin: "user" });
     return session;
@@ -665,7 +648,7 @@ export const App = (): JSX.Element => {
   // The composer home's two on-ramps. Both open a session in a FRESH project
   // folder under the project root (deduped so an existing folder is never
   // clobbered) and open the workbench terminal-only — the canvas reveals itself
-  // once the agent generates content (see CanvasPane's onCanvasContent below).
+  // once the agent generates content (see CanvasPane's onCanvasState below).
   const uniqueProjectDir = (base: string): string => {
     const taken = new Set<string>();
     for (const session of state.sessions) {
@@ -713,31 +696,11 @@ export const App = (): JSX.Element => {
     return found.length;
   };
 
-  // Canvas follows the session on an explicit switch: show the pane if that
-  // session's board is populated (either one we've already seen, or a mock
-  // session with a bundled doc), hide it if there's nothing yet — in which case
-  // it slides in later once content paints (onCanvasContent). Desktop only (the
-  // mobile sheet has its own collapse), and NOT run on initial load/reload, so a
-  // persisted manual fold still survives (held-arrangement contract).
-  const applyCanvasVisibility = (id: string | null): void => {
-    if (isMobile) return;
-    // No live session for this view (a focused agent with none) — nothing to
-    // inspect, so hide the pane.
-    if (id == null) {
-      setRightCollapsed(true);
-      return;
-    }
-    // A dead session keeps its own "resume to see it" invite; leave the pane.
-    if (state.sessions.find((s) => s.id === id)?.status === "exited") return;
-    const populated =
-      sessionsWithCanvas.current.has(id) || (isMockMode() && hasMockCanvasDoc(id));
-    if (populated) {
-      setRightCollapsed(false);
-    } else {
-      setRightCollapsed(true);
-      pendingReveal.current.add(id);
-    }
-  };
+  // The canvas pane follows the ACTIVE session's board rather than being toggled
+  // here: CanvasPane reports whether the session it's mounted for has a servable
+  // board (onCanvasState below), and that drives the pane open/closed. So a
+  // switch only has to move the active session — the pane reconciles itself once
+  // the new session's probe resolves. (Mobile keeps its own sheet control.)
 
   // Switch to a session (history-menu pick, palette hit): focus follows it so
   // the main panel shows its context (its bound agent, or its own folder).
@@ -749,7 +712,6 @@ export const App = (): JSX.Element => {
     const session = state.sessions.find((s) => s.id === id);
     if (session) setFocusedAgentPath(boundWorkflowPathOf(session) ?? session.cwd);
     harness.setActiveSessionId(id);
-    applyCanvasVisibility(id);
   };
 
   // Select a tab in the strip — same as openSession, but the tab always
@@ -759,7 +721,6 @@ export const App = (): JSX.Element => {
     setReviewSummary(null);
     setTemplatesOpen(false);
     harness.setActiveSessionId(id);
-    applyCanvasVisibility(id);
   };
 
 
@@ -799,9 +760,9 @@ export const App = (): JSX.Element => {
       ? harness.activeSessionId
       : (tabs[tabs.length - 1]?.id ?? null);
     if (nextActiveId !== harness.activeSessionId) harness.setActiveSessionId(nextActiveId);
-    // The canvas follows the focus target: shown for a populated session, hidden
-    // for one with nothing yet or an agent with no session at all.
-    applyCanvasVisibility(nextActiveId);
+    // The canvas follows the focus target automatically (onCanvasState): a
+    // populated session shows its board, an empty one or an agent with no
+    // session at all reports no content and the pane stays closed.
   };
 
   // Focus a deep-linked / just-cloned agent if the user has it locally; returns
@@ -1445,21 +1406,21 @@ export const App = (): JSX.Element => {
                 noSessionAgent={noSessionAgentName}
                 overviewActive={showComposer}
                 sessionExited={showDead}
-                onCanvasContent={() => {
-                  // Remember this session's board is populated, so a later switch
-                  // back to it shows the pane straight away.
-                  const id = harness.activeSessionId;
-                  if (!id) return;
-                  sessionsWithCanvas.current.add(id);
-                  // Slide the pane in the first time an ELIGIBLE session paints
-                  // content: one started terminal-first from the composer, or one
-                  // just switched to whose board we hadn't seen. A pre-existing
-                  // session on initial load (never marked pending) keeps its
-                  // collapse state, and mobile never auto-reveals its sheet.
-                  if (isMobile || !pendingReveal.current.has(id) || autoRevealed.current.has(id)) return;
-                  autoRevealed.current.add(id);
-                  pendingReveal.current.delete(id);
-                  setRightCollapsed(false);
+                onCanvasState={(hasContent) => {
+                  // The pane follows the active session's board: open it whenever
+                  // the session has one, close it when it doesn't. This fires on
+                  // the mount probe, on every canvas.reload, and on each session
+                  // switch — so a board an agent just rendered (a finished build,
+                  // a switch to a populated agent) opens the pane on its own, even
+                  // one you'd collapsed, and an empty session keeps it closed.
+                  // Mobile drives its sheet with its own control, not this.
+                  if (isMobile) return;
+                  // An exited session keeps the pane open even with no board, so
+                  // its "resume to see it" invite stays visible.
+                  const activeExited =
+                    state.sessions.find((s) => s.id === harness.activeSessionId)?.status ===
+                    "exited";
+                  setRightCollapsed(!hasContent && !activeExited);
                 }}
                 expanded={canvasExpanded}
                 onToggleExpanded={() => setCanvasExpanded((v) => !v)}
