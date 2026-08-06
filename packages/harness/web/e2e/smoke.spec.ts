@@ -765,24 +765,22 @@ test("the rail's ⋯ menu offers a Group by toggle (Workspace / Deployment)", as
 });
 
 test.describe("held arrangement", () => {
-  test("workspace collapse, right tab, and right-pane collapse survive a reload", async ({ page }) => {
+  test("workspace collapse and the right tab survive a reload", async ({ page }) => {
     // Collapse the rfq workspace group (plain header toggles on click).
     await page.getByTestId("workspace-group-rfq-agent").locator(".workspace-row-main").click();
     await expect(page.getByTestId("workflow-rfq")).toHaveCount(0);
 
-    // Pick the Steps tab, then fold the right pane away.
+    // Pick the Steps tab.
     await page.getByTestId("right-tab-steps").click();
-    await page.getByTestId("right-collapse").click();
 
     await page.reload();
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    // Restored: the group stays folded, the pane stays collapsed, and
-    // expanding it lands back on Steps.
+    // Restored: the group stays folded and the pane still remembers the Steps
+    // tab. The right pane's open/closed state is NOT a persisted arrangement —
+    // it follows the active session's board (a populated session shows it), so
+    // a fold does not survive a reload (the canvas auto-reveal contract).
     await expect(page.getByTestId("workflow-rfq")).toHaveCount(0);
-    const expand = page.getByTestId("right-expand");
-    await expect(expand).toBeVisible();
-    await expand.click();
     await expect(page.getByTestId("right-tab-steps")).toHaveAttribute("aria-selected", "true");
   });
 });
