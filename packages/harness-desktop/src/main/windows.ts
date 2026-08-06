@@ -63,6 +63,12 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
+    // 35rem is the narrowest frame the SPA is composed for: it folds to the
+    // one-column shell at 768px (styles.css "Mobile shell") and that column
+    // still reads at 560. Below it the window was a strip of overlapping
+    // labels, so the frame refuses to go there rather than the layout coping.
+    minWidth: 560,
+    minHeight: 480,
     show: false, // show on ready-to-show to avoid a white flash
     title: "Sapiom",
     ...(isMac ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 19, y: 21 } } : {}),

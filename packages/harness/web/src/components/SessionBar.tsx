@@ -22,6 +22,9 @@ interface SessionBarProps {
   reviewTitle?: string | null;
   /** Set while the composer-first "new session" home is up — no session yet. */
   composing?: boolean;
+  /** Leaves the composer for the session it was opened over. Set only when such
+   *  a session exists — the bar then reads as the Back affordance itself. */
+  onBack?: (() => void) | null;
   /** The session the main panel is showing, if any. */
   activeSession: HarnessSession | null;
   /** The active session's display name (rename > transcript title > folder). */
@@ -67,6 +70,7 @@ export function SessionBar({
   openedAgentName = null,
   reviewTitle = null,
   composing = false,
+  onBack = null,
   activeSession,
   sessionName,
   onRenameSession,
@@ -157,14 +161,23 @@ export function SessionBar({
             </span>
           </div>
         ) : composing ? (
-          /* Composer-first "new session": no session exists yet, so the bar is
-             a single quiet placeholder pill (the + still starts another). */
-          <div className="session-current session-current-static">
-            <Icon name="MessageSquare" size={13} />
-            <span className="session-context-title" data-testid="session-context-title">
-              new session
-            </span>
-          </div>
+          /* Composer-first "new session": there is no session to name here, so
+             the slot carries the one thing it can do — go back to the session
+             the composer was opened over. Nothing when there is none (first
+             run, every session closed): the bar keeps only the + . */
+          onBack ? (
+            <button
+              type="button"
+              className="session-current session-back"
+              data-testid="composer-back"
+              onClick={onBack}
+            >
+              <Icon name="ArrowLeft" size={13} />
+              <span className="session-context-title" data-testid="session-context-title">
+                Back
+              </span>
+            </button>
+          ) : null
         ) : activeSession ? (
           <>
             {/* Current session: the options dropdown (title ⌄). */}

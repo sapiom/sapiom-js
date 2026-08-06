@@ -70,9 +70,6 @@ interface NewSessionComposerProps {
   /** Genuine first run (AppState.firstRun): changes the greeting and shows the
    *  one-time telemetry opt-in + docs footer. */
   firstRun: boolean;
-  /** A back affordance exists only when composing OVER an existing session; on
-   *  the no-session home there is nowhere to go back to. */
-  onBack: (() => void) | null;
   /** Start a session and hand the agent this outcome (empty → default starter).
    *  App derives the folder and runs the scaffold+inject path. */
   onSubmitIdea: (idea: string, harness: HarnessKind) => void;
@@ -100,7 +97,6 @@ interface NewSessionComposerProps {
 
 export function NewSessionComposer({
   firstRun,
-  onBack,
   onSubmitIdea,
   onUseTemplate,
   onBrowseTemplates,
@@ -193,17 +189,6 @@ export function NewSessionComposer({
       className={"composer-home" + (leaving ? " is-leaving" : "")}
       data-testid="new-session-composer"
     >
-      {onBack && (
-        <button
-          type="button"
-          className="composer-back"
-          data-testid="composer-back"
-          onClick={onBack}
-        >
-          <Icon name="ArrowLeft" size={14} /> Back
-        </button>
-      )}
-
       <div className="composer-hero">
         <p className="composer-greeting" data-testid="composer-greeting">
           {timeGreeting(new Date())}{" "}

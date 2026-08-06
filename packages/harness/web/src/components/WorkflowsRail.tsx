@@ -505,7 +505,7 @@ export function WorkflowsRail({
             setStartOpen(true);
           }}
         >
-          <Icon name="FolderOpen" size={14} />
+          <Icon name="FolderPlus" size={14} />
           <span>Add existing agents</span>
         </button>
       </nav>

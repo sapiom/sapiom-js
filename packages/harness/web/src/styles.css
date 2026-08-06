@@ -2208,6 +2208,22 @@ input {
 .session-title-trigger:hover {
   background: var(--nested-shade);
 }
+
+/* Composing: the queue slot carries Back to the session behind the composer
+   instead of naming one, so it reads as an action rather than a session chip. */
+.session-back {
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+}
+.session-back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.session-back:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
 .session-current-static {
   cursor: default;
 }
@@ -8169,31 +8185,6 @@ input {
   animation: refine-content-in var(--base, 0.22s) var(--ease) both;
 }
 
-/* Back to the session the composer was opened over (rendered only then). */
-.composer-back {
-  position: absolute;
-  top: var(--sp4);
-  left: var(--sp4);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  height: var(--control-h-xs);
-  padding: 0 var(--sp2);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-dim);
-  font-size: var(--type-label);
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast);
-}
-.composer-back:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
 .composer-hero {
   width: 100%;
   max-width: 640px;
@@ -8379,6 +8370,13 @@ input {
 @media (max-width: 900px) {
   .composer-template-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* Under ~640px two cards leave each one ~230px, where the name ellipsis eats
+   the words that tell templates apart. One column instead. */
+@media (max-width: 640px) {
+  .composer-template-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .composer-template-card {

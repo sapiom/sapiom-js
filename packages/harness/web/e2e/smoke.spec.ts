@@ -202,10 +202,11 @@ test("Overview heads the account menu and opens the composer home; opening an ag
   await item.click();
 
   // Selection closes the menu and opens the composer-first "new session" home
-  // in the centre pane; the session bar reads "new session" while composing.
+  // in the centre pane. There is no session to name while composing, so the bar
+  // carries Back to the one behind it instead.
   await expect(page.getByTestId("profile-menu")).toHaveCount(0);
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("session-context-title")).toHaveText("new session");
+  await expect(page.getByTestId("session-context-title")).toHaveText("Back");
 
   // Opening the leasing agent returns to the terminal — acme-app's one live
   // session is bound to it, so opening the agent attaches to that session and

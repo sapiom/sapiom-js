@@ -1122,6 +1122,7 @@ export const App = (): JSX.Element => {
               openedAgentName={noSessionAgentName}
               reviewTitle={reviewSummary ? reviewSummary.title : null}
               composing={showComposer}
+              onBack={composerCanCancel ? () => setComposing(false) : null}
               activeSession={showWorkbench ? activeSession : showDead ? activeSession : null}
               sessionName={
                 activeSession ? sessionDisplayName(activeSession, state.sessions, sessionNames) : null
@@ -1247,7 +1248,6 @@ export const App = (): JSX.Element => {
                    `composing`), and the canvas reveals itself once populated. */
                 <NewSessionComposer
                   firstRun={state.firstRun === true}
-                  onBack={composerCanCancel ? () => setComposing(false) : null}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onUseTemplate={handleComposerUseTemplate}
                   onBrowseTemplates={() => setTemplatesOpen(true)}
