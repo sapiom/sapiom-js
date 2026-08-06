@@ -1,5 +1,112 @@
 # @sapiom/harness
 
+## 0.4.0
+
+### Minor Changes
+
+- feaaeaa: Make Test / Run / Deploy observable in Studio: clicking one now reveals the
+  right pane and switches it to the Steps view (the unified activity surface),
+  instead of the action landing silently.
+
+  - **See it move.** A run's steps advance pending → running → passed in view; the
+    acting button carries a `data-running` pulse tied to the real run status (not
+    just the brief hand-off ring); and the demo prod run now progresses across
+    polls on a wall clock rather than snapping to "completed".
+  - **Relevant final data up front.** A run-summary card headlines the Steps
+    surface — outcome, live progress, total duration, and the single most relevant
+    result CTA (the deployed agent's dashboard link → a dev-server preview →
+    URLs the run produced → the final step's output). Honest-absence throughout:
+    no cost fields, no latency on a still-running step, no fabricated values.
+  - **Better payload CTAs.** Input / Output / Logs / Result share one disclosure
+    with a Copy button (the final Result renders expanded); nothing renders for a
+    payload a step never carried.
+  - **Deploy as an action, not a toast.** Deploy lands in the same Steps surface
+    with a live linking → building → deployed banner, then a completion state that
+    links to the dashboard and jumps to the "Trigger from your code" snippet.
+
+  Note: after an action, the persisted right-pane tab is Steps.
+
+- 2c4e8d9: Studio now emits agent-lifecycle product events to PostHog, so the build →
+  templates → deploy funnel is measurable.
+
+  - `agent.created` — a new agent came into existence (a fresh `sapiom.json`
+    appeared in the workspace registry), deduped by path and seeded on first load
+    so pre-existing agents are never counted. This is the "agents built" metric —
+    confirmed existence, not the click that kicked off scaffolding.
+  - `agent.template_cloned` — a template was used to start an agent, carrying the
+    template slug and the on-ramp surface. The "templates used" metric.
+  - `agent.deploy_started` / `agent.deploy_succeeded` (with duration) /
+    `agent.deploy_failed` (coarse `error_kind` enum) — the "agents deployed"
+    metric, fired from the deploy stream.
+
+  Payloads carry ids / enums / counts / durations only — never prompt text, file
+  contents, or absolute paths. Capture stays gated by the existing
+  product-analytics consent tiers and is disabled under mock/e2e.
+
+### Patch Changes
+
+- 38a7327: Studio's canvas pane now simply follows the active session's board: whenever a
+  session has a rendered board, the pane is shown; when it doesn't, it stays
+  closed. This replaces the previous auto-reveal, which fired only once and only
+  for sessions born from the composer — so a resumed session that built an agent,
+  or opening an already-populated agent, left the freshly-rendered board sitting
+  in a collapsed pane the user had to open by hand.
+
+  Now any live render (a `canvas.reload` for the active session — a finished
+  build, a re-render) opens the pane on its own, and switching to a populated
+  session shows its board straight away. Trade-off of the simpler model: a manual
+  collapse of the canvas is no longer a persisted arrangement — it lasts until the
+  next render or session switch (the rail collapse and the Canvas/Steps/Code tab
+  still persist). Exited sessions keep their pane open for the "resume to see it"
+  invite.
+
+- 0b0784c: Fix the Canvas showing a raw "Render failed" esbuild dump (`Could not resolve
+"@sapiom/agent"` / `"zod/v4"`) on a freshly scaffolded agent, before its
+  `npm install` has run. Studio now shows a calm "Preparing your agent…"
+  placeholder while dependencies are missing and auto-renders the step graph the
+  moment they land — no Retry click. Readiness waits for the whole declared
+  dependency set (walking `node_modules` up the tree as esbuild does), so a
+  partial install can't flash the error. The Canvas empty-state and "rendering…"
+  pages are now theme-aware, matching the app's light/dark theme instead of always
+  painting a white panel.
+- 0b0784c: Fix new agents nesting under `projects/<agent>/projects/…` in Studio, deepening
+  on every launch. The desktop host derived its launch dir from the most-recent
+  session dir, which drifted into a project folder — so `<launchDir>/projects`
+  (where new agents are created) appended a second `projects/` inside it, and the
+  new agent's session cwd fed back in to nest even further next time. Pin the
+  launch dir to the harness home so every agent stays flat under one `projects/`
+  and the rail scans them all. The same `projectRoot` pin also fixes the template
+  destination, which nested (and failed with "Couldn't read that directory") for
+  the same reason. The "Add existing agents" folder picker now opens on the
+  project root where agents live.
+- 58f8008: Fix two issues on the Templates screen in Studio:
+
+  - The info (i) spec sheet popover rendered with no surface — its background,
+    border, and shadow were missing, so the Steps / Trigger / Complexity /
+    Capabilities list and the Preview / Use buttons painted directly over the card
+    behind it. `.template-facts` now opts into the shared popover elevation recipe.
+  - The Templates destination hid the workbench, but the rail's other nav actions
+    never cleared it, so clicking Create new, Search, or an agent/session row left
+    you stranded on the browser until you used the back arrow. Navigating anywhere
+    now dismisses the Templates screen the same way the back arrow does.
+
+- 1b3c103: Recolor the embedded terminal so Claude Code's accent colors match the Studio
+  brand, without touching the terminal background.
+
+  Claude Code renders in 256-color by default, so the terminal's own 16-color
+  palette never reached its output — its "blue", "green", etc. were Claude's, not
+  Studio's. Each Claude session is now pinned to Claude Code's `dark-ansi` /
+  `light-ansi` theme (matched to the app theme) through the generated `--settings`
+  file, which routes Claude's colors through the terminal's ANSI ramp. That ramp
+  (`Terminal.tsx`) is retuned to a brand-coherent palette: a calmer blue, the
+  Studio green for success/live state, and harmonized red / yellow / cyan /
+  magenta that read cleanly on the recessed `--bg` surface (which is unchanged).
+
+  The app theme is threaded through session create and persisted on the session so
+  resume keeps the same base; unthemed launches (server-side auto-create, a legacy
+  session resumed from before this existed) omit the theme and keep Claude's
+  default rendering.
+
 ## 0.3.0
 
 ### Minor Changes
