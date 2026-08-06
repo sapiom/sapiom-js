@@ -145,6 +145,16 @@ test.describe("templates journey (from the composer)", () => {
     // The band replaced a price, so nothing on the sheet may read as money.
     expect(await facts.textContent()).not.toMatch(/\$/);
 
+    // The sheet floats over a card, so it MUST carry the popover recipe's own
+    // opaque surface: a transparent panel leaves the card's copy showing
+    // through its figures, which is unreadable rather than merely ugly.
+    const surface = await facts.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { background: style.backgroundColor, border: style.borderTopWidth };
+    });
+    expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(surface.border).not.toBe("0px");
+
     // A response carrying no band shows an em dash rather than inventing one.
     await page.keyboard.press("Escape");
     await page.getByTestId("template-card-info-web-research-digest").click();
