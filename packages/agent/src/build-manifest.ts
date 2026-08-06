@@ -169,8 +169,12 @@ function buildForwardEdges(
           errors.push(
             `step '${name}' has a continue target '${t.target}' that is not in the steps map`,
           );
-      } else if (t.kind === "pause" && names.has(t.resumeStep)) {
-        targets.add(t.resumeStep);
+      } else if (t.kind === "pause") {
+        if (names.has(t.resumeStep)) targets.add(t.resumeStep);
+        else
+          errors.push(
+            `step '${name}' has a pause resumeStep '${t.resumeStep}' that is not in the steps map`,
+          );
       }
     }
     if (step.transitions.length === 0) {
