@@ -6,13 +6,7 @@
  * (not the CLI) means the sapiom_dev_agents_check MCP tool and the dashboard
  * canvas inherit the warning too.
  */
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -21,6 +15,19 @@ import {
   runTypecheck,
   type EntryContractManifest,
 } from "./check";
+import { AgentOperationError } from "./errors";
+
+/**
+ * Stand in for the project's TypeScript compiler at the path runTypecheck runs:
+ * node_modules/typescript/bin/tsc, invoked as `node <script>`. So it is a JS
+ * file (not the sh shim under .bin) — the .bin shim is what broke on Windows,
+ * where the extensionless `.bin/tsc` is a POSIX sh script Node cannot exec.
+ */
+function writeFakeTsc(dir: string, body: string): void {
+  const binDir = path.join(dir, "node_modules", "typescript", "bin");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(path.join(binDir, "tsc"), body);
+}
 
 describe("entryInputSchemaWarning", () => {
   it("warns and names the entry step when it declares no inputSchema", () => {
@@ -73,17 +80,46 @@ describe("entryInputSchemaWarning", () => {
 });
 
 describe("check source directory", () => {
-  it("runs the project compiler when sourceDir is relative", async () => {
+  it("runs the project compiler when sourceDir is relative", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "sapiom-check-relative-"));
     try {
-      const binDir = path.join(dir, "node_modules", ".bin");
-      mkdirSync(binDir, { recursive: true });
-      const tsc = path.join(binDir, "tsc");
-      writeFileSync(tsc, "#!/bin/sh\nexit 0\n");
-      chmodSync(tsc, 0o755);
-      // Before source-directory normalization, execFile resolved this tsc path
-      // beneath cwd a second time and raised TYPECHECK_FAILED instead.
+      writeFakeTsc(dir, "process.exit(0);\n");
+      // runTypecheck passes the tsc script as an argv element the child Node
+      // resolves against cwd; without normalization a relative sourceDir would
+      // resolve it beneath cwd a second time and raise TYPECHECK_FAILED instead.
       expect(runTypecheck(path.relative(process.cwd(), dir))).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws TYPECHECK_FAILED with the compiler output on type errors", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sapiom-check-typeerr-"));
+    try {
+      // Mimic tsc: write diagnostics to stdout, exit non-zero.
+      writeFakeTsc(
+        dir,
+        "process.stdout.write('index.ts(1,1): error TS2322\\n');\nprocess.exit(1);\n",
+      );
+      try {
+        runTypecheck(dir);
+        throw new Error("expected runTypecheck to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(AgentOperationError);
+        const e = err as AgentOperationError;
+        expect(e.code).toBe("TYPECHECK_FAILED");
+        // The compiler's own output becomes the hint, not the generic fallback.
+        expect(e.hint).toContain("error TS2322");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips typecheck when TypeScript is not installed", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sapiom-check-nots-"));
+    try {
+      expect(runTypecheck(dir)).toContain("TypeScript is not installed");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

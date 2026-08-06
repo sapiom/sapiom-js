@@ -28,13 +28,27 @@ import { AgentOperationError } from "./errors.js";
  * success. Throws `TYPECHECK_FAILED` with the compiler output on type errors.
  */
 export function runTypecheck(sourceDir: string): string | null {
-  const tscBin = path.join(sourceDir, "node_modules", ".bin", "tsc");
-  if (!existsSync(tscBin)) {
+  // Resolve to an absolute path first: we pass the tsc script as an argv element
+  // that the child Node resolves against its own cwd, so a relative script path
+  // *and* a relative cwd would resolve it beneath cwd twice (the same
+  // double-resolution the check() caller guards against). Absolute keeps
+  // runTypecheck correct for any caller, relative input included.
+  const dir = path.resolve(sourceDir);
+  // Run TypeScript's own JS entry under this Node binary rather than the
+  // node_modules/.bin/tsc shim. On Windows that shim is tsc.cmd; the
+  // extensionless `.bin/tsc` beside it is a POSIX sh script npm ships for Git
+  // Bash, which execFileSync cannot execute — it threw a spawn error with empty
+  // output, so we reported TYPECHECK_FAILED even when tsc would have passed
+  // (and Node won't execFile a .cmd without shell: true post-CVE-2024-27980).
+  // Invoking the JS entry via process.execPath sidesteps .bin/.cmd/PATHEXT/shell
+  // entirely and is identical across platforms.
+  const tscScript = path.join(dir, "node_modules", "typescript", "bin", "tsc");
+  if (!existsSync(tscScript)) {
     return "typecheck skipped — TypeScript is not installed (run npm install first)";
   }
   try {
-    execFileSync(tscBin, ["--noEmit"], {
-      cwd: sourceDir,
+    execFileSync(process.execPath, [tscScript, "--noEmit"], {
+      cwd: dir,
       stdio: ["ignore", "pipe", "pipe"],
     });
     return null;
