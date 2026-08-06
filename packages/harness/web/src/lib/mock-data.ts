@@ -432,7 +432,14 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
   "/": ["Users"],
   "/Users": ["demo"],
   "/Users/demo": ["acme-app", "rfq-agent", "onboarding-flow", "scratch"],
-  "/Users/demo/acme-app": ["leasing", "src", "docs"],
+  "/Users/demo/acme-app": ["projects", "leasing", "src", "docs"],
+  // The project root (`<launchDir>/projects`, mirroring the Electron host — see
+  // MockApi.state's defaultProjectRoot). Present so the "Add existing agents"
+  // picker, which now opens on the project root, lands on a real directory.
+  "/Users/demo/acme-app/projects": ["leasing", "src", "docs"],
+  "/Users/demo/acme-app/projects/leasing": [],
+  "/Users/demo/acme-app/projects/src": [],
+  "/Users/demo/acme-app/projects/docs": [],
   "/Users/demo/acme-app/leasing": [],
   "/Users/demo/acme-app/src": [],
   "/Users/demo/acme-app/docs": [],

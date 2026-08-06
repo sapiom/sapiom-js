@@ -508,8 +508,8 @@ test("Add existing agents: directory picker navigates and validates", async ({ p
   const primary = modal.locator(".modal-primary-cta");
   const input = page.getByTestId("dir-picker-input");
 
-  // Seeded from launchDir; browsing shows its subdirectories.
-  await expect(input).toHaveValue("/Users/demo/acme-app");
+  // Seeded from the project root (…/projects); browsing shows its subdirectories.
+  await expect(input).toHaveValue("/Users/demo/acme-app/projects");
   await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
 
   // Type-ahead: an unrecognized tail filters the nearest real ancestor's children.
@@ -1679,7 +1679,7 @@ test("directory picker: arrow keys move the highlight and Enter drills into it",
   await input.press("ArrowDown");
   await expect(page.getByTestId("dir-picker-item-src")).toHaveClass(/is-selected/);
   await input.press("Enter");
-  await expect(input).toHaveValue("/Users/demo/acme-app/src");
+  await expect(input).toHaveValue("/Users/demo/acme-app/projects/src");
 });
 
 test("canvas controls: the board widget zooms; the subheader's expand lifts the pane to an overlay", async ({ page }) => {
