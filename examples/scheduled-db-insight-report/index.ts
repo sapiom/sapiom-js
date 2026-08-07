@@ -6,7 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
-import { fileStorage } from "@sapiom/tools";
+import { EmailHttpError, fileStorage } from "@sapiom/tools";
 import postgres from "postgres";
 import { z } from "zod/v4";
 
@@ -77,8 +77,6 @@ const DEFAULT_DB_HANDLE = "db-insight-demo";
  * `template.json` and the platform injects it into this step's environment.
  */
 const DATABASE_URL_KEY = "REPORT_DATABASE_URL";
-/** Username for the inbox we send from (created once, then reused). */
-const SENDER_USERNAME = "db-insight-report";
 /** Default cadence documented for the cron trigger: 08:00 every day. */
 const DEFAULT_SCHEDULE = "0 8 * * *";
 /** Cap the queries a single run will execute — bounds cost + latency. */
@@ -488,15 +486,32 @@ async function ensureSeeded(ctx: Ctx, sql: Sql): Promise<boolean> {
   return true;
 }
 
-/** Reuse an existing inbox to send from, else provision one. */
+/**
+ * Reuse an existing inbox to send from, else provision one.
+ *
+ * We deliberately omit `username`. AgentMail addresses are globally unique, so a
+ * fixed local part can only ever be owned by ONE account across the whole
+ * platform — every other tenant's `create` 409s with "Email address is already
+ * taken", which fails the step. Omitting it lets AgentMail auto-generate a
+ * globally-unique address, so a fresh tenant's first run succeeds and two
+ * tenants never collide. `create` still isn't atomic against the `list`, so a
+ * 409 is treated as "someone already provisioned one" — re-list and reuse.
+ */
 async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
   if (existing.inboxes.length > 0) return existing.inboxes[0].inboxId;
-  const inbox = await ctx.sapiom.email.inboxes.create({
-    username: SENDER_USERNAME,
-    displayName: "DB Insight Report",
-  });
-  return inbox.inboxId;
+  try {
+    const inbox = await ctx.sapiom.email.inboxes.create({
+      displayName: "DB Insight Report",
+    });
+    return inbox.inboxId;
+  } catch (err) {
+    if (err instanceof EmailHttpError && err.status === 409) {
+      const retry = await ctx.sapiom.email.inboxes.list({ limit: 1 });
+      if (retry.inboxes.length > 0) return retry.inboxes[0].inboxId;
+    }
+    throw err;
+  }
 }
 
 /**

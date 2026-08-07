@@ -96,6 +96,39 @@ turns a clean rejection into a 404 mid-run. Declare it under `resources[]` and p
 stop with a stated reason. A **connection** is a third-party credential: never default it and
 never fake it — read it, and when it is absent, skip the side effect and say so.
 
+### Provisioning an inbox: never pin a global identifier
+
+Sending email needs an inbox to send from. Provision it, but let the platform pick the address —
+**never pass a fixed `username` to `inboxes.create`.** AgentMail addresses are globally unique, so
+a hardcoded local part (`"newsletter"`, `"outreach"`) can be owned by only ONE account across the
+whole platform: the first tenant to run your template claims it, and every other tenant's `create`
+then 409s with "Email address is already taken" — an uncaught throw that fails the very first
+zero-setup run. Omit `username` so the address is auto-generated, reuse an existing inbox first,
+and treat a 409 as "someone already provisioned one" (the non-atomic window between `list` and
+`create`) rather than a crash:
+
+```ts
+import { EmailHttpError } from "@sapiom/tools";
+
+async function resolveSenderInbox(ctx: Ctx): Promise<string> {
+  const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
+  if (existing.inboxes.length > 0) return existing.inboxes[0].inboxId;
+  try {
+    const inbox = await ctx.sapiom.email.inboxes.create({ displayName: "My Agent" });
+    return inbox.inboxId;
+  } catch (err) {
+    if (err instanceof EmailHttpError && err.status === 409) {
+      const retry = await ctx.sapiom.email.inboxes.list({ limit: 1 });
+      if (retry.inboxes.length > 0) return retry.inboxes[0].inboxId;
+    }
+    throw err;
+  }
+}
+```
+
+The same caution applies to anything keyed by a platform-global name: prefer a tenant-scoped
+handle or a platform-generated identifier over a string every tenant would otherwise reuse.
+
 ### Pause discipline
 
 Before you write a pause, decide **who fires the signal**, because a zero-config run has no

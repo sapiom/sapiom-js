@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import {
+  EmailHttpError,
   IMAGE_RESULT_SIGNAL,
   VIDEO_RESULT_SIGNAL,
   fileStorage,
@@ -156,8 +157,6 @@ const DEFAULT_SCHEDULE = "0 9 * * 1";
 /** Fan-out bounds on the pull-quote list. */
 const DEFAULT_NUM_QUOTES = 2;
 const MAX_QUOTES = 4;
-/** Username for the inbox we send from (created once, then reused). */
-const SENDER_USERNAME = "content-repurposing";
 
 /** Title paired with `SAMPLE_SOURCE`. */
 const SAMPLE_TITLE = "Why small teams ship faster";
@@ -695,15 +694,32 @@ const packageStep = defineStep({
   },
 });
 
-/** Reuse an existing inbox to send from, else provision one. */
+/**
+ * Reuse an existing inbox to send from, else provision one.
+ *
+ * We deliberately omit `username`. AgentMail addresses are globally unique, so a
+ * fixed local part can only ever be owned by ONE account across the whole
+ * platform — every other tenant's `create` 409s with "Email address is already
+ * taken", which fails the step. Omitting it lets AgentMail auto-generate a
+ * globally-unique address, so a fresh tenant's first run succeeds and two
+ * tenants never collide. `create` still isn't atomic against the `list`, so a
+ * 409 is treated as "someone already provisioned one" — re-list and reuse.
+ */
 async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
   if (existing.inboxes.length > 0) return existing.inboxes[0].inboxId;
-  const inbox = await ctx.sapiom.email.inboxes.create({
-    username: SENDER_USERNAME,
-    displayName: "Content Pack",
-  });
-  return inbox.inboxId;
+  try {
+    const inbox = await ctx.sapiom.email.inboxes.create({
+      displayName: "Content Pack",
+    });
+    return inbox.inboxId;
+  } catch (err) {
+    if (err instanceof EmailHttpError && err.status === 409) {
+      const retry = await ctx.sapiom.email.inboxes.list({ limit: 1 });
+      if (retry.inboxes.length > 0) return retry.inboxes[0].inboxId;
+    }
+    throw err;
+  }
 }
 
 const deliver = defineStep({
