@@ -38,7 +38,7 @@ import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { ApiError, boundWorkflowPathOf } from "./lib/api";
+import { boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
 import {
@@ -77,6 +77,22 @@ import {
 } from "./lib/workflow-deployment";
 
 type RightTab = "canvas" | "steps" | "code";
+
+/**
+ * How long a held initial prompt waits for the coding agent to become ready
+ * (i.e. the user to finish signing in) before we give up and surface the
+ * failure. The normal end of a hold is the session going ready (prompt sent)
+ * or exiting — this is only a leak-guard for a login the user walks away from.
+ */
+const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Grace before nudging the user toward the terminal login. A signed-in agent
+ * reports ready within a beat, so its held prompt sends before this fires and
+ * no hint shows; only a session still stuck (on the Claude login/onboarding
+ * screen) survives the grace and surfaces the hint.
+ */
+const HELD_PROMPT_HINT_DELAY_MS = 4_000;
 
 /**
  * Live sessions belonging to the focused subject, in tab order (oldest first,
@@ -162,6 +178,93 @@ export const App = (): JSX.Element => {
       return next;
     });
   };
+
+  // Session-then-prompt flows (scaffold, templates, clone) must NOT fire the
+  // first prompt while the coding agent is still on its own login/onboarding
+  // screen. Claude Code only becomes injectable once its SessionStart hook
+  // sets session.ready — and that hook does not fire until the user is signed
+  // in. So we HOLD the prompt keyed by session id and send it the moment the
+  // session reports ready, rather than racing a fixed retry window that expires
+  // mid-onboarding and silently drops the prompt (the reported first-run bug).
+  const pendingPromptsRef = useRef<
+    Map<
+      string,
+      { prompt: string; failMessage: string; timer: number; hintTimer: number }
+    >
+  >(new Map());
+  // Latest sessions, read from the hold's async continuation (a closure over
+  // `state` would go stale between the ready flip and the flush).
+  const sessionsRef = useRef<HarnessSession[]>([]);
+
+  // Forget a held prompt and stop both its timers. Returns the entry so a
+  // caller can act on it (send / report), or undefined if nothing was held.
+  const clearPending = useCallback((sessionId: string) => {
+    const pending = pendingPromptsRef.current.get(sessionId);
+    if (!pending) return undefined;
+    window.clearTimeout(pending.timer);
+    window.clearTimeout(pending.hintTimer);
+    pendingPromptsRef.current.delete(sessionId);
+    return pending;
+  }, []);
+
+  // Deliver a held prompt if its session is now ready; drop it (with the
+  // failure toast) if the session exited first. A no-op while still waiting.
+  const tryFlushPrompt = useCallback(
+    (sessionId: string): void => {
+      const pending = pendingPromptsRef.current.get(sessionId);
+      if (!pending) return;
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (!session) return; // not in client state yet — a later session.status retries
+      if (session.ready) {
+        // Delete BEFORE injecting so an overlapping flush can't double-send.
+        clearPending(sessionId);
+        void harness
+          .injectInput(sessionId, pending.prompt)
+          .catch(() => harness.showToast(pending.failMessage));
+      } else if (session.status === "exited") {
+        clearPending(sessionId);
+        harness.showToast(pending.failMessage);
+      }
+    },
+    [clearPending, harness.injectInput, harness.showToast],
+  );
+
+  // Register a prompt to be sent once its session is ready (i.e. Claude is
+  // signed in). Sends immediately if already ready. While waiting, a delayed
+  // hint (only if the session is still not ready after a grace) points the
+  // user at the terminal login — so first-run intent is held, not lost.
+  const sendPromptWhenReady = useCallback(
+    (sessionId: string, prompt: string, failMessage: string): void => {
+      clearPending(sessionId);
+      const timer = window.setTimeout(() => {
+        if (clearPending(sessionId)) harness.showToast(failMessage);
+      }, HELD_PROMPT_TIMEOUT_MS);
+      const hintTimer = window.setTimeout(() => {
+        if (pendingPromptsRef.current.has(sessionId)) {
+          harness.showToast(
+            "Sign in to Claude in the terminal — your prompt sends automatically once you're signed in.",
+          );
+        }
+      }, HELD_PROMPT_HINT_DELAY_MS);
+      pendingPromptsRef.current.set(sessionId, {
+        prompt,
+        failMessage,
+        timer,
+        hintTimer,
+      });
+      tryFlushPrompt(sessionId);
+    },
+    [clearPending, harness.showToast, tryFlushPrompt],
+  );
+
+  // The ready/exited transition arrives as a session.status event → a new
+  // sessions array → this effect flushes any prompt whose session just became
+  // injectable. Event-driven, so no polling.
+  useEffect(() => {
+    sessionsRef.current = harness.state?.sessions ?? [];
+    if (pendingPromptsRef.current.size === 0) return;
+    for (const id of [...pendingPromptsRef.current.keys()]) tryFlushPrompt(id);
+  }, [harness.state?.sessions, tryFlushPrompt]);
   // Panel collapse: the rail unmounts (no state to preserve); the right pane
   // hides via CSS so a running Visualize enrichment survives the collapse.
   const [railCollapsed, setRailCollapsed] = useState(
@@ -552,23 +655,6 @@ export const App = (): JSX.Element => {
     await createSessionAt(cwd, agentHarness);
   };
 
-  // Session-then-prompt flows (scaffold, templates): the pty needs a beat to
-  // become interactive, so a 409 (session not ready) retries a few times.
-  const injectPromptWithRetry = (sessionId: string, prompt: string, failMessage: string): void => {
-    const inject = async (attempt: number): Promise<void> => {
-      try {
-        await harness.injectInput(sessionId, prompt);
-      } catch (err) {
-        if (attempt < 6 && err instanceof ApiError && err.status === 409) {
-          window.setTimeout(() => void inject(attempt + 1), 1500);
-          return;
-        }
-        harness.showToast(failMessage);
-      }
-    };
-    void inject(0);
-  };
-
   // The idea-to-agent path. Starts a session at the (new) folder, then
   // hands the agent the scaffold prompt.
   /**
@@ -589,7 +675,7 @@ export const App = (): JSX.Element => {
       `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(cwd, "default")}, ` +
       "then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to";
     const trimmedIdea = idea?.trim();
-    injectPromptWithRetry(
+    sendPromptWhenReady(
       session.id,
       trimmedIdea
         ? `${base} build this:\n\n${trimmedIdea}`
@@ -620,7 +706,7 @@ export const App = (): JSX.Element => {
   // with no agent yet. Ask that session to scaffold its first agent in place.
   const handleScaffoldInSession = (sessionId: string): void => {
     const cwd = state.sessions.find((session) => session.id === sessionId)?.cwd ?? ".";
-    injectPromptWithRetry(
+    sendPromptWhenReady(
       sessionId,
       `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(cwd, "default")}, then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to define the first agent.`,
       "Couldn't send the scaffold prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
@@ -643,7 +729,7 @@ export const App = (): JSX.Element => {
       template_id: template.id,
       surface,
     });
-    injectPromptWithRetry(
+    sendPromptWhenReady(
       session.id,
       useTemplatePrompt(template, cwd),
       template.kind === "gallery"
@@ -813,7 +899,7 @@ export const App = (): JSX.Element => {
     setRightCollapsed(true); // terminal-first, like the template flow
     try {
       const session = await createSessionAt(cwd, "claude-code");
-      injectPromptWithRetry(
+      sendPromptWhenReady(
         session.id,
         cloneDefinitionPrompt(target.definitionId, cwd),
         "Couldn't send the clone prompt. Ask the coding agent to run sapiom_dev_agents_clone.",

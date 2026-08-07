@@ -991,7 +991,7 @@ class MockApi implements HarnessApi {
     // mock-created session would stay unready forever and gate the action
     // bar. Reads the CURRENT copy at fire time so a bind that landed in
     // between is never clobbered.
-    setTimeout(() => {
+    const promote = (): void => {
       void import("./events").then(({ publishMockBusMessage }) => {
         const current = this.sessions.find((s) => s.id === session.id);
         if (!current || current.status === "exited") return;
@@ -1006,7 +1006,26 @@ class MockApi implements HarnessApi {
         );
         publishMockBusMessage({ type: "session.status", session: promoted });
       });
-    }, 700);
+    };
+    // Test-only: a session that never reaches ready on its own, so Playwright
+    // can exercise the hold-the-prompt-until-signed-in path (a not-logged-in
+    // Claude sits on its login screen and never fires SessionStart). The test
+    // fires readiness by hand via window.__HARNESS_TEST__.promoteReady().
+    const win =
+      typeof window === "undefined"
+        ? undefined
+        : (window as unknown as {
+            __MOCK_WITHHOLD_READY__?: boolean;
+            __HARNESS_TEST__?: Record<string, unknown>;
+          });
+    if (win?.__MOCK_WITHHOLD_READY__) {
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        promoteReady: promote,
+      };
+    } else {
+      setTimeout(promote, 700);
+    }
     return session;
   }
 

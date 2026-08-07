@@ -56,6 +56,44 @@ test("describing an outcome starts a session and hands the agent that outcome", 
     .toContain("Diff our competitors' pricing pages");
 });
 
+test("holds the prompt until the session is ready (Claude signed in), then sends it", async ({
+  page,
+}) => {
+  // Make the next session never reach ready on its own — the stand-in for a
+  // user still on Claude's login/onboarding screen, where SessionStart (and so
+  // session.ready) never fires until they finish signing in.
+  await page.addInitScript(() => {
+    (window as unknown as { __MOCK_WITHHOLD_READY__?: boolean }).__MOCK_WITHHOLD_READY__ = true;
+  });
+  await page.goto("/?seed=0");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+
+  await page.getByTestId("rail-create-new").click();
+  await page.getByTestId("composer-input").fill("Summarise my inbox every morning.");
+  await page.getByTestId("composer-send").click();
+
+  // The session exists (workbench shown) but the prompt is HELD, not injected,
+  // because the session never became ready.
+  await expect(page.getByTestId("agent-view")).toBeVisible();
+  expect(await lastInjectText(page)).toBe("");
+
+  // A hint appears pointing the user at the terminal login; the prompt is still
+  // held while it shows.
+  await expect(page.getByTestId("toast")).toContainText(/sign in to claude/i, {
+    timeout: 8_000,
+  });
+  expect(await lastInjectText(page)).toBe("");
+
+  // The user finishes signing in → the session reports ready → the held prompt
+  // fires itself, carrying the original intent.
+  await page.evaluate(() =>
+    (
+      window as unknown as { __HARNESS_TEST__?: { promoteReady?: () => void } }
+    ).__HARNESS_TEST__?.promoteReady?.(),
+  );
+  await expect.poll(() => lastInjectText(page)).toContain("Summarise my inbox every morning.");
+});
+
 test("a new session opens terminal-only; the canvas stays hidden until it has content", async ({
   page,
 }) => {
