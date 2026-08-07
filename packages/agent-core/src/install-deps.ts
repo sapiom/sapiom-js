@@ -13,32 +13,47 @@
  * Deliberately best-effort and non-fatal: if npm is missing or offline the
  * caller still succeeds, and the Canvas degrades to its existing "run
  * npm install / ask your agent to fix it" prompt (see describeBundleFailure).
+ *
+ * Async on purpose: this runs on the interactive create path (the
+ * `sapiom_dev_agents_scaffold` MCP tool), and the MCP server is a single event
+ * loop. A synchronous `execFileSync` would freeze the whole server for the
+ * entire install — no other JSON-RPC message, cancellation, or ping serviced —
+ * so we spawn the child and await it instead.
  */
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /** Hard ceiling on the install so a pathological dependency tree can't block a
  *  scaffold/seed indefinitely. */
 const INSTALL_TIMEOUT_MS = 120_000;
 
+/** Bound the captured stdout/stderr — `--loglevel=error` keeps npm nearly
+ *  silent, but a large error dump shouldn't reject with ENOBUFS. */
+const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+
 /**
- * Run `npm install` in `projectDir`. Returns true on success, false on any
- * failure (npm missing, offline, non-zero exit, timeout) — never throws, so a
+ * Run `npm install` in `projectDir`. Resolves true on success, false on any
+ * failure (npm missing, offline, non-zero exit, timeout) — never rejects, so a
  * caller can treat a failed install as a soft degrade rather than a hard error.
  *
  * `shell: true` on Windows lets the OS resolve the `npm.cmd` shim; `cwd` (which
  * may contain spaces) is passed via options, not interpolated into a command
  * line, so it stays safe.
  */
-export function installProjectDependencies(projectDir: string): boolean {
+export async function installProjectDependencies(
+  projectDir: string,
+): Promise<boolean> {
   try {
-    execFileSync(
+    await execFileAsync(
       "npm",
       ["install", "--no-audit", "--no-fund", "--loglevel=error"],
       {
         cwd: projectDir,
-        stdio: "ignore",
         shell: process.platform === "win32",
         timeout: INSTALL_TIMEOUT_MS,
+        maxBuffer: MAX_BUFFER_BYTES,
       },
     );
     return true;

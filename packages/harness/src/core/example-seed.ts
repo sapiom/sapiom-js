@@ -353,7 +353,7 @@ export async function seedExampleProject(
   // present for the Canvas's first bundle, while staying out of git history.
   const dependenciesInstalled =
     (options.installDependencies ?? true)
-      ? installProjectDependencies(projectDir)
+      ? await installProjectDependencies(projectDir)
       : false;
 
   commitCustomizations(projectDir);

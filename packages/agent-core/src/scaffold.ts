@@ -386,7 +386,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   // for the Canvas's first bundle while staying out of git history. Best-effort:
   // a failed install (npm missing/offline) still yields a successful scaffold.
   const dependenciesInstalled = opts.installDependencies
-    ? installProjectDependencies(targetDir)
+    ? await installProjectDependencies(targetDir)
     : false;
 
   const gitInitialized = initGitRepo(targetDir);

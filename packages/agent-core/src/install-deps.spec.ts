@@ -8,7 +8,7 @@ import path from "node:path";
 import { installProjectDependencies } from "./install-deps";
 
 describe("installProjectDependencies", () => {
-  it("returns false (never throws) when the install cannot run", () => {
+  it("resolves false (never rejects) when the install cannot run", async () => {
     // A directory that does not exist makes the npm spawn fail immediately —
     // no network, deterministic — exercising the best-effort catch.
     const missing = path.join(
@@ -21,7 +21,6 @@ describe("installProjectDependencies", () => {
       `${process.pid}`,
     );
 
-    expect(() => installProjectDependencies(missing)).not.toThrow();
-    expect(installProjectDependencies(missing)).toBe(false);
+    await expect(installProjectDependencies(missing)).resolves.toBe(false);
   });
 });
