@@ -1311,7 +1311,7 @@ export function CanvasChatPanel({
             className="canvas-inspector-freeform-input"
             data-testid="canvas-freeform-input"
             placeholder={node ? "Ask about this step…" : "Ask about this agent…"}
-            rows={2}
+            rows={1}
             value={freeformText}
             onChange={(e) => setFreeformText(e.target.value)}
             onKeyDown={(e) => {

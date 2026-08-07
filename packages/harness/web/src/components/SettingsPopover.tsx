@@ -4,6 +4,7 @@ import type { AppState } from "@shared/types";
 import { HARNESS_PATHS } from "@shared/types";
 
 import type { AuthStartResponse } from "../lib/api";
+import { isMockMode } from "../lib/api";
 import { Icon } from "./Icon";
 import { track } from "../lib/track";
 
@@ -161,7 +162,12 @@ export function SettingsPopover({
         </div>
       )}
 
-      {authenticated && (
+      {/* Sign-out lives in the account menu (below "Check for updates", shown
+          only when signed in) — NOT here. The one exception is the demo/mock
+          build, where that account-menu slot is a "Connect Sapiom account" CTA
+          instead of a sign-out, so Settings carries Disconnect there (and it's
+          the surface the auth e2e suite drives). Hidden in the real app. */}
+      {isMockMode() && authenticated && (
         <div className="settings-auth-row">
           <button
             type="button"

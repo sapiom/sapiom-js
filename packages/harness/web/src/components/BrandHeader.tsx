@@ -23,10 +23,10 @@ export function BrandHeader({ onCollapse }: { onCollapse: () => void }): JSX.Ele
     <header className="brand-header">
       <h1 className="brand-lockup">
         {/* The wordmark IS "Sapiom"; the accessible name comes from the two
-            parts together, so neither repeats the other. The mark is wrapped so
-            the frameless-mac layout can place it on the traffic-light line while
-            `agent.studio` drops to the line below; in a browser the wrapper is
-            `display:contents` and the lockup reads inline exactly as before. */}
+            parts together, so neither repeats the other. Mark + product read
+            inline as "sapiom agent.studio" (the wrapper is `display:contents`),
+            and the whole lockup drops below the traffic lights in the
+            frameless-mac frame — only the window tools ride the lights' line. */}
         <span className="brand-mark">
           <BrandLogotype height={13} aria-hidden />
           <span className="visually-hidden">Sapiom </span>
@@ -42,7 +42,7 @@ export function BrandHeader({ onCollapse }: { onCollapse: () => void }): JSX.Ele
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           onClick={toggleTheme}
         >
-          <Icon name={theme === "dark" ? "Sun" : "Moon"} size={15} />
+          <Icon name={theme === "dark" ? "Sun" : "Moon"} size={14} />
         </button>
         <button
           className="theme-toggle"
@@ -51,7 +51,7 @@ export function BrandHeader({ onCollapse }: { onCollapse: () => void }): JSX.Ele
           title="Collapse workspace panel"
           onClick={onCollapse}
         >
-          <Icon name="PanelLeftClose" size={15} />
+          <Icon name="PanelLeftClose" size={14} />
         </button>
       </div>
     </header>

@@ -249,20 +249,6 @@ export function CanvasOverviewPanel({
           <>
             <Icon name="Radio" size={13} />
             Overview
-            <span className="canvas-overview-stats">
-              {(overview?.stats ?? "").split("·").map((pair) => {
-                const part = pair.trim();
-                if (!part) return null;
-                const gap = part.indexOf(" ");
-                const value = gap === -1 ? part : part.slice(0, gap);
-                const label = gap === -1 ? "" : part.slice(gap + 1);
-                return (
-                  <span key={part} className="canvas-overview-stat">
-                    <strong>{value}</strong> {label}
-                  </span>
-                );
-              })}
-            </span>
             <button
               className="theme-toggle canvas-overview-close"
               data-testid="canvas-overview-toggle"
@@ -341,20 +327,6 @@ export function CanvasOverviewPanel({
                     ))}
                   </ul>
                 )}
-                <div className="canvas-legend-row" aria-hidden="true">
-                  <span>
-                    <span className="dot dot--entry" />
-                    entry / active step
-                  </span>
-                  <span>
-                    <span className="dot dot--step" />
-                    step
-                  </span>
-                  <span>
-                    <span className="dot dot--terminal" />
-                    terminal
-                  </span>
-                </div>
               </>
             )
           )}

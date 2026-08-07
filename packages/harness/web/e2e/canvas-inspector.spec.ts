@@ -188,7 +188,8 @@ test("deselect restores the overview: Esc, the panel's close, and empty board sp
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
   await expect(panel).toContainText("Handles lease applications end to end");
-  await expect(panel).toContainText("4 steps");
+  // The step/exit count lives on the canvas board itself now (not repeated in
+  // this overview card), so the panel shows the description, not "N steps".
 
   // The panel's own close affordance does the same.
   await pickNode(page, "intake");

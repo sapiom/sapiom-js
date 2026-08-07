@@ -351,10 +351,14 @@ export function WorkflowsRail({
   const pickGrouping = (next: RailGrouping): void => {
     setGrouping(next);
     saveUiPrefs({ railGrouping: next });
+    // A click that changes the section also collapses the Past-sessions
+    // sub-card, matching the hover behaviour on the fixed choices.
+    setPastOpen(false);
   };
   const pickSort = (next: RailSort): void => {
     setSort(next);
     saveUiPrefs({ railSort: next });
+    setPastOpen(false);
   };
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   // Closing the menu also folds its Past-sessions sub-card, so it never
@@ -442,30 +446,18 @@ export function WorkflowsRail({
     <aside ref={railRef} className="rail rail-workflows" style={{ width, minWidth }}>
       <BrandHeader onCollapse={onCollapse} />
 
-      {/* Search and Templates are the two persistent labelled destinations
-          above the workspace tree: Search opens the command palette (carrying
-          the unboxed ⌘K / Ctrl+K shortcut), Templates opens the catalog. They
-          read as rows, not a boxed field or a bare magnifier — a destination is
-          not chrome, and an unlabelled magnifier made the app's broadest way in
-          the one thing you had to already know about. */}
+      {/* The rail's top stack of labelled destinations. "Create new" leads as
+          the primary affirmative action (a solid ink button — the app's primary
+          CTA, like Deploy); Search opens the command palette (carrying the
+          unboxed ⌘K / Ctrl+K shortcut) and Templates opens the catalog. Search
+          and Templates read as rows, not a boxed field or a bare magnifier — a
+          destination is not chrome. */}
       <nav className="rail-nav" aria-label="Primary">
-        <button
-          type="button"
-          className="rail-nav-row"
-          data-testid="palette-trigger"
-          aria-label="Search sessions, agents, and paths"
-          onClick={onOpenPalette}
-        >
-          <Icon name="Search" size={14} />
-          <span>Search</span>
-          <span className="rail-nav-kbd">{SHORTCUT_HINT}</span>
-        </button>
-
-        {/* The primary creative action, promoted out of the header + into a
-            standing CTA directly under Search: the fastest path to a new agent.
-            It opens the composer-first "new session" home; when the rail has
-            nothing yet it becomes the filled primary button so an empty
-            workspace has an obvious next step. */}
+        {/* The primary creative action, promoted out of the header + ABOVE
+            Search: the fastest path to a new agent. It opens the composer-first
+            "new session" home. A standing ink-button CTA; when the rail has
+            nothing yet it gains a soft brand halo so an empty workspace has an
+            obvious next step. */}
         <button
           type="button"
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
@@ -478,6 +470,18 @@ export function WorkflowsRail({
         >
           <Icon name="Plus" size={14} />
           <span>Create new</span>
+        </button>
+
+        <button
+          type="button"
+          className="rail-nav-row"
+          data-testid="palette-trigger"
+          aria-label="Search sessions, agents, and paths"
+          onClick={onOpenPalette}
+        >
+          <Icon name="Search" size={14} />
+          <span>Search</span>
+          <span className="rail-nav-kbd">{SHORTCUT_HINT}</span>
         </button>
 
         <button
@@ -971,7 +975,13 @@ function ProfileRow({
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         title={demo ? "Static demo. No Sapiom account, server, or agent is connected." : "Account"}
-        onClick={() => setMenuOpen((open) => !open)}
+        onClick={() => {
+          // Opening the account menu collapses the settings card so the two
+          // never stack — one section of the profile is open at a time.
+          const willOpen = !menuOpen;
+          setMenuOpen(willOpen);
+          if (willOpen) closeSettings();
+        }}
       >
         <span className="rail-profile-avatar" aria-hidden="true">
           {initial}
@@ -987,7 +997,7 @@ function ProfileRow({
             {meta}
           </span>
         </span>
-        <Icon name="ChevronDown" size={13} />
+        <Icon name="ChevronDown" size={14} />
       </button>
 
       <AnchoredPopover
