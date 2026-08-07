@@ -340,7 +340,9 @@ export function SessionBar({
 
       {/* + : add a session — OUTSIDE the scrollable queue so it stays visible
           however long the session list grows. */}
-      {onNewSession && (activeSession || composing) && (
+      {/* No "new session" + while the composer IS the new-session screen — it's
+          redundant there. Only alongside a live session. */}
+      {onNewSession && activeSession && !composing && (
         <button
           className="session-new"
           data-testid="session-new"
