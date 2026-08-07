@@ -40,15 +40,17 @@ import { z } from "zod/v4";
  *     engine owns, then hands off to the drip. A `dryRun` stops here and returns
  *     the full plan — openers and all — without sending or persisting anything.
  *   - **send** delivers the current touch to everyone still active and logs it,
- *     then pauses until either the drip interval elapses or a prospect replies.
- *   - **advance** wakes on that reply-or-timeout, marks anyone who replied as
- *     done, and either loops back for the next touch or ends the run.
+ *     then pauses until an advance signal arrives.
+ *   - **advance** wakes on that signal, marks anyone who replied as done, and
+ *     either loops back for the next touch or ends the run.
  *
- * Durability: the wait between touches is a `pauseUntilSignal` with a timeout —
- * it costs nothing while idle, resumes on its own when the interval passes, and
- * short-circuits the instant a `reply.received` signal arrives. Determinism:
- * each step body runs once on the happy path (again only on retry), and every
- * timestamp is captured server-side via Postgres `now()`.
+ * Durability: the wait between touches is a `pauseUntilSignal` with no
+ * `timeoutMs`. The current engine treats elapsed pause timeouts as terminal
+ * failures, so cadence comes from an external schedule/webhook that fires the
+ * same signal with either `{ email }` for replies or an empty payload when it is
+ * time for the next touch. Determinism: each step body runs once on the happy
+ * path (again only on retry), and every timestamp is captured server-side via
+ * Postgres `now()`.
  *
  * Zero-setup demo: with no `leads`, the run works `DEMO_LEADS` — three
  * fabricated companies and contacts — instead of stopping with nobody to write
@@ -66,8 +68,8 @@ import { z } from "zod/v4";
 // ─────────────────────────────────────────────────────────────── config ──
 /** Postgres handle the engine owns — created on first run, reused after. */
 const DEFAULT_DB_HANDLE = "cold-outreach-engine";
-/** The named signal a reply-webhook fires to end the drip early. */
-const REPLY_SIGNAL = "reply.received";
+/** The signal a reply webhook or drip scheduler fires to advance the loop. */
+const ADVANCE_SIGNAL = "outreach.advance";
 /** Cap the lead list so cost + latency stay bounded. */
 const MAX_LEADS = 25;
 /** Truncate each scraped body — the ONLY large data on the scrape→personalize path. */
@@ -801,8 +803,8 @@ const launch = defineStep({
 const send = defineStep({
   name: "send",
   next: ["advance", "done"],
-  // Static graph edge: on REPLY_SIGNAL, resume at `advance`. Matches the directive.
-  pause: { signal: REPLY_SIGNAL, resumeStep: "advance" },
+  // Static graph edge: on ADVANCE_SIGNAL, resume at `advance`. Matches the directive.
+  pause: { signal: ADVANCE_SIGNAL, resumeStep: "advance" },
   async run(_input: unknown, ctx: Ctx) {
     const campaign = ctx.shared.get("campaign") || "cold-outreach";
     const sequence = ctx.shared.get("sequence") ?? DEFAULT_SEQUENCE;
@@ -891,17 +893,16 @@ const send = defineStep({
       return goto("done", {});
     }
 
-    // Durable wait: idle at $0 until the interval elapses OR a reply lands.
+    // Durable wait: idle at $0 until the scheduler or reply webhook advances it.
     const dripMs = ctx.shared.get("dripMs") ?? DEFAULT_DRIP_DAYS * DAY_MS;
     ctx.logger.info("pausing between touches", {
       nextTouch: touchIndex + 1,
       dripMs,
     });
     return pauseUntilSignal({
-      signal: REPLY_SIGNAL,
+      signal: ADVANCE_SIGNAL,
       resumeStep: "advance",
       correlationId: ctx.executionId,
-      timeoutMs: dripMs,
     });
   },
 });
@@ -909,7 +910,7 @@ const send = defineStep({
 const advance = defineStep({
   name: "advance",
   next: ["send", "done"],
-  // Input is the reply-signal payload (`{ email }`) or empty on timeout.
+  // Input is `{ email }` for a reply, or empty when the drip scheduler advances.
   async run(input: { email?: string } | undefined, ctx: Ctx) {
     const campaign = ctx.shared.get("campaign") || "cold-outreach";
     const dbHandle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
