@@ -113,7 +113,32 @@ export { toVideoResumePayload } from "./content-generation/index.js";
 export { toImageResumePayload } from "./content-generation/index.js";
 
 export * as search from "./search/index.js";
-export { SearchHttpError } from "./search/index.js";
+export { SearchContractError, SearchHttpError } from "./search/index.js";
+export type { MapInput, MapLink, MapResult } from "./search/index.js";
+
+// searchindex — provisioned search indexes (auto-embedding); control plane + a
+// bound per-index handle for the data-plane operations.
+export * as searchindex from "./search-index/index.js";
+export {
+  DEFAULT_SEARCH_INDEX_RANGE_CURSOR,
+  DEFAULT_SEARCH_INDEX_RANGE_LIMIT,
+  SearchIndexContractError,
+  SearchIndexHttpError,
+} from "./search-index/index.js";
+export type {
+  SearchIndex,
+  SearchIndexInfo,
+  SearchIndexStatus,
+  CreateSearchIndexInput,
+  UpdateSearchIndexInput,
+  SearchDocumentInput,
+  SearchDocument,
+  SearchHit,
+  SearchQueryInput,
+  SearchIndexIncludeOptions,
+  SearchIndexRangeInput,
+  SearchIndexRangeResult,
+} from "./search-index/index.js";
 
 export * as database from "./database/index.js";
 export { DatabaseHttpError } from "./database/index.js";

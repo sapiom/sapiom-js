@@ -2,7 +2,7 @@
 
 Find information across the web and beyond — searching the web, reading pages,
 and looking up professional emails. More operations land in this namespace as
-they ship; today it offers `webSearch`, `scrape`, and `emailSearch`.
+they ship; today it offers `webSearch`, `scrape`, `map`, and `emailSearch`.
 
 ## `webSearch` — search the web
 
@@ -119,6 +119,41 @@ that format was requested.
 
 `scrape` works on HTML pages and common documents (PDF, DOCX, TXT). It is not
 meant for images, video, or archives.
+
+## `map` — discover a site's URLs
+
+Map a website without scraping every page's content. The SDK returns structured
+links, unlike the equivalent MCP tool's rendered text:
+
+```typescript
+const site = await sapiom.search.map({ url: "https://docs.example.com" });
+site.links; // [{ url, title?, description? }, …]
+```
+
+### Input
+
+- `url` (required) — the site or page from which discovery starts.
+
+### Result
+
+```typescript
+{
+  links: Array<{
+    url: string;
+    title?: string | null;
+    description?: string | null;
+  }>;
+  success?: boolean;
+}
+```
+
+Unlike the routed web-search, scrape, and email operations, `map` calls the
+Firecrawl gateway directly at `/v2/map`; authentication is still handled by the
+same Sapiom client. A successful response that does not contain a valid `links`
+array throws `SearchContractError` instead of being mistaken for an empty site.
+
+Each map call is priced at $0.009, independent of the number of discovered
+links.
 
 ## `emailSearch` — work with professional emails
 
