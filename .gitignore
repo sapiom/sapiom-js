@@ -38,7 +38,11 @@ Thumbs.db
 .changeset/pre.json
 
 .temp/
+# Claude Code: share .claude/skills/ (checked in for the team); keep personal
+# and machine-local artifacts out of git.
 .claude/commands/
+.claude/settings.local.json
+.claude/worktrees/
 .trees
 
 # Harness runtime output — canvas renders/cache + per-project context the CLI
