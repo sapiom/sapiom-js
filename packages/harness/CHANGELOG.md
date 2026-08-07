@@ -1,5 +1,41 @@
 # @sapiom/harness
 
+## 0.4.1
+
+### Patch Changes
+
+- e3b2e7a: Studio's top bar, rail icon, and window floor:
+
+  - While the composer home is up there is no session to name, so the bar's first
+    slot carries **Back** (a left arrow) to the session the composer was opened
+    over, replacing the inert `💬 new session` pill — and the composer's own
+    floating Back, which duplicated it and overlapped the heading on a narrow
+    window. With nothing behind the composer (first run, every session closed) the
+    slot is empty rather than offering a Back that goes nowhere.
+  - "Add existing agents" now reads with a folder**+** glyph instead of the open
+    folder it shared with the Workspaces header.
+  - The desktop window refuses to resize below **560×480**: dragged narrower, the
+    app became a strip of overlapping labels. The starter-template row also drops
+    to one column under 640px, where two cards left the names ellipsized past the
+    words that tell templates apart.
+
+- a34bd32: Studio UI fixes from design review:
+
+  - **Canvas chat input**: the "Ask about this agent/step" field is now a clean, boxless single row — no border, padding box, or separator hairline — that auto-grows upward up to five lines (then scrolls) with the Ask button bottom-anchored.
+  - **Canvas overview card**: no longer repeats the step/exit count or the entry/step/terminal legend that the canvas board already shows; the card focuses on the description, Describe-with-AI, notes, and per-step detail.
+  - **Rail brand header (frameless macOS)**: the Sapiom wordmark drops off the traffic-light line and reads inline as "sapiom agent.studio"; only the theme/collapse tools ride the lights' line.
+  - **Account menu**: opening the account menu now collapses the settings card (and vice-versa) so the two never stack; the Workspaces ⋯ menu's Past-sessions sub-card also collapses when a grouping/sort choice is clicked.
+  - **"Create new"**: promoted above Search as the primary affirmative action, restyled to the app's solid ink-button CTA (the Deploy treatment) with the reserved brand-green plus; the empty-rail state keeps a brand halo.
+  - **Rail spacing**: top-level rail rows share one icon size, icon–text gap, and left inset.
+  - **Sign-out**: removed the duplicate Disconnect from the settings panel — signing out now lives once in the account menu, below "Check for updates" and only when signed in.
+  - **Composer**: dropped the redundant "New session" + from the top bar of the create-new composer — you're already starting one there.
+  - **Canvas pane reveal**: an empty agent's board no longer snaps the canvas shut again right after you manually open it (a reveal race that also flaked CI); a live render still re-opens a pane you'd collapsed, and switching agents still follows the new board.
+  - **Collapsed panels**: the expand control is now the mirror of the collapse icon (a panel-open glyph, same quiet style) instead of a menu/list icon; the rail's top tools line up with the icons below them; and the Templates header no longer collides with the macOS traffic lights when the left panel is collapsed.
+
+- Updated dependencies [0bf040f]
+  - @sapiom/agent-core@0.10.4
+  - @sapiom/mcp@0.12.3
+
 ## 0.4.0
 
 ### Minor Changes
