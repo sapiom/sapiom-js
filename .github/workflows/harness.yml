@@ -1,0 +1,157 @@
+name: Harness
+
+# Harness-only checks: the web e2e suite (playwright-mock) and the desktop
+# packaging smoke (desktop-smoke). Both exercise ONLY @sapiom/harness and
+# @sapiom/harness-desktop, so this workflow is path-filtered to those packages
+# and their in-workspace dependency closure plus the shared build inputs (root
+# manifest, lockfile, workspace + tsconfig, and this file). A PR that touches
+# nothing in that set can't affect these checks, so the workflow simply doesn't
+# run for it — no wasted CI, and nothing is blocked (main has no required
+# status checks). Keep the paths list in sync if the harness gains a new
+# workspace dependency; the current closure is:
+#   harness -> agent, agent-core, agent-runtime, analytics-core, mcp,
+#              sandbox-preview, tools
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/harness/**"
+      - "packages/harness-desktop/**"
+      - "packages/agent/**"
+      - "packages/agent-core/**"
+      - "packages/agent-runtime/**"
+      - "packages/analytics-core/**"
+      - "packages/mcp/**"
+      - "packages/sandbox-preview/**"
+      - "packages/tools/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
+      - ".github/workflows/harness.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/harness/**"
+      - "packages/harness-desktop/**"
+      - "packages/agent/**"
+      - "packages/agent-core/**"
+      - "packages/agent-runtime/**"
+      - "packages/analytics-core/**"
+      - "packages/mcp/**"
+      - "packages/sandbox-preview/**"
+      - "packages/tools/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
+      - ".github/workflows/harness.yml"
+
+# Minimal token scope: these jobs only read the checked-out code.
+permissions:
+  contents: read
+
+jobs:
+  # Playwright mock-mode tier — harness web/e2e specs (VITE_MOCK=1, chromium only).
+  # The live/real-pty tiers (e2e:live, sim) are opt-in local only; nothing here
+  # invokes them — they require real agent binaries and credentials not in CI.
+  playwright-mock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Single Node version is enough — the mock tier tests browser behaviour,
+    # not Node version compat; that's covered by the matrix job in test.yml.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness and dependencies
+        run: pnpm --filter "@sapiom/harness..." build
+
+      # Cache Playwright browser binaries keyed on the package.json devDependency
+      # version so the cache invalidates on every @playwright/test bump.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('packages/harness/package.json') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @sapiom/harness exec playwright install chromium --with-deps
+
+      - name: Install Playwright system deps (cached hit path)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @sapiom/harness exec playwright install-deps chromium
+
+      - name: Run Playwright mock-mode suite
+        run: pnpm --filter @sapiom/harness test:ui
+
+      # The canvas suite renders the generated diagram documents in the same
+      # chromium this job already installed. It was previously opt-in only, so
+      # nothing verified in CI that a canvas the renderer produces actually
+      # paints — a rendering regression could only be caught by hand.
+      - name: Run Playwright canvas suite
+        run: pnpm --filter @sapiom/harness test:canvas
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: packages/harness/web/e2e/playwright-report/
+          retention-days: 7
+
+  # Desktop app: does the PACKAGED bundle still launch?
+  #
+  # Split from desktop-release.yml on purpose. That workflow BUILDS installers
+  # for three OSes and only runs on a `harness-desktop-v*` tag (plus a temporary
+  # feature-branch trigger) — releases, not feedback. But the bugs it catches are
+  # packaging bugs: asar path resolution, a native module against the wrong ABI, a
+  # dependency that wasn't unpacked, a mangled package.json. Waiting for a tag to
+  # discover those is too late, and unit/e2e tests structurally cannot see them.
+  #
+  # So the same `--smoke` checks run here, on every harness PR, Linux-only: Linux
+  # packages in ~2 minutes (node-pty ships a prebuilt binary, so nothing compiles)
+  # and the asar/serving/preload/PTY layers are platform-independent. macOS and
+  # Windows keep their per-OS runs in the release workflow, where the
+  # platform-specific toolchains matter.
+  desktop-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          # NOT the dev box's Node 26, which breaks Electron's binary extraction.
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness + desktop (topological)
+        run: pnpm --filter "@sapiom/harness-desktop..." build
+
+      - name: Package the Linux app
+        run: node packages/harness-desktop/scripts/pack.mjs --linux
+
+      - name: Install xvfb (Electron needs a display)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+
+      - name: Smoke-launch the packaged app
+        run: packages/harness-desktop/scripts/smoke.sh
