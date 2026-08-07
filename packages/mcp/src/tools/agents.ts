@@ -99,7 +99,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_scaffold",
-    "Scaffold a new Sapiom agent project into <dir>. Produces an npm-install-ready TypeScript project with a starter agent in index.ts. After scaffolding, the author writes step definitions and uses sapiom_dev_agents_run_local to test them.",
+    "Scaffold a new Sapiom agent project into <dir>. Produces a TypeScript project with a starter agent in index.ts and its dependencies installed (best-effort; if the install was skipped offline, run `npm install` in <dir>). After scaffolding, the author writes step definitions and uses sapiom_dev_agents_run_local to test them.",
     {
       dir: z
         .string()
@@ -121,6 +121,13 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
             targetDir: dir,
             template,
             templatesDir: coreTemplatesDir(),
+            // Install deps up front so the Studio Canvas can bundle the new
+            // project on its first (unprompted) render — its extraction resolves
+            // @sapiom/agent, zod, … from the project's own node_modules, so a
+            // never-installed project would otherwise open with a
+            // "Could not resolve …" render error. Best-effort: a failed install
+            // still returns a successful scaffold.
+            installDependencies: true,
           }),
         );
       } catch (err) {

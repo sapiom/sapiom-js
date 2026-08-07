@@ -20,6 +20,7 @@ import {
 } from "@sapiom/agent";
 import * as esbuild from "esbuild";
 
+import { describeBundleFailure } from "./bundle-error.js";
 import { AgentOperationError } from "./errors.js";
 
 /**
@@ -170,7 +171,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
       throw new AgentOperationError({
         code: "BUNDLE_FAILED",
         message: "Failed to bundle the agent.",
-        hint: err instanceof Error ? err.message : String(err),
+        hint: describeBundleFailure(sourceDir, err),
       });
     }
 

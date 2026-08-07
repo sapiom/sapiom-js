@@ -53,6 +53,11 @@ export type {
   ResolvedVersions,
 } from "./scaffold.js";
 
+// Best-effort dependency install + bundle-failure hinting — shared by scaffold,
+// the example seed, and the Canvas/check/run-local bundle paths.
+export { installProjectDependencies } from "./install-deps.js";
+export { describeBundleFailure } from "./bundle-error.js";
+
 // check (no Sapiom service call; imports author code while deriving the manifest)
 export { check } from "./check.js";
 export type { CheckOptions, CheckResult } from "./check.js";

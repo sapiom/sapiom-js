@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import { writeConfig } from "./config.js";
 import { AgentOperationError } from "./errors.js";
+import { installProjectDependencies } from "./install-deps.js";
 import { VERSION_FALLBACK } from "./version-fallback.generated.js";
 
 /**
@@ -294,6 +295,17 @@ export interface ScaffoldOptions {
    * the npm registry (may add ~5 s on slow connections).
    */
   versions?: ResolvedVersions;
+  /**
+   * Run a best-effort `npm install` in the new project so the Canvas can
+   * esbuild-bundle it on first render (its extraction resolves `@sapiom/agent`,
+   * `zod`, … from the project's own `node_modules`). Defaults to false so the
+   * CLI's `init` — which prints `npm install` as an explicit next step — and
+   * tests stay offline/fast. The Studio create path (the MCP scaffold tool)
+   * opts in with true so a newly-created agent opens with a working Canvas
+   * instead of a "Could not resolve …" render error. Non-fatal: a failed
+   * install (npm missing/offline) still returns a successful scaffold.
+   */
+  installDependencies?: boolean;
 }
 
 export interface ScaffoldResult {
@@ -302,6 +314,10 @@ export interface ScaffoldResult {
   projectName: string;
   /** Whether a git repo with an initial commit was created (false if `git` was unavailable). */
   gitInitialized: boolean;
+  /** Whether `npm install` ran and succeeded (always false when
+   *  `installDependencies` was not requested; false too when npm is
+   *  missing/offline — the Canvas then degrades to its "run npm install" hint). */
+  dependenciesInstalled: boolean;
 }
 
 /**
@@ -366,7 +382,20 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   // Studio's lifecycle metrics read ("default" = bare/from-scratch scaffold).
   writeConfig(targetDir, { starterId: template });
 
+  // Install deps BEFORE git init so the (gitignored) node_modules is present
+  // for the Canvas's first bundle while staying out of git history. Best-effort:
+  // a failed install (npm missing/offline) still yields a successful scaffold.
+  const dependenciesInstalled = opts.installDependencies
+    ? installProjectDependencies(targetDir)
+    : false;
+
   const gitInitialized = initGitRepo(targetDir);
 
-  return { targetDir, template, projectName, gitInitialized };
+  return {
+    targetDir,
+    template,
+    projectName,
+    gitInitialized,
+    dependenciesInstalled,
+  };
 }
