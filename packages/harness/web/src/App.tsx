@@ -191,6 +191,13 @@ export const App = (): JSX.Element => {
   // both directions.
   const [paneSliding, setPaneSliding] = useState(false);
   const rightCollapsedRef = useRef(false);
+  // The (session + bound workflow) whose EMPTY board we've already auto-collapsed.
+  // onCanvasState fires on every probe/reload/re-render; content always reveals
+  // (even a pane the user had collapsed), but an empty board collapses only ONCE
+  // per (session, binding) — so a redundant "still empty" probe can't re-close a
+  // pane the user just expanded (the right-pane e2e race), while a genuine
+  // session/binding change still collapses.
+  const emptyCollapsedKeyRef = useRef<string | null>(null);
   const paneSlidingRef = useRef(false);
   const paneElRef = useRef<HTMLDivElement | null>(null);
   const paneObserverRef = useRef<ResizeObserver | null>(null);
@@ -1420,7 +1427,20 @@ export const App = (): JSX.Element => {
                   const activeExited =
                     state.sessions.find((s) => s.id === harness.activeSessionId)?.status ===
                     "exited";
-                  setRightCollapsed(!hasContent && !activeExited);
+                  if (hasContent || activeExited) {
+                    // Content present (or an exited session's invite) → always
+                    // reveal, re-opening even a pane the user had collapsed.
+                    emptyCollapsedKeyRef.current = null;
+                    setRightCollapsed(false);
+                    return;
+                  }
+                  // Empty board → collapse once per (session, bound workflow). A
+                  // redundant probe for the same one must not re-close a pane the
+                  // user just expanded; a new session or binding still collapses.
+                  const key = `${harness.activeSessionId ?? ""}::${rightPaneWorkflow?.path ?? ""}`;
+                  if (emptyCollapsedKeyRef.current === key) return;
+                  emptyCollapsedKeyRef.current = key;
+                  setRightCollapsed(true);
                 }}
                 expanded={canvasExpanded}
                 onToggleExpanded={() => setCanvasExpanded((v) => !v)}
