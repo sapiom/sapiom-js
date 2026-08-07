@@ -379,7 +379,10 @@ input {
   align-items: center;
   justify-content: space-between;
   height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
+  /* Wordmark keeps the pane inset on the left; the tool cluster on the right
+     sits at --sp2 so its icons line up with the Workspaces ⋯ and the tree's
+     status icons (which sit at the same --sp2 right inset). */
+  padding: 0 var(--sp2) 0 var(--pane-pad-x);
   /* Transparent — the rail block's surface shows through, so the wordmark row
      is never a different colour from the rail beneath it. */
   background: transparent;
@@ -403,8 +406,10 @@ input {
   align-items: center;
   height: auto;
   /* No bottom padding: the --sp2 gap below agent.studio is owned by the nav's
-     padding-top, so agent.studio → Search matches every other top-stack gap. */
-  padding: 0 var(--pane-pad-x);
+     padding-top, so agent.studio → Search matches every other top-stack gap.
+     Right inset is --sp2 so the tool cluster lines up with the ⋯ / status
+     icons below (see the browser-frame .brand-header note). */
+  padding: 0 var(--sp2) 0 var(--pane-pad-x);
   column-gap: var(--sp2);
 }
 
@@ -441,7 +446,8 @@ input {
    session bar becomes the top-left element — leading with its rail-expand
    button, the affordance that brings the rail back. It takes over the
    clearance so the lights never land on that button. */
-:root[data-window-frame="macos"] .app-shell[data-rail-collapsed] .session-bar {
+:root[data-window-frame="macos"] .app-shell[data-rail-collapsed] .session-bar,
+:root[data-window-frame="macos"] .app-shell[data-rail-collapsed] .templates-bar {
   padding-left: 78px;
 }
 
@@ -2717,34 +2723,6 @@ input {
    subtle shadow, and — in light mode — a solid accent fill on hover (the
    product's `hover:bg-accent`); dark mode keeps the more restrained neutral
    hover the outline variant uses there. */
-.gear-btn {
-  width: var(--control-h-xs);
-  height: var(--control-h-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-2);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
-  color: var(--text-dim);
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.gear-btn:hover {
-  background: var(--surface-hover);
-  border-color: var(--ui-line-strong);
-  color: var(--text);
-}
-
-.gear-btn:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
 /* Portaled off the rail's profile row (AnchoredPopover, matchWidth): the
    surface comes from the ONE popover recipe; only the roomier content
    padding is its own. */
@@ -6669,7 +6647,7 @@ input {
   border-bottom: 1px solid var(--ui-line);
 }
 
-/* Matches Button variant="outline" size="icon" — see .gear-btn. */
+/* Matches Button variant="outline" size="icon": a 32px square icon button. */
 .dir-picker-up {
   flex: 0 0 auto;
   width: var(--control-h-xs);

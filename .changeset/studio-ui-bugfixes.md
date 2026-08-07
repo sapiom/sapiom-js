@@ -11,3 +11,4 @@ Studio UI fixes from design review:
 - **"Create new"**: promoted above Search as the primary affirmative action, restyled to the app's solid ink-button CTA (the Deploy treatment) with the reserved brand-green plus; the empty-rail state keeps a brand halo.
 - **Rail spacing**: top-level rail rows share one icon size, icon–text gap, and left inset.
 - **Sign-out**: removed the duplicate Disconnect from the settings panel — signing out now lives once in the account menu, below "Check for updates" and only when signed in.
+- **Collapsed panels**: the expand control is now the mirror of the collapse icon (a panel-open glyph, same quiet style) instead of a menu/list icon; the rail's top tools line up with the icons below them; and the Templates header no longer collides with the macOS traffic lights when the left panel is collapsed.

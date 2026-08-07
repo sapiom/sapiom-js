@@ -106,13 +106,13 @@ export function SessionBar({
     <div className="session-bar">
       {onExpandRail && (
         <button
-          className="gear-btn"
+          className="theme-toggle"
           data-testid="rail-expand"
           aria-label="Expand workspace panel"
           title="Expand workspace panel"
           onClick={onExpandRail}
         >
-          <Icon name="Menu" size={15} />
+          <Icon name="PanelLeftOpen" size={14} />
         </button>
       )}
 
@@ -356,13 +356,13 @@ export function SessionBar({
 
       {onExpandRight && (
         <button
-          className="gear-btn"
+          className="theme-toggle"
           data-testid="right-expand"
           aria-label="Expand canvas panel"
           title="Expand canvas panel"
           onClick={onExpandRight}
         >
-          <Icon name="List" size={15} />
+          <Icon name="PanelRightOpen" size={15} />
         </button>
       )}
 
