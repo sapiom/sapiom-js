@@ -8,6 +8,7 @@
  *
  * Run: npm start
  */
+import { assertDemoServerReachable } from "../shared/check-demo-server";
 import { createClient, config } from "./client";
 
 // ANSI colors for terminal output
@@ -74,6 +75,8 @@ async function main() {
   logInfo("• Pre-emptive authorization before HTTP requests");
   logInfo("• Automatic payment handling on 402 responses");
   logInfo("• Drop-in replacement for existing Axios code");
+
+  await assertDemoServerReachable(config.dummyServerUrl);
 
   // Create client
   const client = createClient();
