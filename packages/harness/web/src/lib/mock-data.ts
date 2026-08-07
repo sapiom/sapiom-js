@@ -946,9 +946,6 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     installed: true,
     installMcpPrompt:
       "Add the Sapiom MCP server to this project: run `claude mcp add sapiom --transport http https://api.sapiom.ai/v1/mcp`, restart the session, then run /mcp to confirm the sapiom tools are listed.",
-    // Mirrors the upstream adapter descriptors: claude-code and
-    // codex read images from a file path, so the composer offers attach.
-    imageInput: true,
   },
   {
     id: "codex",
@@ -958,7 +955,6 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     installed: true,
     installMcpPrompt:
       'Add the Sapiom MCP server to Codex: in ~/.codex/config.toml add an [mcp_servers.sapiom] entry with url = "https://api.sapiom.ai/v1/mcp", then restart Codex and confirm the sapiom tools are listed.',
-    imageInput: true,
   },
   // The rest of the registry, honestly non-launchable: the pickers list them
   // disabled with the reason in a tooltip (no fabricated availability).
@@ -969,7 +965,6 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     experimental: true,
     installed: false,
     installMcpPrompt: "",
-    imageInput: false,
   },
   {
     id: "opencode",
@@ -978,7 +973,6 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     experimental: true,
     installed: false,
     installMcpPrompt: "",
-    imageInput: false,
   },
   {
     id: "conductor",
@@ -987,7 +981,6 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     experimental: false,
     installed: false,
     installMcpPrompt: "",
-    imageInput: false,
   },
 ];
 

@@ -33,8 +33,6 @@ export const opencodeAdapterInfo: EmbeddedHarnessAdapterInfo = {
   label: "opencode",
   mode: "embedded",
   experimental: true,
-  // Scaffold adapter — image relay not yet exercised, so not offered.
-  imageInput: false,
   installMcpPrompt(): string {
     return INSTALL_MCP_PROMPT;
   },

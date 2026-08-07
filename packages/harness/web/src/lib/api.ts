@@ -8,8 +8,6 @@
 import type {
   AdoptSessionRequest,
   AppState,
-  AttachImageRequest,
-  AttachImageResponse,
   BindWorkflowRequest,
   CreateSessionRequest,
   FsDirEntry,
@@ -259,14 +257,6 @@ export interface HarnessApi {
   adoptSession(req: AdoptSessionRequest): Promise<HarnessSession>;
   killSession(id: string): Promise<void>;
   injectInput(id: string, req: InjectInputRequest): Promise<void>;
-  /** Attach an image (composer picker/paste/drop) to a session: the server
-   *  writes it into the project dir and relays its path into the agent's pty.
-   *  Only offered when the session's HarnessEntry declares imageInput — the
-   *  harness-launch server (eebb95c) has no /image route at all. */
-  attachImage(
-    id: string,
-    req: AttachImageRequest,
-  ): Promise<AttachImageResponse>;
   listWorkflows(): Promise<WorkflowInfo[]>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   scanWorkflows(root: string): Promise<WorkflowInfo[]>;
@@ -439,19 +429,6 @@ class RealApi implements HarnessApi {
   async injectInput(id: string, req: InjectInputRequest): Promise<void> {
     await this.request<{ ok: true }>(
       `/api/sessions/${encodeURIComponent(id)}/input`,
-      {
-        method: "POST",
-        body: JSON.stringify(req),
-      },
-    );
-  }
-
-  attachImage(
-    id: string,
-    req: AttachImageRequest,
-  ): Promise<AttachImageResponse> {
-    return this.request<AttachImageResponse>(
-      `/api/sessions/${encodeURIComponent(id)}/image`,
       {
         method: "POST",
         body: JSON.stringify(req),
@@ -1111,37 +1088,6 @@ class MockApi implements HarnessApi {
         lastInjectInput: { id, req },
       };
     }
-  }
-
-  async attachImage(
-    id: string,
-    req: AttachImageRequest,
-  ): Promise<AttachImageResponse> {
-    await delay();
-    const mediaType = /^data:([^;]+);/.exec(req.dataUrl)?.[1] ?? "image/png";
-    // base64 → decoded size: 4 chars encode 3 bytes.
-    const bytes = Math.max(
-      0,
-      Math.floor((req.dataUrl.split(",")[1]?.length ?? 0) * 0.75),
-    );
-    const response: AttachImageResponse = {
-      path: `/mock/cwd/.sapiom/uploads/${id}-${req.filename ?? "image"}`,
-      mediaType: mediaType as AttachImageResponse["mediaType"],
-      bytes,
-    };
-    // Test-only escape hatch, mock mode only — same pattern as lastInjectInput:
-    // Playwright reads this back to assert an attach actually fired.
-    if (typeof window !== "undefined") {
-      const win = window as unknown as {
-        __HARNESS_TEST__?: Record<string, unknown>;
-      };
-      const prev = (win.__HARNESS_TEST__?.attachImageCalls as unknown[]) ?? [];
-      win.__HARNESS_TEST__ = {
-        ...(win.__HARNESS_TEST__ ?? {}),
-        attachImageCalls: [...prev, { id, filename: req.filename, mediaType }],
-      };
-    }
-    return response;
   }
 
   async listWorkflows(): Promise<WorkflowInfo[]> {

@@ -28,7 +28,6 @@ import { ConnectivityBanner, ConnectivityScreen } from "./components/Connectivit
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
-import { ImageComposer } from "./components/ImageComposer";
 import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
 import { TelemetryNotice } from "./components/TelemetryNotice";
@@ -1232,22 +1231,15 @@ export const App = (): JSX.Element => {
                   }
                 />
               ) : showWorkbench && harness.activeSessionId ? (
-                <ImageComposer
-                  sessionId={harness.activeSessionId}
-                  harness={activeSession?.harness ?? "claude-code"}
-                  api={harness.api}
-                  showToast={harness.showToast}
-                >
-                  <div className="agent-view" data-testid="agent-view">
-                    <div className="agent-view-panel" id="agent-panel-terminal">
-                      <Terminal
-                        sessionId={harness.activeSessionId}
-                        token={harness.bootToken}
-                        cwd={activeSession?.cwd ?? null}
-                      />
-                    </div>
+                <div className="agent-view" data-testid="agent-view">
+                  <div className="agent-view-panel" id="agent-panel-terminal">
+                    <Terminal
+                      sessionId={harness.activeSessionId}
+                      token={harness.bootToken}
+                      cwd={activeSession?.cwd ?? null}
+                    />
                   </div>
-                </ImageComposer>
+                </div>
               ) : (
                 /* The composer-first home: no terminal, no canvas yet. Describe
                    an outcome (or pick a template) and a session starts; this
