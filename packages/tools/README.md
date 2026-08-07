@@ -71,11 +71,11 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | ------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | `sandboxes`         | Isolated, ephemeral compute                                                                           | [src/sandboxes](./src/sandboxes/README.md)                   |
 | `repositories`      | Private, in-network git repos                                                                         | [src/repositories](./src/repositories/README.md)             |
-| `agent`             | Coding agents (LLM execution)                                                                         | [src/agent](./src/agent/README.md)                           |
+| `models`            | Coding agents (LLM execution)                                                                         | [src/models](./src/models/README.md)                         |
 | `fileStorage`       | Tenant-scoped object storage (presigned URLs)                                                         | [src/file-storage](./src/file-storage/README.md)             |
 | `contentGeneration` | Media generation (images + video; audio soon), with optional `storage`                                | [src/content-generation](./src/content-generation/README.md) |
 | `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`) | [src/search](./src/search/README.md)                         |
-| `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                        | [src/orchestrations](./src/orchestrations/README.md)         |
+| `agents`            | Run a deployed agent, or dispatch one from a step and await its result                                | [src/agents](./src/agents/README.md)                         |
 | `schedules`         | Schedule a deployed orchestration to run on a cron, or once at a set time                             | [src/schedules](./src/schedules/README.md)                   |
 | `database`          | On-demand Postgres databases, returned with direct connection credentials                             | [src/database](./src/database/README.md)                     |
 | `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks               | [src/email](./src/email/README.md)                           |
@@ -87,7 +87,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 Capabilities are designed to work together. A coding `agent` run hands back the live `Sandbox` it executed in, and a `Repository` can publish a working tree straight from that sandbox:
 
 ```typescript
-const run = await agent.coding.run({ task, gitRepository: repo });
+const run = await models.coding.run({ task, gitRepository: repo });
 await repo.pushFromSandbox(run.sandbox);
 ```
 
