@@ -216,6 +216,33 @@ for (const t of templates) {
   }
 }
 
+// 4c. Onboarding-shelf discipline. `onboarding.eligible` is the STRICTER-than-gallery
+// first-impression bar the app renders as its onboarding suggestion shelf. The schema
+// gives it structure; these two rules give it integrity: (1) a template can only be a
+// good first impression if it runs with zero setup at all, so eligibility requires
+// `setup.runsWithNoSetup`; (2) `order` is the deterministic shelf sequence, so two
+// eligible templates must not claim the same slot.
+const shelfOrders = new Map();
+for (const t of templates) {
+  const ob = t.onboarding;
+  if (!ob || ob.eligible !== true) continue;
+  if (t.setup?.runsWithNoSetup !== true) {
+    errors.push(
+      `onboarding: "${t.id}" is onboarding.eligible but setup.runsWithNoSetup is not true — the shelf is a fresh-tenant first impression, so it must run with zero setup. Verify it, or drop the eligible flag.`,
+    );
+  }
+  if (typeof ob.order === "number") {
+    const prev = shelfOrders.get(ob.order);
+    if (prev) {
+      errors.push(
+        `onboarding: "${t.id}" and "${prev}" both declare onboarding.order ${ob.order} — the shelf order must be unique so the sequence is deterministic.`,
+      );
+    } else {
+      shelfOrders.set(ob.order, t.id);
+    }
+  }
+}
+
 // 4b. `discipline` agrees with `category`. A hard error, not a warning like the
 // complexity divergence below: that one compares an author's judgment against a
 // proxy and the author can be right, whereas a discipline outside its category's
