@@ -24,19 +24,24 @@ const errorMsgEl = document.getElementById("error-message")!;
 const retryBtn = document.getElementById("retry") as HTMLButtonElement;
 
 const PHASE_LABEL: Record<BootProgress["phase"], string> = {
-  starting: "Starting Sapiom…",
+  starting: "Starting…",
   doctor: "Checking your environment…",
   "installing-agent": "Setting up your coding agent…",
   auth: "Signing you in…",
-  consent: "One quick question…",
+  consent: "",
   "choosing-folder": "Preparing your workspace…",
   launching: "Launching…",
   ready: "Ready.",
 };
 
 bridge.onProgress((p: BootProgress) => {
-  statusEl.textContent = PHASE_LABEL[p.phase] ?? p.message;
-  detailEl.textContent = p.message;
+  const label = PHASE_LABEL[p.phase] ?? p.message;
+  statusEl.textContent = label;
+  // Show the detail line only when the message ADDS to the status. Most phases
+  // send a message equal to their label, so echoing it as a muted subtitle is
+  // just the same line twice; collapse those and reserve the detail for
+  // genuinely extra info (e.g. the agent-install progress lines).
+  detailEl.textContent = p.message === label ? "" : p.message;
   statusEl.dataset.status = p.status;
   if (p.phase === "consent" && p.status === "active") {
     consentEl.hidden = false;
