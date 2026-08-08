@@ -8315,3 +8315,302 @@ input {
 .composer-docs:hover {
   color: var(--text);
 }
+
+/* ── Overview: a DESTINATION that introduces the app ──────────────────────
+   Reached from the account menu, it stands in for the workbench the same way
+   Templates does (`.app.is-browsing` hides the panes) and brings its own bar
+   with the way back. Left-aligned on a reading measure — an overview, not a
+   centred pitch. Green is spent ONCE, on the three "how it works" glyphs (the
+   build → shape → ship spine); every other surface is neutral chrome, per the
+   app's rule that --brand is a deliberate accent and never the wash or line. */
+.overview-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Matches the session bar's height, so the shell's top edge does not shift as
+   you enter and leave. */
+.overview-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex: 0 0 auto;
+  min-height: var(--pane-header-h);
+  padding: 0 var(--pane-pad-x);
+  border-bottom: 1px solid var(--border);
+}
+
+.overview-bar-title {
+  font-size: var(--type-ui);
+  font-weight: 550;
+  color: var(--text);
+}
+
+.overview-bar-dash {
+  margin-left: auto;
+  gap: var(--sp2);
+  text-decoration: none;
+}
+
+.overview-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The reading measure — wide enough for a three-up feature grid, narrow enough
+   that hero copy keeps a comfortable line length on a wide monitor. */
+.overview-measure {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--sp7) var(--sp5) var(--sp8);
+  animation: refine-content-in var(--base, 0.22s) var(--ease) both;
+}
+
+.overview-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: var(--sp7);
+}
+
+/* The in-app lockup, verbatim: wordmark + lowercase-mono product name. The
+   wordmark IS "Sapiom", so the S mark is never set beside it. */
+.overview-lockup {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp2);
+  margin-bottom: var(--sp3);
+  color: var(--text);
+}
+
+.overview-lockup-product {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  letter-spacing: 0.01em;
+  color: var(--text-dim);
+}
+
+.overview-eyebrow {
+  margin: 0 0 var(--sp2);
+  font-size: var(--type-ui);
+  color: var(--text-dim);
+}
+
+.overview-hero-title {
+  margin: 0;
+  max-width: 22ch;
+  font-size: clamp(1.6rem, 1.3rem + 1.2vw, 1.95rem);
+  font-weight: 640;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.overview-hero-copy {
+  margin: var(--sp3) 0 0;
+  max-width: 60ch;
+  font-size: var(--type-ui);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.overview-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp2);
+  margin-top: var(--sp5);
+}
+
+/* Hero-scale CTAs: the shared button skins, sized up to the small-control step
+   with a leading glyph. */
+.overview-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp2);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp4);
+  font-size: var(--type-label);
+}
+
+.overview-signin-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  margin: var(--sp4) 0 0;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.overview-section-title {
+  margin: 0 0 var(--sp4);
+  font-size: var(--type-h2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* The build → shape → ship spine: three cards read left-to-right on a wide
+   window, stacking on a narrow one. */
+.overview-steps {
+  margin-bottom: var(--sp7);
+}
+
+.overview-steps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp3);
+}
+
+.overview-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: var(--sp4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* The one deliberate green on the page: a tinted glyph tile per step. */
+.overview-step-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 22%, transparent);
+}
+
+.overview-step-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.overview-step-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp2);
+  font-size: var(--type-label);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.overview-step-index {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  color: var(--brand);
+}
+
+.overview-step-body {
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* Feature grid: neutral throughout — glyph tiles are inset shade, not green. */
+.overview-features {
+  margin-bottom: var(--sp7);
+}
+
+.overview-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sp3);
+}
+
+.overview-feature {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  padding: var(--sp4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.overview-feature:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.overview-feature-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: var(--sp1);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  background: var(--surface-inset);
+}
+
+.overview-feature-title {
+  font-size: var(--type-label);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.overview-feature-body {
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.overview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp3);
+  padding-top: var(--sp4);
+  border-top: 1px solid var(--border);
+}
+
+.overview-foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-label);
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+.overview-foot-link:hover {
+  color: var(--text);
+}
+
+.overview-foot-version {
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
+
+@media (max-width: 640px) {
+  .overview-measure {
+    padding: var(--sp5) var(--sp4) var(--sp6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-measure {
+    animation: none;
+  }
+}

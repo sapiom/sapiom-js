@@ -210,6 +210,13 @@
     "reason": "The design-system Workflow icon identifier is private and remains unchanged."
   },
   {
+    "id": "overview-panel-icon-identifier",
+    "path": "packages/harness/web/src/components/OverviewPanel.tsx",
+    "pattern": "^Workflow$",
+    "occurrences": 2,
+    "reason": "The design-system Workflow icon identifier is private and remains unchanged (matches the CanvasPane allowlist entry)."
+  },
+  {
     "id": "canvas-step-private-identifiers",
     "path": "packages/harness/web/src/components/CanvasStepDetail.tsx",
     "pattern": "^(?:launched-workflow|canvas-open-workflow-)$",

@@ -116,19 +116,19 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
 });
 
 // ---------------------------------------------------------------------------
-// Overview mode canvas
+// Overview destination
 // ---------------------------------------------------------------------------
 
-test("the composer home hides the canvas, not showing the previous session's board", async ({
+test("the Overview hides the canvas, not showing the previous session's board", async ({
   page,
 }) => {
   await page.getByTestId("brand-identity").click();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("overview-panel")).toBeVisible();
 
-  // No canvas while composing — the previous session's board is not on show,
-  // and there is nothing to Visualize because there is no session yet.
-  await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
+  // The Overview stands in for the workbench (`.app.is-browsing` hides the
+  // panes), so the previous session's board is not on show behind it.
+  await expect(page.locator(".right-pane")).toBeHidden();
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 });
 

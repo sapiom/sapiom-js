@@ -36,6 +36,7 @@ import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
+import { OverviewPanel } from "./components/OverviewPanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
@@ -161,6 +162,10 @@ export const App = (): JSX.Element => {
   // Template gallery opened from the command palette (browse is reachable
   // from anywhere, not only the add dialog / welcome panel entries).
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  // The Overview: an introduction to the app, opened from the account menu's
+  // "Overview" item. A full-width destination like Templates (never the
+  // composer it used to alias), cleared by any navigation the same way.
+  const [overviewOpen, setOverviewOpen] = useState(false);
   // User session renames (no server rename endpoint yet, so names persist
   // client-side with the rest of the UI arrangement). State
   // here so the tab strip and the header re-render together on a rename.
@@ -364,6 +369,10 @@ export const App = (): JSX.Element => {
           e.preventDefault();
           setComposing(false);
           setReviewSummary(null);
+          // A tab jump is a navigation: leave any full-width destination that
+          // is standing in for the workbench, or it would linger over the tab.
+          setTemplatesOpen(false);
+          setOverviewOpen(false);
           harness.setActiveSessionId(target.id);
         }
       }
@@ -642,6 +651,7 @@ export const App = (): JSX.Element => {
   const createSessionAt = async (cwd: string, agentHarness: HarnessKind): Promise<HarnessSession> => {
     setComposing(false);
     setReviewSummary(null);
+    setOverviewOpen(false);
     setFocusedAgentPath(cwd);
     closeMobileDrawer();
     const session = await harness.createSession({ cwd, harness: agentHarness });
@@ -800,6 +810,7 @@ export const App = (): JSX.Element => {
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
+    setOverviewOpen(false);
     closeMobileDrawer();
     const session = state.sessions.find((s) => s.id === id);
     if (session) setFocusedAgentPath(boundWorkflowPathOf(session) ?? session.cwd);
@@ -812,6 +823,7 @@ export const App = (): JSX.Element => {
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
+    setOverviewOpen(false);
     harness.setActiveSessionId(id);
   };
 
@@ -821,6 +833,7 @@ export const App = (): JSX.Element => {
     setComposing(false);
     setReviewSummary(summary);
     setTemplatesOpen(false);
+    setOverviewOpen(false);
     closeMobileDrawer();
   };
 
@@ -843,6 +856,7 @@ export const App = (): JSX.Element => {
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
+    setOverviewOpen(false);
     setFocusedAgentPath(path);
     closeMobileDrawer();
     const tabs = liveSessionsForFocus(state.sessions, path);
@@ -877,6 +891,7 @@ export const App = (): JSX.Element => {
     if (target.kind === "template") {
       setDeepLinkTemplateId(target.templateId);
       setTemplatesOpen(true);
+      setOverviewOpen(false);
       return;
     }
     if (focusExistingRef.current?.(target.definitionId)) return;
@@ -934,6 +949,7 @@ export const App = (): JSX.Element => {
     if (owner) {
       setComposing(false);
       setReviewSummary(null);
+      setOverviewOpen(false);
       if (owner.id !== harness.activeSessionId) harness.setActiveSessionId(owner.id);
       targetId = owner.id;
     } else {
@@ -1075,9 +1091,10 @@ export const App = (): JSX.Element => {
           }}
           onCollapse={() => setRailCollapsed(true)}
           onSelectSession={openSession}
-          overviewSelected={showComposer}
+          overviewSelected={overviewOpen}
           onSelectOverview={() => {
-            setComposing(true);
+            setOverviewOpen(true);
+            setComposing(false);
             setReviewSummary(null);
             setTemplatesOpen(false);
             closeMobileDrawer();
@@ -1085,6 +1102,7 @@ export const App = (): JSX.Element => {
           onNewSession={() => {
             setComposing(true);
             setTemplatesOpen(false);
+            setOverviewOpen(false);
           }}
           onReviewSummary={reviewPastSession}
           history={harness.history}
@@ -1097,7 +1115,10 @@ export const App = (): JSX.Element => {
           listHarnesses={harness.listHarnesses}
           onScaffoldSession={handleScaffoldSession}
           onScaffoldInSession={handleScaffoldInSession}
-          onBrowseTemplates={() => setTemplatesOpen(true)}
+          onBrowseTemplates={() => {
+            setTemplatesOpen(true);
+            setOverviewOpen(false);
+          }}
           templatesActive={templatesOpen}
           onScanWorkflows={handleScanWorkflows}
           onToast={harness.showToast}
@@ -1156,11 +1177,16 @@ export const App = (): JSX.Element => {
         <div
           className={
             "app" +
-            (templatesOpen ? " is-browsing" : "") +
+            // Templates AND the Overview are both full-width destinations that
+            // stand in for the workbench — `.is-browsing` hides the panes for
+            // either.
+            (templatesOpen || overviewOpen ? " is-browsing" : "") +
             // The workbench animates the canvas column open/closed (see
             // .app.canvas-animated). Off while browsing / composing / mobile,
             // where the single-column switch should be instant.
-            (!templatesOpen && !isMobile && !showComposer ? " canvas-animated" : "") +
+            (!templatesOpen && !overviewOpen && !isMobile && !showComposer
+              ? " canvas-animated"
+              : "") +
             // Present only DURING an open/close slide: it pins the pane content
             // to its expanded width so it CLIPS instead of squishing. Dropped
             // when settled, so a collapsed pane's content truly goes to zero.
@@ -1175,7 +1201,7 @@ export const App = (): JSX.Element => {
               // Browsing and the composer home take the whole width: a
               // two-column card grid inside half the shell is the letterbox this
               // view exists to escape, and the composer has no canvas yet.
-              templatesOpen || isMobile || showComposer
+              templatesOpen || overviewOpen || isMobile || showComposer
                 ? "minmax(0, 1fr)"
                 : // Two tracks always, so the canvas column can animate to 0 on
                   // collapse — the pane (and its left-edge shadow) slides shut,
@@ -1206,6 +1232,26 @@ export const App = (): JSX.Element => {
               listTemplates={harness.listTemplates}
               getTemplate={harness.getTemplate}
               openTemplateId={deepLinkTemplateId}
+            />
+          )}
+
+          {/* The Overview: the same destination shape as Templates — a sibling
+              of the panes, shown full-width with `.is-browsing` hiding them. */}
+          {overviewOpen && (
+            <OverviewPanel
+              firstRun={state.firstRun === true}
+              authenticated={state.authenticated}
+              appVersion={getDesktopBridge()?.appVersion ?? null}
+              onExit={() => setOverviewOpen(false)}
+              onCreateNew={() => {
+                setOverviewOpen(false);
+                setComposing(true);
+                setTemplatesOpen(false);
+              }}
+              onBrowseTemplates={() => {
+                setOverviewOpen(false);
+                setTemplatesOpen(true);
+              }}
             />
           )}
 
@@ -1591,7 +1637,10 @@ export const App = (): JSX.Element => {
           onSelectSession={openSession}
           onReviewSummary={reviewPastSession}
           onOpenPath={(cwd) => void handleCreateSession(cwd, "claude-code")}
-          onBrowseTemplates={() => setTemplatesOpen(true)}
+          onBrowseTemplates={() => {
+            setTemplatesOpen(true);
+            setOverviewOpen(false);
+          }}
           onClose={() => setPaletteOpen(false)}
         />
       )}

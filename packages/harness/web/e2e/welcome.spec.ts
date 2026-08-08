@@ -1,10 +1,13 @@
 /**
- * The first-run / Overview home is now the composer-first "new session" screen
+ * The first-run home is the composer-first "new session" screen
  * (NewSessionComposer), which replaced the WelcomePanel overlay. `/?mockState=fresh`
  * renders MockApi as a brand-new install: no sessions, no recent dirs, no
  * workflows, AppState.firstRun set — the state the real CLI produces on a machine
  * that has never run the harness. The default fixtures (a lived-in install)
  * double as the returning-user case, which boots straight into its session.
+ *
+ * The account menu's "Overview" no longer aliases the composer: it opens the
+ * Overview destination (OverviewPanel), a standalone introduction to the app.
  *
  * Recent-workspaces used to live on this surface; it now belongs to the left rail
  * (workspace tree), so those cases moved out with the overlay.
@@ -12,20 +15,20 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/** Open the composer home from the account menu (Overview). */
+/** Open the Overview destination from the account menu. */
 async function openOverview(page: Page): Promise<void> {
   await page.getByTestId("brand-identity").click();
   await expect(page.getByTestId("profile-menu")).toBeVisible();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("overview-panel")).toBeVisible();
 }
 
-/** Open the composer, then the templates catalog from its "Browse all". */
+/** Open the Overview, then the templates catalog from its "Start from a template". */
 async function openTemplates(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await openOverview(page);
-  await page.getByTestId("composer-browse-templates").click();
+  await page.getByTestId("overview-browse-templates").click();
   await expect(page.getByTestId("templates-panel")).toBeVisible();
 }
 
@@ -90,26 +93,60 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   });
 
-  test("Overview opens the composer without the first-run greeting or opt-in", async ({ page }) => {
+  test("Overview opens the introduction, and Back returns to the session behind it", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
 
-    const composer = page.getByTestId("new-session-composer");
-    await expect(composer).toContainText("What should your agent do?");
-    // Greeted about a FIRST agent only on the first run, not every Overview.
-    await expect(page.getByTestId("composer-greeting")).not.toContainText("first agent");
-    // The one-time opt-in is a first-run surface only.
-    await expect(page.getByTestId("welcome-consent")).toHaveCount(0);
-    // The way back to the session it opened over.
-    await expect(page.getByTestId("composer-back")).toBeVisible();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
-    await expect(page.getByTestId("composer-browse-templates")).toBeVisible();
+    const overview = page.getByTestId("overview-panel");
+    // It introduces the whole loop, not the composer.
+    await expect(overview).toContainText("Build agents with your coding agent");
+    await expect(overview).toContainText("How it works");
+    // Its two on-ramps into the app.
+    await expect(page.getByTestId("overview-create-new")).toBeVisible();
+    await expect(page.getByTestId("overview-browse-templates")).toBeVisible();
+    // The Overview is a destination, not the composer it used to alias.
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+
+    // Back returns to the boot session that was behind it.
+    await page.getByTestId("overview-exit").click();
+    await expect(overview).toHaveCount(0);
+    await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
+  });
+
+  test("Overview's Build-an-agent CTA opens the composer", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    await openOverview(page);
+    await page.getByTestId("overview-create-new").click();
+
+    await expect(page.getByTestId("overview-panel")).toHaveCount(0);
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("new-session-composer")).toContainText("What should your agent do?");
+  });
+
+  test("the palette's Browse templates, opened over the Overview, leaves it (never stacks)", async ({
+    page,
+  }) => {
+    // The palette is a global overlay reachable even while a full-width
+    // destination is up; navigating from it must dismiss the Overview rather
+    // than mount Templates behind it.
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    await openOverview(page);
+    await page.getByTestId("palette-trigger").click();
+    await page.getByTestId("command-palette-input").fill("templates");
+    await page.getByTestId("command-palette-list").getByText("Browse templates").click();
+
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    await expect(page.getByTestId("overview-panel")).toHaveCount(0);
   });
 });
 
-test.describe("templates browser, reached from the composer", () => {
+test.describe("templates browser, reached from the Overview", () => {
   test("shows the live catalog with facets, not a pinned pair", async ({ page }) => {
     await openTemplates(page);
     const panel = page.getByTestId("templates-panel");

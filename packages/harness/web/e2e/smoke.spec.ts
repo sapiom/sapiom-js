@@ -192,39 +192,39 @@ test("the active session shows a busy pulse that clears once output goes quiet",
   await expect(busy).toHaveCount(0, { timeout: 6_000 });
 });
 
-test("Overview heads the account menu and opens the composer home; opening an agent leaves it", async ({ page }) => {
-  // Reference/new-session home lives in the account menu now, not a pinned rail
-  // row — one click deep but always available, not just on first run.
+test("Overview heads the account menu and opens the introduction; opening an agent leaves it", async ({ page }) => {
+  // The introduction lives in the account menu now, not a pinned rail row —
+  // one click deep but always available, not just on first run.
   await page.getByTestId("brand-identity").click();
   await expect(page.getByTestId("profile-menu")).toBeVisible();
   const item = page.getByTestId("rail-overview");
   await expect(item).toBeVisible();
   await item.click();
 
-  // Selection closes the menu and opens the composer-first "new session" home
-  // in the centre pane. There is no session to name while composing, so the bar
-  // carries Back to the one behind it instead.
+  // Selection closes the menu and opens the Overview destination — a standalone
+  // introduction to the app — full-width in the centre.
   await expect(page.getByTestId("profile-menu")).toHaveCount(0);
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("session-context-title")).toHaveText("Back");
+  const overview = page.getByTestId("overview-panel");
+  await expect(overview).toBeVisible();
+  await expect(overview).toContainText("Build agents with your coding agent");
 
   // Opening the leasing agent returns to the terminal — acme-app's one live
   // session is bound to it, so opening the agent attaches to that session and
-  // leaves the composer.
+  // leaves the Overview.
   await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
-  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+  await expect(overview).toHaveCount(0);
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
-test("Overview opens the composer, and Back returns to the session behind it", async ({ page }) => {
-  // The composer is a centre-pane screen, not an overlay: Back is how you return
-  // to the session it was opened over, and it leaves that session untouched.
+test("Overview opens the introduction, and Back returns to the session behind it", async ({ page }) => {
+  // The Overview is a centre-pane destination, not an overlay: Back returns to
+  // the session it was opened over, and leaves that session untouched.
   await page.getByTestId("brand-identity").click();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("overview-panel")).toBeVisible();
 
-  await page.getByTestId("composer-back").click();
-  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+  await page.getByTestId("overview-exit").click();
+  await expect(page.getByTestId("overview-panel")).toHaveCount(0);
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 

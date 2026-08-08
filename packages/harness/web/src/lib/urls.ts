@@ -14,3 +14,10 @@ export const SAPIOM_AGENTS_URL = `${SAPIOM_DASHBOARD_ROOT}/agents`;
 export function agentUrl(definitionId: number): string {
   return `${SAPIOM_AGENTS_URL}/${definitionId}`;
 }
+
+/** Documentation home — a different host from the dashboard, kept here for the
+ *  same reason: the one place a docs/domain change is made. */
+export const SAPIOM_DOCS_URL = "https://docs.sapiom.ai";
+
+/** The quick-start the Overview and first-run composer both point newcomers at. */
+export const SAPIOM_QUICKSTART_URL = `${SAPIOM_DOCS_URL}/agents/quick-start`;

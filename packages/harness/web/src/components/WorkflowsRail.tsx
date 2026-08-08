@@ -48,8 +48,9 @@ interface WorkflowsRailProps {
   onCollapse: () => void;
   /** Selects a session from the history menu (a past/exited session). */
   onSelectSession: (id: string) => void;
-  /** Overview lives in the account menu: it shows the composer home in the
-   *  main slot. Selecting any session leaves it. */
+  /** Overview lives in the account menu: it opens the Overview destination —
+   *  an introduction to the app — in the main slot. Selecting any session,
+   *  agent, or other destination leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
   /** The "Create new" CTA opens the composer-first "new session" home. */
