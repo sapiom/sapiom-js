@@ -57,6 +57,34 @@ describe("setup.html design-system wiring", () => {
   });
 });
 
+describe("setup.html brand lockup", () => {
+  // The wordmark's official path (design-system/assets/sapiom-logotype.svg,
+  // identical to the SPA's BrandLogotype.tsx). Its opening command is enough to
+  // prove the REAL asset is inlined, not a placeholder or a redrawn glyph.
+  const LOGOTYPE_PATH_HEAD = "M32.1834 7.36578L34.4714 5.81493";
+
+  it("inlines the real Sapiom wordmark, in currentColor", () => {
+    // Inlined (not <img>) so a public clone needs no binary and the CSP needs no
+    // img-src; currentColor so .brand-logotype can theme it to ink.
+    expect(html).toContain('class="brand-logotype"');
+    expect(html).toContain(LOGOTYPE_PATH_HEAD);
+    expect(html).toMatch(/<path\b[^>]*\bfill="currentColor"/);
+  });
+
+  it("names the app 'Sapiom agent.studio', the same lockup as the SPA header", () => {
+    // One accessible name on the lockup (the wordmark itself is aria-hidden), and
+    // the product name visible in text beside the mark.
+    expect(html).toMatch(/aria-label="Sapiom agent\.studio"/);
+    expect(html).toMatch(/class="brand-product"[^>]*>agent\.studio</);
+  });
+
+  it("drops the old plain-text wordmark — the logo replaces it", () => {
+    // The window shipped a text `<div class="brand">Sapiom</div>` before; the
+    // real logo supersedes it, so the placeholder must be gone.
+    expect(html).not.toMatch(/<div class="brand">/);
+  });
+});
+
 describe("copy-renderer.mjs puts every linked file in dist/renderer", () => {
   it("copies something for each stylesheet setup.html links", () => {
     for (const href of stylesheets) {

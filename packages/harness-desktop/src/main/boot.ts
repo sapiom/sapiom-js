@@ -123,7 +123,10 @@ async function decideConsent(
   }
 
   // First run, interactive: ask in the setup window and wait for the answer.
-  progress(setupWin, { phase: "consent", message: "Share anonymous usage data?", status: "active" });
+  // No subtitle: the checkbox below IS the question, so a "Share anonymous usage
+  // data?" detail line just duplicates it. "One quick question…" + the checkbox
+  // is the whole ask.
+  progress(setupWin, { phase: "consent", message: "", status: "active" });
   const optIn = await new Promise<boolean>((resolve) => {
     ipcMain.handleOnce(CONSENT_SUBMIT, (_e, value: boolean) => {
       resolve(Boolean(value));
@@ -262,7 +265,7 @@ export interface BootMode {
 
 export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<BootResult> {
   const { devMode, smoke } = mode;
-  progress(setupWin, { phase: "starting", message: "Starting Sapiom…", status: "active" });
+  progress(setupWin, { phase: "starting", message: "Starting…", status: "active" });
 
   // 1. PATH — must precede doctor so `which claude` works in a GUI app. Also
   //    materialize node/npm shims (Electron-as-Node) and put them first, so the
