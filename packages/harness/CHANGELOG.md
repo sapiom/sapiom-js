@@ -1,5 +1,47 @@
 # @sapiom/harness
 
+## 0.5.0
+
+### Minor Changes
+
+- 5aa3e01: Give the account menu's "Overview" its own page — a proper introduction to Agent Studio
+
+  "Overview" used to be an alias for the composer home. It now opens a standalone
+  Overview destination (`OverviewPanel`) that introduces the app: the
+  build-with-your-coding-agent → shape-on-the-Canvas → run-on-Sapiom loop, a
+  "How it works" trio, and a grid of what's in the window (embedded coding agent,
+  Agents rail, Canvas, Templates, deploy, production run, Sapiom capabilities,
+  zero config mutation). It renders as a full-width destination like Templates
+  (`.app.is-browsing` hides the panes) with its own top bar, a Build-an-agent CTA
+  into the composer, and a Start-from-a-template shortcut.
+
+  The page follows the Studio brand: neutral chrome throughout, with the scarce
+  green (`--brand`) spent only on the three "how it works" glyphs. First run warms
+  the eyebrow to a welcome and, when signed out, hints at connecting a Sapiom
+  account. "Create new" (the composer) is unchanged and remains the primary
+  creative action.
+
+### Patch Changes
+
+- 19b8bbb: Install a new agent's dependencies on scaffold, and turn the Canvas's "Could not resolve …" render error into an actionable "run npm install" hint
+
+  The Canvas step-graph extraction (`check` / `loadDefinition`) esbuild-bundles a project's `index.ts` resolving its imports — `@sapiom/agent`, `zod`, … — from the project's own `node_modules`. A newly-scaffolded (or freshly-cloned) agent whose deps were never installed therefore failed its very first, unprompted Canvas render with a raw esbuild wall (`Could not resolve "@sapiom/agent" … Could not resolve "zod"`), which the failure panel relayed verbatim.
+
+  Two fixes:
+
+  - `scaffold()` gains an opt-in `installDependencies` flag (returned as `dependenciesInstalled`), and the `sapiom_dev_agents_scaffold` MCP tool — the Studio's create path — now passes it, so a new agent opens with a working Canvas. Best-effort and non-fatal: a missing/offline npm still yields a successful scaffold. The `installProjectDependencies` helper (previously demo-only inside the harness's example seed) now lives in `@sapiom/agent-core` and is shared by both.
+  - `check` and `loadDefinition` now route bundle failures through `describeBundleFailure`, which detects the "no `node_modules` + unresolved import" case and returns `Dependencies are not installed. Run \`npm install\` in <dir>, then try again.` (preserving the raw esbuild detail). Every other bundle failure's message is unchanged.
+
+- 03d23c8: Hold a new session's first prompt until Claude Code is signed in
+
+  Starting a session from the composer (or a template/clone) created the session and then fired the initial prompt immediately, retrying only on a 409 for ~9s. But a Claude Code session only becomes injectable once its `SessionStart` hook fires — which doesn't happen until the user is past Claude's own login/onboarding. A first-time, not-yet-signed-in user therefore blew past the 9s window and the prompt was silently dropped.
+
+  The prompt is now held per session and sent the moment the session reports ready (i.e. Claude is signed in and interactive). If the session is still not ready after a short grace, a hint points the user at the terminal login ("Sign in to Claude in the terminal — your prompt sends automatically once you're signed in"), so first-run intent is preserved instead of lost.
+
+- Updated dependencies [19b8bbb]
+  - @sapiom/agent-core@0.10.5
+  - @sapiom/mcp@0.12.4
+
 ## 0.4.1
 
 ### Patch Changes
