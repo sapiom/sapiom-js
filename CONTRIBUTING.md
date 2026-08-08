@@ -7,7 +7,7 @@ Thank you for your interest in contributing to the Sapiom SDK! We welcome contri
 ### Prerequisites
 
 - Node.js 18.0.0 or higher
-- pnpm 8.0.0 or higher
+- pnpm 10.0.0 or higher (the repo pins `pnpm@10.34.3` via `packageManager`)
 
 ### Setup
 
@@ -15,8 +15,8 @@ Thank you for your interest in contributing to the Sapiom SDK! We welcome contri
 2. Clone your fork:
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/sdk.git
-   cd sdk
+   git clone https://github.com/YOUR_USERNAME/sapiom-js.git
+   cd sapiom-js
    ```
 
 3. Install dependencies:
@@ -42,17 +42,42 @@ Thank you for your interest in contributing to the Sapiom SDK! We welcome contri
 
 This is a monorepo containing multiple packages:
 
+**Build & run agents**
+
+- `@sapiom/agent` - Authoring contract: `defineAgent`, `defineStep`, directives, types
+- `@sapiom/tools` - Typed client for Sapiom capabilities (sandboxes, repos, models, …)
+- `@sapiom/cli` - Command line: scaffold, validate, deploy, and schedule agents
+- `@sapiom/mcp` - Local developer MCP server (`sapiom-dev`)
+
+**Runtime internals**
+
+- `@sapiom/agent-core` - Pure functions for scaffolding, validating, and operating agents
+- `@sapiom/agent-runtime` - Host-agnostic graph-walker runtime
+- `@sapiom/analytics-core` - Zero-dependency usage analytics emitter
+- `@sapiom/sandbox-preview` - Client-side flow for deploying a web-app preview to a sandbox
+
+**Agent Studio**
+
+- `@sapiom/harness` - CLI-launched local web app that runs your coding agent
+- `@sapiom/harness-desktop` - Electron desktop host for the harness (private)
+- `@sapiom/agent-studio` - Studio workspace package
+
+**Core SDK**
+
 - `@sapiom/core` - Core SDK functionality
-- `@sapiom/axios` - Axios integration
 - `@sapiom/fetch` - Fetch API integration
-- `@sapiom/node-http` - Node.js HTTP/HTTPS integration
-- `@sapiom/langchain` - LangChain integration
+
+**Deprecated** — not accepting new features; fixes only
+
+- `@sapiom/sandbox` - superseded by `sapiom.sandboxes.*` in `@sapiom/tools`
+- `@sapiom/axios`, `@sapiom/node-http` - legacy HTTP integrations
+- `@sapiom/langchain`, `@sapiom/langchain-classic` - unmaintained, no longer published
 
 ### Working on a Package
 
 ```bash
 # Navigate to a specific package
-cd packages/core
+cd packages/agent
 
 # Build in watch mode
 pnpm dev
@@ -170,10 +195,10 @@ pnpm test
 pnpm test:coverage
 
 # Run tests for specific package
-pnpm --filter @sapiom/core test
+pnpm --filter @sapiom/agent test
 
 # Watch mode
-pnpm --filter @sapiom/core test:watch
+pnpm --filter @sapiom/agent test:watch
 ```
 
 ### Mutation Testing
@@ -197,7 +222,7 @@ pnpm --filter @sapiom/analytics-core test:mutation
 pnpm build
 
 # Build specific package
-pnpm --filter @sapiom/core build
+pnpm --filter @sapiom/agent build
 
 # Clean build artifacts
 pnpm clean
