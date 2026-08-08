@@ -343,10 +343,12 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   if (!opts.versions) {
     const sapiomRegistry = registryFor("@sapiom/tools");
     if (sapiomRegistry !== DEFAULT_REGISTRY) {
-      writeFileSync(
-        path.join(targetDir, ".npmrc"),
-        `@sapiom:registry=${sapiomRegistry}\n`,
-      );
+      const npmrcPath = path.join(targetDir, ".npmrc");
+      const existing = existsSync(npmrcPath) ? readFileSync(npmrcPath, "utf8") : "";
+      const line = `@sapiom:registry=${sapiomRegistry}\n`;
+      if (!existing.includes(line)) {
+        writeFileSync(npmrcPath, existing + line);
+      }
     }
   }
 
