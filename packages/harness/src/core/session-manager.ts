@@ -22,6 +22,12 @@ import {
   type SpawnSpec,
 } from "../shared/types.js";
 import { expandHome } from "./paths.js";
+import {
+  initialBracketedPasteState,
+  trackBracketedPaste,
+  wrapPaste,
+  type BracketedPasteState,
+} from "./bracketed-paste.js";
 import { HOST_ESBUILD_PIN } from "./asar-path.js";
 import { resolveSpawnTarget } from "./spawn-target.js";
 import { stripAnsi } from "./strip-ansi.js";
@@ -123,6 +129,12 @@ const EXIT_TAIL_BYTES = 4_096;
  * prompt sits in the input box and is never sent. Splitting the write with
  * a short delay makes the terminal see two distinct input events instead —
  * a paste, then a separate Enter.
+ *
+ * The split alone is a timing guess against the app's own paste heuristic;
+ * when the app has bracketed paste on, `submitInput` also marks where the
+ * pasted content ends (see `core/bracketed-paste.ts`), which is what makes
+ * the Enter a keypress rather than a race. The delay stays either way — it
+ * costs one beat and covers apps that debounce their input handling.
  */
 const SUBMIT_DELAY_MS = 300;
 /** See `kill()`: how long to wait for a graceful exit before escalating to SIGKILL. */
@@ -295,6 +307,14 @@ interface PtyHandle {
   emitter: EventEmitter;
   /** Epoch ms this pty was spawned — see `isReadyEnough`'s settle window. */
   spawnedAt: number;
+  /**
+   * Whether the app running in this pty has bracketed paste (DEC mode 2004)
+   * on, folded from its own output — see `submitInput` and
+   * `core/bracketed-paste.ts`. Read off the stream rather than assumed so a
+   * harness that never enables the mode is never fed escape sequences it
+   * would render as literal text.
+   */
+  bracketedPaste: BracketedPasteState;
   /**
    * Resolves when this specific pty handle's session has fully exited —
    * either via node-pty's real `onExit` event OR a synthesized exit (kill()'s
@@ -766,7 +786,11 @@ export class SessionManager {
     } else if (text.length === 0) {
       handle.pty.write("\r");
     } else {
-      handle.pty.write(text);
+      // Bracketed when the app supports it: newlines in the prompt (the canvas
+      // chat prepends a multi-line step context to every question) then stay
+      // literal instead of each submitting a fragment, and the `\r` below is
+      // read as Enter rather than as more pasted content.
+      handle.pty.write(handle.bracketedPaste.enabled ? wrapPaste(text) : text);
       await sleep(SUBMIT_DELAY_MS);
       // The pty may have been killed/replaced while we were waiting.
       if (this.ptys.get(id) !== handle) return false;
@@ -973,7 +997,16 @@ export class SessionManager {
     const exited = new Promise<void>((resolve) => {
       resolveExited = resolve;
     });
-    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now(), exited, resolveExited, killed: false };
+    const handle: PtyHandle = {
+      pty,
+      buffer: "",
+      emitter,
+      spawnedAt: Date.now(),
+      bracketedPaste: initialBracketedPasteState,
+      exited,
+      resolveExited,
+      killed: false,
+    };
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -986,6 +1019,7 @@ export class SessionManager {
     this.emitStatus(session);
 
     pty.onData((chunk) => {
+      handle.bracketedPaste = trackBracketedPaste(handle.bracketedPaste, chunk);
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       handle.emitter.emit("data", chunk);
       this.recordActivity(session.id);

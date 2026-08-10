@@ -229,6 +229,52 @@ describe("SessionManager", () => {
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("draft text");
     });
 
+    it("brackets the text once the app has turned bracketed paste on", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
+      // The TUI announces mode 2004 in its own output; only then is it safe to
+      // send the markers rather than have them rendered as literal text.
+      spawns[0]?.emitData("\x1b[?1049;2004h");
+
+      const submitPromise = manager.submitInput(session.id, "step context\n\nDebug this step", true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await submitPromise).toBe(true);
+
+      // One paste whose newlines can't submit a fragment, then Enter.
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
+        1,
+        "\x1b[200~step context\n\nDebug this step\x1b[201~",
+      );
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+    });
+
+    it("writes the text raw again once the app turns bracketed paste back off", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      spawns[0]?.emitData("\x1b[?2004l");
+
+      const submitPromise = manager.submitInput(session.id, "hello world", true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await submitPromise).toBe(true);
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "hello world");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+    });
+
+    it("never brackets a submit:false draft — the text is the user's to edit", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+
+      expect(await manager.submitInput(session.id, "draft text", false)).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("draft text");
+    });
+
     it("returns false for an unknown session without ever touching a pty", async () => {
       const { manager } = makeManager();
       expect(await manager.submitInput("unknown-id", "hello", true)).toBe(false);
