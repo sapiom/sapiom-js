@@ -436,7 +436,13 @@ input {
 :root[data-window-frame="macos"] .brand-header {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  grid-template-rows: var(--header-h) auto;
+  /* Row 1 is the traffic-light line, shortened from --header-h so the lockup
+     sits ONE --sp2 (the header's row-gap) below the window tools — matching the
+     agent.studio → Search gap instead of the old ~20px chasm under the lights.
+     The value keeps the tools' bottom exactly where a full --header-h row
+     centred them, so they stay aligned with the OS lights; the tools bottom-
+     align (below) to hold that line as the row shrinks. */
+  grid-template-rows: calc((var(--header-h) + var(--control-h-xs)) / 2) auto;
   align-items: center;
   height: auto;
   /* No bottom padding: the --sp2 gap below agent.studio is owned by the nav's
@@ -454,12 +460,15 @@ input {
 :root[data-window-frame="macos"] .brand-header .brand-header-window {
   grid-column: 1;
   grid-row: 1;
+  /* Bottom-align so the tools keep the lights' line as row 1 shrinks. */
+  align-self: end;
   padding-left: calc(var(--mac-lights-inset) - var(--pane-pad-x));
 }
 
 :root[data-window-frame="macos"] .brand-header .session-nav {
   grid-column: 3;
   grid-row: 1;
+  align-self: end;
 }
 
 /* The lockup drops in full to the line below the lights, reading inline as
@@ -2230,6 +2239,14 @@ input {
 @container (max-width: 580px) {
   .session-bar .session-step:not(.session-action-primary) .session-step-label {
     display: none;
+  }
+  /* Icon-only now: square the box (width = its --control-h-xs height) and drop
+     the horizontal padding, so a bordered control reads as a square icon button
+     rather than a wide rectangle. */
+  .session-bar .session-step:not(.session-action-primary) {
+    width: var(--control-h-xs);
+    padding: 0;
+    justify-content: center;
   }
 }
 
