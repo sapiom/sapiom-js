@@ -1,0 +1,95 @@
+name: Bug report
+description: Report a reproducible problem with sapiom-js.
+title: "[Bug]: "
+labels:
+  - bug
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+        Before continuing, search [existing issues](https://github.com/sapiom/sapiom-js/issues?q=is%3Aissue) to avoid duplicates.
+
+        Do not report suspected vulnerabilities in a public issue. Follow our [Security Policy](https://github.com/sapiom/sapiom-js/security/policy) for private reporting. Remove secrets, credentials, personal data, and other sensitive information from all examples, logs, and attachments.
+
+  - type: input
+    id: affected-area
+    attributes:
+      label: Affected package or area
+      description: Name the package, CLI command, tool, or repository area where the problem occurs.
+      placeholder: "For example: @sapiom/core, @sapiom/cli, or the example gallery"
+    validations:
+      required: true
+
+  - type: input
+    id: affected-version
+    attributes:
+      label: Affected version, release, or commit
+      description: Provide the package version, release tag, or commit SHA where you observed the problem.
+      placeholder: "For example: @sapiom/core 0.12.0, v0.12.0, or abc1234"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the versions and runtime details needed to reproduce the problem.
+      placeholder: |
+        Node.js:
+        Package manager and version:
+        Operating system:
+        Runtime or framework (if relevant):
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction and steps
+      description: Link a minimal repository or include the smallest code sample you can, then list the exact steps that reproduce the problem.
+      placeholder: |
+        Reproduction link or code sample:
+
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Logs, screenshots, and additional context
+      description: Add any other sanitized information that may help. You can attach files or use Markdown formatting.
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I searched existing open and closed issues for this problem.
+          required: true
+        - label: This report does not describe a suspected security vulnerability; I will use the [Security Policy](https://github.com/sapiom/sapiom-js/security/policy) for private reporting.
+          required: true
+        - label: I removed secrets, credentials, personal data, and other sensitive information from this report.
+          required: true

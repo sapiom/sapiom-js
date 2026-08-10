@@ -1,0 +1,71 @@
+name: Feature request
+description: Propose a problem or use case for maintainer discussion.
+title: "[Feature]: "
+labels:
+  - enhancement
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement to sapiom-js.
+
+        Before continuing, search [existing issues](https://github.com/sapiom/sapiom-js/issues?q=is%3Aissue) to avoid duplicates. Start with the problem and use case rather than a specific implementation.
+
+        Please wait for maintainer agreement before investing in implementation. Read the [Contribution Guidelines](https://github.com/sapiom/sapiom-js/blob/main/CONTRIBUTING.md) for details. Remove secrets, credentials, personal data, and other sensitive information from this request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What limitation, difficulty, or unmet need are you encountering?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Who encounters this problem, when does it happen, and what are they trying to accomplish?
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: What should become possible or easier if this request is addressed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-workaround
+    attributes:
+      label: Current workaround
+      description: If you have a workaround today, describe it and its limitations.
+
+  - type: input
+    id: affected-area
+    attributes:
+      label: Affected package or area
+      description: If known, name the package, CLI command, tool, or repository area involved.
+      placeholder: "Optional"
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives, proposed solution, and additional context
+      description: Optionally describe alternatives you considered, a possible solution, or other sanitized context.
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I searched existing open and closed issues for this request.
+          required: true
+        - label: I understand that I should wait for maintainer agreement before investing in implementation.
+          required: true
+        - label: I removed secrets, credentials, personal data, and other sensitive information from this request.
+          required: true

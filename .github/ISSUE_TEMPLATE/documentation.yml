@@ -1,0 +1,77 @@
+name: Documentation issue
+description: Report missing, incorrect, unclear, or outdated documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+  - needs-triage
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the sapiom-js documentation.
+
+        Before continuing, search [existing issues](https://github.com/sapiom/sapiom-js/issues?q=is%3Aissue) to avoid duplicates. Remove secrets, credentials, personal data, and other sensitive information from all examples and attachments.
+
+  - type: input
+    id: documentation-location
+    attributes:
+      label: Documentation location
+      description: Link the affected page or provide its repository path.
+      placeholder: "For example: https://docs.sapiom.ai/... or packages/core/README.md"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: problem-type
+    attributes:
+      label: Problem type
+      description: Select the option that best describes the documentation problem.
+      options:
+        - Incorrect
+        - Missing
+        - Unclear
+        - Outdated
+        - Broken example or link
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-problem
+    attributes:
+      label: What is wrong or missing?
+      description: Explain the current documentation problem and why it is confusing or incorrect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-documentation
+    attributes:
+      label: What should the documentation say or enable?
+      description: Describe the correct information or the task a reader should be able to complete.
+    validations:
+      required: true
+
+  - type: input
+    id: affected-version
+    attributes:
+      label: Affected SDK or documentation version
+      description: If the problem is version-specific, provide the relevant package version, release, or commit.
+      placeholder: "Optional"
+
+  - type: textarea
+    id: suggested-change
+    attributes:
+      label: Suggested correction and additional context
+      description: Optionally propose wording, attach screenshots, or provide other sanitized context.
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I searched existing open and closed issues for this documentation problem.
+          required: true
+        - label: I removed secrets, credentials, personal data, and other sensitive information from this report.
+          required: true
