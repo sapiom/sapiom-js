@@ -2,6 +2,7 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
+import type { CanvasOverviewContent } from "../components/CanvasOverviewPanel";
 import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionRecord, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
 
 const now = Date.now();
@@ -11,10 +12,7 @@ const daysAgo = (n: number): string => new Date(now - n * 24 * 60 * 60_000).toIS
 /** The directory the harness itself was launched from (`npx @sapiom/harness [dir]`). */
 /** Demo-only canvas overview content (the real renderer emits this inside
  * its own document; live mode therefore renders no app-side panel). */
-export const MOCK_CANVAS_OVERVIEWS: Record<
-  string,
-  { description: string; stats: string; notes: string[] }
-> = {
+export const MOCK_CANVAS_OVERVIEWS: Record<string, CanvasOverviewContent> = {
   "/Users/demo/acme-app/leasing": {
     description: "Handles lease applications end to end: screening, credit check, and approval routing.",
     // Counting rule shared with the Steps tab (canvas-graph's graphCounts):
@@ -24,6 +22,13 @@ export const MOCK_CANVAS_OVERVIEWS: Record<
       "Applications default to manual review when the score field is missing.",
       "Only scores of 620 and above auto-draft a lease; everything else escalates.",
       "Both terminal steps are marked terminal-success in the graph.",
+    ],
+    // The chrome the board used to float over the graph.
+    badges: ["deployed agent"],
+    legend: [
+      { kind: "entry", label: "entry / active step" },
+      { kind: "step", label: "step" },
+      { kind: "terminal-success", label: "terminal · success" },
     ],
   },
 };

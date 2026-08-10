@@ -36,7 +36,7 @@ import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
-import { OverviewPanel } from "./components/OverviewPanel";
+import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
@@ -69,6 +69,7 @@ import { directActionKind } from "./lib/macro-actions";
 import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
+import { useNavigationHistory, type NavigationVisit } from "./lib/navigation-history";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState, type ObservedRun, type RunTarget } from "./lib/use-harness-state";
 import {
@@ -283,6 +284,11 @@ export const App = (): JSX.Element => {
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const isMobile = useMobileShell();
 
+  // Back/forward across every screen the shell can show. The stack is fed by
+  // the place the shell IS (derived below), not by instrumenting each door, so
+  // a new way into a view is navigable the day it lands.
+  const navHistory = useNavigationHistory();
+
   const { widths, canvasResizing, startRailDrag, startCanvasDrag, resetRail, resetCanvas } =
     usePaneWidths();
   // The canvas slides open/shut by animating its grid column to/from 0 (the
@@ -476,6 +482,59 @@ export const App = (): JSX.Element => {
   useEffect(() => {
     saveUiPrefs({ rightTab });
   }, [rightTab]);
+
+  // The place the shell is showing, in the same precedence render uses. It is
+  // derived rather than pushed at each door so every screen is navigable, and
+  // recording it is idempotent: applying a visit re-derives the same place,
+  // which dedupes against the tip instead of branching the stack.
+  const recordVisit = navHistory.record;
+  const activeSessionIdForNav = harness.activeSessionId;
+  const focusHasLiveSession =
+    focusedAgentPath != null &&
+    liveSessionsForFocus(harness.state?.sessions ?? [], focusedAgentPath).length > 0;
+  useEffect(() => {
+    if (templatesOpen) {
+      recordVisit({ kind: "templates" });
+    } else if (reviewSummary) {
+      recordVisit({ kind: "review", summary: reviewSummary });
+    } else if (composing) {
+      recordVisit({ kind: "composer" });
+    } else if (activeSessionIdForNav && (focusedAgentPath == null || focusHasLiveSession)) {
+      recordVisit({
+        kind: "session",
+        sessionId: activeSessionIdForNav,
+        agentPath: focusedAgentPath,
+      });
+    } else if (focusedAgentPath) {
+      recordVisit({ kind: "agent", agentPath: focusedAgentPath });
+    }
+  }, [
+    recordVisit,
+    templatesOpen,
+    reviewSummary,
+    composing,
+    activeSessionIdForNav,
+    focusedAgentPath,
+    focusHasLiveSession,
+  ]);
+
+  const setActiveSessionId = harness.setActiveSessionId;
+  const applyVisit = useCallback(
+    (visit: NavigationVisit | null): void => {
+      if (!visit) return;
+      setOverviewOpen(false);
+      setTemplatesOpen(visit.kind === "templates");
+      setComposing(visit.kind === "composer");
+      setReviewSummary(visit.kind === "review" ? visit.summary : null);
+      if (visit.kind === "session") {
+        setFocusedAgentPath(visit.agentPath);
+        setActiveSessionId(visit.sessionId);
+      } else if (visit.kind === "agent") {
+        setFocusedAgentPath(visit.agentPath);
+      }
+    },
+    [setActiveSessionId],
+  );
 
   // The dead pane's Resume button has to be as honest as a history row's tag,
   // and only the server can say whether the agent still holds the
@@ -1090,6 +1149,10 @@ export const App = (): JSX.Element => {
             await harness.connectWorkflow(path);
           }}
           onCollapse={() => setRailCollapsed(true)}
+          canGoBack={navHistory.canGoBack}
+          canGoForward={navHistory.canGoForward}
+          onGoBack={() => applyVisit(navHistory.goBack())}
+          onGoForward={() => applyVisit(navHistory.goForward())}
           onSelectSession={openSession}
           overviewSelected={overviewOpen}
           onSelectOverview={() => {
@@ -1180,13 +1243,11 @@ export const App = (): JSX.Element => {
             // Templates AND the Overview are both full-width destinations that
             // stand in for the workbench — `.is-browsing` hides the panes for
             // either.
-            (templatesOpen || overviewOpen ? " is-browsing" : "") +
+            (templatesOpen ? " is-browsing" : "") +
             // The workbench animates the canvas column open/closed (see
             // .app.canvas-animated). Off while browsing / composing / mobile,
             // where the single-column switch should be instant.
-            (!templatesOpen && !overviewOpen && !isMobile && !showComposer
-              ? " canvas-animated"
-              : "") +
+            (!templatesOpen && !isMobile && !showComposer ? " canvas-animated" : "") +
             // Present only DURING an open/close slide: it pins the pane content
             // to its expanded width so it CLIPS instead of squishing. Dropped
             // when settled, so a collapsed pane's content truly goes to zero.
@@ -1201,7 +1262,7 @@ export const App = (): JSX.Element => {
               // Browsing and the composer home take the whole width: a
               // two-column card grid inside half the shell is the letterbox this
               // view exists to escape, and the composer has no canvas yet.
-              templatesOpen || overviewOpen || isMobile || showComposer
+              templatesOpen || isMobile || showComposer
                 ? "minmax(0, 1fr)"
                 : // Two tracks always, so the canvas column can animate to 0 on
                   // collapse — the pane (and its left-edge shadow) slides shut,
@@ -1232,26 +1293,6 @@ export const App = (): JSX.Element => {
               listTemplates={harness.listTemplates}
               getTemplate={harness.getTemplate}
               openTemplateId={deepLinkTemplateId}
-            />
-          )}
-
-          {/* The Overview: the same destination shape as Templates — a sibling
-              of the panes, shown full-width with `.is-browsing` hiding them. */}
-          {overviewOpen && (
-            <OverviewPanel
-              firstRun={state.firstRun === true}
-              authenticated={state.authenticated}
-              appVersion={getDesktopBridge()?.appVersion ?? null}
-              onExit={() => setOverviewOpen(false)}
-              onCreateNew={() => {
-                setOverviewOpen(false);
-                setComposing(true);
-                setTemplatesOpen(false);
-              }}
-              onBrowseTemplates={() => {
-                setOverviewOpen(false);
-                setTemplatesOpen(true);
-              }}
             />
           )}
 
@@ -1626,6 +1667,28 @@ export const App = (): JSX.Element => {
           </div>
         </div>
       </div>
+
+      {/* The Overview is a card ON TOP of the shell, so it mounts beside the
+          palette rather than standing in for the workbench. */}
+      {overviewOpen && (
+        <OverviewModal
+          firstRun={state.firstRun === true}
+          appVersion={getDesktopBridge()?.appVersion || __STUDIO_VERSION__}
+          recentDirs={harness.settings?.recentDirs ?? []}
+          projectRoot={projectRoot || null}
+          listDir={harness.listDir}
+          onConnect={async (cwd) => {
+            await harness.connectWorkflow(cwd);
+            setOverviewOpen(false);
+          }}
+          onScan={handleScanWorkflows}
+          onBrowseTemplates={() => {
+            setOverviewOpen(false);
+            setTemplatesOpen(true);
+          }}
+          onDismiss={() => setOverviewOpen(false)}
+        />
+      )}
 
       {paletteOpen && (
         <CommandPalette

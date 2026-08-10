@@ -66,6 +66,25 @@ export function buildLegendHtml(nodeKinds: Set<CanvasNodeKind>, edgeKinds: Set<C
 }
 
 /**
+ * The same key as `buildLegendHtml`, as data rather than markup: the app's
+ * overview panel renders it beside the graph instead of the board floating it
+ * over itself.
+ */
+export function buildLegendItems(
+  nodeKinds: Set<CanvasNodeKind>,
+  edgeKinds: Set<CanvasEdgeKind>,
+): Array<{ kind: string; label: string }> {
+  const items = NODE_KIND_ORDER.filter((k) => nodeKinds.has(k)).map((k) => ({
+    kind: k as string,
+    label: NODE_KIND_LABEL[k],
+  }));
+  if (edgeKinds.has("cross")) {
+    items.push({ kind: "cross", label: "cross-agent signal/handoff" });
+  }
+  return items;
+}
+
+/**
  * Serializes the graph (enrichment merged) into the JSON payload the app's
  * Steps tab / inspector consumes, embedded as a `<script id="sapiom-graph">`
  * data block that `bootCanvasGraph` (canvas-run-state.ts) posts to the parent.
@@ -112,10 +131,17 @@ function buildGraphPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment | n
 
 /** The workflow-level overview the Canvas tab's bottom panel shows: a
  *  deterministic stats line ("N steps · M exits · <entry> entry"), the shape
- *  summary as the description, and the graph's validation notes. Embedded as a
- *  JSON data block (read by bootCanvasOverview), the same pattern as the step
- *  graph — everything here is derived from the graph, no LLM. */
-function buildOverviewPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment | null): string {
+ *  summary as the description, the graph's validation notes, and the chrome
+ *  the board used to float over itself — the status badges and the node-kind
+ *  key. Embedded as a JSON data block (read by bootCanvasOverview), the same
+ *  pattern as the step graph — everything here is derived from the graph, no
+ *  LLM. */
+function buildOverviewPayload(
+  graph: CanvasGraph,
+  badges: string[],
+  legend: Array<{ kind: string; label: string }>,
+  enrichment?: CanvasEnrichment | null,
+): string {
   const exits = graph.nodes.filter(
     (n) => n.kind === "terminal-success" || n.kind === "terminal-warn",
   ).length;
@@ -135,6 +161,8 @@ function buildOverviewPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment 
     description: graph.description ?? "",
     stats: parts.join(" · "),
     notes: enrichment?.notes ?? [],
+    badges,
+    legend,
   };
   // JSON in a <script> block: neutralize any "</script>"/"<" in derived text.
   return JSON.stringify(overview).replace(/</g, "\\u003c");
@@ -149,24 +177,22 @@ export function buildWorkflowPanelHtml(
   meta: WorkflowPanelMeta,
   enrichment?: CanvasEnrichment | null,
 ): string {
-  const badges = (meta.badges ?? [])
-    .map((b) => `<span class="canvas-badge">${esc(b)}</span>`)
-    .join("");
-  const warningBadge =
-    graph.warnings.length > 0
-      ? `<span class="canvas-badge">${graph.warnings.length} warning${graph.warnings.length === 1 ? "" : "s"}</span>`
-      : "";
+  const badgeLabels = [...(meta.badges ?? [])];
+  if (graph.warnings.length > 0) {
+    badgeLabels.push(`${graph.warnings.length} warning${graph.warnings.length === 1 ? "" : "s"}`);
+  }
+  const badges = badgeLabels.map((b) => `<span class="canvas-badge">${esc(b)}</span>`).join("");
   const summary = enrichment?.summary ? `\n    <p class="canvas-subtitle">${esc(enrichment.summary)}</p>` : "";
   const used = usedKinds(graph);
   const legend = buildLegendHtml(used.nodeKinds, used.edgeKinds);
   const legendHtml = legend ? `\n  ${legend}` : "";
   const graphData = buildGraphPayload(graph, enrichment);
-  const overviewData = buildOverviewPayload(graph, enrichment);
+  const overviewData = buildOverviewPayload(graph, badgeLabels, buildLegendItems(used.nodeKinds, used.edgeKinds), enrichment);
   return `<section class="canvas-panel">
   <header class="canvas-header">
     <div class="canvas-title-row">
       <h1 class="canvas-title">${esc(meta.title)}</h1>
-      ${badges}${warningBadge}
+      ${badges}
     </div>${summary}
   </header>
   <div class="canvas-diagram-panel">

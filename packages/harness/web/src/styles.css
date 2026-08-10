@@ -34,6 +34,11 @@
   --radius-full: 9999px;
   /* ONE horizontal inset for every header/subheader bar and panel well. */
   --pane-pad-x: var(--sp4);
+  /* How far a full-bleed row's own padding reaches inside its hover shape.
+     A row is inset by (--pane-pad-x - --row-bleed) and pads by --row-bleed, so
+     its glyphs land on the pane inset while the hover shape breathes around
+     them. Mirrors the studio rail reference. */
+  --row-bleed: var(--sp2);
   --font-sans: var(--font);
   --font-mono: var(--mono);
 
@@ -56,6 +61,16 @@
      Every CLICKABLE chip/pill (run picker, Preview, composer starter pills)
      floors at this so the hit target never collapses to text height. */
   --chip-h: 28px;
+
+  /* In-row icon-only controls (a row's hover action, a tab's ×): smaller than
+     the --control-h-xs chrome cluster, and the ONE size they all share so no
+     row invents its own square. */
+  --control-h-2xs: 22px;
+
+  /* Clearance for the frameless macOS traffic lights, the ONE number every
+     surface that can lead the window's top line uses. COUPLED to
+     harness-desktop main/windows.ts trafficLightPosition {x:19,y:21}. */
+  --mac-lights-inset: 78px;
 }
 
 /* --------------------------------------------------------------------------
@@ -377,15 +392,34 @@ input {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--sp2);
   height: var(--pane-header-h);
-  /* Wordmark keeps the pane inset on the left; the tool cluster on the right
-     sits at --sp2 so its icons line up with the Workspaces ⋯ and the tree's
-     status icons (which sit at the same --sp2 right inset). */
-  padding: 0 var(--sp2) 0 var(--pane-pad-x);
+  /* Window controls lead the line and back/forward closes it, both at --sp2 so
+     their icons line up with the Workspaces ⋯ and the tree's status icons
+     (which sit at the same --sp2 inset). */
+  padding: 0 var(--sp2);
   /* Transparent — the rail block's surface shows through, so the wordmark row
      is never a different colour from the rail beneath it. */
   background: transparent;
+}
+
+/* The window group: the OS lights (frameless host) then the rail collapse. */
+.brand-header-window {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+}
+
+/* Back/forward, the line's right anchor. */
+.session-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sp0);
+}
+
+.session-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ── Frameless macOS host ────────────────────────────────────────────────
@@ -401,7 +435,7 @@ input {
    session bar and tabs stay one 56px line. */
 :root[data-window-frame="macos"] .brand-header {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   grid-template-rows: var(--header-h) auto;
   align-items: center;
   height: auto;
@@ -413,10 +447,18 @@ input {
   column-gap: var(--sp2);
 }
 
-/* The window tools (theme + collapse) ride the traffic-light line, to the RIGHT
-   of the OS lights; the left of that line stays empty for the lights. */
-:root[data-window-frame="macos"] .brand-header .brand-header-tools {
-  grid-column: 2;
+/* Collapse rides the traffic-light line, immediately to the RIGHT of the OS
+   lights, so the window controls read as one group; back/forward take the far
+   end of the same line. The left inset clears the lights themselves — the
+   header itself starts at --pane-pad-x, so the group only owes the remainder. */
+:root[data-window-frame="macos"] .brand-header .brand-header-window {
+  grid-column: 1;
+  grid-row: 1;
+  padding-left: calc(var(--mac-lights-inset) - var(--pane-pad-x));
+}
+
+:root[data-window-frame="macos"] .brand-header .session-nav {
+  grid-column: 3;
   grid-row: 1;
 }
 
@@ -424,8 +466,9 @@ input {
    "sapiom agent.studio" (its default baseline-flex layout) at the rail's normal
    left inset — no traffic-light clearance, because nothing shares this line. */
 :root[data-window-frame="macos"] .brand-header .brand-lockup {
-  grid-column: 1;
+  grid-column: 1 / -1;
   grid-row: 2;
+  padding-left: calc(var(--pane-pad-x) - var(--sp2));
 }
 
 /* The app's top line is the window's drag handle; every control on it opts back
@@ -448,7 +491,7 @@ input {
    clearance so the lights never land on that button. */
 :root[data-window-frame="macos"] .app-shell[data-rail-collapsed] .session-bar,
 :root[data-window-frame="macos"] .app-shell[data-rail-collapsed] .templates-bar {
-  padding-left: 78px;
+  padding-left: var(--mac-lights-inset);
 }
 
 /* An inline confirm (EndSessionConfirm) renders its full-screen backdrop INSIDE
@@ -465,6 +508,8 @@ input {
   display: flex;
   align-items: baseline;
   gap: var(--sp2);
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: var(--type-ui);
 }
@@ -474,12 +519,6 @@ input {
    frameless-mac grid (below) re-materializes it to place it on its own row. */
 .brand-mark {
   display: contents;
-}
-
-.brand-header-tools {
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
 }
 
 /* The Sapiom wordmark renders in currentColor. Keep it neutral ink — the
@@ -507,14 +546,14 @@ input {
 /* Search + Templates: the persistent labelled destinations above the tree.
    A quiet vertical stack of rows on the continuous rail surface — no boxed
    field, no divider. */
-/* One uniform gap (--sp2) sets the whole top stack's rhythm: the nav's
-   padding-top spaces it off the brand header, each row/CTA carries an --sp2
-   bottom margin, and the Workspaces header takes no top margin — so
-   agent.studio → Create new → Search → Templates → Workspaces are all evenly
-   spaced by the same 8px. */
+/* The top stack is a dense list, not a stack of cards: rows sit on the tree's
+   own --sp0 rhythm and take their height from --control-h, so Search →
+   Templates → Add existing agents read as one block. Only the Create new CTA
+   keeps a real gap below it, separating the action from the destinations. */
 .rail-nav {
   display: flex;
   flex-direction: column;
+  gap: var(--sp0);
   padding: var(--sp2) 0 0;
 }
 
@@ -555,6 +594,62 @@ input {
 .theme-toggle:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Icon-only controls are SQUARE, everywhere, always.
+   A button whose whole content is one glyph has no text to size it, so in a
+   flex row it inherits the row's stretch and the row's shrink and comes out
+   as a tall pill or a squashed sliver. Fixing width/height on each recipe was
+   not enough: flex-basis still let them give way. This one rule pins the
+   1:1 footprint (both axes, plus a min so shrink can't bite) and opts every
+   icon button out of stretching and shrinking. Recipes below may restyle a
+   control's surface; none of them may restate its size.
+   Labelled controls are deliberately absent — they size to their text.
+   -------------------------------------------------------------------------- */
+.theme-toggle,
+.macro-icon-btn,
+.session-new,
+.dir-picker-up,
+.composer-attach,
+.composer-send {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  align-self: center;
+  width: var(--control-h-xs);
+  min-width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  min-height: var(--control-h-xs);
+  padding: 0;
+  aspect-ratio: 1;
+}
+
+/* The zoom readout rides the .theme-toggle surface but is a LABEL ("100%"),
+   so it is the one member of the cluster that sizes to its text. */
+/* In-row icon-only controls: the same 1:1 contract at the smaller step. A
+   flex row must never stretch or squeeze a glyph button — it is a square or
+   it is nothing. */
+.workspace-row-action,
+.session-tab-close,
+.deploy-status-dismiss,
+.toast-dismiss {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-h-2xs);
+  min-width: var(--control-h-2xs);
+  height: var(--control-h-2xs);
+  min-height: var(--control-h-2xs);
+  padding: 0;
+  aspect-ratio: 1;
+}
+
+.canvas-zoom-reset {
+  width: auto;
+  aspect-ratio: auto;
+  padding: 0 var(--sp1);
 }
 
 .brand-identity {
@@ -720,9 +815,10 @@ input {
   display: flex;
   align-items: center;
   gap: var(--sp2);
-  width: calc(100% - var(--sp3));
-  margin: 0 var(--sp2) var(--sp2);
-  padding: var(--sp2);
+  align-self: stretch;
+  height: var(--control-h);
+  margin: 0 calc(var(--pane-pad-x) - var(--row-bleed));
+  padding: 0 var(--row-bleed);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -761,10 +857,10 @@ input {
   align-items: center;
   justify-content: center;
   gap: var(--sp2);
-  width: calc(100% - var(--sp3));
-  margin: 0 var(--sp2) var(--sp2);
+  align-self: stretch;
+  margin: 0 calc(var(--pane-pad-x) - var(--row-bleed)) var(--sp2);
   min-height: var(--control-h);
-  padding: 0 var(--sp2);
+  padding: 0 var(--row-bleed);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--btn);
@@ -1707,12 +1803,6 @@ input {
    caret. Direct clicks, no nested menu; the rightmost icon center sits on
    the same 14px trailing axis as the child rows' status icons. */
 .workspace-row-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
   border: none;
   background: transparent;
   border-radius: var(--radius);
@@ -2552,12 +2642,6 @@ input {
 }
 
 .session-tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
   margin-right: 4px;
   border: none;
   background: transparent;
@@ -4627,8 +4711,6 @@ input {
 }
 .deploy-status-dismiss {
   margin-left: auto;
-  display: inline-flex;
-  padding: 2px;
   border: 0;
   background: transparent;
   color: var(--text-faint);
@@ -5172,6 +5254,55 @@ input {
 .canvas-overview-desc {
   margin: 0;
   color: var(--text);
+}
+
+/* The chrome the board used to float over the graph: the shape line and any
+   render badge, on one quiet row above the description. */
+.canvas-overview-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp2);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+}
+
+.canvas-overview-badge {
+  padding: 1px var(--sp2);
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  font-size: var(--type-micro);
+  color: var(--text-dim);
+}
+
+/* The node-kind key, read at the foot of the overview instead of on the
+   board. Only the kinds the graph actually uses are posted. */
+.canvas-overview-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp1) var(--sp3);
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
+
+.canvas-overview-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+}
+
+/* The key mirrors the board, where entry carries no accent. */
+.canvas-overview-legend .dot--entry {
+  background: transparent;
+  border: 1px solid var(--text-faint);
+}
+
+.canvas-overview-legend-item .dot--cross {
+  width: 7px;
+  height: 7px;
+  border: 1px dashed var(--text-faint);
+  border-radius: 2px;
 }
 
 /* "Describe with AI": authors the deterministic `description` fields via the
@@ -6672,7 +6803,6 @@ input {
   font-size: var(--type-h2);
   line-height: 1;
   cursor: pointer;
-  padding: 0 2px;
   border-radius: var(--radius-sm);
   transition: color var(--transition-fast);
 }
@@ -8315,302 +8445,185 @@ input {
 .composer-docs:hover {
   color: var(--text);
 }
-
-/* ── Overview: a DESTINATION that introduces the app ──────────────────────
-   Reached from the account menu, it stands in for the workbench the same way
-   Templates does (`.app.is-browsing` hides the panes) and brings its own bar
-   with the way back. Left-aligned on a reading measure — an overview, not a
-   centred pitch. Green is spent ONCE, on the three "how it works" glyphs (the
-   build → shape → ship spine); every other surface is neutral chrome, per the
-   app's rule that --brand is a deliberate accent and never the wash or line. */
-.overview-panel {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-/* Matches the session bar's height, so the shell's top edge does not shift as
-   you enter and leave. */
-.overview-bar {
+/* ── Overview: a CARD ON TOP that introduces the app ──────────────────────
+   Summoned from the account menu. An app-level overlay fixed over the WHOLE
+   shell (rail, terminal, canvas), centred on a scrim, so re-reading what
+   Studio is never costs you the place you were in. It sits below the modal
+   layer (100) so its own nested picker stacks above it, and below tooltips
+   (200). Neutral throughout: --brand is not spent on an introduction. */
+.overview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
   display: flex;
   align-items: center;
-  gap: var(--sp2);
-  flex: 0 0 auto;
-  min-height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--border);
+  justify-content: center;
+  padding: var(--sp5) var(--sp4);
+  overflow: hidden;
+  background: var(--scrim-bg);
+  animation: fade-in var(--transition-fast) ease-out;
 }
 
-.overview-bar-title {
-  font-size: var(--type-ui);
-  font-weight: 550;
-  color: var(--text);
+.overview-modal-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  animation: overview-modal-rise var(--slow) var(--ease) both;
 }
 
-.overview-bar-dash {
-  margin-left: auto;
-  gap: var(--sp2);
-  text-decoration: none;
+@keyframes overview-modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
-.overview-scroll {
-  flex: 1;
+.overview-modal-close {
+  position: absolute;
+  top: var(--sp3);
+  right: var(--sp3);
+  z-index: 2;
+}
+
+/* The card is copy plus two actions, so its padding carries the composition. */
+.overview-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp3);
   min-height: 0;
+  padding: var(--sp6) var(--sp6) var(--sp5);
   overflow-y: auto;
 }
 
-/* The reading measure — wide enough for a three-up feature grid, narrow enough
-   that hero copy keeps a comfortable line length on a wide monitor. */
-.overview-measure {
-  width: 100%;
-  max-width: 880px;
-  margin: 0 auto;
-  padding: var(--sp7) var(--sp5) var(--sp8);
-  animation: refine-content-in var(--base, 0.22s) var(--ease) both;
-}
-
-.overview-hero {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  margin-bottom: var(--sp7);
-}
-
-/* The in-app lockup, verbatim: wordmark + lowercase-mono product name. The
-   wordmark IS "Sapiom", so the S mark is never set beside it. */
-.overview-lockup {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--sp2);
-  margin-bottom: var(--sp3);
-  color: var(--text);
-}
-
-.overview-lockup-product {
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  letter-spacing: 0.01em;
-  color: var(--text-dim);
-}
-
-.overview-eyebrow {
-  margin: 0 0 var(--sp2);
-  font-size: var(--type-ui);
-  color: var(--text-dim);
-}
-
-.overview-hero-title {
+.overview-modal-title {
   margin: 0;
-  max-width: 22ch;
-  font-size: clamp(1.6rem, 1.3rem + 1.2vw, 1.95rem);
-  font-weight: 640;
-  line-height: 1.15;
+  font-size: var(--type-display);
+  font-weight: var(--fw-strong, 600);
   letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--text);
 }
 
-.overview-hero-copy {
-  margin: var(--sp3) 0 0;
-  max-width: 60ch;
-  font-size: var(--type-ui);
-  line-height: 1.6;
-  color: var(--text-dim);
-}
-
-.overview-hero-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp2);
-  margin-top: var(--sp5);
-}
-
-/* Hero-scale CTAs: the shared button skins, sized up to the small-control step
-   with a leading glyph. */
-.overview-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp2);
-  height: var(--control-h-sm);
-  padding: 0 var(--sp4);
-  font-size: var(--type-label);
-}
-
-.overview-signin-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  margin: var(--sp4) 0 0;
-  font-size: var(--type-meta);
-  color: var(--text-faint);
-}
-
-.overview-section-title {
-  margin: 0 0 var(--sp4);
-  font-size: var(--type-h2);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text);
-}
-
-/* The build → shape → ship spine: three cards read left-to-right on a wide
-   window, stacking on a narrow one. */
-.overview-steps {
-  margin-bottom: var(--sp7);
-}
-
-.overview-steps-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--sp3);
-}
-
-.overview-step {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp2);
-  padding: var(--sp4);
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-/* The one deliberate green on the page: a tinted glyph tile per step. */
-.overview-step-glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius);
-  color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--brand) 22%, transparent);
-}
-
-.overview-step-copy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp1);
-}
-
-.overview-step-title {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--sp2);
-  font-size: var(--type-label);
-  font-weight: 600;
-  color: var(--text);
-}
-
-.overview-step-index {
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  font-weight: 600;
-  color: var(--brand);
-}
-
-.overview-step-body {
-  font-size: var(--type-meta);
-  line-height: 1.5;
-  color: var(--text-dim);
-}
-
-/* Feature grid: neutral throughout — glyph tiles are inset shade, not green. */
-.overview-features {
-  margin-bottom: var(--sp7);
-}
-
-.overview-feature-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: var(--sp3);
-}
-
-.overview-feature {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp1);
-  padding: var(--sp4);
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.overview-feature:hover {
-  background: var(--surface-hover);
-  border-color: var(--border-strong);
-}
-
-.overview-feature-glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin-bottom: var(--sp1);
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  background: var(--surface-inset);
-}
-
-.overview-feature-title {
-  font-size: var(--type-label);
-  font-weight: 600;
-  color: var(--text);
-}
-
-.overview-feature-body {
-  font-size: var(--type-meta);
-  line-height: 1.5;
-  color: var(--text-dim);
-}
-
-.overview-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp3);
-  padding-top: var(--sp4);
-  border-top: 1px solid var(--border);
-}
-
-.overview-foot-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  font-size: var(--type-label);
-  color: var(--text-dim);
-  text-decoration: none;
-  transition: color var(--transition-fast);
-}
-
-.overview-foot-link:hover {
-  color: var(--text);
-}
-
-.overview-foot-version {
+/* The running build, right under the name — the one place a user checks
+   which version they are on before reporting anything about it. */
+.overview-modal-version {
+  margin: calc(var(--sp3) * -1) 0 0;
   font-family: var(--font-mono);
   font-size: var(--type-micro);
   color: var(--text-faint);
 }
 
+.overview-modal-intro {
+  margin: 0 0 var(--sp1);
+  font-size: var(--type-label);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+/* The two paths share one anatomy: glyph, copy, action right. */
+.overview-modal-path {
+  display: flex;
+  align-items: center;
+  gap: var(--sp3);
+  padding: var(--sp4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+}
+
+.overview-modal-path-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  color: var(--text-dim);
+}
+
+.overview-modal-path-copy {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-modal-path-title {
+  font-size: var(--type-label);
+  font-weight: var(--fw-strong, 600);
+  color: var(--text);
+}
+
+.overview-modal-path-desc {
+  font-size: var(--type-meta);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+/* Padding stays the button variant's own: this CTA is worn by .btn-primary
+   and .btn-line, which pad differently on purpose. */
+.overview-modal-cta {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.overview-modal-docs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp1);
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  font-weight: 510;
+  text-decoration: none;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.overview-modal-docs:hover {
+  color: var(--text);
+  border-color: var(--ui-line-strong);
+  background: var(--surface-hover);
+}
+
+.overview-modal-docs:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 @media (max-width: 640px) {
-  .overview-measure {
-    padding: var(--sp5) var(--sp4) var(--sp6);
+  .overview-modal-body {
+    padding: var(--sp5) var(--sp4);
+  }
+
+  .overview-modal-path {
+    flex-wrap: wrap;
+  }
+
+  .overview-modal-cta {
+    width: 100%;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .overview-measure {
+  .overview-modal-card {
     animation: none;
   }
 }

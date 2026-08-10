@@ -8,6 +8,7 @@ import { getTheme, subscribeTheme } from "../lib/theme";
 import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
 import type { DeployProgress, ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
+import type { CanvasLegendItem, CanvasOverviewContent } from "./CanvasOverviewPanel";
 import {
   CanvasChatPanel,
   CanvasStepsList,
@@ -97,6 +98,13 @@ interface CanvasPaneProps {
    *  renders a board (a fresh build, a switch to a populated agent), even one
    *  the user had collapsed. */
   onCanvasState?: (hasContent: boolean) => void;
+}
+
+/** A legend row posted by a rendered document, validated before it is shown. */
+function isLegendItem(value: unknown): value is CanvasLegendItem {
+  if (typeof value !== "object" || value === null) return false;
+  const item = value as { kind?: unknown; label?: unknown };
+  return typeof item.kind === "string" && typeof item.label === "string";
 }
 
 export function CanvasPane({
@@ -451,11 +459,7 @@ export function CanvasPane({
   // renders the overview panel and the document stays a pure board. Live
   // documents that implement the contract populate this; the demo fixtures
   // remain the fallback so mock mode keeps its richer copy.
-  const [postedOverview, setPostedOverview] = useState<{
-    description: string;
-    stats: string;
-    notes: string[];
-  } | null>(null);
+  const [postedOverview, setPostedOverview] = useState<CanvasOverviewContent | null>(null);
   // Render failures arrive over the same channel ({type:"sapiom-canvas:error",
   // title, reason}) — the app shows an actionable card instead of the
   // document's wall of text.
@@ -473,6 +477,8 @@ export function CanvasPane({
         description?: unknown;
         stats?: unknown;
         notes?: unknown;
+        badges?: unknown;
+        legend?: unknown;
       } | null;
       if (!data || event.source !== frameRef.current?.contentWindow) return;
       if (data.type === "sapiom-canvas:overview") {
@@ -480,6 +486,10 @@ export function CanvasPane({
           description: typeof data.description === "string" ? data.description : "",
           stats: typeof data.stats === "string" ? data.stats : "",
           notes: Array.isArray(data.notes) ? data.notes.filter((n): n is string => typeof n === "string") : [],
+          badges: Array.isArray(data.badges)
+            ? data.badges.filter((b): b is string => typeof b === "string")
+            : [],
+          legend: Array.isArray(data.legend) ? data.legend.filter(isLegendItem) : [],
         });
       } else if (data.type === "sapiom-canvas:graph") {
         setGraph(parseCanvasGraph((data as { graph?: unknown }).graph));

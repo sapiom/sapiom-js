@@ -7,7 +7,8 @@
  * double as the returning-user case, which boots straight into its session.
  *
  * The account menu's "Overview" no longer aliases the composer: it opens the
- * Overview destination (OverviewPanel), a standalone introduction to the app.
+ * Overview modal (OverviewModal), a standalone introduction to the app that
+ * sits OVER the workbench rather than replacing it.
  *
  * Recent-workspaces used to live on this surface; it now belongs to the left rail
  * (workspace tree), so those cases moved out with the overlay.
@@ -15,12 +16,12 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/** Open the Overview destination from the account menu. */
+/** Open the Overview modal from the account menu. */
 async function openOverview(page: Page): Promise<void> {
   await page.getByTestId("brand-identity").click();
   await expect(page.getByTestId("profile-menu")).toBeVisible();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("overview-panel")).toBeVisible();
+  await expect(page.getByTestId("overview-modal")).toBeVisible();
 }
 
 /** Open the Overview, then the templates catalog from its "Start from a template". */
@@ -93,56 +94,54 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   });
 
-  test("Overview opens the introduction, and Back returns to the session behind it", async ({ page }) => {
+  test("Overview opens the introduction over the session, and Close returns to it", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
 
-    const overview = page.getByTestId("overview-panel");
-    // It introduces the whole loop, not the composer.
-    await expect(overview).toContainText("Build agents with your coding agent");
-    await expect(overview).toContainText("How it works");
+    const overview = page.getByTestId("overview-modal");
+    // It names the product and says which build is running.
+    await expect(overview).toContainText("agent.studio");
+    await expect(page.getByTestId("overview-version")).toContainText("v");
     // Its two on-ramps into the app.
-    await expect(page.getByTestId("overview-create-new")).toBeVisible();
+    await expect(page.getByTestId("overview-open-folder")).toBeVisible();
     await expect(page.getByTestId("overview-browse-templates")).toBeVisible();
-    // The Overview is a destination, not the composer it used to alias.
+    // A modal, not the composer it used to alias.
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
 
-    // Back returns to the boot session that was behind it.
+    // Closing returns to the boot session it opened over — untouched.
     await page.getByTestId("overview-exit").click();
     await expect(overview).toHaveCount(0);
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
   });
 
-  test("Overview's Build-an-agent CTA opens the composer", async ({ page }) => {
+  test("Overview's Open-folder CTA opens the folder dialog", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
-    await page.getByTestId("overview-create-new").click();
+    await page.getByTestId("overview-open-folder").click();
 
-    await expect(page.getByTestId("overview-panel")).toHaveCount(0);
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
-    await expect(page.getByTestId("new-session-composer")).toContainText("What should your agent do?");
+    await expect(page.locator(".modal-start")).toBeVisible();
   });
 
   test("the palette's Browse templates, opened over the Overview, leaves it (never stacks)", async ({
     page,
   }) => {
-    // The palette is a global overlay reachable even while a full-width
-    // destination is up; navigating from it must dismiss the Overview rather
-    // than mount Templates behind it.
+    // The palette is a global overlay reachable even while the Overview is up
+    // (by shortcut — the modal's scrim owns the pointer); navigating from it
+    // must dismiss the Overview rather than mount Templates behind it.
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
-    await page.getByTestId("palette-trigger").click();
+    await page.keyboard.press("ControlOrMeta+k");
     await page.getByTestId("command-palette-input").fill("templates");
     await page.getByTestId("command-palette-list").getByText("Browse templates").click();
 
     await expect(page.getByTestId("templates-panel")).toBeVisible();
-    await expect(page.getByTestId("overview-panel")).toHaveCount(0);
+    await expect(page.getByTestId("overview-modal")).toHaveCount(0);
   });
 });
 

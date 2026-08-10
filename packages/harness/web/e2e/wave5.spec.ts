@@ -116,20 +116,23 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
 });
 
 // ---------------------------------------------------------------------------
-// Overview destination
+// Overview modal
 // ---------------------------------------------------------------------------
 
-test("the Overview hides the canvas, not showing the previous session's board", async ({
-  page,
-}) => {
+test("the Overview opens over the workbench and dismisses on click-out", async ({ page }) => {
   await page.getByTestId("brand-identity").click();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("overview-panel")).toBeVisible();
+  const overview = page.getByTestId("overview-modal");
+  await expect(overview).toBeVisible();
 
-  // The Overview stands in for the workbench (`.app.is-browsing` hides the
-  // panes), so the previous session's board is not on show behind it.
-  await expect(page.locator(".right-pane")).toBeHidden();
-  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
+  // A modal over the app, not a destination replacing it: the workbench stays
+  // mounted behind the scrim, so closing costs the session nothing.
+  await expect(page.locator(".right-pane")).toBeVisible();
+
+  // Clicking the scrim (outside the card) closes it, like every other modal.
+  await overview.click({ position: { x: 5, y: 5 } });
+  await expect(overview).toHaveCount(0);
+  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
 // ---------------------------------------------------------------------------

@@ -55,13 +55,6 @@
     position: absolute; width: 1px; height: 1px; overflow: hidden;
     clip: rect(0 0 0 0); margin: 0;
   }
-  .canvas-badge {
-    /* Top-left: the app's view controls own the frame's top-right corner. */
-    position: absolute; top: 10px; left: 10px;
-    font: 500 9px/1 "Geist Mono", ui-monospace, monospace;
-    padding: 4px 8px; border-radius: 8px;
-    background: var(--brand-wash); color: var(--brand); border: 1px solid var(--line);
-  }
   /* The graph is the pan/zoom subject: the app posts view messages and this
      wrapper transforms, while the dotted board behind it stays put filling
      the pane (see the view-contract script at the end of body). */
@@ -90,7 +83,9 @@
     display: block; color: var(--ink-muted);
     font: 500 9px/1.7 "Geist Mono", ui-monospace, monospace;
   }
-  .node--entry { border-color: var(--brand); }
+  /* Entry is a POSITION, not a state: no accent by default, so the only
+     accented card is the one the inspector is describing. */
+  .node--entry { border-color: var(--line); }
   /* Interaction states, driven by app messages (the app's gesture layer sits
      over this iframe, so native :hover can never fire here): hover lifts and
      tints, press settles, select rings while the app's drill-down is open. */
@@ -113,7 +108,7 @@
      own node surface, so contrast holds in light and dark. */
   .node.is-selected {
     border-color: var(--brand);
-    box-shadow: 0 0 0 1px var(--brand);
+    box-shadow: 0 0 0 2px var(--brand-wash), 0 0 0 1px var(--brand);
     background: color-mix(in srgb, var(--brand) 10%, var(--node));
   }
   @media (prefers-reduced-motion: reduce) {
@@ -151,7 +146,6 @@
 <div class="canvas-panel">
   <h1 class="canvas-title">leasing</h1>
   <p class="canvas-subtitle">Deterministic agent diagram — generated from the project's sapiom.json.</p>
-  <span class="canvas-badge">demo render</span>
   <div class="cascade">
     <div class="group">
       <span class="group-label">intake &amp; screening</span>

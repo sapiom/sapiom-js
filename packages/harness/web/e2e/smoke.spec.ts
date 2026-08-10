@@ -9,6 +9,7 @@
  * new-session directory picker.
  */
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
@@ -52,6 +53,14 @@ test("viewport-locked shell: the page never scrolls even when terminal content o
   expect(root.scrollHeight).toBe(root.clientHeight);
 });
 
+/** Flip the theme. Appearance lives in the account menu with the rest of the
+ *  workspace preferences — the rail's chrome line is window controls and
+ *  navigation now. */
+async function toggleTheme(page: Page): Promise<void> {
+  await page.getByTestId("brand-identity").click();
+  await page.getByTestId("theme-toggle").click();
+}
+
 test.describe("theme — a manual choice overrides system and persists", () => {
   // Pin the OS to dark so the default resolves to dark; the toggle then flips
   // to light and the STORED choice must survive a reload even though the OS
@@ -62,7 +71,7 @@ test.describe("theme — a manual choice overrides system and persists", () => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await page.screenshot({ path: "web/e2e/screenshots/theme-dark.png", fullPage: true });
 
-    await page.getByTestId("theme-toggle").click();
+    await toggleTheme(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await page.screenshot({ path: "web/e2e/screenshots/theme-light.png", fullPage: true });
 
@@ -70,7 +79,7 @@ test.describe("theme — a manual choice overrides system and persists", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-    await page.getByTestId("theme-toggle").click();
+    await toggleTheme(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });
 });
@@ -192,7 +201,7 @@ test("the active session shows a busy pulse that clears once output goes quiet",
   await expect(busy).toHaveCount(0, { timeout: 6_000 });
 });
 
-test("Overview heads the account menu and opens the introduction; opening an agent leaves it", async ({ page }) => {
+test("Overview heads the account menu and opens the introduction, naming the running build", async ({ page }) => {
   // The introduction lives in the account menu now, not a pinned rail row —
   // one click deep but always available, not just on first run.
   await page.getByTestId("brand-identity").click();
@@ -201,30 +210,25 @@ test("Overview heads the account menu and opens the introduction; opening an age
   await expect(item).toBeVisible();
   await item.click();
 
-  // Selection closes the menu and opens the Overview destination — a standalone
-  // introduction to the app — full-width in the centre.
+  // Selection closes the menu and opens the Overview modal — a standalone
+  // introduction to the app, over the workbench.
   await expect(page.getByTestId("profile-menu")).toHaveCount(0);
-  const overview = page.getByTestId("overview-panel");
+  const overview = page.getByTestId("overview-modal");
   await expect(overview).toBeVisible();
-  await expect(overview).toContainText("Build agents with your coding agent");
-
-  // Opening the leasing agent returns to the terminal — acme-app's one live
-  // session is bound to it, so opening the agent attaches to that session and
-  // leaves the Overview.
-  await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
-  await expect(overview).toHaveCount(0);
-  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
+  await expect(overview).toContainText("agent.studio");
+  // "Which version am I running" is answerable without leaving the app.
+  await expect(page.getByTestId("overview-version")).toContainText(/^v\d/);
 });
 
-test("Overview opens the introduction, and Back returns to the session behind it", async ({ page }) => {
-  // The Overview is a centre-pane destination, not an overlay: Back returns to
-  // the session it was opened over, and leaves that session untouched.
+test("Overview opens the introduction, and Escape returns to the session behind it", async ({ page }) => {
+  // The Overview is a modal over the workbench: dismissing it returns to the
+  // session it opened over, and leaves that session untouched.
   await page.getByTestId("brand-identity").click();
   await page.getByTestId("rail-overview").click();
-  await expect(page.getByTestId("overview-panel")).toBeVisible();
+  await expect(page.getByTestId("overview-modal")).toBeVisible();
 
-  await page.getByTestId("overview-exit").click();
-  await expect(page.getByTestId("overview-panel")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("overview-modal")).toHaveCount(0);
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
@@ -1630,7 +1634,7 @@ test.describe("canvas iframe theme", () => {
     const iframe = page.locator(".canvas-iframe");
     await expect(iframe).toHaveAttribute("src", /theme=dark/);
 
-    await page.getByTestId("theme-toggle").click();
+    await toggleTheme(page);
     await expect(iframe).toHaveAttribute("src", /theme=light/);
   });
 });

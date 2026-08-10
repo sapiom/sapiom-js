@@ -28,6 +28,7 @@ import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 import type { RailGrouping, RailSort } from "../lib/workspace-tree";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
+import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -46,6 +47,10 @@ interface WorkflowsRailProps {
   onConnect: (path: string) => Promise<void>;
   /** Collapses the rail — the session bar grows an expand affordance. */
   onCollapse: () => void;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onGoBack: () => void;
+  onGoForward: () => void;
   /** Selects a session from the history menu (a past/exited session). */
   onSelectSession: (id: string) => void;
   /** Overview lives in the account menu: it opens the Overview destination —
@@ -295,6 +300,10 @@ export function WorkflowsRail({
   onOpenPalette,
   onConnect,
   onCollapse,
+  canGoBack,
+  canGoForward,
+  onGoBack,
+  onGoForward,
   onSelectSession,
   overviewSelected,
   onSelectOverview,
@@ -445,7 +454,13 @@ export function WorkflowsRail({
 
   return (
     <aside ref={railRef} className="rail rail-workflows" style={{ width, minWidth }}>
-      <BrandHeader onCollapse={onCollapse} />
+      <BrandHeader
+        onCollapse={onCollapse}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        onGoBack={onGoBack}
+        onGoForward={onGoForward}
+      />
 
       {/* The rail's top stack of labelled destinations. "Create new" leads as
           the primary affirmative action (a solid ink button — the app's primary
@@ -903,6 +918,8 @@ function ProfileRow({
   onToast: (message: string) => void;
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, setTheme] = useState(getTheme());
+  useEffect(() => subscribeTheme(setTheme), []);
   const [authProgress, setAuthProgress] = useState<ProfileAuthProgress>({ status: "idle" });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -1071,6 +1088,20 @@ function ProfileRow({
         >
           <Icon name="Settings" size={13} />
           Settings
+        </button>
+        {/* Appearance sits with the rest of the workspace preferences: the
+            rail's chrome line belongs to window controls and navigation. */}
+        <button
+          role="menuitem"
+          className="profile-menu-item"
+          data-testid="theme-toggle"
+          onClick={() => {
+            toggleTheme();
+            closeMenu();
+          }}
+        >
+          <Icon name={theme === "dark" ? "Sun" : "Moon"} size={13} />
+          {theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
         </button>
         {desktop && (
           <button

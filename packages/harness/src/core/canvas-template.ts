@@ -25,6 +25,7 @@ import {
   bootCanvasOverview,
   bootCanvasNodeClicks,
   bootCanvasRunState,
+  bootCanvasSelection,
   bootCanvasView,
   runStateNodeClass,
 } from "./canvas-run-state.js";
@@ -110,8 +111,7 @@ body {
 #canvas-root { max-width: 1100px; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; }
 
 /* --- structural classes: keep these, and their names, untouched --- */
-.canvas-panel { background: transparent; border: 0; padding: 20px; }
-.canvas-header { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.canvas-panel { background: transparent; border: 0; padding: 20px; }.canvas-header { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
 .canvas-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .canvas-title { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
 .canvas-badge {
@@ -138,7 +138,10 @@ body {
 .canvas-node { cursor: pointer; }
 .canvas-node:hover .canvas-node-rect { stroke-width: 2.5; }
 .canvas-node .canvas-node-rect { fill: var(--canvas-panel); stroke-width: 1.5; stroke: var(--canvas-border-strong); }
-.node--entry .canvas-node-rect { stroke: var(--canvas-accent); }
+/* Entry is a POSITION in the graph, not a state: it reads from the card's own
+   "entry" caption and from sitting at the top. It carries no accent, so the
+   only accented card on the board is the one the inspector is describing. */
+.node--entry .canvas-node-rect { stroke: var(--canvas-border-strong); }
 .node--pause .canvas-node-rect { stroke: var(--canvas-text-dim); stroke-dasharray: 5 4; }
 .node--terminal-success .canvas-node-rect { stroke: var(--canvas-success); }
 .node--terminal-warn .canvas-node-rect { stroke: var(--canvas-escalation); }
@@ -163,19 +166,26 @@ body {
 
 /* --- legend + interconnections --- */
 .canvas-legend { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--canvas-text-dim); }
-/* In a diagram panel the legend is a footer under the SVG — separate it with a
-   hairline so it reads as a key, not part of the graph. Scoped to .canvas-panel
-   so the overview/seed legends keep their own layout. */
-.canvas-panel .canvas-legend { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--canvas-border); }
 .canvas-legend-item { display: flex; align-items: center; gap: 6px; }
 .canvas-legend-marker { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
-.canvas-legend-marker--entry { background: var(--canvas-accent); }
+.canvas-legend-marker--entry { border: 1.5px solid var(--canvas-border-strong); background: transparent; }
 .canvas-legend-marker--step { border: 1.5px solid var(--canvas-border-strong); background: transparent; }
 .canvas-legend-marker--pause { border: 1.5px dashed var(--canvas-text-dim); background: transparent; }
 .canvas-legend-marker--terminal-success { background: var(--canvas-success); border-radius: 3px; }
 .canvas-legend-marker--terminal-warn { background: var(--canvas-escalation); border-radius: 3px; }
 .canvas-legend-marker--cross { border: 1.5px dashed var(--canvas-text-dim); border-radius: 2px; background: transparent; }
 .canvas-legend-marker--launched-workflow { border: 1.5px dashed var(--canvas-accent); border-radius: 3px; background: transparent; }
+/* The board is ONLY the graph. Title, badges, summary line, stats and the
+   node-kind key are app chrome: the SPA renders them in the overview panel
+   around this iframe (canvas-body.ts posts them), so floating a second copy
+   over the board would just crowd the diagram. Kept in the markup — hidden,
+   not deleted — so the classes stay a stable contract for hand-authored
+   documents and the run-state badge still has something to update. */
+.canvas-header,
+.canvas-legend {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; margin: 0; padding: 0;
+}
 .canvas-interconnections { display: flex; flex-direction: column; gap: 12px; }
 .canvas-panel-title { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--canvas-text-dim); }
 .canvas-interconnection-row { display: grid; grid-template-columns: 12px 1fr auto; column-gap: 8px; row-gap: 2px; align-items: baseline; }
@@ -232,6 +242,27 @@ template { display: none; }
 /* pending: dim, so not-yet-run steps read as inactive. */
 .canvas-node.is-pending {
   opacity: 0.5;
+}
+
+/* --- selection ----------------------------------------------------------- */
+/* The card the bottom inspector is describing (canvas-run-state.ts's
+   bootCanvasSelection, driven by the parent). A ring plus a faint accent wash,
+   so the pick reads at a glance without repainting the node: run-state fill
+   still wins on the same rect, and a selected pending node comes back to full
+   opacity so the thing you just clicked is never the dimmest card on the
+   board. */
+.canvas-node.is-selected .canvas-node-rect {
+  stroke: var(--canvas-accent);
+  stroke-width: 3;
+}
+
+.canvas-node.is-selected:not(.is-running):not(.is-passed):not(.is-failed) .canvas-node-rect {
+  fill: var(--canvas-accent);
+  fill-opacity: 0.1;
+}
+
+.canvas-node.is-selected.is-pending {
+  opacity: 1;
 }
 
 /* Active-run header badge — accent background signals a live run. */
@@ -367,7 +398,7 @@ const NAME_SHIM = "function __name(fn){return fn;}";
  *  embedded step graph so the Steps tab can project it — all via the same
  *  stringify pattern. `NAME_SHIM` MUST come first (see its doc — without it,
  *  esbuild/tsx output throws in the iframe). */
-const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();\n${bootCanvasOverview.toString()}\nbootCanvasOverview();\n${bootCanvasError.toString()}\nbootCanvasError();`;
+const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasSelection.toString()}\nbootCanvasSelection();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();\n${bootCanvasOverview.toString()}\nbootCanvasOverview();\n${bootCanvasError.toString()}\nbootCanvasError();`;
 
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme

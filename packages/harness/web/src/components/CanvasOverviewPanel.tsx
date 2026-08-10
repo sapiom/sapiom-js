@@ -8,11 +8,21 @@ import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { CanvasStepInspector } from "./CanvasStepDetail";
 import { Icon } from "./Icon";
 
-/** What a rendered document posts as its overview chrome (or the mock copy). */
+/** One node-kind key row, posted by the document alongside the overview. */
+export interface CanvasLegendItem {
+  kind: string;
+  label: string;
+}
+
+/** What a rendered document posts as its overview chrome (or the mock copy).
+ *  `stats`, `badges` and `legend` used to be drawn on the board itself; they
+ *  live here now so the graph pane stays the graph. */
 export interface CanvasOverviewContent {
   description: string;
   stats: string;
   notes: string[];
+  badges?: string[];
+  legend?: CanvasLegendItem[];
 }
 
 /** Arrow keys move the handle by this many px (the drag's keyboard fallback). */
@@ -274,6 +284,20 @@ export function CanvasOverviewPanel({
           ) : (
             overview && (
               <>
+                {/* The board's old floating chrome: what the agent is, in
+                    numbers, plus any state badge the render carried. */}
+                {(overview.stats || (overview.badges && overview.badges.length > 0)) && (
+                  <div className="canvas-overview-meta" data-testid="canvas-overview-meta">
+                    {overview.stats && (
+                      <span className="canvas-overview-stats">{overview.stats}</span>
+                    )}
+                    {overview.badges?.map((badge) => (
+                      <span key={badge} className="canvas-overview-badge">
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {overview.description && (
                   <p className="canvas-overview-desc">{overview.description}</p>
                 )}
@@ -326,6 +350,19 @@ export function CanvasOverviewPanel({
                       <li key={note}>{note}</li>
                     ))}
                   </ul>
+                )}
+                {overview.legend && overview.legend.length > 0 && (
+                  <div className="canvas-overview-legend" data-testid="canvas-overview-legend">
+                    {overview.legend.map((item) => (
+                      <span key={item.kind} className="canvas-overview-legend-item">
+                        <span
+                          className={"canvas-step-dot dot--" + item.kind}
+                          aria-hidden="true"
+                        />
+                        {item.label}
+                      </span>
+                    ))}
+                  </div>
                 )}
               </>
             )

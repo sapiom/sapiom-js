@@ -211,6 +211,43 @@ export function bootCanvasNodeClicks(): void {
 }
 
 /**
+ * Keeps the board's selected node lit while the parent's bottom inspector
+ * shows that step.
+ *
+ * Without this the served board answers a pick (see `bootCanvasNodeClicks`)
+ * and then looks untouched: the inspector swaps its content with nothing on
+ * the graph to say WHICH card it is describing — change blindness on every
+ * pick. The parent posts `{ type: "sapiom-canvas:select", id }` (null clears)
+ * with the graph node id, which the SVG carries as `data-step-id`; older
+ * documents that only carry a label fall back to `data-step-name`.
+ *
+ * Selection is orthogonal to run state: `is-selected` only rings the node, so
+ * a running/passed/failed card keeps its own lighting while selected.
+ *
+ * Stringified into the iframe template by `canvas-template.ts`.
+ */
+export function bootCanvasSelection(): void {
+  window.addEventListener("message", function (e) {
+    const d = e && e.data;
+    if (!d || d.type !== "sapiom-canvas:select") return;
+    const previous = document.querySelectorAll(".canvas-node.is-selected");
+    for (let i = 0; i < previous.length; i++) previous[i].classList.remove("is-selected");
+    if (typeof d.id !== "string" || !d.id) return;
+    const nodes = document.querySelectorAll(".canvas-node");
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (
+        node.getAttribute("data-step-id") === d.id ||
+        node.getAttribute("data-step-name") === d.id
+      ) {
+        node.classList.add("is-selected");
+        return;
+      }
+    }
+  });
+}
+
+/**
  * Wires the view (pan/zoom) channel and announces the graph's natural size.
  *
  * The sandboxed iframe element itself NEVER transforms — that keeps the gesture
@@ -312,7 +349,8 @@ export function bootCanvasGraph(): void {
 }
 
 /**
- * Posts the workflow-level overview (`{ description, stats, notes }`) so the
+ * Posts the workflow-level overview (`{ description, stats, notes, badges,
+ * legend }`) so the
  * Canvas tab's bottom panel can show it — the deterministic equivalent of the
  * demo doc's overview. Embedded by `canvas-body.ts` as a `<script
  * type="application/json" id="sapiom-overview">` data block (read as text, same
@@ -332,6 +370,10 @@ export function bootCanvasOverview(): void {
           description: typeof data.description === "string" ? data.description : "",
           stats: typeof data.stats === "string" ? data.stats : "",
           notes: Array.isArray(data.notes) ? data.notes : [],
+          // Chrome the board no longer floats over the graph: the app renders
+          // both in the overview panel (see canvas-body.ts).
+          badges: Array.isArray(data.badges) ? data.badges : [],
+          legend: Array.isArray(data.legend) ? data.legend : [],
         },
         "*",
       );
