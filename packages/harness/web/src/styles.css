@@ -386,6 +386,44 @@ input {
   flex-direction: column;
 }
 
+/* The rail's animating slot (desktop). Its inline width eases between the rail's
+   width and 0, and overflow:hidden clips the fixed-width rail inside it — so
+   collapse/expand slides like a drawer instead of the content squishing. A
+   resize-handle drag/reset (.is-resizing) drops the ease so the rail tracks the
+   cursor. The slot is a fixed column (no shrink); on windows narrower than the
+   rail + both panes' floor the shell scrolls rather than shrinking the rail.
+   On mobile the rail is a position:fixed drawer that escapes this wrapper. */
+.rail-slot {
+  /* A shrinkable flex container: the rail inside keeps its `flex: 0 1 auto`, so
+     it still reflows down to RAIL_MIN under space pressure (a narrow window)
+     rather than forcing horizontal scroll. The slot's inline width eases between
+     the rail's width and 0 on collapse, and overflow:hidden clips the last
+     stretch (below RAIL_MIN) like a drawer. */
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  transition: width var(--base) var(--ease);
+}
+.rail-slot.is-resizing {
+  transition: none;
+}
+/* Once collapsed, take it out of AT + hit-testing (it is width 0 and inert
+   already). The 0s-delayed-by-var(--base) visibility change lets the width
+   finish easing before it goes hidden; on expand the base rule (no visibility
+   transition) flips it back instantly so the open ease is visible. */
+.rail-slot.is-collapsed {
+  visibility: hidden;
+  transition:
+    width var(--base) var(--ease),
+    visibility 0s var(--base);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-slot {
+    transition: none;
+  }
+}
+
 /* Brand header row at the top of the rail — shares --pane-header-h with the
    session bar and right-pane tabs so the app's top edge is one 56px line. */
 .brand-header {
@@ -6324,7 +6362,12 @@ input {
 
 .command-palette-item.is-selected .command-palette-item-label,
 .command-palette-item.is-selected .command-palette-item-meta {
-  color: var(--accent-foreground);
+  /* The selected row is the palette's one sanctioned accent use. Colour the text
+     with the accent ITSELF (--accent = brand green), which is legible on the
+     neutral --nested-shade highlight in both themes. --accent-foreground was
+     wrong here: it is the ink FOR a green fill (--brand-ink, a near-black green
+     in dark mode), so on the neutral highlight the text all but vanished. */
+  color: var(--accent);
 }
 
 /* DialogHeader recipe: a hairline separator under the title. */

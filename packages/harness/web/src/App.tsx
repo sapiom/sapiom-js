@@ -289,7 +289,7 @@ export const App = (): JSX.Element => {
   // a new way into a view is navigable the day it lands.
   const navHistory = useNavigationHistory();
 
-  const { widths, canvasResizing, startRailDrag, startCanvasDrag, resetRail, resetCanvas } =
+  const { widths, canvasResizing, railResizing, startRailDrag, startCanvasDrag, resetRail, resetCanvas } =
     usePaneWidths();
   // The canvas slides open/shut by animating its grid column to/from 0 (the
   // transition is always-on in refine.css). During that slide the pane's content
@@ -1148,8 +1148,21 @@ export const App = (): JSX.Element => {
           onClick={() => setRailCollapsed(true)}
         />
       )}
-      {!railCollapsed && (
-        <WorkflowsRail
+      {/* Desktop: the rail lives in a width-animating slot so collapse/expand
+          slides (see .rail-slot). It stays mounted at width 0 when collapsed
+          (inert, clipped). Mobile: the rail is a position:fixed drawer that
+          escapes the slot, so it renders only when open, exactly as before. */}
+      {(!isMobile || !railCollapsed) && (
+        <div
+          className={
+            "rail-slot" +
+            (railResizing ? " is-resizing" : "") +
+            (!isMobile && railCollapsed ? " is-collapsed" : "")
+          }
+          inert={!isMobile && railCollapsed ? true : undefined}
+          style={!isMobile ? { width: railCollapsed ? 0 : widths.rail } : undefined}
+        >
+          <WorkflowsRail
           projectRoot={projectRoot || null}
           onSaveProjectRoot={saveProjectRoot}
           width={widths.rail}
@@ -1221,6 +1234,7 @@ export const App = (): JSX.Element => {
           settingsOpen={settingsOpen}
           onSetSettingsOpen={setSettingsOpen}
         />
+        </div>
       )}
 
       {!railCollapsed && !isMobile && (

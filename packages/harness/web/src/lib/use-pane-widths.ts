@@ -82,6 +82,11 @@ export function usePaneWidths(): {
    *  drawer toggle. The shell suppresses the open/close ease while it's set,
    *  so the pane snaps to the cursor / the equal split instead of lagging it. */
   canvasResizing: boolean;
+  /** True while the rail handle is dragged OR reset — a direct manipulation of
+   *  the rail width, as opposed to the collapse/expand toggle. The shell
+   *  suppresses the open/close ease while it's set, so the rail snaps to the
+   *  cursor instead of lagging it. */
+  railResizing: boolean;
   startRailDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
   startCanvasDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
   resetRail: () => void;
@@ -89,6 +94,7 @@ export function usePaneWidths(): {
 } {
   const [widths, setWidths] = useState<PaneWidths>(loadStoredWidths);
   const [canvasResizing, setCanvasResizing] = useState(false);
+  const [railResizing, setRailResizing] = useState(false);
 
   const startDrag =
     (
@@ -134,7 +140,8 @@ export function usePaneWidths(): {
   return {
     widths,
     canvasResizing,
-    startRailDrag: startDrag("rail", 1, RAIL_MIN, RAIL_MAX, () => widths.rail),
+    railResizing,
+    startRailDrag: startDrag("rail", 1, RAIL_MIN, RAIL_MAX, () => widths.rail, setRailResizing),
     // Dragging away from the equal split needs a concrete starting px —
     // measure the live pane, since "equal" has no stored number.
     startCanvasDrag: startDrag(
@@ -149,7 +156,11 @@ export function usePaneWidths(): {
       },
       setCanvasResizing,
     ),
-    resetRail: () => reset("rail", RAIL_DEFAULT),
+    resetRail: () => {
+      setRailResizing(true);
+      reset("rail", RAIL_DEFAULT);
+      window.setTimeout(() => setRailResizing(false), 0);
+    },
     // A double-click SNAPS to the equal split (direct manipulation), so flag
     // the change as a resize for the frame it lands: the transition is
     // suppressed, the grid jumps, then the flag clears with nothing left to ease.
