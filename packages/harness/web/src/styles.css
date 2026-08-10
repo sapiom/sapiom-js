@@ -541,6 +541,19 @@ input {
   padding-left: var(--mac-lights-inset);
 }
 
+/* The rail toggle (collapse in the brand header, expand in the session bar)
+   leads the window's top line right after the OS lights. macOS hides those
+   lights whenever the window loses focus, emptying the clearance the toggle
+   sits after — a bare glyph then reads as a gap, not a control. Blurred, the
+   toggle carries its own resting surface so it still reads as the window tool
+   it is; focused, the lights are back and it returns to the ghost recipe. Only
+   the frameless host, because only there is the toggle a window control. */
+:root[data-window-frame="macos"][data-window-focused="false"] .rail-toggle {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
 /* An inline confirm (EndSessionConfirm) renders its full-screen backdrop INSIDE
    the draggable session bar. Without opting out, a backdrop click landing in
    the top drag strip is eaten as a window-move instead of dismissing — so the
@@ -628,6 +641,8 @@ input {
   color: var(--text-dim);
   transition:
     background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
     color var(--transition-fast);
 }
 

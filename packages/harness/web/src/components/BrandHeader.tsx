@@ -15,8 +15,10 @@ import { SessionNav } from "./SessionNav";
  *
  * The chrome line carries window controls on the left — the OS traffic lights
  * in the frameless host, then the rail collapse immediately after them — and
- * back/forward on the right anchor. Theme lives in the account menu with the
- * rest of the workspace preferences.
+ * back/forward on the right anchor. The rail toggle carries a resting surface
+ * (.rail-toggle): full-screen macOS hides the lights, and a bare glyph sitting
+ * alone in their reserved clearance reads as a gap rather than a control.
+ * Theme lives in the account menu with the rest of the workspace preferences.
  */
 export function BrandHeader({
   onCollapse,
@@ -38,7 +40,7 @@ export function BrandHeader({
           control rather than a stray tool at the far edge. */}
       <div className="brand-header-window">
         <button
-          className="theme-toggle"
+          className="theme-toggle rail-toggle"
           data-testid="rail-collapse"
           aria-label="Collapse workspace panel"
           title="Collapse workspace panel"

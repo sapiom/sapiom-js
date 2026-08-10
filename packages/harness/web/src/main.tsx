@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import { interceptMockTrack } from "./lib/api.js";
+import { observeWindowFocus } from "./lib/window-focus.js";
 import { appFrameFromSearch } from "./lib/window-frame.js";
 import "./styles.css";
 import "./styles/refine.css";
@@ -15,6 +16,10 @@ interceptMockTrack();
 // CSS can scope the header padding + drag region to it; a browser stays "web"
 // and never pays for either.
 document.documentElement.dataset.windowFrame = appFrameFromSearch();
+
+// Frameless macOS hides the traffic lights while the window is blurred, so the
+// rail toggle next to them needs its own surface in that state (styles.css).
+observeWindowFocus();
 
 // The shell is viewport-locked (html/body overflow:hidden) — page scroll is
 // never legitimate. overflow:hidden stops user scrolling but NOT the

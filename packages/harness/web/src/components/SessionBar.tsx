@@ -106,7 +106,7 @@ export function SessionBar({
     <div className="session-bar">
       {onExpandRail && (
         <button
-          className="theme-toggle"
+          className="theme-toggle rail-toggle"
           data-testid="rail-expand"
           aria-label="Expand workspace panel"
           title="Expand workspace panel"
