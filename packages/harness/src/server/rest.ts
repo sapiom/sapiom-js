@@ -30,6 +30,7 @@ import type {
 import {
   JSON_BODY_LIMIT_BYTES,
   SPAWNABLE_HARNESS_KINDS,
+  EDITOR_KINDS,
 } from "../shared/types.js";
 import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
@@ -64,6 +65,7 @@ const settingsPatchSchema = z.object({
   recentDirs: z.array(z.string()).optional(),
   projectRoot: z.string().optional(),
   rollingSummary: z.boolean().optional(),
+  editor: z.enum(EDITOR_KINDS).optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
 
 const UI_EVENT_NAMES: readonly UiEventName[] = [

@@ -2931,6 +2931,33 @@ input {
   color: var(--text-dim);
 }
 
+/* The one non-boolean preference in the settings card: sits in the same row
+   recipe as the toggles, so it lines up with them rather than reading as a
+   different kind of control. Native <select> on purpose — the OS menu is the
+   accessible, keyboard-complete one, and this popover is already anchored. */
+.settings-select {
+  flex: 0 0 auto;
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  background: var(--surface-inset);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-label);
+  cursor: pointer;
+}
+
+.settings-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.settings-select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .toggle-switch {
   flex: 0 0 auto;
   width: 34px;

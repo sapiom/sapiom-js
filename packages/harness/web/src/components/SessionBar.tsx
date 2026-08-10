@@ -43,6 +43,8 @@ interface SessionBarProps {
   onCloseSession: (id: string) => void;
   /** Opens the session's directory in the user's editor. */
   onOpenInEditor: (path: string) => void;
+  /** The chosen editor's display name, so the item names where it lands. */
+  editorLabel: string;
   /** Push a message onto the app's toast rail. */
   onToast: (message: string) => void;
   /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
@@ -80,6 +82,7 @@ export function SessionBar({
   onExpandRight,
   onCloseSession,
   onOpenInEditor,
+  editorLabel,
   onToast,
   actions = null,
   onNewSession = null,
@@ -314,7 +317,7 @@ export function SessionBar({
                   }}
                 >
                   <Icon name="Code" size={13} />
-                  Open in editor
+                  Open in {editorLabel}
                 </button>
                 {activeSession.status !== "exited" && (
                   <button

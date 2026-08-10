@@ -803,10 +803,22 @@ test("rail tooltips fly to the right of the rail instead of covering sibling row
   expect(tipBox!.x).toBeGreaterThanOrEqual(railBox!.x + railBox!.width);
 });
 
-test("Open in editor lives on the session menu", async ({ page }) => {
-  // Session ⋯ menu item.
+test("Open in editor lives on the session menu, and names the chosen editor", async ({ page }) => {
+  // Session ⋯ menu item. It says which editor it will hand the folder to,
+  // because nothing reports back if that editor isn't installed.
   await page.getByTestId("session-menu").click();
-  await expect(page.getByTestId("session-open-editor")).toBeVisible();
+  await expect(page.getByTestId("session-open-editor")).toContainText("Open in VS Code");
+  await page.keyboard.press("Escape");
+
+  // Picking another editor in Settings retargets the item — the VS Code
+  // hardcoding is what made this useless on a Cursor-only machine.
+  await page.getByTestId("brand-identity").click();
+  await page.getByTestId("settings-trigger").click();
+  await page.getByTestId("editor-select").selectOption("cursor");
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("session-menu").click();
+  await expect(page.getByTestId("session-open-editor")).toContainText("Open in Cursor");
 });
 
 test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {

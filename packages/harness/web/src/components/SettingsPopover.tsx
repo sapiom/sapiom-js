@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { JSX } from "react";
-import type { AppState } from "@shared/types";
+import type { AppState, EditorKind } from "@shared/types";
 import { HARNESS_PATHS } from "@shared/types";
 
 import type { AuthStartResponse } from "../lib/api";
 import { isMockMode } from "../lib/api";
+import { EDITOR_OPTIONS, resolveEditor } from "../lib/editors";
 import { Icon } from "./Icon";
 import { track } from "../lib/track";
 
@@ -29,6 +30,9 @@ interface SettingsPopoverProps {
   /** `HarnessSettings.rollingSummary` — see the toggle's own note below. */
   rollingSummary: boolean;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
+  /** `HarnessSettings.editor` — which editor "Open in editor" targets. */
+  editor: EditorKind;
+  onSelectEditor: (next: EditorKind) => Promise<void>;
   /** Kick off the browser OAuth flow — see HarnessApi.startAuth(). */
   onStartAuth: () => Promise<AuthStartResponse>;
   /** Sign out and clear credentials — see HarnessApi.disconnect(). */
@@ -46,6 +50,8 @@ export function SettingsPopover({
   onToggleProductAnalytics,
   rollingSummary,
   onToggleRollingSummary,
+  editor,
+  onSelectEditor,
   onStartAuth,
   onDisconnect,
 }: SettingsPopoverProps): JSX.Element {
@@ -84,6 +90,15 @@ export function SettingsPopover({
     setBusy(true);
     try {
       await onToggleRollingSummary(!rollingSummary);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSelectEditor = async (next: EditorKind): Promise<void> => {
+    setBusy(true);
+    try {
+      await onSelectEditor(next);
     } finally {
       setBusy(false);
     }
@@ -245,6 +260,29 @@ export function SettingsPopover({
           <span className="toggle-knob" />
         </button>
       </label>
+
+      <label className="settings-toggle-row">
+        <span>Open in editor uses</span>
+        <select
+          className="settings-select"
+          data-testid="editor-select"
+          value={resolveEditor(editor)}
+          disabled={busy}
+          onChange={(e) => void handleSelectEditor(e.target.value as EditorKind)}
+        >
+          {EDITOR_OPTIONS.map((option) => (
+            <option key={option.kind} value={option.kind}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <p className="settings-note">
+        Which editor the session menu&rsquo;s &ldquo;Open in editor&rdquo; hands the project folder
+        to. It opens the editor&rsquo;s own URL scheme, so the app has to be installed — the OS
+        never reports back, and an editor that isn&rsquo;t there simply does nothing.
+      </p>
 
       <p className="settings-note">
         Off by default, because it uses tokens you didn&rsquo;t ask to use: every 10 turns, and

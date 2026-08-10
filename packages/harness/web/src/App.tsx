@@ -52,6 +52,7 @@ import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
 import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
 import { deepLinkFromSearch } from "./lib/deep-link";
+import { editorLabel, editorUrl, resolveEditor } from "./lib/editors";
 import { CloneAgentConfirm } from "./components/CloneAgentConfirm";
 import {
   cloneDefinitionPrompt,
@@ -911,15 +912,14 @@ export const App = (): JSX.Element => {
     closeMobileDrawer();
   };
 
-  // Jump from the Studio to the real code.
+  // Jump from the Studio to the real code, in the editor the user picked.
   const openInEditor = (path: string): void => {
-    // `editorUrlTemplate` is a forward-looking setting the canonical contract
-    // doesn't carry yet; read it defensively so the default holds on servers
-    // (and mocks) that omit it.
-    const template =
-      (harness.settings as { editorUrlTemplate?: string } | null)?.editorUrlTemplate ??
-      "vscode://file{path}";
-    window.location.href = template.replace("{path}", encodeURI(path));
+    const editor = harness.settings?.editor;
+    // Nothing reports back whether the scheme found an application, so say who
+    // we handed it to — otherwise a machine without that editor installed just
+    // shows a menu item that does nothing.
+    harness.showToast(`Opening in ${editorLabel(editor)}… Pick a different editor in Settings.`);
+    window.location.href = editorUrl(editor, path);
   };
 
   // The rail verb: FOCUS an agent (or a bare folder). Focusing swaps the main
@@ -1229,6 +1229,10 @@ export const App = (): JSX.Element => {
           onToggleRollingSummary={async (next) => {
             await harness.updateSettings({ rollingSummary: next });
           }}
+          editor={resolveEditor(harness.settings?.editor)}
+          onSelectEditor={async (next) => {
+            await harness.updateSettings({ editor: next });
+          }}
           onStartAuth={harness.startAuth}
           onDisconnect={harness.disconnect}
           settingsOpen={settingsOpen}
@@ -1361,6 +1365,7 @@ export const App = (): JSX.Element => {
               busy={activeSession != null && harness.busySessionIds.has(activeSession.id)}
               onCloseSession={(id) => void harness.closeSession(id)}
               onOpenInEditor={openInEditor}
+              editorLabel={editorLabel(harness.settings?.editor)}
               onToast={harness.showToast}
               onExpandRail={railCollapsed ? () => setRailCollapsed(false) : null}
               onExpandRight={rightCollapsed ? () => setRightCollapsed(false) : null}

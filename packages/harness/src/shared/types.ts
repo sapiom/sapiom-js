@@ -1285,7 +1285,30 @@ export interface HarnessSettings {
    * user never asked for. With it off, briefs degrade to last-N-turns.
    */
   rollingSummary?: boolean;
+  /**
+   * Which editor "Open in editor" hands the session directory to. Absent means
+   * `EDITOR_KINDS[0]` (VS Code) — the behaviour before this setting existed.
+   *
+   * A preference rather than a detected value: the schemes below are handled by
+   * the OS, which never tells us whether anything answered, so a wrong guess is
+   * indistinguishable from a working one (the click just does nothing). The user
+   * picking their editor is the only signal we can trust.
+   */
+  editor?: EditorKind;
 }
+
+/**
+ * The editors "Open in editor" can hand a directory to, in menu order.
+ *
+ * Each one registers its own URL scheme (`<kind>://file/<path>`) — the VS Code
+ * forks kept VS Code's shape, which is why one template covers all of them
+ * (see web/src/lib/editors.ts). `HarnessSettings.editor`, the zod enum in
+ * server/rest.ts and the picker are all derived from this tuple, so adding an
+ * editor is a one-line change here plus its label.
+ */
+export const EDITOR_KINDS = ["vscode", "vscode-insiders", "cursor", "windsurf", "zed"] as const;
+
+export type EditorKind = (typeof EDITOR_KINDS)[number];
 
 // ---------------------------------------------------------------------------
 // Filesystem browsing (new-session directory picker autocomplete)

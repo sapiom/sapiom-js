@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type {
   AppState,
+  EditorKind,
   HarnessEntry,
   HarnessKind,
   HarnessSession,
@@ -98,6 +99,8 @@ interface WorkflowsRailProps {
   onToggleTelemetry: (next: boolean) => Promise<void>;
   onToggleProductAnalytics: (next: boolean) => Promise<void>;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
+  editor: EditorKind;
+  onSelectEditor: (next: EditorKind) => Promise<void>;
   /** Kick off the browser OAuth flow for the in-app Connect button. */
   onStartAuth: () => Promise<AuthStartResponse>;
   /** Sign out and clear credentials. */
@@ -335,6 +338,8 @@ export function WorkflowsRail({
   onToggleTelemetry,
   onToggleProductAnalytics,
   onToggleRollingSummary,
+  editor,
+  onSelectEditor,
   onStartAuth,
   onDisconnect,
   settingsOpen,
@@ -840,6 +845,8 @@ export function WorkflowsRail({
           onToggleTelemetry={onToggleTelemetry}
           onToggleProductAnalytics={onToggleProductAnalytics}
           onToggleRollingSummary={onToggleRollingSummary}
+          editor={editor}
+          onSelectEditor={onSelectEditor}
           onStartAuth={onStartAuth}
           onDisconnect={onDisconnect}
           settingsOpen={settingsOpen}
@@ -891,6 +898,8 @@ function ProfileRow({
   onToggleTelemetry,
   onToggleProductAnalytics,
   onToggleRollingSummary,
+  editor,
+  onSelectEditor,
   onStartAuth,
   onDisconnect,
   settingsOpen,
@@ -909,6 +918,8 @@ function ProfileRow({
   onToggleTelemetry: (next: boolean) => Promise<void>;
   onToggleProductAnalytics: (next: boolean) => Promise<void>;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
+  editor: EditorKind;
+  onSelectEditor: (next: EditorKind) => Promise<void>;
   onStartAuth: () => Promise<AuthStartResponse>;
   onDisconnect: () => Promise<void>;
   settingsOpen: boolean;
@@ -1038,6 +1049,8 @@ function ProfileRow({
           onToggleTelemetry={onToggleTelemetry}
           onToggleProductAnalytics={onToggleProductAnalytics}
           onToggleRollingSummary={onToggleRollingSummary}
+          editor={editor}
+          onSelectEditor={onSelectEditor}
           onStartAuth={onStartAuth}
           onDisconnect={onDisconnect}
         />
