@@ -492,7 +492,18 @@ export const App = (): JSX.Element => {
   const focusHasLiveSession =
     focusedAgentPath != null &&
     liveSessionsForFocus(harness.state?.sessions ?? [], focusedAgentPath).length > 0;
+  // Set by applyVisit for the single re-derivation its state change triggers, so
+  // the record effect skips that one run. Without it, replaying a Back/Forward
+  // visit whose derived place has since changed KIND — e.g. a "session" whose
+  // live CLI has since exited now re-derives as an "agent" visit — records a
+  // mismatching visit, which pushNavigationVisit treats as a new branch and
+  // truncates the forward stack. Guarding here keeps back/forward a pure replay.
+  const applyingVisitRef = useRef(false);
   useEffect(() => {
+    if (applyingVisitRef.current) {
+      applyingVisitRef.current = false;
+      return;
+    }
     if (templatesOpen) {
       recordVisit({ kind: "templates" });
     } else if (reviewSummary) {
@@ -522,6 +533,10 @@ export const App = (): JSX.Element => {
   const applyVisit = useCallback(
     (visit: NavigationVisit | null): void => {
       if (!visit) return;
+      // Replaying, not navigating: tell the record effect to skip the one run
+      // this state change triggers, so it never re-derives-and-pushes (which
+      // would truncate the forward stack). See applyingVisitRef above.
+      applyingVisitRef.current = true;
       setOverviewOpen(false);
       setTemplatesOpen(visit.kind === "templates");
       setComposing(visit.kind === "composer");
