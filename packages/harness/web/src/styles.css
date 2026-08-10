@@ -548,6 +548,17 @@ input {
    toggle carries its own resting surface so it still reads as the window tool
    it is; focused, the lights are back and it returns to the ghost recipe. Only
    the frameless host, because only there is the toggle a window control. */
+/* The ghost recipe transitions background+color only, and it is declared after
+   this block — carry the surface's other two properties at higher specificity
+   so the state fades in rather than snapping. */
+.theme-toggle.rail-toggle {
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    color var(--transition-fast);
+}
+
 :root[data-window-frame="macos"][data-window-focused="false"] .rail-toggle {
   background: var(--surface-raised);
   border-color: var(--border);
@@ -641,8 +652,6 @@ input {
   color: var(--text-dim);
   transition:
     background-color var(--transition-fast),
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast),
     color var(--transition-fast);
 }
 
