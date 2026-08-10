@@ -4,6 +4,17 @@ Read CONTRIBUTING.md before submitting, and keep the pull request focused on one
 Do not disclose suspected vulnerabilities here; follow SECURITY.md instead.
 -->
 
+## Primary change type
+
+<!-- Select exactly one primary type. -->
+
+- [ ] Bug fix
+- [ ] Documentation
+- [ ] Feature
+- [ ] Tests
+- [ ] Dependency update
+- [ ] Maintenance or refactor
+
 ## Problem and motivation
 
 <!-- What problem does this solve, and why is the change needed? -->

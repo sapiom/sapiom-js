@@ -77,6 +77,9 @@ jobs:
       - name: Test repository content checks
         run: pnpm examples:check:test
 
+      - name: Test pull request classification
+        run: pnpm pr-labeler:check
+
   # NOTE: the harness web-e2e (playwright-mock) and desktop packaging
   # (desktop-smoke) jobs moved to .github/workflows/harness.yml, which is
   # path-filtered to the harness and its workspace dependencies — they only

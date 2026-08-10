@@ -1,0 +1,146 @@
+name: Pull Request Labeler
+
+on:
+  pull_request_target:
+    branches: [main]
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to classify
+        required: true
+        type: number
+      initialize_triage:
+        description: Add needs-triage when the pull request is external
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-labeler-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Classify pull request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply area labels
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          configuration-path: .github/labeler.yml
+          pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          sync-labels: "true"
+
+      # pull_request_target is privileged. Check out only the trusted base SHA;
+      # never fetch or execute the contributor-controlled head ref in this job.
+      - name: Check out trusted classifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+
+      - name: Apply deterministic classification labels
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          EVENT_ACTION: ${{ github.event.action || 'workflow_dispatch' }}
+          INITIALIZE_TRIAGE: ${{ inputs.initialize_triage || false }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        with:
+          script: |
+            const path = await import("node:path");
+            const { pathToFileURL } = await import("node:url");
+            const classifierUrl = pathToFileURL(
+              path.join(
+                process.env.GITHUB_WORKSPACE,
+                "scripts",
+                "pr-label-classifier.mjs",
+              ),
+            ).href;
+            const {
+              classifyPullRequest,
+              reconcilePullRequestLabels,
+            } = await import(classifierUrl);
+
+            const pullNumber = Number.parseInt(process.env.PR_NUMBER, 10);
+            if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+              core.setFailed("PR_NUMBER must be a positive integer");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+            if (pullRequest.base.ref !== "main") {
+              core.setFailed(
+                `PR #${pullNumber} targets ${pullRequest.base.ref}, not main`,
+              );
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: pullNumber,
+              per_page: 100,
+            });
+            const classification = classifyPullRequest({
+              pullRequest,
+              files,
+              eventAction: process.env.EVENT_ACTION,
+              initializeTriage: process.env.INITIALIZE_TRIAGE === "true",
+            });
+            const currentLabels = pullRequest.labels
+              .map((label) =>
+                typeof label === "string" ? label : label.name,
+              )
+              .filter(Boolean);
+            const changes = reconcilePullRequestLabels(
+              currentLabels,
+              classification,
+            );
+
+            core.info(
+              `PR #${pullNumber}: review size ${classification.reviewSize}; ` +
+                `add [${changes.add.join(", ")}]; ` +
+                `remove [${changes.remove.join(", ")}]`,
+            );
+            for (const reason of classification.templateReasons) {
+              core.info(`Template incomplete: ${reason}`);
+            }
+
+            for (const name of changes.remove) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pullNumber,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
+
+            if (changes.add.length > 0) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pullNumber,
+                labels: changes.add,
+              });
+            }

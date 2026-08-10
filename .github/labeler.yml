@@ -1,0 +1,63 @@
+"area: agents":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/agent/**
+          - packages/agent-core/**
+          - packages/agent-runtime/**
+
+"area: studio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/agent-studio/**
+          - packages/harness/**
+          - packages/harness-desktop/**
+
+"area: sdk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/core/**
+          - packages/analytics-core/**
+
+"area: integrations":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/axios/**
+          - packages/fetch/**
+          - packages/node-http/**
+          - packages/langchain/**
+          - packages/langchain-classic/**
+
+"area: platform-tools":
+  - changed-files:
+      - any-glob-to-any-file:
+          - packages/cli/**
+          - packages/mcp/**
+          - packages/sandbox/**
+          - packages/sandbox-preview/**
+          - packages/tools/**
+          - plugins/**
+          - .claude/**
+          - .claude-plugin/**
+
+"area: examples-docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - examples/**
+          - "*.md"
+
+"area: ci-release":
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+          - .changeset/config.json
+          - .npmrc
+          - .prettierignore
+          - .prettierrc.json
+          - eslint.config.*
+          - package.json
+          - pnpm-lock.yaml
+          - pnpm-workspace.yaml
+          - PUBLISHING.md
+          - scripts/**
+          - tsconfig*.json

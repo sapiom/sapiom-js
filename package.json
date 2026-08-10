@@ -32,6 +32,7 @@
     "terminology:check:test": "node --test scripts/agent-studio-terminology-check.test.mjs",
     "provider-copy:check": "node scripts/provider-neutral-copy-check.mjs",
     "provider-copy:check:test": "node --test scripts/provider-neutral-copy-check.test.mjs",
+    "pr-labeler:check": "node --test scripts/pr-label-classifier.test.mjs && prettier --check .github/labeler.yml .github/workflows/pr-labeler.yml .github/workflows/test.yml .github/pull_request_template.md package.json scripts/pr-label-classifier.mjs scripts/pr-label-classifier.test.mjs",
     "examples:sort": "node scripts/examples-sort.mjs",
     "examples:sync-setup": "node scripts/examples-sync-setup.mjs"
   },
