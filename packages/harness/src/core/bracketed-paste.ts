@@ -37,12 +37,13 @@ export const PASTE_END = "\x1b[201~";
 const PRIVATE_MODE_RE = /\x1b\[\?([0-9;]*)([hl])/g;
 
 /**
- * Longest prefix of a private-mode sequence worth carrying between chunks:
- * `ESC [ ? ` plus a params list. A pty chunk can split any escape sequence, so
- * a tail that could still grow into a mode set is re-scanned with the next
- * chunk instead of being dropped.
+ * Longest partial private-mode sequence worth carrying between chunks: an
+ * `ESC [ ? <params>` with no terminator yet. A pty chunk can split an escape
+ * sequence at any byte, so such a tail is re-scanned with the next chunk
+ * instead of being dropped. Sized to hold a realistically long *batched* set —
+ * a terminal enables several modes at once, e.g. `ESC[?1049;1000;1002;…;2004h`.
  */
-const MAX_CARRY = 32;
+const MAX_CARRY = 64;
 
 /** Incremental scan state — see {@link trackBracketedPaste}. */
 export interface BracketedPasteState {
@@ -54,13 +55,23 @@ export interface BracketedPasteState {
 
 export const initialBracketedPasteState: BracketedPasteState = { enabled: false, carry: "" };
 
-/** The tail of `chunk` that could still grow into a private-mode sequence. */
+/**
+ * The tail of `chunk` that could still grow into a private-mode set/reset on
+ * the next chunk. Anchored on the last ESC — not on the full `ESC[?` — so a
+ * boundary that falls *inside* the introducer (`ESC` | `[?…`, or `ESC[` | `?…`)
+ * still carries, instead of dropping the mode change (and, for a RESET split
+ * that way, leaving 2004 wrongly stuck on and pasting escape bytes at an app
+ * that has turned bracketed paste off).
+ */
 function pendingCarry(chunk: string): string {
-  const start = chunk.lastIndexOf("\x1b[?");
-  if (start === -1) return "";
-  const tail = chunk.slice(start);
-  // A finished sequence (it has its final h/l) tells us nothing more.
-  if (/[hl]/.test(tail)) return "";
+  const esc = chunk.lastIndexOf("\x1b");
+  if (esc === -1) return "";
+  const tail = chunk.slice(esc);
+  // Keep it only while it is still a viable prefix of `ESC [ ? <params>` with no
+  // terminator yet: a final h/l, a second byte other than "[", or a post-"["
+  // byte other than "?" all mean it can never become a private-mode sequence.
+  // eslint-disable-next-line no-control-regex
+  if (!/^\x1b(\[(\?[0-9;]*)?)?$/.test(tail)) return "";
   return tail.length > MAX_CARRY ? "" : tail;
 }
 
@@ -85,11 +96,15 @@ export function trackBracketedPaste(
  * Wrap `text` as bracketed pasted content.
  *
  * Any `ESC [ 201 ~` inside the text would end the paste early and hand the
- * remainder to the app as keystrokes, so it is dropped; `\r` is normalized to
- * `\n` because a carriage return inside a paste is what the app reads as
- * Return, which is precisely the premature submit this exists to prevent.
+ * remainder to the app as keystrokes, so it is dropped — to a FIXPOINT, since
+ * removing one terminator can let the bytes on either side re-form another
+ * (`"\x1b[20" + ESC[201~ + "1~"` collapses to a fresh `ESC[201~`). `\r` is then
+ * normalized to `\n`, because a carriage return inside a paste is what the app
+ * reads as Return, which is precisely the premature submit this exists to prevent.
  */
 export function wrapPaste(text: string): string {
-  const body = text.split(PASTE_END).join("").replace(/\r\n?/g, "\n");
+  let body = text;
+  while (body.includes(PASTE_END)) body = body.split(PASTE_END).join("");
+  body = body.replace(/\r\n?/g, "\n");
   return PASTE_START + body + PASTE_END;
 }

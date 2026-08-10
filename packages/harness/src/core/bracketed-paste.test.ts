@@ -36,6 +36,23 @@ describe("trackBracketedPaste", () => {
     expect(fold("\x1b[?2004h", "\x1b[?2", "004l")).toBe(false);
   });
 
+  it("sees a sequence split inside the ESC[? introducer, in both directions", () => {
+    // The boundary falls between ESC and "[", or "[" and "?" — the carry must
+    // keep a bare ESC / ESC[ too, or the whole mode change is silently lost.
+    expect(fold("\x1b", "[?2004h")).toBe(true);
+    expect(fold("\x1b[", "?2004h")).toBe(true);
+    // The dangerous direction: a RESET split this way must not leave 2004 stuck
+    // ON — otherwise submitInput pastes escape bytes at an app that turned it off.
+    expect(fold("\x1b[?2004h", "\x1b", "[?2004l")).toBe(false);
+    expect(fold("\x1b[?2004h", "\x1b[", "?2004l")).toBe(false);
+  });
+
+  it("completes a long batched mode-set split before its terminator", () => {
+    // A realistic batched enable (a terminal turns several modes on at once)
+    // split across the onData boundary must still be recognized.
+    expect(fold("\x1b[?1049;1000;1002;1003;1004;1006;1015;2004", "h")).toBe(true);
+  });
+
   it("drops a carry that can no longer be a mode sequence", () => {
     // A long run of text after `ESC[?` is not a pending sequence.
     const state = trackBracketedPaste(initialBracketedPasteState, "\x1b[?" + "x".repeat(64));
@@ -55,5 +72,14 @@ describe("wrapPaste", () => {
 
   it("strips an embedded paste terminator that would end the paste early", () => {
     expect(wrapPaste(`ask${PASTE_END} rm -rf /`)).toBe(PASTE_START + "ask rm -rf /" + PASTE_END);
+  });
+
+  it("strips a terminator even when removing one re-forms another", () => {
+    // "\x1b[20" + PASTE_END + "1~" collapses to a fresh PASTE_END on a single
+    // pass; the strip must loop to a fixpoint or a live terminator survives.
+    const wrapped = wrapPaste(`\x1b[20${PASTE_END}1~ rm -rf /`);
+    expect(wrapped).toBe(PASTE_START + " rm -rf /" + PASTE_END);
+    // Exactly one terminator — the wrapper's own — with none left in the body.
+    expect(wrapped.split(PASTE_END)).toHaveLength(2);
   });
 });
