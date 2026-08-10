@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": minor
+"@sapiom/harness-desktop": patch
 ---
 
 Studio: animated rail, back/forward hardening, and dark-mode + control polish
