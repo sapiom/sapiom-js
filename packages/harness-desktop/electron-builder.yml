@@ -119,6 +119,12 @@ win:
   asar: false
 
 nsis:
+  # Space-free, so the on-disk name survives GitHub's upload sanitisation
+  # unchanged and matches the `url` electron-builder writes into `latest.yml`.
+  # The default `${productName} Setup ${version}.${ext}` has a space: builder
+  # sanitises that to a hyphen in the manifest, GitHub rewrites it to a dot in
+  # the asset, and the two disagree — every Windows client then 404s on update.
+  artifactName: Sapiom-Setup-${version}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

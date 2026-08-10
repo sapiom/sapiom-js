@@ -506,6 +506,37 @@ jobs:
           fi
           echo "All three channel manifests present for \"$channel\"."
 
+      # A present manifest is not a working one. electron-updater resolves every
+      # `url:` in the manifest against the release assets, so a manifest naming a
+      # file that isn't attached 404s on every client — exactly what a
+      # `${productName} Setup ${version}` (spaced) NSIS name did: builder wrote a
+      # hyphenated url, GitHub stored a dotted asset, and Windows updates broke
+      # silently for four releases. The name-match holds pre-upload because our
+      # artifact names are space-free (see electron-builder.yml nsis.artifactName)
+      # — so on-disk == manifest url == the name GitHub will keep.
+      - name: Verify each manifest's referenced assets are attached
+        run: |
+          set -euo pipefail
+          cd dist-artifacts
+          shopt -s nullglob globstar
+          fail=0
+          for manifest in **/latest*.yml **/beta*.yml; do
+            # `url:` lines list the installer(s); dedupe since `path:` repeats one.
+            refs="$(grep -oE 'url:[[:space:]]*[^[:space:]]+' "$manifest" | awk '{print $2}' | sort -u)"
+            while IFS= read -r ref; do
+              [ -n "$ref" ] || continue
+              if [ -z "$(find . -name "$ref" -print -quit)" ]; then
+                echo "::error::$manifest references \"$ref\" but no such asset is attached — installed apps will 404 on update."
+                fail=1
+              fi
+            done < <(printf '%s\n' "$refs")
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "Attached assets:"; find . -type f -printf '  %f\n' | sort -u
+            exit 1
+          fi
+          echo "Every manifest-referenced asset is attached."
+
       # Make the channels a hierarchy rather than two dead ends.
       #
       # A beta install reads `beta.yml`. Final releases only publish `latest*.yml`,
