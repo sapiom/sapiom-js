@@ -131,6 +131,31 @@ test("a new session opens terminal-only; the canvas stays hidden until it has co
   }).toPass({ timeout: 10_000 });
 });
 
+test("the new agent's folder appears in the rail at once and is never lost mid-creation", async ({
+  page,
+}) => {
+  const groups = page.locator(".rail-list .workspace-group");
+  const before = await groups.count();
+
+  await page.getByTestId("rail-create-new").click();
+  await page
+    .getByTestId("composer-input")
+    .fill("Diff competitor pricing pages every morning.");
+  await page.getByTestId("composer-send").click();
+
+  // It shows up immediately — before the session POST resolves and the workbench
+  // settles — as a focusable "creating agent" placeholder, so switching away
+  // mid-creation can never strand the in-progress agent.
+  const pending = page.locator('[data-testid^="workspace-pending-"]').first();
+  await expect(pending).toBeVisible();
+  await expect(pending).toHaveAttribute("aria-busy", "true");
+
+  // And it stays: as the session lands the placeholder becomes a real folder
+  // row — one more group than before, continuously present (no vanish/flicker).
+  await expect(page.getByTestId("agent-view")).toBeVisible();
+  await expect(groups).toHaveCount(before + 1);
+});
+
 test("Back returns to the session the composer was opened over", async ({
   page,
 }) => {

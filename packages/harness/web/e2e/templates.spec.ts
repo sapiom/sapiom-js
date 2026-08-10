@@ -245,6 +245,13 @@ test.describe("templates journey (from the composer)", () => {
       "web-research-digest",
     );
 
+    // The workspace folder joins the rail from the instant the clone starts (a
+    // "creating agent" placeholder first), so switching away mid-clone can never
+    // lose the in-progress agent — on a fresh install this is the very first row.
+    await expect(
+      page.getByTestId("workspace-group-web-research-digest"),
+    ).toBeVisible();
+
     // The injected prompt names the real operation and its arguments, and ends
     // with the run continuation: use → edit → run is one path.
     await expect

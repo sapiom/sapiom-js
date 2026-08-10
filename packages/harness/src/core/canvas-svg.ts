@@ -109,6 +109,14 @@ export function layoutGraph(
   }
   applyLaneOrder(byLayer, graph, laneOrder);
   const layers = [...byLayer.keys()].sort((a, b) => a - b);
+  // Longest-path layering leaves GAPS when a back-edge bumps a node past an
+  // otherwise-empty layer (e.g. a step that loops back to an earlier one). The
+  // raw layer index then no longer maps to a row on screen: a gap opens a dead
+  // band, and — because the height below is derived from the layer COUNT while
+  // y used the raw INDEX — the deepest node (a terminal) fell outside the
+  // viewBox and was clipped, taking its incoming edge's arrowhead with it.
+  // Collapse the sorted layers to consecutive rows so index and count agree.
+  const rowOf = new Map<number, number>(layers.map((l, i) => [l, i]));
 
   const idSet = new Set(graph.nodes.map((n) => n.id));
   const parentsOf = new Map<string, string[]>(graph.nodes.map((n) => [n.id, []]));
@@ -151,7 +159,7 @@ export function layoutGraph(
     for (const id of byLayer.get(l)!) {
       pos[id] = {
         x: cx.get(id)! + shiftX - NODE_W / 2,
-        y: MARGIN + l * (NODE_H + LAYER_GAP),
+        y: MARGIN + rowOf.get(l)! * (NODE_H + LAYER_GAP),
       };
     }
   }

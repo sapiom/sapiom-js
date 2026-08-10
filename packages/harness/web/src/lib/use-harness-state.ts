@@ -88,6 +88,18 @@ export interface DeployProgress {
   message?: string;
 }
 
+/**
+ * An optimistic rail entry for a folder whose agent is still being created.
+ * `sessionSeen` records that a live session for this `cwd` has appeared at least
+ * once — the pruning logic uses it to tell "the create hasn't produced a session
+ * yet" (keep waiting) from "a session came and went without producing an agent"
+ * (abandoned — drop the ghost row).
+ */
+export interface PendingWorkspace {
+  cwd: string;
+  sessionSeen: boolean;
+}
+
 export interface HarnessStateHook {
   state: AppState | null;
   loading: boolean;
@@ -175,6 +187,20 @@ export interface HarnessStateHook {
   deployStateByPath: Map<string, DeployProgress>;
   /** Dismiss a workflow's deploy banner (clears its `deployStateByPath` entry). */
   dismissDeployState: (workflowPath: string) => void;
+  /**
+   * Folders whose agent is being created but whose session/agent has not yet
+   * landed in `state`. Presentational overlay only — never enters `sessions`/
+   * `workflows` — so the rail can show a "Creating agent…" row from the instant
+   * creation starts. Newest first. Pruned automatically once a real session or
+   * agent covers the `cwd` (or the create fails / is abandoned). */
+  pendingWorkspaces: PendingWorkspace[];
+  /** Optimistically mark `cwd` as a workspace being created (call synchronously
+   *  at the start of the create flow, before the network round-trip). No-op if
+   *  already pending. */
+  addPendingWorkspace: (cwd: string) => void;
+  /** Drop the optimistic entry for `cwd` — used when session creation fails so
+   *  no ghost row lingers. */
+  removePendingWorkspace: (cwd: string) => void;
   /**
    * Monotonic counter bumped on every direct-action settle (deploy or run,
    * success or failure). SessionStepsBar adds this to its `useEffect` deps so
@@ -375,6 +401,72 @@ export function useHarnessState(): HarnessStateHook {
     },
     [],
   );
+  // Optimistic rail rows for folders whose agent is being created. The `cwd` is
+  // known synchronously at the start of the create flow, long before the session
+  // POST resolves or the scaffolded `sapiom.json` is registered, so this bridges
+  // the whole window during which the rail would otherwise show nothing to
+  // return to. Presentational only — never enters `sessions`/`workflows`.
+  const [pendingWorkspaces, setPendingWorkspaces] = useState<PendingWorkspace[]>(
+    [],
+  );
+  const addPendingWorkspace = useCallback((cwd: string): void => {
+    setPendingWorkspaces((prev) =>
+      prev.some((p) => p.cwd === cwd)
+        ? prev
+        : [{ cwd, sessionSeen: false }, ...prev],
+    );
+  }, []);
+  const removePendingWorkspace = useCallback((cwd: string): void => {
+    setPendingWorkspaces((prev) =>
+      prev.some((p) => p.cwd === cwd)
+        ? prev.filter((p) => p.cwd !== cwd)
+        : prev,
+    );
+  }, []);
+  // Reconcile the optimistic entries against real state. One folder-owns-path
+  // rule (a path is under `cwd` if it equals it or sits below it):
+  //  - an agent (workflow) is now registered under the cwd → creation reached
+  //    its goal, drop the entry;
+  //  - a live session has appeared under the cwd → remember it (`sessionSeen`),
+  //    so we can later tell an abandoned create from one still in flight;
+  //  - a session was seen but none is live any more → the create produced no
+  //    agent (exited/abandoned), drop the entry so no ghost row lingers.
+  // The row itself stays visible across the bind→register flicker because in
+  // that window there is still a live (now bound) session under the cwd, so the
+  // entry is kept while the rail renders it as pending.
+  useEffect(() => {
+    if (pendingWorkspaces.length === 0) return;
+    const sessions = state?.sessions ?? [];
+    const workflows = state?.workflows ?? [];
+    const isUnder = (path: string, cwd: string): boolean =>
+      path === cwd || path.startsWith(`${cwd}/`);
+    setPendingWorkspaces((prev) => {
+      let changed = false;
+      const next: PendingWorkspace[] = [];
+      for (const entry of prev) {
+        const hasAgent = workflows.some((w) => isUnder(w.path, entry.cwd));
+        if (hasAgent) {
+          changed = true;
+          continue;
+        }
+        const hasLiveSession = sessions.some(
+          (s) => s.status !== "exited" && isUnder(s.cwd, entry.cwd),
+        );
+        if (entry.sessionSeen && !hasLiveSession) {
+          changed = true;
+          continue;
+        }
+        if (hasLiveSession && !entry.sessionSeen) {
+          next.push({ ...entry, sessionSeen: true });
+          changed = true;
+          continue;
+        }
+        next.push(entry);
+      }
+      return changed ? next : prev;
+    });
+  }, [state?.sessions, state?.workflows, pendingWorkspaces]);
+
   // Monotonic settle counter for direct actions: bumped each time a deploy or
   // run (prod/local) reaches its terminal state — success OR failure. The
   // SessionStepsBar adds this to its useEffect deps so the pending ring clears
@@ -1505,6 +1597,9 @@ export function useHarnessState(): HarnessStateHook {
     lastDeployErrorFor,
     deployStateByPath,
     dismissDeployState: (workflowPath: string) => setDeployProgress(workflowPath, null),
+    pendingWorkspaces,
+    addPendingWorkspace,
+    removePendingWorkspace,
     directActionSettleSeq,
     listDir,
     lastMessage,

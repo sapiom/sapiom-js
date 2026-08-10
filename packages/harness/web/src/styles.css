@@ -1792,6 +1792,28 @@ input {
   color: var(--text);
 }
 
+/* Optimistic "creating agent" folder: a spinning ring in the trailing action
+   slot marks the row as busy while the agent's session/definition is still on
+   its way. Reuses the canvas run spinner's keyframe. */
+.workspace-row-spinner {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-right: var(--tree-pad-x);
+  border: 1.5px solid var(--brand);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: canvas-run-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-row-spinner {
+    animation: none;
+    border-right-color: var(--brand);
+    opacity: 0.5;
+  }
+}
+
 /* The merged row's trailing state dot: always visible, centered on the same
    14px trailing axis as the child rows' dots (16px slot + row pad). */
 .workspace-row-trail {

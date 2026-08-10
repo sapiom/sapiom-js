@@ -53,6 +53,12 @@ export interface WorkspaceFolder {
    *  in the bare case (agents empty): the folder row becomes a focusable
    *  workspace row whose sessions open as tabs. */
   bareSessions: HarnessSession[];
+  /** An optimistic folder for an agent still being created: its `cwd` is known
+   *  up front but no session or agent exists under it yet. Set only when the
+   *  folder is otherwise empty (no agents, no bareSessions), so it self-clears
+   *  the moment real content arrives. The rail renders it as a "Creating agent…"
+   *  placeholder. Only ever set in Workspace grouping. */
+  pending?: boolean;
 }
 
 export interface WorkspaceTree {
@@ -87,9 +93,12 @@ export function buildWorkspaceTree(
   grouping: RailGrouping = "workspace",
   sort: RailSort = "recent",
   recentDirs: string[] = [],
+  pendingCwds: readonly string[] = [],
 ): WorkspaceTree {
+  // Deployment buckets have no `cwd` axis, so a pending workspace has nowhere to
+  // land there — pending rows are a Workspace-grouping concept only.
   if (grouping === "deployment") return byDeployment(workflows, sort);
-  return byWorkspace(workflows, sessions, sort, recentDirs);
+  return byWorkspace(workflows, sessions, sort, recentDirs, pendingCwds);
 }
 
 /**
@@ -123,9 +132,18 @@ function byWorkspace(
   sessions: HarnessSession[],
   sort: RailSort,
   recentDirs: string[],
+  pendingCwds: readonly string[] = [],
 ): WorkspaceTree {
   const liveSessions = sessions.filter((session) => session.status !== "exited");
   const remaining = new Set(workflows);
+
+  // Folders whose agent is still being created: `cwd` is known before any
+  // session or agent exists, so it seeds a candidate the tree would otherwise
+  // not see. `pendingRank` (creation order, newest first) floats them to the top
+  // ahead of every real folder, since a folder you are creating right now is the
+  // most relevant thing in the rail.
+  const pendingSet = new Set(pendingCwds);
+  const pendingRank = new Map(pendingCwds.map((cwd, index) => [cwd, index]));
 
   // Newest activity per directory, for folders `recentDirs` has not heard of.
   const newestByCwd = new Map<string, string>();
@@ -139,7 +157,7 @@ function byWorkspace(
   // used project directories, newest first") — already persisted, deduped, and
   // pruned of dead paths at every boot. Session activity only widens the
   // candidate set for folders recentDirs has not yet recorded.
-  const candidateCwds = new Set([...newestByCwd.keys(), ...recentDirs]);
+  const candidateCwds = new Set([...newestByCwd.keys(), ...recentDirs, ...pendingCwds]);
 
   // recentDirs is MRU and survives session pruning, so it is the better recency
   // key; session activity only answers for folders missing from it.
@@ -152,6 +170,14 @@ function byWorkspace(
   };
 
   const orderedCwds = Array.from(candidateCwds).sort((a, b) => {
+    // A folder mid-creation outranks everything, on either sort — the user's
+    // attention is on it. Among several pending folders, newest first.
+    const ra = pendingRank.get(a);
+    const rb = pendingRank.get(b);
+    if (ra !== undefined || rb !== undefined) {
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      return ra !== undefined ? -1 : 1;
+    }
     if (sort === "name") return basename(a).localeCompare(basename(b)) || a.localeCompare(b);
     return byRecency(a, b) || a.localeCompare(b);
   });
@@ -181,9 +207,14 @@ function byWorkspace(
     const bareSessions = liveSessions
       .filter((session) => session.boundWorkflowPath == null && ownerCwdOf(session.cwd) === cwd)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-    // Nothing to show: no agents and no live session to keep the folder alive.
-    if (agents.length === 0 && bareSessions.length === 0) continue;
-    workspaces.push({ cwd, label: basename(cwd), isDirectory: true, agents, bareSessions });
+    // A folder mid-creation earns a row before any session or agent exists, so
+    // the user can find it the instant they start. It self-clears: once a real
+    // session or agent lands under `cwd`, one of the two lists above is
+    // non-empty, so `pending` is false and the row renders normally.
+    const pending = pendingSet.has(cwd) && agents.length === 0 && bareSessions.length === 0;
+    // Nothing to show: no agents, no live session, and not being created.
+    if (agents.length === 0 && bareSessions.length === 0 && !pending) continue;
+    workspaces.push({ cwd, label: basename(cwd), isDirectory: true, agents, bareSessions, pending });
   }
 
   const orphanAgents: AgentNode[] = Array.from(remaining)

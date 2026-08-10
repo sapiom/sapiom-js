@@ -27,6 +27,7 @@ import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "..
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 import type { RailGrouping, RailSort } from "../lib/workspace-tree";
+import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
 
@@ -36,6 +37,10 @@ interface WorkflowsRailProps {
   minWidth: number;
   workflows: WorkflowInfo[];
   sessions: HarnessSession[];
+  /** Folders whose agent is being created but has not yet landed in
+   *  `workflows`/`sessions` — rendered as optimistic "Creating agent…" rows so
+   *  a mid-creation agent is always findable in the rail. */
+  pendingWorkspaces: PendingWorkspace[];
   /** The active session — highlights its own row in the history menu. */
   activeSessionId: string | null;
   /** The focused agent (or bare folder) path — the single filled selection. */
@@ -222,6 +227,46 @@ function BareFolderRow({
 }
 
 /**
+ * Optimistic folder for an agent still being created: its session and definition
+ * have not landed yet, so nothing else in the rail would show it. It reads as
+ * busy (a spinner + "Creating agent…") but stays focusable, so switching away
+ * mid-creation never loses the in-progress agent — clicking it returns focus to
+ * the folder. The real bare-folder / agent rows replace it the moment they
+ * arrive (same `cwd` key), so there is no flip or duplicate.
+ */
+function PendingFolderRow({
+  label,
+  cwd,
+  isFocused,
+  onFocus,
+}: {
+  label: string;
+  cwd: string;
+  isFocused: boolean;
+  onFocus: (path: string) => void;
+}): JSX.Element {
+  return (
+    <div
+      className={"workspace-row" + (isFocused ? " is-selected" : "")}
+      data-testid={`workspace-group-${label}`}
+    >
+      <button
+        className="workspace-row-main"
+        data-testid={`workspace-pending-${label}`}
+        aria-label={`Creating agent in ${label}`}
+        aria-busy="true"
+        data-tooltip="Creating agent…"
+        onClick={() => onFocus(cwd)}
+      >
+        <Icon name="Folder" size={13} />
+        <span className="tree-row-label">{label}</span>
+      </button>
+      <span className="workspace-row-spinner" aria-hidden="true" />
+    </div>
+  );
+}
+
+/**
  * Merged past-sessions row: exited registry sessions and history entries share
  * this anatomy — title, then one meta line carrying everything else.
  *
@@ -294,6 +339,7 @@ export function WorkflowsRail({
   minWidth,
   workflows,
   sessions,
+  pendingWorkspaces,
   activeSessionId,
   focusedAgentPath,
   onFocusAgent,
@@ -439,6 +485,7 @@ export function WorkflowsRail({
     grouping,
     sort,
     recentDirs,
+    pendingWorkspaces.map((p) => p.cwd),
   );
 
   // A first-run rail (no agents, no orphans) promotes the Create-new CTA to the
@@ -757,6 +804,22 @@ export function WorkflowsRail({
 
           {workspaces.map((workspace) => {
             const collapsed = collapsedCwds.has(workspace.cwd);
+            // Being created: the folder is known but its session/agent has not
+            // landed yet. A focusable, busy placeholder so the in-progress agent
+            // is always findable — replaced by the bare/agent rows below once
+            // real content arrives at the same cwd.
+            if (workspace.pending) {
+              return (
+                <div key={workspace.cwd} className="workspace-group">
+                  <PendingFolderRow
+                    label={workspace.label}
+                    cwd={workspace.cwd}
+                    isFocused={workspace.cwd === focusedAgentPath}
+                    onFocus={onFocusAgent}
+                  />
+                </div>
+              );
+            }
             // Bare case: no agents, a live scaffold session — the folder row
             // itself is the focus target (the only clickable folder row).
             const bare = workspace.agents.length === 0 && workspace.bareSessions.length > 0;

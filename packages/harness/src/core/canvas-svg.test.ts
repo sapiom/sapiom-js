@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CanvasGraph } from "./canvas-graph.js";
 import {
+  NODE_H,
   computeLayers,
   layoutGraph,
   renderGraphSvg,
@@ -101,6 +102,50 @@ describe("layoutGraph", () => {
     expect(layout.pos.auto_resolve!.x).not.toBe(layout.pos.escalate!.x);
     expect(layout.width).toBeGreaterThan(0);
     expect(layout.height).toBeGreaterThan(0);
+  });
+
+  it("keeps the terminal node inside the viewBox when a back-edge leaves a layer gap (no clipped last step, no dangling edge)", () => {
+    // A revise loop (selfEdit -> write) bumps `write` past an intermediate
+    // layer, so the raw layer numbering skips a value. The bug sized the SVG
+    // height from the layer COUNT while positioning nodes by their raw layer
+    // INDEX, so the deepest node (the terminal `deliver`) fell below the
+    // viewBox and was clipped, taking its incoming edge's arrowhead with it.
+    const looping: CanvasGraph = {
+      manifestName: "content-pipeline",
+      entry: "research",
+      warnings: [],
+      nodes: [
+        { id: "research", kind: "entry", label: "research" },
+        { id: "dedupe", kind: "step", label: "dedupe" },
+        { id: "write", kind: "step", label: "write" },
+        { id: "selfEdit", kind: "step", label: "selfEdit" },
+        { id: "illustrate", kind: "step", label: "illustrate" },
+        { id: "deliver", kind: "terminal-success", label: "deliver" },
+      ],
+      edges: [
+        { from: "research", to: "dedupe", kind: "sequential" },
+        { from: "dedupe", to: "write", kind: "sequential" },
+        { from: "write", to: "selfEdit", kind: "sequential" },
+        { from: "selfEdit", to: "write", kind: "branching" },
+        { from: "selfEdit", to: "illustrate", kind: "branching" },
+        { from: "illustrate", to: "deliver", kind: "sequential" },
+      ],
+    };
+    const layout = layoutGraph(looping);
+    const deliver = layout.pos["deliver"]!;
+    const maxY = Math.max(...Object.values(layout.pos).map((p) => p.y));
+    // The terminal is the deepest node and its box fits within the height.
+    expect(deliver.y).toBe(maxY);
+    expect(deliver.y + NODE_H).toBeLessThanOrEqual(layout.height);
+    // Rows are compacted to consecutive positions — no dead band from the gap.
+    const rows = [...new Set(Object.values(layout.pos).map((p) => p.y))].sort(
+      (a, b) => a - b,
+    );
+    expect(rows.length).toBe(5);
+    const step = rows[1]! - rows[0]!;
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i]! - rows[i - 1]!).toBe(step);
+    }
   });
 });
 

@@ -117,6 +117,60 @@ describe("buildWorkspaceTree (explorer: folders > agents)", () => {
   });
 });
 
+describe("buildWorkspaceTree — optimistic pending workspaces", () => {
+  it("shows a pending folder with no session or agent, marked pending", () => {
+    const tree = buildWorkspaceTree([], [], "workspace", "recent", [], ["/home/dev/new-agent"]);
+    expect(tree.workspaces).toHaveLength(1);
+    expect(tree.workspaces[0]?.cwd).toBe("/home/dev/new-agent");
+    expect(tree.workspaces[0]?.label).toBe("new-agent");
+    expect(tree.workspaces[0]?.pending).toBe(true);
+    expect(tree.workspaces[0]?.agents).toEqual([]);
+    expect(tree.workspaces[0]?.bareSessions).toEqual([]);
+  });
+
+  it("floats a pending folder above real folders on either sort", () => {
+    const sessions = [session({ id: "a", cwd: "/home/dev/aaa", boundWorkflowPath: null })];
+    const workflows = [workflow({ name: "zzz", path: "/home/dev/zzz/zzz" })];
+    const recent = buildWorkspaceTree(workflows, sessions, "workspace", "recent", [], ["/home/dev/mmm"]);
+    expect(recent.workspaces[0]?.cwd).toBe("/home/dev/mmm");
+    const byName = buildWorkspaceTree(workflows, sessions, "workspace", "name", [], ["/home/dev/mmm"]);
+    expect(byName.workspaces[0]?.cwd).toBe("/home/dev/mmm");
+  });
+
+  it("stops being pending once a live unbound session lands (renders bare)", () => {
+    const sessions = [session({ id: "s", cwd: "/home/dev/new-agent", boundWorkflowPath: null })];
+    const tree = buildWorkspaceTree([], sessions, "workspace", "recent", [], ["/home/dev/new-agent"]);
+    expect(tree.workspaces).toHaveLength(1);
+    expect(tree.workspaces[0]?.pending).toBe(false);
+    expect(tree.workspaces[0]?.bareSessions.map((s) => s.id)).toEqual(["s"]);
+  });
+
+  it("stops being pending once the agent is registered under the cwd", () => {
+    const workflows = [workflow({ name: "new-agent", path: "/home/dev/new-agent/new-agent" })];
+    const tree = buildWorkspaceTree(workflows, [], "workspace", "recent", [], ["/home/dev/new-agent"]);
+    expect(tree.workspaces).toHaveLength(1);
+    expect(tree.workspaces[0]?.pending).toBe(false);
+    expect(tree.workspaces[0]?.agents.map((a) => a.workflow.name)).toEqual(["new-agent"]);
+  });
+
+  it("stays visible across the bind→register flicker (bound session, agent not yet listed)", () => {
+    // The server has bound the session to the (soon-to-be) agent path, but the
+    // workflow list has not caught up. Neither bare (bound) nor an agent row
+    // (not listed) — the pending row keeps the folder on screen.
+    const sessions = [
+      session({ id: "s", cwd: "/home/dev/new-agent", boundWorkflowPath: "/home/dev/new-agent/new-agent" }),
+    ];
+    const tree = buildWorkspaceTree([], sessions, "workspace", "recent", [], ["/home/dev/new-agent"]);
+    expect(tree.workspaces).toHaveLength(1);
+    expect(tree.workspaces[0]?.pending).toBe(true);
+  });
+
+  it("ignores pending workspaces in the deployment grouping (no cwd axis)", () => {
+    const tree = buildWorkspaceTree([], [], "deployment", "recent", [], ["/home/dev/new-agent"]);
+    expect(tree.workspaces).toEqual([]);
+  });
+});
+
 describe("macro gating", () => {
   const macros: MacroDef[] = [
     { id: "visualize", label: "Visualize", icon: "Sparkles", action: { kind: "render-canvas" } },

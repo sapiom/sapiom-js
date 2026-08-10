@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
+import { displayAgentName } from "../lib/agent-name";
 import { workflowDeploymentState } from "../lib/workflow-deployment";
 
 /**
@@ -48,7 +49,9 @@ export function WorkflowRow({
         aria-pressed={isFocused}
         data-tooltip={isFocused ? "Focused agent" : "Focus this agent"}
       >
-        <span className="tree-row-label">{workflow.name}</span>
+        <span className="tree-row-label" title={workflow.name}>
+          {displayAgentName(workflow.name)}
+        </span>
         <span
           className="workflow-status"
           data-deployed={deployed}

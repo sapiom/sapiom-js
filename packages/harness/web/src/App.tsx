@@ -727,11 +727,22 @@ export const App = (): JSX.Element => {
     setReviewSummary(null);
     setOverviewOpen(false);
     setFocusedAgentPath(cwd);
+    // Show the folder in the rail immediately — before the session POST, the pty
+    // spawn, and the agent's scaffold/clone all resolve — so switching away
+    // mid-creation never loses the in-progress agent. Cleared on failure so a
+    // rejected create leaves no ghost row; cleared automatically on success once
+    // the real session/agent lands (see the store's pruning effect).
+    harness.addPendingWorkspace(cwd);
     closeMobileDrawer();
-    const session = await harness.createSession({ cwd, harness: agentHarness });
-    track("session.created");
-    trackProduct("session.started", { harness_kind: agentHarness, origin: "user" });
-    return session;
+    try {
+      const session = await harness.createSession({ cwd, harness: agentHarness });
+      track("session.created");
+      trackProduct("session.started", { harness_kind: agentHarness, origin: "user" });
+      return session;
+    } catch (err) {
+      harness.removePendingWorkspace(cwd);
+      throw err;
+    }
   };
 
   const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
@@ -1169,6 +1180,7 @@ export const App = (): JSX.Element => {
           minWidth={RAIL_MIN}
           workflows={state.workflows}
           sessions={state.sessions}
+          pendingWorkspaces={harness.pendingWorkspaces}
           activeSessionId={harness.activeSessionId}
           focusedAgentPath={focusedAgentPath}
           onFocusAgent={handleFocusAgent}

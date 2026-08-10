@@ -4,6 +4,7 @@ import type { RunView, WorkflowInfo } from "@shared/types";
 
 import type { CanvasGraphNode } from "../lib/canvas-graph";
 import { nodeKindLabel } from "../lib/canvas-graph";
+import { displayAgentName } from "../lib/agent-name";
 import { relativeTimeLabel } from "../lib/relative-time";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { AnchoredPopover } from "./AnchoredPopover";
@@ -160,7 +161,9 @@ export function WorkflowActionsHeader({
         className={"workflow-actions-header" + (run ? " has-run" : "")}
         data-testid="workflow-actions-header"
       >
-        <span className="workflow-actions-name">{workflow.name}</span>
+        <span className="workflow-actions-name" title={workflow.name}>
+          {displayAgentName(workflow.name)}
+        </span>
         <span className="workflow-actions-count" data-testid="canvas-steps-count">
           {stepsSummary ?? "no steps"}
         </span>
