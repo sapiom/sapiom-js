@@ -6944,9 +6944,8 @@ input {
   gap: 10px;
   max-width: 480px;
   padding: 10px 14px;
-  background: var(--bg-2);
+  background: var(--bg-1);
   border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--red);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   z-index: 100;
