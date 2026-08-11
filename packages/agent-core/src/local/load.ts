@@ -48,8 +48,9 @@ export async function loadDefinition(
       await esbuild.build({
         entryPoints: [entryFile],
         outfile: bundlePath,
-        // Diagnostics stay project-relative regardless of who called us — see
-        // check.ts, where the caller's cwd is a package deep under the app.
+        // Resolution (and diagnostics) stay anchored to the project regardless
+        // of who called us — see check.ts: unanchored, esbuild also walks the
+        // caller's cwd chain, which for the harness is deep inside the app.
         absWorkingDir: path.resolve(sourceDir),
         bundle: true,
         platform: "node",

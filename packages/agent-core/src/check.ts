@@ -161,11 +161,21 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
       await esbuild.build({
         entryPoints: [entryFile],
         outfile: bundlePath,
-        // esbuild pretty-prints every path in a diagnostic relative to its
-        // working directory, which is the CALLER's cwd — for the Studio Canvas
-        // that is the harness package root, so a project error arrived as
-        // `../../../../../Users/me/agents/x/index.ts`. Anchor it to the project
-        // instead and the same message reads `index.ts`.
+        // Anchor esbuild to the project. Given no working directory it adopts
+        // the CALLER's cwd, and then it enumerates that cwd's ancestor chain on
+        // top of the project's (measured: without this, a build for a project
+        // under /home/ubuntu read /home/ubuntu/repos/sapiom-js/packages and
+        // every directory above it; with it, only the project's chain). For the
+        // Studio Canvas the caller is the harness package, buried inside the
+        // app bundle — so a directory nowhere near the user's agent could fail
+        // the build. That is the reported `Cannot read directory
+        // "../../../../../../../..": result too large` + `Could not resolve
+        // <project>/index.ts` pair: an unreadable ancestor of OUR cwd aborted
+        // resolution of a project that bundled fine on its own, which is why
+        // the same directory passed `check` from a terminal and failed here.
+        // It also makes diagnostics legible — paths print relative to the
+        // working directory, so a project error reads `index.ts` rather than
+        // `../../../../../Users/me/agents/x/index.ts`.
         absWorkingDir: sourceDir,
         bundle: true,
         platform: "node",

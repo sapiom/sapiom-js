@@ -14,14 +14,14 @@
  * deps and the `@sapiom/*` SDK are still installed server-side (bring-your-own-
  * deps), not frozen into the bundle.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { isBuiltin } from 'node:module';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { isBuiltin } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-import * as esbuild from 'esbuild';
+import * as esbuild from "esbuild";
 
-import { AgentOperationError } from './errors.js';
+import { AgentOperationError } from "./errors.js";
 
 export interface DeployBundle {
   /** The bundled `index.ts` source (relative code inlined, npm imports external). */
@@ -35,45 +35,57 @@ export interface DeployBundle {
  * packages, then resolve each external package to the version installed in the
  * author's tree. Throws `AgentOperationError` (`NO_ENTRY` | `BUNDLE_FAILED`).
  */
-export async function bundleForDeploy(sourceDir: string): Promise<DeployBundle> {
-  const entryFile = path.join(sourceDir, 'index.ts');
+export async function bundleForDeploy(
+  sourceDir: string,
+): Promise<DeployBundle> {
+  const projectDir = path.resolve(sourceDir);
+  const entryFile = path.join(projectDir, "index.ts");
   if (!existsSync(entryFile)) {
     throw new AgentOperationError({
-      code: 'NO_ENTRY',
+      code: "NO_ENTRY",
       message: `No index.ts found in ${sourceDir}.`,
-      hint: 'Run this from an agent project, or pass its directory.',
+      hint: "Run this from an agent project, or pass its directory.",
     });
   }
 
-  const tmp = mkdtempSync(path.join(tmpdir(), 'sapiom-deploy-bundle-'));
-  const outfile = path.join(tmp, 'index.js');
+  const tmp = mkdtempSync(path.join(tmpdir(), "sapiom-deploy-bundle-"));
+  const outfile = path.join(tmp, "index.js");
   try {
     let result: esbuild.BuildResult;
     try {
       result = await esbuild.build({
         entryPoints: [entryFile],
         outfile,
+        // Anchor esbuild to the project, not to whoever called us: with no
+        // working directory of its own it walks OUR cwd's ancestors as well,
+        // and the harness server calls this in-process from a package buried
+        // inside the app bundle. See check.ts for the failure that taught us.
+        absWorkingDir: projectDir,
         bundle: true,
-        platform: 'node',
-        target: 'node20',
-        format: 'esm',
+        platform: "node",
+        target: "node20",
+        format: "esm",
         // Inline relative/local code; keep every npm package import external so the
         // server install (not this bundle) provides them.
-        packages: 'external',
+        packages: "external",
         metafile: true,
-        logLevel: 'silent',
+        logLevel: "silent",
       });
     } catch (err) {
       throw new AgentOperationError({
-        code: 'BUNDLE_FAILED',
-        message: 'Failed to bundle the agent for deploy.',
+        code: "BUNDLE_FAILED",
+        message: "Failed to bundle the agent for deploy.",
         hint: err instanceof Error ? err.message : String(err),
       });
     }
 
-    const code = readFileSync(outfile, 'utf8');
-    const externals = collectExternalPackages(result.metafile!, outfile);
-    const dependencies = resolveInstalledVersions(sourceDir, externals);
+    const code = readFileSync(outfile, "utf8");
+    const externals = collectExternalPackages(
+      result.metafile!,
+      outfile,
+      projectDir,
+    );
+    const dependencies = resolveInstalledVersions(projectDir, externals);
     return { code, dependencies };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -84,8 +96,16 @@ export async function bundleForDeploy(sourceDir: string): Promise<DeployBundle> 
  * The npm package names left external in the bundle (Node built-ins excluded).
  * A subpath import (`zod/v4`, `@scope/pkg/sub`) is reduced to its package name.
  */
-function collectExternalPackages(metafile: esbuild.Metafile, outfile: string): string[] {
-  const key = Object.keys(metafile.outputs).find((k) => path.resolve(k) === path.resolve(outfile));
+function collectExternalPackages(
+  metafile: esbuild.Metafile,
+  outfile: string,
+  workingDir: string,
+): string[] {
+  // Metafile keys are relative to esbuild's working directory — which is the
+  // project, not this process's cwd, so they must be resolved against it.
+  const key = Object.keys(metafile.outputs).find(
+    (k) => path.resolve(workingDir, k) === path.resolve(outfile),
+  );
   const imports = key ? metafile.outputs[key].imports : [];
   const names = new Set<string>();
   for (const imp of imports) {
@@ -98,9 +118,10 @@ function collectExternalPackages(metafile: esbuild.Metafile, outfile: string): s
 
 /** `zod/v4` → `zod`; `@sapiom/agent/x` → `@sapiom/agent`. */
 function packageNameOf(importPath: string): string | null {
-  if (importPath.startsWith('node:')) return null;
-  const parts = importPath.split('/');
-  if (importPath.startsWith('@')) return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null;
+  if (importPath.startsWith("node:")) return null;
+  const parts = importPath.split("/");
+  if (importPath.startsWith("@"))
+    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null;
   return parts[0] || null;
 }
 
@@ -110,10 +131,13 @@ function packageNameOf(importPath: string): string | null {
  * installs precisely what the author developed against. A package with no
  * installed copy is recorded as `latest` (the server install will resolve it).
  */
-function resolveInstalledVersions(sourceDir: string, packages: string[]): Record<string, string> {
+function resolveInstalledVersions(
+  sourceDir: string,
+  packages: string[],
+): Record<string, string> {
   const deps: Record<string, string> = {};
   for (const pkg of packages) {
-    deps[pkg] = readInstalledVersion(sourceDir, pkg) ?? 'latest';
+    deps[pkg] = readInstalledVersion(sourceDir, pkg) ?? "latest";
   }
   return deps;
 }
@@ -122,10 +146,17 @@ function readInstalledVersion(fromDir: string, pkg: string): string | null {
   let dir = path.resolve(fromDir);
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const pkgJson = path.join(dir, 'node_modules', ...pkg.split('/'), 'package.json');
+    const pkgJson = path.join(
+      dir,
+      "node_modules",
+      ...pkg.split("/"),
+      "package.json",
+    );
     if (existsSync(pkgJson)) {
       try {
-        const version = (JSON.parse(readFileSync(pkgJson, 'utf8')) as { version?: string }).version;
+        const version = (
+          JSON.parse(readFileSync(pkgJson, "utf8")) as { version?: string }
+        ).version;
         if (version) return version;
       } catch {
         // unreadable — fall through to keep walking up
