@@ -82,9 +82,9 @@ export interface DesktopBridge {
    * don't expose it, and a browser has no bridge; the card then never renders.
    */
   onUpdateState?: (callback: (state: UpdateStatePayload) => void) => () => void;
-  // No restart method: applying an update is confirmed by a native dialog in the
-  // desktop app, so page code — which shares an origin with agent-authored files
-  // the harness serves — has no way to end a user's sessions.
+  // No restart method: applying an update is confirmed in the desktop app's own
+  // main-process-owned update window, so page code — which shares an origin with
+  // agent-authored files the harness serves — has no way to end a user's sessions.
 }
 
 declare global {

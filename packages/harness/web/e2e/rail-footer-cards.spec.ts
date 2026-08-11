@@ -11,8 +11,9 @@
  * loads (addInitScript — the same slot the Electron preload occupies) whose
  * onUpdateState hands us the push callback. That mirrors the real protocol:
  * the desktop app pushes downloaded-state; the card renders; a click calls
- * checkForUpdates() (which in the real app re-raises the NATIVE restart
- * dialog — there is no in-page apply, by design); a `none` push retracts it.
+ * checkForUpdates() (which in the real app re-raises the main-process-owned
+ * update window — there is no in-page apply, by design); a `none` push
+ * retracts it.
  */
 import { expect, test } from "@playwright/test";
 
@@ -96,8 +97,8 @@ test.describe("update card", () => {
         checkForUpdates: () => {
           window.__updateChecks = (window.__updateChecks ?? 0) + 1;
           // The expected answer while an update is pending — the real main
-          // process ALSO re-raises its native restart dialog here, which a
-          // page test can't see and doesn't need to.
+          // process ALSO re-raises its update window here, which a page test
+          // can't see and doesn't need to.
           return Promise.resolve({ kind: "downloaded", version: "0.4.2" });
         },
         onUpdateState: (cb: (state: { kind: string; version?: string }) => void) => {

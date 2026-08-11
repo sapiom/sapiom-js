@@ -60,8 +60,8 @@ const api = {
    * "Update now" card and nothing else. The current state is re-pushed on
    * every page load, so subscribing at mount is enough — there is nothing to
    * ask for. Applying the update still goes through checkForUpdates(), whose
-   * pending branch re-raises the NATIVE restart dialog (see ipc.ts — page code
-   * has no restart channel, deliberately).
+   * pending branch re-raises the main-process-owned update window (see
+   * ipc.ts — page code has no restart channel, deliberately).
    */
   onUpdateState(callback: (state: UpdateStatePayload) => void): () => void {
     const listener = (_event: unknown, state: UpdateStatePayload): void => callback(state);

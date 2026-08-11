@@ -1039,7 +1039,8 @@ function ProfileRow({
     try {
       // A toast, because the menu closes on click and the outcome is the entire
       // point of pressing this. When an update is already downloaded the main
-      // process ALSO re-raises its native "Restart now / Later" prompt — that
+      // process ALSO re-raises its own update window ("Restart now / Later /
+      // Skip this version") — that
       // dialog is the only way to apply one, deliberately (see the desktop app's
       // ipc.ts: page code has no restart channel).
       onToast(describeUpdateOutcome(await desktop.checkForUpdates()).text);

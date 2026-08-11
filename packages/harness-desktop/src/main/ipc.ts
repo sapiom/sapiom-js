@@ -164,8 +164,8 @@ export const UPDATE_AUTO_ARG = "--sapiom-update-auto=";
  * Like DEEP_LINK_NAVIGATE, a SEND rather than an invoke — it opens no attack
  * surface; it only tells the SPA whether its "Update now" card should exist.
  * The card's CLICK goes through the existing UPDATE_CHECK invoke, whose
- * pending branch re-raises the native restart dialog — so the no-apply-channel
- * rule above is untouched: page code still cannot end a session.
+ * pending branch re-raises the main-process-owned update window above — so
+ * the no-apply-channel rule is untouched: page code still cannot end a session.
  *
  * Re-sent on every `did-finish-load` because renderer state dies on reload but
  * the main process's `pending` does not — without the re-send, a reloaded SPA

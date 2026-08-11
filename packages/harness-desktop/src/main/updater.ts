@@ -275,6 +275,10 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
         pending = null;
         if (active) active.autoUpdater.autoInstallOnAppQuit = false;
       }
+      // A skip also retracts the rail's "Update now" card — it mirrors
+      // `pending`, and "skip this version" means exactly "stop showing me
+      // ways back to it".
+      pushUpdateState();
       return;
     }
     if (choice !== "restart") {
@@ -326,13 +330,13 @@ export async function checkForUpdatesNow(): Promise<UpdateCheckOutcome> {
   // Asking is undeclining — and it has to happen BEFORE the `pending` shortcut
   // below, or it never happens in the one case that matters: choosing "Later"
   // sets `pending`, so returning early would leave the version declined for the
-  // rest of the run and the native prompt would never come back.
+  // rest of the run and the update prompt would never come back.
   declined.clear();
   // ...and un-skip: an explicit ask is the user reconsidering, so a version they
   // chose "Skip this version" for is offered again too.
   await clearSkippedVersions(updatePrefsFile());
   // Something already downloaded and waiting to be applied: report that instead of
-  // asking GitHub again, and RE-RAISE the native prompt. That prompt is the only
+  // asking GitHub again, and RE-RAISE the update window. That window is the only
   // way to actually apply an update — the SPA has no restart channel, by design —
   // and it already carries the wording that matters ("this ends running agent
   // sessions"). Re-offering here is what `declined.clear()` above exists for: a
@@ -486,11 +490,27 @@ function startUpdater(deps: UpdaterDeps): void {
     // on disk and applying it is a restart away — which is what the SPA's button
     // needs to know to say "restart" instead of "up to date".
     pending = info;
-    // The rail's "Update now" card appears now and OUTLIVES the dialog below:
-    // a user who chooses "Later" keeps a visible way back to the restart.
-    pushUpdateState();
-    void offerUpdate(info, deps).catch((err: unknown) => {
-      log(`failed to apply ${info.version}: ${err instanceof Error ? err.message : String(err)}`);
+    void (async () => {
+      // A persisted skip is honored BEFORE anything becomes visible: no rail
+      // card, no prompt (offerUpdate re-checks, but by then the card would
+      // already be up), and no silent install of the very version the user
+      // refused — with the staged artifact left as `pending` under an ON
+      // auto-install toggle, the next ordinary quit would apply it.
+      const prefs = await loadUpdatePrefs(updatePrefsFile());
+      if (prefs.skippedVersions.includes(info.version)) {
+        log(`skipping ${info.version} (user chose Skip this version)`);
+        if (pending?.version === info.version) pending = null;
+        autoUpdater.autoInstallOnAppQuit = false;
+        pushUpdateState();
+        return;
+      }
+      // The rail's "Update now" card appears now and OUTLIVES the prompt
+      // below: a user who chooses "Later" keeps a visible way back to the
+      // restart.
+      pushUpdateState();
+      await offerUpdate(info, deps);
+    })().catch((err: unknown) => {
+      log(`failed to offer ${info.version}: ${err instanceof Error ? err.message : String(err)}`);
     });
   });
   autoUpdater.on("error", (err) => {

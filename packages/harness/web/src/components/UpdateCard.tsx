@@ -6,9 +6,10 @@
  *
  * The click does not install anything. It calls the same checkForUpdates()
  * bridge as the account menu item; with an update pending, the main process
- * re-raises its NATIVE "Restart now / Later" dialog — the only surface that
- * can end sessions, deliberately (see lib/desktop.ts). Any other outcome
- * (the update evaporated, updates got disabled) is reported as a toast.
+ * re-raises its own update window ("Restart now / Later / Skip this
+ * version") — the only surface that can end sessions, deliberately (see
+ * lib/desktop.ts). Any other outcome (the update evaporated, updates got
+ * disabled) is reported as a toast.
  */
 import { useState, type JSX } from "react";
 
@@ -31,8 +32,8 @@ export function UpdateCard({
     setBusy(true);
     try {
       const outcome = await desktop.checkForUpdates();
-      // "downloaded" is the expected answer and needs no toast — the native
-      // restart dialog is already up. Anything else is the card being stale,
+      // "downloaded" is the expected answer and needs no toast — the desktop
+      // app's update window is already up. Anything else is the card being stale,
       // and the outcome text says what actually happened.
       if (outcome.kind !== "downloaded") {
         onToast(describeUpdateOutcome(outcome).text);

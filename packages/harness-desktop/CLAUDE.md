@@ -225,9 +225,11 @@ the network.
 
 There are two ways an update reaches the user, and they are not interchangeable:
 
-- **Scheduled** (30 s after boot, then every 4 h) → silent, and only ever surfaces the native
-  "restart to install" dialog. That dialog stays native because it fires whenever a background
-  download finishes and must work regardless of what the window is showing.
+- **Scheduled** (30 s after boot, then every 4 h) → silent, and only ever surfaces the
+  main-process-owned update window (`update-window.ts`, our bundled `update.html` — never remote or
+  agent content). It stays main-process-owned because it fires whenever a background download
+  finishes and must work regardless of what the main window is showing; its "Restart / Later / Skip
+  this version" answers ride two IPC channels sender-gated to that exact window.
 - **On demand** → the profile menu's "Check for updates" item, via
   `window.sapiomDesktop.checkForUpdates()`. Note WHICH menu: the rail's profile drawer has a
   Disconnect button and so does the Settings popover one level deeper — the item belongs in the
@@ -240,8 +242,10 @@ A third surface rides the second: the rail's **"Update now" card** (`UpdateCard`
 `updater.ts` pushes `UPDATE_STATE` (receive-only, `onUpdateState` on the bridge) when a download
 finishes, when a failed apply clears `pending`, and on every `did-finish-load` — the card mirrors
 `pending` and survives a page reload because of that re-send. Its click is just
-`checkForUpdates()`: the pending branch re-raises the native dialog, so the card adds **no**
-install channel and the no-apply-channel rule below is untouched.
+`checkForUpdates()`: the pending branch re-raises the update window, so the card adds **no**
+install channel and the no-apply-channel rule below is untouched. A version the user chose "Skip
+this version" for never raises the card (and clears a staged auto-install), and choosing skip
+retracts an already-shown card — the card mirrors `pending`, and skip empties it.
 
 The main window carries a preload (`src/preload/desktop.mts`) — it did not before. Watch out for:
 
@@ -257,9 +261,11 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
   agent prints. That made an agent-printed URL one click from a window holding `restartToUpdate()`,
   i.e. an agent could kill every live session. Local pop-outs go through `createPreviewWindow`
   (no preload, `sandbox: true`), which is explicit rather than dependent on override-merge semantics.
-- **There is no "apply the update" channel, and there must not be.** A restart ends every running
-  agent session, and page code shares an origin with agent-authored files. The confirmation is a
-  native dialog only; an on-demand check with something already downloaded re-raises it. The
+- **There is no "apply the update" channel reachable from the main window, and there must not
+  be.** A restart ends every running agent session, and page code shares an origin with
+  agent-authored files. The confirmation lives in the separate update window (whose own two
+  channels are gated on the sender being exactly that window's `webContents`); an on-demand check
+  with something already downloaded re-raises it. The
   `desktop-bridge` smoke check asserts the bridge exposes NOTHING beyond `appVersion`,
   `checkForUpdates`, `chooseDirectory` (the read-only native folder picker behind the SPA's
   Browse button — it returns only a path and opens no file), and the two receive-only

@@ -1336,8 +1336,8 @@ button.rail-footer-card:focus-visible {
 }
 
 /* The update card is one whole-card button: bold verb, mono target version,
-   trailing chevron. The click hands off to the desktop app's NATIVE restart
-   dialog (there is no in-page apply, by design — see lib/desktop.ts). */
+   trailing chevron. The click hands off to the desktop app's own update
+   window (there is no in-page apply, by design — see lib/desktop.ts). */
 button.rail-footer-card {
   cursor: pointer;
   transition: background-color var(--fast) var(--ease);
