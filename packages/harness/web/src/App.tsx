@@ -601,6 +601,7 @@ export const App = (): JSX.Element => {
           task.status === "failed"
             ? "Couldn't generate descriptions — check the agent terminal for details."
             : "Describe run finished — the canvas updates if the agent changed the source.",
+          task.status === "failed" ? "error" : "info",
         );
       }
       describeTaskStatus.current.set(task.id, task.status);
@@ -899,6 +900,7 @@ export const App = (): JSX.Element => {
         : found.length === 1
           ? "Found 1 agent project."
           : `Found ${found.length} agent projects.`,
+      "info",
     );
     return found.length;
   };
@@ -948,7 +950,10 @@ export const App = (): JSX.Element => {
     // Nothing reports back whether the scheme found an application, so say who
     // we handed it to — otherwise a machine without that editor installed just
     // shows a menu item that does nothing.
-    harness.showToast(`Opening in ${editorLabel(editor)}… Pick a different editor in Settings.`);
+    harness.showToast(
+      `Opening in ${editorLabel(editor)}… Pick a different editor in Settings.`,
+      "info",
+    );
     window.location.href = editorUrl(editor, path);
   };
 
@@ -1787,7 +1792,13 @@ export const App = (): JSX.Element => {
         />
       )}
 
-      {harness.toast && <Toast message={harness.toast} onDismiss={harness.dismissToast} />}
+      {harness.toast && (
+        <Toast
+          message={harness.toast.message}
+          tone={harness.toast.tone}
+          onDismiss={harness.dismissToast}
+        />
+      )}
       <TooltipLayer />
     </div>
   );

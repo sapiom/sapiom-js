@@ -12,6 +12,7 @@ import type {
 } from "@shared/types";
 
 import type { AuthStartResponse, FsListResponse } from "../lib/api";
+import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
@@ -92,8 +93,9 @@ interface WorkflowsRailProps {
   /** True while that destination is the visible view, so the nav row can say so. */
   templatesActive: boolean;
   onScanWorkflows: (root: string) => Promise<number>;
-  /** Push a message onto the app's toast rail (copy confirmations etc.). */
-  onToast: (message: string) => void;
+  /** Push a message onto the app's toast rail (copy confirmations etc.).
+   *  Defaults to the "error" tone; result announcements opt into "info". */
+  onToast: (message: string, tone?: ToastTone) => void;
   telemetryOptIn: boolean;
   productAnalyticsOptIn: boolean;
   rollingSummary: boolean;
@@ -500,7 +502,7 @@ export function WorkflowsRail({
   const copyPath = (path: string): void => {
     void navigator.clipboard
       ?.writeText(path)
-      .then(() => onToast("Path copied."))
+      .then(() => onToast("Path copied.", "info"))
       .catch(() => onToast("Couldn't copy the path."));
   };
 
@@ -989,7 +991,7 @@ function ProfileRow({
   onSetSettingsOpen: (open: boolean) => void;
   overviewSelected: boolean;
   onSelectOverview: () => void;
-  onToast: (message: string) => void;
+  onToast: (message: string, tone?: ToastTone) => void;
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState(getTheme());
@@ -1016,7 +1018,8 @@ function ProfileRow({
       // process ALSO re-raises its native "Restart now / Later" prompt — that
       // dialog is the only way to apply one, deliberately (see the desktop app's
       // ipc.ts: page code has no restart channel).
-      onToast(describeUpdateOutcome(await desktop.checkForUpdates()).text);
+      const outcome = describeUpdateOutcome(await desktop.checkForUpdates());
+      onToast(outcome.text, outcome.tone === "error" ? "error" : "info");
     } catch {
       onToast("Couldn't check for updates.");
     } finally {
