@@ -2935,10 +2935,23 @@ input {
    recipe as the toggles, so it lines up with them rather than reading as a
    different kind of control. Native <select> on purpose — the OS menu is the
    accessible, keyboard-complete one, and this popover is already anchored. */
-.settings-select {
+/* The editor picker wraps its native <select> so we can drop the OS chrome
+   (appearance:none) and lay our own ChevronDown caret over it — the same
+   disclosure the harness picker and menus use — instead of the platform arrow,
+   so the control reads as part of the theme rather than a system widget. */
+.settings-select-wrap {
+  position: relative;
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-select {
+  appearance: none;
+  -webkit-appearance: none;
   height: var(--control-h-xs);
-  padding: 0 var(--sp2);
+  /* room for the caret on the right */
+  padding: 0 calc(var(--sp2) + 18px) 0 var(--sp2);
   background: var(--surface-inset);
   border: 1px solid var(--ui-line);
   border-radius: var(--radius);
@@ -2946,11 +2959,28 @@ input {
   font: inherit;
   font-size: var(--type-label);
   cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.settings-select:hover:not(:disabled) {
+  background: var(--surface-raised);
+  border-color: var(--border);
 }
 
 .settings-select:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+.settings-select-caret {
+  position: absolute;
+  right: var(--sp2);
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+  pointer-events: none;
 }
 
 .settings-select:disabled {

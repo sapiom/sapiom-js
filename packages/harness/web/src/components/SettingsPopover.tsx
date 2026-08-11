@@ -263,19 +263,24 @@ export function SettingsPopover({
 
       <label className="settings-toggle-row">
         <span>Open in editor uses</span>
-        <select
-          className="settings-select"
-          data-testid="editor-select"
-          value={resolveEditor(editor)}
-          disabled={busy}
-          onChange={(e) => void handleSelectEditor(e.target.value as EditorKind)}
-        >
-          {EDITOR_OPTIONS.map((option) => (
-            <option key={option.kind} value={option.kind}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        <span className="settings-select-wrap">
+          <select
+            className="settings-select"
+            data-testid="editor-select"
+            value={resolveEditor(editor)}
+            disabled={busy}
+            onChange={(e) => void handleSelectEditor(e.target.value as EditorKind)}
+          >
+            {EDITOR_OPTIONS.map((option) => (
+              <option key={option.kind} value={option.kind}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="settings-select-caret" aria-hidden="true">
+            <Icon name="ChevronDown" size={12} />
+          </span>
+        </span>
       </label>
 
       <p className="settings-note">
