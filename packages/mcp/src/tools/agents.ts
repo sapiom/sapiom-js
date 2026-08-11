@@ -43,6 +43,11 @@ import {
 } from "@sapiom/agent-core";
 import { type ResolvedEnvironment } from "../credentials.js";
 import { registerTool } from "../register-tool.js";
+import {
+  INCLUDABLE_FIELDS,
+  projectExecutionForTool,
+  type ProjectExecutionOptions,
+} from "./execution-projection.js";
 import { fail, gatewayClient, NOT_AUTHED, ok } from "./shared.js";
 import { webappRunUrl } from "./webapp-url.js";
 
@@ -412,7 +417,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_inspect",
-    "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local. When inspecting an execution, the result includes a `webappUrl` to open that run in the webapp.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
+    "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local. When inspecting an execution, the result includes a `webappUrl` to open that run in the webapp.\n\nBy default the execution is returned COMPACT: identity/status/timestamps + a per-step summary (name/order/attempt/status/error-message) with a `has` flag-set and a `sizes` hint (char counts of the omitted input/output/logs/events/sharedState bodies). Full step bodies are NOT included by default — they can be multiple MB. To pull a specific step's heavy fields, pass `step` (its name or order, from the compact list) with `include` (e.g. ['input','error']); optionally narrow to one `attempt`. Debug loop: inspect(executionId) → see step N failed → inspect(executionId, step:'<name>', include:['input','error']) → feed that input to run_local. Every field is capped to a char budget; an over-budget value is truncated with a marker pointing at `webappUrl`.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
     {
       dir: z
         .string()
@@ -425,6 +430,25 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .optional()
         .describe("Build to inspect (requires a linked project)."),
+      step: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe(
+          "Expand one step's heavy fields: its stepName or stepOrder (from the compact step list). Pair with `include` to choose which fields.",
+        ),
+      attempt: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "Restrict expansion to a single attempt of the selected `step` (a retried step has several). Omit to expand every attempt of that step.",
+        ),
+      include: z
+        .array(z.enum(INCLUDABLE_FIELDS))
+        .optional()
+        .describe(
+          "Heavy step fields to expand for the selected `step`: 'input' | 'output' | 'logs' | 'events' | 'sharedState' | 'error'. Ignored without `step`. Each is capped to the char budget.",
+        ),
       wait: z
         .boolean()
         .optional()
@@ -438,7 +462,16 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           "Max seconds to wait when wait:true (default 45, capped at 55). On timeout it returns the latest snapshot with waiting:true — call again to keep waiting.",
         ),
     },
-    async ({ dir, executionId, buildRunId, wait, maxWaitSeconds }) => {
+    async ({
+      dir,
+      executionId,
+      buildRunId,
+      step,
+      attempt,
+      include,
+      wait,
+      maxWaitSeconds,
+    }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
@@ -452,6 +485,13 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           );
         }
         if (executionId) {
+          // Compact-by-default projection options, shared by both return
+          // branches so wait:true and the snapshot yield the same bounded shape.
+          const projectOpts: Omit<ProjectExecutionOptions, "webappUrl"> = {
+            step,
+            attempt,
+            include,
+          };
           if (wait) {
             const maxWaitMs =
               Math.min(Math.max(maxWaitSeconds ?? 45, 1), 55) * 1000;
@@ -465,15 +505,19 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
                 : reason === "needs-signal"
                   ? `Paused on signal '${execution.pausedSignalName ?? "?"}' — deliver it with sapiom_dev_agents_signal to resume.`
                   : undefined;
+            const webappUrl = webappRunUrl(
+              env.appURL,
+              execution.definitionId,
+              execution.id,
+            );
             return ok({
-              execution,
+              execution: projectExecutionForTool(execution, {
+                ...projectOpts,
+                webappUrl,
+              }),
               done,
               waiting: !done,
-              webappUrl: webappRunUrl(
-                env.appURL,
-                execution.definitionId,
-                execution.id,
-              ),
+              webappUrl,
               ...(hint ? { hint } : {}),
             });
           }
@@ -483,13 +527,17 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           const hint = isExecutionTerminal(execution.status)
             ? undefined
             : `Execution is '${execution.status}', not terminal — call inspect with wait:true to block until it finishes instead of polling manually.`;
+          const webappUrl = webappRunUrl(
+            env.appURL,
+            execution.definitionId,
+            execution.id,
+          );
           return ok({
-            execution,
-            webappUrl: webappRunUrl(
-              env.appURL,
-              execution.definitionId,
-              execution.id,
-            ),
+            execution: projectExecutionForTool(execution, {
+              ...projectOpts,
+              webappUrl,
+            }),
+            webappUrl,
             ...(hint ? { hint } : {}),
           });
         }

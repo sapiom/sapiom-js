@@ -30,6 +30,25 @@ export type ToolResult = {
   isError?: boolean;
 };
 
+/**
+ * Truncate `text` to `budget` characters, appending an honest marker that
+ * records how many characters were dropped and — when a `webappUrl` is given —
+ * where the full value can be read. Returns the input unchanged when it already
+ * fits. This is the primitive the execution projection uses to guarantee a tool
+ * result can never exceed its char budget regardless of how large the underlying
+ * step input/output/logs were (a single step output can be multiple MB).
+ */
+export function capText(
+  text: string,
+  budget: number,
+  webappUrl?: string,
+): string {
+  if (text.length <= budget) return text;
+  const dropped = text.length - budget;
+  const where = webappUrl ? ` — open ${webappUrl} for the full value` : "";
+  return `${text.slice(0, budget)}…[truncated ${dropped} chars${where}]`;
+}
+
 export function ok(data: unknown): ToolResult {
   let text: string;
   try {
