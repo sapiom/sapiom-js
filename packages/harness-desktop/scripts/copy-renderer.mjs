@@ -1,5 +1,5 @@
-// Copies the setup window's static assets into dist/renderer.
-// tsc emits only setup.js from src/renderer; the .html/.css must be copied.
+// Copies the renderer windows' static assets into dist/renderer.
+// tsc emits only the .js from src/renderer; the .html/.css must be copied.
 //
 // We ALSO resolve and copy the design-system token layer, so the onboarding
 // window reads the SAME token values as the SPA instead of carrying its own
@@ -74,7 +74,7 @@ async function copyIfPresent(from, to, options) {
 }
 
 await mkdir(outDir, { recursive: true });
-for (const file of ["setup.html", "setup.css"]) {
+for (const file of ["setup.html", "setup.css", "update.html", "update.css"]) {
   await cp(join(srcDir, file), join(outDir, file));
 }
 

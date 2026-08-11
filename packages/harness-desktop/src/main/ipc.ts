@@ -115,12 +115,47 @@ export interface DeepLinkTemplateTarget {
   slug?: string;
 }
 /*
- * There is deliberately NO "apply the update" channel. The restart is destructive —
- * it ends every running agent session — and the page that would call it is the same
- * origin as the agent-authored files the harness serves at `/canvas/:sessionId/*`.
- * Rather than exposing that and guarding it, the confirmation lives in a native
- * dialog the main process raises: page content cannot reach it at all.
+ * There is deliberately NO "apply the update" channel reachable from the MAIN
+ * window. The restart is destructive — it ends every running agent session — and
+ * the main window shares its origin with the agent-authored files the harness
+ * serves at `/canvas/:sessionId/*`, so any channel it could reach would be
+ * reachable by that content too.
+ *
+ * The apply confirmation therefore lives in a separate, main-process-owned window
+ * (see `update-window.ts`) that loads ONLY our bundled `update.html` — never remote
+ * or agent content — carries its own dedicated preload (none of `sapiomDesktop`),
+ * and answers on the two channels below. Both are gated on the sender BEING that
+ * exact window's `webContents`, and are registered only while it is open, so no
+ * other renderer — not the SPA, not a canvas/preview window — can reach them. The
+ * invariant is intact: page content still cannot trigger a restart.
  */
+
+/** The user's choice in the update window. `later` also covers closing the window. */
+export type UpdateChoice = "restart" | "later" | "skip";
+
+/**
+ * update window → main (invoke): the user picked an action, resolving the
+ * `showUpdatePrompt` promise. Sender-gated to the update window (see above), NOT
+ * via `isTrustedSender` — that guard is specific to the main window's SPA.
+ */
+export const UPDATE_DECIDE = "update:decide";
+
+/**
+ * update window → main (invoke): the "Automatically download and install updates"
+ * toggle changed. Persisted (`update-prefs.ts`) and applied live to
+ * `autoUpdater.autoInstallOnAppQuit`. Separate from UPDATE_DECIDE so flipping the
+ * toggle and THEN closing the window still keeps the change. Same sender gate.
+ */
+export const UPDATE_SET_AUTO = "update:set-auto";
+
+/**
+ * argv prefixes carrying the update window's initial state into its preload — the
+ * offered version, and the auto-update toggle state ("1"/"0"). Same documented
+ * `additionalArguments` mechanism as APP_VERSION_ARG (a `process.env` read would
+ * depend on a renderer inheriting a var mutated after startup).
+ */
+export const UPDATE_VERSION_ARG = "--sapiom-update-version=";
+export const UPDATE_AUTO_ARG = "--sapiom-update-auto=";
 
 /**
  * main → renderer (push): the downloaded-update state changed, or a freshly

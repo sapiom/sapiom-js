@@ -43,6 +43,17 @@ import {
   resolveUpdateChannel,
   shouldEnableUpdater,
 } from "./update-policy.js";
+// The custom "update ready" window that replaced the native offer dialog.
+import { showUpdatePrompt } from "./update-window.js";
+// Persisted, desktop-only update prefs: the auto-install toggle + skipped versions.
+import {
+  DEFAULT_UPDATE_PREFS,
+  addSkippedVersion,
+  clearSkippedVersions,
+  loadUpdatePrefs,
+  saveUpdatePrefs,
+  updatePrefsPathIn,
+} from "./update-prefs.js";
 
 /**
  * How often to look for a new build. Four hours: the app is a long-lived desktop
@@ -194,44 +205,79 @@ function relaunchAfterFailedHandoff(): void {
   app.exit(0);
 }
 
+/** The persisted-prefs file for this install (Electron's per-user userData dir). */
+function updatePrefsFile(): string {
+  return updatePrefsPathIn(app.getPath("userData"));
+}
+
 /**
- * Offer the update, and apply it only if the user agrees.
+ * Persist an "auto-install on quit" toggle change AND apply it live. Passed to the
+ * update window (which holds no autoUpdater reference); the window calls it the
+ * moment the toggle flips, so the change sticks even if the user then just closes
+ * the window rather than pressing a button.
+ */
+async function setAutoUpdatePref(on: boolean): Promise<void> {
+  const prefs = await loadUpdatePrefs(updatePrefsFile());
+  await saveUpdatePrefs({ ...prefs, autoUpdate: on }, updatePrefsFile());
+  if (active) active.autoUpdater.autoInstallOnAppQuit = on;
+  log(`auto-install on quit ${on ? "enabled" : "disabled"} by user`);
+}
+
+/**
+ * Offer the update, and act on the user's choice.
  *
- * A native dialog, not something injected into the page: this fires whenever a
- * background download finishes, and it must work regardless of what the main
- * window happens to be showing. (The SPA's Settings popover has its own,
- * *user-initiated* path — see `checkForUpdatesNow`.)
+ * A custom window (see `update-window.ts`), not something injected into the page:
+ * this fires whenever a background download finishes, and it must work regardless
+ * of what the main window happens to be showing. (The SPA's Settings popover has
+ * its own, *user-initiated* path — see `checkForUpdatesNow`.)
  *
- * Declining is remembered per version FOR THIS RUN only. Re-prompting on every
- * check would nag someone who already said no; forgetting entirely across
- * launches would mean a deferred update is never mentioned again. Prompting once
- * per launch is the middle that needs no extra state on disk — and an explicit
- * "check for updates" clears it, because asking IS undeclining.
+ * Three outcomes:
+ *  - **restart** → apply now.
+ *  - **later** → remembered per version FOR THIS RUN only. Re-prompting on every
+ *    check would nag someone who already said no; forgetting across launches would
+ *    mean a deferred update is never mentioned again. Prompting once per launch is
+ *    the middle that needs no state on disk — and an explicit "check for updates"
+ *    clears it, because asking IS undeclining.
+ *  - **skip** → remembered ACROSS launches (persisted): the user doesn't want this
+ *    version at all. A newer one is still offered; "check for updates" clears skips.
  */
 async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
   const { version } = info;
+  // Skipped versions are never re-offered — checked first, before the per-run
+  // guards, so a skip persisted last launch is honored on this one too.
+  const prefs = await loadUpdatePrefs(updatePrefsFile());
+  if (prefs.skippedVersions.includes(version)) {
+    log(`skipping ${version} (user chose Skip this version)`);
+    return;
+  }
   if (declined.has(version) || promptOpen) return;
   if (deps.mainWindow.isDestroyed()) return;
 
   promptOpen = true;
-  // Held across the apply, not just the dialog: shutdown takes seconds, and
-  // releasing early let a second `update-downloaded` stack another dialog on top
+  // Held across the apply, not just the window: shutdown takes seconds, and
+  // releasing early let a second `update-downloaded` stack another prompt on top
   // of an app that was already installing.
   try {
-    const { response } = await dialog.showMessageBox(deps.mainWindow, {
-      type: "info",
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-      message: `Sapiom ${version} is ready to install.`,
-      // The session warning is the point of this dialog, not a footnote: the
-      // user may have an agent mid-task, and restarting ends it. Burying that is
-      // how a well-meaning update destroys someone's work.
-      detail:
-        "Restarting will end any running agent sessions. " +
-        "Choose Later to keep working — Sapiom stays on the current version until you restart.",
+    const choice = await showUpdatePrompt(deps.mainWindow, {
+      version,
+      autoUpdate: prefs.autoUpdate,
+      onAutoUpdateChange: setAutoUpdatePref,
     });
-    if (response !== 0) {
+
+    if (choice === "skip") {
+      await addSkippedVersion(version, updatePrefsFile());
+      log(`user skipped ${version}`);
+      // Honor the skip even under auto-install: a staged update would otherwise
+      // install on the next quit. Drop it and stop that for this session — the
+      // pref itself is untouched, so next launch restores it and a manual check
+      // (which clears skips) re-offers.
+      if (pending?.version === version) {
+        pending = null;
+        if (active) active.autoUpdater.autoInstallOnAppQuit = false;
+      }
+      return;
+    }
+    if (choice !== "restart") {
       declined.add(version);
       log(`user deferred ${version}`);
       return;
@@ -241,7 +287,8 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
     if (!result.ok) {
       // Never silently: the user pressed "Restart now" and nothing happened, so
       // say what and why. Their sessions are still alive in the refuse-up-front
-      // case, which is exactly what the message needs to tell them.
+      // case, which is exactly what the message needs to tell them. The rare
+      // failure stays a native dialog — an OK-only acknowledgement.
       pending = null;
       // The SPA's card mirrors `pending` — retract it, or it wedges on a
       // "ready to install" that can never install.
@@ -265,8 +312,8 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
  * scheduled check in three ways, and each one is a thing users notice:
  *  - it REPORTS an outcome. A silent background check is fine; a button that
  *    appears to do nothing is broken.
- *  - it clears the declined set, so someone who chose "Later" can change their
- *    mind without restarting the app.
+ *  - it clears the declined set AND the persisted skip list, so someone who chose
+ *    "Later" or "Skip this version" can change their mind without restarting.
  *  - it answers "downloaded" for an update already waiting, rather than the
  *    literally-true-but-useless "you're up to date".
  *
@@ -281,6 +328,9 @@ export async function checkForUpdatesNow(): Promise<UpdateCheckOutcome> {
   // sets `pending`, so returning early would leave the version declined for the
   // rest of the run and the native prompt would never come back.
   declined.clear();
+  // ...and un-skip: an explicit ask is the user reconsidering, so a version they
+  // chose "Skip this version" for is offered again too.
+  await clearSkippedVersions(updatePrefsFile());
   // Something already downloaded and waiting to be applied: report that instead of
   // asking GitHub again, and RE-RAISE the native prompt. That prompt is the only
   // way to actually apply an update — the SPA has no restart channel, by design —
@@ -397,10 +447,23 @@ function startUpdater(deps: UpdaterDeps): void {
   autoUpdater.channel = decision.channel;
   autoUpdater.allowPrerelease = decision.allowPrerelease;
   autoUpdater.autoDownload = true;
-  // We own the restart (the user asked to be notified, not surprised), so an
-  // ordinary quit must NOT install. Leaving this at its default would apply the
-  // update on quit — silently — which is the behaviour we deliberately declined.
-  autoUpdater.autoInstallOnAppQuit = false;
+  // Whether an ordinary quit installs a downloaded update is now USER-controlled,
+  // via the update window's "Automatically download and install updates" toggle
+  // (persisted in update-prefs). Default ON: a ready update installs on the next
+  // quit — never a surprise mid-session restart, since the running app is only ever
+  // restarted by an explicit "Restart now". This reverses the former hardcoded
+  // `false` ("the behaviour we deliberately declined"), now that the user owns it.
+  // Set the default synchronously (loading prefs is async and the first check is
+  // 30s out), then reconcile with the persisted value; a failed read keeps the
+  // default — prefs are a convenience, never load-bearing.
+  autoUpdater.autoInstallOnAppQuit = DEFAULT_UPDATE_PREFS.autoUpdate;
+  void loadUpdatePrefs(updatePrefsFile())
+    .then((prefs) => {
+      autoUpdater.autoInstallOnAppQuit = prefs.autoUpdate;
+    })
+    .catch(() => {
+      /* keep the default */
+    });
   // Only when forced on from an unpackaged build: read dev-app-update.yml
   // instead of the app-update.yml that only packaging writes.
   if (gate.forced) autoUpdater.forceDevUpdateConfig = true;

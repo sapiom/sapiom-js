@@ -1,0 +1,128 @@
+<!doctype html>
+<!-- data-product scopes the design-system's "sapiom-studio" preset, exactly as
+     setup.html and the SPA do. It MUST sit on the same element as data-theme
+     (which the script below sets on <html>): studio.css keys the brand on the
+     compound selector [data-product="sapiom-studio"][data-theme="…"], so on <body>
+     light mode would silently lose its brand and its --bg. -->
+<html lang="en" data-product="sapiom-studio">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    />
+    <title>Sapiom</title>
+    <script>
+      // Set the theme before first paint. The design-system tokens key dark on
+      // [data-theme="dark"], so this window must set the attribute too.
+      //
+      // The app's live theme is handed in by the main process as a `?theme=` query
+      // (see update-window.ts). It has to be — this window's file:// origin can't
+      // read the SPA's (http://localhost) localStorage, so guessing from THIS
+      // origin's storage or the OS would drift out of sync with the app whenever
+      // the user picked a non-OS theme. The query wins; localStorage then OS are
+      // only fallbacks so the window is never unthemed.
+      (function () {
+        var forced = null;
+        try {
+          forced = new URLSearchParams(location.search).get("theme");
+        } catch (_) {}
+        var stored = null;
+        try {
+          stored = localStorage.getItem("sapiom-harness-theme");
+        } catch (_) {}
+        var theme =
+          forced === "light" || forced === "dark"
+            ? forced
+            : stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <!-- The SAME four design-system files, in the SAME order, as setup.html and the
+         SPA's styles.css: fonts register Geist (before tokens), tokens.css is the
+         source of truth, the named studio.css preset layers Studio on top, then this
+         window's own layout. agent-cloud.css is NEVER linked here — studio.css
+         @imports it, and a later <link> would win on source order and restore the
+         old teal accent. All copied in by scripts/copy-renderer.mjs. -->
+    <link rel="stylesheet" href="./ds-fonts.css" />
+    <link rel="stylesheet" href="./ds-tokens.css" />
+    <link rel="stylesheet" href="./themes/studio.css" />
+    <link rel="stylesheet" href="./update.css" />
+  </head>
+  <body>
+    <main class="card">
+      <!-- The brand lockup. Unlike setup.html (which shows only the wordmark, per
+           the brand rule that mark+wordmark reads as a third logo), this window's
+           agreed design places the "S" mark in a neutral chip beside the wordmark.
+           Both glyphs are inlined in currentColor and themed to ink — the mark is
+           NOT its published brand green here, keeping "green = state only". Paths
+           are the official assets: sapiom-mark.svg and the wordmark (identical to
+           setup.html / BrandLogotype.tsx), inlined so a public clone needs no binary
+           and the CSP needs no img-src. -->
+      <header class="brand-lockup" role="img" aria-label="Sapiom agent.studio">
+        <span class="mark-chip" aria-hidden="true">
+          <svg
+            class="brand-mark"
+            width="18"
+            height="19"
+            viewBox="0 0 115 122"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M105.267 60.7219L98.8902 71.7648L92.1353 83.4669L83.3114 98.7521L70.18 121.491H0L13.1249 98.7521H57.042L72.6274 71.7648L79.0038 60.7219L72.2619 49.0459H98.5247L105.267 60.7219Z"
+              fill="currentColor"
+            />
+            <path
+              d="M114.072 0L100.954 22.7189H57.0694L57.0498 22.6928L57.0368 22.7189L41.8365 49.047L35.0945 60.723L41.471 71.7659H15.2016L8.8252 60.723L15.5671 49.047L21.9631 37.978L30.774 22.7189L43.8923 0H114.072Z"
+              fill="currentColor"
+            />
+          </svg>
+        </span>
+        <svg
+          class="brand-logotype"
+          style="--brand-logotype-descender: 3.72px"
+          width="82"
+          height="22"
+          viewBox="0 0 89 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path
+            d="M32.1834 7.36578L34.4714 5.81493H36.5941C39.3219 5.81493 41.5567 8.05816 41.5567 10.7996V14.9539C41.5567 17.7234 39.3247 19.9385 36.5941 19.9385H34.4714L32.1834 18.3877V24H29.4277V5.81493H32.1834V7.36578ZM23.7454 7.36578V5.81493H26.5012V19.9385H23.7454V18.3877L21.4574 19.9385H19.3347C16.6069 19.9385 14.3722 17.6953 14.3722 14.9539V10.7996C14.3722 8.03001 16.6041 5.81493 19.3347 5.81493H21.4574L23.7454 7.36578ZM50.2802 17.169H54.0945V19.9385H43.7074V17.169H47.5245V8.58449H43.7074V5.81493H50.2802V17.169ZM73.2556 7.36296L75.5436 5.81212H76.9774C78.4645 5.81212 79.7667 6.60584 80.492 7.79359L81.1557 7.36296L83.4466 5.81212H84.8805C87.1516 5.81212 89 7.66975 89 9.94957V19.9385H86.3199V10.0284C86.3199 9.21495 85.6898 8.58168 84.8805 8.58168H84.3008L81.1585 10.7151V19.9357H78.4001V9.79195C78.2909 9.09675 77.7084 8.58449 76.9802 8.58449H76.4005L73.2556 10.718V19.9385H70.4998V5.81212H73.2556V7.36296ZM64.4479 5.73331C66.3944 5.73331 67.9682 7.31511 67.9682 9.27125V16.2571L64.0923 19.8456L64.0783 19.8569H59.5807C57.6372 19.8569 56.0605 18.2751 56.0605 16.319V9.33316L59.9363 5.74457L59.9504 5.73331H64.4479ZM9.23606 5.81493L11.5549 7.38829V10.7405L8.3539 8.5676H3.91231C2.66607 8.61545 2.63808 10.079 3.62665 10.4618L9.69534 12.3926C11.0284 12.8176 11.9385 14.0616 11.9385 15.4662V16.4907C11.9385 17.5968 11.3925 18.6297 10.4795 19.249L9.65053 19.8119H2.28801L0 18.261V14.9088L3.29339 17.1436H7.53336C7.55015 17.1436 9.29767 17.1859 9.36488 16.0741C9.38729 15.5928 9.12683 15.1059 8.62835 14.9005L2.88732 13.0738C1.16781 12.5249 -0.0476086 10.9515 0.210037 9.16429C0.33886 7.88365 1.34424 5.80931 4.19515 5.83183H4.20356L9.23606 5.82056V5.81493ZM32.1834 10.718V15.0383L35.3284 17.1717H36.5969C37.8096 17.1717 38.8009 16.1754 38.8009 14.9567V10.8024C38.8009 9.58367 37.8096 8.5873 36.5969 8.5873H35.3284L32.1834 10.7208V10.718ZM19.3347 8.58449C18.122 8.58449 17.1307 9.58086 17.1307 10.7996V14.9539C17.1307 16.1726 18.122 17.169 19.3347 17.169H20.6033L23.7454 15.0383V10.718L20.6033 8.58449H19.3347ZM58.7881 10.5378V16.1642C58.7881 16.6764 59.1999 17.0902 59.7096 17.0902H63.0421L65.2377 15.058V9.43168C65.2377 8.91942 64.8261 8.50568 64.3164 8.50568H60.9837L58.7881 10.5378ZM50.283 2.76956H47.2501V0H50.283V2.76956Z"
+            fill="currentColor"
+          />
+        </svg>
+        <span class="brand-product" aria-hidden="true">agent.studio</span>
+        <span class="header-version" id="version-header" aria-hidden="true"></span>
+      </header>
+
+      <p class="body-line">
+        <span id="version-body">A new version</span> is ready to install. Restart ends running agent
+        sessions.
+      </p>
+
+      <label class="toggle-row" for="auto-update">
+        <span class="toggle-label">Automatically download and install updates</span>
+        <input type="checkbox" id="auto-update" class="toggle-switch" role="switch" />
+      </label>
+
+      <footer class="footer">
+        <button id="skip" class="btn-secondary" type="button">Skip this version</button>
+        <div class="footer-right">
+          <button id="later" class="btn-secondary" type="button">Later</button>
+          <button id="restart" class="btn-primary" type="button">Restart now</button>
+        </div>
+      </footer>
+    </main>
+    <script type="module" src="./update.js"></script>
+  </body>
+</html>

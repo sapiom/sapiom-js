@@ -34,3 +34,14 @@ export function setupPreloadPath(): string {
 export function desktopPreloadPath(): string {
   return path.join(mainDir, "..", "preload", "desktop.mjs");
 }
+
+/** This app's update-window HTML (copied to dist/renderer by the build). */
+export function updateHtmlPath(): string {
+  return path.join(mainDir, "..", "renderer", "update.html");
+}
+
+/** Preload for the update window — exposes `window.sapiomUpdate`. Same `.mjs` +
+ *  sandbox-off requirement as the setup preload. */
+export function updatePreloadPath(): string {
+  return path.join(mainDir, "..", "preload", "update.mjs");
+}
