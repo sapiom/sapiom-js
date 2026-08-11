@@ -259,21 +259,19 @@ test("security, AI, and final acknowledgements are enforced", () => {
   assert.equal(disclosedAiDetails.complete, true);
 });
 
-test("only OWNER and MEMBER associations are classified as members", () => {
-  for (const association of ["OWNER", "MEMBER", "owner", "member"]) {
-    assert.equal(classifyContributor(association), "contributor: member");
+test("only write-equivalent repository permissions are trusted", () => {
+  for (const permission of ["admin", "write", "ADMIN", "WRITE"]) {
+    assert.equal(classifyContributor(permission), "contributor: trusted");
   }
 
-  for (const association of [
-    "COLLABORATOR",
-    "CONTRIBUTOR",
-    "FIRST_TIMER",
-    "FIRST_TIME_CONTRIBUTOR",
-    "NONE",
-    "MANNEQUIN",
+  for (const permission of [
+    "read",
+    "none",
+    "triage",
+    "unexpected",
     undefined,
   ]) {
-    assert.equal(classifyContributor(association), "contributor: external");
+    assert.equal(classifyContributor(permission), "contributor: external");
   }
 });
 
@@ -347,9 +345,11 @@ test("sensitive paths cover automation, policy, dependency, and release files", 
 test("external intake gets deterministic type, size, contributor, and triage labels", () => {
   const classification = classifyPullRequest({
     pullRequest: {
-      author_association: "FIRST_TIME_CONTRIBUTOR",
+      author_association: "MEMBER",
       body: pullRequestBody(),
     },
+    repositoryPermission: "read",
+    permissionResolved: true,
     files: [changedFile("packages/core/src/index.ts", 20, 5)],
     eventAction: "opened",
   });
@@ -391,10 +391,11 @@ test("incomplete, sensitive, large, and opaque external PRs route to manual revi
   for (const fixture of cases) {
     const result = classifyPullRequest({
       pullRequest: {
-        author_association: "NONE",
         body: fixture.body,
         changed_files: fixture.changedFiles,
       },
+      repositoryPermission: "read",
+      permissionResolved: true,
       files: fixture.files,
       eventAction: "synchronize",
     });
@@ -402,22 +403,51 @@ test("incomplete, sensitive, large, and opaque external PRs route to manual revi
   }
 });
 
-test("member PRs retain risk metadata without external manual routing", () => {
+test("trusted PRs retain risk metadata without external manual routing", () => {
   const result = classifyPullRequest({
-    pullRequest: { author_association: "MEMBER", body: pullRequestBody() },
-    files: [changedFile(".github/workflows/test.yml", 10)],
+    pullRequest: {
+      author_association: "NONE",
+      body: pullRequestBody({ selectedTypes: [] }),
+    },
+    repositoryPermission: "admin",
+    permissionResolved: true,
+    files: [changedFile(".github/workflows/test.yml", 700)],
     eventAction: "opened",
   });
 
-  assert.ok(result.desiredLabels.includes("contributor: member"));
+  assert.ok(result.desiredLabels.includes("contributor: trusted"));
+  assert.ok(result.desiredLabels.includes("contribution: incomplete"));
   assert.ok(result.desiredLabels.includes("review: sensitive"));
+  assert.ok(result.desiredLabels.includes("size: large"));
   assert.ok(!result.desiredLabels.includes("review: manual"));
   assert.equal(result.addNeedsTriage, false);
 });
 
+test("unresolved repository permissions fail closed to external manual review", () => {
+  for (const fixture of [
+    { repositoryPermission: undefined, permissionResolved: false },
+    { repositoryPermission: "unexpected", permissionResolved: true },
+    { repositoryPermission: "admin", permissionResolved: false },
+  ]) {
+    const result = classifyPullRequest({
+      pullRequest: { body: pullRequestBody() },
+      ...fixture,
+      files: [changedFile("packages/core/src/index.ts", 5)],
+      eventAction: "synchronize",
+    });
+
+    assert.ok(result.desiredLabels.includes("contributor: external"));
+    assert.ok(result.desiredLabels.includes("review: manual"));
+    assert.ok(!result.desiredLabels.includes("contributor: trusted"));
+    assert.equal(result.repositoryPermissionResolved, false);
+  }
+});
+
 test("needs-triage is initialized only on external intake or explicit backfill", () => {
   const input = {
-    pullRequest: { author_association: "NONE", body: pullRequestBody() },
+    pullRequest: { body: pullRequestBody() },
+    repositoryPermission: "read",
+    permissionResolved: true,
     files: [changedFile("packages/core/src/index.ts", 5)],
   };
 
@@ -452,13 +482,16 @@ test("needs-triage is initialized only on external intake or explicit backfill",
 
 test("reconciliation replaces managed labels and preserves maintainer state", () => {
   const classification = classifyPullRequest({
-    pullRequest: { author_association: "MEMBER", body: pullRequestBody() },
+    pullRequest: { body: pullRequestBody() },
+    repositoryPermission: "write",
+    permissionResolved: true,
     files: [changedFile("packages/core/src/index.ts", 5)],
     eventAction: "synchronize",
   });
   const changes = reconcilePullRequestLabels(
     [
       "contributor: external",
+      "contributor: member",
       "size: large",
       "documentation",
       "review: manual",
@@ -469,9 +502,10 @@ test("reconciliation replaces managed labels and preserves maintainer state", ()
     classification,
   );
 
-  assert.deepEqual(changes.add, ["bug", "contributor: member", "size: small"]);
+  assert.deepEqual(changes.add, ["bug", "contributor: trusted", "size: small"]);
   assert.deepEqual(changes.remove, [
     "contributor: external",
+    "contributor: member",
     "documentation",
     "review: manual",
     "size: large",
@@ -481,12 +515,31 @@ test("reconciliation replaces managed labels and preserves maintainer state", ()
   assert.ok(!changes.remove.includes("area: sdk"));
 });
 
+test("reconciliation removes stale trusted access after permission revocation", () => {
+  const classification = classifyPullRequest({
+    pullRequest: { body: pullRequestBody() },
+    repositoryPermission: "read",
+    permissionResolved: true,
+    files: [changedFile("packages/core/src/index.ts", 5)],
+    eventAction: "synchronize",
+  });
+  const changes = reconcilePullRequestLabels(
+    ["contributor: trusted", "size: small", "bug", "help wanted"],
+    classification,
+  );
+
+  assert.deepEqual(changes.add, ["contributor: external"]);
+  assert.deepEqual(changes.remove, ["contributor: trusted"]);
+  assert.ok(!changes.remove.includes("help wanted"));
+});
+
 test("invalid type selection preserves existing type labels", () => {
   const classification = classifyPullRequest({
     pullRequest: {
-      author_association: "NONE",
       body: pullRequestBody({ selectedTypes: [] }),
     },
+    repositoryPermission: "read",
+    permissionResolved: true,
     files: [changedFile("packages/core/src/index.ts", 5)],
     eventAction: "edited",
   });
@@ -538,5 +591,13 @@ test("the privileged workflow stays pinned and never references PR head code or 
   assert.match(workflow, /pull_request_target:/);
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /pull-requests: write/);
+  assert.match(workflow, /getCollaboratorPermissionLevel/);
+  assert.doesNotMatch(workflow, /author_association/);
   assert.doesNotMatch(workflow, /pull_request\.head|head\.sha|secrets\./);
+
+  const classifier = readFileSync(
+    path.join(ROOT, "scripts", "pr-label-classifier.mjs"),
+    "utf8",
+  );
+  assert.doesNotMatch(classifier, /author_association/);
 });

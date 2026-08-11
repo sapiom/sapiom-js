@@ -92,6 +92,31 @@ jobs:
               return;
             }
 
+            const authorLogin = pullRequest.user?.login;
+            let repositoryPermission;
+            let permissionResolved = false;
+            let permissionLookupFailure = "pull request author is unavailable";
+            if (authorLogin) {
+              try {
+                const { data: repositoryAccess } =
+                  await github.rest.repos.getCollaboratorPermissionLevel({
+                    owner,
+                    repo,
+                    username: authorLogin,
+                  });
+                repositoryPermission = repositoryAccess.permission;
+                permissionResolved = true;
+                permissionLookupFailure = null;
+              } catch (error) {
+                const status =
+                  error && typeof error === "object" && "status" in error
+                    ? error.status
+                    : "unknown";
+                permissionLookupFailure =
+                  `GitHub API status ${status ?? "unknown"}`;
+              }
+            }
+
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner,
               repo,
@@ -100,10 +125,21 @@ jobs:
             });
             const classification = classifyPullRequest({
               pullRequest,
+              repositoryPermission,
+              permissionResolved,
               files,
               eventAction: process.env.EVENT_ACTION,
               initializeTriage: process.env.INITIALIZE_TRIAGE === "true",
             });
+            if (!classification.repositoryPermissionResolved) {
+              const reason =
+                permissionLookupFailure ??
+                `unexpected permission ${JSON.stringify(repositoryPermission)}`;
+              core.warning(
+                `PR #${pullNumber}: repository permission unresolved (${reason}); ` +
+                  "treating the author as external and requiring manual review",
+              );
+            }
             const currentLabels = pullRequest.labels
               .map((label) =>
                 typeof label === "string" ? label : label.name,

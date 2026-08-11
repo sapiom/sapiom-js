@@ -12,9 +12,11 @@ export const TYPE_LABELS = Object.freeze(
 );
 
 export const CONTRIBUTOR_LABELS = Object.freeze([
-  "contributor: member",
+  "contributor: trusted",
   "contributor: external",
 ]);
+
+const LEGACY_CONTRIBUTOR_LABELS = Object.freeze(["contributor: member"]);
 
 export const SIZE_LABELS = Object.freeze([
   "size: small",
@@ -25,6 +27,7 @@ export const SIZE_LABELS = Object.freeze([
 
 const CLASSIFICATION_LABELS = Object.freeze([
   ...CONTRIBUTOR_LABELS,
+  ...LEGACY_CONTRIBUTOR_LABELS,
   ...SIZE_LABELS,
   "contribution: incomplete",
   "review: sensitive",
@@ -353,10 +356,23 @@ function isOpaqueFile(file) {
   return file.patch === undefined || file.patch === null;
 }
 
-export function classifyContributor(authorAssociation) {
-  const association = String(authorAssociation ?? "").toUpperCase();
-  return association === "OWNER" || association === "MEMBER"
-    ? "contributor: member"
+const RESOLVED_REPOSITORY_PERMISSIONS = new Set([
+  "admin",
+  "write",
+  "read",
+  "none",
+]);
+
+function normalizeRepositoryPermission(repositoryPermission) {
+  return String(repositoryPermission ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+export function classifyContributor(repositoryPermission) {
+  const permission = normalizeRepositoryPermission(repositoryPermission);
+  return permission === "admin" || permission === "write"
+    ? "contributor: trusted"
     : "contributor: external";
 }
 
@@ -370,11 +386,20 @@ function shouldInitializeTriage(eventAction, initializeTriage) {
 
 export function classifyPullRequest({
   pullRequest,
+  repositoryPermission,
+  permissionResolved = false,
   files,
   eventAction,
   initializeTriage = false,
 }) {
-  const contributorLabel = classifyContributor(pullRequest?.author_association);
+  const normalizedPermission =
+    normalizeRepositoryPermission(repositoryPermission);
+  const repositoryPermissionResolved =
+    permissionResolved === true &&
+    RESOLVED_REPOSITORY_PERMISSIONS.has(normalizedPermission);
+  const contributorLabel = repositoryPermissionResolved
+    ? classifyContributor(normalizedPermission)
+    : "contributor: external";
   const size = calculateReviewSize(files);
   const template = validatePullRequestTemplate(pullRequest?.body);
   const sensitive = files.some(({ filename }) => isSensitivePath(filename));
@@ -383,7 +408,8 @@ export function classifyPullRequest({
   const external = contributorLabel === "contributor: external";
   const manual =
     external &&
-    (!template.complete ||
+    (!repositoryPermissionResolved ||
+      !template.complete ||
       sensitive ||
       size.label === "size: large" ||
       size.label === "size: xlarge" ||
@@ -400,6 +426,7 @@ export function classifyPullRequest({
       external && shouldInitializeTriage(eventAction, initializeTriage),
     desiredLabels: [...desiredLabels].sort((a, b) => a.localeCompare(b)),
     hasOpaqueFile: opaque,
+    repositoryPermissionResolved,
     reviewSize: size.changedLines,
     synchronizeTypeLabels: template.typeIsValid,
     templateReasons: template.reasons,
