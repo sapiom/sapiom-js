@@ -23,6 +23,9 @@ import { initDialogs } from "./dialogs.js";
 import { setTrustedWindow } from "./trusted-sender.js";
 import { parseDeepLink, deepLinkFromArgv, DEEP_LINK_SCHEME } from "./deep-link.js";
 import { DEEP_LINK_NAVIGATE } from "./ipc.js";
+// Dev-only: preview the update window without waiting for a real update.
+import { showUpdatePrompt } from "./update-window.js";
+import { loadUpdatePrefs, saveUpdatePrefs, updatePrefsPathIn } from "./update-prefs.js";
 
 const devMode = process.argv.includes("--dev");
 /** `--smoke`: boot, verify the packaged bundle, print results, exit. See smoke.ts. */
@@ -181,6 +184,20 @@ if (lock.action === "fail") {
       // the same reason as initUpdater: invoke on an unhandled channel rejects, so
       // the handler must exist regardless of which branch of boot we exit through.
       initDialogs({ mainWindow: bootResult.mainWindow });
+      // Dev-only preview: `SAPIOM_PREVIEW_UPDATE_WINDOW=1 pnpm dev` opens the update
+      // window with a sample version so it can be eyeballed (and its toggle/skip
+      // persistence exercised) without a real update. Double-gated on devMode, so it
+      // can never fire in a packaged build.
+      if (devMode && process.env.SAPIOM_PREVIEW_UPDATE_WINDOW) {
+        const prefsPath = updatePrefsPathIn(app.getPath("userData"));
+        void showUpdatePrompt(bootResult.mainWindow, {
+          version: "0.0.0-preview",
+          autoUpdate: (await loadUpdatePrefs(prefsPath)).autoUpdate,
+          onAutoUpdateChange: async (on) => {
+            await saveUpdatePrefs({ ...(await loadUpdatePrefs(prefsPath)), autoUpdate: on }, prefsPath);
+          },
+        }).then((choice) => console.log(`[preview] update window choice: ${choice}`));
+      }
       if (smokeMode) {
         // Verify the packaged bundle, then leave — never wait for a user. The
         // exit code is the CI signal. `app.exit` skips the before-quit handler,
