@@ -601,7 +601,7 @@ export const App = (): JSX.Element => {
           task.status === "failed"
             ? "Couldn't generate descriptions — check the agent terminal for details."
             : "Describe run finished — the canvas updates if the agent changed the source.",
-          task.status === "failed" ? "error" : "info",
+          task.status === "failed" ? "error" : "success",
         );
       }
       describeTaskStatus.current.set(task.id, task.status);
@@ -894,13 +894,15 @@ export const App = (): JSX.Element => {
   // Bulk discovery from the add dialog.
   const handleScanWorkflows = async (root: string): Promise<number> => {
     const found = await harness.scanWorkflows(root);
+    // Finding agents is the win this dialog exists for; an empty sweep is a
+    // neutral fact, not a failure.
     harness.showToast(
       found.length === 0
         ? "No agent projects found under this folder."
         : found.length === 1
           ? "Found 1 agent project."
           : `Found ${found.length} agent projects.`,
-      "info",
+      found.length === 0 ? "info" : "success",
     );
     return found.length;
   };

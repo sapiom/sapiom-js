@@ -502,7 +502,7 @@ export function WorkflowsRail({
   const copyPath = (path: string): void => {
     void navigator.clipboard
       ?.writeText(path)
-      .then(() => onToast("Path copied.", "info"))
+      .then(() => onToast("Path copied.", "success"))
       .catch(() => onToast("Couldn't copy the path."));
   };
 
@@ -1018,8 +1018,18 @@ function ProfileRow({
       // process ALSO re-raises its native "Restart now / Later" prompt — that
       // dialog is the only way to apply one, deliberately (see the desktop app's
       // ipc.ts: page code has no restart channel).
-      const outcome = describeUpdateOutcome(await desktop.checkForUpdates());
-      onToast(outcome.text, outcome.tone === "error" ? "error" : "info");
+      const result = await desktop.checkForUpdates();
+      const view = describeUpdateOutcome(result);
+      // Positive terminals (already current, or on disk awaiting a restart)
+      // get the green check; in-flight and empty outcomes stay neutral.
+      onToast(
+        view.text,
+        view.tone === "error"
+          ? "error"
+          : result.kind === "up-to-date" || result.kind === "downloaded"
+            ? "success"
+            : "info",
+      );
     } catch {
       onToast("Couldn't check for updates.");
     } finally {

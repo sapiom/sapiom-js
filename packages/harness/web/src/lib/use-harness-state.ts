@@ -1430,7 +1430,7 @@ export function useHarnessState(): HarnessStateHook {
             setToast(
               pendingWarning
                 ? createToastMessage(`Deployed to Sapiom. ${pendingWarning}`)
-                : createToastMessage("Deployed to Sapiom.", "info"),
+                : createToastMessage("Deployed to Sapiom.", "success"),
             );
             // Clear any prior deploy error for this workflow — it succeeded.
             setLastDeployErrorByPath((prev) => {

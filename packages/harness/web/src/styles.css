@@ -6967,6 +6967,10 @@ input {
   color: var(--ink-faint);
 }
 
+.toast[data-tone="success"] .toast-icon {
+  color: var(--green-text, var(--green));
+}
+
 .toast[data-tone="error"] .toast-icon {
   color: var(--red-text, var(--red));
 }

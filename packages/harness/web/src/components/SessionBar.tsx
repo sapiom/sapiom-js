@@ -288,7 +288,7 @@ export function SessionBar({
                   onClick={() => {
                     void navigator.clipboard
                       ?.writeText(activeSession.cwd)
-                      .then(() => onToast("Path copied.", "info"))
+                      .then(() => onToast("Path copied.", "success"))
                       .catch(() => onToast("Couldn't copy the path."));
                     closeMenu();
                   }}

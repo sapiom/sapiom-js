@@ -1,8 +1,9 @@
-/** What kind of thing a toast announces. Only two tones, because only two
- *  change what you would do next: something went wrong, or something
- *  finished/is worth knowing. The default is "error" — callers announcing a
- *  result opt into "info" (mirrors design-eng's sapiom-studio toast model). */
-export type ToastTone = "info" | "error";
+/** What kind of thing a toast announces: something went wrong ("error", the
+ *  default), something POSITIVELY finished ("success" — the scarce green,
+ *  reserved for a confirmed win like a copy or a deploy), or a neutral
+ *  status worth knowing ("info" — progress, hand-offs, empty results).
+ *  Callers announcing a result opt into success/info explicitly. */
+export type ToastTone = "info" | "success" | "error";
 
 export interface ToastMessage {
   message: string;

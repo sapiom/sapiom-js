@@ -20,6 +20,7 @@ const EXIT_FALLBACK_MS = 400;
 
 const TONE_ICON: Record<ToastTone, string> = {
   info: "Info",
+  success: "CircleCheck",
   error: "TriangleAlert",
 };
 
