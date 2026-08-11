@@ -39,26 +39,24 @@ describe("update.html design-system wiring", () => {
 });
 
 describe("update.html brand lockup", () => {
-  // The wordmark's official path head (identical to setup.html / BrandLogotype.tsx)
-  // and the "S" mark's (sapiom-mark.svg). Their opening commands are enough to prove
-  // the REAL assets are inlined, not placeholders.
+  // The wordmark's official path head (identical to setup.html / BrandLogotype.tsx).
   const LOGOTYPE_PATH_HEAD = "M32.1834 7.36578L34.4714 5.81493";
-  const MARK_PATH_HEAD = "M105.267 60.7219L98.8902";
 
   it("inlines the real Sapiom wordmark, in currentColor", () => {
     expect(html).toContain('class="brand-logotype"');
     expect(html).toContain(LOGOTYPE_PATH_HEAD);
+    // The wordmark's path(s) draw in currentColor so .brand-logotype themes it to ink.
+    expect([...html.matchAll(/<path\b[^>]*>/g)].every((m) => m[0].includes('fill="currentColor"'))).toBe(true);
   });
 
-  it("inlines the real 'S' mark beside it, in currentColor (ink, not brand green)", () => {
-    // Inlined (not <img>) so a public clone needs no binary and the CSP no img-src;
-    // currentColor so .brand-mark themes it to ink, keeping green for state only.
-    expect(html).toContain('class="brand-mark"');
-    expect(html).toContain(MARK_PATH_HEAD);
-    // No hardcoded brand-green fill leaked in from the source asset.
-    expect(html).not.toMatch(/fill="#6[bB]/);
-    // Every path in the lockup draws in currentColor.
-    expect([...html.matchAll(/<path\b[^>]*>/g)].every((m) => m[0].includes('fill="currentColor"'))).toBe(true);
+  it("uses the DESKTOP APP ICON as the mark, not a redrawn glyph", () => {
+    // The mark must be the app's own icon.png (the black rounded-square "S" badge)
+    // so it can never drift from the dock/installer icon. Referenced same-origin,
+    // which the CSP must permit.
+    expect(html).toMatch(/<img\b[^>]*class="brand-mark"[^>]*src="\.\/icon\.png"/);
+    expect(html).toMatch(/img-src 'self'/);
+    // The old inlined sapiom-mark glyph (a different, green mark) must be gone.
+    expect(html).not.toContain("M105.267 60.7219");
   });
 
   it("names the app 'Sapiom agent.studio', the same lockup as the SPA header", () => {
@@ -90,5 +88,11 @@ describe("copy-renderer.mjs puts every linked file in dist/renderer", () => {
 
   it("copies update.html itself alongside setup.html", () => {
     expect(copyScript).toContain("update.html");
+  });
+
+  it("copies the desktop app icon the mark references", () => {
+    // update.html <img src="./icon.png"> resolves to dist/renderer/icon.png only if
+    // the build copies it; a missing copy is a silent broken image.
+    expect(copyScript).toContain("icon.png");
   });
 });

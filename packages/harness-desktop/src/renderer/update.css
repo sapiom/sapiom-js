@@ -81,7 +81,7 @@ input {
   }
 }
 
-/* ---- Brand lockup: S-mark chip + wordmark + product + version ---- */
+/* ---- Brand lockup: app-icon badge + wordmark + product + version ---- */
 .brand-lockup {
   display: flex;
   align-items: center;
@@ -89,23 +89,16 @@ input {
   margin: 0 0 18px;
 }
 
-/* The neutral chip holding the "S" mark. --s2 fill + hairline, ink glyph. */
-.mark-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: var(--r-sm);
-  background: var(--s2);
-  border: 1px solid var(--line);
-  color: var(--ink);
-}
+/* The desktop app icon (assets/icon.png) — the black rounded-square "S" badge,
+   shown as-is so this window's mark matches the dock/installer icon exactly. The
+   PNG already carries its own rounded corners and fill; theme-independent, like
+   any app icon. --r-sm clips any stray edge pixels from the source margin. */
 .brand-mark {
   display: block;
-  height: 18px;
-  width: auto;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
 }
 
 /* The wordmark IS the name, so it is neutral ink. Centered with the chip + text

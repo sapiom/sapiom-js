@@ -78,6 +78,12 @@ for (const file of ["setup.html", "setup.css", "update.html", "update.css"]) {
   await cp(join(srcDir, file), join(outDir, file));
 }
 
+// The update window shows the desktop app icon (the black rounded-square "S" badge)
+// as its brand mark — the SAME asset electron-builder ships as the app/dock icon —
+// so the two can never drift. Copy it beside the renderer so update.html can
+// reference it same-origin (<img src="./icon.png">, covered by img-src 'self').
+await cp(join(root, "assets", "icon.png"), join(outDir, "icon.png"));
+
 const { dir: dsDir, seam } = resolveDesignSystemDir();
 
 // tokens.css is the one file flattened and renamed on the way out (the `ds-`
