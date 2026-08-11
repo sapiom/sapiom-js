@@ -99,6 +99,18 @@ describe("session record archive wiring", () => {
     expect(res.status).toBe(200);
   }
 
+  /**
+   * The ingest route ACKs before it persists (see ingest.ts: the 200 is sent
+   * and processing runs detached, so a slow server never stalls the agent's
+   * hook pipeline). A resolved hook() therefore doesn't mean the event has
+   * reached events.ndjson — wait for the bytes before acting on "stored".
+   */
+  async function eventsPersisted(needle: string): Promise<void> {
+    await vi.waitFor(async () => {
+      expect(await readFile(eventStorePath, "utf8")).toContain(needle);
+    });
+  }
+
   async function readArchived(harnessSessionId: string): Promise<SessionRecord | null> {
     try {
       return JSON.parse(await readFile(join(recordsRoot, `${harnessSessionId}.json`), "utf8")) as SessionRecord;
@@ -174,6 +186,13 @@ describe("session record archive wiring", () => {
 
     await hook(session.id, "SessionStart", { session_id: "agent-killed", cwd });
     await hook(session.id, "UserPromptSubmit", { prompt: "start something long" });
+
+    // The exit handler folds the archive from events.ndjson exactly once, and
+    // a fold that sees zero turns writes nothing (record-archive.ts) — so if
+    // the kill wins the race against the detached ingest processing, the
+    // archive never appears and no amount of waiting below can recover it.
+    // Killing is only meaningful after the prompt event is on disk.
+    await eventsPersisted("start something long");
 
     // No Stop, no SessionEnd: the agent is killed mid-turn, so the only signal
     // is the session's own transition to "exited".
