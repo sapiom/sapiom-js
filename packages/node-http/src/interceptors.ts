@@ -16,6 +16,8 @@ import {
 
 import type { TransactionPollingConfig } from "@sapiom/core";
 
+import { VERSION as SDK_VERSION } from "./_generated/version.js";
+
 /**
  * Authorization configuration
  */
@@ -33,8 +35,6 @@ export interface PaymentConfig {
   failureMode: FailureMode;
   polling?: TransactionPollingConfig;
 }
-
-const SDK_VERSION = "1.0.0";
 
 const DEFAULT_POLLING: Required<TransactionPollingConfig> = {
   timeout: 30000,
