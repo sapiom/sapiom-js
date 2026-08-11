@@ -3,7 +3,7 @@
  * running harness server (see MockApi in ./api).
  */
 import type { CanvasOverviewContent } from "../components/CanvasOverviewPanel";
-import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionRecord, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
+import type { AccountPlanView, HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionRecord, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
 
 const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
@@ -34,6 +34,15 @@ export const MOCK_CANVAS_OVERVIEWS: Record<string, CanvasOverviewContent> = {
 };
 
 export const MOCK_LAUNCH_DIR = "/Users/demo/acme-app";
+
+/** The rail's plan card in demo mode: the limit readout ("$12.40 / $50"), the
+ *  same pair the dashboard's balance card renders, so the demo shows the
+ *  card's fullest honest state. */
+export const MOCK_ACCOUNT_PLAN: AccountPlanView = {
+  plan: { name: "Free plan", status: "active" },
+  readout: { kind: "limit", usedUsd: 12.4, limitUsd: 50 },
+  source: "live",
+};
 
 /** The ONLY mock sessions with a real bundled canvas document under
  *  public/canvas/<id>/. The canvas pane must never mount an iframe for any

@@ -236,6 +236,13 @@ There are two ways an update reaches the user, and they are not interchangeable:
   nothing is broken), it clears the per-run "Later" set (asking is undeclining), and it answers
   `downloaded` for an update already on disk instead of the true-but-useless "up to date".
 
+A third surface rides the second: the rail's **"Update now" card** (`UpdateCard` in the SPA).
+`updater.ts` pushes `UPDATE_STATE` (receive-only, `onUpdateState` on the bridge) when a download
+finishes, when a failed apply clears `pending`, and on every `did-finish-load` — the card mirrors
+`pending` and survives a page reload because of that re-send. Its click is just
+`checkForUpdates()`: the pending branch re-raises the native dialog, so the card adds **no**
+install channel and the no-apply-channel rule below is untouched.
+
 The main window carries a preload (`src/preload/desktop.mts`) — it did not before. Watch out for:
 
 - **The SPA is not ours alone.** The identical bundle is served to a plain browser by
@@ -254,8 +261,10 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
   agent session, and page code shares an origin with agent-authored files. The confirmation is a
   native dialog only; an on-demand check with something already downloaded re-raises it. The
   `desktop-bridge` smoke check asserts the bridge exposes NOTHING beyond `appVersion`,
-  `checkForUpdates`, and `chooseDirectory` (the read-only native folder picker behind the SPA's
-  Browse button — it returns only a path and opens no file), so a future addition has to be deliberate.
+  `checkForUpdates`, `chooseDirectory` (the read-only native folder picker behind the SPA's
+  Browse button — it returns only a path and opens no file), and the two receive-only
+  subscriptions `onDeepLink` / `onUpdateState` (main → renderer pushes; nothing to invoke), so a
+  future addition has to be deliberate.
 - **Validate the IPC sender.** `isTrustedSender` (`trusted-sender.ts`, shared by the updater and the
   folder-picker channels) requires the main window's `webContents` *and* a top frame at `/`, because
   the main window could itself navigate to agent content on the same origin. It reads the window set

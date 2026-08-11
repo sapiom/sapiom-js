@@ -621,9 +621,10 @@ jobs:
 
             Sapiom checks for new versions on its own and downloads them in the background. When one
             is ready it asks whether you'd like to restart — **restarting ends any agent sessions
-            you have running**, so it never does it without asking. You can also check whenever you
-            like: click your account name at the bottom of the left sidebar and choose
-            **Check for updates**.
+            you have running**, so it never does it without asking. If you choose Later, an
+            **Update now** card stays at the bottom of the left sidebar so you can restart when it
+            suits you. You can also check whenever you like: click your account name at the bottom
+            of the left sidebar and choose **Check for updates**.
 
             > Automatic updates began in **0.1.2**. If you're on an older build, install this one by
             > hand once — after that it keeps itself current.

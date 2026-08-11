@@ -663,7 +663,8 @@ export type UiEventName =
   | "visualize.triggered"
   | "consent.changed"
   | "session.created"
-  | "mcp.install";
+  | "mcp.install"
+  | "plan.upgrade_clicked";
 
 export interface UiTrackRequest {
   /** Dot-canonical event name — one of the UiEventName literals. */
@@ -691,7 +692,8 @@ export type AnalyticsEventType =
   | "visualize.triggered"
   | "consent.changed"
   | "session.created"
-  | "mcp.install";
+  | "mcp.install"
+  | "plan.upgrade_clicked";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -901,6 +903,7 @@ export interface SessionRecord {
 // PATCH  /api/settings                  Partial<HarnessSettings> → HarnessSettings
 // GET    /api/templates                 → TemplateListResponse (relays core's gallery)
 // GET    /api/templates/:id             → TemplateDetailView
+// GET    /api/account/plan              → AccountPlanView (relays core's plan + usage readout)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
 // POST   /api/track                     UiTrackRequest → { ok: true }  (UI-interaction analytics)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
@@ -1236,6 +1239,31 @@ export interface TemplateDetailView extends TemplateSummary {
  */
 export interface TemplateListResponse {
   templates: TemplateSummary[];
+  source: "live" | "fallback";
+  /** Why the live fetch was not used, when `source` is `fallback`. */
+  reason?: "signed-out" | "unreachable";
+}
+
+/**
+ * The rail's plan card, assembled SERVER-SIDE from core reads so the SPA never
+ * sees the API key and never derives money figures itself (the card renders
+ * what it is told or nothing — it does not invent spend, quota, or a plan).
+ *
+ * `readout` is the one money line the card shows, in preference order:
+ *  - `limit`   — today's settled spend against the org's active spend-limit
+ *                rule, the same "$used / $cap" pair the dashboard's balance
+ *                card renders. Present only when such a rule exists.
+ *  - `balance` — the prepaid account's available USD, when no limit rule is
+ *                set but the ledger answered.
+ *  - `none`    — nothing trustworthy to show; the card omits the line (and
+ *                hides entirely when `plan` is also null).
+ */
+export interface AccountPlanView {
+  plan: { name: string; status: "active" | "inactive" } | null;
+  readout:
+    | { kind: "limit"; usedUsd: number; limitUsd: number }
+    | { kind: "balance"; availableUsd: number }
+    | { kind: "none" };
   source: "live" | "fallback";
   /** Why the live fetch was not used, when `source` is `fallback`. */
   reason?: "signed-out" | "unreachable";

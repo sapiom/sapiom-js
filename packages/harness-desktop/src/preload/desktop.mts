@@ -18,8 +18,10 @@ import {
   CHOOSE_DIRECTORY,
   DEEP_LINK_NAVIGATE,
   UPDATE_CHECK,
+  UPDATE_STATE,
   type DeepLinkTarget,
   type UpdateCheckOutcome,
+  type UpdateStatePayload,
 } from "../main/ipc.js";
 
 const api = {
@@ -50,6 +52,22 @@ const api = {
     ipcRenderer.on(DEEP_LINK_NAVIGATE, listener);
     return () => {
       ipcRenderer.removeListener(DEEP_LINK_NAVIGATE, listener);
+    };
+  },
+  /**
+   * Subscribe to downloaded-update state (main → renderer push); returns an
+   * unsubscribe fn. RECEIVE-only, like onDeepLink: it drives the rail's
+   * "Update now" card and nothing else. The current state is re-pushed on
+   * every page load, so subscribing at mount is enough — there is nothing to
+   * ask for. Applying the update still goes through checkForUpdates(), whose
+   * pending branch re-raises the NATIVE restart dialog (see ipc.ts — page code
+   * has no restart channel, deliberately).
+   */
+  onUpdateState(callback: (state: UpdateStatePayload) => void): () => void {
+    const listener = (_event: unknown, state: UpdateStatePayload): void => callback(state);
+    ipcRenderer.on(UPDATE_STATE, listener);
+    return () => {
+      ipcRenderer.removeListener(UPDATE_STATE, listener);
     };
   },
   // No restart method, on purpose — see ipc.ts. An update that is ready to install

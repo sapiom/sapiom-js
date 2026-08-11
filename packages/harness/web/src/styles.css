@@ -703,6 +703,7 @@ input {
 .workspace-row-action,
 .session-tab-close,
 .deploy-status-dismiss,
+.plan-card-menu-btn,
 .toast-dismiss {
   box-sizing: border-box;
   display: inline-flex;
@@ -1224,9 +1225,10 @@ input {
   padding: var(--sp3) var(--sp2);
 }
 
-/* Footer: ONE continuous block, not divided bands — the plan card (demo only)
-   then the account row, told apart by a gap on the shared rail inset. No
-   border-top (the rail is a single surface) and no inter-row rule. */
+/* Footer: a short stack — zero, one, or two CARDS (update, then plan), then
+   the flat account row — told apart by a gap on the shared rail inset. Still
+   no border-top and no inter-row rule: the rail stays a single surface, and
+   the cards sit ON it rather than banding it. */
 .rail-footer {
   flex: 0 0 auto;
   display: flex;
@@ -1244,35 +1246,128 @@ input {
   padding: 0;
 }
 
-/* The plan summary is compact — it doesn't claim a full bar height. */
-.plan-row {
+/* The card rows size to their card, not to a full bar height. */
+.plan-row,
+.update-row {
   min-height: 0;
 }
 
-/* Free plan · Active + one way out. NOT a shaded card — a plain row, aligned
-   to the same inset as the account row below it (no box, no background). Only
-   the CTA carries a surface (the shared .pill); the ↗ trails it. */
-.rail-plan-card {
+/* The footer cards: the ONE deliberate exception to the flat-rail rule
+   (product mockup, 2026-08). Update card and plan card share this shaded
+   plane — an ink wash rather than a surface token, so it reads on the rail's
+   base in both themes without minting a new plane. Everything else in the
+   rail stays flat; don't grow this recipe more members without the same
+   deliberation that added these two. */
+.rail-footer-card {
   display: flex;
   align-items: center;
   gap: var(--sp2);
   width: 100%;
-  min-height: var(--control-h);
-  padding: 0;
+  min-height: var(--row-h-xs);
+  padding: var(--sp2) var(--sp3);
+  background: var(--surface-inset);
+  border: 0;
+  border-radius: var(--radius);
   color: var(--text-dim);
   text-decoration: none;
-  transition: color var(--fast) var(--ease);
+  text-align: left;
 }
 
-.rail-plan-card:hover {
+/* Plan name over the money line; the pair truncates before the CTA moves. */
+.plan-card-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.plan-card-name {
+  font-size: var(--type-label);
+  font-weight: 510;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Machine value: mono + tabular so "$12.40 / $50" doesn't wobble as it
+   refreshes. */
+.plan-card-readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* The Upgrade CTA rides the shared .pill surface but at a clickable height —
+   a tappable pill never collapses to text height (--chip-h floor). Neutral on
+   purpose: green is success/live, not a sales color. */
+.plan-card-upgrade {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: calc(var(--chip-h) - var(--sp1));
+  padding: 0 var(--sp3);
+}
+
+.plan-card-upgrade:hover {
   color: var(--text);
 }
 
-.rail-plan-card > .pill {
-  margin-left: auto;
+.plan-card-upgrade:focus-visible,
+.plan-card-menu-btn:focus-visible,
+button.rail-footer-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
-.rail-plan-card > svg:last-child {
+.plan-card-menu-btn {
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius);
+  color: var(--text-faint);
+}
+
+.plan-card-menu-btn:hover,
+.plan-card-menu-btn[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--nested-shade);
+}
+
+/* The update card is one whole-card button: bold verb, mono target version,
+   trailing chevron. The click hands off to the desktop app's NATIVE restart
+   dialog (there is no in-page apply, by design — see lib/desktop.ts). */
+button.rail-footer-card {
+  cursor: pointer;
+  transition: background-color var(--fast) var(--ease);
+}
+
+button.rail-footer-card:hover {
+  background: var(--nested-shade);
+}
+
+.update-card-label {
+  font-size: var(--type-label);
+  font-weight: 590;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.update-card-version {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-card > svg:last-child,
+.plan-card > svg:last-child {
   flex: 0 0 auto;
   color: var(--text-faint);
 }
@@ -1357,6 +1452,7 @@ input {
 .canvas-detail-menu,
 .canvas-run-menu,
 .composer-library,
+.plan-menu,
 .profile-menu,
 .session-menu,
 .settings-popover,
@@ -1373,11 +1469,17 @@ input {
   animation: pop-in var(--transition-fast) ease-out;
 }
 
+/* The plan card's overflow menu: menu-item rows need a real column to fill. */
+.plan-menu {
+  min-width: 12rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .canvas-detail-menu,
   .canvas-run-menu,
   .composer-library,
   .connect-card,
+  .plan-menu,
   .profile-menu,
   .session-menu,
   .settings-popover,

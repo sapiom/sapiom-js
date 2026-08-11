@@ -18,12 +18,14 @@ import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
 import { StartDialog } from "./StartDialog";
-import { DEMO_ACCOUNT_PLAN, PlanCard } from "./PlanCard";
+import { PlanCard } from "./PlanCard";
+import { UpdateCard } from "./UpdateCard";
 import { MenuChoice } from "./MenuChoice";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
+import { useAccountPlan } from "../lib/use-account-plan";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
@@ -391,6 +393,22 @@ export function WorkflowsRail({
   settingsOpen,
   onSetSettingsOpen,
 }: WorkflowsRailProps): JSX.Element {
+  // The footer's plan card. Keyed on the auth state the rail already receives,
+  // so sign-in/out re-reads without a second events subscription. MockApi
+  // serves the demo fixture, which is what the static Pages build renders.
+  const accountPlan = useAccountPlan(authenticated);
+  // The footer's "Update now" card — exists only while the desktop app says a
+  // downloaded update is waiting. The push protocol re-sends current state on
+  // every page load, so subscribing at mount is the whole handshake; a browser
+  // (no bridge) or an older desktop build (no subscription) never sets this.
+  const [updateReady, setUpdateReady] = useState<{ version: string } | null>(null);
+  useEffect(() => {
+    const bridge = getDesktopBridge();
+    if (!bridge?.onUpdateState) return;
+    return bridge.onUpdateState((state) => {
+      setUpdateReady(state.kind === "downloaded" ? { version: state.version } : null);
+    });
+  }, []);
   // "Add existing agents" opens the detection-driven StartDialog (register a
   // folder that already holds an agent project). "Create new" goes to the
   // composer home instead. connectTriggerRef anchors Escape focus return.
@@ -892,10 +910,18 @@ export function WorkflowsRail({
       </div>
 
       <div className="rail-footer">
-        {/* The plan summary sits in the SAME footer block as the account row
-            (no divider). Only the demo fixture supplies a plan; live mode
-            passes null and the card renders nothing. */}
-        <PlanCard plan={isMockMode() ? DEMO_ACCOUNT_PLAN : null} />
+        {/* Update card over plan card over account row — all in the SAME
+            footer block. The update card exists only while the desktop app
+            holds a downloaded update (see the onUpdateState subscription). */}
+        {updateReady && (() => {
+          const bridge = getDesktopBridge();
+          return bridge ? (
+            <UpdateCard desktop={bridge} version={updateReady.version} onToast={onToast} />
+          ) : null;
+        })()}
+        {/* The plan summary: the server's /api/account/plan relay (MockApi's
+            fixture in demo); a view with nothing to state renders nothing. */}
+        <PlanCard plan={accountPlan} />
         <ProfileRow
           onToast={onToast}
           authenticated={authenticated}

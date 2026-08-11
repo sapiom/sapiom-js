@@ -662,8 +662,9 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       " check: typeof window.sapiomDesktop?.checkForUpdates," +
       " choose: typeof window.sapiomDesktop?.chooseDirectory," +
       " deep: typeof window.sapiomDesktop?.onDeepLink," +
+      " updateState: typeof window.sapiomDesktop?.onUpdateState," +
       " version: window.sapiomDesktop?.appVersion })",
-  )) as { bridge: string; check: string; choose: string; deep: string; version: unknown };
+  )) as { bridge: string; check: string; choose: string; deep: string; updateState: string; version: unknown };
 
   if (shape.bridge !== "object") {
     throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
@@ -684,14 +685,20 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   if (shape.deep !== "function") {
     throw new Error(`bridge incomplete — onDeepLink missing: ${JSON.stringify(shape)}`);
   }
-  // The bridge must stay MINIMAL as well as present. Only two members are allowed
-  // beyond appVersion: checkForUpdates (no destructive counterpart — applying an
-  // update is a native dialog, see ipc.ts) and chooseDirectory (returns only a
-  // user-picked path, opens no file, and is itself gated by isTrustedSender). A
+  // Shape-only again: onUpdateState is the other receive-only subscription
+  // (drives the rail's "Update now" card; the apply path stays native).
+  if (shape.updateState !== "function") {
+    throw new Error(`bridge incomplete — onUpdateState missing: ${JSON.stringify(shape)}`);
+  }
+  // The bridge must stay MINIMAL as well as present. Beyond appVersion the only
+  // members allowed are checkForUpdates (no destructive counterpart — applying
+  // an update is a native dialog, see ipc.ts), chooseDirectory (returns only a
+  // user-picked path, opens no file, and is itself gated by isTrustedSender),
+  // and the two receive-only subscriptions (onDeepLink, onUpdateState). A
   // restart method, by contrast, would let same-origin agent-authored content end
   // every running session — so anything new here has to be a deliberate addition.
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink')",
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);
@@ -741,7 +748,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }

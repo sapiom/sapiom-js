@@ -121,6 +121,7 @@ import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
 import { createTemplatesRouter } from "./templates.js";
+import { createAccountRouter } from "./account.js";
 import { createActionsRouter } from "./actions.js";
 import {
   createAuthRouter,
@@ -1291,6 +1292,14 @@ export const startServer = async (
   // baseUrl omitted: the router self-defaults via resolveCoreBaseUrl().
   app.use(
     createTemplatesRouter({
+      apiKey: apiKeyProvider,
+    }),
+  );
+  // The rail's plan card, relayed from CORE for the same reason as the gallery
+  // above: the key stays server-side and the card can't disagree with the
+  // dashboard's billing views. baseUrl self-defaults via resolveCoreBaseUrl().
+  app.use(
+    createAccountRouter({
       apiKey: apiKeyProvider,
     }),
   );

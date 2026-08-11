@@ -6,6 +6,7 @@
  * server.
  */
 import type {
+  AccountPlanView,
   AdoptSessionRequest,
   AppState,
   BindWorkflowRequest,
@@ -32,6 +33,7 @@ import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 import { getTheme } from "./theme";
 
 import {
+  MOCK_ACCOUNT_PLAN,
   MOCK_FS_TREE,
   MOCK_HARNESSES,
   MOCK_HISTORY,
@@ -278,6 +280,9 @@ export interface HarnessApi {
   listTemplates(): Promise<TemplateListResponse>;
   /** One template's manifest + declared graph. Rejects 404 on an unknown id. */
   getTemplate(id: string): Promise<TemplateDetailView>;
+  /** The rail's plan card view, relayed by the server from core (key stays
+   *  server-side). Never rejects on a degraded read — inspect `source`. */
+  getAccountPlan(): Promise<AccountPlanView>;
   /** Live run render state (upstream feat/harness-runtime-analytics):
    *  GET /api/runs/:id/state = inspect -> decode -> renderRunState. Poll
    *  after an execution.started bus message until the run is terminal. */
@@ -510,6 +515,10 @@ class RealApi implements HarnessApi {
     return this.request<TemplateDetailView>(
       `/api/templates/${encodeURIComponent(id)}`,
     );
+  }
+
+  getAccountPlan(): Promise<AccountPlanView> {
+    return this.request<AccountPlanView>("/api/account/plan");
   }
 
   getRunState(executionId: string): Promise<RunView> {
@@ -1261,6 +1270,11 @@ class MockApi implements HarnessApi {
   async listTemplates(): Promise<TemplateListResponse> {
     await delay(200);
     return { templates: MOCK_TEMPLATES, source: "live" };
+  }
+
+  async getAccountPlan(): Promise<AccountPlanView> {
+    await delay(150);
+    return MOCK_ACCOUNT_PLAN;
   }
 
   async getTemplate(id: string): Promise<TemplateDetailView> {

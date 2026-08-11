@@ -51,6 +51,25 @@ describe("getDesktopBridge", () => {
       expect(getDesktopBridge({ sapiomDesktop: junk })).toBeNull();
     }
   });
+
+  it("degrades onUpdateState to undefined on an older desktop build", () => {
+    // The subscription is optional: without it the "Update now" card simply
+    // never renders — the bridge itself must still be accepted.
+    const older = getDesktopBridge({
+      sapiomDesktop: { appVersion: "0.2.0", checkForUpdates: noop },
+    });
+    expect(older).not.toBeNull();
+    expect(older?.onUpdateState).toBeUndefined();
+
+    const current = getDesktopBridge({
+      sapiomDesktop: {
+        appVersion: "0.3.0",
+        checkForUpdates: noop,
+        onUpdateState: () => () => {},
+      },
+    });
+    expect(typeof current?.onUpdateState).toBe("function");
+  });
 });
 
 describe("describeUpdateOutcome", () => {

@@ -123,6 +123,28 @@ export interface DeepLinkTemplateTarget {
  */
 
 /**
+ * main → renderer (push): the downloaded-update state changed, or a freshly
+ * loaded page is being told the current state. Carries `UpdateStatePayload`.
+ *
+ * Like DEEP_LINK_NAVIGATE, a SEND rather than an invoke — it opens no attack
+ * surface; it only tells the SPA whether its "Update now" card should exist.
+ * The card's CLICK goes through the existing UPDATE_CHECK invoke, whose
+ * pending branch re-raises the native restart dialog — so the no-apply-channel
+ * rule above is untouched: page code still cannot end a session.
+ *
+ * Re-sent on every `did-finish-load` because renderer state dies on reload but
+ * the main process's `pending` does not — without the re-send, a reloaded SPA
+ * would silently lose the card until the next download event.
+ */
+export const UPDATE_STATE = "update:state";
+
+/** What the SPA needs to render (or retract) its "Update now" card. `none`
+ *  retracts it — e.g. an apply failed and the pending update was cleared. */
+export type UpdateStatePayload =
+  | { kind: "none" }
+  | { kind: "downloaded"; version: string };
+
+/**
  * The result of an on-demand check.
  *
  * Deliberately STRUCTURED rather than a ready-made sentence: the renderer owns

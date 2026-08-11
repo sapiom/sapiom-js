@@ -38,6 +38,16 @@
  *
  * Runs against `vite dev` with VITE_MOCK=1 (playwright.config.ts) — no
  * harness server required.
+ *
+ * DELIBERATE EXEMPTION (2026-08): the rail FOOTER's plan card renders an
+ * account-level readout ("$12.40 / $50" — spend vs the org's spend-limit
+ * rule, served by GET /api/account/plan, the dashboard's own pair). That is
+ * an account-billing surface, not the per-run/per-step cost UI this suite
+ * guards against reintroducing. The scoped "$" walks above intentionally do
+ * not cover `.rail-footer`; the DOM-wide class/testid bans and the
+ * /spend|/transactions network sentinel still apply to it (the card uses
+ * `plan-*` names and its data rides /api/account/plan). See
+ * e2e/rail-footer-cards.spec.ts for that card's own coverage.
  */
 import { expect, test, type Page } from "@playwright/test";
 

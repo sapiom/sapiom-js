@@ -76,6 +76,7 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
   "consent.changed",
   "session.created",
   "mcp.install",
+  "plan.upgrade_clicked",
 ];
 
 /**

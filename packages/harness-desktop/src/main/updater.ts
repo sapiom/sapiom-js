@@ -33,7 +33,7 @@ import { BrowserWindow, app, dialog, ipcMain } from "electron";
 // CJS: default-import then read the property. See trap 1 above.
 import electronUpdater from "electron-updater";
 import type { UpdateInfo } from "electron-updater";
-import { UPDATE_CHECK, type UpdateCheckOutcome } from "./ipc.js";
+import { UPDATE_CHECK, UPDATE_STATE, type UpdateCheckOutcome, type UpdateStatePayload } from "./ipc.js";
 // Shared with the folder-picker channel — the "only the SPA at `/` may ask" rule
 // lives in one place rather than being copied per privileged channel.
 import { isTrustedSender } from "./trusted-sender.js";
@@ -110,6 +110,23 @@ let checkInFlight: Promise<UpdateCheckOutcome> | null = null;
  * for Squirrel.Mac's staging step, not a guess at a happy path.
  */
 const HANDOFF_GRACE_MS = 15 * 1_000;
+
+/**
+ * Tell the SPA whether its "Update now" card should exist — the state that
+ * mirrors `pending`. Push-only (see UPDATE_STATE in ipc.ts): the card's click
+ * comes back through the existing UPDATE_CHECK invoke, so this adds no
+ * privileged surface. Called on `update-downloaded`, on a failed apply (to
+ * retract), and on every `did-finish-load` so a reloaded page re-learns what
+ * the main process still knows.
+ */
+function pushUpdateState(): void {
+  const win = host?.mainWindow;
+  if (!win || win.isDestroyed()) return;
+  const payload: UpdateStatePayload = pending
+    ? { kind: "downloaded", version: pending.version }
+    : { kind: "none" };
+  win.webContents.send(UPDATE_STATE, payload);
+}
 
 /**
  * Hand off to the platform installer, having first closed the harness server.
@@ -226,6 +243,9 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
       // say what and why. Their sessions are still alive in the refuse-up-front
       // case, which is exactly what the message needs to tell them.
       pending = null;
+      // The SPA's card mirrors `pending` — retract it, or it wedges on a
+      // "ready to install" that can never install.
+      pushUpdateState();
       await dialog.showMessageBox(deps.mainWindow, {
         type: "warning",
         buttons: ["OK"],
@@ -326,6 +346,10 @@ export function initUpdater(deps: UpdaterDeps): void {
   // — so skipping registration for a build with updates disabled would turn a
   // clear "updates are off in this build" into an opaque renderer-side error.
   registerHandlers();
+  // Also regardless of the gate: a reload wipes renderer state but not
+  // `pending`, so every finished load re-learns the current update state (an
+  // honest `none` when updates are off — the card simply never appears).
+  deps.mainWindow.webContents.on("did-finish-load", pushUpdateState);
   try {
     startUpdater(deps);
   } catch (err) {
@@ -399,6 +423,9 @@ function startUpdater(deps: UpdaterDeps): void {
     // on disk and applying it is a restart away — which is what the SPA's button
     // needs to know to say "restart" instead of "up to date".
     pending = info;
+    // The rail's "Update now" card appears now and OUTLIVES the dialog below:
+    // a user who chooses "Later" keeps a visible way back to the restart.
+    pushUpdateState();
     void offerUpdate(info, deps).catch((err: unknown) => {
       log(`failed to apply ${info.version}: ${err instanceof Error ? err.message : String(err)}`);
     });
