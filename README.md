@@ -9,7 +9,8 @@
 TypeScript SDK for **building, running, and operating AI agents on Sapiom**.
 Author agents as typed step graphs, call Sapiom paid tools (sandboxes, git
 repos, coding models, search, file storage, …) directly from your code, and ship
-them to the Sapiom engine from the CLI or your coding agent's MCP.
+them to the Sapiom engine from the CLI, your coding agent's MCP, or the
+**Sapiom Studio** desktop app.
 
 ## 📦 Packages
 
@@ -23,6 +24,18 @@ This is a monorepo of focused packages. Install only what you need.
 | [@sapiom/tools](./packages/tools) | [![npm](https://img.shields.io/npm/v/@sapiom/tools)](https://www.npmjs.com/package/@sapiom/tools) | Typed client for Sapiom capabilities — the same tools your agents call, callable from your code |
 | [@sapiom/cli](./packages/cli)     | [![npm](https://img.shields.io/npm/v/@sapiom/cli)](https://www.npmjs.com/package/@sapiom/cli)     | Command line: scaffold, validate, deploy, and schedule agents                                   |
 | [@sapiom/mcp](./packages/mcp)     | [![npm](https://img.shields.io/npm/v/@sapiom/mcp)](https://www.npmjs.com/package/@sapiom/mcp)     | Local developer MCP server (`sapiom-dev`) — build & operate agents from your coding agent       |
+
+### Agent Studio
+
+Agent Studio runs your coding agent (Claude Code or Codex) in a
+Sapiom-configured environment: MCP pre-wired, agent projects tracked, one-click
+deploy/run, and a live canvas for previews.
+
+| Package                                             | Version                                                                                                             | Description                                                                                     |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [@sapiom/agent-studio](./packages/agent-studio)     | [![npm](https://img.shields.io/npm/v/@sapiom/agent-studio)](https://www.npmjs.com/package/@sapiom/agent-studio)     | Agent Studio launcher — `npx @sapiom/agent-studio@latest`                                       |
+| [@sapiom/harness](./packages/harness)               | [![npm](https://img.shields.io/npm/v/@sapiom/harness)](https://www.npmjs.com/package/@sapiom/harness)               | The Agent Studio implementation — a CLI-launched local web app                                  |
+| [@sapiom/harness-desktop](./packages/harness-desktop) | private                                                                                                            | **Sapiom Studio** desktop app (Electron) — ships as signed installers, not to npm               |
 
 ### Runtime internals
 
@@ -48,6 +61,19 @@ cd my-app
 npx @sapiom/cli agents check         # validate locally (bundle, manifest, graph)
 npx @sapiom/cli agents deploy        # build and ship
 ```
+
+### Build with your coding agent in Agent Studio
+
+One command checks your environment, signs you in, and opens Agent Studio with
+your coding agent running in an embedded terminal:
+
+```bash
+npx @sapiom/agent-studio@latest [dir]
+```
+
+Prefer a native app? **Sapiom Studio** is the one-click desktop host for the
+same experience — download installers (macOS, Windows, Linux) from
+[GitHub Releases](https://github.com/sapiom/sapiom-js/releases).
 
 ### Author an agent
 
@@ -127,6 +153,7 @@ claude mcp add sapiom-dev -- npx -y @sapiom/mcp
 - **[@sapiom/tools](./packages/tools/README.md)** — capability client
 - **[@sapiom/cli](./packages/cli/README.md)** — command line
 - **[@sapiom/mcp](./packages/mcp/README.md)** — developer MCP
+- **[Agent Studio](./packages/harness/README.md)** — local app for building with your coding agent
 
 ## 🏗️ Package Architecture
 
@@ -140,6 +167,10 @@ claude mcp add sapiom-dev -- npx -y @sapiom/mcp
             └── @sapiom/mcp     Local developer MCP (sapiom-dev)
 
 @sapiom/tools            Typed capability client (sandboxes, repos, models, …)
+
+@sapiom/harness          Agent Studio (local web app; launched via @sapiom/agent-studio)
+    ↑
+    └── @sapiom/harness-desktop   Sapiom Studio desktop app (Electron host, ships as installers)
 ```
 
 ## 🛠️ Development
@@ -184,13 +215,24 @@ pnpm release            # build and publish to npm
 
 ## 🤝 Contributing
 
-Contributions welcome! Please read our [Contributing Guide](./CONTRIBUTING.md) first.
+Contributions welcome! Please read our [Contributing Guide](./CONTRIBUTING.md)
+first — it explains which changes can go straight to a pull request (focused
+bug fixes, documentation corrections, single-template additions) and which need
+a maintainer-agreed [issue](https://github.com/sapiom/sapiom-js/issues) before
+you invest in them (new features, public API changes, new dependencies,
+cross-package work).
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+In short:
+
+1. Fork the repository and branch from the latest `main`
+2. Keep the change focused on one problem, with tests for changed behavior
+3. Run the root checks (`pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm test`)
+4. Add a [changeset](./CONTRIBUTING.md#changesets) when a published package's behavior or API changes
+5. Open a pull request and complete every applicable section of the template
+
+AI-assisted contributions are welcome but must be disclosed, reviewed, and
+validated by the contributor. For suspected security vulnerabilities, follow
+the [Security Policy](./SECURITY.md) instead of opening a public issue.
 
 ## 📄 License
 
