@@ -136,6 +136,9 @@ function pushUpdateState(): void {
   const payload: UpdateStatePayload = pending
     ? { kind: "downloaded", version: pending.version }
     : { kind: "none" };
+  // Rare and load-bearing when a user reports "the card never shows" — same
+  // rationale as every other line this module logs.
+  log(`card state → ${payload.kind === "downloaded" ? payload.version : "none"}`);
   win.webContents.send(UPDATE_STATE, payload);
 }
 

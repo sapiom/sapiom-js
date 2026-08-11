@@ -24,6 +24,21 @@ import {
   type UpdateStatePayload,
 } from "../main/ipc.js";
 
+/**
+ * UPDATE_STATE is consumed here in the preload, not lazily on subscribe: the
+ * main process pushes on `did-finish-load`, which fires BEFORE the SPA's mount
+ * effects run, so a subscription-time `ipcRenderer.on` would miss that push
+ * and a reload during a pending update would silently drop the "Update now"
+ * card. The preload evaluates before any page code, so listening from here and
+ * replaying the latest payload to each new subscriber closes the gap.
+ */
+let latestUpdateState: UpdateStatePayload | null = null;
+const updateStateSubscribers = new Set<(state: UpdateStatePayload) => void>();
+ipcRenderer.on(UPDATE_STATE, (_event, state: UpdateStatePayload) => {
+  latestUpdateState = state;
+  for (const subscriber of updateStateSubscribers) subscriber(state);
+});
+
 const api = {
   /** The desktop app's version — NOT the harness's (the SPA already knows that one). */
   appVersion:
@@ -57,17 +72,20 @@ const api = {
   /**
    * Subscribe to downloaded-update state (main → renderer push); returns an
    * unsubscribe fn. RECEIVE-only, like onDeepLink: it drives the rail's
-   * "Update now" card and nothing else. The current state is re-pushed on
-   * every page load, so subscribing at mount is enough — there is nothing to
-   * ask for. Applying the update still goes through checkForUpdates(), whose
+   * "Update now" card and nothing else. Subscribing at mount is the whole
+   * handshake: the preload listens from before any page code runs and REPLAYS
+   * the latest state to a new subscriber — the main process's re-push on
+   * `did-finish-load` lands in the gap before React's effects have subscribed,
+   * so without the replay a reload while an update is pending would lose the
+   * card. Applying the update still goes through checkForUpdates(), whose
    * pending branch re-raises the main-process-owned update window (see
    * ipc.ts — page code has no restart channel, deliberately).
    */
   onUpdateState(callback: (state: UpdateStatePayload) => void): () => void {
-    const listener = (_event: unknown, state: UpdateStatePayload): void => callback(state);
-    ipcRenderer.on(UPDATE_STATE, listener);
+    updateStateSubscribers.add(callback);
+    if (latestUpdateState) callback(latestUpdateState);
     return () => {
-      ipcRenderer.removeListener(UPDATE_STATE, listener);
+      updateStateSubscribers.delete(callback);
     };
   },
   // No restart method, on purpose — see ipc.ts. An update that is ready to install

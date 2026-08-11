@@ -76,10 +76,11 @@ export interface DesktopBridge {
   onDeepLink?: (callback: (target: DeepLinkTarget) => void) => () => void;
   /**
    * Subscribe to downloaded-update state (main → renderer push); returns an
-   * unsubscribe fn. Drives the rail's "Update now" card: the desktop app
-   * re-pushes the current state on every page load, so subscribing at mount is
-   * the whole protocol. Optional for the usual reason — older desktop builds
-   * don't expose it, and a browser has no bridge; the card then never renders.
+   * unsubscribe fn. Drives the rail's "Update now" card: the desktop preload
+   * buffers the latest push and replays it on subscribe (the load-time re-push
+   * lands before mount effects run), so subscribing at mount is the whole
+   * protocol. Optional for the usual reason — older desktop builds don't
+   * expose it, and a browser has no bridge; the card then never renders.
    */
   onUpdateState?: (callback: (state: UpdateStatePayload) => void) => () => void;
   // No restart method: applying an update is confirmed in the desktop app's own
