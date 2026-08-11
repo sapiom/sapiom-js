@@ -140,6 +140,19 @@ function pushUpdateState(): void {
 }
 
 /**
+ * Dev-only preview twin of SAPIOM_PREVIEW_UPDATE_WINDOW (see index.ts): fake a
+ * downloaded update so the rail's "Update now" card can be eyeballed without a
+ * real release. Only `version` is ever read off `pending` on this path (the
+ * card push and the on-demand check's `downloaded` answer), so the sparse cast
+ * is honest — and clicking the card in an unpackaged build answers `disabled`,
+ * which is the truth. Never called outside the devMode gate.
+ */
+export function previewDownloadedUpdateCard(version: string): void {
+  pending = { version } as UpdateInfo;
+  pushUpdateState();
+}
+
+/**
  * Hand off to the platform installer, having first closed the harness server.
  *
  * Two hard-won constraints pull in opposite directions here:

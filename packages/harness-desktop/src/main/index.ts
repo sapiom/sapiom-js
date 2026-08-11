@@ -18,7 +18,7 @@ import { resolveInstanceLockAction } from "./single-instance.js";
 import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
 import { runSmokeChecks, reportSmoke } from "./smoke.js";
-import { initUpdater } from "./updater.js";
+import { initUpdater, previewDownloadedUpdateCard } from "./updater.js";
 import { initDialogs } from "./dialogs.js";
 import { setTrustedWindow } from "./trusted-sender.js";
 import { parseDeepLink, deepLinkFromArgv, DEEP_LINK_SCHEME } from "./deep-link.js";
@@ -197,6 +197,13 @@ if (lock.action === "fail") {
             await saveUpdatePrefs({ ...(await loadUpdatePrefs(prefsPath)), autoUpdate: on }, prefsPath);
           },
         }).then((choice) => console.log(`[preview] update window choice: ${choice}`));
+      }
+      // Same idea for the rail's "Update now" card: fake a downloaded update so
+      // the card renders (the did-finish-load re-send covers a page still
+      // loading). Clicking it answers `disabled` in an unpackaged build — the
+      // card's look is what this previews, not the apply path.
+      if (devMode && process.env.SAPIOM_PREVIEW_UPDATE_CARD) {
+        previewDownloadedUpdateCard("0.0.0-preview");
       }
       if (smokeMode) {
         // Verify the packaged bundle, then leave — never wait for a user. The
