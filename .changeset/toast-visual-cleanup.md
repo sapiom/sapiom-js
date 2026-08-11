@@ -2,4 +2,4 @@
 "@sapiom/harness": patch
 ---
 
-Clean up the bottom toast: drop the red left-edge accent stripe and move the background from `--bg-2` to `--bg-1`, the same shade as the foreground panes, so every toast (macro failures, copy confirmations, deploy outcomes) reads as a quiet floating surface instead of an alert bar.
+Redesign the bottom toast as a quiet glass chip. The red left-edge accent stripe is gone (it error-coded even success copy); the surface is now translucent `--bg-1` over a backdrop blur with a neutral ink hairline and soft layered shadow. It enters on the shared spring ease, plays a short exit animation on dismissal, pauses its auto-dismiss timer while hovered or focused, and the dismiss control is the shared 22px icon button with a hover wash.

@@ -6934,6 +6934,12 @@ input {
   font-size: var(--type-micro);
 }
 
+/* A quiet glass chip: translucent pane surface over a backdrop blur, a
+   neutral ink hairline, and a soft two-layer shadow — floats without
+   shouting, in both themes. Hue never rides the chrome (a toast can carry
+   success or failure copy; the words say which). Enters on the shared
+   spring ease from below; `.is-leaving` plays the exit before Toast.tsx
+   unmounts on animationend. */
 .toast {
   position: fixed;
   left: 50%;
@@ -6941,41 +6947,88 @@ input {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp2);
   max-width: 480px;
-  padding: 10px 14px;
-  background: var(--bg-1);
-  border: 1px solid var(--border-strong);
+  padding: 8px 8px 8px 16px;
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  backdrop-filter: blur(16px) saturate(1.3);
+  border: 1px solid color-mix(in srgb, var(--ink) 13%, transparent);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent),
+    var(--shadow-md);
   z-index: 100;
-  animation: pop-in var(--transition-fast) ease-out;
+  animation: toast-in 0.34s var(--ease) both;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .toast {
+    background: var(--bg-1);
+  }
+}
+
+.toast.is-leaving {
+  animation: toast-out 0.18s ease-in both;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.98);
+  }
+}
+
+/* Near-zero duration instead of `none` so animationend still fires and the
+   leaving state resolves to the unmount. */
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast.is-leaving {
+    animation-duration: 0.01s;
+  }
 }
 
 .toast-message {
   color: var(--text);
   font-size: var(--type-ui);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .toast-dismiss {
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: var(--type-h2);
-  line-height: 1;
   cursor: pointer;
   border-radius: var(--radius-sm);
-  transition: color var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .toast-dismiss:hover {
   color: var(--text);
+  background: var(--bg-hover);
 }
 
 .toast-dismiss:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 /* Prompt bar ------------------------------------------------------------ */
