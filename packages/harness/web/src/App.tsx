@@ -304,13 +304,24 @@ export const App = (): JSX.Element => {
   // both directions.
   const [paneSliding, setPaneSliding] = useState(false);
   const rightCollapsedRef = useRef(false);
-  // The (session + bound workflow) whose EMPTY board we've already auto-collapsed.
+  // The (session + bound workflow) whose EMPTY board is settled: either we
+  // auto-collapsed it, or the user has opened the pane over it themselves.
   // onCanvasState fires on every probe/reload/re-render; content always reveals
   // (even a pane the user had collapsed), but an empty board collapses only ONCE
-  // per (session, binding) — so a redundant "still empty" probe can't re-close a
-  // pane the user just expanded (the right-pane e2e race), while a genuine
+  // per (session, binding) — so a "still empty" probe can't re-close a pane the
+  // user opened, whether it arrives before or after the click, while a genuine
   // session/binding change still collapses.
   const emptyCollapsedKeyRef = useRef<string | null>(null);
+  // The session whose pane the user opened BY HAND — an empty board never
+  // re-closes it, however late that session's probe lands. The (session,
+  // binding) key above can't carry this: the click routinely happens while the
+  // session it belongs to is still being created (the agent's Start button
+  // reveals the workbench before `activeSessionId` exists), and the probe then
+  // arrives under a *different* key and slams the pane shut. So a claim made
+  // with no active session is PENDING: it adopts whichever session reports
+  // next. Any later session re-arms the collapse.
+  const manualExpandSessionRef = useRef<string | null>(null);
+  const manualExpandPendingRef = useRef(false);
   const paneSlidingRef = useRef(false);
   const paneElRef = useRef<HTMLDivElement | null>(null);
   const paneObserverRef = useRef<ResizeObserver | null>(null);
@@ -685,6 +696,14 @@ export const App = (): JSX.Element => {
   const noSessionAgentName = showAgentEmpty
     ? (focusedWorkflow?.name ?? null)
     : null;
+  // Identity of the board the auto-collapse reasons about (see
+  // emptyCollapsedKeyRef).
+  const emptyBoardKey = `${harness.activeSessionId ?? ""}::${rightPaneWorkflow?.path ?? ""}`;
+  const expandRightPane = (): void => {
+    manualExpandSessionRef.current = harness.activeSessionId ?? null;
+    manualExpandPendingRef.current = harness.activeSessionId == null;
+    setRightCollapsed(false);
+  };
   const rightPaneDeploymentState = rightPaneWorkflow
     ? workflowDeploymentState(
         rightPaneWorkflow,
@@ -1363,7 +1382,7 @@ export const App = (): JSX.Element => {
               onOpenInEditor={openInEditor}
               onToast={harness.showToast}
               onExpandRail={railCollapsed ? () => setRailCollapsed(false) : null}
-              onExpandRight={rightCollapsed ? () => setRightCollapsed(false) : null}
+              onExpandRight={rightCollapsed ? expandRightPane : null}
               onNewSession={() => setComposing(true)}
               /* The agent action cluster shares the one session bar — no
                  separate tab lane or action row. Switching sessions moves to
@@ -1631,9 +1650,15 @@ export const App = (): JSX.Element => {
                   // Empty board → collapse once per (session, bound workflow). A
                   // redundant probe for the same one must not re-close a pane the
                   // user just expanded; a new session or binding still collapses.
-                  const key = `${harness.activeSessionId ?? ""}::${rightPaneWorkflow?.path ?? ""}`;
-                  if (emptyCollapsedKeyRef.current === key) return;
-                  emptyCollapsedKeyRef.current = key;
+                  if (manualExpandPendingRef.current) {
+                    manualExpandPendingRef.current = false;
+                    manualExpandSessionRef.current = harness.activeSessionId ?? null;
+                    return;
+                  }
+                  const claimed = manualExpandSessionRef.current;
+                  if (claimed != null && claimed === harness.activeSessionId) return;
+                  if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
+                  emptyCollapsedKeyRef.current = emptyBoardKey;
                   setRightCollapsed(true);
                 }}
                 expanded={canvasExpanded}
