@@ -1,5 +1,60 @@
 # @sapiom/harness-desktop
 
+## 0.2.8
+
+### Patch Changes
+
+- 5c0c646: Rail footer: live plan & balance card, and an "Update now" card for a downloaded desktop update
+
+  The rail's footer gains two shaded cards above the account row.
+
+  - **Plan & balance card** (both hosts): the harness server relays core reads at
+    `GET /api/account/plan` — the API key never reaches the page — showing the
+    org's plan name and one honest money line: daily spend against the org's
+    spend-limit rule (the same "$used / $cap" pair the dashboard renders),
+    falling back to the prepaid available balance, else nothing. An Upgrade pill
+    and a ⋮ menu deep-link to billing/usage on the dashboard (checkout is
+    dashboard-session-only). Signed-out or unreachable hides the card — it never
+    invents a number.
+  - **"Update now" card** (desktop only): when an update has finished
+    downloading, the main process pushes state over a new receive-only
+    `onUpdateState` bridge member (re-pushed on page load, buffered in the
+    preload so a reload can't drop it) and the card appears with the target
+    version. Clicking it goes through the existing `checkForUpdates()` — the
+    pending branch re-raises the update window — so there is still no
+    page-reachable install channel. It outlives "Later"; "Skip this version"
+    suppresses and retracts it (and now also disarms auto-install-on-quit for a
+    skipped build that was already staged).
+
+- c0135a1: Update window: use the actual desktop app icon as the brand mark
+
+  The redesigned update window showed the SPA's `sapiom-mark.svg` (a different, green mark) in a themed chip. It now shows the app's own `icon.png` — the black rounded-square "S" badge — copied beside the renderer and referenced same-origin, so the window's logo is identical to the dock/installer icon and can't drift from it.
+
+- 05773de: Replace the native "update ready" dialog with a designed, on-brand update window
+
+  electron-updater's "Sapiom X is ready to install" prompt was a native OS dialog — unstyleable and generic. It's now a custom frameless window, built the same way as the setup window (bundled, CSP-locked HTML themed through the design-system seam), so it reads as Sapiom instead of a system alert.
+
+  - **Design:** the Sapiom "S" mark (in a neutral ink chip) + wordmark + `agent.studio <version>` lockup, a concise "`<version>` is ready to install. Restart ends running agent sessions." line, and an ink primary **Restart now** with secondary **Later** and **Skip this version**. Light and dark.
+  - **Skip this version** is persisted (a desktop-local `update-prefs.json`): that version is never re-offered, a newer one still is, and "Check for updates" clears skips.
+  - **Automatically download and install updates** toggle: when on (the default), a downloaded update installs on the next ordinary quit (`autoInstallOnAppQuit`) — never a surprise mid-session restart; off keeps the prompt-only behaviour. This reverses the former hardcoded no-auto-install default, now that the user controls it.
+  - **Theme sync:** the window follows the app's current light/dark theme. Its `file://` origin can't read the SPA's (`http://localhost`) theme storage, so the main process reads the SPA window's live `data-theme` and hands it in — no drift to the OS default when the user has picked a non-OS theme.
+  - **Safety preserved:** "Later" is the keyboard default (Esc/Return defer); restarting needs an explicit click. The new IPC channels are scoped to the update window's own renderer (sender-gated, registered only while it is open), so page/agent content still cannot trigger a restart.
+
+- 5e58677: Fix Windows auto-update: the NSIS installer now uses a space-free artifact name
+  (`Sapiom-Setup-<version>.exe`), so the filename electron-builder records in
+  `latest.yml` matches the asset GitHub actually stores. Previously the default
+  spaced name (`Sapiom Setup <version>.exe`) was sanitised to hyphens in the
+  manifest but to dots in the uploaded asset, so every Windows client 404'd on
+  update. The release workflow now also fails if any published manifest references
+  an asset that isn't attached, so this class of mismatch can't ship silently again.
+- Updated dependencies [651c407]
+- Updated dependencies [7bef8b2]
+- Updated dependencies [95241fb]
+- Updated dependencies [928a639]
+- Updated dependencies [5c0c646]
+- Updated dependencies [21bb3f0]
+  - @sapiom/harness@0.6.0
+
 ## 0.2.7
 
 ### Patch Changes

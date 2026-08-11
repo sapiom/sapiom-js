@@ -1,5 +1,19 @@
 # @sapiom/cli
 
+## 5.0.0
+
+### Patch Changes
+
+- Updated dependencies [651c407]
+- Updated dependencies [7bef8b2]
+- Updated dependencies [651c407]
+- Updated dependencies [95241fb]
+- Updated dependencies [928a639]
+- Updated dependencies [5c0c646]
+- Updated dependencies [21bb3f0]
+  - @sapiom/harness@0.6.0
+  - @sapiom/agent-core@0.10.6
+
 ## 4.0.0
 
 ### Patch Changes

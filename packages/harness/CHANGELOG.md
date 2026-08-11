@@ -1,5 +1,70 @@
 # @sapiom/harness
 
+## 0.6.0
+
+### Minor Changes
+
+- 928a639: Studio: a new agent's workspace folder now appears in the rail the instant you
+  start creating it — from the composer or a template — as an optimistic
+  "Creating agent…" row, pinned to the top and focusable. It stays put through
+  session-landing and the clone, and across the brief window after the session
+  binds but before its `sapiom.json` is registered, so switching sessions
+  mid-creation can never strand the in-progress agent.
+
+  Also fixes two rail/canvas issues:
+
+  - **Canvas no longer clips the terminal step.** A revise loop (a step pointing
+    back to an earlier one) left a gap in the layer numbering; the SVG height was
+    derived from the layer _count_ while nodes were positioned by their raw layer
+    _index_, so the deepest node (a terminal like `deliver`) fell below the
+    viewBox and was drawn off-screen with a dangling edge. Rows are now compacted
+    to consecutive positions, which also removes the empty band the gap produced.
+  - **Cloned agents show a short name in the rail.** The row now reads
+    `newsletter-autopilot` rather than the full package name
+    `@sapiom/example-newsletter-autopilot` (npm scope and a leading `example-`
+    stripped for display only — the full name is on hover, and the raw name still
+    keys testids and lookups).
+
+- 5c0c646: Rail footer: live plan & balance card, and an "Update now" card for a downloaded desktop update
+
+  The rail's footer gains two shaded cards above the account row.
+
+  - **Plan & balance card** (both hosts): the harness server relays core reads at
+    `GET /api/account/plan` — the API key never reaches the page — showing the
+    org's plan name and one honest money line: daily spend against the org's
+    spend-limit rule (the same "$used / $cap" pair the dashboard renders),
+    falling back to the prepaid available balance, else nothing. An Upgrade pill
+    and a ⋮ menu deep-link to billing/usage on the dashboard (checkout is
+    dashboard-session-only). Signed-out or unreachable hides the card — it never
+    invents a number.
+  - **"Update now" card** (desktop only): when an update has finished
+    downloading, the main process pushes state over a new receive-only
+    `onUpdateState` bridge member (re-pushed on page load, buffered in the
+    preload so a reload can't drop it) and the card appears with the target
+    version. Clicking it goes through the existing `checkForUpdates()` — the
+    pending branch re-raises the update window — so there is still no
+    page-reachable install channel. It outlives "Later"; "Skip this version"
+    suppresses and retracts it (and now also disarms auto-install-on-quit for a
+    skipped build that was already staged).
+
+### Patch Changes
+
+- 651c407: Canvas extraction failures now name the project directory they bundled. The Canvas is the only `check()` caller whose directory the user never typed — it comes from the bound workflow row — so a report of "check, run_local and deploy succeed but the Canvas fails on the same project" was unfalsifiable from the panel alone; esbuild's own paths are printed relative to the invoking package, which reads like the bundler resolving `node_modules` from the wrong root.
+- 7bef8b2: Stop the empty-board auto-collapse from closing a canvas pane the user just opened. The collapse fires once per (session, binding), which was meant to make a redundant "still empty" probe harmless — but the pane's expand control is most often used right after starting a session on an agent, i.e. _before_ `activeSessionId` exists, so the probe that follows arrives under a different key and slams the pane shut a beat after the click (measured: 3–5 of 12 runs of the action-bar e2e, on `main`). A manual expand now claims the session, and a claim made while none is active adopts the one that reports next; switching sessions still re-arms the collapse.
+- 95241fb: Give the rail toggle a resting surface while the app window is blurred: macOS hides the traffic lights it sits beside, so the bare glyph read as a gap on the left of the header.
+- 21bb3f0: Let "Open in editor" target the editor you actually use.
+
+  The session menu hardcoded `vscode://file…`, so on a machine with Cursor (or
+  Windsurf, Zed, VS Code Insiders) and no VS Code the item silently did nothing —
+  the OS resolves the scheme and never reports back, so an unhandled scheme is
+  indistinguishable from a working one. Settings now carries an editor picker
+  (`HarnessSettings.editor`, `PATCH /api/settings`), the menu item names the
+  chosen editor ("Open in Cursor"), and a toast says where the folder was sent.
+  Windows paths are normalized to the `/C:/…` shape the handlers expect.
+
+- Updated dependencies [651c407]
+  - @sapiom/agent-core@0.10.6
+
 ## 0.5.1
 
 ### Patch Changes
