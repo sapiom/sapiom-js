@@ -50,7 +50,7 @@ tag, no publish. Useful to smoke a build without releasing.
 
 2. **Merge the PRs to `main`.** Changesets accumulate on `main`.
 
-3. **The version-PR is automatic.** `.github/workflows/release-pr.yml`
+3. **The version-PR is automatic — and self-updating.** `.github/workflows/release-pr.yml`
    (changesets/action@v1, on push to `main`) opens/updates a
    **"chore: version packages"** PR that runs `pnpm run version-packages`
    (= `changeset version` + regenerate the version fallback + `pnpm install
@@ -58,10 +58,26 @@ tag, no publish. Useful to smoke a build without releasing.
    `package.json`, and writes the `CHANGELOG.md`s.
    - You normally do NOT run `changeset version` by hand — let the PR do it. (If
      you must locally: `pnpm run version-packages`.)
+   - **Every push to `main` force-pushes the PR's branch** (`changeset-release/main`)
+     with a fresh run, so a feature PR merged a minute ago is already in it —
+     never edit the version PR by hand and never "update" it manually. If it
+     looks stale, check that the latest `release-pr.yml` run succeeded on main's
+     HEAD SHA (`gh run list --workflow release-pr.yml --limit 1`) rather than
+     touching the branch.
+   - **Expected oddity, not a mistake:** packages that *peer-depend* on a bumped
+     package get a **major** (changesets' default for peer dependents on any
+     minor). This is why `@sapiom/cli` (peer-deps `@sapiom/harness`) jumps a
+     whole major with only "Updated dependencies" in its changelog — 2.0.0 →
+     3.0.0 → 4.0.0 → 5.0.0 all happened this way. Don't "fix" it during a release.
 
-4. **Merge the "chore: version packages" PR.** Now `main` has the bumped
-   `packages/harness-desktop/package.json` version + changelogs. Note the new
-   version, e.g. `0.2.4`.
+4. **Merge the "chore: version packages" PR — the release is BLOCKED until this
+   lands.** The tag in step 5 must equal the version this PR writes, so there is
+   no tagging before it merges. Branch protection requires **1 approving
+   review** (the PR author is the github-actions bot, so any maintainer —
+   including you — can approve): `gh pr review <num> --approve` then
+   `gh pr merge <num> --squash` once CI (CodeQL) is green. Now `main` has the
+   bumped `packages/harness-desktop/package.json` version + changelogs. Note the
+   new version, e.g. `0.2.4`.
 
 5. **Tag and push on `main`** (this is the actual release trigger):
    ```bash
@@ -69,6 +85,13 @@ tag, no publish. Useful to smoke a build without releasing.
    v=$(node -p "require('./packages/harness-desktop/package.json').version")   # e.g. 0.2.4
    git tag "harness-desktop-v$v"          # add a -beta.N suffix for a beta
    git push origin "harness-desktop-v$v"
+   ```
+   From a worktree (don't touch the user's main checkout), the equivalent is
+   tagging main's HEAD directly:
+   ```bash
+   git fetch origin main
+   v=$(git show origin/main:packages/harness-desktop/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+   git tag "harness-desktop-v$v" origin/main && git push origin "harness-desktop-v$v"
    ```
    This starts `desktop-release.yml`: `prepare` (version/channel + tag match) →
    one build job per OS (sign + notarize on macOS) → uploads the installers +
