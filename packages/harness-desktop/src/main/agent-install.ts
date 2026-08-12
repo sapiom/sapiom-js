@@ -26,6 +26,7 @@ import { CLAUDE_INSTALL_COMMAND } from "@sapiom/harness";
 import {
   SAPIOM_CLI_PACKAGE,
   SAPIOM_MCP_PACKAGE,
+  npmInstallEnv,
   shouldInstallSapiomCli,
   type SapiomCliDecision,
 } from "./install-policy.js";
@@ -218,11 +219,15 @@ function installNpmGlobal(
     "--loglevel=info",
   ];
 
+  // See npmInstallEnv: ELECTRON_RUN_AS_NODE on, the host's esbuild pin OFF —
+  // the pin inheriting into npm's postinstalls tore @sapiom/mcp installs.
+  const env = npmInstallEnv(process.env);
+
   return new Promise<InstallResult>((resolve) => {
     let child;
     try {
       child = spawn(process.execPath, args, {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        env,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });

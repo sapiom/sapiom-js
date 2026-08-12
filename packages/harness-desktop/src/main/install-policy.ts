@@ -31,6 +31,25 @@ export const SAPIOM_CLI_PACKAGE = "@sapiom/cli@latest";
  *  sessions launch it via the app binary instead of `npx` (see mcp-install.ts). */
 export const SAPIOM_MCP_PACKAGE = "@sapiom/mcp@latest";
 
+/**
+ * The environment for the npm-install child (agent-install.ts).
+ *
+ * ELECTRON_RUN_AS_NODE makes the Electron binary behave as Node for npm's CLI.
+ * ESBUILD_BINARY_PATH must NOT inherit: it pins THIS app's bundled esbuild for
+ * the in-process bundler (esbuild-binary.ts), and npm passes its env to every
+ * postinstall it runs — a package whose dependency tree carries a different
+ * esbuild then fails its own install.js version check ("Expected 0.28.2 but
+ * got 0.28.1"), the whole install exits 1, and npm's half-finished cleanup
+ * leaves a torn tree. Measured on a user machine installing @sapiom/mcp; the
+ * harness strips the same pin from every session/task child for the same
+ * reason (harness CLAUDE.md).
+ */
+export function npmInstallEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ELECTRON_RUN_AS_NODE: "1" };
+  delete env.ESBUILD_BINARY_PATH;
+  return env;
+}
+
 export interface SapiomCliDecision {
   install: boolean;
   /** Human-readable, and logged either way — a silent skip is how this class of

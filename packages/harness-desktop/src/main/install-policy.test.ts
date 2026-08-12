@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { SAPIOM_CLI_PACKAGE, shouldInstallSapiomCli } from "./install-policy.js";
+import { SAPIOM_CLI_PACKAGE, npmInstallEnv, shouldInstallSapiomCli } from "./install-policy.js";
 
 describe("shouldInstallSapiomCli", () => {
   it("installs when the CLI is nowhere on PATH", () => {
@@ -39,5 +39,21 @@ describe("shouldInstallSapiomCli", () => {
   it("pins nothing surprising: the spec is the published package", () => {
     // `@latest` is deliberate — see install-policy.ts.
     expect(SAPIOM_CLI_PACKAGE).toBe("@sapiom/cli@latest");
+  });
+});
+
+describe("npmInstallEnv", () => {
+  it("runs the child as Node and strips the host's esbuild pin", () => {
+    // The pin inheriting into npm's postinstalls is what tore @sapiom/mcp
+    // installs on a user machine: the dependency's own esbuild install.js
+    // found the app's 0.28.1 binary, failed its version check, and npm left a
+    // half-extracted tree that no later boot could repair over.
+    const env = npmInstallEnv({
+      PATH: "C:\\somewhere",
+      ESBUILD_BINARY_PATH: "C:\\app\\resources\\esbuild.exe",
+    });
+    expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
+    expect("ESBUILD_BINARY_PATH" in env).toBe(false);
+    expect(env.PATH).toBe("C:\\somewhere");
   });
 });
