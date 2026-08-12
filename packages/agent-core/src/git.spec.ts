@@ -43,6 +43,40 @@ describe('redactCredentials', () => {
   });
 });
 
+describe('missing git binary', () => {
+  it('maps spawn ENOENT to an actionable GIT_NOT_INSTALLED error, not a raw crash', () => {
+    // The first thing that happens on a Windows machine without Git for
+    // Windows — a bare "spawn git ENOENT" reads like an internal error, and
+    // the remedy has to be in the error itself. The spawn is stubbed with the
+    // exact error shape execFileSync produces for a missing binary (PATH
+    // manipulation is not reliable under jest, whose child env resolution
+    // still found a real git with PATH set to '').
+    const cp = jest.requireActual<typeof import('node:child_process')>('node:child_process');
+    const spy = jest.spyOn(cp, 'execFileSync').mockImplementation(() => {
+      const err = new Error('spawnSync git ENOENT') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      err.errno = -2;
+      throw err;
+    });
+    try {
+      cloneRepo({
+        cloneUrl: 'https://github.com/example/example.git',
+        targetDir: path.join(tmpdir(), 'sapiom-git-noent', 'checkout'),
+        branch: 'main',
+        repoFullName: 'example/example',
+        cwd: tmpdir(),
+      });
+      throw new Error('expected cloneRepo to throw');
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe('GIT_NOT_INSTALLED');
+      expect((err as Error).message).toContain('git is not installed');
+      expect((err as { hint?: string }).hint).toContain('git-scm.com');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('cloneRepo', () => {
   it('clones the branch and scrubs the token from the origin remote', () => {
     const src = makeSourceRepo();

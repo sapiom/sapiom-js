@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as http from "node:http";
 import { performBrowserAuth } from "./auth.js";
-import { execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
-// Mock child_process to prevent actual browser opening
+// Mock child_process to prevent actual browser opening. The fake child needs
+// the two members openBrowser touches (`on`, `unref`) — fire-and-forget, so
+// nothing further.
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(),
+  spawn: vi.fn(() => ({ on: vi.fn(), unref: vi.fn() })),
 }));
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedSpawn = vi.mocked(spawn);
 
 // Helper to simulate browser callback
 function callbackToServer(
@@ -30,11 +32,28 @@ function callbackToServer(
   });
 }
 
+/**
+ * Recover the auth URL from the mocked opener. On POSIX (where these tests
+ * run) openBrowser spawns `open`/`xdg-open` with the URL as its only argv
+ * element; on win32 it is base64-inside-PowerShell, decoded here so the same
+ * assertion works if the suite ever runs there.
+ */
+function extractAuthUrl(): string {
+  const call = mockedSpawn.mock.calls[0];
+  if (!call) throw new Error("No open call found");
+  const [command, args] = call as unknown as [string, string[]];
+  if (command === "powershell.exe") {
+    const encoded = args[args.indexOf("-EncodedCommand") + 1]!;
+    const decoded = Buffer.from(encoded, "base64").toString("utf16le");
+    const match = /^Start-Process '(.+)'$/.exec(decoded);
+    if (!match) throw new Error(`Unexpected PowerShell command: ${decoded}`);
+    return match[1]!.replace(/''/g, "'");
+  }
+  return args[0]!;
+}
+
 function extractAuthInfo(): { state: string; port: string } {
-  const openCall = mockedExecSync.mock.calls[0]?.[0] as string;
-  const urlMatch = openCall?.match(/open "(.+)"/);
-  if (!urlMatch) throw new Error("No open call found");
-  const authURL = new URL(urlMatch[1]);
+  const authURL = new URL(extractAuthUrl());
   const state = authURL.searchParams.get("state")!;
   const redirectUri = authURL.searchParams.get("redirect_uri")!;
   const port = new URL(redirectUri).port;

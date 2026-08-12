@@ -1,6 +1,6 @@
 import * as http from "node:http";
 import * as crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { URL, URLSearchParams } from "node:url";
 
 export interface AuthResult {
@@ -10,16 +10,52 @@ export interface AuthResult {
   apiKeyId: string;
 }
 
+/**
+ * Fire-and-forget browser launch. Three properties matter here, all learned
+ * from this running inside an MCP server on Windows:
+ *
+ *  - NEVER a visible console. The previous `execSync('start "" "<url>"')`
+ *    spawned cmd.exe, which pops a console window on the user's screen when
+ *    the caller isn't attached to one (an MCP server child of a GUI app
+ *    never is). PowerShell here runs with CREATE_NO_WINDOW (`windowsHide`).
+ *  - NEVER synchronous. execSync blocked the tool handler on the opener
+ *    process itself; a wedged opener wedged the tool call.
+ *  - NEVER a shell-parsed URL. The OAuth URL carries `&` in its query, which
+ *    a cmd.exe command line treats as a command separator unless quoted
+ *    exactly right. The PowerShell command is passed BASE64-ENCODED
+ *    (-EncodedCommand), so no shell ever tokenizes the URL; the
+ *    single-quoted PS literal only needs `'` doubled, and percent-encoded
+ *    OAuth URLs cannot contain `'`.
+ *
+ * Failure is still non-fatal by design: the caller's stderr line and the
+ * timeout error both carry the URL for a manual open.
+ */
 function openBrowser(url: string): void {
-  const platform = process.platform;
   try {
-    if (platform === "darwin") {
-      execSync(`open "${url}"`);
-    } else if (platform === "win32") {
-      execSync(`start "" "${url}"`);
-    } else {
-      execSync(`xdg-open "${url}"`);
-    }
+    const child =
+      process.platform === "win32"
+        ? spawn(
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-WindowStyle",
+              "Hidden",
+              "-EncodedCommand",
+              Buffer.from(`Start-Process '${url.replace(/'/g, "''")}'`, "utf16le").toString(
+                "base64",
+              ),
+            ],
+            { stdio: "ignore", windowsHide: true, detached: true },
+          )
+        : spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], {
+            stdio: "ignore",
+            detached: true,
+          });
+    // A missing opener binary rejects asynchronously — swallow it the same
+    // way the old catch did, or the ENOENT crashes the whole server.
+    child.on("error", () => {});
+    child.unref();
   } catch {
     // Browser open failed — user will see the URL in the output
   }

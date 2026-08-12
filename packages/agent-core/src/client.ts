@@ -85,6 +85,15 @@ export class GatewayClient {
   /**
    * The single JSON request path — every method above funnels here so the
    * NETWORK / HTTP_* / 401-hint mapping is defined exactly once.
+   *
+   * Bounded by {@link REQUEST_TIMEOUT_MS}: without a signal, a blackholed
+   * connection rides undici's defaults (headers timeout ~5 minutes), and the
+   * caller is often an MCP tool handler — the agent then just "hangs" with no
+   * message, which is exactly how this surfaced on a Windows machine that
+   * couldn't reach the gateway. Every request through here is a short
+   * JSON round-trip (long operations poll with repeated requests — see
+   * deploy.ts's pollBuild — and streams go through openStream, which is
+   * deliberately NOT bounded this way), so one generous cap fits all.
    */
   private async send<T>(method: string, url: string, body?: unknown): Promise<T> {
     let res: Response;
@@ -93,6 +102,7 @@ export class GatewayClient {
         method,
         headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       throw networkError(url, err);
@@ -191,8 +201,20 @@ function stripTrailingSlashes(host: string): string {
   return end === host.length ? host : host.slice(0, end);
 }
 
+/** See {@link GatewayClient.send} — per-request ceiling for one JSON round-trip. */
+const REQUEST_TIMEOUT_MS = 60_000;
+
 /** Unreachable-host failure, shaped identically wherever a fetch rejects. */
 function networkError(url: string, err: unknown): AgentOperationError {
+  // AbortSignal.timeout rejects with TimeoutError — name the duration and the
+  // likely cause rather than surfacing an opaque "operation was aborted".
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return new AgentOperationError({
+      code: 'NETWORK',
+      message: `Request to ${url} timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`,
+      hint: 'Is this machine able to reach the Sapiom API (firewall/proxy)? Try again once connectivity is confirmed.',
+    });
+  }
   return new AgentOperationError({
     code: 'NETWORK',
     message: `Could not reach ${url}.`,

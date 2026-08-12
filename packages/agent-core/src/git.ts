@@ -7,6 +7,22 @@ import { execFileSync } from "node:child_process";
 
 import { AgentOperationError } from "./errors.js";
 
+/**
+ * A missing `git` binary deserves its own message: `execFileSync("git", …)`
+ * rejects with a bare `spawn git ENOENT`, which reads like an internal error.
+ * It is the FIRST thing that happens on a Windows machine without Git for
+ * Windows (git is not preinstalled there, and Claude Code no longer requires
+ * it), so the remedy has to be in the error itself.
+ */
+function gitMissingError(err: unknown): AgentOperationError | null {
+  if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") return null;
+  return new AgentOperationError({
+    code: "GIT_NOT_INSTALLED",
+    message: "git is not installed (or not on PATH).",
+    hint: "Install Git from https://git-scm.com/downloads, then retry. On Windows, install “Git for Windows” with default options and restart the app so the new PATH is picked up.",
+  });
+}
+
 function git(args: string[], cwd: string): string {
   try {
     return execFileSync("git", args, {
@@ -15,6 +31,8 @@ function git(args: string[], cwd: string): string {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   } catch (err) {
+    const missing = gitMissingError(err);
+    if (missing) throw missing;
     const raw = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
     // Redact any embedded credential (e.g. a token-bearing push URL echoed by
     // git into stderr) before it reaches the caller, the CLI, or the browser
@@ -119,6 +137,8 @@ export function cloneRepo(opts: CloneRepoOptions): void {
       { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
     );
   } catch (err) {
+    const missing = gitMissingError(err);
+    if (missing) throw missing;
     const stderr = (err as { stderr?: Buffer | string }).stderr?.toString();
     const raw =
       stderr?.trim() || (err instanceof Error ? err.message : String(err));
