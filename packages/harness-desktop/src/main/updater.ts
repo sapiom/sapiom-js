@@ -375,7 +375,13 @@ export async function checkForUpdatesNow(): Promise<UpdateCheckOutcome> {
   }
 }
 
-async function runCheck(current: NonNullable<typeof active>): Promise<UpdateCheckOutcome> {
+/** One quick second chance for a dropped connection — see runCheck's catch. */
+const CHECK_RETRY_DELAY_MS = 2_000;
+
+async function runCheck(
+  current: NonNullable<typeof active>,
+  attempt = 1,
+): Promise<UpdateCheckOutcome> {
   try {
     const result = await current.autoUpdater.checkForUpdates();
     if (!result) {
@@ -394,6 +400,16 @@ async function runCheck(current: NonNullable<typeof active>): Promise<UpdateChec
     // electron-updater appends the whole releases Atom feed and a stack trace, so
     // it is kilobytes of XML — which went straight into a toast once.
     const { kind, summary } = classifyUpdateError(err instanceof Error ? err.message : String(err));
+    // A network-class failure gets ONE quick retry before it reaches the user:
+    // the first outbound connection of a fresh process is the one AV/proxies/
+    // cold TLS eat (measured: an ERR_EMPTY_RESPONSE first check whose immediate
+    // successor succeeded — the user saw "could not reach GitHub" for a
+    // connection drop the very next attempt absorbed).
+    if (kind === "offline" && attempt === 1) {
+      log(`check failed (${kind}): ${summary} — retrying once in ${CHECK_RETRY_DELAY_MS / 1000}s`);
+      await new Promise((resolve) => setTimeout(resolve, CHECK_RETRY_DELAY_MS));
+      return runCheck(current, attempt + 1);
+    }
     log(`on-demand check failed (${kind}): ${summary}`);
     if (kind === "no-release") return { kind: "no-release", channel: current.channel };
     return { kind: "failed", message: summary };
