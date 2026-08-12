@@ -6,6 +6,7 @@
  * the bundle, being type-stripped, cannot).
  */
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -198,7 +199,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     // definition shape is identical, so everything downstream (buildManifest,
     // graph validation) works unchanged on either.
     const mod: Record<string, unknown> = await import(
-      `file://${bundlePath}?t=${Date.now()}`
+      `${pathToFileURL(bundlePath).href}?t=${Date.now()}`
     );
     const defs: unknown[] = [];
     for (const value of Object.values(mod)) {
