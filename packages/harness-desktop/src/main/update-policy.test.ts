@@ -191,6 +191,19 @@ describe("classifyUpdateError", () => {
     }
   });
 
+  it("names a GitHub 429 as rate-limiting, not jargon and not offline", () => {
+    // Seen live: a day of repeated installs/boot-checks from one home IP got
+    // the raw "429 Too Many Requests" into a toast. It must NOT classify as
+    // "offline" either — that kind gets an immediate retry (updater.ts),
+    // which is exactly what a throttled IP doesn't need.
+    const { kind, summary } = classifyUpdateError(
+      "HttpError: 429 Too Many Requests ... \"method: GET url: https://github.com/sapiom/sapiom-js/releases.atom\"",
+    );
+    expect(kind).toBe("rate-limited");
+    expect(summary).toContain("rate-limiting");
+    expect(summary).not.toContain("429");
+  });
+
   it("names an offline machine as such", () => {
     expect(classifyUpdateError("request to https://github.com failed, reason: getaddrinfo ENOTFOUND github.com").kind).toBe(
       "offline",

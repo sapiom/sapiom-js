@@ -171,6 +171,8 @@ export type UpdateErrorKind =
   | "no-release"
   /** We could not reach GitHub. */
   | "offline"
+  /** GitHub answered 429 — throttled, self-clearing; retrying now makes it worse. */
+  | "rate-limited"
   | "other";
 
 /**
@@ -195,6 +197,16 @@ export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summa
 
   if (/unable to find latest version|ensure a production release exists|no published versions/i.test(collapsed)) {
     return { kind: "no-release", summary: "no release has been published on this channel yet" };
+  }
+  // Before the net::ERR bucket: a 429 is GitHub answering, not unreachable.
+  // Seen live after a day of repeated installs/boot-checks from one home IP —
+  // it clears on its own, and the message should say so rather than leak
+  // HTTP jargon into a toast (or invite a retry storm via the offline path).
+  if (/\b429\b|too many requests/i.test(collapsed)) {
+    return {
+      kind: "rate-limited",
+      summary: "GitHub is rate-limiting this network — it clears on its own; try again in a while",
+    };
   }
   if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|net::ERR/i.test(collapsed)) {
     return { kind: "offline", summary: "could not reach GitHub" };
