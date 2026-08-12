@@ -22,7 +22,7 @@
  * No `electron` import (the caller passes the prefix + installer) — the
  * vitest tier covers the resolution and decision logic from POSIX.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 
 /**
@@ -56,6 +56,37 @@ export function resolveSapiomMcpEntry(prefixDir: string): string | null {
   return null;
 }
 
+/**
+ * Remove a TORN @sapiom/mcp install so npm can lay down a fresh one.
+ *
+ * Field case: the app quit while npm was mid-extraction, leaving
+ * `node_modules/@sapiom/mcp/` holding ONLY its dependency subtree — no
+ * package.json, no dist. The resolver rightly returns null for that, but npm
+ * cannot repair over the torn tree either (its rename-into-place semantics
+ * fail on the leftovers), so every boot's reinstall failed and every session
+ * fell back to the npx launch — the persistent console window, forever.
+ * Since the caller only invokes this when the resolver found nothing, any
+ * directory present here is by definition torn: deleting it is repair, not
+ * data loss.
+ */
+function removeTornInstall(prefixDir: string, onLine: (line: string) => void): void {
+  for (const modulesDir of [
+    path.join(prefixDir, "node_modules"),
+    path.join(prefixDir, "lib", "node_modules"),
+  ]) {
+    const pkgDir = path.join(modulesDir, "@sapiom", "mcp");
+    if (!existsSync(pkgDir)) continue;
+    try {
+      rmSync(pkgDir, { recursive: true, force: true });
+      onLine(`removed torn @sapiom/mcp install at ${pkgDir} before reinstalling`);
+    } catch (err) {
+      onLine(
+        `could not remove torn install at ${pkgDir}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
 export interface EnsureSapiomMcpOptions {
   /** The per-user npm prefix (agent-install's agentPrefixDir()). */
   prefix: string;
@@ -87,6 +118,9 @@ export async function ensureSapiomMcp(options: EnsureSapiomMcpOptions): Promise<
       return existing;
     }
     if (options.devMode) return null;
+    // The resolver found nothing, so whatever sits in the package dir is a
+    // torn previous attempt — clear it or npm's reinstall fails forever.
+    removeTornInstall(options.prefix, onLine);
     const result = await options.install(onLine);
     // Resolve regardless of npm's exit code: npm can materialize a perfectly
     // usable package and still exit non-zero (a bin-shim collision, an EPERM

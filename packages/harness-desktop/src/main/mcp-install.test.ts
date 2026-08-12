@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +94,36 @@ describe("ensureSapiomMcp", () => {
     });
     expect(entry).toBeNull();
     expect(lines.join("\n")).toContain("fall back");
+  });
+
+  it("wipes a TORN install before reinstalling — npm cannot repair over one", async () => {
+    // The shipped state: the app quit mid-extraction, leaving the package dir
+    // holding only its dependency subtree (no package.json, no dist). Every
+    // reinstall then failed on the leftovers and every session fell back to
+    // the npx launch — the persistent console window on Windows, forever.
+    root = mkdtempSync(path.join(tmpdir(), "sapiom-mcp-install-"));
+    const prefix = root;
+    const pkgDir = path.join(prefix, "node_modules", "@sapiom", "mcp");
+    mkdirSync(path.join(pkgDir, "node_modules", "zod"), { recursive: true });
+
+    const lines: string[] = [];
+    const install = vi.fn(async () => {
+      // npm only succeeds because the torn tree is gone by the time it runs.
+      expect(existsSync(pkgDir)).toBe(false);
+      mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+      writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({ bin: "./dist/index.js" }));
+      writeFileSync(path.join(pkgDir, "dist", "index.js"), "");
+      return { ok: true };
+    });
+    const entry = await ensureSapiomMcp({
+      prefix,
+      smoke: false,
+      devMode: false,
+      install,
+      onLine: (line) => lines.push(line),
+    });
+    expect(entry).toContain("index.js");
+    expect(lines.join("\n")).toContain("torn");
   });
 
   it("uses the package when npm exits non-zero but the files resolved anyway", async () => {
