@@ -360,6 +360,7 @@ test("external intake gets deterministic type, size, contributor, and triage lab
     "size: small",
   ]);
   assert.equal(classification.addNeedsTriage, true);
+  assert.equal(classification.clearAutomationLabels, false);
   assert.equal(classification.synchronizeTypeLabels, true);
 });
 
@@ -403,7 +404,7 @@ test("incomplete, sensitive, large, and opaque external PRs route to manual revi
   }
 });
 
-test("trusted PRs retain risk metadata without external manual routing", () => {
+test("trusted PRs receive no automation-managed labels", () => {
   const result = classifyPullRequest({
     pullRequest: {
       author_association: "NONE",
@@ -415,11 +416,9 @@ test("trusted PRs retain risk metadata without external manual routing", () => {
     eventAction: "opened",
   });
 
-  assert.ok(result.desiredLabels.includes("contributor: trusted"));
-  assert.ok(result.desiredLabels.includes("contribution: incomplete"));
-  assert.ok(result.desiredLabels.includes("review: sensitive"));
-  assert.ok(result.desiredLabels.includes("size: large"));
-  assert.ok(!result.desiredLabels.includes("review: manual"));
+  assert.deepEqual(result.desiredLabels, []);
+  assert.equal(result.clearAutomationLabels, true);
+  assert.equal(result.synchronizeTypeLabels, true);
   assert.equal(result.addNeedsTriage, false);
 });
 
@@ -480,7 +479,7 @@ test("needs-triage is initialized only on external intake or explicit backfill",
   );
 });
 
-test("reconciliation replaces managed labels and preserves maintainer state", () => {
+test("trusted reconciliation removes automation labels and preserves unrelated state", () => {
   const classification = classifyPullRequest({
     pullRequest: { body: pullRequestBody() },
     repositoryPermission: "write",
@@ -490,29 +489,41 @@ test("reconciliation replaces managed labels and preserves maintainer state", ()
   });
   const changes = reconcilePullRequestLabels(
     [
+      "bug",
+      "contributor: trusted",
       "contributor: external",
       "contributor: member",
       "size: large",
       "documentation",
+      "contribution: incomplete",
+      "review: sensitive",
       "review: manual",
       "needs-triage",
       "help wanted",
       "area: sdk",
+      "area: future-package",
+      "claude-code-assisted",
     ],
     classification,
   );
 
-  assert.deepEqual(changes.add, ["bug", "contributor: trusted", "size: small"]);
+  assert.deepEqual(changes.add, []);
   assert.deepEqual(changes.remove, [
+    "area: future-package",
+    "area: sdk",
+    "bug",
+    "contribution: incomplete",
     "contributor: external",
     "contributor: member",
+    "contributor: trusted",
     "documentation",
+    "needs-triage",
     "review: manual",
+    "review: sensitive",
     "size: large",
   ]);
-  assert.ok(!changes.remove.includes("needs-triage"));
   assert.ok(!changes.remove.includes("help wanted"));
-  assert.ok(!changes.remove.includes("area: sdk"));
+  assert.ok(!changes.remove.includes("claude-code-assisted"));
 });
 
 test("reconciliation removes stale trusted access after permission revocation", () => {
@@ -592,6 +603,16 @@ test("the privileged workflow stays pinned and never references PR head code or 
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /pull-requests: write/);
   assert.match(workflow, /getCollaboratorPermissionLevel/);
+  assert.match(workflow, /id: classification/);
+  assert.match(workflow, /core\.setOutput\(\s*"trusted"/);
+  assert.match(
+    workflow,
+    /if: steps\.classification\.outputs\.trusted == 'false'/,
+  );
+  assert.ok(
+    workflow.indexOf("id: classification") <
+      workflow.indexOf("Apply area labels to external pull requests"),
+  );
   assert.doesNotMatch(workflow, /author_association/);
   assert.doesNotMatch(workflow, /pull_request\.head|head\.sha|secrets\./);
 
