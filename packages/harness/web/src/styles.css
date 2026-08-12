@@ -6488,26 +6488,156 @@ button.rail-footer-card:hover {
 }
 
 .command-palette {
-  width: 480px;
+  width: min(640px, calc(100vw - 32px));
   padding: 0;
   overflow: hidden;
 }
 
-.command-palette-input {
-  width: 100%;
+/* THREE BARS: a search bar on top, a tab row under it, a shortcut bar at the
+   bottom — the result list scrolls between them. */
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   height: var(--pane-header-h);
   padding: 0 var(--pane-pad-x);
-  border: none;
   border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+}
+
+.command-palette-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
   background: transparent;
   color: var(--text);
   font-size: var(--type-body);
-  transition: border-color var(--transition-fast);
 }
 
 .command-palette-input:focus {
   outline: none;
-  border-bottom-color: var(--focus);
+}
+
+.command-palette-clear {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--surface-hover);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.command-palette-clear:hover {
+  color: var(--text);
+  background: var(--active-shade);
+}
+
+/* The filter tabs, with one pill that TRAVELS behind the active tab instead
+   of two backgrounds blinking on and off. */
+.tab-track {
+  position: relative;
+}
+
+.tab-indicator {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  left: 0;
+  height: var(--control-h);
+  margin-top: calc(var(--control-h) / -2);
+  border-radius: var(--radius);
+  background: var(--active-shade);
+  pointer-events: none;
+  transition:
+    transform 0.18s ease,
+    width 0.18s ease,
+    opacity var(--transition-fast);
+}
+
+.tab-track > [role="tab"] {
+  position: relative;
+  z-index: 1;
+  border-radius: var(--radius);
+}
+
+.command-palette-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  flex: 0 0 auto;
+  padding: 0 var(--sp2);
+  border-bottom: 1px solid var(--border);
+}
+
+.command-palette-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-h);
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+}
+
+.command-palette-filter:hover {
+  color: var(--text-dim);
+  background: var(--surface-hover);
+}
+
+.command-palette-filter.is-active {
+  background: transparent;
+  color: var(--text);
+}
+
+.command-palette-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp3);
+  height: 40px;
+  flex: 0 0 auto;
+  padding: 0 var(--sp2) 0 var(--sp3);
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+.command-palette-footer kbd {
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  line-height: 1;
+  color: var(--text-dim);
+}
+
+.command-palette-footer-mod {
+  margin-left: auto;
+}
+
+/* The tab's destination, anchored to the bar's right edge and sized to sit
+   INSIDE the 40px bar rather than growing it. */
+.command-palette-footer-cta {
+  margin-left: auto;
+  height: var(--control-h);
+  font-size: var(--type-meta);
 }
 
 .command-palette-list {
@@ -6558,21 +6688,40 @@ button.rail-footer-card:hover {
 .command-palette-item-meta {
   font-size: var(--type-meta);
   color: var(--text-faint);
-  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
 }
 
-.command-palette-item.is-selected .command-palette-item-label,
+/* Paths read as code; action and doc one-liners read as prose. */
+.command-palette-item-meta[data-code] {
+  font-family: var(--font-mono);
+}
+
+/* Selection is the row WASH alone — the text keeps its reading colors, so
+   the match highlight (an accent-tinted cap behind the hit characters) stays
+   the one colored signal on any row. Accent-colored text on the selected row
+   fought that cap and read as murk in dark mode. */
+.command-palette-item.is-selected .command-palette-item-label {
+  color: var(--text);
+}
+
 .command-palette-item.is-selected .command-palette-item-meta {
-  /* The selected row is the palette's one sanctioned accent use. Colour the text
-     with the accent ITSELF (--accent = brand green), which is legible on the
-     neutral --nested-shade highlight in both themes. --accent-foreground was
-     wrong here: it is the ink FOR a green fill (--brand-ink, a near-black green
-     in dark mode), so on the neutral highlight the text all but vanished. */
+  color: var(--text-dim);
+}
+
+/* The active session's row: identifiable at a glance, but NEVER the same
+   affordance as keyboard selection — a quiet accent pill after the name. */
+.command-palette-current {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
+  font-size: var(--type-micro);
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 /* DialogHeader recipe: a hairline separator under the title. */
@@ -7361,18 +7510,19 @@ button.rail-footer-card:hover {
   margin-top: 0;
 }
 
-/* The fuzzy-matched characters, bolded in place. */
+/* The fuzzy-matched characters: a soft accent-tinted cap behind the hit, the
+   way an editor marks find results — legible on the plain row AND on the
+   selected wash in both themes, where color-only bolding disappeared. */
 .palette-match {
   font-weight: 700;
   color: var(--text);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: 3px;
 }
 
 .command-palette-item-meta .palette-match {
   color: var(--text-dim);
-}
-
-.command-palette-item.is-selected .palette-match {
-  color: var(--accent-foreground);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .command-palette-error {

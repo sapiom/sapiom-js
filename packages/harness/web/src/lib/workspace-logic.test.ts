@@ -33,9 +33,13 @@ const workflow = (overrides: Partial<WorkflowInfo>): WorkflowInfo => ({
   ...overrides,
 });
 
+// The matcher's own behavior (boundary gating, scoring order, the Slack
+// regressions) is pinned in fuzzy.test.ts — this keeps only the palette-visible
+// contract this file always asserted: tighter matches rank higher, absent
+// characters don't match at all.
 describe("fuzzyScore", () => {
-  it("matches subsequences and prefers tighter matches", () => {
-    const loose = fuzzyScore("lsg", "leasing");
+  it("prefers tighter matches", () => {
+    const loose = fuzzyScore("leas", "leasing");
     const exact = fuzzyScore("leasing", "leasing");
     expect(loose).not.toBeNull();
     expect(exact).not.toBeNull();
@@ -44,6 +48,10 @@ describe("fuzzyScore", () => {
 
   it("returns null when characters are missing", () => {
     expect(fuzzyScore("xyz", "leasing")).toBeNull();
+  });
+
+  it("no longer accepts off-boundary scatter (the old matcher did)", () => {
+    expect(fuzzyScore("lsg", "leasing")).toBeNull();
   });
 });
 

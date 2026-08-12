@@ -227,8 +227,22 @@
     "id": "command-palette-private-identifiers",
     "path": "packages/harness/web/src/components/CommandPalette.tsx",
     "pattern": "^workflow:?$",
-    "occurrences": 3,
-    "reason": "The private palette discriminator, item prefix, and icon identifier remain stable."
+    "occurrences": 1,
+    "reason": "The icon-name identifier remains stable; the palette's discriminator and item prefix now say agent."
+  },
+  {
+    "id": "palette-docs-page-titles",
+    "path": "packages/harness/web/src/lib/docs.ts",
+    "pattern": "Workflows quick start|/workflows/",
+    "occurrences": 2,
+    "reason": "Docs-site page title and its URL, quoted verbatim — the platform SDK concept keeps its own name."
+  },
+  {
+    "id": "palette-model-icon-identifier",
+    "path": "packages/harness/web/src/lib/palette.ts",
+    "pattern": "^workflow$",
+    "occurrences": 1,
+    "reason": "The Agents filter tab reuses the agent rows' icon identifier."
   },
   {
     "id": "session-bar-private-css-and-test-id",

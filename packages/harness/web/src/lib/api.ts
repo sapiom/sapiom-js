@@ -39,6 +39,8 @@ import {
   MOCK_HISTORY,
   MOCK_LAUNCH_DIR,
   MOCK_MACROS,
+  MOCK_SEARCH_HISTORY,
+  MOCK_SEARCH_WORKFLOWS,
   MOCK_SESSION_RECORDS,
   MOCK_SESSIONS,
   MOCK_SETTINGS,
@@ -133,6 +135,19 @@ export function isFreshMockState(): boolean {
   return (
     isMockMode() &&
     new URLSearchParams(window.location.search).get("mockState") === "fresh"
+  );
+}
+
+/**
+ * Mock mode only: `?mockFixtures=search` additionally seeds the shapes from
+ * the search bug report (a scoped agent name, a scatter-path agent, duplicate
+ * and raw-prompt history titles) so Playwright can exercise the palette's
+ * ranking. Additive-only, so every fixture-count assertion elsewhere holds.
+ */
+export function isSearchFixturesEnabled(): boolean {
+  return (
+    isMockMode() &&
+    new URLSearchParams(window.location.search).get("mockFixtures") === "search"
   );
 }
 
@@ -858,7 +873,10 @@ class MockApi implements HarnessApi {
     : MOCK_SESSIONS.map((session) => ({ ...session }));
   private workflows = this.fresh
     ? []
-    : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
+    : [
+        ...MOCK_WORKFLOWS,
+        ...(isSearchFixturesEnabled() ? MOCK_SEARCH_WORKFLOWS : []),
+      ].map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
     : {
@@ -1022,7 +1040,8 @@ class MockApi implements HarnessApi {
 
   async sessionHistory(cwd: string): Promise<SessionSummary[]> {
     await delay();
-    return MOCK_HISTORY[cwd] ?? [];
+    const searchExtras = isSearchFixturesEnabled() ? (MOCK_SEARCH_HISTORY[cwd] ?? []) : [];
+    return [...(MOCK_HISTORY[cwd] ?? []), ...searchExtras];
   }
 
   async sessionRecord(id: string): Promise<SessionRecord | null> {

@@ -69,7 +69,9 @@ export interface WorkspaceTree {
 }
 
 const basename = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
-const isUnder = (childPath: string, cwd: string): boolean =>
+/** Segment-aware containment — a bare prefix check would put /a/scratch-2
+ *  under /a/scratch. Exported for the palette's agent-recency derivation. */
+export const isUnder = (childPath: string, cwd: string): boolean =>
   childPath === cwd || childPath.startsWith(`${cwd}/`);
 
 // Agent rows have no recency signal (WorkflowInfo carries no timestamp), so
