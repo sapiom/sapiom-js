@@ -24,6 +24,8 @@ import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { getDesktopBridge } from "../lib/desktop.js";
+import { dropPayload } from "../lib/terminal-drop.js";
 import { buildTerminalWsUrl } from "../lib/terminal-ws.js";
 import { getTheme, subscribeTheme, type Theme } from "../lib/theme.js";
 import { isMockMode } from "../lib/api.js";
@@ -215,6 +217,33 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     });
     resizeObserver.observe(container);
 
+    // Drop-to-path, like a native emulator: a file dropped on the terminal
+    // types its quoted path at the cursor (Claude/Codex then handle it — an
+    // image path pastes as `[Image #1]`). Only the desktop bridge can resolve
+    // a File to a real path; in a plain browser the drop resolves to nothing,
+    // but default is still prevented — the browser's default for a file drop
+    // is to navigate the whole SPA away to the file.
+    const onDragOver = (event: DragEvent): void => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    };
+    const onDrop = (event: DragEvent): void => {
+      const files = event.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      event.preventDefault();
+      const pathForFile = getDesktopBridge()?.pathForFile;
+      if (!pathForFile) return;
+      const payload = dropPayload(Array.from(files, (file) => pathForFile(file)));
+      if (payload === null) return;
+      // paste() honors bracketed-paste mode, so the CLI sees one paste event
+      // (the same reason injected prompts are bracketed — see core/bracketed-paste).
+      term.paste(payload);
+      term.focus();
+    };
+    container.addEventListener("dragover", onDragOver);
+    container.addEventListener("drop", onDrop);
+
     function connect(): void {
       if (disposed) return;
       const socket = new WebSocket(buildTerminalWsUrl(sessionId, token));
@@ -261,6 +290,8 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     return () => {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      container.removeEventListener("dragover", onDragOver);
+      container.removeEventListener("drop", onDrop);
       resizeObserver.disconnect();
       inputDisposable.dispose();
       mock?.dispose();

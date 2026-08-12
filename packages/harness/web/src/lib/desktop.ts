@@ -83,6 +83,15 @@ export interface DesktopBridge {
    * expose it, and a browser has no bridge; the card then never renders.
    */
   onUpdateState?: (callback: (state: UpdateStatePayload) => void) => () => void;
+  /**
+   * The absolute filesystem path of a dropped/picked File, or "" when the
+   * desktop app can't resolve one. This is what lets a drop on the terminal
+   * behave like a native emulator (the file's path is typed into the pty): a
+   * plain browser's File object exposes no path at all. Optional for the usual
+   * reason — older desktop builds and browsers don't have it, and callers must
+   * degrade to doing nothing rather than assume it.
+   */
+  pathForFile?: (file: File) => string;
   // No restart method: applying an update is confirmed in the desktop app's own
   // main-process-owned update window, so page code — which shares an origin with
   // agent-authored files the harness serves — has no way to end a user's sessions.
@@ -130,6 +139,9 @@ export function getDesktopBridge(host: DesktopHost | undefined = defaultHost()):
     // Optional again: with no subscription there is no update state, so the
     // "Update now" card simply never appears on an older desktop build.
     onUpdateState: typeof bridge.onUpdateState === "function" ? bridge.onUpdateState : undefined,
+    // Optional: a browser (or older desktop build) can't resolve a File's path,
+    // so a drop on the terminal simply does nothing there.
+    pathForFile: typeof bridge.pathForFile === "function" ? bridge.pathForFile : undefined,
   };
 }
 

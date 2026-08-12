@@ -12,7 +12,7 @@
  * the main process, so every addition is attack surface — `contextIsolation` stays
  * on and `ipcRenderer` is never handed to the page.
  */
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   APP_VERSION_ARG,
   CHOOSE_DIRECTORY,
@@ -87,6 +87,21 @@ const api = {
     return () => {
       updateStateSubscribers.delete(callback);
     };
+  },
+  /**
+   * The absolute filesystem path of a dropped/picked File, or "" when Electron
+   * can't resolve one (e.g. a file synthesized by the page). What makes
+   * drag-and-drop into the terminal possible at all: a web renderer's File
+   * object exposes no path, so the SPA cannot type it into the pty the way a
+   * native terminal emulator does without this. Synchronous and local — no IPC,
+   * nothing crosses into the main process.
+   */
+  pathForFile(file: File): string {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
   },
   // No restart method, on purpose — see ipc.ts. An update that is ready to install
   // is confirmed through a native dialog, so nothing the page can call ends a

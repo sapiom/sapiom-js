@@ -70,6 +70,25 @@ describe("getDesktopBridge", () => {
     });
     expect(typeof current?.onUpdateState).toBe("function");
   });
+
+  it("degrades pathForFile to undefined on an older desktop build or browser", () => {
+    // Without it a drop on the terminal simply does nothing — the bridge
+    // itself must still be accepted.
+    const older = getDesktopBridge({
+      sapiomDesktop: { appVersion: "0.2.0", checkForUpdates: noop },
+    });
+    expect(older).not.toBeNull();
+    expect(older?.pathForFile).toBeUndefined();
+
+    const current = getDesktopBridge({
+      sapiomDesktop: {
+        appVersion: "0.3.0",
+        checkForUpdates: noop,
+        pathForFile: () => "/tmp/shot.png",
+      },
+    });
+    expect(typeof current?.pathForFile).toBe("function");
+  });
 });
 
 describe("describeUpdateOutcome", () => {

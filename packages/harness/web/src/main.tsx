@@ -34,6 +34,18 @@ window.addEventListener(
   { passive: true },
 );
 
+// A file dropped anywhere the terminal isn't listening must do nothing — the
+// browser's default is to NAVIGATE to the file, replacing the whole SPA (and
+// in the desktop app, will-navigate hands the file to the OS). Cancelling the
+// default here doesn't interfere with real drop targets: their own handlers
+// still run first.
+window.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+});
+window.addEventListener("drop", (e) => {
+  if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+});
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
