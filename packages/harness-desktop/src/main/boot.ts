@@ -6,11 +6,13 @@
  * surface added in `@sapiom/harness` — the npx CLI stays the untouched backup.
  */
 import { app, BrowserWindow, ipcMain } from "electron";
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import {
   runDoctor,
   pickDefaultHarness,
@@ -37,6 +39,7 @@ import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
 import { agentPrefixDir, ensureSapiomCli, installClaudeCode } from "./agent-install.js";
 import { agentRepairDecision } from "./agent-repair.js";
+import { ensureMinGit } from "./git-provision.js";
 import { installRuntimeShims } from "./runtime-shims.js";
 import {
   BOOT_PROGRESS,
@@ -59,6 +62,22 @@ export interface BootResult {
  *  stuck onboarding can be pinpointed without a visible setup window. */
 function debug(msg: string): void {
   if (process.env.SAPIOM_BOOT_DEBUG === "1") console.error(`[boot] ${msg}`);
+}
+
+/**
+ * Is a system git on PATH? Shells `where` — the same probe the doctor uses
+ * (`harness/src/cli/doctor.ts`) — rather than resolveSpawnTarget, which on
+ * non-Windows is a filesystem-blind passthrough. Windows-only caller today,
+ * but keep the POSIX arm so the helper stays honest if that changes.
+ */
+async function hasSystemGit(): Promise<boolean> {
+  const exec = promisify(execFile);
+  try {
+    await exec(process.platform === "win32" ? "where" : "which", ["git"]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function progress(setupWin: BrowserWindow, p: BootProgress): void {
@@ -281,6 +300,37 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   //     earlier than here, because esbuild reads the setting when its module
   //     loads (esbuild-binary.ts). Only traced here, where the boot log is.
   debug(`esbuild binary: ${esbuildBinaryPath ?? "left to esbuild's own resolution"}`);
+
+  // 1c. Git, on Windows machines that have none. Template cloning and deploy
+  //     shell out to a real git (agent-core's cloneRepo/pushSynthesizedTree),
+  //     and Windows ships without one — the same reasoning as the node/npm
+  //     shims and the agent auto-install: the one-click user must not be sent
+  //     to git-scm.com. Downloads the checksum-pinned official MinGit into
+  //     userData on first boot (see git-provision.ts); non-fatal, and never in
+  //     smoke (no network in CI). A user-installed git always wins: this
+  //     branch is skipped whenever `where git` resolves, and the provisioned
+  //     dir is APPENDED to PATH. When the MinGit variant carries a bash.exe,
+  //     advertise it via CLAUDE_CODE_GIT_BASH_PATH — Claude Code prefers Git
+  //     Bash for its shell/hooks on Windows and falls back to PowerShell
+  //     without it.
+  if (!smoke && process.platform === "win32" && !(await hasSystemGit())) {
+    progress(setupWin, { phase: "starting", message: "Setting up Git…", status: "active" });
+    const provisioned = await ensureMinGit({
+      installRoot: path.join(app.getPath("userData"), "mingit"),
+      onLine: (line) => {
+        debug(`git provision: ${line}`);
+        progress(setupWin, { phase: "starting", message: line, status: "active" });
+      },
+    });
+    if (provisioned) {
+      process.env.PATH = `${process.env.PATH ?? ""};${provisioned.cmdDir}`;
+      if (provisioned.bashPath && !process.env.CLAUDE_CODE_GIT_BASH_PATH) {
+        process.env.CLAUDE_CODE_GIT_BASH_PATH = provisioned.bashPath;
+      }
+    }
+    // null → offline or blocked: boot proceeds; template/deploy flows surface
+    // the actionable GIT_NOT_INSTALLED remedy when actually used.
+  }
 
   // 2. Doctor.
   progress(setupWin, { phase: "doctor", message: "Checking your environment…", status: "active" });

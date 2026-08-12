@@ -301,6 +301,7 @@ Three shims (`runtime-shims.ts`, PATH-prepended) plus two npm installs into
 | `node`, `npm`, **`npx`** shims | Electron bundles Node but not npm, and the machine may have neither |
 | Claude Code (if no agent on PATH) | the app is useless without an agent |
 | `@sapiom/cli` (if `sapiom` not on PATH) | macros and templates hand the agent `sapiom agents …` |
+| **MinGit** (Windows, if no `git` on PATH) | template cloning and deploy shell out to a real `git`, and Windows ships none; downloaded checksum-pinned from git-for-windows' official releases into `userData/mingit` at first boot (`git-provision.ts`) — never bundled, so no installer bloat and no GPL redistribution. Its `bash.exe` (when the variant has one) is advertised via `CLAUDE_CODE_GIT_BASH_PATH`, which upgrades Claude Code's Windows shell from the PowerShell fallback to Git Bash. A user-installed git always wins (`where git` short-circuits; the provisioned dir is PATH-appended) |
 
 `npx` and the CLI were both missing until they were added together, and both failed
 **silently**: the per-session MCP config launches the sapiom-dev server with
