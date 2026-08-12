@@ -105,7 +105,10 @@ function skeletonFromJsonSchema(schema: Record<string, unknown>): unknown {
     return skeletonFromJsonSchema(branches[0]);
   }
 
-  switch (schema.type) {
+  const type = Array.isArray(schema.type)
+    ? (schema.type as string[]).find((t) => t !== 'null') ?? 'null'
+    : schema.type;
+  switch (type) {
     case 'object': {
       const props = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
       const out: Record<string, unknown> = {};
