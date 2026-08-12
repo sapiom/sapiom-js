@@ -26,6 +26,17 @@ export interface UpdatePrefs {
   autoUpdate: boolean;
   /** Versions the user picked "Skip this version" for — never re-offered. */
   skippedVersions: string[];
+  /**
+   * Epoch ms of the last AUTOMATIC check that reached GitHub, or 0.
+   *
+   * Every launch used to fetch `latest.yml` from the (unauthenticated)
+   * release-download endpoint, which GitHub secondary-rate-limits per IP —
+   * so a day of restarts earned a 429 and the boot check started failing on a
+   * perfectly healthy machine. Persisting the timestamp lets a relaunch reuse
+   * the periodic cadence instead of spending a fresh request. Never gates the
+   * user's own "Check for updates".
+   */
+  lastAutoCheckAt: number;
 }
 
 export const DEFAULT_UPDATE_PREFS: UpdatePrefs = {
@@ -35,6 +46,7 @@ export const DEFAULT_UPDATE_PREFS: UpdatePrefs = {
   // the updater's former hardcoded `autoInstallOnAppQuit = false` (see updater.ts).
   autoUpdate: true,
   skippedVersions: [],
+  lastAutoCheckAt: 0,
 };
 
 /**
@@ -60,6 +72,12 @@ export function sanitizeUpdatePrefs(raw: unknown): UpdatePrefs {
   return {
     autoUpdate: typeof obj.autoUpdate === "boolean" ? obj.autoUpdate : DEFAULT_UPDATE_PREFS.autoUpdate,
     skippedVersions: skipped,
+    // A future timestamp (clock moved back, hand-edited file) would suppress
+    // checks indefinitely — only accept a sane, non-negative number.
+    lastAutoCheckAt:
+      typeof obj.lastAutoCheckAt === "number" && Number.isFinite(obj.lastAutoCheckAt) && obj.lastAutoCheckAt > 0
+        ? obj.lastAutoCheckAt
+        : DEFAULT_UPDATE_PREFS.lastAutoCheckAt,
   };
 }
 
@@ -100,4 +118,31 @@ export async function clearSkippedVersions(prefsPath: string): Promise<void> {
   const prefs = await loadUpdatePrefs(prefsPath);
   if (prefs.skippedVersions.length === 0) return;
   await saveUpdatePrefs({ ...prefs, skippedVersions: [] }, prefsPath);
+}
+
+/**
+ * Stamp "an automatic check just reached GitHub". Read-modify-write like the
+ * skip helpers, and swallowed on failure — a prefs file we can't write must
+ * never break the updater (worst case the next launch checks again).
+ */
+export async function recordAutoCheck(now: number, prefsPath: string): Promise<void> {
+  try {
+    const prefs = await loadUpdatePrefs(prefsPath);
+    await saveUpdatePrefs({ ...prefs, lastAutoCheckAt: now }, prefsPath);
+  } catch {
+    // Best-effort only.
+  }
+}
+
+/**
+ * Whether the automatic boot check should run, given the last one's timestamp.
+ * Same cadence as the in-process interval, so a relaunch never costs an extra
+ * request but a genuinely stale install still checks immediately.
+ */
+export function shouldRunAutoCheck(
+  lastAutoCheckAt: number,
+  now: number,
+  intervalMs: number,
+): boolean {
+  return now - lastAutoCheckAt >= intervalMs;
 }
