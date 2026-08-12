@@ -195,18 +195,23 @@ export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summa
   const firstLine = (withoutXml.split(/\r?\n/)[0] ?? "").trim();
   const collapsed = firstLine.replace(/\s+/g, " ");
 
-  if (/unable to find latest version|ensure a production release exists|no published versions/i.test(collapsed)) {
-    return { kind: "no-release", summary: "no release has been published on this channel yet" };
-  }
-  // Before the net::ERR bucket: a 429 is GitHub answering, not unreachable.
-  // Seen live after a day of repeated installs/boot-checks from one home IP —
-  // it clears on its own, and the message should say so rather than leak
-  // HTTP jargon into a toast (or invite a retry storm via the offline path).
+  // 429 FIRST — ahead of both no-release and net::ERR. A 429 is GitHub
+  // answering, not unreachable (so it must not take the offline branch, whose
+  // caller retries immediately). More subtly, it must not take the no-release
+  // branch either: electron-updater's GitHubProvider wraps ANY failure of its
+  // `/releases/latest` request as "Unable to find latest version on GitHub …
+  // please ensure a production release exists: HttpError: 429 Too Many
+  // Requests", so testing no-release first told a throttled user "nothing is
+  // published yet" — the one message that invites them to click again, when
+  // clicking is exactly what deepens the limit.
   if (/\b429\b|too many requests/i.test(collapsed)) {
     return {
       kind: "rate-limited",
       summary: "GitHub is rate-limiting this network — it clears on its own; try again in a while",
     };
+  }
+  if (/unable to find latest version|ensure a production release exists|no published versions/i.test(collapsed)) {
+    return { kind: "no-release", summary: "no release has been published on this channel yet" };
   }
   if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|net::ERR/i.test(collapsed)) {
     return { kind: "offline", summary: "could not reach GitHub" };

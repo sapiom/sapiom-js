@@ -366,14 +366,34 @@ export async function checkForUpdatesNow(): Promise<UpdateCheckOutcome> {
     }
     return { kind: "downloaded", version: info.version };
   }
+  // Replay a very recent SUCCESSFUL answer instead of asking again. One check
+  // costs ~3 unauthenticated GitHub requests, and nothing else in this module
+  // is unbounded — but serial clicks were, limited only by how fast a human
+  // can click, which is how an IP earns a 429. A failed check is never
+  // replayed: retrying after a failure is precisely what the button is for,
+  // and the window is short enough that "nothing happened" is not a thing a
+  // user can perceive (the same answer still toasts).
+  const now = Date.now();
+  if (lastGoodCheck && now - lastGoodCheck.at < CHECK_REPLAY_WINDOW_MS) {
+    return lastGoodCheck.outcome;
+  }
   // Coalesce concurrent asks rather than firing two requests at GitHub.
   checkInFlight ??= runCheck(active);
   try {
-    return await checkInFlight;
+    const outcome = await checkInFlight;
+    if (outcome.kind === "up-to-date" || outcome.kind === "available") {
+      lastGoodCheck = { at: Date.now(), outcome };
+    }
+    return outcome;
   } finally {
     checkInFlight = null;
   }
 }
+
+/** See `checkForUpdatesNow`: how long a successful answer stands in for a new ask. */
+const CHECK_REPLAY_WINDOW_MS = 60_000;
+/** The last check that actually reached GitHub and got an answer. */
+let lastGoodCheck: { at: number; outcome: UpdateCheckOutcome } | null = null;
 
 /** One quick second chance for a dropped connection — see runCheck's catch. */
 const CHECK_RETRY_DELAY_MS = 2_000;
@@ -457,7 +477,23 @@ function registerHandlers(): void {
   });
 }
 
+/**
+ * Structural one-shot guard, not a convention.
+ *
+ * `startUpdater` arms a boot timeout AND a 4h interval, and nothing clears
+ * them. A second call would therefore double the check rate permanently —
+ * the classic way a polite cadence turns into a request storm — while
+ * `handlersRegistered` above silently masked the double-init. Unreachable
+ * today (one `app.whenReady`, single-instance lock), so this exists to keep
+ * it unreachable when a future caller appears.
+ */
+let updaterStarted = false;
+
 function startUpdater(deps: UpdaterDeps): void {
+  if (updaterStarted) {
+    log("startUpdater called twice — ignoring the second (timers are already armed)");
+    return;
+  }
   const gate = shouldEnableUpdater({
     isPackaged: app.isPackaged,
     devMode: deps.devMode,
@@ -568,6 +604,10 @@ function startUpdater(deps: UpdaterDeps): void {
   // only once everything above has been configured without throwing.
   active = { autoUpdater, channel: decision.channel, deps };
   disabledReason = null;
+  // Set with the timers, so the guard covers exactly the thing that must not
+  // happen twice (an enabled build arming a second interval). A gated-off
+  // build returns above without marking, and stays free to be re-inited.
+  updaterStarted = true;
   // .unref() so a pending check can't hold the process alive during quit.
   setTimeout(check, FIRST_CHECK_DELAY_MS).unref();
   setInterval(check, CHECK_INTERVAL_MS).unref();
