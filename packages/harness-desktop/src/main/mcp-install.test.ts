@@ -82,7 +82,7 @@ describe("ensureSapiomMcp", () => {
     expect(install).not.toHaveBeenCalled();
   });
 
-  it("falls back to null (npx launch) when the install fails — never throws", async () => {
+  it("falls back to null (npx launch) when the install fails and nothing resolved — never throws", async () => {
     root = mkdtempSync(path.join(tmpdir(), "sapiom-mcp-install-"));
     const lines: string[] = [];
     const entry = await ensureSapiomMcp({
@@ -94,5 +94,30 @@ describe("ensureSapiomMcp", () => {
     });
     expect(entry).toBeNull();
     expect(lines.join("\n")).toContain("fall back");
+  });
+
+  it("uses the package when npm exits non-zero but the files resolved anyway", async () => {
+    // npm can materialize a usable package and still exit non-zero (bin-shim
+    // collision, unrelated EPERM). Trusting only the exit code left a machine
+    // with the package on disk and sessions still on the npx launch.
+    root = mkdtempSync(path.join(tmpdir(), "sapiom-mcp-install-"));
+    const prefix = root;
+    const lines: string[] = [];
+    const install = vi.fn(async () => {
+      const pkgDir = path.join(prefix, "node_modules", "@sapiom", "mcp");
+      mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+      writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({ bin: "./dist/index.js" }));
+      writeFileSync(path.join(pkgDir, "dist", "index.js"), "");
+      return { ok: false };
+    });
+    const entry = await ensureSapiomMcp({
+      prefix,
+      smoke: false,
+      devMode: false,
+      install,
+      onLine: (line) => lines.push(line),
+    });
+    expect(entry).toContain("index.js");
+    expect(lines.join("\n")).toContain("non-zero");
   });
 });

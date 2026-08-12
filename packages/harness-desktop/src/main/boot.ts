@@ -420,6 +420,9 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   //     every sapiom-dev tool call hung. A GUI-subsystem launcher can never
   //     have that window. Non-fatal: null falls back to the npx config —
   //     exactly the previous behavior. See mcp-install.ts.
+  // console.log (not debug()): these land in main.log unconditionally — the
+  // one-line-per-boot breadcrumb that turns "sessions still use npx, why?"
+  // from a remote guessing game into a file read.
   let sapiomDevMcpEntry: string | null = null;
   try {
     sapiomDevMcpEntry = await ensureSapiomMcp({
@@ -427,15 +430,15 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
       smoke,
       devMode,
       install: installSapiomMcp,
-      onLine: (line) => debug(`sapiom-mcp: ${line}`),
+      onLine: (line) => console.log(`[boot] sapiom-mcp: ${line}`),
     });
-    debug(
+    console.log(
       sapiomDevMcpEntry
-        ? `sapiom-dev MCP entry: ${sapiomDevMcpEntry}`
-        : "sapiom-dev MCP: no local install — sessions use the npx launch",
+        ? `[boot] sapiom-dev MCP: launching sessions via app binary + ${sapiomDevMcpEntry}`
+        : "[boot] sapiom-dev MCP: no local install — sessions use the npx launch",
     );
   } catch (err) {
-    debug(`sapiom-mcp setup threw (ignored): ${err instanceof Error ? err.message : String(err)}`);
+    console.log(`[boot] sapiom-mcp setup threw (ignored): ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // 4. Machine id + first-run. "First run" means the user has never completed

@@ -88,11 +88,18 @@ export async function ensureSapiomMcp(options: EnsureSapiomMcpOptions): Promise<
     }
     if (options.devMode) return null;
     const result = await options.install(onLine);
-    if (!result.ok) {
+    // Resolve regardless of npm's exit code: npm can materialize a perfectly
+    // usable package and still exit non-zero (a bin-shim collision, an EPERM
+    // on some unrelated file). Trusting only the exit code left one machine
+    // with the package on disk and every session still on the npx launch —
+    // the exact window this module exists to remove.
+    const entry = resolveSapiomMcpEntry(options.prefix);
+    if (!entry) {
       onLine("@sapiom/mcp install failed — sessions fall back to the npx launch.");
       return null;
     }
-    return resolveSapiomMcpEntry(options.prefix);
+    if (!result.ok) onLine("@sapiom/mcp install exited non-zero but the package resolved — using it.");
+    return entry;
   } catch (err) {
     onLine(`@sapiom/mcp setup failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
