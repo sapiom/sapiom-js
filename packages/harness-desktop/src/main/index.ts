@@ -39,6 +39,21 @@ const smokeMode = process.argv.includes("--smoke");
 // scrollbar) browser. Must be set before app is ready.
 app.commandLine.appendSwitch("enable-features", "OverlayScrollbar");
 
+// Disable HTTP/2 in Chromium's network stack. The auto-updater is the only
+// remote consumer of that stack in this app (electron-updater rides
+// Electron's `net`; the SPA talks to 127.0.0.1 and telemetry goes through
+// Node's fetch), and on a real user machine every update check failed with
+// net::ERR_HTTP2_SERVER_REFUSED_STREAM against GitHub — repeatedly, across
+// hours, while the same machine's browser reached github.com fine. That is
+// the documented Electron/GitHub HTTP/2 failure mode (a refused multiplexed
+// stream surfaces as a hard error instead of retrying on a fresh
+// connection), and falling back to HTTP/1.1 is the accepted workaround. Cost
+// is one extra TCP connection per update check/download. Escape hatch for
+// A/B-testing the theory on an affected machine, not a supported setting.
+if (process.env.SAPIOM_KEEP_HTTP2 !== "1") {
+  app.commandLine.appendSwitch("disable-http2");
+}
+
 let bootResult: BootResult | null = null;
 let quitting = false;
 /**
