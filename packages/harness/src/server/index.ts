@@ -1283,6 +1283,13 @@ export const startServer = async (
     createCanvasRenderRouter({
       getSession: (harnessSessionId) => sessionManager.get(harnessSessionId),
       listWorkflows: canvasWorkflowsForSession,
+      // Keep the install watcher in lockstep with what this route just put on
+      // screen — without this, a depsMissing render through the POST route
+      // showed the "preparing" placeholder with nothing armed to replace it.
+      onOutcome: (harnessSessionId, outcome) => {
+        const session = sessionManager.get(harnessSessionId);
+        if (session) reactToRenderOutcome(session, outcome);
+      },
     }),
   );
   // Wrap the registry so GET /api/workflows also returns enriched slugs —

@@ -2,7 +2,38 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CanvasWatcherManager, snapshotCanvasDir, snapshotWorkflowSources } from "./canvas-watcher.js";
+import { CanvasWatcherManager, normalizeWatchPath, snapshotCanvasDir, snapshotWorkflowSources } from "./canvas-watcher.js";
+import { CANVAS_DIR } from "../shared/types.js";
+
+describe("normalizeWatchPath", () => {
+  // The shipped Windows bug: fs.watch reports `.sapiom\canvas\renders\x.html`
+  // (native separators), which matched neither the POSIX CANVAS_DIR literal
+  // nor the mixed-separator prefix — so canvas.reload was NEVER published on
+  // Windows and the pane sat on stale HTML (the "Preparing your agent"
+  // placeholder surviving the finished install). Provable from POSIX CI via
+  // the injected separator, like server/cwd-normalize.ts.
+  it("turns a Windows-reported canvas path into one the POSIX constant matches", () => {
+    const normalized = normalizeWatchPath(".sapiom\\canvas\\renders\\my-agent.html", "\\");
+    expect(normalized).toBe(".sapiom/canvas/renders/my-agent.html");
+    expect(normalized.startsWith(`${CANVAS_DIR}/`)).toBe(true);
+    expect(normalizeWatchPath(".sapiom\\canvas", "\\")).toBe(CANVAS_DIR);
+  });
+
+  it("leaves POSIX paths — including ones legitimately containing a backslash — intact", () => {
+    expect(normalizeWatchPath(".sapiom/canvas/renders/x.html", "/")).toBe(
+      ".sapiom/canvas/renders/x.html",
+    );
+    // A literal backslash is a valid POSIX filename character; splitting on
+    // the platform separator (not a blanket replace) must preserve it.
+    expect(normalizeWatchPath("src/weird\\name.ts", "/")).toBe("src/weird\\name.ts");
+  });
+
+  it("normalizes Windows-reported source paths so skip-dir segments are still recognized", () => {
+    expect(normalizeWatchPath("node_modules\\pkg\\index.ts", "\\")).toBe(
+      "node_modules/pkg/index.ts",
+    );
+  });
+});
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

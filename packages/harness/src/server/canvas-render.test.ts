@@ -90,4 +90,20 @@ describe("canvas render router", () => {
     expect(getSession).toHaveBeenCalledWith("sess-42");
     expect(listWorkflows).toHaveBeenCalledWith(session);
   });
+
+  it("reports the outcome to onOutcome so the install watcher stays in lockstep", async () => {
+    // This route used to bypass reactToRenderOutcome entirely: a depsMissing
+    // render through here showed the "preparing" placeholder with nothing
+    // armed to ever replace it. Pin that the outcome now reaches the hook.
+    const onOutcome = vi.fn();
+    await start({
+      getSession: () => ({ cwd: projectDir, boundWorkflowPath: null }),
+      listWorkflows: () => [],
+      onOutcome,
+    });
+
+    await fetch(`${baseUrl}/api/canvas/sess-7/render`, { method: "POST", headers: TOKEN_HEADER });
+
+    expect(onOutcome).toHaveBeenCalledWith("sess-7", expect.objectContaining({ mode: "empty" }));
+  });
 });

@@ -92,6 +92,25 @@ export interface SessionWatcherCallbacks {
  * directory-tree fingerprints (canvas output + sources) when recursive
  * `fs.watch` isn't available (notably Linux) or the watcher errors out.
  */
+/**
+ * Normalize an `fs.watch`-reported relative path to forward-slash form.
+ *
+ * `fs.watch` reports NATIVE separators — `.sapiom\canvas\renders\x.html` on
+ * Windows — while CANVAS_DIR is a POSIX literal. Comparing them raw meant
+ * `isCanvasPath()` was false for EVERY canvas write on Windows, so
+ * `canvas.reload` was never published and the pane sat on stale HTML (the
+ * shipped symptom: the "Preparing your agent" placeholder surviving long
+ * after the real step graph was on disk — every hot-reload path was deaf).
+ *
+ * Splitting on `path.sep` (not a blanket backslash replace) keeps POSIX
+ * filenames that legitimately CONTAIN a backslash intact. Exported, with the
+ * separator injectable, so the Windows behavior is provable from POSIX CI —
+ * same pattern as server/cwd-normalize.ts.
+ */
+export function normalizeWatchPath(filename: string, sep: string = path.sep): string {
+  return sep === "/" ? filename : filename.split(sep).join("/");
+}
+
 class SessionCanvasWatcher {
   private watcher: fs.FSWatcher | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -109,7 +128,11 @@ class SessionCanvasWatcher {
     private readonly callbacks: SessionWatcherCallbacks,
   ) {
     this.canvasDir = path.join(cwd, CANVAS_DIR);
-    this.canvasPrefix = CANVAS_DIR + path.sep;
+    // Forward-slash prefix: every filename is normalized via
+    // normalizeWatchPath before comparison, so the POSIX-literal CANVAS_DIR
+    // and the prefix agree on every platform. (CANVAS_DIR + path.sep produced
+    // a mixed-separator prefix on Windows that could never match anything.)
+    this.canvasPrefix = CANVAS_DIR + "/";
     this.arm();
   }
 
@@ -135,22 +158,26 @@ class SessionCanvasWatcher {
     return filename === CANVAS_DIR || filename.startsWith(this.canvasPrefix);
   }
 
+  /** `filename` is the normalized (forward-slash) form — see normalizeWatchPath. */
   private isWorkflowSourcePath(filename: string): boolean {
     if (!SOURCE_EXTENSIONS.has(path.extname(filename))) return false;
-    return !filename.split(path.sep).some((seg) => SKIP_DIR_NAMES.has(seg));
+    return !filename.split("/").some((seg) => SKIP_DIR_NAMES.has(seg));
   }
 
   private arm(): void {
     if (this.closed) return;
     try {
-      this.watcher = fs.watch(this.cwd, { recursive: true }, (event, filename) => {
+      this.watcher = fs.watch(this.cwd, { recursive: true }, (event, rawFilename) => {
         // A `null` filename means the platform couldn't report which path
         // changed — do both (reload AND re-render) rather than miss an update.
-        if (filename === null) {
+        if (rawFilename === null) {
           this.scheduleCanvasChange();
           this.scheduleSourceChange();
           return;
         }
+        // Native separators → forward-slash before ANY comparison; on
+        // Windows the raw form matches nothing (see normalizeWatchPath).
+        const filename = normalizeWatchPath(rawFilename);
         if (this.isCanvasPath(filename)) {
           this.scheduleCanvasChange();
           // A rename at (or above) the canvas dir — e.g. an editor's atomic
@@ -158,7 +185,7 @@ class SessionCanvasWatcher {
           // time — can leave a recursive watcher no longer covering the new
           // inode on some platforms. Re-arm defensively rather than risk
           // silently going deaf.
-          if (event === "rename" && (filename === CANVAS_DIR || filename === path.dirname(CANVAS_DIR))) {
+          if (event === "rename" && (filename === CANVAS_DIR || filename === path.posix.dirname(CANVAS_DIR))) {
             this.rearm();
           }
           return;
