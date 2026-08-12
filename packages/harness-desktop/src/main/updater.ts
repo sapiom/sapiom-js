@@ -51,9 +51,7 @@ import {
   addSkippedVersion,
   clearSkippedVersions,
   loadUpdatePrefs,
-  recordAutoCheck,
   saveUpdatePrefs,
-  shouldRunAutoCheck,
   updatePrefsPathIn,
 } from "./update-prefs.js";
 
@@ -554,37 +552,12 @@ function startUpdater(deps: UpdaterDeps): void {
     log(`check failed: ${classifyUpdateError(err.message).summary}`);
   });
 
-  /**
-   * The AUTOMATIC check (boot + every CHECK_INTERVAL_MS). Throttled across
-   * process lifetimes: `latest.yml` comes from GitHub's unauthenticated
-   * release-download endpoint, which is secondary-rate-limited per IP, so an
-   * app that checks on every launch earns a 429 for someone who restarts a
-   * lot (measured — a day of test installs, then every boot check 429'd on a
-   * healthy machine). The user's own "Check for updates" is never throttled.
-   */
   const check = (): void => {
-    void (async () => {
-      const prefsPath = updatePrefsFile();
-      const now = Date.now();
-      const { lastAutoCheckAt } = await loadUpdatePrefs(prefsPath);
-      if (!shouldRunAutoCheck(lastAutoCheckAt, now, CHECK_INTERVAL_MS)) {
-        log(
-          `automatic check skipped — last one was ${Math.round((now - lastAutoCheckAt) / 60_000)}m ago ` +
-            `(cadence ${CHECK_INTERVAL_MS / 3_600_000}h); GitHub rate-limits per IP`,
-        );
-        return;
-      }
-      // Stamped BEFORE the request: the point is to bound how often we ask
-      // GitHub, and a failed ask cost a request just the same.
-      await recordAutoCheck(now, prefsPath);
-      try {
-        await autoUpdater.checkForUpdates();
-      } catch (err: unknown) {
-        // checkForUpdates rejects AND emits "error"; swallow here so the
-        // rejection can't surface as an unhandled promise.
-        log(`check rejected: ${classifyUpdateError(err instanceof Error ? err.message : String(err)).summary}`);
-      }
-    })();
+    autoUpdater.checkForUpdates().catch((err: unknown) => {
+      // checkForUpdates rejects AND emits "error"; swallow here so the
+      // rejection can't surface as an unhandled promise.
+      log(`check rejected: ${classifyUpdateError(err instanceof Error ? err.message : String(err)).summary}`);
+    });
   };
 
   log(
