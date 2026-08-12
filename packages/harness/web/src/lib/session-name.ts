@@ -16,9 +16,9 @@
  */
 import type { HarnessSession } from "@shared/types";
 
-export type SessionNameOverrides = Record<string, string>;
+import { basenameOf } from "./paths";
 
-const basenameOf = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
+export type SessionNameOverrides = Record<string, string>;
 
 /** True when the session has nothing better than the folder default (the
  *  adapter initializes `title` to the cwd basename until a transcript title

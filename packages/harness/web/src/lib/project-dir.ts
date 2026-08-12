@@ -25,6 +25,8 @@
  * Design: plans/harness-idea-door/design.md in the Sapiom repo.
  */
 
+import { joinPath, parentOf as parentOfPath } from "./paths";
+
 /**
  * A legal npm package name, restricted to the subset that is also a sane
  * directory name: lowercase alphanumerics and dashes, starting alphanumeric.
@@ -94,15 +96,17 @@ export function slugifyIdea(idea: string): string {
 }
 
 /**
- * `<root>/<name>` with no double slashes. Returns "" when either side is
- * missing, matching `templateDirSuggestion`'s existing contract for a null
- * launch dir (the caller renders nothing rather than a half path).
+ * `<root><sep><name>` in the root's own separator (a Windows root must yield a
+ * Windows path — this string gets POSTed back as a session cwd). Returns ""
+ * when either side is missing, matching `templateDirSuggestion`'s existing
+ * contract for a null launch dir (the caller renders nothing rather than a
+ * half path).
  */
 export function projectDirSuggestion(name: string, root: string | null): string {
-  const trimmedRoot = root?.trim().replace(/\/+$/, "") ?? "";
+  const trimmedRoot = root?.trim() ?? "";
   const trimmedName = name.trim();
-  if (!trimmedRoot || !trimmedName) return "";
-  return `${trimmedRoot}/${trimmedName}`;
+  if (!trimmedRoot.replace(/[\\/]+$/, "") || !trimmedName) return "";
+  return joinPath(trimmedRoot, trimmedName);
 }
 
 /**
@@ -129,20 +133,11 @@ export function resolveProjectRoot(input: {
 }
 
 /**
- * Parent of an absolute path, or null at the filesystem root. Mirrors
- * `path.dirname` without pulling node:path into the browser bundle.
- *
- * Needed because GET /api/fs/list reports one level DOWN: a path can only learn
- * whether it is itself an agent project by asking its parent.
+ * Parent of an absolute path, or null at the filesystem root. Re-exported from
+ * paths.ts so this module's existing callers keep their import; see there for
+ * the separator handling.
  */
-export function parentOf(input: string): string | null {
-  const trimmed = input.replace(/\/+$/, "");
-  const lastSlash = trimmed.lastIndexOf("/");
-  if (lastSlash < 0) return null;
-  const cut = trimmed.slice(0, lastSlash);
-  if (cut === trimmed) return null;
-  return cut || "/";
-}
+export const parentOf = parentOfPath;
 
 /**
  * First name in the `base`, `base-2`, `base-3`, … series that isn't taken.

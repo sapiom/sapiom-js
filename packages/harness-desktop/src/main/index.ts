@@ -12,8 +12,9 @@
 // `spawn ENOTDIR`. See esbuild-binary.ts.
 import "./esbuild-binary.js";
 import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { app, dialog, Menu } from "electron";
+import { initFileLog } from "./log-file.js";
 import { resolveInstanceLockAction } from "./single-instance.js";
 import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
@@ -143,6 +144,12 @@ if (lock.action === "fail") {
   });
 
   app.whenReady().then(async () => {
+    // FIRST, before boot() and before any early --smoke return: tee console
+    // output into a log file. The packaged Windows app is a GUI-subsystem exe
+    // with no console, so without this every console.error — including the
+    // harness server's "[harness] unhandled request error:" lines, which run
+    // in this process — vanishes and nothing is diagnosable in the field.
+    initFileLog(join(app.getPath("logs"), "main.log"), app.getVersion());
     // No application menu — the harness SPA is the whole UI. Removes the
     // File/Edit/View/Window/Help bar on Linux/Windows. (On macOS the top menu
     // bar is OS-level and can't be removed; this leaves a bare default there —

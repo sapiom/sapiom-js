@@ -11,6 +11,9 @@ import {
 const fold = (...chunks: string[]): boolean =>
   chunks.reduce(trackBracketedPaste, initialBracketedPasteState).enabled;
 
+const foldState = (...chunks: string[]) =>
+  chunks.reduce(trackBracketedPaste, initialBracketedPasteState);
+
 describe("trackBracketedPaste", () => {
   it("is off until the app enables mode 2004", () => {
     expect(initialBracketedPasteState.enabled).toBe(false);
@@ -51,6 +54,25 @@ describe("trackBracketedPaste", () => {
     // A realistic batched enable (a terminal turns several modes on at once)
     // split across the onData boundary must still be recognized.
     expect(fold("\x1b[?1049;1000;1002;1003;1004;1006;1015;2004", "h")).toBe(true);
+  });
+
+  it("records whether ANY 2004 traffic was ever observed — set, reset, or split", () => {
+    // The tri-state consumers need: "off because the app turned it off" vs
+    // "off because ConPTY hid the announcement". Only the latter may fall back
+    // to an adapter-declared assumption.
+    expect(initialBracketedPasteState.observed).toBe(false);
+    expect(foldState("plain output, no modes").observed).toBe(false);
+    // Other private modes are not 2004 observations.
+    expect(foldState("\x1b[?1049;1006h").observed).toBe(false);
+    expect(foldState("\x1b[?2004h").observed).toBe(true);
+    // An explicit RESET is also an observation — it must WIN over any assumption.
+    const reset = foldState("\x1b[?2004l");
+    expect(reset.observed).toBe(true);
+    expect(reset.enabled).toBe(false);
+    // A chunk-boundary split still counts as observed once it completes.
+    expect(foldState("\x1b[?20", "04h").observed).toBe(true);
+    // observed is sticky across later chunks.
+    expect(foldState("\x1b[?2004h", "later output").observed).toBe(true);
   });
 
   it("drops a carry that can no longer be a mode sequence", () => {

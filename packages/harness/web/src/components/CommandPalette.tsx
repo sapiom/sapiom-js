@@ -4,6 +4,7 @@ import type { HarnessSession, SessionSummary, WorkflowInfo } from "@shared/types
 
 import type { FsDirEntry, FsListResponse } from "../lib/api";
 import { fuzzyMatch } from "../lib/fuzzy";
+import { basenameOf, looksAbsolutePath } from "../lib/paths";
 import { Icon } from "./Icon";
 
 interface PaletteItem {
@@ -128,7 +129,7 @@ export function CommandPalette({
     inputRef.current?.focus();
   }, []);
 
-  const looksLikePath = query.startsWith("/") || query.startsWith("~");
+  const looksLikePath = looksAbsolutePath(query);
 
   useEffect(() => {
     if (!looksLikePath) {
@@ -241,7 +242,7 @@ export function CommandPalette({
       .map((dir) => ({
         id: `recent:${dir}`,
         kind: "recent",
-        label: dir.split("/").filter(Boolean).pop() ?? dir,
+        label: basenameOf(dir),
         meta: dir,
         path: dir,
       }));

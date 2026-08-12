@@ -23,6 +23,7 @@ import {
   hasStoredSettings,
   startServer,
   createClaudeCodeAdapter,
+  resolveSpawnTarget,
   CLAUDE_INSTALL_COMMAND,
   CODEX_INSTALL_COMMAND,
   type HarnessServer,
@@ -34,7 +35,8 @@ import { augmentProcessPath } from "./env.js";
 import { esbuildBinaryPath } from "./esbuild-binary.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
-import { ensureSapiomCli, installClaudeCode } from "./agent-install.js";
+import { agentPrefixDir, ensureSapiomCli, installClaudeCode } from "./agent-install.js";
+import { agentRepairDecision } from "./agent-repair.js";
 import { installRuntimeShims } from "./runtime-shims.js";
 import {
   BOOT_PROGRESS,
@@ -295,6 +297,45 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   if (!smoke && (forceNoAgent || report.availableHarnesses.length === 0)) {
     report = await ensureAgentAvailable(setupWin, report);
   }
+
+  // 3a. Windows: doctor's presence check (`where`) finds `claude.CMD` even when
+  //     the shim's target binary is gone — the state Claude Code's own native
+  //     auto-updater left one machine in (renamed claude.exe → .old.<ts>, never
+  //     wrote the replacement), after which EVERY session spawn failed while
+  //     doctor stayed green. resolveSpawnTarget is the real oracle; when it
+  //     refuses and the broken install is the app-managed one, re-run the
+  //     (idempotent) npm install to put a working binary back.
+  const managedClaudeInstalled = (): boolean =>
+    fs.existsSync(path.join(agentPrefixDir(), "node_modules", "@anthropic-ai", "claude-code"));
+  if (!smoke && report.availableHarnesses.includes("claude-code")) {
+    const decision = agentRepairDecision({
+      platform: process.platform,
+      managedInstallExists: managedClaudeInstalled(),
+      checkSpawn: () => void resolveSpawnTarget("claude", []),
+    });
+    if (decision.repair) {
+      debug(`agent repair: ${decision.reason ?? "spawn check failed"}`);
+      progress(setupWin, { phase: "installing-agent", message: "Repairing Claude Code…", status: "active" });
+      await installClaudeCode((line) => {
+        progress(setupWin, { phase: "installing-agent", message: line, status: "active" });
+      });
+      report = await runDoctor();
+    }
+  }
+
+  // 3b'. The agent's own self-updater must not mutate an install the app
+  //      manages: in-place update of a running exe is exactly what produced the
+  //      .old wreckage above, and the app repairs/refreshes the install itself
+  //      via npm. DISABLE_AUTOUPDATER is Claude Code's documented opt-out; it
+  //      rides process.env into every session the server spawns. Never set when
+  //      the user runs their own claude (their install, their update policy) —
+  //      the managed prefix is prepended to PATH, so when it exists it IS the
+  //      active claude.
+  if (managedClaudeInstalled()) {
+    process.env.DISABLE_AUTOUPDATER = "1";
+    debug("managed Claude Code install detected — agent self-updater disabled for sessions");
+  }
+
   progress(setupWin, { phase: "doctor", message: `Found: ${report.availableHarnesses.join(", ")}`, status: "done" });
 
   // 3b. The `sapiom` CLI. The agent is told to run `sapiom agents deploy` /

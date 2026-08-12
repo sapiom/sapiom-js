@@ -378,6 +378,31 @@ export interface HarnessAdapter {
    */
   detectBlockingPrompt?(scrollback: string): boolean;
   /**
+   * How SessionManager may mark this harness ready WITHOUT its real readiness
+   * signal (SessionStart hook / tailer equivalent). Absent = never.
+   *
+   *  - `"immediate"` (Codex): `isReadyEnough` trusts a settled scrollback with
+   *    no blocking prompt right away — Codex's real signal cannot arrive
+   *    before the first injection needs it (see CodexAdapter).
+   *  - `"hook-timeout"` (Claude Code): the hook is the primary signal, but a
+   *    generously-timed fallback flips `ready` when it never arrives — the
+   *    hook chain runs `node` through whatever shell Claude uses for hooks,
+   *    and on Windows machines where that resolution breaks, the alternative
+   *    was a held first prompt silently dropped. Requires
+   *    `detectBlockingPrompt` so the fallback never types into an unanswered
+   *    trust dialog.
+   */
+  readyFallback?: "immediate" | "hook-timeout";
+  /**
+   * Whether this harness's TUI is known to always enable bracketed paste
+   * (DEC mode 2004). Used only when the pty's own output never showed a 2004
+   * set/reset: ConPTY re-renders output rather than passing DEC private-mode
+   * sequences through, so on Windows the observation channel is blind and a
+   * multi-line prompt written raw would submit at its first newline. An
+   * explicit observed reset still wins over this assumption.
+   */
+  assumesBracketedPaste?: boolean;
+  /**
    * Builds a one-shot, headless invocation for `TaskManager.run()`: executes
    * `opts.prompt` non-interactively and exits on its own when the turn
    * completes — no pty write to submit it and no trust dialog to wait out

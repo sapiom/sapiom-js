@@ -85,14 +85,37 @@ const EMIT_SCRIPT_SOURCE = `#!/usr/bin/env node
 const hookEvent = process.argv[2] || "unknown";
 
 // Absolute ceiling: whatever else happens, exit quickly so we never hang
-// the agent's hook pipeline.
+// the agent's hook pipeline. 3s (not 1s): on a cold Windows loopback the
+// original 1s ceiling raced the fetch below and the SessionStart POST — the
+// only signal that flips a session to "ready" — silently lost.
 const hardStop = setTimeout(() => {
   try {
     process.exit(0);
   } catch {
     // ignore
   }
-}, 1000);
+}, 3000);
+
+// Best-effort breadcrumb when the POST fails: one line beside this script.
+// Every failure here is swallowed by design (a broken debug log must never
+// break the hook), and the file is capped so a long-dead harness can't grow
+// it unboundedly. Without this there is zero evidence anywhere when the
+// ready-signal chain dies — the exact hole the Windows prompt-drop hid in.
+function logEmitFailure(message) {
+  try {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const debugPath = path.join(__dirname, "emit-debug.log");
+    try {
+      if (fs.statSync(debugPath).size > 65536) return;
+    } catch {
+      // No file yet — fine.
+    }
+    fs.appendFileSync(debugPath, new Date().toISOString() + " " + hookEvent + " " + message + "\\n");
+  } catch {
+    // ignore
+  }
+}
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -101,7 +124,7 @@ function readStdin() {
       return;
     }
     let data = "";
-    const giveUp = setTimeout(() => resolve(data), 300);
+    const giveUp = setTimeout(() => resolve(data), 500);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
@@ -136,8 +159,14 @@ async function main() {
     payload: payload,
   });
 
+  // 2s, not 200ms: loopback is normally instant (and a dead port fails
+  // instantly with ECONNREFUSED), but a cold first accept on Windows can
+  // exceed 200ms — and a timed-out SessionStart means the session never
+  // reaches "ready" and the held first prompt is dropped. The hard stop
+  // above still bounds the whole process at 3s, far under the agent's own
+  // hook budget.
   const controller = new AbortController();
-  const abortTimer = setTimeout(() => controller.abort(), 200);
+  const abortTimer = setTimeout(() => controller.abort(), 2000);
 
   try {
     await fetch(ingestUrl, {
@@ -149,8 +178,9 @@ async function main() {
       body: body,
       signal: controller.signal,
     });
-  } catch {
+  } catch (err) {
     // Fire-and-forget: ingest being down/slow must never surface here.
+    logEmitFailure("POST failed: " + (err && err.message ? err.message : String(err)));
   } finally {
     clearTimeout(abortTimer);
   }
@@ -167,6 +197,31 @@ main()
 function settingsDirFor(root: string, harnessSessionId: string): string {
   return path.join(root, harnessSessionId);
 }
+
+/**
+ * Why the hook command invokes a BARE `node`, on every platform — this is a
+ * decision, not an omission:
+ *
+ * Claude Code runs `command` hooks through a shell: `/bin/sh -c` on POSIX,
+ * and on Windows **Git Bash by default, falling back to PowerShell** (per its
+ * hooks documentation) — never cmd.exe. `node` is the one spelling all of
+ * them resolve, PROVIDED a matching flavor exists on PATH:
+ *
+ *  - Git Bash resolves extensionless names and `.exe` — never a `.cmd`. A
+ *    machine whose only `node` was the desktop app's `node.cmd` shim ran ZERO
+ *    hooks: the SessionStart POST (the only thing that flips a session to
+ *    "ready") silently died and the held first prompt was dropped. The
+ *    desktop host now ships an extensionless `#!/bin/sh` node shim beside the
+ *    `.cmd` for exactly this (harness-desktop's runtime-shims, mirroring
+ *    npm's own three-flavor layout).
+ *  - PowerShell and cmd resolve `node.cmd`/`node.exe` via PATHEXT.
+ *
+ * An absolute `"C:\…\node.exe"` looks more robust but is a trap: PowerShell's
+ * `-Command` form parses a leading quoted string as an EXPRESSION, not an
+ * invocation (it needs `&`), so embedding one would break the documented
+ * PowerShell fallback — while adding nothing Git Bash or cmd need.
+ */
+const HOOK_NODE = "node";
 
 /**
  * Write the generated settings.json + emit.cjs for one harness session.
@@ -204,7 +259,7 @@ export async function generateClaudeSettings(
             // CLAUDE.md's "paths contain spaces — never hand a shell an
             // unquoted path" rule. The event name is a fixed identifier from
             // HOOK_EVENTS, so it needs no quoting.
-            command: `node "${emitScriptPath}" ${event}`,
+            command: `${HOOK_NODE} "${emitScriptPath}" ${event}`,
           },
         ],
       },

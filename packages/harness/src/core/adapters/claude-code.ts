@@ -19,6 +19,7 @@ import type {
   PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
+import { stripAnsi } from "../strip-ansi.js";
 
 /**
  * Minimum `claude` version the harness supports.
@@ -364,6 +365,24 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
   return args;
 }
 
+/**
+ * Claude Code's known blocking startup screens, matched against stripped-ANSI
+ * scrollback. Exported so the packaged smoke / e2e layers can pin the same
+ * patterns this adapter gates the ready-fallback on (see detectBlockingPrompt).
+ * Wording verified against Claude Code 2.1.x; a future rewording fails SAFE:
+ * an unmatched dialog only means the fallback flips `ready` and the injected
+ * prompt lands in a dialog the user is looking at anyway — the pre-fallback
+ * behaviour was the prompt silently vanishing after ten minutes.
+ */
+export const CLAUDE_BLOCKING_PROMPT_PATTERNS: readonly RegExp[] = [
+  // First-run / new-directory trust dialog.
+  /do\s+you\s+trust\s+the\s+files\s+in\s+this\s+(folder|directory)/i,
+  // First-run theme picker.
+  /choose\s+the\s+text\s+style/i,
+  // Signed-out login flow.
+  /select\s+login\s+method|sign\s+in\s+to\s+(use\s+)?claude/i,
+];
+
 export class ClaudeCodeAdapter implements HarnessAdapter {
   readonly id = "claude-code" as const;
   readonly eventSource = "hooks" as const;
@@ -371,6 +390,24 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
    *  launch/resume path below, so a rehydration brief composed into that file
    *  needs no separate delivery. */
   readonly systemPromptDelivery = "launch-flag" as const;
+  /**
+   * See `HarnessAdapter.readyFallback`. The SessionStart hook stays the
+   * primary signal (isReadyEnough gives claude-code NO immediate scrollback
+   * shortcut); this only lets SessionManager's generously-timed fallback
+   * rescue a session whose hook chain is broken — on Windows the hook runs
+   * `node` through Claude's hook shell, and when that resolution fails the
+   * POST never fires, `ready` never flips, and the held first prompt was
+   * silently dropped.
+   */
+  readonly readyFallback = "hook-timeout" as const;
+  /**
+   * See `HarnessAdapter.assumesBracketedPaste`. Claude Code's Ink input layer
+   * enables mode 2004 in every interactive session — the macOS/Linux paste
+   * detection observing `ESC[?2004h` on real ptys is the in-repo evidence.
+   * Declared so Windows (where ConPTY hides that announcement) still paste-
+   * wraps multi-line prompts instead of submitting at the first newline.
+   */
+  readonly assumesBracketedPaste = true;
   private readonly binary: string;
   private readonly homeDir: string;
   private readonly fullScanMaxBytes: number;
@@ -379,6 +416,18 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     this.binary = options.binary ?? "claude";
     this.homeDir = options.homeDir ?? homedir();
     this.fullScanMaxBytes = options.fullScanMaxBytes ?? DEFAULT_FULL_SCAN_MAX_BYTES;
+  }
+
+  /**
+   * See `HarnessAdapter.detectBlockingPrompt` and `readyFallback` above: this
+   * exists ONLY to gate the hook-timeout fallback (never type a stray Enter
+   * into an unanswered trust dialog) — it deliberately does NOT give
+   * claude-code Codex's immediate scrollback shortcut, because the hook is
+   * reliable wherever the hook chain itself works.
+   */
+  detectBlockingPrompt(scrollback: string): boolean {
+    const cleaned = stripAnsi(scrollback);
+    return CLAUDE_BLOCKING_PROMPT_PATTERNS.some((pattern) => pattern.test(cleaned));
   }
 
   async doctor(): Promise<DoctorCheck[]> {

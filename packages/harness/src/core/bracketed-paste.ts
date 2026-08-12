@@ -49,11 +49,24 @@ const MAX_CARRY = 64;
 export interface BracketedPasteState {
   /** Whether the app currently has mode 2004 on. */
   enabled: boolean;
+  /**
+   * Whether ANY 2004 set/reset has ever been seen on this pty. Distinguishes
+   * "the app turned bracketed paste off" (observed, enabled=false — respect
+   * it) from "we never saw the announcement" — which on Windows is the normal
+   * case even for apps that DO enable it, because ConPTY re-renders output
+   * instead of passing DEC private-mode sequences through. Consumers may fall
+   * back to an adapter-declared assumption only in the never-observed state.
+   */
+  observed: boolean;
   /** Trailing bytes of the last chunk that may be an unfinished sequence. */
   carry: string;
 }
 
-export const initialBracketedPasteState: BracketedPasteState = { enabled: false, carry: "" };
+export const initialBracketedPasteState: BracketedPasteState = {
+  enabled: false,
+  observed: false,
+  carry: "",
+};
 
 /**
  * The tail of `chunk` that could still grow into a private-mode set/reset on
@@ -86,10 +99,14 @@ export function trackBracketedPaste(
 ): BracketedPasteState {
   const scanned = state.carry + chunk;
   let enabled = state.enabled;
+  let observed = state.observed;
   for (const match of scanned.matchAll(PRIVATE_MODE_RE)) {
-    if (match[1]?.split(";").includes("2004")) enabled = match[2] === "h";
+    if (match[1]?.split(";").includes("2004")) {
+      enabled = match[2] === "h";
+      observed = true;
+    }
   }
-  return { enabled, carry: pendingCarry(scanned) };
+  return { enabled, observed, carry: pendingCarry(scanned) };
 }
 
 /**

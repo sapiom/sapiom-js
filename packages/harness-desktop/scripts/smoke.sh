@@ -67,18 +67,50 @@ export SAPIOM_SMOKE_OUT="$(native "$report_file")"
 # spawning that is what failed there — CreateProcess does no PATHEXT lookup and
 # cannot execute a .cmd. A stub that was an .exe would pass while the real thing
 # broke. It just idles briefly so the session is genuinely running.
+# Both stubs also RUN the SessionStart hook command from their own --settings
+# file, exactly the way Claude Code would (Git Bash on Windows — Claude's
+# documented hook shell there, falling back to cmd when bash is absent — and
+# /bin/sh -c on POSIX). The hook POSTs to /ingest with the env the stub
+# inherited, which is what flips the session to `ready` — so the session-create
+# check can assert the WHOLE readiness chain (settings → hook command → node
+# resolution under the hook shell → POST → ready), the exact seam that broke
+# silently on Windows and dropped every held first prompt.
+cat > "$smoke_home/stub-agent.js" <<'STUBJS'
+const fs = require("fs");
+const envFile = process.env.SAPIOM_SMOKE_AGENT_ENV;
+if (envFile) fs.writeFileSync(envFile, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\n") + "\n");
+try {
+  const i = process.argv.indexOf("--settings");
+  const settingsPath = i > -1 ? process.argv[i + 1] : null;
+  if (settingsPath) {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    const { execFileSync, execSync } = require("child_process");
+    if (process.platform === "win32") {
+      const bash = "C:\\Program Files\\Git\\bin\\bash.exe";
+      if (fs.existsSync(bash)) execFileSync(bash, ["-c", command], { stdio: "ignore" });
+      else execSync(command, { stdio: "ignore" });
+    } else {
+      execFileSync("/bin/sh", ["-c", command], { stdio: "ignore" });
+    }
+  }
+} catch {
+  // A failed hook is exactly what the ready-poll in checkSessionCreate reports.
+}
+setTimeout(() => process.exit(0), 3000);
+STUBJS
 if [ "$(uname -s)" != "Linux" ] && [ "$(uname -s)" != "Darwin" ]; then
   # Shaped like an npm shim on purpose — a `.cmd` that runs `node <script>` — because
   # that is exactly what `claude.cmd` is, and it's the shape resolveSpawnTarget has
   # to see through. A stub that were a plain .cmd (or an .exe) would exercise a path
   # real agents never take, and is now correctly refused rather than shelled out.
   stub="$smoke_home/stub-agent.cmd"
-  # Dumps its own environment first — see SAPIOM_SMOKE_AGENT_ENV below.
-  printf 'const f = process.env.SAPIOM_SMOKE_AGENT_ENV;\nif (f) require("fs").writeFileSync(f, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\\n") + "\\n");\nsetTimeout(() => process.exit(0), 3000);\n' > "$smoke_home/stub-agent.js"
   printf '@echo off\r\n"%%dp0%%\\node.exe" "%%dp0%%\\stub-agent.js" %%*\r\n' > "$stub"
 else
+  # `node` rather than a hardcoded path: the app's PATH augmentation (runtime
+  # shims) must make it resolvable — that resolution is part of what's under test.
   stub="$smoke_home/stub-agent.sh"
-  printf '#!/bin/sh\n[ -n "$SAPIOM_SMOKE_AGENT_ENV" ] && env > "$SAPIOM_SMOKE_AGENT_ENV"\nsleep 3\nexit 0\n' > "$stub"
+  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$smoke_home/stub-agent.js" > "$stub"
   chmod +x "$stub"
 fi
 # Where the stub agent writes its environment, so a check can assert on what the

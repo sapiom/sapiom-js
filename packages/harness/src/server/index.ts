@@ -29,6 +29,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
+import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { resolveStatePaths } from "../core/paths.js";
 import {
   SessionManager,
@@ -1578,17 +1579,7 @@ export const startServer = async (
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
   app.use(createStaticRouter(webDir, options.bootToken));
 
-  app.use(
-    (
-      err: unknown,
-      _req: express.Request,
-      res: express.Response,
-      _next: express.NextFunction,
-    ) => {
-      console.error("[harness] unhandled request error:", err);
-      res.status(500).json({ error: "internal error" });
-    },
-  );
+  app.use(unhandledRequestErrorHandler);
 
   const httpServer: HttpServer = createHttpServer(app);
 

@@ -245,6 +245,13 @@ export class CodexAdapter implements HarnessAdapter {
    * injection that needs it — a scrollback check is the only thing that
    * can stand in for it up to that point.
    */
+  /**
+   * See `HarnessAdapter.readyFallback`: `isReadyEnough` may trust a settled,
+   * prompt-free scrollback immediately — Codex's real readiness signal cannot
+   * arrive before the first injection needs it (see detectBlockingPrompt).
+   */
+  readonly readyFallback = "immediate" as const;
+
   detectBlockingPrompt(scrollback: string): boolean {
     return TRUST_PROMPT_PATTERN.test(stripAnsi(scrollback));
   }

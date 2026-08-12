@@ -156,6 +156,17 @@ const READY_SETTLE_MS = 700;
  *  frame is well under 2KB) without re-scanning unbounded history. */
 const BLOCKING_PROMPT_SCAN_BYTES = 4_096;
 /**
+ * See `armHookReadyFallback()`: how long after spawn a `readyFallback:
+ * "hook-timeout"` harness may sit un-ready before the fallback flips it.
+ * Generous on purpose: a healthy SessionStart hook lands in 1–3s, so 20s
+ * only ever fires when the hook chain is genuinely broken (the Windows
+ * node-resolution failure this exists for) — never racing a working hook.
+ */
+const HOOK_READY_FALLBACK_MS = 20_000;
+/** Poll cadence for `armHookReadyFallback()` — coarse; nothing user-visible
+ *  rides on sub-second precision 20s after spawn. */
+const HOOK_READY_POLL_MS = 1_000;
+/**
  * See `submitInput()`: how long to wait for a not-yet-ready session to
  * become ready before giving up and throwing `SessionNotReadyError`. Covers
  * the ordinary "macro fired a beat before onboarding finished" case without
@@ -790,7 +801,16 @@ export class SessionManager {
       // chat prepends a multi-line step context to every question) then stay
       // literal instead of each submitting a fragment, and the `\r` below is
       // read as Enter rather than as more pasted content.
-      handle.pty.write(handle.bracketedPaste.enabled ? wrapPaste(text) : text);
+      //
+      // Observation wins when we have one; the adapter's declared assumption
+      // only covers the never-observed case — under ConPTY the app's
+      // `ESC[?2004h` announcement is re-rendered away, so on Windows a Claude
+      // session that DOES accept bracketed paste looked like one that doesn't
+      // and multi-line prompts submitted at their first newline.
+      const paste = handle.bracketedPaste.observed
+        ? handle.bracketedPaste.enabled
+        : (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
+      handle.pty.write(paste ? wrapPaste(text) : text);
       await sleep(SUBMIT_DELAY_MS);
       // The pty may have been killed/replaced while we were waiting.
       if (this.ptys.get(id) !== handle) return false;
@@ -896,7 +916,11 @@ export class SessionManager {
   private isReadyEnough(session: HarnessSession, handle: PtyHandle): boolean {
     if (session.ready) return true;
     const adapter = this.adapters[session.harness];
-    if (!adapter?.detectBlockingPrompt) return false;
+    // Gated on the DECLARED fallback mode, not on detectBlockingPrompt's mere
+    // presence: claude-code now implements detectBlockingPrompt too (for the
+    // hook-timeout fallback armed in spawn()), and giving it this immediate
+    // shortcut would bypass its reliable SessionStart hook everywhere.
+    if (adapter?.readyFallback !== "immediate" || !adapter.detectBlockingPrompt) return false;
     if (Date.now() - handle.spawnedAt < READY_SETTLE_MS) return false;
     // Only the tail: `handle.buffer` is the full retained scrollback
     // (up to SCROLLBACK_BYTES) and full-screen TUIs never truly "clear" it
@@ -1026,6 +1050,63 @@ export class SessionManager {
     });
 
     pty.onExit(({ exitCode }) => this.markExited(session.id, handle, exitCode));
+
+    this.armHookReadyFallback(session.id, handle);
+  }
+
+  /**
+   * For a `readyFallback: "hook-timeout"` harness (Claude Code): rescue a
+   * session whose real readiness signal never arrives. `ready` is normally
+   * flipped by the SessionStart hook POSTing to /ingest — but that chain runs
+   * `node` through the agent's hook shell, and where it breaks (Windows: Git
+   * Bash resolves no `.cmd`, so a machine whose only node is a .cmd shim runs
+   * zero hooks) the session looked fine in the terminal while every held
+   * prompt was silently dropped after the SPA's timeout.
+   *
+   * Conservative on purpose:
+   *  - fires no earlier than HOOK_READY_FALLBACK_MS after spawn — a healthy
+   *    hook (1–3s) always wins the race, so behaviour only changes on
+   *    machines where the hook is already broken;
+   *  - requires SOME output — a pty that hasn't drawn anything yet isn't an
+   *    interactive TUI missing its hook, it's still starting;
+   *  - keeps waiting while a known blocking prompt (trust dialog, theme
+   *    picker, login) is on screen, so the submit `\r` that follows readiness
+   *    can never answer a dialog the user hasn't seen — once the user
+   *    dismisses it, the next poll flips ready;
+   *  - dies with the handle (exit clears the interval; a replaced handle is
+   *    detected via the ptys map, same idempotency rule as markExited()).
+   */
+  private armHookReadyFallback(id: string, handle: PtyHandle): void {
+    const session = this.sessions.get(id);
+    const adapter = session ? this.adapters[session.harness] : undefined;
+    if (adapter?.readyFallback !== "hook-timeout") return;
+
+    const poll = setInterval(() => {
+      const current = this.sessions.get(id);
+      if (!current || this.ptys.get(id) !== handle || current.status !== "running") {
+        clearInterval(poll);
+        return;
+      }
+      if (current.ready) {
+        clearInterval(poll);
+        return;
+      }
+      if (Date.now() - handle.spawnedAt < HOOK_READY_FALLBACK_MS) return;
+      if (!handle.buffer) return;
+      if (adapter.detectBlockingPrompt?.(handle.buffer.slice(-BLOCKING_PROMPT_SCAN_BYTES))) return;
+      clearInterval(poll);
+      console.warn(
+        `[harness] session ${id}: SessionStart hook never reached /ingest after ${
+          HOOK_READY_FALLBACK_MS / 1000
+        }s — marking ready by fallback. The hook command may be failing on this machine ` +
+          `(is \`node\` resolvable from the agent's hook shell?).`,
+      );
+      this.setReady(id);
+    }, HOOK_READY_POLL_MS);
+    // Never the reason the process stays alive; tests with fake timers and
+    // the real server both tear down via the exited hook below anyway.
+    poll.unref?.();
+    void handle.exited.then(() => clearInterval(poll));
   }
 
   /**

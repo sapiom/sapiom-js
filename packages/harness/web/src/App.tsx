@@ -48,6 +48,7 @@ import {
   resolveProjectRoot,
   slugifyIdea,
 } from "./lib/project-dir";
+import { basenameOf, isWithinDir } from "./lib/paths";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
 import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
@@ -859,11 +860,11 @@ export const App = (): JSX.Element => {
   const uniqueProjectDir = (base: string): string => {
     const taken = new Set<string>();
     for (const session of state.sessions) {
-      const name = session.cwd.split("/").filter(Boolean).pop();
+      const name = basenameOf(session.cwd);
       if (name) taken.add(name);
     }
     for (const workflow of state.workflows) {
-      const name = workflow.path.split("/").filter(Boolean).pop();
+      const name = basenameOf(workflow.path);
       if (name) taken.add(name);
     }
     return projectDirSuggestion(nextAvailableName(base, taken), projectRoot || null);
@@ -1038,7 +1039,7 @@ export const App = (): JSX.Element => {
     closeMobileDrawer();
     const live = state.sessions.filter((s) => s.status !== "exited");
     const ownsPath = (s: HarnessSession): boolean =>
-      s.boundWorkflowPath === path || path === s.cwd || path.startsWith(`${s.cwd}/`);
+      s.boundWorkflowPath === path || isWithinDir(s.cwd, path);
     // Prefer the ACTIVE tab when it already owns the workflow, so running a
     // macro against the current agent never yanks the workbench to a sibling
     // session in the same workspace (e.g. re-visualize on a two-tab agent).
@@ -1381,7 +1382,7 @@ export const App = (): JSX.Element => {
                 // labelled by its AGENT instead, numbering extras; a real
                 // rename/title passes through untouched.
                 const display = sessionDisplayName(session, state.sessions, sessionNames);
-                const folder = session.cwd.split("/").filter(Boolean).pop() ?? "";
+                const folder = basenameOf(session.cwd);
                 // Folder-default forms ONLY: the bare basename, or "<basename> N"
                 // the dedup appends to repeats. A real rename or transcript title
                 // that merely begins with the basename (e.g. "leasing draft")

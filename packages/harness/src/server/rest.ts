@@ -32,8 +32,9 @@ import {
   SPAWNABLE_HARNESS_KINDS,
   EDITOR_KINDS,
 } from "../shared/types.js";
-import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError, SpawnTargetError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
 import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
@@ -359,16 +360,26 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    // Collapse whatever separators the client sent (see cwd-normalize.ts) so a
+    // mixed-separator path can never reach the pty spawn or sessions.json.
+    const request = { ...parsed.data, cwd: normalizeCwd(parsed.data.cwd) };
     try {
       // sessionManager.create() writes the initial harness-context.json
       // itself (before spawning) so every entry point gets it, not just
       // this REST route — see SessionManager.create().
-      const session = await sessionManager.create(parsed.data);
+      const session = await sessionManager.create(request);
       res.status(201).json(session);
-      options.onSessionCreated?.(parsed.data.cwd, session.id);
+      options.onSessionCreated?.(request.cwd, session.id);
     } catch (err) {
-      if (err instanceof AdapterNotFoundError) {
+      if (err instanceof AdapterNotFoundError || err instanceof SpawnTargetError) {
+        // Both are user-actionable ("install claude", "restart to repair") —
+        // the dialog renders this message verbatim, so a 500 here buried the
+        // one string that tells the user what to do.
         res.status(400).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (err instanceof ExternalHarnessError) {
+        res.status(409).json({ error: err.message, code: err.code });
         return;
       }
       next(err);
@@ -519,9 +530,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(404).json({ error: err.message });
       return true;
     }
-    if (err instanceof AdapterNotFoundError) {
-      // A persisted session with an unknown harness kind (e.g. from a future
-      // or removed harness type) cannot be resumed.
+    if (err instanceof AdapterNotFoundError || err instanceof SpawnTargetError) {
+      // AdapterNotFoundError: a persisted session with an unknown harness kind
+      // (e.g. from a future or removed harness type) cannot be resumed.
+      // SpawnTargetError: the agent binary can't be spawned on Windows (not on
+      // PATH / broken install) — resuming spawns too, and the message is the
+      // user-facing remedy.
       res.status(400).json({ error: err.message, code: err.code });
       return true;
     }
@@ -548,7 +562,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
       return;
     }
-    const { agentSessionId, harness, cwd, title, lastActiveAt } = parsed.data;
+    const { agentSessionId, harness, title, lastActiveAt } = parsed.data;
+    const cwd = normalizeCwd(parsed.data.cwd);
     try {
       // Never take the client's word for resumability — it's re-derived from
       // the agent's own store here, so a stale history row (transcript deleted

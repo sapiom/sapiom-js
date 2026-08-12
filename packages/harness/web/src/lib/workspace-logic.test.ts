@@ -110,6 +110,22 @@ describe("buildWorkspaceTree (explorer: folders > agents)", () => {
     expect(tree.workspaces[0]?.bareSessions).toEqual([]);
   });
 
+  it("files a Windows agent under its Windows folder, even in mixed-separator form", () => {
+    const sessions = [
+      session({
+        id: "w",
+        cwd: "C:\\Users\\demo\\app",
+        // The `/`-joined form the browser used to produce for a native folder.
+        boundWorkflowPath: "C:\\Users\\demo\\app/leasing",
+      }),
+    ];
+    const tree = buildWorkspaceTree([workflow({ path: "C:\\Users\\demo\\app/leasing" })], sessions);
+    expect(tree.workspaces.map((w) => w.cwd)).toEqual(["C:\\Users\\demo\\app"]);
+    expect(tree.workspaces[0]?.label).toBe("app");
+    expect(tree.workspaces[0]?.agents.map((a) => a.workflow.name)).toEqual(["leasing"]);
+    expect(tree.orphanAgents).toEqual([]);
+  });
+
   it("drops a folder with no agents and no live sessions (nothing to show)", () => {
     const sessions = [session({ id: "x", cwd: "/home/dev/gone", status: "exited", boundWorkflowPath: null })];
     const tree = buildWorkspaceTree([], sessions);

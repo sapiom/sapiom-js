@@ -31,6 +31,7 @@ import {
   type RunLocalLine,
 } from "./api";
 import { type ConnectivityErrorInput } from "./connectivity";
+import { isWithinDir } from "./paths";
 import { mergeHistory } from "./history-meta";
 import { subscribeEvents } from "./events";
 import { track as trackProduct } from "./analytics/events";
@@ -438,8 +439,7 @@ export function useHarnessState(): HarnessStateHook {
     if (pendingWorkspaces.length === 0) return;
     const sessions = state?.sessions ?? [];
     const workflows = state?.workflows ?? [];
-    const isUnder = (path: string, cwd: string): boolean =>
-      path === cwd || path.startsWith(`${cwd}/`);
+    const isUnder = (path: string, cwd: string): boolean => isWithinDir(cwd, path);
     setPendingWorkspaces((prev) => {
       let changed = false;
       const next: PendingWorkspace[] = [];

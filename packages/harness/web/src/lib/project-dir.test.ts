@@ -92,6 +92,18 @@ describe("projectDirSuggestion", () => {
     expect(projectDirSuggestion("price-watch", "/Users/demo/")).toBe("/Users/demo/price-watch");
   });
 
+  it("joins a Windows root with a backslash — this string is POSTed back as a cwd", () => {
+    expect(projectDirSuggestion("newsletter-autopilot", "C:\\Users\\x\\.sapiom\\harness\\projects")).toBe(
+      "C:\\Users\\x\\.sapiom\\harness\\projects\\newsletter-autopilot",
+    );
+  });
+
+  it("does not double a Windows root's trailing separator", () => {
+    expect(projectDirSuggestion("price-watch", "C:\\Users\\demo\\")).toBe(
+      "C:\\Users\\demo\\price-watch",
+    );
+  });
+
   it.each([
     ["price-watch", null],
     ["price-watch", ""],
@@ -140,11 +152,13 @@ describe("parentOf", () => {
     ["/Users/demo/acme-app/", "/Users/demo"],
     ["/Users/demo", "/Users"],
     ["/Users", "/"],
+    ["C:\\Users\\demo", "C:\\Users"],
+    ["C:\\Users", "C:\\"],
   ])("%s → %s", (input, expected) => {
     expect(parentOf(input)).toBe(expected);
   });
 
-  it.each([["/"], [""], ["relative"]])("returns null at the top for %s", (input) => {
+  it.each([["/"], ["C:\\"], [""], ["relative"]])("returns null at the top for %s", (input) => {
     expect(parentOf(input)).toBeNull();
   });
 });

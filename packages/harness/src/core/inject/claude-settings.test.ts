@@ -56,7 +56,7 @@ describe("generateClaudeSettings", () => {
     expect(command).not.toBe(`node ${emitScriptPath} SessionStart`);
   });
 
-  it("writes a self-contained CommonJS emit.cjs with no requires", async () => {
+  it("writes a self-contained CommonJS emit.cjs — node builtins only", async () => {
     const { emitScriptPath } = await generateClaudeSettings({
       harnessSessionId: "session-abc",
       generatedRoot: tmpDir,
@@ -64,12 +64,36 @@ describe("generateClaudeSettings", () => {
 
     const source = await fs.readFile(emitScriptPath, "utf8");
     expect(source).toContain('"use strict"');
-    expect(source).not.toMatch(/require\(/);
+    // The real invariant: the script runs from an arbitrary user project with
+    // no node_modules resolvable, so every require must be a `node:` builtin.
+    for (const match of source.matchAll(/require\(([^)]*)\)/g)) {
+      expect(match[1]).toMatch(/^"node:[a-z/]+"$/);
+    }
     expect(source).not.toMatch(/^import /m);
     expect(source).toContain("process.env.SAPIOM_HARNESS_INGEST_URL");
     expect(source).toContain("process.env.SAPIOM_HARNESS_INGEST_TOKEN");
     expect(source).toContain("process.env.SAPIOM_HARNESS_SESSION_ID");
     expect(source).toContain("AbortController");
+  });
+
+  it("gives the ready-signal POST budgets that survive a cold Windows loopback", async () => {
+    // 200ms abort / 1s hard-stop raced a cold ConPTY boot and the SessionStart
+    // POST — the only signal that flips a session to "ready" — silently lost,
+    // so the held first prompt was dropped. Ordering invariant: stdin give-up
+    // plus fetch abort must stay under the hard stop.
+    const { emitScriptPath } = await generateClaudeSettings({
+      harnessSessionId: "session-abc",
+      generatedRoot: tmpDir,
+    });
+    const source = await fs.readFile(emitScriptPath, "utf8");
+    const hardStop = Number(/}, (\d+)\);\n\n\/\/ Best-effort breadcrumb/.exec(source)?.[1]);
+    const abort = Number(/controller\.abort\(\), (\d+)\)/.exec(source)?.[1]);
+    const stdinGiveUp = Number(/setTimeout\(\(\) => resolve\(data\), (\d+)\)/.exec(source)?.[1]);
+    expect(abort).toBeGreaterThanOrEqual(2000);
+    expect(hardStop).toBeGreaterThan(stdinGiveUp + abort);
+    // Breadcrumb on failure, capped so it can't grow unboundedly.
+    expect(source).toContain("emit-debug.log");
+    expect(source).toContain("65536");
   });
 
   it("omits the theme key by default (Claude keeps its default rendering)", async () => {
@@ -93,6 +117,23 @@ describe("generateClaudeSettings", () => {
     const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
     expect(settings.theme).toBe("light-ansi");
     expect(Object.keys(settings.hooks)).toHaveLength(6);
+  });
+
+  it("invokes a BARE `node` in every hook command — the one spelling all three hook shells resolve", async () => {
+    // Claude Code runs hooks through Git Bash on Windows (PowerShell
+    // fallback), /bin/sh on POSIX. Bare `node` resolves under all of them
+    // (the desktop host ships .cmd AND extensionless sh shims); an absolute
+    // "C:\...\node.exe" would parse as a string EXPRESSION, not an
+    // invocation, under PowerShell's -Command form. Pinned so a future
+    // "improvement" back to an embedded path has to argue with this test.
+    const { settingsPath } = await generateClaudeSettings({
+      harnessSessionId: "session-abc",
+      generatedRoot: tmpDir,
+    });
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    for (const event of Object.keys(settings.hooks)) {
+      expect(settings.hooks[event][0].hooks[0].command).toMatch(/^node "/);
+    }
   });
 
   it("is safe to regenerate for the same session (overwrites in place)", async () => {

@@ -13,6 +13,7 @@ export {
   SessionAlreadyLiveError,
   AdapterNotFoundError,
   ExternalHarnessError,
+  SpawnTargetError,
 } from "./core/errors.js";
 export {
   listHarnessAdapters,

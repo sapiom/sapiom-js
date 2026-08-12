@@ -30,6 +30,8 @@
 
 import type { HarnessSession, WorkflowInfo } from "@shared/types";
 
+import { basenameOf, isWithinDir } from "./paths";
+
 export interface RecentWorkspace {
   /** Absolute path; a session opens here when the row is clicked. */
   cwd: string;
@@ -45,13 +47,12 @@ export interface RecentWorkspace {
   agentCount: number;
 }
 
-const basename = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
+const basename = basenameOf;
 
 /** Same containment rule the rail's tree uses: a path is under a folder if it
  *  IS that folder or sits beneath it — never a mere string prefix, so
  *  `/a/scratch-2` is not counted under `/a/scratch`. */
-const isUnder = (childPath: string, cwd: string): boolean =>
-  childPath === cwd || childPath.startsWith(`${cwd}/`);
+const isUnder = (childPath: string, cwd: string): boolean => isWithinDir(cwd, childPath);
 
 /**
  * The Overview list, newest-activity first.

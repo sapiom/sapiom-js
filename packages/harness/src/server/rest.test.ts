@@ -16,7 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SessionRecord, SessionSummary, SpawnSpec, WorkflowInfo } from "../shared/types.js";
 import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
 import type { SessionRecordReader } from "../core/session-record.js";
-import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError, SpawnTargetError } from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -412,6 +412,72 @@ describe("createRestRouter", () => {
 
       expect(res.status).toBe(201);
       expect(writeWorkspaceContext).not.toHaveBeenCalled();
+    });
+
+    it("normalizes the cwd before create() sees it", async () => {
+      // The SPA can't know the host separator; resolve() at the route makes a
+      // duplicated-separator/traversal path canonical for every consumer
+      // (pty cwd, sessions.json, startsWith containment). Mixed "\\"/"/" is the
+      // Windows shape of this bug; the posix-expressible equivalent is pinned
+      // here since tests run on POSIX CI (win32 case: cwd-normalize.test.ts).
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "sess-1",
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+        status: "starting",
+      });
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp//projects/../proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(sessionManager.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: "/tmp/proj" }),
+      );
+    });
+
+    it("maps SpawnTargetError to a 400 carrying the actionable message", async () => {
+      // "claude isn't on PATH" / "self-update broke the install" used to
+      // surface as 500 {"error":"internal error"} — the one string telling the
+      // user what to do was discarded. The dialog renders this body verbatim.
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SpawnTargetError('cannot spawn "claude" on Windows: not found on PATH'),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("SPAWN_TARGET");
+      expect(body.error).toContain("not found on PATH");
+    });
+
+    it("maps ExternalHarnessError to a 409", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new ExternalHarnessError("conductor", "Conductor"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code: string }).code).toBe("HARNESS_EXTERNAL");
     });
   });
 

@@ -14,6 +14,7 @@
  *    from inheriting its ancestor's contents and reporting as "N projects".
  */
 import type { FsListResponse } from "./api";
+import { stripTrailingSep } from "./paths";
 import { parentOf } from "./project-dir";
 
 /** What detection found at a resolved path. */
@@ -23,9 +24,10 @@ export type FolderOutcome =
   | { kind: "plain" }
   | { kind: "new" };
 
-/** `/a/b/` → `/a/b`, so a user's trailing slash never breaks a path comparison. */
+/** `/a/b/` → `/a/b`, so a user's trailing slash never breaks a path comparison.
+ *  Kept under its historical name; the separator handling lives in paths.ts. */
 export function stripTrailingSlash(input: string): string {
-  return input.length > 1 ? input.replace(/\/+$/, "") : input;
+  return stripTrailingSep(input);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { FsDirEntry, FsListResponse } from "./api";
-import { classifyFolder } from "./detect-folder";
+import { classifyFolder, stripTrailingSlash } from "./detect-folder";
 
 function entry(path: string, hasAgentProject = false): FsDirEntry {
   return { name: path.split("/").filter(Boolean).pop() ?? path, path, hasAgentProject };
@@ -24,6 +24,17 @@ function makeListDir(map: Record<string, FsListResponse>): (path?: string) => Pr
   });
 }
 
+describe("stripTrailingSlash", () => {
+  it.each([
+    ["/a/b/", "/a/b"],
+    ["C:\\a\\b\\", "C:\\a\\b"],
+    ["/", "/"],
+    ["C:\\", "C:\\"],
+  ])("%s → %s", (input, expected) => {
+    expect(stripTrailingSlash(input)).toBe(expected);
+  });
+});
+
 describe("classifyFolder", () => {
   it("reports a new folder from the picker's isNew flag without touching the fs", async () => {
     const listDir = vi.fn();
@@ -39,6 +50,13 @@ describe("classifyFolder", () => {
   it("normalises a trailing slash before the parent-listing comparison", async () => {
     const listDir = makeListDir({ "/a": listing("/a", [{ path: "/a/b", agent: true }]) });
     expect(await classifyFolder("/a/b/", false, listDir)).toEqual({ kind: "project" });
+  });
+
+  it("recognises a Windows target as an agent project via its Windows parent", async () => {
+    const listDir = makeListDir({
+      "C:\\a": listing("C:\\a", [{ path: "C:\\a\\b", agent: true }]),
+    });
+    expect(await classifyFolder("C:\\a\\b", false, listDir)).toEqual({ kind: "project" });
   });
 
   it("counts agent projects contained under a plain folder", async () => {

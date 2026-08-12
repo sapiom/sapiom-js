@@ -326,14 +326,35 @@ async function checkSessionCreate(base: string, token: string | null): Promise<s
 
     // The record must be visible in state too — a session that spawned but never
     // registered would leave the UI with nothing to attach to.
-    const state = (await (
-      await fetch(`${base}/api/state`, { headers: { "X-Harness-Token": token } })
-    ).json()) as { sessions?: Array<{ id: string; status?: string }> };
-    const found = state.sessions?.find((s) => s.id === session.id);
+    const readState = async () =>
+      (await (
+        await fetch(`${base}/api/state`, { headers: { "X-Harness-Token": token } })
+      ).json()) as { sessions?: Array<{ id: string; status?: string; ready?: boolean }> };
+    let found = (await readState()).sessions?.find((s) => s.id === session.id);
     if (!found) throw new Error(`session ${session.id} missing from /api/state`);
 
+    // Hook delivery — the readiness chain end-to-end. The stub agent executes
+    // its --settings file's SessionStart hook command the way Claude Code
+    // would (Git Bash on Windows, /bin/sh on POSIX; scripts/smoke.sh), and
+    // that command's POST to /ingest is the ONLY thing that flips `ready`
+    // within this window (the server's own hook-timeout fallback sits at 20s,
+    // outside this 10s deadline, so a pass here can't be the fallback). This
+    // is the seam that broke silently on Windows: sessions looked fine while
+    // `ready` never flipped and every held first prompt was dropped.
+    const deadline = Date.now() + 10_000;
+    while (!found?.ready && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      found = (await readState()).sessions?.find((s) => s.id === session.id);
+    }
+    if (!found?.ready) {
+      throw new Error(
+        `session ${session.id} never became ready — the SessionStart hook command did not reach /ingest ` +
+          `(is \`node\` resolvable from the hook shell? see runtime-shims)`,
+      );
+    }
+
     const inherited = await checkAgentEnvironment(session.id);
-    return `spawned a session in ${path.basename(cwd)} (status ${found.status ?? session.status ?? "?"}); ${inherited}`;
+    return `spawned a session in ${path.basename(cwd)} (status ${found.status ?? session.status ?? "?"}, ready via SessionStart hook); ${inherited}`;
   } finally {
     // Best-effort ONLY, and deliberately so: this directory is the live pty's
     // cwd, and Windows refuses to delete a directory that is a running
@@ -497,8 +518,27 @@ async function checkRuntimeShims(): Promise<string> {
     } catch (err) {
       throw new Error(`${name} shim did not run: ${err instanceof Error ? err.message : String(err)}`);
     }
+
+    // Windows also needs the EXTENSIONLESS sh flavor beside the .cmd: Claude
+    // Code runs hook commands through Git Bash, which never resolves a `.cmd`
+    // for a bare `node` — a .cmd-only shim dir meant zero hooks ran on a
+    // machine with no system Node, so sessions never reached "ready" and held
+    // prompts were silently dropped. (npm itself ships three shim flavors for
+    // exactly this reason.) Bash isn't guaranteed here, so assert shape, not
+    // execution — the hook-delivery poll in session-create covers execution.
+    if (process.platform === "win32") {
+      const shShim = path.join(dir, name);
+      if (!existsSync(shShim)) throw new Error(`no extensionless (Git Bash) ${name} shim at ${shShim}`);
+      const body = readFileSync(shShim, "utf8");
+      if (!body.startsWith("#!/bin/sh")) {
+        throw new Error(`${shShim} is not a #!/bin/sh script (starts: ${JSON.stringify(body.slice(0, 20))})`);
+      }
+      if (body.includes("\\")) {
+        throw new Error(`${shShim} embeds backslash paths — sh-unsafe, must be forward-slashed`);
+      }
+    }
   }
-  return reports.join(", ");
+  return reports.join(", ") + (process.platform === "win32" ? " (+ extensionless Git Bash shims)" : "");
 }
 
 /**

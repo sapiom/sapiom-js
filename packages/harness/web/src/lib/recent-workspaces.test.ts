@@ -142,6 +142,20 @@ describe("recentWorkspaces", () => {
     expect(result[0]?.label).toBe("my-project");
   });
 
+  it("labels Windows cwds by basename and counts agents under mixed-separator paths", () => {
+    const result = recentWorkspaces(
+      [session({ cwd: "C:\\Users\\demo\\alpha" })],
+      [],
+      // Mixed form — a `/`-joined child of a native Windows folder (the
+      // shipped bug's shape) must still count as a descendant.
+      [workflow("C:\\Users\\demo\\alpha/leasing"), workflow("C:\\Users\\demo\\alpha-2\\rfq")],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.label).toBe("alpha");
+    expect(result[0]?.agentCount).toBe(1);
+  });
+
   it("returns nothing when nothing is known", () => {
     expect(recentWorkspaces([], [], [])).toEqual([]);
   });

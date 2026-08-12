@@ -9,6 +9,8 @@
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
  *   AdapterNotFoundError      → 400
+ *   SpawnTargetError          → 400
+ *   ExternalHarnessError      → 409
  */
 
 /** Base class for all typed harness errors. */
@@ -86,6 +88,19 @@ export class SessionAlreadyLiveError extends HarnessError {
 export class AdapterNotFoundError extends HarnessError {
   constructor(harness: string) {
     super("ADAPTER_NOT_FOUND", `No adapter registered for harness "${harness}"`);
+  }
+}
+
+/**
+ * Thrown by `resolveSpawnTarget` (core/spawn-target.ts) when a command cannot
+ * be turned into something `CreateProcess` can execute on Windows — not on
+ * PATH, an unparseable `.cmd`/`.bat` shim, or a shim whose target is missing.
+ * Every case is user-actionable ("install X", "restart to repair"), so it maps
+ * to HTTP 400 and the message is shown verbatim in the UI.
+ */
+export class SpawnTargetError extends HarnessError {
+  constructor(message: string) {
+    super("SPAWN_TARGET", message);
   }
 }
 

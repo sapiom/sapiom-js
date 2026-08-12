@@ -33,6 +33,7 @@ import { createRequire } from "node:module";
 
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../../cli/paths.js";
+import { unpackedPath } from "../asar-path.js";
 
 export interface SkillsPluginOptions {
   /** Root directory generated configs live under. Defaults to HARNESS_PATHS.generated. */
@@ -61,10 +62,15 @@ export interface SkillsPluginOptions {
 function resolveAgentCoreSkillsDir(): string | null {
   const require = createRequire(import.meta.url);
 
-  // Strategy 1: direct package.json resolution (clean path).
+  // Strategy 1: direct package.json resolution (clean path). unpackedPath():
+  // in the packaged desktop app require.resolve reports the app.asar virtual
+  // path, and while readFile works there (Electron patches fs), copyFile's
+  // SOURCE must be a real on-disk file — node_modules are asarUnpacked, so the
+  // twin exists (harness CLAUDE.md's mandatory translation for any
+  // package-relative path).
   try {
     const pkgJsonPath = require.resolve("@sapiom/agent-core/package.json");
-    return path.join(path.dirname(pkgJsonPath), "skills");
+    return unpackedPath(path.join(path.dirname(pkgJsonPath), "skills"));
   } catch {
     // exports map may not expose ./package.json — fall through to strategy 2.
   }
@@ -81,7 +87,7 @@ function resolveAgentCoreSkillsDir(): string | null {
         const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as {
           name?: string;
         };
-        if (pkg.name === "@sapiom/agent-core") return path.join(dir, "skills");
+        if (pkg.name === "@sapiom/agent-core") return unpackedPath(path.join(dir, "skills"));
       } catch {
         // No package.json here (or unparseable / a nested type-marker without a
         // name field) — keep climbing.
@@ -130,33 +136,45 @@ export async function generateSkillsPlugin(
   const generatedRoot = expandHome(options.generatedRoot ?? HARNESS_PATHS.generated);
   const pluginDir = path.join(generatedRoot, harnessSessionId, "skills-plugin");
 
-  // Write the .claude-plugin/plugin.json manifest.
-  const pluginJsonDir = path.join(pluginDir, ".claude-plugin");
-  await fs.mkdir(pluginJsonDir, { recursive: true });
-  // Plugin name is user-visible: it namespaces every skill's slash command as
-  // `/<name>:<skill>`, so "sapiom" yields `/sapiom:sapiom-agent-authoring`.
-  await fs.writeFile(
-    path.join(pluginJsonDir, "plugin.json"),
-    JSON.stringify({ name: "sapiom" }, null, 2) + "\n",
-    "utf8",
-  );
+  // The writes honor the module's documented graceful-no-op contract too:
+  // this runs inside sessionManager.create()'s launch-opts phase, so an
+  // unguarded mkdir/copy failure (disk, permissions, an asar edge we missed)
+  // killed the whole session over an optional skills plugin.
+  try {
+    // Write the .claude-plugin/plugin.json manifest.
+    const pluginJsonDir = path.join(pluginDir, ".claude-plugin");
+    await fs.mkdir(pluginJsonDir, { recursive: true });
+    // Plugin name is user-visible: it namespaces every skill's slash command as
+    // `/<name>:<skill>`, so "sapiom" yields `/sapiom:sapiom-agent-authoring`.
+    await fs.writeFile(
+      path.join(pluginJsonDir, "plugin.json"),
+      JSON.stringify({ name: "sapiom" }, null, 2) + "\n",
+      "utf8",
+    );
 
-  // Copy each skill's SKILL.md into skills/<name>/SKILL.md.
-  let copiedAny = false;
-  for (const skillName of skillDirs) {
-    const sourceMd = path.join(agentCoreSkillsDir, skillName, "SKILL.md");
-    try {
-      await fs.access(sourceMd);
-    } catch {
-      // No SKILL.md for this entry — skip.
-      continue;
+    // Copy each skill's SKILL.md into skills/<name>/SKILL.md.
+    let copiedAny = false;
+    for (const skillName of skillDirs) {
+      const sourceMd = path.join(agentCoreSkillsDir, skillName, "SKILL.md");
+      try {
+        await fs.access(sourceMd);
+      } catch {
+        // No SKILL.md for this entry — skip.
+        continue;
+      }
+      const destDir = path.join(pluginDir, "skills", skillName);
+      await fs.mkdir(destDir, { recursive: true });
+      await fs.copyFile(sourceMd, path.join(destDir, "SKILL.md"));
+      copiedAny = true;
     }
-    const destDir = path.join(pluginDir, "skills", skillName);
-    await fs.mkdir(destDir, { recursive: true });
-    await fs.copyFile(sourceMd, path.join(destDir, "SKILL.md"));
-    copiedAny = true;
-  }
 
-  if (!copiedAny) return undefined;
-  return pluginDir;
+    if (!copiedAny) return undefined;
+    return pluginDir;
+  } catch (err) {
+    console.warn(
+      `[harness] skills-plugin generation failed for session ${harnessSessionId} — launching without --plugin-dir:`,
+      err instanceof Error ? err.message : err,
+    );
+    return undefined;
+  }
 }

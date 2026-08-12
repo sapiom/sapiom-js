@@ -11,7 +11,8 @@
  * the quoting desynchronises). These tests pin that no shell is involved at all.
  */
 import { describe, expect, it } from "vitest";
-import { resolveSpawnTarget, type SpawnTargetDeps } from "./spawn-target.js";
+import { SpawnTargetError } from "./errors.js";
+import { findWindowsExecutableOnPath, resolveSpawnTarget, type SpawnTargetDeps } from "./spawn-target.js";
 
 /** A Windows box with npm's claude shim installed, as our users have. */
 function windowsWithNpmShim(overrides: Partial<Record<string, string>> = {}): SpawnTargetDeps {
@@ -179,9 +180,113 @@ describe("resolveSpawnTarget", () => {
     expect(() => resolveSpawnTarget("nope", [], windowsWithNpmShim())).toThrow(/not found on PATH/i);
   });
 
+  it("throws typed SpawnTargetError so the server can map it to a 4xx", () => {
+    // These failures are user-actionable ("install claude", "restart to repair"),
+    // but as plain Errors they surfaced as an opaque 500 "internal error".
+    for (const run of [
+      () => resolveSpawnTarget("nope", [], windowsWithNpmShim()),
+      () =>
+        resolveSpawnTarget(
+          "claude",
+          [],
+          windowsWithNpmShim({ "C:\\npm\\claude.cmd": "@echo off\r\nsomething-else.exe %*\r\n" }),
+        ),
+    ]) {
+      let thrown: unknown;
+      try {
+        run();
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(SpawnTargetError);
+      expect((thrown as SpawnTargetError).code).toBe("SPAWN_TARGET");
+    }
+  });
+
+  it("names the agent's failed self-update when the target is gone but a .old copy remains", () => {
+    // Verbatim wreckage from a user's machine: Claude Code's native updater
+    // renamed the running claude.exe to claude.exe.old.<ms-epoch> and failed to
+    // write the replacement. Every session spawn then failed with the generic
+    // "target could not be determined" — this pins the targeted message.
+    const bin = "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin";
+    const deps = windowsWithNpmShim({
+      "C:\\npm\\claude.cmd":
+        "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\n" +
+        'CALL :find_dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n',
+      [`${bin}\\claude.exe.old.1786481526874`]: "",
+    });
+    deps.listDir = (dir) =>
+      dir.toLowerCase() === bin.toLowerCase() ? ["claude.exe.old.1786481526874"] : [];
+    let thrown: unknown;
+    try {
+      resolveSpawnTarget("claude", [], deps);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SpawnTargetError);
+    expect((thrown as Error).message).toMatch(/self-updater/i);
+    expect((thrown as Error).message).toMatch(/restart the app to repair/i);
+    expect((thrown as Error).message).toContain("claude.exe");
+  });
+
+  it("refuses a .cmd node as the shim's interpreter instead of spawning it", () => {
+    // A machine whose only `node` is itself a .cmd (the desktop app's
+    // Electron-as-Node shim, LAST on PATH by design): accepting that hit hands
+    // CreateProcess a batch file — the exact failure this module exists to end.
+    const base = windowsWithNpmShim();
+    const deps: SpawnTargetDeps = {
+      ...base,
+      env: { PATH: "C:\\npm;C:\\shims", PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+      fileExists: (p) => p.toLowerCase() === "c:\\shims\\node.cmd" || base.fileExists!(p),
+    };
+    expect(() => resolveSpawnTarget("claude", [], deps)).toThrow(SpawnTargetError);
+  });
+
   it("does not mutate the caller's array", () => {
     const args = ["--one"];
     resolveSpawnTarget("claude", args, windowsWithNpmShim());
     expect(args).toEqual(["--one"]);
+  });
+});
+
+describe("findWindowsExecutableOnPath", () => {
+  const exists =
+    (...paths: string[]) =>
+    (p: string) =>
+      paths.some((k) => k.toLowerCase() === p.toLowerCase());
+
+  it("finds a real node.exe by bare name", () => {
+    expect(
+      findWindowsExecutableOnPath("node", {
+        env: { PATH: "C:\\nodejs" },
+        fileExists: exists("C:\\nodejs\\node.exe"),
+      })?.toLowerCase(),
+    ).toBe("c:\\nodejs\\node.exe");
+  });
+
+  it("never returns a .cmd, and keeps searching past one for a real .exe", () => {
+    // NOT a filter over the general lookup: a node.cmd in an early PATH dir must
+    // not mask the node.exe in a later one.
+    expect(
+      findWindowsExecutableOnPath("node", {
+        env: { PATH: "C:\\shims;C:\\nodejs" },
+        fileExists: exists("C:\\shims\\node.cmd", "C:\\nodejs\\node.exe"),
+      })?.toLowerCase(),
+    ).toBe("c:\\nodejs\\node.exe");
+    expect(
+      findWindowsExecutableOnPath("node", {
+        env: { PATH: "C:\\shims" },
+        fileExists: exists("C:\\shims\\node.cmd"),
+      }),
+    ).toBeNull();
+  });
+
+  it("strips quoted PATH entries, as cmd and `where` do", () => {
+    expect(
+      findWindowsExecutableOnPath("node", {
+        env: { PATH: '"C:\\Program Files\\nodejs";C:\\other' },
+        fileExists: exists("C:\\Program Files\\nodejs\\node.exe"),
+      })?.toLowerCase(),
+    ).toBe("c:\\program files\\nodejs\\node.exe");
   });
 });

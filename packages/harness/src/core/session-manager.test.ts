@@ -275,6 +275,45 @@ describe("SessionManager", () => {
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("draft text");
     });
 
+    it("paste-wraps on the adapter's assumption when NO 2004 traffic was ever observed", async () => {
+      // ConPTY re-renders output instead of passing DEC private-mode sequences
+      // through, so on Windows the `ESC[?2004h` announcement never arrives even
+      // from an app that has the mode on — a raw multi-line write then submits
+      // at its first newline. Claude Code declares assumesBracketedPaste for
+      // exactly this blind spot.
+      const { manager, spawns } = makeManager({
+        adapter: createFakeAdapter({ assumesBracketedPaste: true }),
+      });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("welcome banner, no mode announcements");
+
+      const submitPromise = manager.submitInput(session.id, "line one\n\nline two", true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await submitPromise).toBe(true);
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "\x1b[200~line one\n\nline two\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+    });
+
+    it("an OBSERVED reset always beats the adapter's assumption", async () => {
+      // The assumption only covers the never-observed state; an app that
+      // explicitly turned 2004 off would render the markers as literal text.
+      const { manager, spawns } = makeManager({
+        adapter: createFakeAdapter({ assumesBracketedPaste: true }),
+      });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      spawns[0]?.emitData("\x1b[?2004l");
+
+      const submitPromise = manager.submitInput(session.id, "hello\nworld", true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await submitPromise).toBe(true);
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "hello\nworld");
+    });
+
     it("returns false for an unknown session without ever touching a pty", async () => {
       const { manager } = makeManager();
       expect(await manager.submitInput("unknown-id", "hello", true)).toBe(false);
@@ -467,7 +506,7 @@ describe("SessionManager", () => {
     describe("harnesses with detectBlockingPrompt (Codex's lazy-rollout-file bridge)", () => {
       it("is not ready before the settle window elapses, even with a clean scrollback", async () => {
         const detectBlockingPrompt = vi.fn(() => false);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt, readyFallback: "immediate" }) });
         const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
@@ -484,7 +523,7 @@ describe("SessionManager", () => {
 
       it("becomes ready enough after the settle window when the scrollback shows no blocking prompt (the common already-trusted case)", async () => {
         const detectBlockingPrompt = vi.fn(() => false);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt, readyFallback: "immediate" }) });
         const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
         await vi.advanceTimersByTimeAsync(700);
@@ -501,7 +540,7 @@ describe("SessionManager", () => {
       it("stays not-ready while the scrollback shows a blocking prompt, then proceeds once it clears", async () => {
         let showingPrompt = true;
         const detectBlockingPrompt = vi.fn(() => showingPrompt);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt, readyFallback: "immediate" }) });
         const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
@@ -517,7 +556,7 @@ describe("SessionManager", () => {
 
       it("throws SessionNotReadyError if the blocking prompt never clears within the grace period", async () => {
         const detectBlockingPrompt = vi.fn(() => true);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt, readyFallback: "immediate" }) });
         const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
@@ -527,6 +566,93 @@ describe("SessionManager", () => {
 
         expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("hook-timeout ready fallback (Claude Code's broken-hook rescue)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    const hookTimeoutAdapter = (detect: (scrollback: string) => boolean = () => false) =>
+      createFakeAdapter({
+        readyFallback: "hook-timeout",
+        detectBlockingPrompt: vi.fn(detect),
+      });
+
+    it("flips ready ~20s after spawn when the hook never lands and the screen shows no blocking prompt", async () => {
+      // The Windows failure this rescues: the SessionStart hook runs `node`
+      // through the agent's hook shell; where that resolution breaks, ready
+      // never flips and the SPA's held first prompt is dropped after 10min.
+      const { manager, spawns } = makeManager({ adapter: hookTimeoutAdapter() });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      spawns[0]?.emitData("welcome to claude\r\n> ");
+
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(manager.get(session.id)?.ready).toBe(true);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("marking ready by fallback"));
+    });
+
+    it("never fires when the real hook already landed — a healthy machine sees no behavior change", async () => {
+      const { manager, spawns } = makeManager({ adapter: hookTimeoutAdapter() });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      spawns[0]?.emitData("welcome\r\n");
+      manager.setReady(session.id);
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it("keeps waiting while a blocking prompt is on screen — the submit \\r must never answer a trust dialog", async () => {
+      let showingPrompt = true;
+      const { manager, spawns } = makeManager({ adapter: hookTimeoutAdapter(() => showingPrompt) });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      spawns[0]?.emitData("Do you trust the files in this folder?\r\n");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      // The user answers the dialog in the terminal; the next poll may flip.
+      showingPrompt = false;
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("requires SOME output first — a pty that never drew anything is still starting, not hook-broken", async () => {
+      const { manager } = makeManager({ adapter: hookTimeoutAdapter() });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+    });
+
+    it("stops polling once the pty exits", async () => {
+      const { manager, spawns } = makeManager({ adapter: hookTimeoutAdapter() });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      spawns[0]?.emitData("output\r\n");
+      spawns[0]?.emitExit(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+      expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("marking ready by fallback"));
+    });
+
+    it("is not armed for adapters without hook-timeout (Codex keeps its immediate path, default gets nothing)", async () => {
+      const { manager, spawns } = makeManager({ adapter: createFakeAdapter() });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      spawns[0]?.emitData("output\r\n");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
     });
   });
 

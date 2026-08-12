@@ -11,11 +11,19 @@
  * working `node`/`npm` with zero system dependencies — and independent of where
  * (or whether) the user has their own (e.g. this box keeps them in /usr/sbin,
  * which a GUI app's minimal PATH misses).
+ *
+ * On Windows each CLI gets TWO files — `<name>.cmd` AND an extensionless
+ * `#!/bin/sh` script — because Claude Code executes hook commands through Git
+ * Bash there, and bash resolves only extensionless names/`.exe`, never `.cmd`.
+ * npm itself ships three shim flavors (`.cmd`, `.ps1`, extensionless sh) for
+ * exactly this reason. What bytes go in which file is `shim-files.ts`'s job
+ * (pure, unit-tested); this module is only the electron-facing wiring.
  */
 import { app } from "electron";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { resolveNpmBin } from "./agent-install.js";
+import { shimFiles } from "./shim-files.js";
 
 const isWindows = process.platform === "win32";
 
@@ -33,7 +41,6 @@ export function shimDir(): string {
 export function installRuntimeShims(): string {
   const dir = shimDir();
   mkdirSync(dir, { recursive: true });
-  const exec = process.execPath;
 
   // node, npm AND npx. npx was the one missing, and its absence was silent: the
   // per-session MCP config launches the sapiom-dev server with `command: "npx"`
@@ -47,21 +54,21 @@ export function installRuntimeShims(): string {
     ["npx", resolveNpmBin("npx")],
   ];
 
-  for (const [name, cli] of clis) {
+  for (const file of shimFiles(process.execPath, process.platform, clis)) {
+    const filePath = path.join(dir, file.fileName);
+    writeFileSync(filePath, file.body);
     if (isWindows) {
-      // `%*` forwards args; ELECTRON_RUN_AS_NODE makes Electron behave as Node.
-      const body = cli
-        ? `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exec}" "${cli}" %*\r\n`
-        : `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exec}" %*\r\n`;
-      writeFileSync(path.join(dir, `${name}.cmd`), body);
-      continue;
+      // chmod is a no-op on Windows but harmless — and never worth crashing
+      // boot over on an exotic filesystem.
+      try {
+        chmodSync(filePath, 0o755);
+      } catch {
+        /* ignore */
+      }
+    } else {
+      // POSIX: the execute bit is load-bearing; a failure here must surface.
+      chmodSync(filePath, 0o755);
     }
-    const body = cli
-      ? `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec "${exec}" "${cli}" "$@"\n`
-      : `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec "${exec}" "$@"\n`;
-    const shimPath = path.join(dir, name);
-    writeFileSync(shimPath, body);
-    chmodSync(shimPath, 0o755);
   }
   return dir;
 }

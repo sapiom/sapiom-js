@@ -45,6 +45,11 @@ describe("sessionDisplayName", () => {
     expect(sessionDisplayName(s, [s], { s1: "  " })).toBe("Build the leasing pipeline");
   });
 
+  it("defaults from a Windows cwd's basename too", () => {
+    const s = session({ cwd: "C:\\Users\\demo\\acme-app" });
+    expect(sessionDisplayName(s, [s], {})).toBe("acme-app");
+  });
+
   it("sessions in different folders never collide", () => {
     const a = session({ id: "s1", cwd: "/Users/demo/acme-app", title: "acme-app" });
     const b = session({ id: "s2", cwd: "/Users/demo/scratch", title: "scratch" });

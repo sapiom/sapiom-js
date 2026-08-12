@@ -3,15 +3,8 @@ import type { JSX } from "react";
 
 import type { FsDirEntry, FsListResponse } from "../lib/api";
 import { getDesktopBridge } from "../lib/desktop";
+import { middleTruncatePath, parentOf } from "../lib/paths";
 import { Icon } from "./Icon";
-
-/** "/Users/…/onboarding-flow" — middle-truncates a long path so a chip row
- *  never hard-clips a chip mid-glyph; the full path stays in the tooltip. */
-function middleTruncatePath(path: string): string {
-  const segments = path.split("/").filter(Boolean);
-  if (segments.length <= 2) return path;
-  return `/${segments[0]}/…/${segments[segments.length - 1]}`;
-}
 
 /**
  * The resolved state of the field, handed to `onResolve` so a host can classify
@@ -99,12 +92,6 @@ export function DirectoryPicker({
     setLoading(true);
     setError(null);
     setNewDir(false);
-    const parentOf = (path: string): string | null => {
-      const trimmed = path.replace(/\/+$/, "");
-      const cut = trimmed.slice(0, trimmed.lastIndexOf("/"));
-      if (!trimmed.includes("/") || cut === trimmed) return null;
-      return cut || "/";
-    };
     const handle = setTimeout(() => {
       listDir(value || undefined)
         .then((res) => {
@@ -144,7 +131,13 @@ export function DirectoryPicker({
 
   // If the listing resolved to an ancestor of what was typed (the tail didn't
   // exist yet), that tail is a type-ahead filter over the ancestor's children.
-  const tail = value.startsWith(browsePath) ? value.slice(browsePath.length).replace(/^\//, "") : "";
+  // The prefix check is separator-insensitive (the server reports native
+  // backslash paths on Windows while the field may hold a `/`-joined one), but
+  // the slice happens on the raw value so the tail keeps what was typed.
+  const normalizeSep = (p: string): string => p.replace(/\\/g, "/");
+  const tail = normalizeSep(value).startsWith(normalizeSep(browsePath))
+    ? value.slice(browsePath.length).replace(/^[\\/]+/, "")
+    : "";
   const filteredDirs = tail ? dirs.filter((d) => d.name.toLowerCase().startsWith(tail.toLowerCase())) : dirs;
   const clampedHighlight = Math.min(highlight, Math.max(filteredDirs.length - 1, 0));
 

@@ -415,6 +415,15 @@ describe("templateDirSuggestion", () => {
     ).toBe("/Users/demo/acme-app/hello-agent");
   });
 
+  it("joins a Windows launch dir with a backslash", () => {
+    expect(
+      templateDirSuggestion(
+        summary({ id: "hello-agent" }),
+        "C:\\Users\\demo\\acme-app",
+      ),
+    ).toBe("C:\\Users\\demo\\acme-app\\hello-agent");
+  });
+
   it("gives the 'default' starter a descriptive folder name", () => {
     expect(
       templateDirSuggestion(STARTER_TEMPLATES[0], "/Users/demo/acme-app"),

@@ -13,6 +13,26 @@ import {
 } from "./claude-code.js";
 
 describe("ClaudeCodeAdapter", () => {
+  describe("readiness fallback surface", () => {
+    it("declares hook-timeout (never immediate) so the SessionStart hook stays primary", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      expect(adapter.readyFallback).toBe("hook-timeout");
+      expect(adapter.assumesBracketedPaste).toBe(true);
+    });
+
+    it("detectBlockingPrompt matches Claude's known blocking screens through ANSI noise", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      // ANSI-decorated, as a real pty frame renders them.
+      expect(
+        adapter.detectBlockingPrompt("\x1b[1mDo you trust the files in this folder?\x1b[0m"),
+      ).toBe(true);
+      expect(adapter.detectBlockingPrompt("Do you trust the files in this directory?")).toBe(true);
+      expect(adapter.detectBlockingPrompt("Choose the text style that looks best")).toBe(true);
+      expect(adapter.detectBlockingPrompt("Select login method:")).toBe(true);
+      expect(adapter.detectBlockingPrompt("> welcome, composer is ready")).toBe(false);
+    });
+  });
+
   describe("launch/resume — pluginDir flag", () => {
     it("includes --plugin-dir in launch args when pluginDir is set", () => {
       const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
