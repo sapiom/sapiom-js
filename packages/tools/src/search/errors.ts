@@ -16,6 +16,23 @@ export class SearchHttpError extends Error {
 }
 
 /**
+ * A successful HTTP response that does not match a documented `search`
+ * operation's wire contract. This is deliberately distinct from an empty
+ * result and from a non-2xx {@link SearchHttpError}.
+ */
+export class SearchContractError extends Error {
+  readonly operation: string;
+  readonly body: unknown;
+
+  constructor(operation: string, message: string, body: unknown) {
+    super(`Invalid Search ${operation} response: ${message}`);
+    this.name = "SearchContractError";
+    this.operation = operation;
+    this.body = body;
+  }
+}
+
+/**
  * Return the response when 2xx, otherwise throw a {@link SearchHttpError}.
  * Parses the error body as JSON when possible; falls back to raw text.
  */

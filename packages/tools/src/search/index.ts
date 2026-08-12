@@ -18,11 +18,13 @@
  *
  * Or via an explicit client: `createClient({ apiKey }).search.webSearch(...)`.
  *
- * Every operation here is **routed**: it goes through the shared
+ * Web search, scrape, and email operations are **routed** through the shared
  * {@link capabilityCall} seam to `POST /v1/capabilities/<id>` on the single Core
  * base URL (SAP-1116). The dotted capability id (`web.scrape`, `web.search`,
- * `email.find` / `email.verify` / `email.domain.search`) appears only on the wire —
- * the public verb names and shapes below are unchanged. Failed requests throw
+ * `email.find` / `email.verify` / `email.domain.search`) appears only on the wire.
+ * `map` is the exception: it calls the Firecrawl gateway directly at `/v2/map`
+ * because that endpoint has no routed capability id. The public verb names and
+ * shapes remain provider-neutral in both cases. Failed requests throw
  * {@link SearchHttpError} (carries `status` + parsed `body`).
  */
 import {
@@ -31,9 +33,11 @@ import {
   defaultTransport,
   resolveCoreBaseUrl,
 } from "../_client/index.js";
-import { SearchHttpError } from "./errors.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
+import { ensureOk, SearchContractError, SearchHttpError } from "./errors.js";
+import { validateMapInput } from "./validation.js";
 
-export { SearchHttpError };
+export { SearchContractError, SearchHttpError };
 
 /** Build the capability-specific error the routed call throws on a non-2xx. */
 const searchError = (message: string, status: number, body: unknown): Error =>
@@ -622,4 +626,130 @@ export async function domainSearch(
     },
   );
   return mapDomainSearch(input.domain, raw);
+}
+
+// ----- map -----
+
+/**
+ * `map` is gateway-direct, unlike the routed verbs above: site mapping is not a
+ * routed capability (`/v2/map` carries no capability id at the gateway), so the
+ * call goes straight to the Firecrawl provider host with the credential on the
+ * default gateway header. Flat-priced at $0.009 per call.
+ */
+const MAP_BASE_URL = resolveServiceUrl(
+  "firecrawl",
+  process.env.SAPIOM_FIRECRAWL_URL,
+);
+
+export interface MapInput {
+  /** URL of the site to map (an HTML page — not an image/binary URL). */
+  url: string;
+}
+
+/** One discovered URL. `title`/`description` are best-effort and often null. */
+export interface MapLink {
+  url: string;
+  title?: string | null;
+  description?: string | null;
+}
+
+export interface MapResult {
+  /** Every URL discovered from the starting page (sitemap + crawled links). */
+  links: MapLink[];
+  /** Upstream success flag (absent on some responses; links presence is the signal). */
+  success?: boolean;
+}
+
+function mapContractError(message: string, body: unknown): never {
+  throw new SearchContractError("map", message, body);
+}
+
+async function readMapResponse(response: Response): Promise<unknown> {
+  const text = await response.text().catch(() => "");
+  if (!text) mapContractError("expected a JSON body", undefined);
+  try {
+    return JSON.parse(text);
+  } catch {
+    mapContractError("response body is not valid JSON", text);
+  }
+}
+
+function parseMapResponse(raw: unknown): MapResult {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    mapContractError("expected an object with a links array", raw);
+  }
+  const response = raw as Record<string, unknown>;
+  if (!Array.isArray(response.links)) {
+    mapContractError("expected a links array", raw);
+  }
+  if (response.success !== undefined && typeof response.success !== "boolean") {
+    mapContractError("expected success to be a boolean when present", raw);
+  }
+
+  const links = response.links.map((item, index): MapLink => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      mapContractError(`link at index ${index} must be an object`, item);
+    }
+    const link = item as Record<string, unknown>;
+    if (typeof link.url !== "string" || link.url.trim().length === 0) {
+      mapContractError(
+        `link at index ${index} requires a non-empty string url`,
+        item,
+      );
+    }
+    for (const field of ["title", "description"] as const) {
+      if (
+        link[field] !== undefined &&
+        link[field] !== null &&
+        typeof link[field] !== "string"
+      ) {
+        mapContractError(
+          `link at index ${index} field '${field}' must be a string or null when present`,
+          item,
+        );
+      }
+    }
+    return {
+      url: link.url,
+      ...(link.title !== undefined && {
+        title: link.title as string | null,
+      }),
+      ...(link.description !== undefined && {
+        description: link.description as string | null,
+      }),
+    };
+  });
+
+  return {
+    links,
+    ...(response.success !== undefined && {
+      success: response.success as boolean,
+    }),
+  };
+}
+
+/**
+ * Discover every URL on a website without extracting content — fast sitemap
+ * discovery from a starting page ($0.009 flat). Returns structured links
+ * (unlike the MCP tool of the same capability, which renders markdown text).
+ *
+ * Non-2xx responses throw {@link SearchHttpError}; malformed successful
+ * responses throw {@link SearchContractError} rather than fabricating an empty
+ * result.
+ */
+export async function map(
+  input: MapInput,
+  transport: Transport = defaultTransport(),
+  baseUrl: string = MAP_BASE_URL,
+): Promise<MapResult> {
+  validateMapInput(input);
+  const res = await ensureOk(
+    await transport.fetch(`${baseUrl}/v2/map`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: input.url }),
+    }),
+    `Failed to map ${input.url}`,
+  );
+  return parseMapResponse(await readMapResponse(res));
 }

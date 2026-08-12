@@ -85,6 +85,7 @@ import {
   findEmail,
   verifyEmail,
   domainSearch,
+  map as searchMap,
 } from "./search/index.js";
 import type {
   ScrapeInput,
@@ -97,7 +98,15 @@ import type {
   VerifyEmailResult,
   DomainSearchInput,
   DomainSearchResult,
+  MapInput,
+  MapResult,
 } from "./search/index.js";
+import * as searchindex from "./search-index/index.js";
+import type {
+  CreateSearchIndexInput,
+  UpdateSearchIndexInput,
+  SearchIndex,
+} from "./search-index/index.js";
 import * as database from "./database/index.js";
 import type { CreateDatabaseInput, Database } from "./database/index.js";
 import * as email from "./email/index.js";
@@ -290,6 +299,8 @@ export interface Sapiom {
     scrape(input: ScrapeInput): Promise<ScrapeResult>;
     /** Search the web — a synthesized answer plus results by default. */
     webSearch(input: WebSearchInput): Promise<WebSearchResponse>;
+    /** Map every URL discoverable on a site — structured links ($0.009 flat). */
+    map(input: MapInput): Promise<MapResult>;
     /** Find, verify, and discover professional email addresses. */
     readonly emailSearch: {
       /** Find a person's email from their name and company. */
@@ -299,6 +310,26 @@ export interface Sapiom {
       /** Discover the emails published at a company domain. */
       domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
     };
+  };
+  /**
+   * Provisioned search indexes with server-side auto-embedding — full-text +
+   * semantic search over JSON documents. Control plane manages indexes;
+   * `create`/`get`/`list` return a bound {@link SearchIndex} handle carrying
+   * logically-metered data-plane operations (upsert / query / range /
+   * fetchDocuments / deleteDocuments) against the index's own data-plane URL.
+   * Distinct from `search` (web search / scrape).
+   */
+  readonly searchindex: {
+    /** Create an index. Omit `ttl` for long-lived — expired indexes are reaped. */
+    create(input: CreateSearchIndexInput): Promise<SearchIndex>;
+    /** Retrieve an index by id as a bound handle. */
+    get(id: string): Promise<SearchIndex>;
+    /** List your indexes as bound handles (read-only). */
+    list(): Promise<SearchIndex[]>;
+    /** Update an index's name and/or expiry. */
+    update(id: string, input: UpdateSearchIndexInput): Promise<SearchIndex>;
+    /** Delete a whole index and ALL its data (document-level: `deleteDocuments`). */
+    delete(id: string): Promise<void>;
   };
   /** On-demand Postgres databases, returned with direct connection credentials. */
   readonly database: {
@@ -585,11 +616,19 @@ function bind(transport: Transport): Sapiom {
     search: {
       scrape: (input) => scrape(input, transport),
       webSearch: (input) => webSearch(input, transport),
+      map: (input) => searchMap(input, transport),
       emailSearch: {
         findEmail: (input) => findEmail(input, transport),
         verifyEmail: (input) => verifyEmail(input, transport),
         domainSearch: (input) => domainSearch(input, transport),
       },
+    },
+    searchindex: {
+      create: (input) => searchindex.create(input, transport),
+      get: (id) => searchindex.get(id, transport),
+      list: () => searchindex.list(transport),
+      update: (id, input) => searchindex.update(id, input, transport),
+      delete: (id) => searchindex.delete(id, transport),
     },
     database: {
       create: (input) => database.create(input, transport),
