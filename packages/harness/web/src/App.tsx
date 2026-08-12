@@ -48,7 +48,7 @@ import {
   resolveProjectRoot,
   slugifyIdea,
 } from "./lib/project-dir";
-import { basenameOf, isWithinDir } from "./lib/paths";
+import { basenameOf, isWithinDir, samePath } from "./lib/paths";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
 import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
@@ -110,7 +110,12 @@ function liveSessionsForFocus(sessions: HarnessSession[], focusPath: string | nu
     .filter(
       (s) =>
         s.status !== "exited" &&
-        (s.boundWorkflowPath === focusPath || (s.boundWorkflowPath == null && s.cwd === focusPath)),
+        // samePath, not ===: the server resolve()s the cwd it stores while
+        // this focus string is whatever the user typed / recentDirs kept, so
+        // a "C:/…" spelling or a trailing separator would hide the session
+        // the user just created.
+        (samePath(s.boundWorkflowPath ?? "", focusPath) ||
+          (s.boundWorkflowPath == null && samePath(s.cwd, focusPath))),
     )
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }

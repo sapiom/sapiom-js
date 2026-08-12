@@ -98,6 +98,7 @@ describe("SessionManager", () => {
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
+      platform?: SessionManagerOptions["platform"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -124,6 +125,7 @@ describe("SessionManager", () => {
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
       isPidAlive: opts.isPidAlive,
+      platform: opts.platform,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -283,6 +285,7 @@ describe("SessionManager", () => {
       // exactly this blind spot.
       const { manager, spawns } = makeManager({
         adapter: createFakeAdapter({ assumesBracketedPaste: true }),
+        platform: "win32",
       });
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
       manager.setReady(session.id);
@@ -301,6 +304,7 @@ describe("SessionManager", () => {
       // explicitly turned 2004 off would render the markers as literal text.
       const { manager, spawns } = makeManager({
         adapter: createFakeAdapter({ assumesBracketedPaste: true }),
+        platform: "win32",
       });
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
       manager.setReady(session.id);

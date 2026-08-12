@@ -578,9 +578,17 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       // Idempotent: a row already tracked by the registry resumes its existing
       // record rather than minting a duplicate on every click.
+      // Compare NORMALIZED cwds: records persisted before cwd normalization
+      // existed (and any written by an older build) can hold the
+      // mixed-separator form the SPA used to send, which never equals the
+      // resolved `cwd` above — so an exact compare re-adopts the same
+      // conversation into a duplicate row on every Resume.
       const existing = sessionManager
         .list()
-        .find((session) => session.agentSessionId === agentSessionId && session.cwd === cwd);
+        .find(
+          (session) =>
+            session.agentSessionId === agentSessionId && normalizeCwd(session.cwd) === cwd,
+        );
       const target = existing ?? sessionManager.registerHistorical({ agentSessionId, harness, cwd, title, lastActiveAt });
       res.json(await sessionManager.resume(target.id));
     } catch (err) {

@@ -356,8 +356,16 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   //     doctor stayed green. resolveSpawnTarget is the real oracle; when it
   //     refuses and the broken install is the app-managed one, re-run the
   //     (idempotent) npm install to put a working binary back.
+  // BOTH global layouts: npm puts packages under `<prefix>/node_modules` on
+  // Windows and `<prefix>/lib/node_modules` on POSIX (agent-install.ts).
+  // Checking only the Windows shape meant the DISABLE_AUTOUPDATER opt-out
+  // below silently never applied on macOS/Linux — leaving the very
+  // self-updater that tears managed installs live on those platforms.
   const managedClaudeInstalled = (): boolean =>
-    fs.existsSync(path.join(agentPrefixDir(), "node_modules", "@anthropic-ai", "claude-code"));
+    [
+      path.join(agentPrefixDir(), "node_modules", "@anthropic-ai", "claude-code"),
+      path.join(agentPrefixDir(), "lib", "node_modules", "@anthropic-ai", "claude-code"),
+    ].some((dir) => fs.existsSync(dir));
   if (!smoke && report.availableHarnesses.includes("claude-code")) {
     const decision = agentRepairDecision({
       platform: process.platform,

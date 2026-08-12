@@ -158,3 +158,17 @@ describe("middleTruncatePath", () => {
     expect(middleTruncatePath("C:\\Users")).toBe("C:\\Users");
   });
 });
+
+describe("isWithinDir at a filesystem root", () => {
+  it("groups children under a drive root or /", () => {
+    // stripTrailingSep preserves a root's trailing separator by contract, so
+    // the containment check used to test a DOUBLED separator ("C://…") and
+    // every session under a root-level workspace rendered as an orphan.
+    expect(isWithinDir("C:\\", "C:\\proj")).toBe(true);
+    expect(isWithinDir("C:\\", "C:\\proj\\nested")).toBe(true);
+    expect(isWithinDir("/", "/proj")).toBe(true);
+    // Still not a bare string prefix, and still exact-match tolerant.
+    expect(isWithinDir("C:\\", "D:\\proj")).toBe(false);
+    expect(isWithinDir("C:\\", "C:\\")).toBe(true);
+  });
+});

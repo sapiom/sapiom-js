@@ -68,10 +68,28 @@ export function stripTrailingSep(p: string): string {
 /** Whether `child` IS `parent` or sits beneath it — never a mere string
  *  prefix, so `/a/scratch-2` is not within `/a/scratch`. Separator-insensitive
  *  on both sides, so a mixed-form path still matches its native spelling. */
+/**
+ * Whether two paths name the same directory, ignoring separator form and a
+ * trailing separator.
+ *
+ * Needed because the client and the server no longer agree byte-for-byte: the
+ * server `path.resolve()`s every cwd it stores (server/cwd-normalize.ts) while
+ * the SPA holds whatever the user typed or a recentDirs entry recorded — so a
+ * `C:/…`-typed path, or one with a trailing slash, fails a raw `===` against
+ * the very session it just created (empty tab strip, unhighlighted rail row).
+ */
+export function samePath(a: string, b: string): boolean {
+  return stripTrailingSep(a.replace(/\\/g, "/")) === stripTrailingSep(b.replace(/\\/g, "/"));
+}
+
 export function isWithinDir(parent: string, child: string): boolean {
   const p = stripTrailingSep(parent.replace(/\\/g, "/"));
   const c = stripTrailingSep(child.replace(/\\/g, "/"));
-  return c === p || c.startsWith(`${p}/`);
+  if (c === p) return true;
+  // A filesystem root keeps its trailing separator (stripTrailingSep's
+  // contract), so appending another would test "C://…" and never match —
+  // every session under a root-level workspace looked like an orphan.
+  return p.endsWith("/") ? c.startsWith(p) : c.startsWith(`${p}/`);
 }
 
 /** Whether typed input is trying to be an absolute path (`/…`, `~…`, or a

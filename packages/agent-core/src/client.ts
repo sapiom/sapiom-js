@@ -108,7 +108,16 @@ export class GatewayClient {
       throw networkError(url, err);
     }
 
-    const text = await res.text();
+    // The body read is inside the same timeout as the request, so a stalled
+    // or reset body rejects HERE with a raw TimeoutError/TypeError — map it
+    // through the same NETWORK error the fetch above gets, or callers that
+    // switch on `code`/`hint` see an opaque "operation was aborted".
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      throw networkError(url, err);
+    }
     const data = text ? safeParse(text) : undefined;
     if (!res.ok) {
       throw new AgentOperationError({

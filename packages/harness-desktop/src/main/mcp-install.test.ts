@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureSapiomMcp, resolveSapiomMcpEntry } from "./mcp-install.js";
+import { REFRESH_AFTER_MS, ensureSapiomMcp, resolveSapiomMcpEntry } from "./mcp-install.js";
 
 let root: string;
 
@@ -50,13 +50,41 @@ describe("resolveSapiomMcpEntry", () => {
 });
 
 describe("ensureSapiomMcp", () => {
-  it("uses an existing install immediately and refreshes it in the background", async () => {
+  it("uses a FRESH existing install without touching the registry", async () => {
+    // The refresh must never be backgrounded: boot bakes this path into every
+    // session's MCP config, and npm refreshes by removing and re-extracting
+    // that exact directory — racing the first session's spawn.
     const prefix = makePrefix("windows");
     const install = vi.fn(async () => ({ ok: true }));
     const entry = await ensureSapiomMcp({ prefix, smoke: false, devMode: false, install });
     expect(entry).toContain("index.js");
-    // Background refresh was kicked off but not awaited for the result.
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("refreshes — awaited, before any session exists — once the install goes stale", async () => {
+    const prefix = makePrefix("windows");
+    const install = vi.fn(async () => ({ ok: true }));
+    const entry = await ensureSapiomMcp({
+      prefix,
+      smoke: false,
+      devMode: false,
+      install,
+      now: () => Date.now() + REFRESH_AFTER_MS + 1,
+    });
     expect(install).toHaveBeenCalledTimes(1);
+    expect(entry).toContain("index.js");
+  });
+
+  it("keeps a usable install when a stale-refresh fails, rather than falling back to npx", async () => {
+    const prefix = makePrefix("windows");
+    const entry = await ensureSapiomMcp({
+      prefix,
+      smoke: false,
+      devMode: false,
+      install: async () => ({ ok: false }),
+      now: () => Date.now() + REFRESH_AFTER_MS + 1,
+    });
+    expect(entry).toContain("index.js");
   });
 
   it("installs when missing, then resolves the fresh entry", async () => {
@@ -79,6 +107,23 @@ describe("ensureSapiomMcp", () => {
     const install = vi.fn(async () => ({ ok: true }));
     expect(await ensureSapiomMcp({ prefix: root, smoke: true, devMode: false, install })).toBeNull();
     expect(await ensureSapiomMcp({ prefix: root, smoke: false, devMode: true, install })).toBeNull();
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("in dev, uses an install a packaged run left but never refreshes it", async () => {
+    // `pnpm dev` shares the packaged app's userData prefix: installing from
+    // there would hit the registry every launch, clobber a locally-built test
+    // copy, and rewrite a tree a packaged instance may be running from.
+    const prefix = makePrefix("windows");
+    const install = vi.fn(async () => ({ ok: true }));
+    const entry = await ensureSapiomMcp({
+      prefix,
+      smoke: false,
+      devMode: true,
+      install,
+      now: () => Date.now() + REFRESH_AFTER_MS + 1,
+    });
+    expect(entry).toContain("index.js");
     expect(install).not.toHaveBeenCalled();
   });
 

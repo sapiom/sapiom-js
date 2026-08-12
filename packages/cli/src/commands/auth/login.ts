@@ -26,7 +26,10 @@ function openBrowser(url: string): void {
   const os = platform();
   const [cmd, args] = os === 'darwin' ? ['open', [safeUrl]] : os === 'win32' ? ['cmd', ['/c', 'start', '', safeUrl]] : ['xdg-open', [safeUrl]];
   try {
-    execFile(cmd as string, args as string[], () => {
+    // windowsHide: this CLI also runs under hosts with no console of their own
+    // (the desktop app shells it, editors' task runners), where a cmd child
+    // would otherwise pop a visible window.
+    execFile(cmd as string, args as string[], { windowsHide: true }, () => {
       /* best-effort; the URL is always printed too */
     });
   } catch {

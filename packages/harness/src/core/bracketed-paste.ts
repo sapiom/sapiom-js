@@ -21,6 +21,13 @@
  * than assuming it: an app that never enables 2004 keeps the previous raw
  * behaviour instead of being fed escape sequences it would render as text.
  *
+ * One exception, gated to Windows by its consumer (`SessionManager.submitInput`):
+ * ConPTY re-renders output instead of passing DEC private-mode sequences
+ * through, so the announcement never reaches us even from an app that DID
+ * enable the mode. There, and only there, an adapter may declare
+ * `assumesBracketedPaste` — hence {@link BracketedPasteState.observed}, which
+ * separates "the app turned it off" from "we never saw the announcement".
+ *
  * Pure — no I/O, no pty — so the parsing is unit-testable on strings.
  */
 

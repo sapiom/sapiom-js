@@ -84,17 +84,26 @@ const EMIT_SCRIPT_SOURCE = `#!/usr/bin/env node
 
 const hookEvent = process.argv[2] || "unknown";
 
-// Absolute ceiling: whatever else happens, exit quickly so we never hang
-// the agent's hook pipeline. 3s (not 1s): on a cold Windows loopback the
-// original 1s ceiling raced the fetch below and the SessionStart POST — the
-// only signal that flips a session to "ready" — silently lost.
+// Absolute ceiling: whatever else happens, exit quickly so we never hang the
+// agent's hook pipeline. The budgets are PER EVENT, because only SessionStart
+// is correctness-critical: its POST is the sole signal that
+// flips a session to "ready" (a lost one drops the user's held first prompt),
+// so it gets the budget a cold Windows loopback needs. Every other event is
+// analytics — the agent BLOCKS on each hook's exit, so a degraded-but-
+// accepting server would otherwise add up to 2s per tool call, minutes across
+// a long turn.
+const isReadySignal = hookEvent === "SessionStart";
+const hardStopMs = isReadySignal ? 3000 : 1000;
+const abortMs = isReadySignal ? 2000 : 200;
+const stdinGiveUpMs = isReadySignal ? 500 : 300;
+
 const hardStop = setTimeout(() => {
   try {
     process.exit(0);
   } catch {
     // ignore
   }
-}, 3000);
+}, hardStopMs);
 
 // Best-effort breadcrumb when the POST fails: one line beside this script.
 // Every failure here is swallowed by design (a broken debug log must never
@@ -124,7 +133,7 @@ function readStdin() {
       return;
     }
     let data = "";
-    const giveUp = setTimeout(() => resolve(data), 500);
+    const giveUp = setTimeout(() => resolve(data), stdinGiveUpMs);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
@@ -159,14 +168,13 @@ async function main() {
     payload: payload,
   });
 
-  // 2s, not 200ms: loopback is normally instant (and a dead port fails
-  // instantly with ECONNREFUSED), but a cold first accept on Windows can
-  // exceed 200ms — and a timed-out SessionStart means the session never
-  // reaches "ready" and the held first prompt is dropped. The hard stop
-  // above still bounds the whole process at 3s, far under the agent's own
-  // hook budget.
+  // SessionStart gets 2s, not 200ms: loopback is normally instant (and a dead
+  // port fails instantly with ECONNREFUSED), but a cold first accept on
+  // Windows can exceed 200ms — and a timed-out SessionStart means the session
+  // never reaches "ready" and the held first prompt is dropped. Analytics
+  // events keep the original tight budget (see hardStopMs above).
   const controller = new AbortController();
-  const abortTimer = setTimeout(() => controller.abort(), 2000);
+  const abortTimer = setTimeout(() => controller.abort(), abortMs);
 
   try {
     await fetch(ingestUrl, {

@@ -299,7 +299,7 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
 
 ## What the app installs for the user
 
-Three shims (`runtime-shims.ts`, PATH-prepended) plus two npm installs into
+Three shims (`runtime-shims.ts`, PATH-prepended) plus three npm installs into
 `userData/npm-global` (`agent-install.ts`, on PATH via `agentBinDir()`):
 
 | Provided | Why |
@@ -307,6 +307,7 @@ Three shims (`runtime-shims.ts`, PATH-prepended) plus two npm installs into
 | `node`, `npm`, **`npx`** shims | Electron bundles Node but not npm, and the machine may have neither |
 | Claude Code (if no agent on PATH) | the app is useless without an agent |
 | `@sapiom/cli` (if `sapiom` not on PATH) | macros and templates hand the agent `sapiom agents …` |
+| `@sapiom/mcp` (the sapiom-dev server) | so sessions launch it as `<app binary> <entry.js>` (Electron-as-Node) instead of `npx`. A GUI-subsystem launcher can allocate no console — the npx chain's `cmd.exe` sat on Windows users' screens as a persistent blank window, and closing it killed the MCP server mid-session. Also removes an npm round-trip per session. Refreshed at boot only when the install is older than `REFRESH_AFTER_MS`, and **awaited** — a background refresh would rewrite the tree the running sessions were spawned from (`mcp-install.ts`) |
 | **MinGit** (Windows, if no `git` on PATH) | template cloning and deploy shell out to a real `git`, and Windows ships none; downloaded checksum-pinned from git-for-windows' official releases into `userData/mingit` at first boot (`git-provision.ts`) — never bundled, so no installer bloat and no GPL redistribution. Its `bash.exe` (when the variant has one) is advertised via `CLAUDE_CODE_GIT_BASH_PATH`, which upgrades Claude Code's Windows shell from the PowerShell fallback to Git Bash. A user-installed git always wins (`where git` short-circuits; the provisioned dir is PATH-appended) |
 
 `npx` and the CLI were both missing until they were added together, and both failed

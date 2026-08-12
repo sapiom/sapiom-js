@@ -22,7 +22,7 @@
  * No `electron` import (the caller passes the prefix + installer) — the
  * vitest tier covers the resolution and decision logic from POSIX.
  */
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import * as path from "node:path";
 
 /**
@@ -87,6 +87,24 @@ function removeTornInstall(prefixDir: string, onLine: (line: string) => void): v
   }
 }
 
+/**
+ * How old an install may get before a boot re-fetches it. A week keeps the
+ * app-managed server current without putting an npm round-trip (and a tree
+ * rewrite) in front of every launch — see ensureSapiomMcp on why the refresh
+ * cannot simply be backgrounded.
+ */
+export const REFRESH_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Whether the resolved entry file is older than {@link REFRESH_AFTER_MS}. */
+function isStale(entry: string, now: number): boolean {
+  try {
+    return now - statSync(entry).mtimeMs > REFRESH_AFTER_MS;
+  } catch {
+    // Unstattable: treat as fresh rather than reinstalling on every boot.
+    return false;
+  }
+}
+
 export interface EnsureSapiomMcpOptions {
   /** The per-user npm prefix (agent-install's agentPrefixDir()). */
   prefix: string;
@@ -95,6 +113,8 @@ export interface EnsureSapiomMcpOptions {
   /** Runs `npm install -g @sapiom/mcp@latest` into the prefix (agent-install). */
   install: (onLine: (line: string) => void) => Promise<{ ok: boolean }>;
   onLine?: (line: string) => void;
+  /** Injectable clock for the staleness gate (tests). */
+  now?: () => number;
 }
 
 /**
@@ -105,19 +125,37 @@ export interface EnsureSapiomMcpOptions {
  * - smoke: never touches the network; uses an existing install when present.
  * - dev: never installs (mirrors the sapiom-CLI policy — dev machines run
  *   the workspace copy via npx); still uses an install a packaged run left.
- * - existing install: returned immediately, refreshed in the background so
- *   boot never waits on the registry.
+ * - existing install: used as-is, and refreshed only when {@link REFRESH_AFTER_MS}
+ *   has elapsed — AWAITED, never in the background.
+ *
+ * The refresh must not be backgrounded: boot bakes the resolved entry path
+ * into every session's MCP config for the whole run, and npm refreshes by
+ * removing and re-extracting that exact directory. A background install
+ * therefore races the first session's `<app binary> <entry.js>` spawn
+ * (MODULE_NOT_FOUND, dead sapiom-dev for the rest of the run) and, on
+ * Windows, can tear the tree against files a running MCP server holds open.
+ * Awaiting it here — before any session can exist — makes the sequence
+ * deterministic; the staleness gate keeps the common boot off the registry.
  */
 export async function ensureSapiomMcp(options: EnsureSapiomMcpOptions): Promise<string | null> {
   const onLine = options.onLine ?? (() => {});
   try {
     const existing = resolveSapiomMcpEntry(options.prefix);
     if (options.smoke) return existing;
+    // Dev first: a packaged run may have left an install in the shared
+    // userData prefix, and `pnpm dev` must neither hit the registry nor
+    // clobber a locally-built test copy (mirrors the sapiom-CLI policy).
+    if (options.devMode) return existing;
     if (existing) {
-      void options.install(() => {}).catch(() => {});
-      return existing;
+      if (!isStale(existing, options.now?.() ?? Date.now())) return existing;
+      onLine("refreshing @sapiom/mcp (weekly check)…");
+      await options.install(onLine).catch(() => ({ ok: false }));
+      // Re-resolve: the refresh rewrote the tree, and a failed one can leave
+      // nothing behind — fall through to the repair path when it did.
+      const refreshed = resolveSapiomMcpEntry(options.prefix);
+      if (refreshed) return refreshed;
+      onLine("@sapiom/mcp refresh left no usable install — repairing.");
     }
-    if (options.devMode) return null;
     // The resolver found nothing, so whatever sits in the package dir is a
     // torn previous attempt — clear it or npm's reinstall fails forever.
     removeTornInstall(options.prefix, onLine);

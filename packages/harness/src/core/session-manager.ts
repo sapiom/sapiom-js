@@ -310,6 +310,11 @@ export interface SessionManagerOptions {
    * probed against real OS processes). Defaults to `defaultIsPidAlive`.
    */
   isPidAlive?: (pid: number) => boolean;
+  /**
+   * Host platform, injectable so the Windows-only bracketed-paste assumption
+   * (see `submitInput`) is provable from POSIX CI. Defaults to the real one.
+   */
+  platform?: NodeJS.Platform;
 }
 
 interface PtyHandle {
@@ -365,6 +370,7 @@ export class SessionManager {
   private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
+  private readonly platform: NodeJS.Platform;
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
@@ -390,6 +396,7 @@ export class SessionManager {
     this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    this.platform = options.platform ?? process.platform;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
     this.statusEmitter.setMaxListeners(0);
     this.activityEmitter.setMaxListeners(0);
@@ -807,9 +814,16 @@ export class SessionManager {
       // `ESC[?2004h` announcement is re-rendered away, so on Windows a Claude
       // session that DOES accept bracketed paste looked like one that doesn't
       // and multi-line prompts submitted at their first newline.
+      // win32 only: the blind spot is ConPTY's (it re-renders output instead
+      // of passing DEC private-mode sequences through). On POSIX a real 2004
+      // announcement always arrives, so "not observed yet" there means the
+      // app genuinely hasn't enabled it — and writing paste markers at such
+      // an app renders them as literal text, the behaviour the observation
+      // channel exists to avoid.
       const paste = handle.bracketedPaste.observed
         ? handle.bracketedPaste.enabled
-        : (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
+        : this.platform === "win32" &&
+          (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
       handle.pty.write(paste ? wrapPaste(text) : text);
       await sleep(SUBMIT_DELAY_MS);
       // The pty may have been killed/replaced while we were waiting.
@@ -920,7 +934,14 @@ export class SessionManager {
     // presence: claude-code now implements detectBlockingPrompt too (for the
     // hook-timeout fallback armed in spawn()), and giving it this immediate
     // shortcut would bypass its reliable SessionStart hook everywhere.
-    if (adapter?.readyFallback !== "immediate" || !adapter.detectBlockingPrompt) return false;
+    //
+    // `readyFallback` is optional on the PUBLIC HarnessAdapter interface and
+    // hosts may inject their own adapters, so an external one predating the
+    // field would silently lose its only pre-ready injection path. Treat
+    // detectBlockingPrompt-without-readyFallback as the legacy "immediate"
+    // contract it used to imply.
+    if (!adapter?.detectBlockingPrompt) return false;
+    if (adapter.readyFallback !== undefined && adapter.readyFallback !== "immediate") return false;
     if (Date.now() - handle.spawnedAt < READY_SETTLE_MS) return false;
     // Only the tail: `handle.buffer` is the full retained scrollback
     // (up to SCROLLBACK_BYTES) and full-screen TUIs never truly "clear" it

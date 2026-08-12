@@ -76,21 +76,32 @@ describe("generateClaudeSettings", () => {
     expect(source).toContain("AbortController");
   });
 
-  it("gives the ready-signal POST budgets that survive a cold Windows loopback", async () => {
+  it("budgets the ready-signal POST generously and every other hook tightly", async () => {
     // 200ms abort / 1s hard-stop raced a cold ConPTY boot and the SessionStart
     // POST — the only signal that flips a session to "ready" — silently lost,
-    // so the held first prompt was dropped. Ordering invariant: stdin give-up
-    // plus fetch abort must stay under the hard stop.
+    // so the held first prompt was dropped. But the agent BLOCKS on every
+    // hook's exit, so the relaxed budget must NOT apply to the per-tool-call
+    // analytics events (PreToolUse/PostToolUse fire dozens of times a turn).
     const { emitScriptPath } = await generateClaudeSettings({
       harnessSessionId: "session-abc",
       generatedRoot: tmpDir,
     });
     const source = await fs.readFile(emitScriptPath, "utf8");
-    const hardStop = Number(/}, (\d+)\);\n\n\/\/ Best-effort breadcrumb/.exec(source)?.[1]);
-    const abort = Number(/controller\.abort\(\), (\d+)\)/.exec(source)?.[1]);
-    const stdinGiveUp = Number(/setTimeout\(\(\) => resolve\(data\), (\d+)\)/.exec(source)?.[1]);
-    expect(abort).toBeGreaterThanOrEqual(2000);
-    expect(hardStop).toBeGreaterThan(stdinGiveUp + abort);
+    const budget = (name: string): { ready: number; other: number } => {
+      const m = new RegExp(`const ${name} = isReadySignal \\? (\\d+) : (\\d+);`).exec(source);
+      return { ready: Number(m?.[1]), other: Number(m?.[2]) };
+    };
+    const hardStop = budget("hardStopMs");
+    const abort = budget("abortMs");
+    const stdinGiveUp = budget("stdinGiveUpMs");
+
+    expect(source).toContain('const isReadySignal = hookEvent === "SessionStart"');
+    expect(abort.ready).toBeGreaterThanOrEqual(2000);
+    expect(abort.other).toBeLessThanOrEqual(200);
+    // Ordering invariant, per branch: stdin give-up + fetch abort must stay
+    // under the hard stop, or the ceiling kills the POST it exists to protect.
+    expect(hardStop.ready).toBeGreaterThan(stdinGiveUp.ready + abort.ready);
+    expect(hardStop.other).toBeGreaterThan(stdinGiveUp.other + abort.other);
     // Breadcrumb on failure, capped so it can't grow unboundedly.
     expect(source).toContain("emit-debug.log");
     expect(source).toContain("65536");
