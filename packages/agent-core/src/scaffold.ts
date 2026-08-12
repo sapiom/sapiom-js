@@ -250,7 +250,7 @@ function copyTemplate(
 function initGitRepo(dir: string): boolean {
   const tryGit = (args: string[]): boolean => {
     try {
-      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+      execFileSync("git", args, { cwd: dir, stdio: "ignore", windowsHide: true });
       return true;
     } catch {
       return false;

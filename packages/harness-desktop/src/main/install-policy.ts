@@ -27,6 +27,10 @@
  */
 export const SAPIOM_CLI_PACKAGE = "@sapiom/cli@latest";
 
+/** The local sapiom-dev MCP server package — installed into the same prefix so
+ *  sessions launch it via the app binary instead of `npx` (see mcp-install.ts). */
+export const SAPIOM_MCP_PACKAGE = "@sapiom/mcp@latest";
+
 export interface SapiomCliDecision {
   install: boolean;
   /** Human-readable, and logged either way — a silent skip is how this class of

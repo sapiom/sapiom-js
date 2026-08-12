@@ -47,6 +47,31 @@ describe("generateMcpConfig", () => {
     });
   });
 
+  it("launches sapiom-dev via the host-supplied command when devServer is given", async () => {
+    // The desktop host passes its own GUI-subsystem binary (Electron-as-Node):
+    // on Windows the default npx chain's cmd.exe sat as a persistent visible
+    // console window that users closed — killing the MCP server. The
+    // launcher's env must merge WITH the shared entries and win on conflicts
+    // (ELECTRON_RUN_AS_NODE is what makes the command a node at all).
+    const filePath = await generateMcpConfig("session-dev", {
+      environment: "staging",
+      devServer: {
+        command: "C:\\Apps\\Sapiom.exe",
+        args: ["C:\\prefix\\node_modules\\@sapiom\\mcp\\dist\\index.js"],
+        env: { ELECTRON_RUN_AS_NODE: "1" },
+      },
+    });
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers["sapiom-dev"]).toEqual({
+      command: "C:\\Apps\\Sapiom.exe",
+      args: ["C:\\prefix\\node_modules\\@sapiom\\mcp\\dist\\index.js"],
+      env: { SAPIOM_ENVIRONMENT: "staging", ELECTRON_RUN_AS_NODE: "1" },
+    });
+    // The remote entry is untouched by the override.
+    expect(config.mcpServers.sapiom.type).toBe("http");
+  });
+
   it("passes SAPIOM_ENVIRONMENT through to the sapiom-dev entry when set", async () => {
     const filePath = await generateMcpConfig("session-456", { environment: "staging" });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));

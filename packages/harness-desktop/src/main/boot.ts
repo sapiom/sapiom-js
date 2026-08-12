@@ -37,9 +37,10 @@ import { augmentProcessPath } from "./env.js";
 import { esbuildBinaryPath } from "./esbuild-binary.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
-import { agentPrefixDir, ensureSapiomCli, installClaudeCode } from "./agent-install.js";
+import { agentPrefixDir, ensureSapiomCli, installClaudeCode, installSapiomMcp } from "./agent-install.js";
 import { agentRepairDecision } from "./agent-repair.js";
 import { ensureMinGit } from "./git-provision.js";
+import { ensureSapiomMcp } from "./mcp-install.js";
 import { installRuntimeShims } from "./runtime-shims.js";
 import {
   BOOT_PROGRESS,
@@ -73,7 +74,7 @@ function debug(msg: string): void {
 async function hasSystemGit(): Promise<boolean> {
   const exec = promisify(execFile);
   try {
-    await exec(process.platform === "win32" ? "where" : "which", ["git"]);
+    await exec(process.platform === "win32" ? "where" : "which", ["git"], { windowsHide: true });
     return true;
   } catch {
     return false;
@@ -411,6 +412,32 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     debug(`sapiom CLI install threw (ignored): ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // 3c. The local sapiom-dev MCP server, installed into the same prefix so
+  //     sessions launch it as `<this app binary> <entry.js>` (Electron-as-Node)
+  //     instead of `npx @sapiom/mcp@latest`. On Windows the npx chain's cmd.exe
+  //     sat as a PERSISTENT blank console window (Claude Code spawns without
+  //     windowsHide); users closed it, killing the MCP server, after which
+  //     every sapiom-dev tool call hung. A GUI-subsystem launcher can never
+  //     have that window. Non-fatal: null falls back to the npx config —
+  //     exactly the previous behavior. See mcp-install.ts.
+  let sapiomDevMcpEntry: string | null = null;
+  try {
+    sapiomDevMcpEntry = await ensureSapiomMcp({
+      prefix: agentPrefixDir(),
+      smoke,
+      devMode,
+      install: installSapiomMcp,
+      onLine: (line) => debug(`sapiom-mcp: ${line}`),
+    });
+    debug(
+      sapiomDevMcpEntry
+        ? `sapiom-dev MCP entry: ${sapiomDevMcpEntry}`
+        : "sapiom-dev MCP: no local install — sessions use the npx launch",
+    );
+  } catch (err) {
+    debug(`sapiom-mcp setup threw (ignored): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // 4. Machine id + first-run. "First run" means the user has never completed
   //    onboarding — i.e. no settings file has ever been persisted — NOT "has no
   //    recent dirs". Keying on recentDirs (as this once did) re-ran the whole
@@ -493,6 +520,18 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     // launchDir itself must stay put: it is the scan root, and moving it would
     // orphan the seeded sample from the rail.
     projectRoot: path.join(launchDir, "projects"),
+    // Console-free sapiom-dev MCP launch (see 3c above). ELECTRON_RUN_AS_NODE
+    // rides the MCP config's own env block, so it applies to exactly this
+    // child and never leaks into the session at large.
+    ...(sapiomDevMcpEntry
+      ? {
+          sapiomDevMcp: {
+            command: process.execPath,
+            args: [sapiomDevMcpEntry],
+            env: { ELECTRON_RUN_AS_NODE: "1" },
+          },
+        }
+      : {}),
     autoCreateSession: !firstRun,
     defaultHarnessKind: stubbedHarnesses ? "claude-code" : pickDefaultHarness(report),
     availableHarnesses: stubbedHarnesses ? [...stubbedHarnesses] : report.availableHarnesses,

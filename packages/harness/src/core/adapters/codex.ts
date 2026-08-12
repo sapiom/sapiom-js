@@ -200,7 +200,7 @@ export class CodexAdapter implements HarnessAdapter {
 
   async doctor(): Promise<DoctorCheck[]> {
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000 });
+      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
       return [{ name: "codex", ok: true, detail: stdout.trim() || "installed" }];
     } catch {
       return [

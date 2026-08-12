@@ -54,6 +54,7 @@ export async function installProjectDependencies(
         shell: process.platform === "win32",
         timeout: INSTALL_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER_BYTES,
+        windowsHide: true,
       },
     );
     return true;

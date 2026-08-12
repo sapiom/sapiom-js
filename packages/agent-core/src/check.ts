@@ -51,6 +51,7 @@ export function runTypecheck(sourceDir: string): string | null {
     execFileSync(process.execPath, [tscScript, "--noEmit"], {
       cwd: dir,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     return null;
   } catch (err) {

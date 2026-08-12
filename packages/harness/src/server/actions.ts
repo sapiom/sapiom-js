@@ -221,6 +221,7 @@ function defaultRunLocalSpawn(): RunLocalChildProcess {
     cwd: spec.cwd,
     env: spec.env,
     stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
 }
 

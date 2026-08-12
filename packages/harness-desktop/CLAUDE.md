@@ -56,6 +56,12 @@ touching this package, and how to tell whether a change actually works on the OS
 - **Paths contain spaces** (`C:\Program Files`, `/Users/x/My Drive`): prefer argv arrays over shell
   strings, and don't hand-quote.
 - Use `os.homedir()` / `app.getPath("userData")`, never a literal `~` or `%USERPROFILE%`.
+- **Every `child_process` call needs `windowsHide: true`.** The app is a GUI-subsystem process with
+  no console, so any console-subsystem child (`git`, `where`, npm, a `.cmd` chain) otherwise
+  ALLOCATES A VISIBLE CONSOLE WINDOW on the user's screen — and closing that window kills the
+  child's whole tree (this killed live MCP servers mid-session). Node's default is `false`; the
+  flag is a no-op on POSIX. Applies equally to `@sapiom/harness`, `@sapiom/agent-core` and
+  `@sapiom/mcp` code, all of which run inside this console-less process or its children.
 - **A test harness is part of the system under test.** `smoke.sh` exported `HOME`/`USERPROFILE`/
   `APPDATA` from `mktemp -d`, which under git-bash is a POSIX path (`/tmp/…`) with no drive letter.
   Electron uses `APPDATA` to compute `userData`, so it died creating those directories *before logging

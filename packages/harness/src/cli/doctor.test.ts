@@ -12,8 +12,15 @@ vi.mock("node:child_process", () => ({
   execFile: (
     file: string,
     args: string[],
-    callback: (err: Error | null, result?: { stdout: string; stderr: string }) => void,
+    // The real call sites pass an options object (windowsHide) before the
+    // promisify-appended callback — accept both shapes so the mock doesn't
+    // silently treat options as the callback and "fail" every probe.
+    optionsOrCallback:
+      | Record<string, unknown>
+      | ((err: Error | null, result?: { stdout: string; stderr: string }) => void),
+    maybeCallback?: (err: Error | null, result?: { stdout: string; stderr: string }) => void,
   ) => {
+    const callback = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback!;
     const which = process.platform === "win32" ? "where" : "which";
     if (file === which) {
       const bin = args[0];

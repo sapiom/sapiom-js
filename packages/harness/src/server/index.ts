@@ -75,7 +75,7 @@ import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
-import { generateMcpConfig } from "../core/inject/mcp-config.js";
+import { generateMcpConfig, type McpDevServerCommand } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
 import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import {
@@ -184,6 +184,13 @@ export interface HarnessServerOptions {
   /** Session registry file. Defaults to `<stateRoot>/sessions.json`. */
   sessionsPath?: string;
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Host-supplied launcher for the local sapiom-dev MCP server, replacing the
+   *  default `npx @sapiom/mcp@latest`. The Electron host passes its own binary
+   *  (GUI-subsystem — allocates no console window on Windows, where the npx
+   *  chain's cmd.exe popped a persistent one that users closed, killing the
+   *  server) plus the entry script it installed into the per-user npm prefix.
+   *  See core/inject/mcp-config.ts. */
+  sapiomDevMcp?: McpDevServerCommand;
   /** Root directory per-session generated agent configs are written under —
    *  and cleaned up from (exit-time delete + boot-time sweep, see
    *  core/inject/retention.ts). Defaults to `<stateRoot>/generated`. */
@@ -313,6 +320,7 @@ function createDefaultBuildLaunchOpts(
     /** Which channel this harness receives a brief on. */
     deliveryFor: (harness: HarnessKind) => SystemPromptDelivery;
   },
+  sapiomDevMcp?: McpDevServerCommand,
 ): LaunchOptsBuilder {
   return async (harnessSessionId, req) => {
     // Portable continue (SAP-2059). Resolved before the prompt file is
@@ -359,6 +367,7 @@ function createDefaultBuildLaunchOpts(
           apiKey,
           generatedRoot,
           harnessVersion: readVersion(),
+          ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
         }),
         generateSystemPromptFile(harnessSessionId, {
           generatedRoot,
@@ -694,10 +703,15 @@ export const startServer = async (
 
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ??
-    createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot, {
-      buildBrief: resolveRehydrationBrief,
-      deliveryFor: (harness) => systemPromptDeliveryFor(adapters[harness]),
-    });
+    createDefaultBuildLaunchOpts(
+      identity?.apiKey ?? null,
+      generatedRoot,
+      {
+        buildBrief: resolveRehydrationBrief,
+        deliveryFor: (harness) => systemPromptDeliveryFor(adapters[harness]),
+      },
+      options.sapiomDevMcp,
+    );
   const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
     return innerBuildLaunchOpts(harnessSessionId, req);

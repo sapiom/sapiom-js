@@ -433,7 +433,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   async doctor(): Promise<DoctorCheck[]> {
     let versionLine: string;
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000 });
+      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
       versionLine = stdout.trim();
     } catch {
       return [

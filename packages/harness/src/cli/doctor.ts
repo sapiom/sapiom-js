@@ -9,7 +9,9 @@ async function which(bin: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(process.platform === "win32" ? "where" : "which", [
       bin,
-    ]);
+      // windowsHide: a console child of the console-less desktop host would
+      // otherwise open a visible window (no-op on POSIX and in a real terminal).
+    ], { windowsHide: true });
     return stdout.trim().split("\n")[0] ?? null;
   } catch {
     return null;
@@ -18,7 +20,7 @@ async function which(bin: string): Promise<string | null> {
 
 async function version(bin: string, args: string[] = ["--version"]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(bin, args);
+    const { stdout } = await execFileAsync(bin, args, { windowsHide: true });
     return stdout.trim().split("\n")[0] ?? null;
   } catch {
     return null;

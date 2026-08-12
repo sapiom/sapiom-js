@@ -3,7 +3,29 @@ import * as path from "node:path";
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../../cli/paths.js";
 
+/**
+ * A host-supplied way to launch the local `sapiom-dev` stdio server instead of
+ * the default `npx @sapiom/mcp@latest`.
+ *
+ * Why this exists (Windows, desktop host): the npx chain's top process is
+ * cmd.exe — a console-subsystem image — and Claude Code's Windows spawns leave
+ * a PERSISTENT visible console window for it. Users close that window, which
+ * kills the MCP server's process tree, and every later tool call hangs against
+ * the dead server. A GUI-subsystem executable (the Electron binary running as
+ * Node via ELECTRON_RUN_AS_NODE in `env`) allocates no console under ANY spawn
+ * flags while stdio pipes still work — so the desktop host passes itself plus
+ * the installed @sapiom/mcp entry script here. Bonus on every platform: no
+ * per-session registry fetch (npx re-resolves `@latest` each launch).
+ */
+export interface McpDevServerCommand {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
 export interface McpConfigOptions {
+  /** Override for the local sapiom-dev server launch — see {@link McpDevServerCommand}. */
+  devServer?: McpDevServerCommand;
   /** SAPIOM_ENVIRONMENT to pass through to the sapiom-dev child process. */
   environment?: string;
   /**
@@ -61,19 +83,29 @@ export async function generateMcpConfig(
         url: "https://api.sapiom.ai/v1/mcp",
         ...(options.apiKey ? { headers: { "x-api-key": options.apiKey } } : {}),
       },
-      "sapiom-dev": {
-        command: "npx",
-        // Pin the dist-tag (`@latest`) rather than the bare name so npx always
-        // resolves the PUBLISHED package from the registry. A bare
-        // `@sapiom/mcp` resolves a LOCAL workspace copy whenever the harness
-        // runs from inside the sapiom-js monorepo (dogfooding/dev) — whose bin
-        // isn't linked, so the server fails to launch ("sapiom-mcp: command
-        // not found" → JSON-RPC -32000). A dist-tag spec forces registry
-        // resolution and is behaviourally identical to what a real user
-        // (outside the monorepo) already gets, so it's a pure robustness fix.
-        args: ["-y", "@sapiom/mcp@latest"],
-        ...(devEnv ? { env: devEnv } : {}),
-      },
+      "sapiom-dev": options.devServer
+        ? {
+            command: options.devServer.command,
+            args: options.devServer.args,
+            // The launcher's own env (e.g. ELECTRON_RUN_AS_NODE) must win over
+            // the shared entries — it is what makes the command a node at all.
+            ...(devEnv || options.devServer.env
+              ? { env: { ...devEnvEntries, ...options.devServer.env } }
+              : {}),
+          }
+        : {
+            command: "npx",
+            // Pin the dist-tag (`@latest`) rather than the bare name so npx always
+            // resolves the PUBLISHED package from the registry. A bare
+            // `@sapiom/mcp` resolves a LOCAL workspace copy whenever the harness
+            // runs from inside the sapiom-js monorepo (dogfooding/dev) — whose bin
+            // isn't linked, so the server fails to launch ("sapiom-mcp: command
+            // not found" → JSON-RPC -32000). A dist-tag spec forces registry
+            // resolution and is behaviourally identical to what a real user
+            // (outside the monorepo) already gets, so it's a pure robustness fix.
+            args: ["-y", "@sapiom/mcp@latest"],
+            ...(devEnv ? { env: devEnv } : {}),
+          },
     },
   };
 

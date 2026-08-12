@@ -511,7 +511,7 @@ async function checkRuntimeShims(): Promise<string> {
     if (!existsSync(shim)) throw new Error(`no ${name} shim at ${shim}`);
     try {
       // shell on Windows: a .cmd cannot be spawned directly (CVE-2024-27980).
-      const { stdout } = await exec(shim, ["--version"], { shell: process.platform === "win32" });
+      const { stdout } = await exec(shim, ["--version"], { shell: process.platform === "win32", windowsHide: true });
       const version = stdout.trim().split("\n")[0] ?? "";
       if (!version) throw new Error("no version output");
       reports.push(`${name} ${version}`);

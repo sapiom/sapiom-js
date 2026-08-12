@@ -66,7 +66,7 @@ function agentCoreTemplatesDir(): string {
 
 function tryGit(cwd: string, args: string[]): boolean {
   try {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
+    execFileSync("git", args, { cwd, stdio: "ignore", windowsHide: true });
     return true;
   } catch {
     return false;

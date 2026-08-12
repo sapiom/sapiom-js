@@ -82,7 +82,7 @@ export type TaskSpawnFn = (
 ) => TaskProcess;
 
 const defaultSpawn: TaskSpawnFn = (command, args, options) =>
-  spawnChildProcess(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+  spawnChildProcess(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 
 /** Thrown when the session's harness adapter has no `launchTask` (codex,
  *  today) — the macros router surfaces this as a 400 with this message. */

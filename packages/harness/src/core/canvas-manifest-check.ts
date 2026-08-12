@@ -121,6 +121,9 @@ export function runManifestCheck(
         },
         timeout: CHECK_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER_BYTES,
+        // windowsHide: a console child of our console-less GUI process would
+        // otherwise open a visible window.
+        windowsHide: true,
       },
       (err, stdout, stderr) => {
         if (err) {
