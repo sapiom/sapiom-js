@@ -245,6 +245,7 @@ test.describe("Capability calls block", () => {
             {
               capability: "records.read",
               stubUsed: true,
+              args: { applicant: "Ada" },
               result: { creditScore: 720, passed: true },
             },
           ],
@@ -272,12 +273,25 @@ test.describe("Capability calls block", () => {
     await expect(stubChip).toBeVisible();
     await expect(stubChip).toContainText("stubbed");
 
-    // The result disclosure must be present; open it to see the served value.
+    const argumentsDetail = callsSection.getByTestId("canvas-call-arguments-records.read");
+    const argumentsDisclosure = argumentsDetail.getByRole("button", { name: "Arguments", exact: true });
+    await expect(argumentsDisclosure).toHaveAttribute("aria-expanded", "false");
+    await argumentsDisclosure.click();
+    await expect(argumentsDetail.getByText("applicant", { exact: true })).toBeVisible();
+    await expect(argumentsDetail.getByText("Ada", { exact: true })).toBeVisible();
+    await argumentsDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(argumentsDetail.locator("pre")).toContainText('"applicant": "Ada"');
+
+    // Result follows the same collapsed Rendered/Raw contract.
     const resultDetail = callsSection.getByTestId("canvas-call-result-records.read");
     await expect(resultDetail).toBeVisible();
-    await resultDetail.click();
-    await expect(resultDetail).toContainText("720");
-    await expect(resultDetail).toContainText("creditScore");
+    const resultDisclosure = resultDetail.getByRole("button", { name: "Result", exact: true });
+    await expect(resultDisclosure).toHaveAttribute("aria-expanded", "false");
+    await resultDisclosure.click();
+    await expect(resultDetail.getByText("720", { exact: true })).toBeVisible();
+    await expect(resultDetail.getByText("creditScore", { exact: true })).toBeVisible();
+    await resultDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(resultDetail.locator("pre")).toContainText('"creditScore": 720');
   });
 
   test("a prod run step without calls does NOT show the Capability calls block", async ({

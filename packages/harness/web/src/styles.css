@@ -5195,12 +5195,6 @@ button.rail-footer-card:hover {
   flex-wrap: wrap;
 }
 
-/* The per-call result disclosure inherits .canvas-run-logs summary/pre rules
-   and only overrides the top-margin spacing within a call card. */
-.canvas-capability-call-result {
-  margin-top: var(--sp1);
-}
-
 .canvas-detail-kind {
   flex: 0 0 auto;
   padding: 2px 8px;

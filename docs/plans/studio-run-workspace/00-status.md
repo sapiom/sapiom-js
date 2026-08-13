@@ -59,4 +59,5 @@ same Rendered/Raw artifact viewer is reused for structured attempt Input,
 Output, State, and Directive evidence; Logs and Calls retain their specialized
 inspection views. Canvas node selection also reuses that artifact viewer for
 observed step Input, Output, and Logs instead of falling back to raw-only
-disclosures; these compact Canvas evidence cards start collapsed.
+disclosures; these compact Canvas evidence cards start collapsed. Recorded
+capability-call Arguments and Results follow the same pattern.

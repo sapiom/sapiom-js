@@ -105,12 +105,12 @@ function PayloadBlock({
 /** Canvas step evidence uses the same safe, bounded artifact experience as run
  * results, but starts collapsed to keep the board inspector compact. Keeping
  * this wrapper shared between Canvas and Steps node detail prevents drift. */
-function StepEvidenceArtifact({
+function CanvasEvidenceArtifact({
   label,
   value,
   testId,
 }: {
-  label: "Input" | "Output" | "Logs";
+  label: "Input" | "Output" | "Logs" | "Arguments" | "Result";
   value: unknown;
   testId: string;
 }): JSX.Element {
@@ -289,10 +289,10 @@ export function DeployStatusBanner({
 /**
  * "Capability calls" block: rendered when `step.calls` is present and
  * non-empty (local/offline runs). Each call shows the dotted capability id
- * with a "(stubbed)" marker when the call was served by a stub, and its
- * `result` behind a compact per-call disclosure so the panel is not
- * overwhelming. Absent when `calls` is absent (prod runs) or empty — that
- * is correct, not a bug.
+ * with a "(stubbed)" marker when the call was served by a stub. Recorded
+ * arguments and results reuse the collapsed Canvas artifact viewer. Absent
+ * evidence stays absent, as do calls in production traces that do not carry
+ * call records.
  *
  * Provider rule: only the capability dotted id is shown — never a provider
  * or model name.
@@ -316,11 +316,19 @@ function CapabilityCallsBlock({ step }: { step: StepView }): JSX.Element | null 
                 </span>
               )}
             </div>
+            {call.args !== undefined && (
+              <CanvasEvidenceArtifact
+                label="Arguments"
+                value={call.args}
+                testId={`canvas-call-arguments-${call.capability}`}
+              />
+            )}
             {call.result !== undefined && (
-              <details className="canvas-run-logs canvas-capability-call-result" data-testid={`canvas-call-result-${call.capability}`}>
-                <summary>Result</summary>
-                <pre>{formatPayload(call.result)}</pre>
-              </details>
+              <CanvasEvidenceArtifact
+                label="Result"
+                value={call.result}
+                testId={`canvas-call-result-${call.capability}`}
+              />
             )}
           </div>
         ))}
@@ -833,14 +841,14 @@ export function CanvasStepDetail({
                 Capability, not model: these are the step's own payloads, with
             no provider/model surfaced anywhere. */}
             {runStep.input !== undefined && (
-              <StepEvidenceArtifact
+              <CanvasEvidenceArtifact
                 label="Input"
                 value={runStep.input}
                 testId={`canvas-detail-run-input-${node.id}`}
               />
             )}
             {runStep.output !== undefined && (
-              <StepEvidenceArtifact
+              <CanvasEvidenceArtifact
                 label="Output"
                 value={runStep.output}
                 testId={`canvas-detail-run-output-${node.id}`}
@@ -848,7 +856,7 @@ export function CanvasStepDetail({
             )}
             {runStep.error && <pre className="canvas-run-error">{runStep.error}</pre>}
             {runStep.logSlice && (
-              <StepEvidenceArtifact
+              <CanvasEvidenceArtifact
                 label="Logs"
                 value={runStep.logSlice}
                 testId={`canvas-detail-run-logs-${node.id}`}
@@ -1034,14 +1042,14 @@ export function CanvasStepInspector({
       {/* Per-step IO — same honest-absence gate as the full-pane detail:
           gated on !==undefined so null/false/0/"" still render. */}
       {runStep?.input !== undefined && (
-        <StepEvidenceArtifact
+        <CanvasEvidenceArtifact
           label="Input"
           value={runStep.input}
           testId={`canvas-inspector-run-input-${node.id}`}
         />
       )}
       {runStep?.output !== undefined && (
-        <StepEvidenceArtifact
+        <CanvasEvidenceArtifact
           label="Output"
           value={runStep.output}
           testId={`canvas-inspector-run-output-${node.id}`}
@@ -1049,7 +1057,7 @@ export function CanvasStepInspector({
       )}
       {runStep?.error && <pre className="canvas-run-error">{runStep.error}</pre>}
       {runStep?.logSlice && (
-        <StepEvidenceArtifact
+        <CanvasEvidenceArtifact
           label="Logs"
           value={runStep.logSlice}
           testId={`canvas-inspector-run-logs-${node.id}`}
