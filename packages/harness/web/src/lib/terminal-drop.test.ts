@@ -26,6 +26,14 @@ describe("quotePathForTerminal", () => {
     expect(quotePathForTerminal('/tmp/say "hi".png')).toBe('"/tmp/say \\"hi\\".png"');
   });
 
+  it("escapes a backslash in a POSIX path so it can't defuse the quote escaping", () => {
+    expect(quotePathForTerminal('/tmp/a\\" b.png')).toBe('"/tmp/a\\\\\\" b.png"');
+  });
+
+  it("quotes a Windows path with spaces verbatim — separators stay single backslashes", () => {
+    expect(quotePathForTerminal("C:\\My Shots\\a b.png")).toBe('"C:\\My Shots\\a b.png"');
+  });
+
   it("quotes shell-special characters, not just spaces", () => {
     expect(quotePathForTerminal("/tmp/a&b.png")).toBe('"/tmp/a&b.png"');
   });
