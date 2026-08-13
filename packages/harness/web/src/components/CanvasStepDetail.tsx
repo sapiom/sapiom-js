@@ -102,11 +102,19 @@ function PayloadBlock({
   );
 }
 
-/** Step outputs use the same safe, bounded artifact experience as run results.
- * Keeping this wrapper shared between the Canvas inspector and Steps detail
- * prevents those two node drill-ins from drifting again. */
-function StepOutputArtifact({ value, testId }: { value: unknown; testId: string }): JSX.Element {
-  return <ArtifactRenderer value={value} label="Output" testId={testId} />;
+/** Canvas step evidence uses the same safe, bounded artifact experience as run
+ * results, but starts collapsed to keep the board inspector compact. Keeping
+ * this wrapper shared between Canvas and Steps node detail prevents drift. */
+function StepEvidenceArtifact({
+  label,
+  value,
+  testId,
+}: {
+  label: "Input" | "Output" | "Logs";
+  value: unknown;
+  testId: string;
+}): JSX.Element {
+  return <ArtifactRenderer value={value} label={label} testId={testId} defaultOpen={false} />;
 }
 
 /**
@@ -823,27 +831,27 @@ export function CanvasStepDetail({
                 honest `null`/`false`/`0`/`""` still renders; a step that never
                 carried an input/output shows no block at all (no fabrication).
                 Capability, not model: these are the step's own payloads, with
-                no provider/model surfaced anywhere. */}
+            no provider/model surfaced anywhere. */}
             {runStep.input !== undefined && (
-              <PayloadBlock
+              <StepEvidenceArtifact
                 label="Input"
-                text={formatPayload(runStep.input)}
-                testid={`canvas-detail-run-input-${node.id}`}
-                copyTestid={`payload-copy-input-${node.id}`}
+                value={runStep.input}
+                testId={`canvas-detail-run-input-${node.id}`}
               />
             )}
             {runStep.output !== undefined && (
-              <StepOutputArtifact
+              <StepEvidenceArtifact
+                label="Output"
                 value={runStep.output}
                 testId={`canvas-detail-run-output-${node.id}`}
               />
             )}
             {runStep.error && <pre className="canvas-run-error">{runStep.error}</pre>}
             {runStep.logSlice && (
-              <PayloadBlock
+              <StepEvidenceArtifact
                 label="Logs"
-                text={runStep.logSlice}
-                copyTestid={`payload-copy-logs-${node.id}`}
+                value={runStep.logSlice}
+                testId={`canvas-detail-run-logs-${node.id}`}
               />
             )}
           </section>
@@ -1026,26 +1034,25 @@ export function CanvasStepInspector({
       {/* Per-step IO — same honest-absence gate as the full-pane detail:
           gated on !==undefined so null/false/0/"" still render. */}
       {runStep?.input !== undefined && (
-        <PayloadBlock
+        <StepEvidenceArtifact
           label="Input"
-          text={formatPayload(runStep.input)}
-          testid={`canvas-inspector-run-input-${node.id}`}
-          copyTestid={`payload-copy-input-${node.id}`}
+          value={runStep.input}
+          testId={`canvas-inspector-run-input-${node.id}`}
         />
       )}
       {runStep?.output !== undefined && (
-        <StepOutputArtifact
+        <StepEvidenceArtifact
+          label="Output"
           value={runStep.output}
           testId={`canvas-inspector-run-output-${node.id}`}
         />
       )}
       {runStep?.error && <pre className="canvas-run-error">{runStep.error}</pre>}
       {runStep?.logSlice && (
-        <PayloadBlock
+        <StepEvidenceArtifact
           label="Logs"
-          text={runStep.logSlice}
-          testid={`canvas-inspector-run-logs-${node.id}`}
-          copyTestid={`payload-copy-logs-${node.id}`}
+          value={runStep.logSlice}
+          testId={`canvas-inspector-run-logs-${node.id}`}
         />
       )}
       {/* Capability calls: local runs carry per-call stub traces; absent for

@@ -300,15 +300,17 @@ export function ArtifactRenderer({
   value,
   label = "Result",
   testId = "run-artifact",
+  defaultOpen = true,
   onViewed,
 }: {
   value: unknown;
   label?: string;
   testId?: string;
+  defaultOpen?: boolean;
   onViewed?: () => void;
 }): JSX.Element {
   const [mode, setMode] = useState<"rendered" | "raw">("rendered");
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   const [copied, setCopied] = useState(false);
   const reported = useRef(false);
   const bodyId = useId();
@@ -332,7 +334,7 @@ export function ArtifactRenderer({
           <span className="artifact-title">{label}</span>
         </button>
         <div className="artifact-actions">
-          <div className="artifact-mode" role="tablist" aria-label="Result display">
+          <div className="artifact-mode" role="tablist" aria-label={`${label} display`}>
             <button
               type="button"
               role="tab"
