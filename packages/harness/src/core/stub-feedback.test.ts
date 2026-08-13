@@ -10,8 +10,8 @@ function run(overrides: Partial<RunView> = {}): RunView {
     executionId: "local-1",
     status: "completed",
     steps: [
-      { id: "a-1", name: "a", status: "passed" },
-      { id: "b-1", name: "b", status: "passed" },
+      { id: "a-1", name: "a", attempt: 1, status: "passed" },
+      { id: "b-1", name: "b", attempt: 1, status: "passed" },
     ],
     ...overrides,
   };

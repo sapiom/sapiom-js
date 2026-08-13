@@ -13,12 +13,12 @@ import {
   CanvasChatPanel,
   CanvasStepsList,
   DeployStatusBanner,
-  RunStepsList,
-  RunSummaryBlock,
 } from "./CanvasStepDetail";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
+import { RunWorkspace } from "./RunWorkspace";
+import { track as trackProduct } from "../lib/analytics/events";
 
 /** How many of a running task's trailing status lines the activity view shows. */
 const ACTIVITY_LINES_SHOWN = 8;
@@ -775,14 +775,6 @@ export function CanvasPane({
           onOpenCode={onOpenCode}
         />
       )}
-      {run && (
-        <RunSummaryBlock
-          run={run}
-          runTarget={runTarget}
-          workflow={boundWorkflow}
-          preview={preview}
-        />
-      )}
     </>
   );
 
@@ -900,9 +892,26 @@ export function CanvasPane({
         /* No diagram yet, but a run was observed or a deploy is landing: the
            live per-step data (or the deploy banner) renders instead of the
            "No steps yet" empty state. */
-        <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
-          {stepsHeader}
-          {run && <RunStepsList run={run} target={runTarget} />}
+        <div
+          className={"canvas-frame-wrap" + (expanded ? " is-expanded" : "")}
+          data-view="steps"
+        >
+          <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
+            {stepsHeader}
+            {run && (
+              <RunWorkspace
+                run={run}
+                target={runTarget}
+                workflow={boundWorkflow}
+                focus={expanded}
+                onToggleFocus={onToggleExpanded}
+                onAskAgent={onInjectPrompt}
+                onInspectionOpened={() => trackProduct("run.inspection_opened", { target: runTarget ?? "unknown" })}
+                onArtifactViewed={() => trackProduct("run.artifact_viewed", { target: runTarget ?? "unknown" })}
+                onDashboardOpened={() => trackProduct("run.dashboard_opened", { target: runTarget ?? "unknown" })}
+              />
+            )}
+          </div>
         </div>
       ) : !showsContent && sessionExited ? (
         /* nothing was generated and the session is dead — a render here would
@@ -1180,7 +1189,19 @@ export function CanvasPane({
           {surface === "steps" && (
             <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
               {stepsHeader}
-              {graph && graph.nodes.length > 0 ? (
+              {run ? (
+                <RunWorkspace
+                  run={run}
+                  target={runTarget}
+                  workflow={boundWorkflow}
+                  focus={expanded}
+                  onToggleFocus={onToggleExpanded}
+                  onAskAgent={onInjectPrompt}
+                  onInspectionOpened={() => trackProduct("run.inspection_opened", { target: runTarget ?? "unknown" })}
+                  onArtifactViewed={() => trackProduct("run.artifact_viewed", { target: runTarget ?? "unknown" })}
+                  onDashboardOpened={() => trackProduct("run.dashboard_opened", { target: runTarget ?? "unknown" })}
+                />
+              ) : graph && graph.nodes.length > 0 ? (
                 <CanvasStepsList
                   graph={graph}
                   run={run}
@@ -1191,10 +1212,6 @@ export function CanvasPane({
                   expandedId={expandedStepId}
                   onToggle={(id) => setExpandedStepId((cur) => (cur === id ? null : id))}
                 />
-              ) : run ? (
-                /* No structural graph, but a real run was observed:
-                   its per-step truth renders instead of a dead end. */
-                <RunStepsList run={run} target={runTarget} />
               ) : (
                 /* Same title as the pre-render empty state; the hint names
                    this cause (a rendered canvas that posted no graph). */

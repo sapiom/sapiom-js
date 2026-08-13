@@ -165,6 +165,90 @@ describe("createActionsRouter", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  describe("GET /api/workflows/:id/input-contract", () => {
+    it.each([
+      {
+        label: "an available schema and runnable example",
+        contract: {
+          status: "available" as const,
+          jsonSchema: {
+            type: "object",
+            properties: { topic: { type: "string", default: "agents" } },
+          },
+          example: { topic: "agents" },
+        },
+      },
+      {
+        label: "a declared absence",
+        contract: {
+          status: "none" as const,
+          jsonSchema: null,
+          example: {},
+        },
+      },
+      {
+        label: "a safe extraction failure",
+        contract: {
+          status: "unavailable" as const,
+          jsonSchema: null,
+          example: {},
+          reason: "Studio couldn't extract this agent's input contract.",
+        },
+      },
+    ])("returns $label", async ({ contract }) => {
+      const resolveInputContract = vi.fn().mockResolvedValue(contract);
+      start({
+        apiKey: null,
+        resolveWorkflow: () => ({ path: "/registered/agent" }),
+        resolveInputContract,
+      });
+
+      const res = await fetch(
+        `${baseUrl}/api/workflows/${encodeURIComponent("/registered/agent")}/input-contract`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(contract);
+      expect(resolveInputContract).toHaveBeenCalledWith({
+        path: "/registered/agent",
+      });
+    });
+
+    it("rejects an unregistered path before contract extraction", async () => {
+      const resolveInputContract = vi.fn();
+      start({
+        apiKey: null,
+        resolveWorkflow: () => null,
+        resolveInputContract,
+      });
+
+      const res = await fetch(
+        `${baseUrl}/api/workflows/${encodeURIComponent("/outside/agent")}/input-contract`,
+      );
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "agent not found" });
+      expect(resolveInputContract).not.toHaveBeenCalled();
+    });
+
+    it("converts unexpected extraction errors to an unavailable response", async () => {
+      start({
+        apiKey: null,
+        resolveWorkflow: () => ({ path: "/registered/agent" }),
+        resolveInputContract: () => Promise.reject(new Error("/secret/path")),
+      });
+
+      const res = await fetch(
+        `${baseUrl}/api/workflows/${encodeURIComponent("/registered/agent")}/input-contract`,
+      );
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(200);
+      expect(body.status).toBe("unavailable");
+      expect(body.reason).not.toContain("/secret/path");
+    });
+  });
+
   // ── POST /api/workflows/:id/deploy ────────────────────────────────────────
 
   describe("POST /api/workflows/:id/deploy", () => {

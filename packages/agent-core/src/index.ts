@@ -178,4 +178,9 @@ export type {
 export { loadDefinition } from "./local/load.js";
 export type { LoadedDefinition } from "./local/load.js";
 export { LocalStubDispatcher } from "./local/dispatcher.js";
-export type { LocalStepTrace, LogEntry } from "./local/dispatcher.js";
+export type {
+  LocalStepTrace,
+  LocalStepTracePhase,
+  LocalStepTraceSink,
+  LogEntry,
+} from "./local/dispatcher.js";

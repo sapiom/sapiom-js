@@ -26,6 +26,91 @@ function manifestFor(def: AgentDefinition): AgentManifest {
 }
 
 describe("runLocal", () => {
+  it("streams start and settled evidence with timing, directive, and shared state", async () => {
+    const entry = defineStep({
+      name: "entry",
+      next: [],
+      terminal: true,
+      async run(input: { topic: string }, ctx) {
+        ctx.shared.set("topic", input.topic);
+        ctx.logger.info("prepared result");
+        return terminate({ accepted: true });
+      },
+    });
+    const def = defineAgent({
+      name: "live-evidence",
+      entry: "entry",
+      steps: { entry },
+    });
+    const events: Array<{ phase: string; trace: Record<string, unknown> }> = [];
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: { topic: "leases" },
+      onStepTrace(phase, trace) {
+        // Snapshot at callback time: the settled event later mutates different
+        // data and must not make the start assertion pass accidentally.
+        events.push({ phase, trace: JSON.parse(JSON.stringify(trace)) as Record<string, unknown> });
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      phase: "started",
+      trace: {
+        step: "entry",
+        attempt: 1,
+        input: { topic: "leases" },
+        status: "running",
+        logs: [],
+      },
+    });
+    expect(events[0]?.trace.startedAt).toEqual(expect.any(String));
+    expect(events[0]?.trace).not.toHaveProperty("finishedAt");
+    expect(events[1]).toMatchObject({
+      phase: "settled",
+      trace: {
+        step: "entry",
+        attempt: 1,
+        status: "succeeded",
+        output: { accepted: true },
+        directive: { kind: "terminate", output: { accepted: true } },
+        sharedStateAfter: { topic: "leases" },
+        logs: [{ level: "info", msg: "prepared result" }],
+      },
+    });
+    expect(events[1]?.trace.startedAt).toEqual(events[0]?.trace.startedAt);
+    expect(events[1]?.trace.finishedAt).toEqual(expect.any(String));
+  });
+
+  it("isolates observability sink errors from the local execution", async () => {
+    const entry = defineStep({
+      name: "entry",
+      next: [],
+      terminal: true,
+      async run() {
+        return terminate({ ok: true });
+      },
+    });
+    const def = defineAgent({
+      name: "sink-isolation",
+      entry: "entry",
+      steps: { entry },
+    });
+
+    await expect(
+      runLocal({
+        definition: def,
+        manifest: manifestFor(def),
+        onStepTrace() {
+          throw new Error("observer failed");
+        },
+      }),
+    ).resolves.toMatchObject({ outcome: "completed", output: { ok: true } });
+  });
+
   it("applies Zod defaults before author code runs", async () => {
     let capturedInput: unknown;
     const entry = defineStep({

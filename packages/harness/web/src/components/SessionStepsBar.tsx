@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
+import { AnchoredPopover } from "./AnchoredPopover";
 import { macroNeedsReadySession } from "../lib/macro-actions";
 import { macroDisabledReason } from "../lib/macro-gating";
 import type { RunTarget } from "../lib/use-harness-state";
+import {
+  loadStoredRunTarget,
+  saveStoredRunTarget,
+} from "../lib/run-input";
 import { track } from "../lib/track";
 import { SAPIOM_DASHBOARD_ROOT, agentUrl } from "../lib/urls";
 import {
@@ -20,6 +25,8 @@ interface SessionStepsBarProps {
   sessionReady: boolean;
   macros: MacroDef[];
   onRunMacro: (macro: MacroDef) => void;
+  /** Opens the unified input sheet for the selected execution target. */
+  onRequestRun: (target: RunTarget, returnFocus: HTMLElement | null) => void;
   /** Dev server the agent started in this session (port.detected), if any. */
   preview: { port: number; url: string } | null;
   /** Error message from the last failed deploy for this workflow, or null. */
@@ -56,6 +63,7 @@ export function SessionStepsBar({
   sessionReady,
   macros,
   onRunMacro,
+  onRequestRun,
   preview,
   lastDeployError,
   authenticated,
@@ -83,9 +91,18 @@ export function SessionStepsBar({
   //     lastDeployError don't change (e.g. re-deploy of an already-deployed
   //     workflow, or a prod/local run completing without a re-bind).
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [runMenuOpen, setRunMenuOpen] = useState(false);
+  const [preferredTarget, setPreferredTarget] = useState<RunTarget>(() =>
+    loadStoredRunTarget(workflow.path),
+  );
+  const runMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const runMainButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setPendingId(null);
   }, [workflow.path, deploymentState, lastDeployError, directActionSettleSeq]);
+  useEffect(() => {
+    setPreferredTarget(loadStoredRunTarget(workflow.path));
+  }, [workflow.path]);
 
   const actions: {
     id: string;
@@ -99,26 +116,6 @@ export function SessionStepsBar({
     needsAuth?: boolean;
   }[] = [
     {
-      id: "local",
-      label: "Test",
-      icon: "FlaskConical",
-      macro: macroFor("run_local"),
-      testId: "session-step-local",
-      hint: "Test locally with Sapiom capability calls stubbed — no real Sapiom capability calls.",
-    },
-    {
-      id: "run",
-      label: "Run",
-      icon: "Play",
-      macro: macroFor("prod_run"),
-      testId: "session-step-run",
-      hint: "Run: start a real cloud execution on Sapiom.",
-      needsDeploy: true,
-      needsAuth: true,
-      // Ready build → Run is primary (the agent is live; running it is the act).
-      primary: runnable,
-    },
-    {
       id: "deploy",
       label: "Deploy",
       icon: "CloudUpload",
@@ -130,6 +127,21 @@ export function SessionStepsBar({
       primary: !runnable,
     },
   ].filter((action) => action.macro);
+
+  const cloudDisabledReason =
+    (!authenticated ? "Connect your account first" : null) ??
+    prodRunDisabledReason(workflow, lastDeployError);
+  const effectiveTarget: RunTarget =
+    preferredTarget === "prod" && cloudDisabledReason ? "local" : preferredTarget;
+  const runLabel = effectiveTarget === "local" ? "Local" : "Cloud";
+
+  const selectRunTarget = (target: RunTarget): void => {
+    if (target === "prod" && cloudDisabledReason) return;
+    setPreferredTarget(target);
+    saveStoredRunTarget(workflow.path, target);
+    setRunMenuOpen(false);
+    onRequestRun(target, runMainButtonRef.current);
+  };
 
   return (
     <div className="session-actions" data-testid="session-steps" aria-label="Agent actions">
@@ -167,6 +179,86 @@ export function SessionStepsBar({
         <Icon name="Globe" size={14} />
       </a>
 
+      <div
+        className="session-run-split"
+        data-running={runningTarget === effectiveTarget || undefined}
+      >
+        <button
+          ref={runMainButtonRef}
+          className={
+            "session-step session-run-main" +
+            (runnable ? " session-action-primary" : "")
+          }
+          data-testid="session-step-local"
+          type="button"
+          onClick={() => onRequestRun(effectiveTarget, runMainButtonRef.current)}
+          aria-label={`Run using ${runLabel}`}
+          data-tooltip={`Review input and run using ${runLabel}`}
+        >
+          <Icon name="Play" size={14} />
+          <span className="session-step-label">Run · {runLabel}</span>
+        </button>
+        <button
+          ref={runMenuButtonRef}
+          className={
+            "session-step session-run-menu-trigger" +
+            (runnable ? " session-action-primary" : "")
+          }
+          type="button"
+          aria-label="Choose run target"
+          aria-haspopup="menu"
+          aria-expanded={runMenuOpen}
+          onClick={() => setRunMenuOpen((open) => !open)}
+        >
+          <Icon name="ChevronDown" size={13} />
+        </button>
+        <AnchoredPopover
+          open={runMenuOpen}
+          anchorRef={runMenuButtonRef}
+          onDismiss={() => setRunMenuOpen(false)}
+          placement="down-end"
+          className="profile-menu canvas-run-menu session-run-menu"
+          role="menu"
+          testid="session-run-target-menu"
+        >
+          <button
+            className={
+              "profile-menu-item" +
+              (preferredTarget === "local" ? " is-selected" : "")
+            }
+            type="button"
+            role="menuitemradio"
+            aria-checked={preferredTarget === "local"}
+            onClick={() => selectRunTarget("local")}
+          >
+            <Icon name="SquareTerminal" size={14} />
+            <span>
+              <strong>Local</strong>
+              <small>Stubbed Sapiom capabilities</small>
+            </span>
+          </button>
+          <button
+            className={
+              "profile-menu-item" +
+              (preferredTarget === "prod" ? " is-selected" : "")
+            }
+            data-testid="session-step-run"
+            type="button"
+            role="menuitemradio"
+            aria-checked={preferredTarget === "prod"}
+            disabled={Boolean(cloudDisabledReason)}
+            title={cloudDisabledReason ?? undefined}
+            onClick={() => selectRunTarget("prod")}
+          >
+            <Icon name="Cloud" size={14} />
+            <span>
+              <strong>Cloud</strong>
+              <small>{cloudDisabledReason ?? "Real production execution"}</small>
+            </span>
+          </button>
+        </AnchoredPopover>
+      </div>
+
       {actions.map((action) => {
         // Auth gate: actions requiring authentication are disabled when not
         // signed in. Test remains available because its Sapiom calls are stubbed.
@@ -189,9 +281,7 @@ export function SessionStepsBar({
           (action.macro ? macroDisabledReason(action.macro, workflow, activeSessionId) : null);
         // The run's REAL status drives this (not the hand-off pending ring), so
         // Test/Run stay lit for the whole execution the user is watching.
-        const isRunningAction =
-          (runningTarget === "local" && action.id === "local") ||
-          (runningTarget === "prod" && action.id === "run");
+        const isRunningAction = false;
         return (
           <button
             key={action.id}

@@ -38,9 +38,13 @@ export interface LocalStepTrace {
   step: string;
   attempt: number;
   input: unknown;
-  status: "succeeded" | "threw";
+  status: "running" | "succeeded" | "threw";
+  startedAt?: string;
+  finishedAt?: string;
   output?: unknown;
   directive?: NextStepDirective;
+  /** Snapshot taken after the attempt settles; absent on the start event. */
+  sharedStateAfter?: Record<string, unknown>;
   error?: { name: string; message: string; stack?: string };
   logs: LogEntry[];
   /** Capability calls the step's stub client served, in call order. Each entry
@@ -50,6 +54,12 @@ export interface LocalStepTrace {
    *  empty array — honest absence. */
   calls?: StubCallRecord[];
 }
+
+export type LocalStepTracePhase = "started" | "settled";
+export type LocalStepTraceSink = (
+  phase: LocalStepTracePhase,
+  trace: LocalStepTrace,
+) => void;
 
 export class LocalStubDispatcher implements StepDispatcher {
   private core: AgentRunnerCore | null = null;
@@ -71,7 +81,16 @@ export class LocalStubDispatcher implements StepDispatcher {
   constructor(
     private readonly definition: AgentDefinition,
     private readonly stubs: StubFile,
+    private readonly traceSink?: LocalStepTraceSink,
   ) {}
+
+  private emit(phase: LocalStepTracePhase, trace: LocalStepTrace): void {
+    try {
+      this.traceSink?.(phase, trace);
+    } catch {
+      // Observability must never change author-code execution semantics.
+    }
+  }
 
   setCore(core: AgentRunnerCore): void {
     this.core = core;
@@ -102,6 +121,15 @@ export class LocalStubDispatcher implements StepDispatcher {
       );
 
     const logs: LogEntry[] = [];
+    const startedAt = new Date().toISOString();
+    this.emit("started", {
+      step: request.stepName,
+      attempt: request.attempt,
+      input: request.input,
+      status: "running",
+      startedAt,
+      logs: [],
+    });
     const sharedStore = new InMemoryContextStore<Record<string, unknown>>(
       request.shared,
     );
@@ -172,11 +200,15 @@ export class LocalStubDispatcher implements StepDispatcher {
         input:
           e instanceof StepInputValidationError ? request.input : stepInput,
         status: "threw",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        sharedStateAfter: sharedStore.snapshot(),
         error: { name: e.name, message: e.message, stack: e.stack },
         logs,
       };
       if (stepCalls.length > 0) traceEntry.calls = stepCalls;
       this.trace.push(traceEntry);
+      this.emit("settled", traceEntry);
       await this.core.completeDispatchedStep(
         {
           protocol: 1,
@@ -197,12 +229,16 @@ export class LocalStubDispatcher implements StepDispatcher {
       attempt: request.attempt,
       input: stepInput,
       status: "succeeded",
+      startedAt,
+      finishedAt: new Date().toISOString(),
       output,
       directive,
+      sharedStateAfter: sharedStore.snapshot(),
       logs,
     };
     if (stepCalls.length > 0) traceEntry.calls = stepCalls;
     this.trace.push(traceEntry);
+    this.emit("settled", traceEntry);
     const payload: StepCompletionPayload = {
       protocol: 1,
       correlationId: request.correlationId,

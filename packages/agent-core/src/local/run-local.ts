@@ -23,7 +23,11 @@ import {
 
 import { getOrchestrationAnalytics } from "../analytics.js";
 import { AgentOperationError } from "../errors.js";
-import { LocalStubDispatcher, type LocalStepTrace } from "./dispatcher.js";
+import {
+  LocalStubDispatcher,
+  type LocalStepTrace,
+  type LocalStepTraceSink,
+} from "./dispatcher.js";
 import { loadDefinition } from "./load.js";
 import { parseStubFile, type StubFile } from "./stubs.js";
 
@@ -55,6 +59,9 @@ export interface RunLocalOptions {
   /** Stub overrides (already parsed). Unmatched calls use built-in defaults. */
   stubs?: StubFile;
   maxAttemptsPerStep?: number;
+  /** Called synchronously at attempt start and settlement for live Studio
+   * observability. Exceptions are isolated by the dispatcher. */
+  onStepTrace?: LocalStepTraceSink;
 }
 
 export type LocalRunOutcome = "completed" | "failed" | "paused" | "running";
@@ -91,7 +98,11 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   const max = opts.maxAttemptsPerStep ?? DEFAULT_MAX_ATTEMPTS_PER_STEP;
 
   const store = new InMemoryExecutionStore();
-  const dispatcher = new LocalStubDispatcher(opts.definition, stubs);
+  const dispatcher = new LocalStubDispatcher(
+    opts.definition,
+    stubs,
+    opts.onStepTrace,
+  );
   // Shared registry: a launched capability (e.g. models.coding.launch) records the
   // result that should resume a pause on its signal.
   const signals = new Map<string, unknown>();
@@ -181,6 +192,7 @@ export async function runLocalFromDir(opts: {
   input?: unknown;
   stubs?: StubFile;
   maxAttemptsPerStep?: number;
+  onStepTrace?: LocalStepTraceSink;
 }): Promise<LocalRunResult> {
   const { definition, manifest } = await loadDefinition(opts.sourceDir);
   const stubs = opts.stubs ?? loadStubsFile(opts.sourceDir);
@@ -190,5 +202,6 @@ export async function runLocalFromDir(opts: {
     input: opts.input,
     stubs,
     maxAttemptsPerStep: opts.maxAttemptsPerStep,
+    onStepTrace: opts.onStepTrace,
   });
 }

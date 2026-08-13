@@ -332,6 +332,7 @@ test.describe("debug macros — offline stub run", () => {
     const btn = page.getByTestId("session-step-local");
     await expect(btn).toBeEnabled();
     await btn.click();
+    await page.getByTestId("run-sheet-submit").click();
 
     // Wait for the run to complete.
     const chip = page.getByTestId("canvas-run-chip");

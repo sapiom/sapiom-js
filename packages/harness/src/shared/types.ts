@@ -581,7 +581,13 @@ export interface StepView {
   id: string;
   /** Human step label (the projection's stepName). */
   name: string;
+  /** Attempt number from the runtime; retries repeat as distinct rows. Absent
+   * only for legacy/synthetic structural rows that predate attempt evidence. */
+  attempt?: number;
   status: StepStatus;
+  /** Runtime timestamps when recorded. */
+  startedAt?: string;
+  finishedAt?: string;
   /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
   latencyMs?: number;
   /** Terminal error message; present only for a failed step that recorded one. */
@@ -600,6 +606,10 @@ export interface StepView {
    *  output, absent otherwise (a still-running or output-less step shows no
    *  Output block). Any JSON shape. */
   output?: unknown;
+  /** Snapshot of shared state immediately after this attempt settled. */
+  sharedState?: Record<string, unknown>;
+  /** Continue/retry/pause/terminate/fail directive returned by the step. */
+  directive?: unknown;
   /** The capability calls this step made during the run, in call order. Each
    *  entry is capability-scoped and provider-agnostic. Absent (never `[]`)
    *  when the source records no call information for this step — honest
@@ -634,6 +644,14 @@ export interface RunView {
   executionId: string;
   status: "running" | "completed" | "failed" | "cancelled";
   steps: StepView[];
+  /** Exact entry input when recorded. */
+  input?: unknown;
+  /** Canonical terminal output when recorded. */
+  output?: unknown;
+  /** Canonical terminal error when recorded. */
+  error?: unknown;
+  startedAt?: string;
+  finishedAt?: string;
   /** True when this run was served entirely by stub capabilities. Absent for
    *  real (prod / local-backend) runs. Drives the
    *  per-step "stubbed" chip. */
@@ -1437,6 +1455,32 @@ export interface WorkflowInfo {
   /** How it entered the registry. */
   source: "scan" | "connect";
 }
+
+/**
+ * The entry-step contract Studio uses to collect an exact execution input.
+ * `unavailable` is deliberately distinct from `none`: the former means
+ * extraction failed and Studio must preserve a raw-JSON escape hatch, while
+ * the latter means the agent intentionally accepts opaque/no declared input.
+ */
+export type WorkflowInputContractResponse =
+  | {
+      status: "available";
+      jsonSchema: Record<string, unknown>;
+      /** Author example when declared, otherwise a runnable shape skeleton. */
+      example: unknown;
+    }
+  | {
+      status: "none";
+      jsonSchema: null;
+      example: Record<string, never>;
+    }
+  | {
+      status: "unavailable";
+      jsonSchema: null;
+      example: Record<string, never>;
+      /** Safe, user-facing explanation; never raw extraction diagnostics. */
+      reason: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Action macros (right icon rail)

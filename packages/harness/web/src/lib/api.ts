@@ -25,6 +25,7 @@ import type {
   TemplateListResponse,
   RunView,
   StepView,
+  WorkflowInputContractResponse,
   WorkflowInfo,
 } from "@shared/types";
 
@@ -79,6 +80,11 @@ export interface RunLocalArgs {
  */
 export type RunLocalLine =
   | ({ kind?: undefined } & LocalStepTrace)
+  | {
+      kind: "step";
+      phase: "started" | "settled";
+      trace: LocalStepTrace;
+    }
   | {
       kind: "summary";
       outcome: LocalRunOutcome;
@@ -275,6 +281,10 @@ export interface HarnessApi {
   killSession(id: string): Promise<void>;
   injectInput(id: string, req: InjectInputRequest): Promise<void>;
   listWorkflows(): Promise<WorkflowInfo[]>;
+  /** Entry-step JSON Schema used by Studio's unified run sheet. */
+  getWorkflowInputContract(
+    workflowPath: string,
+  ): Promise<WorkflowInputContractResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   scanWorkflows(root: string): Promise<WorkflowInfo[]>;
   /** Adapter registry (GET /api/harnesses): every known harness with its
@@ -458,6 +468,14 @@ class RealApi implements HarnessApi {
 
   listWorkflows(): Promise<WorkflowInfo[]> {
     return this.request<WorkflowInfo[]>("/api/workflows");
+  }
+
+  getWorkflowInputContract(
+    workflowPath: string,
+  ): Promise<WorkflowInputContractResponse> {
+    return this.request<WorkflowInputContractResponse>(
+      `/api/workflows/${encodeURIComponent(workflowPath)}/input-contract`,
+    );
   }
 
   connectWorkflow(path: string): Promise<WorkflowInfo> {
@@ -1142,6 +1160,31 @@ class MockApi implements HarnessApi {
     return this.workflows;
   }
 
+  async getWorkflowInputContract(
+    workflowPath: string,
+  ): Promise<WorkflowInputContractResponse> {
+    await delay(120);
+    const workflow = this.workflows.find((item) => item.path === workflowPath);
+    if (!workflow) throw new ApiError(404, "Agent not found", "Agent not found");
+    return {
+      status: "available",
+      jsonSchema: {
+        type: "object",
+        title: `${workflow.name} input`,
+        properties: {
+          topic: {
+            type: "string",
+            title: "Topic",
+            description: "The subject this run should work on.",
+            default: "indie game development",
+          },
+        },
+        required: ["topic"],
+      },
+      example: { topic: "indie game development" },
+    };
+  }
+
   async connectWorkflow(path: string): Promise<WorkflowInfo> {
     await delay(250);
     const info: WorkflowInfo = {
@@ -1391,7 +1434,7 @@ class MockApi implements HarnessApi {
     args: RunLocalArgs,
     onLine: (line: RunLocalLine) => void,
   ): Promise<void> {
-    this.recordDirectAction("runLocal", { sourceDir: args.sourceDir });
+    this.recordDirectAction("runLocal", args);
     const traces: LocalStepTrace[] = [
       {
         step: "intake",
@@ -1420,7 +1463,37 @@ class MockApi implements HarnessApi {
     ];
     for (const trace of traces) {
       await delay(140);
-      onLine(trace);
+      onLine({
+        kind: "step",
+        phase: "started",
+        trace: {
+          step: trace.step,
+          attempt: trace.attempt,
+          input: trace.input,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          logs: [],
+        },
+      });
+      await delay(140);
+      onLine({
+        kind: "step",
+        phase: "settled",
+        trace: {
+          ...trace,
+          startedAt: new Date(Date.now() - 140).toISOString(),
+          finishedAt: new Date().toISOString(),
+          sharedStateAfter: { lastStep: trace.step },
+          directive:
+            trace.step === "approve"
+              ? { kind: "terminate" }
+              : {
+                  kind: "continue",
+                  stepName: trace.step === "intake" ? "screen" : "approve",
+                  input: trace.output,
+                },
+        },
+      });
     }
     await delay(140);
     onLine({

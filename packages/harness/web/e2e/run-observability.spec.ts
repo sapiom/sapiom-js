@@ -1,97 +1,196 @@
-/**
- * Observable Run / Test / Deploy: clicking an action reveals the right pane and
- * switches it to the Steps view, the acting button shows a running highlight
- * tied to the REAL run status, the run advances visibly (running → completed),
- * and the relevant final data (deployed dashboard link, result output) surfaces
- * up front — never with fabricated cost. All in mock mode (VITE_MOCK=1).
- *
- * Fixtures (mock-data.ts): leasing is deployed (definitionId=4821, path
- * /Users/demo/acme-app/leasing); the boot session is bound to leasing.
- */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test.beforeEach(async ({ page }) => {
+type DirectAction = { action: string; req: Record<string, unknown> };
+type ProductEvent = { event: string; properties?: Record<string, unknown> };
+
+async function loadStudio(page: Page): Promise<void> {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("session-steps")).toBeVisible();
-  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+}
+
+async function openLocalSheet(page: Page): Promise<void> {
+  await page.getByTestId("session-step-local").click();
+  await expect(page.getByRole("dialog", { name: "Run leasing" })).toBeVisible();
+  await expect(page.getByText("Local execution", { exact: true })).toBeVisible();
+}
+
+async function openCloudSheet(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Choose run target" }).click();
+  await page.getByRole("menuitemradio", { name: /Cloud/ }).click();
+  await expect(page.getByRole("dialog", { name: "Run leasing" })).toBeVisible();
+  await expect(page.getByText("Cloud execution", { exact: true })).toBeVisible();
+}
+
+async function directAction(page: Page): Promise<DirectAction> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as {
+            __HARNESS_TEST__?: { lastDirectAction?: DirectAction };
+          }).__HARNESS_TEST__?.lastDirectAction,
+      ),
+    )
+    .toBeTruthy();
+  return (await page.evaluate(
+    () =>
+      (window as unknown as {
+        __HARNESS_TEST__?: { lastDirectAction?: DirectAction };
+      }).__HARNESS_TEST__?.lastDirectAction,
+  ))!;
+}
+
+async function productEvents(page: Page): Promise<ProductEvent[]> {
+  return page.evaluate(
+    () =>
+      ((window as unknown as {
+        __HARNESS_TEST__?: { productEvents?: ProductEvent[] };
+      }).__HARNESS_TEST__?.productEvents ?? []),
+  );
+}
+
+test.beforeEach(async ({ page }) => {
+  await loadStudio(page);
 });
 
-test.describe("Run/Test/Deploy observability", () => {
-  test("Run reveals the Steps view, highlights the running button, then shows a completed summary", async ({
-    page,
-  }) => {
-    // Collapse the pane first, to prove Run REVEALS it (not just switches tabs).
-    await page.getByTestId("right-collapse").click();
-    await expect(page.getByTestId("right-panel-canvas")).not.toBeVisible();
+test.describe("unified run entry", () => {
+  test("defaults to Local, validates JSON, sends the exact input, and restores it", async ({ page }) => {
+    const main = page.getByTestId("session-step-local");
+    await expect(main).toHaveAccessibleName("Run using Local");
+    await openLocalSheet(page);
 
-    const runBtn = page.getByTestId("session-step-run");
-    await expect(runBtn).toBeEnabled();
-    await runBtn.click();
+    await page.getByRole("tab", { name: "JSON" }).click();
+    const editor = page.locator("#run-sheet-json");
+    await editor.fill('{"topic":42}');
+    await page.getByTestId("run-sheet-submit").click();
+    await expect(page.getByRole("alert")).toContainText("Fix the highlighted input");
+    await expect(page.getByText(/topic must be string/i)).toBeVisible();
 
-    // Auto-switched to Steps AND revealed the pane.
+    await editor.fill('{"topic":"commercial leasing"}');
+    await page.getByTestId("run-sheet-submit").click();
+
     await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-    await expect(page.getByTestId("canvas-steps-surface")).toBeVisible();
+    await expect(page.getByTestId("run-workspace")).toBeVisible();
+    const action = await directAction(page);
+    expect(action).toEqual({
+      action: "runLocal",
+      req: {
+        sourceDir: "/Users/demo/acme-app/leasing",
+        input: { topic: "commercial leasing" },
+      },
+    });
 
-    // The run summary appears and reads as running; the acting button pulses.
-    const summary = page.getByTestId("run-summary");
-    await expect(summary).toBeVisible();
-    await expect(summary).toContainText("Running");
-    await expect(runBtn).toHaveAttribute("data-running", "true");
-
-    // The deployed agent's dashboard link is the headline result CTA.
-    await expect(page.getByTestId("run-summary-dashboard-link")).toBeVisible();
-
-    // It advances to completed; the highlight clears; a total duration shows.
-    await expect(summary).toContainText("Completed", { timeout: 12_000 });
-    await expect(runBtn).not.toHaveAttribute("data-running", "true");
-    await expect(page.getByTestId("run-summary-duration")).toBeVisible();
+    await main.click();
+    await expect(page.getByLabel(/Topic/)).toHaveValue("commercial leasing");
   });
 
-  test("Test streams a local run into the Steps view with a copyable result", async ({ page }) => {
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  test("keeps an invalid saved value visible and offers a contract reset", async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem(
+        `sapiom.studio.run-input.v1:${encodeURIComponent("/Users/demo/acme-app/leasing")}`,
+        JSON.stringify({ value: { topic: 42 }, schemaSignature: "old-contract" }),
+      );
+    });
+    await openLocalSheet(page);
+    await expect(page.getByText(/saved input no longer matches/i)).toBeVisible();
+    await expect(page.getByLabel(/Topic/)).toHaveValue("42");
+    await page.getByRole("button", { name: "Reset to defaults" }).click();
+    await expect(page.getByLabel(/Topic/)).toHaveValue("indie game development");
+  });
 
-    await page.getByTestId("session-step-local").click();
+  test("explicit Cloud selection persists and sends the exact cloud payload", async ({ page }) => {
+    await openCloudSheet(page);
+    await page.getByLabel(/Topic/).fill("warehouse renewals");
+    await page.getByTestId("run-sheet-submit").click();
 
-    await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-    await expect(page.getByTestId("run-summary")).toBeVisible();
+    const action = await directAction(page);
+    expect(action).toEqual({
+      action: "run",
+      req: { definitionId: "4821", input: { topic: "warehouse renewals" } },
+    });
+    await expect(page.getByTestId("run-workspace")).toContainText("Cloud");
 
-    // A local run carries per-step output, so the final Result renders
-    // default-open with a Copy button that reuses the snippet-copy pattern.
-    const result = page.getByTestId("run-summary-output");
-    await expect(result).toBeVisible({ timeout: 6_000 });
-    const copy = page.getByTestId("payload-copy-result");
+    await page.reload();
+    await expect(page.getByTestId("session-step-local")).toHaveAccessibleName("Run using Cloud");
+  });
+
+  test("an unavailable saved Cloud target falls back to Local without overwriting it", async ({ page }) => {
+    const rfqPath = "/Users/demo/rfq-agent";
+    await page.evaluate((path) => {
+      localStorage.setItem(
+        `sapiom.studio.run-target.v1:${encodeURIComponent(path)}`,
+        "prod",
+      );
+    }, rfqPath);
+
+    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+    await page.getByTestId("open-agent-start-session").click();
+    const main = page.getByTestId("session-step-local");
+    await expect(main).toHaveAccessibleName("Run using Local");
+    await page.getByRole("button", { name: "Choose run target" }).click();
+    await expect(page.getByRole("menuitemradio", { name: /Cloud/ })).toBeDisabled();
+    expect(
+      await page.evaluate((path) =>
+        localStorage.getItem(
+          `sapiom.studio.run-target.v1:${encodeURIComponent(path)}`,
+        ), rfqPath),
+    ).toBe("prod");
+  });
+});
+
+test.describe("artifact-first completion", () => {
+  test("closes the sheet, streams attempts, then leads with a rendered and copyable result", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await openLocalSheet(page);
+    await page.getByTestId("run-sheet-submit").click();
+
+    const workspace = page.getByTestId("run-workspace");
+    await expect(workspace).toBeVisible();
+    await expect(workspace.locator(".run-workspace-status")).toContainText("Completed", { timeout: 8_000 });
+    const artifact = page.getByTestId("run-artifact");
+    await expect(artifact).toContainText("approved");
+    await expect(artifact).toContainText("true");
+    await expect(page.getByTestId("run-timeline").getByRole("option")).toHaveCount(3);
+    await expect(workspace.getByText("Open", { exact: true })).toHaveCount(0);
+
+    await artifact.getByRole("tab", { name: "Raw" }).click();
+    await expect(artifact.locator("pre")).toContainText('"approved": true');
+    const copy = artifact.getByRole("button", { name: "Copy" });
     await expect(copy).toBeVisible();
     await copy.click();
-    await expect(copy).toContainText("Copied");
   });
 
-  test("Deploy shows a live banner in the Steps view that jumps to the Code snippet", async ({
-    page,
-  }) => {
-    await page.getByTestId("session-step-deploy").click();
+  test("records content-free artifact, inspection, and dashboard events", async ({ page }) => {
+    await openLocalSheet(page);
+    await page.getByTestId("run-sheet-submit").click();
+    await expect(page.getByTestId("run-artifact")).toBeVisible({ timeout: 8_000 });
+    await page.getByRole("option", { name: /screen/ }).click();
 
-    // Deploy lands in the same Steps activity surface.
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByTestId("run-workspace").getByRole("link", { name: "Dashboard" }).click();
+    const popup = await popupPromise;
+    await popup.close();
+
+    await expect.poll(async () => (await productEvents(page)).map((item) => item.event)).toEqual(
+      expect.arrayContaining([
+        "run.artifact_viewed",
+        "run.inspection_opened",
+        "run.dashboard_opened",
+      ]),
+    );
+    const events = (await productEvents(page)).filter((item) => item.event.startsWith("run."));
+    expect(events.every((item) => item.properties?.target === "local")).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("indie game development");
+    expect(JSON.stringify(events)).not.toContain("local-");
+  });
+
+  test("Deploy still lands in Steps and links to the Code integration", async ({ page }) => {
+    await page.getByTestId("session-step-deploy").click();
     await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
     const banner = page.getByTestId("deploy-status-banner");
-    await expect(banner).toBeVisible();
-
-    // It reaches the ready phase with the dashboard + code CTAs.
     await expect(banner).toHaveAttribute("data-phase", "ready", { timeout: 6_000 });
-    await expect(page.getByTestId("deploy-open-dashboard")).toBeVisible();
-
-    // "Trigger from your code" jumps to the Code tab where the snippet lives.
     await page.getByTestId("deploy-open-code").click();
-    await expect(page.getByTestId("right-panel-code")).toBeVisible();
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
-  });
-
-  test("no fabricated cost surfaces in the run summary or its result", async ({ page }) => {
-    await page.getByTestId("session-step-local").click();
-    const surface = page.getByTestId("canvas-steps-surface");
-    await expect(page.getByTestId("run-summary")).toBeVisible();
-    await expect(page.getByTestId("run-summary-output")).toBeVisible({ timeout: 6_000 });
-    // Latency and logs, never money.
-    await expect(surface).not.toContainText("$");
   });
 });

@@ -16,9 +16,8 @@
  *  - **No cost** — local runs are stubbed and free by construction; a StepView
  *    from here never carries `costUsd` (so the inspector reads "local run ·
  *    free", never "$0.00").
- *  - **No latency** — a {@link LocalStepTrace} carries no timing (agent-core's
- *    in-process dispatcher records none, and agent-core is consumed as-is), so
- *    `latencyMs` is ABSENT rather than a fabricated `0`.
+ *  - **Timing is evidence-backed** — new traces carry start/finish timestamps
+ *    and produce latency; legacy traces without them keep `latencyMs` absent.
  *  - **Output** is present only when the trace captured one (a step that threw,
  *    or a `continue` with no value, carries none) — but ABSENCE is `undefined`
  *    on the trace, and a genuine `null`/`false`/`0`/`""` output is a real value
@@ -85,6 +84,11 @@ export interface RenderLocalRunOptions {
    * {@link RenderLocalRunOptions.unusedStubs}: an empty list is dropped.
    */
   stubWarnings?: string[];
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 /**
@@ -96,6 +100,7 @@ export interface RenderLocalRunOptions {
  * `passed`.
  */
 function toStepStatus(raw: LocalStepTrace["status"]): StepStatus {
+  if (raw === "running") return "running";
   if (raw === "succeeded") return "passed";
   if (raw === "threw") return "failed";
   return "pending";
@@ -127,12 +132,24 @@ function toStepView(trace: LocalStepTrace): StepView {
     // collision-free key across a run's attempts of the same step.
     id: `${trace.step}-${trace.attempt}`,
     name: trace.step,
+    attempt: trace.attempt,
     status: toStepStatus(trace.status),
   };
-  // No costUsd, no latencyMs — a local run is free and untimed (see the file
-  // header). Their honest absence is the whole point of the local target.
+  if (trace.startedAt) view.startedAt = trace.startedAt;
+  if (trace.finishedAt) view.finishedAt = trace.finishedAt;
+  if (trace.startedAt && trace.finishedAt) {
+    const start = Date.parse(trace.startedAt);
+    const finish = Date.parse(trace.finishedAt);
+    if (Number.isFinite(start) && Number.isFinite(finish) && finish >= start) {
+      view.latencyMs = finish - start;
+    }
+  }
   if (trace.input !== undefined) view.input = trace.input;
   if (trace.output !== undefined) view.output = trace.output;
+  if (trace.sharedStateAfter !== undefined) {
+    view.sharedState = trace.sharedStateAfter;
+  }
+  if (trace.directive !== undefined) view.directive = trace.directive;
   if (trace.error?.message) view.error = trace.error.message;
   const logSlice = toLogSlice(trace.logs);
   if (logSlice !== undefined) view.logSlice = logSlice;
@@ -183,5 +200,10 @@ export function renderLocalRun(
   if (options.stubWarnings && options.stubWarnings.length > 0) {
     view.stubWarnings = options.stubWarnings;
   }
+  if (options.input !== undefined) view.input = options.input;
+  if (options.output !== undefined) view.output = options.output;
+  if (options.error !== undefined) view.error = options.error;
+  if (options.startedAt) view.startedAt = options.startedAt;
+  if (options.finishedAt) view.finishedAt = options.finishedAt;
   return view;
 }

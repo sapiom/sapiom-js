@@ -73,6 +73,11 @@ export interface AnalyticsEventMap {
     duration_ms?: number;
     error_kind?: string;
   };
+  /** Content-free Studio observability funnel. Comparing inspections with
+   * dashboard exits measures the 80% dashboard-independence target. */
+  "run.inspection_opened": { target: "local" | "prod" | "unknown" };
+  "run.artifact_viewed": { target: "local" | "prod" | "unknown" };
+  "run.dashboard_opened": { target: "local" | "prod" | "unknown" };
 
   /** A deploy was initiated from the Studio. `source`/`template_id` as on `agent.created` — built and deployed split on the same dimension. */
   "agent.deploy_started": {

@@ -380,6 +380,9 @@ importers:
       '@sapiom/mcp':
         specifier: workspace:^
         version: link:../mcp
+      ajv:
+        specifier: ^8.12.0
+        version: 8.20.0
       express:
         specifier: ^4.21.0
         version: 4.22.2

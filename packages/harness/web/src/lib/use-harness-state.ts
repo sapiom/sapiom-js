@@ -12,6 +12,7 @@ import type {
   SessionRecord,
   SessionSummary,
   WorkflowInfo,
+  WorkflowInputContractResponse,
 } from "@shared/types";
 
 import type {
@@ -133,6 +134,10 @@ export interface HarnessStateHook {
    *  prop-driven rather than reaching for a module-level api singleton. */
   listTemplates: () => Promise<TemplateListResponse>;
   getTemplate: (id: string) => Promise<TemplateDetailView>;
+  /** Loads the selected agent's entry JSON Schema for the run sheet. */
+  getWorkflowInputContract: (
+    workflowPath: string,
+  ) => Promise<WorkflowInputContractResponse>;
   /** A past session's reconstructed transcript (null when nothing was
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
@@ -602,8 +607,12 @@ export function useHarnessState(): HarnessStateHook {
         sessionsRef.current.find((s) => s.id === sessionId),
       );
       const observedAt = Date.now();
+      const startedAt = new Date(observedAt).toISOString();
       const traces: LocalStepTrace[] = [];
       let outcome: LocalRunOutcome | undefined;
+      let output: unknown;
+      let runError: unknown;
+      let finishedAt: string | undefined;
       // Stub-hygiene signals from the terminal summary line (WB15-2). Held
       // alongside outcome so each re-map through renderLocalRun carries them;
       // absent until the summary lands, and renderLocalRun drops empties.
@@ -630,6 +639,11 @@ export function useHarnessState(): HarnessStateHook {
           outcome,
           unusedStubs,
           stubWarnings,
+          input,
+          output,
+          error: runError,
+          startedAt,
+          finishedAt,
         });
         setRunsByExecution((prev) =>
           new Map(prev).set(executionId, {
@@ -647,6 +661,9 @@ export function useHarnessState(): HarnessStateHook {
       const onLine = (line: RunLocalLine): void => {
         if (line.kind === "summary") {
           outcome = line.outcome;
+          output = line.output;
+          runError = line.error;
+          finishedAt = new Date().toISOString();
           // Carry the stub-hygiene signals so the inspector can surface a no-op
           // mock (unusedStubs) or a wrong-shape stub (stubWarnings). Passed
           // straight through; renderLocalRun applies the honest-absence rule.
@@ -657,17 +674,42 @@ export function useHarnessState(): HarnessStateHook {
           // as a failed run carrying one failed step so the inspector shows the
           // reason instead of an empty, silently-failed run.
           outcome = "failed";
-          traces.push({
+          runError = line.error;
+          finishedAt = new Date().toISOString();
+          const failedTrace: LocalStepTrace = {
             step: "run-local",
             attempt: 1,
             input,
             status: "threw",
+            startedAt,
+            finishedAt,
             error: { name: "RunLocalError", message: line.error },
             logs: [],
-          });
+          };
+          const index = traces.findIndex(
+            (trace) =>
+              trace.step === failedTrace.step &&
+              trace.attempt === failedTrace.attempt,
+          );
+          if (index >= 0) traces[index] = failedTrace;
+          else traces.push(failedTrace);
+        } else if (line.kind === "step") {
+          const next = line.trace;
+          const index = traces.findIndex(
+            (trace) =>
+              trace.step === next.step && trace.attempt === next.attempt,
+          );
+          if (index >= 0) traces[index] = next;
+          else traces.push(next);
         } else {
-          // A per-step trace line (no `kind`).
-          traces.push(line);
+          // Backward-compatible with older bootstraps that emitted settled
+          // traces without the discriminated step wrapper.
+          const index = traces.findIndex(
+            (trace) =>
+              trace.step === line.step && trace.attempt === line.attempt,
+          );
+          if (index >= 0) traces[index] = line;
+          else traces.push(line);
         }
         publish();
       };
@@ -676,16 +718,37 @@ export function useHarnessState(): HarnessStateHook {
         await api.runLocal({ sourceDir, input }, onLine);
       } catch (err) {
         // Transport failure (the stream itself broke) — mark the run failed so
-        // it doesn't spin as "running" forever, and toast the reason.
+        // it doesn't spin as "running" forever. Give the workspace a concrete
+        // failed attempt so its failure-first Logs rule still has evidence to
+        // select even though no runtime step line could arrive.
+        const message =
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : err instanceof Error
+              ? err.message
+              : "Local execution failed.";
         outcome = "failed";
-        publish();
-        setToast(
-          createToastMessage(
-            err instanceof ApiError && err.reason
-              ? err.reason
-              : (err as Error).message,
-          ),
+        runError = message;
+        finishedAt = new Date().toISOString();
+        const failedTrace: LocalStepTrace = {
+          step: "run-local",
+          attempt: 1,
+          input,
+          status: "threw",
+          startedAt,
+          finishedAt,
+          error: { name: "RunLocalError", message },
+          logs: [{ level: "error", msg: message }],
+        };
+        const failedIndex = traces.findIndex(
+          (trace) =>
+            trace.step === failedTrace.step &&
+            trace.attempt === failedTrace.attempt,
         );
+        if (failedIndex >= 0) traces[failedIndex] = failedTrace;
+        else traces.push(failedTrace);
+        publish();
+        setToast(createToastMessage(message));
       } finally {
         // Signal settle so the SessionStepsBar clears the Local Run button's
         // pending ring — the stream ended (success or failure), the button's
@@ -1585,6 +1648,12 @@ export function useHarnessState(): HarnessStateHook {
     [],
   );
 
+  const getWorkflowInputContract = useCallback(
+    (workflowPath: string): Promise<WorkflowInputContractResponse> =>
+      api.getWorkflowInputContract(workflowPath),
+    [],
+  );
+
   return {
     state,
     loading,
@@ -1605,6 +1674,7 @@ export function useHarnessState(): HarnessStateHook {
     createSession,
     listTemplates,
     getTemplate,
+    getWorkflowInputContract,
     sessionRecord,
     resumeSession,
     rehydrateSession,

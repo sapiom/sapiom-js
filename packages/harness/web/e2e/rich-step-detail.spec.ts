@@ -314,17 +314,13 @@ test.describe("Capability calls block", () => {
     await expect(chip).toBeVisible({ timeout: 8000 });
     await expect(chip).toContainText("completed", { timeout: 8000 });
 
-    // Expand the 'approve' row: the detail renders inline in its dropdown.
-    await page.getByTestId("canvas-step-row-approve").click();
-
-    const detail = page.getByTestId("canvas-step-detail");
+    // Drill into the attempt and use the workspace's predictable Calls tab.
+    await page.getByRole("option", { name: /approve/ }).click();
+    const detail = page.getByRole("region", { name: "approve attempt 1" });
     await expect(detail).toBeVisible({ timeout: 5000 });
-    await expect(detail.getByRole("heading", { name: "Agent run" })).toBeVisible();
-    await expect(detail).not.toContainText("Last run");
-
-    const callsSection = detail.getByTestId("canvas-detail-capability-calls");
-    await expect(callsSection).toBeVisible();
-    await expect(callsSection).toContainText("records.write");
+    await detail.getByRole("tab", { name: "Calls" }).click();
+    await expect(detail.getByRole("tabpanel")).toContainText("records.write");
+    await expect(detail.getByRole("tabpanel")).toContainText("stubbed");
   });
 });
 
