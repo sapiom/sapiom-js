@@ -229,6 +229,10 @@ function TextValue({ text, forceSource = false }: { text: string; forceSource?: 
   );
 }
 
+function isCompositeValue(value: unknown): value is Record<string, unknown> | unknown[] {
+  return value !== null && typeof value === "object";
+}
+
 function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number }): JSX.Element {
   if (typeof value === "string") {
     const url = safeUrl(value);
@@ -243,7 +247,7 @@ function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number 
     return (
       <div className="artifact-list">
         {visible.map((item, index) => (
-          <div className="artifact-list-item" key={index}>
+          <div className="artifact-list-item" data-composite={isCompositeValue(item) || undefined} key={index}>
             <span className="artifact-list-index">{index + 1}</span>
             <StructuredValue value={item} depth={depth + 1} />
           </div>
@@ -252,7 +256,11 @@ function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number 
           <details className="artifact-collection-more">
             <summary>Show {rest.length} more</summary>
             {rest.map((item, index) => (
-              <div className="artifact-list-item" key={index + COLLECTION_PREVIEW}>
+              <div
+                className="artifact-list-item"
+                data-composite={isCompositeValue(item) || undefined}
+                key={index + COLLECTION_PREVIEW}
+              >
                 <span className="artifact-list-index">{index + COLLECTION_PREVIEW + 1}</span>
                 <StructuredValue value={item} depth={depth + 1} />
               </div>
@@ -268,7 +276,7 @@ function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number 
     const rest = entries.slice(COLLECTION_PREVIEW);
     const rows = (items: Array<[string, unknown]>): JSX.Element[] =>
       items.map(([key, child]) => (
-        <div className="artifact-field" key={key}>
+        <div className="artifact-field" data-composite={isCompositeValue(child) || undefined} key={key}>
           <div className="artifact-field-label">{key.replaceAll(/[_-]+/g, " ")}</div>
           <div className="artifact-field-value"><StructuredValue value={child} depth={depth + 1} /></div>
         </div>

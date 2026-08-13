@@ -48,7 +48,16 @@ test("orders retries chronologically and exposes predictable, honest evidence ta
         input: { retry: true },
         output: { score: 720 },
         sharedState: { screened: true },
-        directive: { kind: "continue", stepName: "approve" },
+        directive: {
+          kind: "continue",
+          stepName: "approve",
+          input: {
+            weather: {
+              locationName: "Strasbourg, Grand Est, France",
+              latitude: 48.58392,
+            },
+          },
+        },
       },
       {
         id: "intake-1",
@@ -109,6 +118,15 @@ test("orders retries chronologically and exposes predictable, honest evidence ta
   await expect(evidence.locator("pre")).toContainText('"stepName": "approve"');
   await evidence.getByRole("tab", { name: "Rendered" }).click();
   await expect(evidence.getByText("stepName", { exact: true })).toBeVisible();
+  await expect(evidence.getByText("Strasbourg, Grand Est, France", { exact: true })).toBeVisible();
+  const composite = evidence.locator(".artifact-field[data-composite]").first();
+  const [compositeLabel, compositeValue] = await Promise.all([
+    composite.locator(":scope > .artifact-field-label").boundingBox(),
+    composite.locator(":scope > .artifact-field-value").boundingBox(),
+  ]);
+  expect(compositeLabel).not.toBeNull();
+  expect(compositeValue).not.toBeNull();
+  expect(Math.abs(compositeLabel!.x - compositeValue!.x)).toBeLessThanOrEqual(1);
   await inspector.getByRole("tab", { name: "Calls" }).click();
   await expect(inspector.getByRole("tabpanel")).toContainText("Calls not recorded");
   await inspector.getByRole("tab", { name: "Calls" }).press("ArrowLeft");

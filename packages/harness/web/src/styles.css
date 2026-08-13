@@ -7184,6 +7184,15 @@ button.rail-footer-card:hover {
   border-top: 1px solid var(--border);
 }
 
+/* Nested structures must not recursively spend width on label columns. A
+   composite field becomes a full-width group; its scalar children can then
+   use the normal two-column row without progressively squeezing values. */
+.artifact-field[data-composite],
+.artifact-list-item[data-composite] {
+  grid-template-columns: 1fr;
+  gap: var(--sp2);
+}
+
 .artifact-object > .artifact-field:first-child,
 .artifact-list > .artifact-list-item:first-child { border-top: 0; }
 .artifact-field-label { color: var(--text-faint); font-size: var(--type-meta); text-transform: capitalize; }
