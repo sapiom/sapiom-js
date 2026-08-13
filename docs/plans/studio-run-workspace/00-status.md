@@ -54,4 +54,7 @@ changing the approved product or architecture. Acceptance now explicitly require
 The remediation slice completed on 2026-08-13. The desktop dev command now
 rebuilds Harness before Electron, the visible entry graph is a last-known-good
 contract fallback, PTYs explicitly advertise true colour, artifacts use bounded
-disclosures, and Focus renders through an opaque document-level portal.
+disclosures, and Focus renders through an opaque document-level portal. The
+same Rendered/Raw artifact viewer is reused for structured attempt Input,
+Output, State, and Directive evidence; Logs and Calls retain their specialized
+inspection views.

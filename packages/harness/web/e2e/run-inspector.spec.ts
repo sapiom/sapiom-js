@@ -85,13 +85,30 @@ test("orders retries chronologically and exposes predictable, honest evidence ta
   await options.nth(2).click();
   const inspector = page.getByRole("region", { name: "screen attempt 2" });
   await expect(inspector).toBeVisible();
-  await expect(inspector.getByRole("tab")).toHaveText([
+  const evidenceTabs = inspector.locator(".run-evidence-tabs").getByRole("tab");
+  await expect(evidenceTabs).toHaveText([
     "Input", "Output", "State", "Directive", "Logs", "Calls",
   ]);
+  const evidence = inspector.getByTestId("run-evidence-artifact");
+  await expect(evidence.getByText("score", { exact: true })).toBeVisible();
+  await expect(evidence.getByText("720", { exact: true })).toBeVisible();
+  await evidence.getByRole("tab", { name: "Raw" }).click();
+  await expect(evidence.locator("pre")).toContainText('"score": 720');
+
+  await inspector.getByRole("tab", { name: "Input", exact: true }).click();
+  await expect(evidence.locator("pre")).toContainText('"retry": true');
+  await evidence.getByRole("tab", { name: "Rendered" }).click();
+  await expect(evidence.getByText("retry", { exact: true })).toBeVisible();
+  await expect(evidence.getByText("true", { exact: true })).toBeVisible();
+
   await inspector.getByRole("tab", { name: "State" }).click();
-  await expect(inspector.getByRole("tabpanel")).toContainText('"screened": true');
+  await expect(evidence.getByText("screened", { exact: true })).toBeVisible();
+  await evidence.getByRole("tab", { name: "Raw" }).click();
+  await expect(evidence.locator("pre")).toContainText('"screened": true');
   await inspector.getByRole("tab", { name: "Directive" }).click();
-  await expect(inspector.getByRole("tabpanel")).toContainText('"stepName": "approve"');
+  await expect(evidence.locator("pre")).toContainText('"stepName": "approve"');
+  await evidence.getByRole("tab", { name: "Rendered" }).click();
+  await expect(evidence.getByText("stepName", { exact: true })).toBeVisible();
   await inspector.getByRole("tab", { name: "Calls" }).click();
   await expect(inspector.getByRole("tabpanel")).toContainText("Calls not recorded");
   await inspector.getByRole("tab", { name: "Calls" }).press("ArrowLeft");

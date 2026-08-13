@@ -291,10 +291,12 @@ function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number 
 export function ArtifactRenderer({
   value,
   label = "Result",
+  testId = "run-artifact",
   onViewed,
 }: {
   value: unknown;
   label?: string;
+  testId?: string;
   onViewed?: () => void;
 }): JSX.Element {
   const [mode, setMode] = useState<"rendered" | "raw">("rendered");
@@ -309,7 +311,7 @@ export function ArtifactRenderer({
     onViewed?.();
   }, [onViewed]);
   return (
-    <section className="artifact-renderer" data-testid="run-artifact" data-collapsed={!open || undefined}>
+    <section className="artifact-renderer" data-testid={testId} data-collapsed={!open || undefined}>
       <header className="artifact-header">
         <button
           type="button"

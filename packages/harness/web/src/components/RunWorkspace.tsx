@@ -166,6 +166,15 @@ function Evidence({ step, tab }: { step: StepView; tab: EvidenceTab }): JSX.Elem
       </div>
     );
   }
+  if (tab === "input" || tab === "output" || tab === "state" || tab === "directive") {
+    return (
+      <ArtifactRenderer
+        value={value}
+        label={EVIDENCE_TABS.find((item) => item.id === tab)?.label}
+        testId="run-evidence-artifact"
+      />
+    );
+  }
   return <pre className="run-evidence-value">{typeof value === "string" ? value : formatPayload(value)}</pre>;
 }
 
