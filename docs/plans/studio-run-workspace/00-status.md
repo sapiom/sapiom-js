@@ -57,4 +57,5 @@ contract fallback, PTYs explicitly advertise true colour, artifacts use bounded
 disclosures, and Focus renders through an opaque document-level portal. The
 same Rendered/Raw artifact viewer is reused for structured attempt Input,
 Output, State, and Directive evidence; Logs and Calls retain their specialized
-inspection views.
+inspection views. Canvas node selection also reuses that artifact viewer for
+observed step outputs instead of falling back to a raw-only disclosure.

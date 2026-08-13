@@ -108,7 +108,7 @@ test.describe("board-click inspector shows Input, Output, and Logs", () => {
     await loadBoard(page);
   });
 
-  test("inspector shows Input and Output disclosures when a run step carries them", async ({
+  test("inspector shows raw Input and a Rendered/Raw Output artifact when a run step carries them", async ({
     page,
   }) => {
     await seedRunState(page, "exec-io-test", {
@@ -143,11 +143,17 @@ test.describe("board-click inspector shows Input, Output, and Logs", () => {
     await inputDetail.click();
     await expect(inputDetail).toContainText("Ada");
 
-    // Output disclosure must be present.
+    // Output reuses the artifact renderer from the run workspace.
     const outputDetail = inspector.getByTestId("canvas-inspector-run-output-intake");
     await expect(outputDetail).toBeVisible();
-    await outputDetail.click();
-    await expect(outputDetail).toContainText("720");
+    await expect(outputDetail.getByRole("tab", { name: "Rendered" })).toHaveAttribute("aria-selected", "true");
+    await expect(outputDetail.getByText("ok", { exact: true })).toBeVisible();
+    await expect(outputDetail.getByText("true", { exact: true })).toBeVisible();
+    await expect(outputDetail.getByText("score", { exact: true })).toBeVisible();
+    await expect(outputDetail.getByText("720", { exact: true })).toBeVisible();
+    await outputDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(outputDetail.locator("pre")).toContainText('"score": 720');
+    await expect(outputDetail.getByRole("button", { name: "Copy" })).toBeVisible();
   });
 
   test("inspector shows a Logs disclosure when the run step carries logSlice", async ({

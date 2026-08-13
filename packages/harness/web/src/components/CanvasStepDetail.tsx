@@ -13,6 +13,7 @@ import {
 } from "../lib/extract-step-context";
 import type { DeployProgress, RunTarget } from "../lib/use-harness-state";
 import { agentUrl } from "../lib/urls";
+import { ArtifactRenderer } from "./ArtifactRenderer";
 import { Icon } from "./Icon";
 
 /**
@@ -35,7 +36,7 @@ function StubbedChip(): JSX.Element {
 }
 
 /**
- * A labelled disclosure for a run payload (Input / Output / Logs / Result) with
+ * A labelled disclosure for raw diagnostic payloads (Input / Logs) with
  * a Copy button — the one place these render, so every payload gets the same
  * copy affordance. `text` is pre-stringified by the caller (formatPayload for
  * JSON values, the raw string for logs). Copying reuses the SnippetPanel copy
@@ -99,6 +100,13 @@ function PayloadBlock({
       <pre>{text}</pre>
     </details>
   );
+}
+
+/** Step outputs use the same safe, bounded artifact experience as run results.
+ * Keeping this wrapper shared between the Canvas inspector and Steps detail
+ * prevents those two node drill-ins from drifting again. */
+function StepOutputArtifact({ value, testId }: { value: unknown; testId: string }): JSX.Element {
+  return <ArtifactRenderer value={value} label="Output" testId={testId} />;
 }
 
 /**
@@ -825,11 +833,9 @@ export function CanvasStepDetail({
               />
             )}
             {runStep.output !== undefined && (
-              <PayloadBlock
-                label="Output"
-                text={formatPayload(runStep.output)}
-                testid={`canvas-detail-run-output-${node.id}`}
-                copyTestid={`payload-copy-output-${node.id}`}
+              <StepOutputArtifact
+                value={runStep.output}
+                testId={`canvas-detail-run-output-${node.id}`}
               />
             )}
             {runStep.error && <pre className="canvas-run-error">{runStep.error}</pre>}
@@ -1028,11 +1034,9 @@ export function CanvasStepInspector({
         />
       )}
       {runStep?.output !== undefined && (
-        <PayloadBlock
-          label="Output"
-          text={formatPayload(runStep.output)}
-          testid={`canvas-inspector-run-output-${node.id}`}
-          copyTestid={`payload-copy-output-${node.id}`}
+        <StepOutputArtifact
+          value={runStep.output}
+          testId={`canvas-inspector-run-output-${node.id}`}
         />
       )}
       {runStep?.error && <pre className="canvas-run-error">{runStep.error}</pre>}
