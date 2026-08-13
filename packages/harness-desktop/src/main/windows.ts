@@ -128,13 +128,13 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
       createPreviewWindow(url);
       return { action: "deny" };
     }
-    void shell.openExternal(url);
+    openInSystemBrowser(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (event, url) => {
     if (!isLocalUrl(url)) {
       event.preventDefault();
-      void shell.openExternal(url);
+      openInSystemBrowser(url);
     }
   });
 
@@ -179,11 +179,30 @@ export function createPreviewWindow(url: string): BrowserWindow {
   // A preview window is a leaf: it gets no bridge, and it cannot spawn further
   // windows that might. Off-origin links still go to the real browser.
   win.webContents.setWindowOpenHandler(({ url: next }) => {
-    if (!isLocalUrl(next)) void shell.openExternal(next);
+    if (!isLocalUrl(next)) openInSystemBrowser(next);
     return { action: "deny" };
   });
   void win.loadURL(url);
   return win;
+}
+
+/**
+ * Hand a URL to the OS default handler — but only a web URL. `window.open()`
+ * with no argument reaches the window-open handlers as "about:blank", and
+ * `shell.openExternal("about:blank")` makes macOS show a "there is no
+ * application set to open the URL" picker (no app registers that scheme).
+ * Anything that isn't http(s)/mailto is dropped rather than handed over —
+ * arbitrary schemes from page content shouldn't launch arbitrary apps anyway.
+ */
+function openInSystemBrowser(url: string): void {
+  try {
+    const protocol = new URL(url).protocol;
+    if (protocol === "http:" || protocol === "https:" || protocol === "mailto:") {
+      void shell.openExternal(url);
+    }
+  } catch {
+    // Not a parseable URL — nothing the OS could open.
+  }
 }
 
 function isLocalUrl(url: string): boolean {

@@ -161,7 +161,17 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     termRef.current = term;
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(new WebLinksAddon());
+    // Explicit activation handler: the addon's default calls `window.open()`
+    // with NO url (about:blank) and assigns `location.href` afterwards. Inside
+    // the desktop app the window-open handler intercepts that first call, sees
+    // only "about:blank", and hands it to the OS — macOS answers with a "no
+    // application set to open the URL about:blank" dialog and the real link
+    // never opens. Passing the uri directly gives every host the actual link.
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        window.open(uri, "_blank", "noopener,noreferrer");
+      }),
+    );
 
     // XDA reply: some CLIs query "CSI > q" to identify the terminal before
     // enabling terminal-dependent features. xterm.js doesn't answer by
