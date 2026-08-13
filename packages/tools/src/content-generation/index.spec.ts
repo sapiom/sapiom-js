@@ -2,6 +2,7 @@ import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
 import {
   images,
+  video,
   createImage,
   launchImage,
   createVideo,
@@ -272,11 +273,11 @@ describe("createClient().contentGeneration.images.create", () => {
 });
 
 // ---------------------------------------------------------------------------
-// contentGeneration.video.create()  — async: submit, then poll until ready
+// contentGeneration.video.create()  — routed submit, then poll until ready
 // ---------------------------------------------------------------------------
 
 describe("contentGeneration.video.create()", () => {
-  it("returns a synchronous video result without trying to poll", async () => {
+  it("POSTs to /v1/capabilities/content.generation.video with x-api-key and the prompt (model omitted → router default)", async () => {
     const { transport, calls } = makeTransport([
       (c) =>
         c.init.method === "POST"
@@ -291,6 +292,8 @@ describe("contentGeneration.video.create()", () => {
 
     const out = await createVideo({ prompt: "merge" }, transport, BASE);
 
+    // The router returns the sync-completion `video` object (some fal ops, notably
+    // ffmpeg merge, complete inline) — mapped snake → camelCase.
     expect(out).toEqual({
       video: {
         url: "https://media/merged.mp4",
@@ -298,15 +301,52 @@ describe("contentGeneration.video.create()", () => {
       },
     });
     expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.video`,
+    );
+    expect(calls[0]!.init.method).toBe("POST");
+    // Routed verbs authenticate via x-api-key (the /v1 guard's header), NOT the
+    // gateway-direct x-sapiom-api-key — wrong header = silent 401.
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
+    // model omitted → the router's video adapter defaults it; no /run/<model> URL building here.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "merge",
+    });
   });
 
-  it("derives the result URL when Fal returns only status_url", async () => {
+  it("sends a semantic alias verbatim in the body — no /run/<model> URL, no raw provider id in caller code", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ video: { url: "https://media/v.mp4" } })
+          : null,
+    ]);
+
+    await createVideo(
+      { prompt: "a wave", model: "veo3-fast" },
+      transport,
+      BASE,
+    );
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.video`,
+    );
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "a wave",
+      model: "veo3-fast",
+    });
+    // The alias never gets turned into a URL path — the adapter resolves it server-side.
+    expect(calls.some((c) => c.url.includes("/run/"))).toBe(false);
+  });
+
+  it("derives the result URL when the router returns only statusUrl", async () => {
     const { transport, calls } = makeTransport([
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
-              request_id: "req-status-only",
-              status_url: `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only/status`,
+              requestId: "req-status-only",
+              statusUrl: `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only/status`,
             })
           : null,
       (c) =>
@@ -327,21 +367,22 @@ describe("contentGeneration.video.create()", () => {
     );
   });
 
-  it("submits the default video model, polls until ready, and maps the result to camelCase", async () => {
+  it("polls until ready and maps the raw snake poll result to camelCase", async () => {
     let polls = 0;
     const { transport, calls } = makeTransport([
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
-              request_id: "req-1",
-              response_url: `${BASE}/queue/fal-ai/veo3/requests/req-1`,
-              status_url: `${BASE}/queue/fal-ai/veo3/requests/req-1/status`,
+              requestId: "req-1",
+              responseUrl: `${BASE}/queue/fal-ai/veo3/requests/req-1`,
+              statusUrl: `${BASE}/queue/fal-ai/veo3/requests/req-1/status`,
             })
           : null,
       (c) => {
         if (c.init.method !== "GET") return null;
         polls += 1;
-        // pending first, completed result second
+        // pending first, completed result second — the poll target still returns
+        // fal's RAW snake_case result (the gateway's queue passthrough).
         return polls < 2
           ? jsonResponse({ status: "IN_PROGRESS" })
           : jsonResponse({
@@ -362,12 +403,6 @@ describe("contentGeneration.video.create()", () => {
       video: { url: "https://media/v.mp4", contentType: "video/mp4" },
       seed: 9,
     });
-    // submit: default model, prompt only (no provider named, no storage).
-    expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/veo3/fast`);
-    expect(calls[0]!.init.method).toBe("POST");
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
-      prompt: "a wave",
-    });
     // polled the rewritten result URL until it carried output.
     expect(
       calls.filter(
@@ -383,8 +418,8 @@ describe("contentGeneration.video.create()", () => {
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
-              request_id: "req-2",
-              response_url: `${BASE}/queue/req-2`,
+              requestId: "req-2",
+              responseUrl: `${BASE}/queue/req-2`,
             })
           : null,
       (c) =>
@@ -425,8 +460,8 @@ describe("contentGeneration.video.create()", () => {
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
-              request_id: "req-4",
-              response_url: `${BASE}/queue/req-4`,
+              requestId: "req-4",
+              responseUrl: `${BASE}/queue/req-4`,
             })
           : null,
       (c) =>
@@ -465,8 +500,8 @@ describe("contentGeneration.video.create()", () => {
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
-              request_id: "req-3",
-              response_url: `${BASE}/queue/req-3`,
+              requestId: "req-3",
+              responseUrl: `${BASE}/queue/req-3`,
             })
           : null,
       (c) =>
@@ -490,8 +525,8 @@ describe("contentGeneration.video.create()", () => {
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
-              request_id: "req-5",
-              response_url: `${BASE}/queue/req-5`,
+              requestId: "req-5",
+              responseUrl: `${BASE}/queue/req-5`,
             })
           : null,
       (c) => {
@@ -511,6 +546,17 @@ describe("contentGeneration.video.create()", () => {
 
     expect(out.video?.url).toBe("https://media/v5.mp4");
   });
+
+  it("`video.create` is the same operation as `createVideo`", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ video: { url: "u" } }),
+    ]);
+
+    await video.create({ prompt: "x" }, transport, BASE);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.video`,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -518,7 +564,7 @@ describe("contentGeneration.video.create()", () => {
 // ---------------------------------------------------------------------------
 
 describe("createClient().contentGeneration.video.create", () => {
-  it("binds to the client credential + default host, submits then polls to the result", async () => {
+  it("binds to the client credential + the Core base URL, sending x-api-key, submits then polls to the result", async () => {
     let polls = 0;
     const calls: FetchCall[] = [];
     const fetchMock = (async (
@@ -528,8 +574,8 @@ describe("createClient().contentGeneration.video.create", () => {
       calls.push({ url: String(input), init });
       if (init.method === "POST") {
         return jsonResponse({
-          request_id: "r",
-          response_url: "https://fal.services.sapiom.ai/queue/r",
+          requestId: "r",
+          responseUrl: "https://api.sapiom.ai/queue/r",
         });
       }
       polls += 1;
@@ -547,14 +593,15 @@ describe("createClient().contentGeneration.video.create", () => {
 
     expect(out.video?.fileId).toBe("f");
     expect(calls[0]!.url).toBe(
-      "https://fal.services.sapiom.ai/run/fal-ai/veo3/fast",
+      "https://api.sapiom.ai/v1/capabilities/content.generation.video",
     );
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("client-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
   });
 });
 
 // ---------------------------------------------------------------------------
-// contentGeneration.video.launch() — dispatch handle + workflow resume token
+// contentGeneration.video.launch() — routed async dispatch + resume token
 // ---------------------------------------------------------------------------
 
 function makeLaunchTransport(
@@ -588,11 +635,11 @@ function makeLaunchTransport(
 }
 
 describe("contentGeneration.video.launch()", () => {
-  it("accepts a status_url-only submit handle", async () => {
+  it("accepts a statusUrl-only submit handle, deriving the poll URL by stripping /status", async () => {
     const { transport } = makeLaunchTransport(
       {
-        request_id: "req-status-only",
-        status_url: `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only/status`,
+        requestId: "req-status-only",
+        statusUrl: `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only/status`,
       },
       { video: { url: "https://media/merged.mp4" } },
     );
@@ -605,27 +652,43 @@ describe("contentGeneration.video.launch()", () => {
     });
   });
 
-  it("submits to the right URL and method, returns a handle with requestId and dispatch", async () => {
+  it("POSTs the routed capability with x-api-key, model as a body field, and returns a handle", async () => {
     const { transport, calls } = makeLaunchTransport(
       {
-        request_id: "req-launch-1",
-        response_url: `${BASE}/queue/req-launch-1`,
+        requestId: "req-launch-1",
+        responseUrl: `${BASE}/queue/req-launch-1`,
       },
       { video: { url: "https://media/v.mp4" } },
     );
 
-    const handle = await launchVideo({ prompt: "a wave" }, transport, BASE);
+    const handle = await launchVideo(
+      { prompt: "a wave", model: "veo3-fast" },
+      transport,
+      BASE,
+    );
 
-    expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/veo3/fast`);
+    // Routed URL (Core capability route), NOT a fal-direct /run/<model> path.
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.video`,
+    );
     expect(calls[0]!.init.method).toBe("POST");
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
+    // Video is async-only (no sync/async choice, unlike images), so the body carries
+    // no `dispatch` field — `model` rides as a body field (a semantic alias here) and
+    // the adapter resolves it server-side.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "a wave",
+      model: "veo3-fast",
+    });
     expect(handle.requestId).toBe("req-launch-1");
   });
 
   it("dispatch.correlationId equals requestId and dispatch.resultSignal equals VIDEO_RESULT_SIGNAL", async () => {
     const { transport } = makeLaunchTransport(
       {
-        request_id: "req-dispatch",
-        response_url: `${BASE}/queue/req-dispatch`,
+        requestId: "req-dispatch",
+        responseUrl: `${BASE}/queue/req-dispatch`,
       },
       { video: { url: "https://media/v.mp4" } },
     );
@@ -642,7 +705,7 @@ describe("contentGeneration.video.launch()", () => {
 
   it("includes x-sapiom-workflow-token when transport.resumeToken is set", async () => {
     const { transport, calls } = makeLaunchTransport(
-      { request_id: "req-tok", response_url: `${BASE}/queue/req-tok` },
+      { requestId: "req-tok", responseUrl: `${BASE}/queue/req-tok` },
       { video: { url: "u" } },
       "tok-workflow-abc",
     );
@@ -656,7 +719,7 @@ describe("contentGeneration.video.launch()", () => {
 
   it("omits x-sapiom-workflow-token when resumeToken is not set", async () => {
     const { transport, calls } = makeLaunchTransport(
-      { request_id: "req-notok", response_url: `${BASE}/queue/req-notok` },
+      { requestId: "req-notok", responseUrl: `${BASE}/queue/req-notok` },
       { video: { url: "u" } },
     );
 
@@ -676,8 +739,8 @@ describe("contentGeneration.video.launch()", () => {
       ): Promise<Response> => {
         calls.push({ url: String(input), init });
         return jsonResponse({
-          request_id: "req-env",
-          response_url: `${BASE}/queue/req-env`,
+          requestId: "req-env",
+          responseUrl: `${BASE}/queue/req-env`,
         });
       }) as typeof globalThis.fetch;
       // Transport reads env var when resumeToken is not explicitly set
@@ -691,7 +754,7 @@ describe("contentGeneration.video.launch()", () => {
     }
   });
 
-  it("wait() polls the response_url and returns the mapped result", async () => {
+  it("wait() polls the responseUrl and returns the mapped result", async () => {
     let polls = 0;
     const calls: FetchCall[] = [];
     const fetchMock = (async (
@@ -702,8 +765,8 @@ describe("contentGeneration.video.launch()", () => {
       calls.push({ url, init });
       if (init.method === "POST") {
         return jsonResponse({
-          request_id: "req-wait",
-          response_url: `${BASE}/queue/req-wait`,
+          requestId: "req-wait",
+          responseUrl: `${BASE}/queue/req-wait`,
         });
       }
       polls += 1;
@@ -731,7 +794,7 @@ describe("contentGeneration.video.launch()", () => {
 
   it("wait() maps fileId and passes storage on submit", async () => {
     const { transport, calls } = makeLaunchTransport(
-      { request_id: "req-store", response_url: `${BASE}/queue/req-store` },
+      { requestId: "req-store", responseUrl: `${BASE}/queue/req-store` },
       { video: { url: "https://media/v.mp4", file_id: "f-store" } },
     );
 
@@ -762,7 +825,7 @@ describe("contentGeneration.video.launch()", () => {
 
   it("wait() throws if the result isn't ready before the timeout", async () => {
     const { transport } = makeLaunchTransport(
-      { request_id: "req-timeout", response_url: `${BASE}/queue/req-timeout` },
+      { requestId: "req-timeout", responseUrl: `${BASE}/queue/req-timeout` },
       { status: "IN_PROGRESS" },
     );
 
@@ -783,8 +846,8 @@ describe("contentGeneration.video.launch()", () => {
       ): Promise<Response> => {
         calls.push({ url: String(input), init });
         return jsonResponse({
-          request_id: "req-explicit",
-          response_url: `${BASE}/queue/req-explicit`,
+          requestId: "req-explicit",
+          responseUrl: `${BASE}/queue/req-explicit`,
         });
       }) as typeof globalThis.fetch;
       const transport = new Transport({
@@ -799,6 +862,17 @@ describe("contentGeneration.video.launch()", () => {
     } finally {
       delete process.env[KEY];
     }
+  });
+
+  it("`video.launch` is the same operation as `launchVideo`", async () => {
+    const { transport } = makeLaunchTransport(
+      { requestId: "req-ns", responseUrl: `${BASE}/queue/req-ns` },
+      { video: { url: "u" } },
+    );
+
+    const handle = await video.launch({ prompt: "x" }, transport, BASE);
+    expect(handle.requestId).toBe("req-ns");
+    expect(handle.dispatch.resultSignal).toBe(VIDEO_RESULT_SIGNAL);
   });
 });
 
@@ -818,8 +892,8 @@ describe("createClient().contentGeneration.video.launch", () => {
       ): Promise<Response> => {
         calls.push({ url: String(input), init });
         return jsonResponse({
-          request_id: "r-client",
-          response_url: "https://fal.services.sapiom.ai/queue/r-client",
+          requestId: "r-client",
+          responseUrl: "https://api.sapiom.ai/queue/r-client",
         });
       }) as typeof globalThis.fetch;
 
@@ -831,9 +905,10 @@ describe("createClient().contentGeneration.video.launch", () => {
       expect(handle.requestId).toBe("r-client");
       expect(handle.dispatch.resultSignal).toBe(VIDEO_RESULT_SIGNAL);
       expect(calls[0]!.url).toBe(
-        "https://fal.services.sapiom.ai/run/fal-ai/veo3/fast",
+        "https://api.sapiom.ai/v1/capabilities/content.generation.video",
       );
-      expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
+      expect(headerOf(calls[0]!, "x-api-key")).toBe("client-key");
+      expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
       expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe(
         "tok-client-bind",
       );
@@ -856,7 +931,7 @@ describe("contentGeneration.images.launch()", () => {
 
     const handle = await launchImage({ prompt: "a red bike" }, transport, BASE);
 
-    // Routed URL (Core), NOT the fal-direct /run/<model> path video uses.
+    // Routed URL (Core capability route), NOT a fal-direct /run/<model> path.
     expect(calls[0]!.url).toBe(
       `${BASE}/v1/capabilities/content.generation.images`,
     );

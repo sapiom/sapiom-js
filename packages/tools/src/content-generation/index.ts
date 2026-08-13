@@ -25,21 +25,10 @@ import {
   defaultTransport,
   resolveCoreBaseUrl,
 } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
-import { ensureOk, ContentGenerationHttpError } from "./errors.js";
+import { ContentGenerationHttpError } from "./errors.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 export { ContentGenerationHttpError };
-
-/**
- * Base URL for the still-provider-direct video ops (deferred — async/poll, SAP-1117).
- * The routed `images.create` verb does NOT use this; it resolves the single Core
- * base URL at call time via {@link resolveCoreBaseUrl} (SAP-1116).
- */
-const DEFAULT_BASE_URL = resolveServiceUrl(
-  "fal",
-  process.env.SAPIOM_CONTENT_GENERATION_URL,
-);
 
 /**
  * Capability-stable signal a video launch fires when the video reaches a terminal
@@ -177,11 +166,6 @@ function mapResult(raw: RawImageResult): ImageGenerationResult {
 }
 
 // ----- Capability operations -----
-
-/** Encode a model id into a URL path, preserving its `/` separators. */
-function modelToPath(model: string): string {
-  return model.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-}
 
 /**
  * Guard a prompt value: throw a clear error before a paid job is submitted when
@@ -462,15 +446,15 @@ export const images = { create: createImage, launch: launchImage };
 type LiteralUnion<T extends string> = T | (string & Record<never, never>);
 
 /**
- * The concrete video models the Sapiom video gateway serves today, ready to pass as
- * {@link VideoCreateInput.model} — e.g. `VIDEO_MODELS.veo3Fast`. Omit `model` to use the
- * default (`veo3Fast`).
+ * The concrete provider video model ids the Sapiom video gateway serves, ready to pass as
+ * {@link VideoCreateInput.model} — e.g. `VIDEO_MODELS.veo3Fast`.
  *
- * These are raw *provider* model ids. They are deliberately NOT the Sapiom backend's
- * semantic aliases (`"veo3-fast"`, `"kling-standard"`, …): those aliases resolve server-side
- * ONLY on the `content.generation.video` capability route. This SDK forwards `model` verbatim
- * to the video gateway, so passing a semantic alias here fails upstream with a 404. When in
- * doubt, use a value from this object.
+ * @deprecated Raw provider ids are no longer required. `video.create`/`video.launch` route
+ * through the `content.generation.video` capability (SAP-2575), and that capability's adapter
+ * resolves Sapiom's semantic aliases (`"veo3-fast"`, `"kling-standard"`, …) server-side — pass
+ * one of those directly to {@link VideoCreateInput.model} instead. Kept exported for
+ * back-compat: a raw provider id from this object still works, the adapter passes an
+ * already-resolved id straight through.
  */
 export const VIDEO_MODELS = {
   /** Google Veo 3 Fast — fast text-to-video. The default. */
@@ -488,8 +472,6 @@ export const VIDEO_MODELS = {
 /** A known video model id — one of the values of {@link VIDEO_MODELS}. */
 export type KnownVideoModel = (typeof VIDEO_MODELS)[keyof typeof VIDEO_MODELS];
 
-/** Default video model when the caller doesn't pick one. */
-const DEFAULT_VIDEO_MODEL: KnownVideoModel = VIDEO_MODELS.veo3Fast;
 /** How often to poll for the async result, and when to give up. Caller-overridable. */
 const DEFAULT_VIDEO_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_VIDEO_TIMEOUT_MS = 5 * 60_000;
@@ -498,14 +480,14 @@ export interface VideoCreateInput {
   /** Text prompt describing the video to generate. */
   prompt: string;
   /**
-   * Optional video model. Omit to use the default ({@link VIDEO_MODELS.veo3Fast}).
+   * Optional video model. Omit to use the router's default (currently Veo 3 Fast).
    *
-   * Pass a value from {@link VIDEO_MODELS} — a raw *provider* model id. The Sapiom backend's
-   * semantic aliases (`"veo3-fast"`, `"kling-standard"`, …) are NOT accepted here: they resolve
-   * only on the server-side `content.generation.video` capability route, whereas this SDK
-   * forwards `model` verbatim to the gateway, so an alias fails upstream with a 404.
+   * Pass a Sapiom semantic alias (`"veo3-fast"`, `"kling-standard"`, …) or a raw *provider*
+   * model id from {@link VIDEO_MODELS} — both resolve: the request routes through the
+   * `content.generation.video` capability, whose adapter resolves an alias to its provider
+   * id server-side (SAP-2575).
    *
-   * @example VIDEO_MODELS.veo3Fast
+   * @example "veo3-fast"
    */
   model?: LiteralUnion<KnownVideoModel>;
   /**
@@ -570,23 +552,30 @@ interface RawVideoResult {
   [key: string]: unknown;
 }
 
-/** The async submit handle: a queue id + the Sapiom URL to poll for the result. */
-interface QueueHandle {
-  request_id?: string;
-  response_url?: string;
-  status_url?: string;
+/**
+ * The routed async-submit handle the Core capability router returns for the video
+ * capability — camelCase (the router normalizes fal's snake_case), with `servedBy`
+ * stripped at the public `/v1` boundary. Mirrors {@link ImageDispatchResponse}.
+ *
+ * NOTE: this is only the SUBMIT envelope's shape. The URL it carries
+ * (`responseUrl`/`statusUrl`) points at the gateway's queue passthrough, which still
+ * returns fal's RAW snake_case result — see {@link RawVideoResult} and {@link mapVideo}.
+ */
+interface VideoDispatchResponse {
+  requestId: string;
+  statusUrl: string;
+  responseUrl?: string;
 }
 
 /**
- * The upstream service occasionally omits `response_url` while still returning the canonical
- * `.../requests/:id/status` URL. The result endpoint is the same URL without
- * the final `/status` segment, so keep async video launches usable in that
- * valid response shape.
+ * The result endpoint to poll. Prefer `responseUrl`; fall back to `statusUrl` with a
+ * trailing `/status` removed — the same convention as {@link imageResultUrl} — so an
+ * async video launch stays usable when only `statusUrl` comes back.
  */
-function queueResultUrl(handle: QueueHandle): string | undefined {
-  if (handle.response_url) return handle.response_url;
-  if (!handle.status_url) return undefined;
-  const url = new URL(handle.status_url);
+function videoResultUrl(handle: VideoDispatchResponse): string | undefined {
+  if (handle.responseUrl) return handle.responseUrl;
+  if (!handle.statusUrl) return undefined;
+  const url = new URL(handle.statusUrl);
   if (!url.pathname.endsWith("/status")) return undefined;
   url.pathname = url.pathname.slice(0, -"/status".length);
   return url.toString();
@@ -622,37 +611,49 @@ const sleep = (ms: number): Promise<void> =>
  * persist the output (the returned `video` then carries `fileId`). Throws
  * {@link ContentGenerationHttpError} on a failed submit, or an `Error` if the result
  * isn't ready within `timeoutMs`.
+ *
+ * Routed (SAP-2575): the submit goes through the shared {@link capabilityCall} seam to
+ * `POST /v1/capabilities/content.generation.video` on the single Core base URL — the
+ * same seam {@link createImage} uses. `model` is a request-body field the router's video
+ * adapter resolves (a semantic alias like `"veo3-fast"`, or a raw provider id, and
+ * defaults when omitted); the SDK no longer builds a `/run/<model>` URL itself. The poll
+ * loop is unchanged: the submit response's `responseUrl`/`statusUrl` point at the
+ * gateway's queue passthrough, which still returns fal's raw snake_case result.
  */
 export async function createVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<VideoGenerationResult> {
   assertPrompt(input.prompt);
-  const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
 
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    ...input.params,
-  };
+  // Map to the router's camelCase video request. `params` rides as a nested field
+  // (not spread) so the adapter forwards it verbatim; `model` is a body field the
+  // adapter resolves — mirrors createImage's body byte-for-byte.
+  const body: Record<string, unknown> = { prompt: input.prompt };
+  if (input.model != null) body.model = input.model;
   // Truthy check (not `!== undefined`) so `storage: null` is treated as "no storage".
   if (input.storage) body.storage = input.storage;
+  if (input.params != null) body.params = input.params;
 
-  // Submit — for an async model Sapiom returns a queue handle, not the result.
-  const submitRes = await ensureOk(
-    await transport.fetch(`${baseUrl}/run/${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to submit video generation",
+  // Submit through the capability router — for an async model this returns a queue
+  // handle (camelCase requestId/statusUrl/responseUrl), not the result.
+  const submitted = await capabilityCall<VideoDispatchResponse & RawVideoResult>(
+    "content.generation.video",
+    body,
+    {
+      transport,
+      baseUrl,
+      makeError: (message, status, errorBody) =>
+        new ContentGenerationHttpError(message, status, errorBody),
+      errorPrefix: "Failed to submit video generation",
+    },
   );
-  const submitted = (await submitRes.json()) as QueueHandle & RawVideoResult;
   // Some Fal video operations (notably ffmpeg merge) complete synchronously and
   // return the final `video` object instead of a queue handle.
   if (submitted.video?.url) return mapVideoResult(submitted);
   const handle = submitted;
-  const responseUrl = queueResultUrl(handle);
+  const responseUrl = videoResultUrl(handle);
   if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
@@ -680,7 +681,7 @@ export async function createVideo(
     await sleep(intervalMs);
   }
   throw new Error(
-    `Video generation did not complete within ${timeoutMs}ms (request id: ${handle.request_id ?? "unknown"})`,
+    `Video generation did not complete within ${timeoutMs}ms (request id: ${handle.requestId ?? "unknown"})`,
   );
 }
 
@@ -770,41 +771,56 @@ export function toVideoResumePayload(
  *
  * Pass `storage` to persist the output (the result then carries `fileId`).
  * Throws {@link ContentGenerationHttpError} when the submit fails.
+ *
+ * Routed (SAP-2575): the submit is identical to {@link createVideo}'s — same body,
+ * same `POST /v1/capabilities/content.generation.video` call through the shared
+ * {@link capabilityCall} seam. Unlike images, video has no sync/async choice (it's
+ * the first capability that is ASYNC-dispatch only), so there's no `dispatch` field
+ * to set here; `launchVideo` differs from `createVideo` only in returning the
+ * dispatch handle (for workflow pause/resume) instead of polling to completion
+ * itself. Workflow resume is driven by forwarding the engine's resume token via
+ * {@link workflowResumeHeaders} so the service resumes the paused step on
+ * completion. `model` resolves the same way as `createVideo` (semantic alias or
+ * raw provider id, defaulted when omitted). The poll stays unchanged: `wait()`
+ * reads the gateway's queue passthrough, which still returns fal's raw
+ * snake_case result.
  */
 export async function launchVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<VideoLaunchHandle> {
   assertPrompt(input.prompt);
-  const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
 
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    ...input.params,
-  };
+  // Mirror createVideo's body byte-for-byte — video is async-only, so there's no
+  // `dispatch` field to add (unlike launchImage, which sets `dispatch: 'async'` to
+  // pick the queue path over images' sync default).
+  const body: Record<string, unknown> = { prompt: input.prompt };
+  if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
+  if (input.params != null) body.params = input.params;
 
-  // Submit — includes the workflow resume token header so the service can resume
-  // the paused step when the job completes (no-op outside a workflow context).
-  const submitRes = await ensureOk(
-    await transport.fetch(`${baseUrl}/run/${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...workflowResumeHeaders(transport.resumeToken),
-      },
-      body: JSON.stringify(body),
-    }),
-    "Failed to submit video generation",
+  const handle = await capabilityCall<VideoDispatchResponse>(
+    "content.generation.video",
+    body,
+    {
+      transport,
+      baseUrl,
+      // Forward the resume token so the service resumes a paused workflow step when the
+      // job completes (no header, no behavior change outside a workflow context).
+      headers: workflowResumeHeaders(transport.resumeToken),
+      makeError: (message, status, errorBody) =>
+        new ContentGenerationHttpError(message, status, errorBody),
+      errorPrefix: "Failed to submit video generation",
+    },
   );
-  const handle = (await submitRes.json()) as QueueHandle;
-  const responseUrl = queueResultUrl(handle);
+
+  const responseUrl = videoResultUrl(handle);
   if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
 
-  const requestId = handle.request_id ?? "unknown";
+  const requestId = handle.requestId ?? "unknown";
 
   const wait = async ({
     timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
