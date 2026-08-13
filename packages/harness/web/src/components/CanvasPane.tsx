@@ -91,12 +91,21 @@ interface CanvasPaneProps {
    *  navigating to a launched workflow is an explicit act on it, so it
    *  rebinds, same as running a macro against it. */
   onOpenWorkflow: (path: string) => void;
-  /** Reports whether THIS session currently has a servable canvas board, so the
-   *  workbench can follow it: shown when it has one, hidden when it doesn't.
-   *  Fires on the mount probe, on every canvas.reload, and whenever the session
-   *  changes — the reload case is what opens the pane the moment an agent
-   *  renders a board (a fresh build, a switch to a populated agent), even one
-   *  the user had collapsed. */
+  /** Reports whether THIS session currently has a REAL rendered board, so the
+   *  workbench can follow it: shown when a step graph exists, hidden when it
+   *  doesn't.
+   *
+   *  "Real" means the document posted `sapiom-canvas:graph` — not merely that
+   *  a file exists. A canvas write also happens for the "Preparing your agent
+   *  — installing dependencies" placeholder (and the server answers an
+   *  unrendered bound session with a "Rendering agent diagram…" document), and
+   *  revealing the pane for those presented setup scaffolding as if it were
+   *  the result. Those documents deliberately post nothing, so waiting for the
+   *  graph message is what separates them.
+   *
+   *  Fires on the mount probe, whenever the session changes, and once a graph
+   *  arrives — the last case is what opens the pane the moment an agent
+   *  finishes rendering a board, even one the user had collapsed. */
   onCanvasState?: (hasContent: boolean) => void;
 }
 
@@ -493,6 +502,13 @@ export function CanvasPane({
         });
       } else if (data.type === "sapiom-canvas:graph") {
         setGraph(parseCanvasGraph((data as { graph?: unknown }).graph));
+        // THE reveal signal. Only a real render embeds the graph script that
+        // posts this; the "preparing"/"pending" placeholders post nothing, so
+        // this is what keeps the pane from opening on scaffolding. The
+        // document loads even while the pane is collapsed (it is hidden with
+        // `display:none`, never unmounted), so nothing is deferred — only the
+        // reveal waits.
+        onCanvasStateRef.current?.(true);
       } else if (data.type === "sapiom-canvas:node") {
         // A board pick: populate the bottom inspector, stay on the Canvas
         // tab. The Steps tab is the inspector's explicit "Open in Steps"
@@ -643,7 +659,11 @@ export function CanvasPane({
     if (isMockMode()) {
       const has = hasMockCanvasDoc(sessionId);
       setHasGeneratedContent(has);
-      onCanvasStateRef.current?.(has);
+      // Same rule as the live probe: absence is announced, presence waits for
+      // the graph message. The bundled fixture posts one (public/canvas/
+      // sess-boot/index.html), so the demo still opens on its seeded board —
+      // and the e2e suite exercises the real gate rather than a shortcut.
+      if (!has) onCanvasStateRef.current?.(false);
       return;
     }
     setHasGeneratedContent(false);
@@ -652,8 +672,13 @@ export function CanvasPane({
     fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
       .then((res) => {
         if (cancelled) return;
+        // Mount the iframe when something is servable, but only ever announce
+        // the ABSENCE of content here. A 200 covers the real board, the
+        // "preparing" placeholder AND the server's "Rendering agent diagram…"
+        // pending document — indistinguishable to a HEAD probe. The reveal is
+        // the graph message's job; hiding an empty pane is still this one's.
         setHasGeneratedContent(res.ok);
-        onCanvasStateRef.current?.(res.ok);
+        if (!res.ok) onCanvasStateRef.current?.(false);
       })
       .catch(() => {})
       .finally(() => !cancelled && setProbing(false));
@@ -670,10 +695,11 @@ export function CanvasPane({
       // URL would be the static host's 404 page — never mount it; the pane
       // keeps its honest empty state instead.
       if (isMockMode() && !hasMockCanvasDoc(sessionId)) return;
+      // Mount and swap the document, but do NOT announce it: a canvas write is
+      // also how the "preparing" placeholder lands, and announcing here opened
+      // the pane on setup scaffolding. The reveal is announced from the graph
+      // message below, once the loaded document proves it has a board.
       setHasGeneratedContent(true);
-      // A live render just delivered a board — announce it so the workbench
-      // opens the pane, even one the user had collapsed.
-      onCanvasStateRef.current?.(true);
       setFrameLoading(true);
       setReloadKey((key) => key + 1);
     }
