@@ -663,8 +663,17 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       " choose: typeof window.sapiomDesktop?.chooseDirectory," +
       " deep: typeof window.sapiomDesktop?.onDeepLink," +
       " updateState: typeof window.sapiomDesktop?.onUpdateState," +
+      " pathForFile: typeof window.sapiomDesktop?.pathForFile," +
       " version: window.sapiomDesktop?.appVersion })",
-  )) as { bridge: string; check: string; choose: string; deep: string; updateState: string; version: unknown };
+  )) as {
+    bridge: string;
+    check: string;
+    choose: string;
+    deep: string;
+    updateState: string;
+    pathForFile: string;
+    version: unknown;
+  };
 
   if (shape.bridge !== "object") {
     throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
@@ -690,15 +699,23 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   if (shape.updateState !== "function") {
     throw new Error(`bridge incomplete — onUpdateState missing: ${JSON.stringify(shape)}`);
   }
+  // Shape-only: pathForFile needs a real dropped File to return anything, and it
+  // is read-only + local (webUtils.getPathForFile, no IPC) — what a drop on the
+  // terminal uses to type the file's path into the pty.
+  if (shape.pathForFile !== "function") {
+    throw new Error(`bridge incomplete — pathForFile missing: ${JSON.stringify(shape)}`);
+  }
   // The bridge must stay MINIMAL as well as present. Beyond appVersion the only
   // members allowed are checkForUpdates (no destructive counterpart — applying
   // an update is a native dialog, see ipc.ts), chooseDirectory (returns only a
   // user-picked path, opens no file, and is itself gated by isTrustedSender),
-  // and the two receive-only subscriptions (onDeepLink, onUpdateState). A
-  // restart method, by contrast, would let same-origin agent-authored content end
-  // every running session — so anything new here has to be a deliberate addition.
+  // the two receive-only subscriptions (onDeepLink, onUpdateState), and
+  // pathForFile (read-only resolution of a dropped File's path — no IPC, opens
+  // nothing). A restart method, by contrast, would let same-origin
+  // agent-authored content end every running session — so anything new here has
+  // to be a deliberate addition.
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState')",
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState' && k !== 'pathForFile')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);
@@ -748,7 +765,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState + pathForFile (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }
