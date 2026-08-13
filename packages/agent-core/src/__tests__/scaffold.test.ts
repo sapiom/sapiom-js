@@ -348,6 +348,53 @@ describe("scaffold .npmrc (local registry)", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  it("appends to (not overwrites) a template-authored .npmrc", async () => {
+    process.env.npm_config_registry = "http://localhost:4873";
+    global.fetch = (async () => ({
+      ok: true,
+      json: async () => ({ version: "9.9.9" }),
+    })) as unknown as typeof fetch;
+
+    const templatesRoot = makeTmp();
+    const templateDir = path.join(templatesRoot, "with-npmrc");
+    mkdirSync(templateDir, { recursive: true });
+    writeFileSync(
+      path.join(templateDir, "package.json"),
+      JSON.stringify({
+        name: "__PROJECT_NAME__",
+        version: "0.1.0",
+        dependencies: {
+          "@sapiom/agent": "__AGENT_VERSION__",
+          "@sapiom/tools": "__TOOLS_VERSION__",
+          zod: "__ZOD_VERSION__",
+        },
+      }),
+    );
+    writeFileSync(path.join(templateDir, "index.ts"), "export {};\n");
+    writeFileSync(
+      path.join(templateDir, "_npmrc"),
+      "auth-token=template-provided-token\n",
+    );
+
+    const base = makeTmp();
+    const targetDir = path.join(base, "template-npmrc");
+    try {
+      await scaffold({
+        targetDir,
+        template: "with-npmrc",
+        templatesDir: templatesRoot,
+      });
+      const npmrc = readFileSync(path.join(targetDir, ".npmrc"), "utf8");
+      expect(npmrc).toContain("auth-token=template-provided-token");
+      expect(npmrc).toContain(
+        "@sapiom:registry=http://localhost:4873",
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(templatesRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveVersions offline fallback", () => {
