@@ -127,13 +127,11 @@ test.describe("unified run entry", () => {
     const topic = page.getByLabel(/Topic/);
     await expect(topic).toHaveValue("42");
     await expect(topic).toHaveAttribute("aria-invalid", "true");
-    await expect(topic).toHaveAttribute(
-      "aria-describedby",
-      /schema--topic-errors/,
-    );
+    await expect(topic).toHaveAccessibleDescription(/topic must be string/i);
     await page.getByRole("button", { name: "Reset to defaults" }).click();
     await expect(topic).toHaveValue("indie game development");
     await expect(topic).toHaveAttribute("aria-invalid", "false");
+    await expect(topic).not.toHaveAccessibleDescription(/topic must be string/i);
   });
 
   test("renders and submits recursive schema controls with scoped JSON fallbacks", async ({
