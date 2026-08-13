@@ -29,8 +29,9 @@
  *  - **Stub signal (WB15-2)** is RUN-LEVEL. A local run is stub-served by
  *    construction, so the run carries `stubbed: true` (prod's renderRunState
  *    never does) and the inspector marks each executed step with a "stubbed"
- *    chip — agent-core records no per-CALL stub attribution, so that is the
- *    honest granularity. The terminal summary's `unusedStubs` (a supplied key
+ *    chip. Recorded calls additionally carry their own `stubUsed` attribution;
+ *    the run-level flag remains useful for steps that made no call. The terminal
+ *    summary's `unusedStubs` (a supplied key
  *    that matched nothing) and `stubWarnings` (a wrong-shape value) pass through
  *    only when NON-empty, so a clean run surfaces no notice at all.
  */
@@ -187,8 +188,8 @@ export function renderLocalRun(
     // A local run is stub-served by construction (every ctx.sapiom.* call
     // resolves from a stub, never the network) — so the run itself is `stubbed`,
     // and the inspector marks each executed step with the chip. This is the
-    // honest per-run truth: agent-core records no per-CALL stub attribution, so
-    // there is nothing finer to claim. renderRunState (prod) never sets this.
+    // honest per-run truth even when a step made no call. Recorded calls also
+    // carry their own `stubUsed` attribution. renderRunState (prod) never sets this.
     stubbed: true,
   };
   // Honest absence: only a NON-empty signal reaches the view, so the read-only

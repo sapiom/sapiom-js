@@ -7,28 +7,50 @@ async function loadSteps(page: Page): Promise<void> {
   await page.getByTestId("right-tab-steps").click();
 }
 
-async function seedRun(page: Page, run: RunView, target: "prod" | "local" = "prod"): Promise<void> {
-  await page.evaluate(([id, view]) => {
-    const win = window as unknown as { __MOCK_RUN_STATE__?: Record<string, RunView> };
-    win.__MOCK_RUN_STATE__ = { ...(win.__MOCK_RUN_STATE__ ?? {}), [id]: view };
-  }, [run.executionId, run] as [string, RunView]);
-  await page.evaluate(([executionId, nextTarget]) => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } })
-      .__HARNESS_TEST__.publish({
+async function seedRun(
+  page: Page,
+  run: RunView,
+  target: "prod" | "local" = "prod",
+): Promise<void> {
+  await page.evaluate(
+    ([id, view]) => {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE__?: Record<string, RunView>;
+      };
+      win.__MOCK_RUN_STATE__ = {
+        ...(win.__MOCK_RUN_STATE__ ?? {}),
+        [id]: view,
+      };
+    },
+    [run.executionId, run] as [string, RunView],
+  );
+  await page.evaluate(
+    ([executionId, nextTarget]) => {
+      (
+        window as unknown as {
+          __HARNESS_TEST__: { publish: (message: unknown) => void };
+        }
+      ).__HARNESS_TEST__.publish({
         type: "execution.started",
         harnessSessionId: "sess-boot",
         executionId,
         target: nextTarget,
       });
-  }, [run.executionId, target] as const);
-  await expect(page.getByTestId("run-workspace")).toBeVisible({ timeout: 8_000 });
+    },
+    [run.executionId, target] as const,
+  );
+  await expect(page.getByTestId("run-workspace")).toBeVisible({
+    timeout: 8_000,
+  });
 }
 
 test.beforeEach(async ({ page }) => {
   await loadSteps(page);
 });
 
-test("orders retries chronologically and exposes predictable, honest evidence tabs", async ({ page }) => {
+test("orders retries chronologically and exposes predictable, honest evidence tabs", async ({
+  page,
+}) => {
   await seedRun(page, {
     executionId: "exec-retries",
     status: "completed",
@@ -96,7 +118,12 @@ test("orders retries chronologically and exposes predictable, honest evidence ta
   await expect(inspector).toBeVisible();
   const evidenceTabs = inspector.locator(".run-evidence-tabs").getByRole("tab");
   await expect(evidenceTabs).toHaveText([
-    "Input", "Output", "State", "Directive", "Logs", "Calls",
+    "Input",
+    "Output",
+    "State",
+    "Directive",
+    "Logs",
+    "Calls",
   ]);
   const evidence = inspector.getByTestId("run-evidence-artifact");
   await expect(evidence.getByText("score", { exact: true })).toBeVisible();
@@ -118,7 +145,9 @@ test("orders retries chronologically and exposes predictable, honest evidence ta
   await expect(evidence.locator("pre")).toContainText('"stepName": "approve"');
   await evidence.getByRole("tab", { name: "Rendered" }).click();
   await expect(evidence.getByText("stepName", { exact: true })).toBeVisible();
-  await expect(evidence.getByText("Strasbourg, Grand Est, France", { exact: true })).toBeVisible();
+  await expect(
+    evidence.getByText("Strasbourg, Grand Est, France", { exact: true }),
+  ).toBeVisible();
   const composite = evidence.locator(".artifact-field[data-composite]").first();
   const [compositeLabel, compositeValue] = await Promise.all([
     composite.locator(":scope > .artifact-field-label").boundingBox(),
@@ -126,23 +155,37 @@ test("orders retries chronologically and exposes predictable, honest evidence ta
   ]);
   expect(compositeLabel).not.toBeNull();
   expect(compositeValue).not.toBeNull();
-  expect(Math.abs(compositeLabel!.x - compositeValue!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(compositeLabel!.x - compositeValue!.x)).toBeLessThanOrEqual(
+    1,
+  );
   await inspector.getByRole("tab", { name: "Calls" }).click();
-  await expect(inspector.getByRole("tabpanel")).toContainText("Calls not recorded");
+  await expect(
+    inspector.getByRole("tabpanel", { name: "Calls" }),
+  ).toContainText("Calls not recorded");
   await inspector.getByRole("tab", { name: "Calls" }).press("ArrowLeft");
   await expect(inspector.getByRole("tab", { name: "Logs" })).toBeFocused();
-  await expect(inspector.getByRole("tabpanel")).toContainText("Logs not recorded");
+  await expect(inspector.getByRole("tabpanel", { name: "Logs" })).toContainText(
+    "Logs not recorded",
+  );
   await inspector.getByRole("button", { name: "Back" }).click();
   await expect(page.getByTestId("run-artifact")).toBeVisible();
 });
 
-test("a failed run automatically selects the failing attempt and Logs", async ({ page }) => {
+test("a failed run automatically selects the failing attempt and Logs", async ({
+  page,
+}) => {
   await seedRun(page, {
     executionId: "exec-failed",
     status: "failed",
     error: { message: "Execution stopped" },
     steps: [
-      { id: "intake-1", name: "intake", attempt: 1, status: "passed", output: { ok: true } },
+      {
+        id: "intake-1",
+        name: "intake",
+        attempt: 1,
+        status: "passed",
+        output: { ok: true },
+      },
       {
         id: "screen-2",
         name: "screen",
@@ -156,63 +199,175 @@ test("a failed run automatically selects the failing attempt and Logs", async ({
 
   const inspector = page.getByRole("region", { name: "screen attempt 2" });
   await expect(inspector).toBeVisible();
-  await expect(inspector.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
-  await expect(inspector.getByRole("tabpanel")).toContainText("schema mismatch");
+  await expect(inspector.getByRole("tab", { name: "Logs" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(inspector.getByRole("tabpanel", { name: "Logs" })).toContainText(
+    "schema mismatch",
+  );
+  const logsArtifact = inspector.getByTestId("run-evidence-artifact");
+  await expect(
+    logsArtifact.getByRole("tab", { name: "Rendered" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await logsArtifact.getByRole("tab", { name: "Raw" }).click();
+  await expect(logsArtifact.locator("pre")).toContainText("Validation failed");
   await expect(inspector).toContainText("Validation failed");
 });
 
-test("manual inspection is preserved when a running execution later fails", async ({ page }) => {
+test("renders recorded capability arguments and results as compact artifacts", async ({
+  page,
+}) => {
+  await seedRun(page, {
+    executionId: "exec-calls",
+    status: "completed",
+    output: { ok: true },
+    steps: [
+      {
+        id: "lookup-1",
+        name: "lookup",
+        attempt: 1,
+        status: "passed",
+        calls: [
+          {
+            capability: "weather.current",
+            stubUsed: true,
+            args: { city: "Strasbourg" },
+            result: { temperatureC: 28.7 },
+          },
+        ],
+      },
+    ],
+  });
+
+  await page.getByRole("option", { name: /lookup/ }).click();
+  const inspector = page.getByRole("region", { name: "lookup attempt 1" });
+  await inspector.getByRole("tab", { name: "Calls" }).click();
+  await expect(inspector.getByText("weather.current")).toBeVisible();
+  await expect(inspector.getByText("stubbed", { exact: true })).toBeVisible();
+
+  const args = inspector.getByTestId("run-call-arguments-0");
+  const result = inspector.getByTestId("run-call-result-0");
+  await expect(args.getByRole("button", { name: "Arguments" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(result.getByRole("button", { name: "Result" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await args.getByRole("button", { name: "Arguments" }).click();
+  await expect(args.getByText("Strasbourg", { exact: true })).toBeVisible();
+  await args.getByRole("tab", { name: "Raw" }).click();
+  await expect(args.locator("pre")).toContainText('"city": "Strasbourg"');
+  await result.getByRole("button", { name: "Result" }).click();
+  await expect(result.getByText("28.7", { exact: true })).toBeVisible();
+});
+
+test("manual inspection is preserved when a running execution later fails", async ({
+  page,
+}) => {
   const running: RunView = {
     executionId: "exec-manual",
     status: "running",
     steps: [
-      { id: "intake-1", name: "intake", attempt: 1, status: "passed", output: { ok: true } },
+      {
+        id: "intake-1",
+        name: "intake",
+        attempt: 1,
+        status: "passed",
+        output: { ok: true },
+      },
       { id: "screen-1", name: "screen", attempt: 1, status: "running" },
     ],
   };
   await seedRun(page, running);
   await page.getByRole("option", { name: /intake/ }).click();
-  await expect(page.getByRole("region", { name: "intake attempt 1" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "intake attempt 1" }),
+  ).toBeVisible();
 
   await page.evaluate(() => {
     const view: RunView = {
       executionId: "exec-manual",
       status: "failed",
       steps: [
-        { id: "intake-1", name: "intake", attempt: 1, status: "passed", output: { ok: true } },
-        { id: "screen-1", name: "screen", attempt: 1, status: "failed", error: "late failure", logSlice: "boom" },
+        {
+          id: "intake-1",
+          name: "intake",
+          attempt: 1,
+          status: "passed",
+          output: { ok: true },
+        },
+        {
+          id: "screen-1",
+          name: "screen",
+          attempt: 1,
+          status: "failed",
+          error: "late failure",
+          logSlice: "boom",
+        },
       ],
     };
-    (window as unknown as { __MOCK_RUN_STATE__?: Record<string, RunView> }).__MOCK_RUN_STATE__ = {
+    (
+      window as unknown as { __MOCK_RUN_STATE__?: Record<string, RunView> }
+    ).__MOCK_RUN_STATE__ = {
       "exec-manual": view,
     };
   });
 
-  await expect(page.locator(".run-workspace-status")).toContainText("Failed", { timeout: 5_000 });
-  await expect(page.getByRole("region", { name: "intake attempt 1" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Output" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".run-workspace-status")).toContainText("Failed", {
+    timeout: 5_000,
+  });
+  await expect(
+    page.getByRole("region", { name: "intake attempt 1" }),
+  ).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Output" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
-test("uses canonical run output, then labels the successful-step fallback Latest output", async ({ page }) => {
+test("uses canonical run output, then labels the successful-step fallback Latest output", async ({
+  page,
+}) => {
   await seedRun(page, {
     executionId: "exec-canonical",
     status: "completed",
     output: { source: "canonical" },
-    steps: [{ id: "deliver-1", name: "deliver", status: "passed", output: { source: "step" } }],
+    steps: [
+      {
+        id: "deliver-1",
+        name: "deliver",
+        status: "passed",
+        output: { source: "step" },
+      },
+    ],
   });
   await expect(page.getByTestId("run-artifact")).toContainText("canonical");
-  await expect(page.getByTestId("run-artifact")).not.toContainText("Latest output");
+  await expect(page.getByTestId("run-artifact")).not.toContainText(
+    "Latest output",
+  );
 
   await seedRun(page, {
     executionId: "exec-fallback",
     status: "completed",
-    steps: [{ id: "deliver-1", name: "deliver", status: "passed", output: { source: "step" } }],
+    steps: [
+      {
+        id: "deliver-1",
+        name: "deliver",
+        status: "passed",
+        output: { source: "step" },
+      },
+    ],
   });
   await expect(page.getByTestId("run-artifact")).toContainText("Latest output");
   await expect(page.getByTestId("run-artifact")).toContainText("step");
 });
 
-test("renders safe artifacts, collapses long collections, and falls back when media fails", async ({ page }) => {
+test("renders safe artifacts, collapses long collections, and falls back when media fails", async ({
+  page,
+}) => {
   await seedRun(page, {
     executionId: "exec-artifact",
     status: "completed",
@@ -221,22 +376,46 @@ test("renders safe artifacts, collapses long collections, and falls back when me
       body: "<img src=x onerror=alert(1)>",
       documentation: "[Documentation](https://example.com/docs)",
       image: "http://127.0.0.1:1/broken.png",
+      emptyObject: {},
+      emptyArray: [],
       items: Array.from({ length: 10 }, (_, index) => `item-${index + 1}`),
     },
     steps: [],
   });
   const artifact = page.getByTestId("run-artifact");
-  await expect(artifact.getByRole("heading", { name: "Shipping report" })).toBeVisible();
-  await expect(artifact.locator("pre.artifact-source")).toContainText("<img src=x onerror=alert(1)>");
+  await expect(
+    artifact.getByRole("heading", { name: "Shipping report" }),
+  ).toBeVisible();
+  await expect(artifact.locator("pre.artifact-source")).toContainText(
+    "<img src=x onerror=alert(1)>",
+  );
   await expect(artifact.locator("img[src='x']")).toHaveCount(0);
-  await expect(artifact.getByRole("link", { name: "Documentation" })).toHaveAttribute("href", "https://example.com/docs");
+  await expect(
+    artifact.getByRole("link", { name: "Documentation" }),
+  ).toHaveAttribute("href", "https://example.com/docs");
   await expect(artifact.getByText("Show 2 more")).toBeVisible();
-  await expect(artifact.getByText(/Preview unavailable/)).toBeVisible({ timeout: 5_000 });
-  await artifact.getByRole("tab", { name: "Raw" }).click();
-  await expect(artifact.locator("pre")).toContainText("<img src=x onerror=alert(1)>");
+  await expect(artifact.getByText("{}", { exact: true })).toBeVisible();
+  await expect(artifact.getByText("[]", { exact: true })).toBeVisible();
+  await expect(artifact.getByText(/Preview unavailable/)).toBeVisible({
+    timeout: 5_000,
+  });
+  const renderedTab = artifact.getByRole("tab", { name: "Rendered" });
+  const rawTab = artifact.getByRole("tab", { name: "Raw" });
+  await renderedTab.focus();
+  await renderedTab.press("ArrowRight");
+  await expect(rawTab).toBeFocused();
+  await expect(rawTab).toHaveAttribute("aria-selected", "true");
+  await expect(artifact.locator("pre")).toContainText(
+    "<img src=x onerror=alert(1)>",
+  );
+  await rawTab.press("Home");
+  await expect(renderedTab).toBeFocused();
+  await expect(renderedTab).toHaveAttribute("aria-selected", "true");
 });
 
-test("puts attempts before the result and bounds long HTML until explicitly expanded", async ({ page }) => {
+test("puts attempts before the result and bounds long HTML until explicitly expanded", async ({
+  page,
+}) => {
   const tail = "TAIL_MUST_STAY_COLLAPSED";
   await seedRun(page, {
     executionId: "exec-long-html",
@@ -245,13 +424,22 @@ test("puts attempts before the result and bounds long HTML until explicitly expa
       html: `<!doctype html><html><body>${"weather ".repeat(300)}${tail}</body></html>`,
     },
     steps: [
-      { id: "render-1", name: "render", attempt: 1, status: "passed", latencyMs: 120 },
+      {
+        id: "render-1",
+        name: "render",
+        attempt: 1,
+        status: "passed",
+        latencyMs: 120,
+      },
     ],
   });
 
   const timeline = page.getByTestId("run-timeline");
   const artifact = page.getByTestId("run-artifact");
-  const [timelineBox, artifactBox] = await Promise.all([timeline.boundingBox(), artifact.boundingBox()]);
+  const [timelineBox, artifactBox] = await Promise.all([
+    timeline.boundingBox(),
+    artifact.boundingBox(),
+  ]);
   expect(timelineBox).not.toBeNull();
   expect(artifactBox).not.toBeNull();
   expect(timelineBox!.y).toBeLessThan(artifactBox!.y);
@@ -262,42 +450,74 @@ test("puts attempts before the result and bounds long HTML until explicitly expa
   await expandHtml.click();
   await expect(artifact.locator("pre.artifact-source")).toContainText(tail);
 
-  const disclosure = artifact.getByRole("button", { name: "Result", exact: true });
+  const disclosure = artifact.getByRole("button", {
+    name: "Result",
+    exact: true,
+  });
   await expect(disclosure).toHaveAttribute("aria-expanded", "true");
   await disclosure.click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-  await expect(artifact.locator(".artifact-body")).toHaveCount(0);
+  await expect(artifact.locator(".artifact-body")).toBeHidden();
   await disclosure.click();
   await expect(artifact.locator(".artifact-body")).toBeVisible();
 });
 
-test("Focus mode shows the timeline and shared inspector side by side", async ({ page }) => {
+test("Focus mode shows the timeline and shared inspector side by side", async ({
+  page,
+}) => {
   await page.evaluate(() => {
     document.documentElement.dataset.windowFrame = "macos";
   });
   await page.getByTestId("session-step-local").click();
   await page.getByTestId("run-sheet-submit").click();
-  await expect(page.getByTestId("run-artifact")).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByTestId("run-artifact")).toBeVisible({
+    timeout: 8_000,
+  });
   const coveredTabsBox = await page.locator(".right-pane-tabs").boundingBox();
   expect(coveredTabsBox).not.toBeNull();
-  await page.getByRole("button", { name: "Open Focus mode" }).click();
+  const openFocus = page.getByRole("button", { name: "Open Focus mode" });
+  await openFocus.click();
   const focusLayer = page.getByTestId("run-focus-layer");
   await expect(focusLayer).toBeVisible();
+  await expect(focusLayer).toHaveAttribute("role", "dialog");
+  await expect(focusLayer).toHaveAttribute("aria-modal", "true");
+  await expect(
+    focusLayer.getByRole("button", { name: "Exit Focus mode" }),
+  ).toBeFocused();
+  expect(
+    await page.locator("#root").evaluate((root) => ({
+      inert: (root as HTMLElement).inert,
+      ariaHidden: root.getAttribute("aria-hidden"),
+    })),
+  ).toEqual({ inert: true, ariaHidden: "true" });
   await expect(page.getByTestId("run-workspace")).toHaveClass(/is-focus/);
-  expect(await focusLayer.evaluate((element) => element.parentElement === document.body)).toBe(true);
+  expect(
+    await focusLayer.evaluate(
+      (element) => element.parentElement === document.body,
+    ),
+  ).toBe(true);
   const layerBox = await focusLayer.boundingBox();
   expect(layerBox).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
   expect(
-    await page.locator(".run-focus-layer .run-workspace-header").evaluate((header) =>
-      Number.parseFloat(getComputedStyle(header).paddingLeft),
-    ),
+    await page
+      .locator(".run-focus-layer .run-workspace-header")
+      .evaluate((header) =>
+        Number.parseFloat(getComputedStyle(header).paddingLeft),
+      ),
   ).toBeGreaterThanOrEqual(78);
   expect(
-    await page.evaluate(({ x, y }) =>
-      Boolean(document.elementFromPoint(x, y)?.closest("[data-testid='run-focus-layer']")), {
+    await page.evaluate(
+      ({ x, y }) =>
+        Boolean(
+          document
+            .elementFromPoint(x, y)
+            ?.closest("[data-testid='run-focus-layer']"),
+        ),
+      {
         x: coveredTabsBox!.x + coveredTabsBox!.width / 2,
         y: coveredTabsBox!.y + coveredTabsBox!.height / 2,
-      }),
+      },
+    ),
   ).toBe(true);
   await page.getByRole("option", { name: /screen/ }).click();
   const timelineBox = await page.getByTestId("run-timeline").boundingBox();
@@ -314,6 +534,16 @@ test("Focus mode shows the timeline and shared inspector side by side", async ({
   expect(backBox).not.toBeNull();
   expect(backBox!.x).toBeGreaterThanOrEqual(78);
   expect(backBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
-  await page.getByTestId("run-workspace").getByRole("button", { name: "Exit Focus mode" }).click();
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveCount(0);
+  await expect(focusLayer).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(focusLayer).toHaveCount(0);
+  expect(
+    await page.locator("#root").evaluate((root) => ({
+      inert: (root as HTMLElement).inert,
+      ariaHidden: root.getAttribute("aria-hidden"),
+    })),
+  ).toEqual({ inert: false, ariaHidden: null });
+  await expect(openFocus).toBeFocused();
 });

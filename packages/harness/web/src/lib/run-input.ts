@@ -31,7 +31,9 @@ export function loadStoredRunInput(
   workflowPath: string,
 ): StoredRunInput | null {
   try {
-    const raw = browserStorage()?.getItem(storageKey(INPUT_PREFIX, workflowPath));
+    const raw = browserStorage()?.getItem(
+      storageKey(INPUT_PREFIX, workflowPath),
+    );
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredRunInput>;
     if (!("value" in parsed)) return null;
@@ -64,8 +66,9 @@ export function saveStoredRunInput(
 
 export function loadStoredRunTarget(workflowPath: string): RunTarget {
   try {
-    return browserStorage()?.getItem(storageKey(TARGET_PREFIX, workflowPath)) ===
-      "prod"
+    return browserStorage()?.getItem(
+      storageKey(TARGET_PREFIX, workflowPath),
+    ) === "prod"
       ? "prod"
       : "local";
   } catch {
@@ -110,9 +113,7 @@ function firstDeclaredExample(schema: Record<string, unknown>): unknown {
 }
 
 /** Recursively materialize declared defaults without inventing optional data. */
-export function defaultsFromSchema(
-  schema: Record<string, unknown>,
-): unknown {
+export function defaultsFromSchema(schema: Record<string, unknown>): unknown {
   if (Object.prototype.hasOwnProperty.call(schema, "default")) {
     return schema.default;
   }
@@ -132,7 +133,8 @@ export function defaultsFromSchema(
 }
 
 function skeletonScalar(schema: Record<string, unknown>): unknown {
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0];
+  if (Array.isArray(schema.enum) && schema.enum.length > 0)
+    return schema.enum[0];
   switch (schema.type) {
     case "string":
       return "";
@@ -167,12 +169,67 @@ export function requiredSkeletonFromSchema(
   );
 }
 
+/** Merge optional declared defaults with placeholders for every required
+ * branch. A partial set of defaults must not make the initial form invalid by
+ * suppressing required siblings that happen not to declare one. */
+function defaultsAndRequiredFromSchema(
+  schema: Record<string, unknown>,
+): unknown {
+  const hasDefault = Object.prototype.hasOwnProperty.call(schema, "default");
+  if (schema.type !== "object") return hasDefault ? schema.default : undefined;
+  if (
+    hasDefault &&
+    (!schema.default ||
+      typeof schema.default !== "object" ||
+      Array.isArray(schema.default))
+  ) {
+    return schema.default;
+  }
+  const properties = (schema.properties ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const required = new Set(
+    Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === "string")
+      : [],
+  );
+  const result: Record<string, unknown> = hasDefault
+    ? { ...(schema.default as Record<string, unknown>) }
+    : {};
+  for (const [key, child] of Object.entries(properties)) {
+    if (Object.prototype.hasOwnProperty.call(result, key)) {
+      const existing = result[key];
+      if (
+        child.type === "object" &&
+        existing !== null &&
+        typeof existing === "object" &&
+        !Array.isArray(existing)
+      ) {
+        result[key] = defaultsAndRequiredFromSchema({
+          ...child,
+          default: existing,
+        });
+      }
+      continue;
+    }
+    const childDefaults = defaultsFromSchema(child);
+    if (childDefaults !== undefined) {
+      result[key] = defaultsAndRequiredFromSchema(child);
+    } else if (required.has(key)) {
+      result[key] =
+        defaultsAndRequiredFromSchema(child) ?? skeletonScalar(child);
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 /** Author example → declared defaults → required-field skeleton. */
 export function resetValueForSchema(schema: Record<string, unknown>): unknown {
   const example = firstDeclaredExample(schema);
   if (example !== undefined) return example;
-  const defaults = defaultsFromSchema(schema);
-  if (defaults !== undefined) return defaults;
+  const defaultsAndRequired = defaultsAndRequiredFromSchema(schema);
+  if (defaultsAndRequired !== undefined) return defaultsAndRequired;
   return requiredSkeletonFromSchema(schema);
 }
 
@@ -215,7 +272,8 @@ export function createInputValidator(
 
 export function fieldPathForError(error: ErrorObject): string {
   if (error.keyword === "required") {
-    const missing = (error.params as { missingProperty?: unknown }).missingProperty;
+    const missing = (error.params as { missingProperty?: unknown })
+      .missingProperty;
     if (typeof missing === "string") return `${error.instancePath}/${missing}`;
   }
   return error.instancePath || "/";

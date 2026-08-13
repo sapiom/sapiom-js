@@ -575,7 +575,8 @@ export type StepStatus = "pending" | "running" | "passed" | "failed";
 /** One step as the canvas renders it — status plus the deterministically
  *  derived latency/error/log slice. Optional fields are ABSENT (not
  *  `undefined`/`0`) when the decoded projection carries no value — honest
- *  absence. The inspector surfaces logs, latency, and pass/fail only. */
+ *  absence. Studio exposes every recorded field through the shared evidence
+ *  inspector and labels missing fields as not recorded. */
 export interface StepView {
   /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
   id: string;
@@ -636,8 +637,9 @@ export interface UnusedStubView {
  *  never carry them), and only when they carry real signal. A local run is
  *  stub-served by construction — every `ctx.sapiom.*` call resolves from a stub —
  *  so `stubbed` is the honest per-run truth the inspector marks each executed
- *  step with (agent-core records no per-CALL stub attribution, so the chip lives
- *  at the granularity the trace actually supports). `unusedStubs`/`stubWarnings`
+ *  step with. When the local trace records individual calls, `StepCall.stubUsed`
+ *  supplies the finer-grained attribution alongside that run-level signal.
+ *  `unusedStubs`/`stubWarnings`
  *  come from the run's terminal NDJSON summary and are ABSENT (not `[]`) when
  *  empty, so the read-only notice renders nothing when there is nothing wrong. */
 export interface RunView {

@@ -6526,6 +6526,11 @@ button.rail-footer-card:hover {
   font-weight: 550;
 }
 
+.run-sheet-field-head h3 {
+  margin: 0;
+  font: inherit;
+}
+
 .run-input-mode {
   display: inline-flex;
   padding: 2px;
@@ -6644,7 +6649,8 @@ button.rail-footer-card:hover {
 
 .schema-field > label,
 .schema-json-field > label,
-.schema-object > legend {
+.schema-object > legend,
+.schema-array-field > legend {
   color: var(--text);
   font-size: var(--type-label);
   font-weight: 550;
@@ -6652,7 +6658,8 @@ button.rail-footer-card:hover {
 
 .schema-field > p,
 .schema-json-field > p,
-.schema-object > p {
+.schema-object > p,
+.schema-array-field > p {
   margin: 0 0 var(--sp1);
   color: var(--text-faint);
   font-size: var(--type-meta);
@@ -6700,6 +6707,17 @@ button.rail-footer-card:hover {
   padding: 0 var(--sp1);
 }
 
+.schema-array-field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.schema-array-field > legend {
+  padding: 0;
+}
+
 .schema-optional-toggle {
   display: inline-flex;
   align-items: center;
@@ -6720,7 +6738,7 @@ button.rail-footer-card:hover {
   gap: var(--sp1);
 }
 
-.schema-array-row .schema-field-error {
+.schema-array-row .schema-field-errors {
   grid-column: 1 / -1;
 }
 
@@ -6733,9 +6751,15 @@ button.rail-footer-card:hover {
 }
 
 .schema-field-error {
+  display: block;
   color: var(--red-text);
   font-size: var(--type-meta);
   line-height: 1.4;
+}
+
+.schema-field-errors {
+  display: grid;
+  gap: 2px;
 }
 
 .run-sheet-actions {
@@ -7102,22 +7126,6 @@ button.rail-footer-card:hover {
   font-size: var(--type-label);
 }
 
-.run-evidence-value,
-.run-call pre {
-  margin: 0;
-  padding: var(--sp3);
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-inset);
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .run-call-list { display: grid; gap: var(--sp3); }
 .run-call { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .run-call > header { display: flex; justify-content: space-between; padding: var(--sp2) var(--sp3); background: var(--surface-inset); }
@@ -7125,7 +7133,6 @@ button.rail-footer-card:hover {
 .run-call-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .run-call-pair section { min-width: 0; padding: var(--sp3); }
 .run-call-pair section + section { border-left: 1px solid var(--border); }
-.run-call h5 { margin: 0 0 var(--sp2); color: var(--text-faint); font-size: var(--type-meta); }
 .run-call p { color: var(--text-faint); font-size: var(--type-meta); }
 
 /* Artifact renderer ----------------------------------------------------- */

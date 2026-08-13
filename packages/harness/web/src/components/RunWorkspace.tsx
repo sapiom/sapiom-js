@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 import type { RunView, StepView, WorkflowInfo } from "@shared/types";
@@ -10,7 +10,13 @@ import { agentUrl } from "../lib/urls";
 import { ArtifactRenderer } from "./ArtifactRenderer";
 import { Icon } from "./Icon";
 
-export type EvidenceTab = "input" | "output" | "state" | "directive" | "logs" | "calls";
+export type EvidenceTab =
+  | "input"
+  | "output"
+  | "state"
+  | "directive"
+  | "logs"
+  | "calls";
 
 const EVIDENCE_TABS: Array<{ id: EvidenceTab; label: string }> = [
   { id: "input", label: "Input" },
@@ -27,8 +33,10 @@ export function chronologicalAttempts(steps: StepView[]): StepView[] {
     .sort((a, b) => {
       const at = a.step.startedAt ? Date.parse(a.step.startedAt) : Number.NaN;
       const bt = b.step.startedAt ? Date.parse(b.step.startedAt) : Number.NaN;
-      if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
-      if (Number.isFinite(at) !== Number.isFinite(bt)) return Number.isFinite(at) ? -1 : 1;
+      if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt)
+        return at - bt;
+      if (Number.isFinite(at) !== Number.isFinite(bt))
+        return Number.isFinite(at) ? -1 : 1;
       return a.index - b.index;
     })
     .map(({ step }) => step);
@@ -49,7 +57,8 @@ function runDuration(run: RunView): number | null {
   if (run.startedAt && run.finishedAt) {
     const start = Date.parse(run.startedAt);
     const end = Date.parse(run.finishedAt);
-    if (Number.isFinite(start) && Number.isFinite(end) && end >= start) return end - start;
+    if (Number.isFinite(start) && Number.isFinite(end) && end >= start)
+      return end - start;
   }
   const total = run.steps.reduce((sum, step) => sum + (step.latencyMs ?? 0), 0);
   return total > 0 ? total : null;
@@ -62,18 +71,31 @@ function StepGlyph({ status }: { status: StepView["status"] }): JSX.Element {
   return <span className="run-workspace-pending" />;
 }
 
-function timelinePosition(step: StepView, run: RunView): { left: number; width: number } {
-  if (!step.startedAt || !run.startedAt) return { left: 0, width: step.latencyMs ? 100 : 12 };
+function timelinePosition(
+  step: StepView,
+  run: RunView,
+): { left: number; width: number } {
+  if (!step.startedAt || !run.startedAt)
+    return { left: 0, width: step.latencyMs ? 100 : 12 };
   const runStart = Date.parse(run.startedAt);
   const stepStart = Date.parse(step.startedAt);
   const runEnd = run.finishedAt ? Date.parse(run.finishedAt) : Date.now();
   const stepEnd = step.finishedAt ? Date.parse(step.finishedAt) : runEnd;
-  if (![runStart, stepStart, runEnd, stepEnd].every(Number.isFinite) || runEnd <= runStart) {
+  if (
+    ![runStart, stepStart, runEnd, stepEnd].every(Number.isFinite) ||
+    runEnd <= runStart
+  ) {
     return { left: 0, width: step.latencyMs ? 100 : 12 };
   }
   return {
-    left: Math.max(0, Math.min(96, ((stepStart - runStart) / (runEnd - runStart)) * 100)),
-    width: Math.max(4, Math.min(100, ((stepEnd - stepStart) / (runEnd - runStart)) * 100)),
+    left: Math.max(
+      0,
+      Math.min(96, ((stepStart - runStart) / (runEnd - runStart)) * 100),
+    ),
+    width: Math.max(
+      4,
+      Math.min(100, ((stepEnd - stepStart) / (runEnd - runStart)) * 100),
+    ),
   };
 }
 
@@ -90,41 +112,71 @@ function Timeline({
 }): JSX.Element {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   return (
-    <div className="run-timeline" role="listbox" aria-label="Execution attempts" data-testid="run-timeline">
-      <div className="run-timeline-title">Attempts <span>{attempts.length}</span></div>
+    <div
+      className="run-timeline"
+      role="listbox"
+      aria-label="Execution attempts"
+      data-testid="run-timeline"
+    >
+      <div className="run-timeline-title">
+        Attempts <span>{attempts.length}</span>
+      </div>
       {attempts.map((step, index) => {
         const timing = timelinePosition(step, run);
         return (
           <button
             key={step.id}
-            ref={(node) => { refs.current[index] = node; }}
+            ref={(node) => {
+              refs.current[index] = node;
+            }}
             type="button"
             role="option"
             aria-selected={selectedId === step.id}
+            tabIndex={
+              selectedId === step.id || (selectedId === null && index === 0)
+                ? 0
+                : -1
+            }
             className="run-timeline-row"
             data-testid={`run-attempt-${step.id}`}
             data-status={step.status}
             onClick={() => onSelect(step)}
             onKeyDown={(event) => {
-              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+              if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
+                return;
               event.preventDefault();
-              const delta = event.key === "ArrowDown" ? 1 : -1;
-              const next = (index + delta + attempts.length) % attempts.length;
+              const next =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? attempts.length - 1
+                    : (index +
+                        (event.key === "ArrowDown" ? 1 : -1) +
+                        attempts.length) %
+                      attempts.length;
               refs.current[next]?.focus();
               onSelect(attempts[next]!);
             }}
           >
-            <span className="run-timeline-index">{String(index + 1).padStart(2, "0")}</span>
-            <span className="run-timeline-status" aria-label={step.status}><StepGlyph status={step.status} /></span>
+            <span className="run-timeline-index">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <span className="run-timeline-status" aria-label={step.status}>
+              <StepGlyph status={step.status} />
+            </span>
             <span className="run-timeline-copy">
               <strong>{step.name}</strong>
               <small>Attempt {step.attempt ?? 1}</small>
             </span>
             <span className="run-timeline-duration">
-              {step.latencyMs !== undefined ? formatTimeout(step.latencyMs) : step.status}
+              {step.latencyMs !== undefined
+                ? formatTimeout(step.latencyMs)
+                : step.status}
             </span>
             <span className="run-timeline-track" aria-hidden="true">
-              <span style={{ left: `${timing.left}%`, width: `${timing.width}%` }} />
+              <span
+                style={{ left: `${timing.left}%`, width: `${timing.width}%` }}
+              />
             </span>
           </button>
         );
@@ -142,12 +194,22 @@ function evidenceValue(step: StepView, tab: EvidenceTab): unknown | undefined {
   return step.calls;
 }
 
-function Evidence({ step, tab }: { step: StepView; tab: EvidenceTab }): JSX.Element {
+function Evidence({
+  step,
+  tab,
+}: {
+  step: StepView;
+  tab: EvidenceTab;
+}): JSX.Element {
   const value = evidenceValue(step, tab);
-  if (value === undefined || (tab === "calls" && Array.isArray(value) && value.length === 0)) {
+  if (
+    value === undefined ||
+    (tab === "calls" && Array.isArray(value) && value.length === 0)
+  ) {
     return (
       <div className="run-evidence-empty">
-        <Icon name="Info" size={14} /> {EVIDENCE_TABS.find((item) => item.id === tab)?.label} not recorded.
+        <Icon name="Info" size={14} />{" "}
+        {EVIDENCE_TABS.find((item) => item.id === tab)?.label} not recorded.
       </div>
     );
   }
@@ -156,17 +218,48 @@ function Evidence({ step, tab }: { step: StepView; tab: EvidenceTab }): JSX.Elem
       <div className="run-call-list">
         {(value as NonNullable<StepView["calls"]>).map((call, index) => (
           <article className="run-call" key={`${call.capability}-${index}`}>
-            <header><code>{call.capability}</code>{call.stubUsed && <span>stubbed</span>}</header>
+            <header>
+              <code>{call.capability}</code>
+              {call.stubUsed && <span>stubbed</span>}
+            </header>
             <div className="run-call-pair">
-              <section><h5>Arguments</h5>{call.args === undefined ? <p>not recorded</p> : <pre>{formatPayload(call.args)}</pre>}</section>
-              <section><h5>Result</h5>{call.result === undefined ? <p>not recorded</p> : <pre>{formatPayload(call.result)}</pre>}</section>
+              <section>
+                {call.args === undefined ? (
+                  <p>Arguments not recorded.</p>
+                ) : (
+                  <ArtifactRenderer
+                    value={call.args}
+                    label="Arguments"
+                    testId={`run-call-arguments-${index}`}
+                    defaultOpen={false}
+                  />
+                )}
+              </section>
+              <section>
+                {call.result === undefined ? (
+                  <p>Result not recorded.</p>
+                ) : (
+                  <ArtifactRenderer
+                    value={call.result}
+                    label="Result"
+                    testId={`run-call-result-${index}`}
+                    defaultOpen={false}
+                  />
+                )}
+              </section>
             </div>
           </article>
         ))}
       </div>
     );
   }
-  if (tab === "input" || tab === "output" || tab === "state" || tab === "directive") {
+  if (
+    tab === "input" ||
+    tab === "output" ||
+    tab === "state" ||
+    tab === "directive" ||
+    tab === "logs"
+  ) {
     return (
       <ArtifactRenderer
         value={value}
@@ -175,32 +268,36 @@ function Evidence({ step, tab }: { step: StepView; tab: EvidenceTab }): JSX.Elem
       />
     );
   }
-  return <pre className="run-evidence-value">{typeof value === "string" ? value : formatPayload(value)}</pre>;
+  return <div className="run-evidence-empty">Evidence not recorded.</div>;
 }
 
 function attemptContext(run: RunView, step: StepView): string {
   const logTail = step.logSlice?.slice(-4_000);
-  return JSON.stringify({
-    executionId: run.executionId,
-    runStatus: run.status,
-    runInput: run.input,
-    runOutput: run.output,
-    runError: run.error,
-    attempt: {
-      step: step.name,
-      number: step.attempt ?? 1,
-      status: step.status,
-      startedAt: step.startedAt,
-      finishedAt: step.finishedAt,
-      input: step.input,
-      output: step.output,
-      state: step.sharedState,
-      directive: step.directive,
-      calls: step.calls,
-      error: step.error,
-      logTail,
+  return JSON.stringify(
+    {
+      executionId: run.executionId,
+      runStatus: run.status,
+      runInput: run.input,
+      runOutput: run.output,
+      runError: run.error,
+      attempt: {
+        step: step.name,
+        number: step.attempt ?? 1,
+        status: step.status,
+        startedAt: step.startedAt,
+        finishedAt: step.finishedAt,
+        input: step.input,
+        output: step.output,
+        state: step.sharedState,
+        directive: step.directive,
+        calls: step.calls,
+        error: step.error,
+        logTail,
+      },
     },
-  }, null, 2);
+    null,
+    2,
+  );
 }
 
 function AttemptInspector({
@@ -219,48 +316,99 @@ function AttemptInspector({
   onAskAgent: (prompt: string) => void;
 }): JSX.Element {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const tabsId = useId();
+  const panelId = `${tabsId}-panel`;
   return (
-    <section className="run-attempt-inspector" aria-label={`${step.name} attempt ${step.attempt ?? 1}`}>
+    <section
+      className="run-attempt-inspector"
+      aria-label={`${step.name} attempt ${step.attempt ?? 1}`}
+    >
       <header className="run-attempt-head">
-        <button type="button" className="btn-ghost run-attempt-back" onClick={onBack}>
+        <button
+          type="button"
+          className="btn-ghost run-attempt-back"
+          onClick={onBack}
+        >
           <Icon name="ArrowLeft" size={13} /> Back
         </button>
         <div>
           <h3>{step.name}</h3>
-          <p><span data-status={step.status}>{step.status}</span> · Attempt {step.attempt ?? 1}{step.latencyMs !== undefined ? ` · ${formatTimeout(step.latencyMs)}` : ""}</p>
+          <p>
+            <span data-status={step.status}>{step.status}</span> · Attempt{" "}
+            {step.attempt ?? 1}
+            {step.latencyMs !== undefined
+              ? ` · ${formatTimeout(step.latencyMs)}`
+              : ""}
+          </p>
         </div>
         <button
           type="button"
           className="btn-ghost run-attempt-debug"
-          onClick={() => onAskAgent(`Help me inspect and improve this execution attempt.\n\n${attemptContext(run, step)}`)}
+          onClick={() =>
+            onAskAgent(
+              `Help me inspect and improve this execution attempt.\n\n${attemptContext(run, step)}`,
+            )
+          }
         >
           <Icon name="MessageSquare" size={13} /> Ask coding agent
         </button>
       </header>
-      {step.error && <div className="run-attempt-error"><Icon name="TriangleAlert" size={14} /><span>{step.error}</span></div>}
-      <div className="run-evidence-tabs" role="tablist" aria-label="Attempt evidence">
+      {step.error && (
+        <div className="run-attempt-error">
+          <Icon name="TriangleAlert" size={14} />
+          <span>{step.error}</span>
+        </div>
+      )}
+      <div
+        className="run-evidence-tabs"
+        role="tablist"
+        aria-label="Attempt evidence"
+      >
         {EVIDENCE_TABS.map((item, index) => (
           <button
             key={item.id}
-            ref={(node) => { tabRefs.current[index] = node; }}
+            ref={(node) => {
+              tabRefs.current[index] = node;
+            }}
             type="button"
             role="tab"
+            id={`${tabsId}-${item.id}`}
             aria-selected={tab === item.id}
-            aria-controls={`run-evidence-${item.id}`}
+            aria-controls={panelId}
+            tabIndex={tab === item.id ? 0 : -1}
             data-testid={`run-evidence-tab-${item.id}`}
             onClick={() => onTab(item.id)}
             onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
               event.preventDefault();
-              const delta = event.key === "ArrowRight" ? 1 : -1;
-              const nextIndex = (index + delta + EVIDENCE_TABS.length) % EVIDENCE_TABS.length;
+              const nextIndex =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? EVIDENCE_TABS.length - 1
+                    : (index +
+                        (event.key === "ArrowRight" ? 1 : -1) +
+                        EVIDENCE_TABS.length) %
+                      EVIDENCE_TABS.length;
               onTab(EVIDENCE_TABS[nextIndex]!.id);
               tabRefs.current[nextIndex]?.focus();
             }}
-          >{item.label}</button>
+          >
+            {item.label}
+          </button>
         ))}
       </div>
-      <div className="run-evidence-panel" id={`run-evidence-${tab}`} role="tabpanel"><Evidence step={step} tab={tab} /></div>
+      <div
+        className="run-evidence-panel"
+        id={panelId}
+        role="tabpanel"
+        aria-labelledby={`${tabsId}-${tab}`}
+      >
+        <Evidence step={step} tab={tab} />
+      </div>
     </section>
   );
 }
@@ -271,17 +419,29 @@ function StubNotices({ run }: { run: RunView }): JSX.Element | null {
   if (unused.length === 0 && warnings.length === 0) return null;
   return (
     <details className="run-stub-notices" data-testid="run-stub-notices">
-      <summary>Stub notices <span>{unused.length + warnings.length}</span></summary>
+      <summary>
+        Stub notices <span>{unused.length + warnings.length}</span>
+      </summary>
       {unused.length > 0 && (
         <section>
           <h4>Unused stubs</h4>
-          <ul>{unused.map((item) => <li key={`${item.step}:${item.key}`}><code>{item.step}</code> · {item.key}</li>)}</ul>
+          <ul>
+            {unused.map((item) => (
+              <li key={`${item.step}:${item.key}`}>
+                <code>{item.step}</code> · {item.key}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
       {warnings.length > 0 && (
         <section>
           <h4>Warnings</h4>
-          <ul>{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+          <ul>
+            {warnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
         </section>
       )}
     </details>
@@ -290,7 +450,9 @@ function StubNotices({ run }: { run: RunView }): JSX.Element | null {
 
 function finalArtifact(run: RunView): { value: unknown; label: string } | null {
   if (run.output !== undefined) return { value: run.output, label: "Result" };
-  const latest = [...run.steps].reverse().find((step) => step.status === "passed" && step.output !== undefined);
+  const latest = [...run.steps]
+    .reverse()
+    .find((step) => step.status === "passed" && step.output !== undefined);
   return latest ? { value: latest.output, label: "Latest output" } : null;
 }
 
@@ -320,6 +482,8 @@ export function RunWorkspace({
   const [tab, setTab] = useState<EvidenceTab>("output");
   const manualSelection = useRef(false);
   const artifactReportedFor = useRef<string | null>(null);
+  const focusOrigin = useRef<HTMLElement | null>(null);
+  const exitFocusButton = useRef<HTMLButtonElement | null>(null);
   const selected = attempts.find((step) => step.id === selectedId) ?? null;
   const artifact = finalArtifact(run);
   const duration = runDuration(run);
@@ -334,7 +498,9 @@ export function RunWorkspace({
   useEffect(() => {
     if (manualSelection.current || run.status === "running") return;
     if (run.status === "failed") {
-      const failed = [...attempts].reverse().find((step) => step.status === "failed");
+      const failed = [...attempts]
+        .reverse()
+        .find((step) => step.status === "failed");
       if (failed) {
         setSelectedId(failed.id);
         setTab("logs");
@@ -343,6 +509,47 @@ export function RunWorkspace({
       setSelectedId(null);
     }
   }, [run.status, attempts]);
+
+  useEffect(() => {
+    if (!focus || typeof document === "undefined") return;
+    const appRoot = document.getElementById("root");
+    focusOrigin.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const previousAriaHidden = appRoot?.getAttribute("aria-hidden") ?? null;
+    const previousInert = appRoot?.inert ?? false;
+    if (appRoot) {
+      appRoot.inert = true;
+      appRoot.setAttribute("aria-hidden", "true");
+    }
+    const frame = window.requestAnimationFrame(() =>
+      exitFocusButton.current?.focus(),
+    );
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (appRoot) {
+        appRoot.inert = previousInert;
+        if (previousAriaHidden === null) appRoot.removeAttribute("aria-hidden");
+        else appRoot.setAttribute("aria-hidden", previousAriaHidden);
+      }
+      focusOrigin.current?.focus();
+      focusOrigin.current = null;
+    };
+  }, [focus]);
+
+  useEffect(() => {
+    if (!focus) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (selectedId !== null) setSelectedId(null);
+      else onToggleFocus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focus, selectedId, onToggleFocus]);
 
   const selectAttempt = (step: StepView): void => {
     manualSelection.current = true;
@@ -353,11 +560,19 @@ export function RunWorkspace({
 
   const overview = (
     <section className="run-overview">
-      {!focus && <Timeline attempts={attempts} run={run} selectedId={selectedId} onSelect={selectAttempt} />}
+      {!focus && (
+        <Timeline
+          attempts={attempts}
+          run={run}
+          selectedId={selectedId}
+          onSelect={selectAttempt}
+        />
+      )}
       {artifact ? (
         <ArtifactRenderer
           value={artifact.value}
           label={artifact.label}
+          viewEventKey={run.executionId}
           onViewed={() => {
             if (artifactReportedFor.current === run.executionId) return;
             artifactReportedFor.current = run.executionId;
@@ -365,9 +580,14 @@ export function RunWorkspace({
           }}
         />
       ) : run.status === "running" ? (
-        <div className="run-result-pending"><span className="run-workspace-pulse" /> Waiting for the agent result…</div>
+        <div className="run-result-pending">
+          <span className="run-workspace-pulse" /> Waiting for the agent result…
+        </div>
       ) : run.error !== undefined ? (
-        <div className="run-result-error"><Icon name="TriangleAlert" size={15} /><pre>{formatPayload(run.error)}</pre></div>
+        <div className="run-result-error">
+          <Icon name="TriangleAlert" size={15} />
+          <pre>{formatPayload(run.error)}</pre>
+        </div>
       ) : (
         <div className="run-result-pending">No result was recorded.</div>
       )}
@@ -376,44 +596,95 @@ export function RunWorkspace({
   );
 
   const workspace = (
-    <div className={"run-workspace" + (focus ? " is-focus" : "")} data-testid="run-workspace">
+    <div
+      className={"run-workspace" + (focus ? " is-focus" : "")}
+      data-testid="run-workspace"
+    >
       <header className="run-workspace-header">
         <span className="run-workspace-status" data-status={run.status}>
-          <StepGlyph status={run.status === "completed" ? "passed" : run.status === "failed" || run.status === "cancelled" ? "failed" : "running"} />
+          <StepGlyph
+            status={
+              run.status === "completed"
+                ? "passed"
+                : run.status === "failed" || run.status === "cancelled"
+                  ? "failed"
+                  : "running"
+            }
+          />
           {statusLabel(run.status)}
         </span>
         {duration !== null && <span>{formatTimeout(duration)}</span>}
         <span>{targetLabel(target)}</span>
         <span className="run-workspace-spacer" />
         {workflow?.definitionId != null && (
-          <a href={agentUrl(workflow.definitionId)} target="_blank" rel="noreferrer" onClick={onDashboardOpened}>
+          <a
+            href={agentUrl(workflow.definitionId)}
+            target="_blank"
+            rel="noreferrer"
+            onClick={onDashboardOpened}
+          >
             <Icon name="Cloud" size={12} /> Dashboard
           </a>
         )}
         {focus && (
-          <button type="button" className="theme-toggle" onClick={onToggleFocus} aria-label="Exit Focus mode">
+          <button
+            ref={exitFocusButton}
+            type="button"
+            className="theme-toggle"
+            onClick={onToggleFocus}
+            aria-label="Exit Focus mode"
+          >
             <Icon name="Minimize2" size={14} />
           </button>
         )}
       </header>
       {focus ? (
         <div className="run-workspace-focus-grid">
-          <Timeline attempts={attempts} run={run} selectedId={selectedId} onSelect={selectAttempt} />
+          <Timeline
+            attempts={attempts}
+            run={run}
+            selectedId={selectedId}
+            onSelect={selectAttempt}
+          />
           <div className="run-workspace-inspector">
             {selected ? (
-              <AttemptInspector run={run} step={selected} tab={tab} onTab={setTab} onBack={() => setSelectedId(null)} onAskAgent={onAskAgent} />
-            ) : overview}
+              <AttemptInspector
+                run={run}
+                step={selected}
+                tab={tab}
+                onTab={setTab}
+                onBack={() => setSelectedId(null)}
+                onAskAgent={onAskAgent}
+              />
+            ) : (
+              overview
+            )}
           </div>
         </div>
       ) : selected ? (
-        <AttemptInspector run={run} step={selected} tab={tab} onTab={setTab} onBack={() => setSelectedId(null)} onAskAgent={onAskAgent} />
-      ) : overview}
+        <AttemptInspector
+          run={run}
+          step={selected}
+          tab={tab}
+          onTab={setTab}
+          onBack={() => setSelectedId(null)}
+          onAskAgent={onAskAgent}
+        />
+      ) : (
+        overview
+      )}
     </div>
   );
 
   return focus && typeof document !== "undefined"
     ? createPortal(
-        <div className="run-focus-layer" data-testid="run-focus-layer">
+        <div
+          className="run-focus-layer"
+          data-testid="run-focus-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Execution Focus mode"
+        >
           {workspace}
         </div>,
         document.body,

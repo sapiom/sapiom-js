@@ -73,8 +73,9 @@ export interface RunLocalArgs {
 
 /**
  * One parsed line of the `/api/runs/local` NDJSON stream. Either a per-step
- * trace (a {@link LocalStepTrace}, discriminated by the ABSENCE of `kind`) or a
- * terminal line: a `summary` for a run that executed (carrying the outcome and
+ * trace wrapped with its start/settle phase, a legacy unwrapped trace
+ * (discriminated by the absence of `kind`), or a terminal line: a `summary`
+ * for a run that executed (carrying the outcome and
  * the two stub-hygiene signals), or an `error` for a run that could not be
  * invoked at all. The shapes mirror the bootstrap's own wire contract.
  */
@@ -1167,9 +1168,12 @@ class MockApi implements HarnessApi {
     const workflow = this.workflows.find((item) => item.path === workflowPath);
     if (!workflow) throw new ApiError(404, "Agent not found", "Agent not found");
     if (typeof window !== "undefined") {
-      const mode = (window as unknown as {
+      const testWindow = window as unknown as {
         __MOCK_INPUT_CONTRACT_MODE__?: "throw" | "unavailable";
-      }).__MOCK_INPUT_CONTRACT_MODE__;
+        __MOCK_INPUT_CONTRACT__?: WorkflowInputContractResponse;
+      };
+      if (testWindow.__MOCK_INPUT_CONTRACT__) return testWindow.__MOCK_INPUT_CONTRACT__;
+      const mode = testWindow.__MOCK_INPUT_CONTRACT_MODE__;
       if (mode === "throw") {
         throw new ApiError(
           500,

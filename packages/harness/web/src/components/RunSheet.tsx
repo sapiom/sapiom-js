@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { JSX, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ErrorObject } from "ajv";
 import type {
   WorkflowInfo,
@@ -51,6 +51,8 @@ export function RunSheet({
 }: RunSheetProps): JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const formTabRef = useRef<HTMLButtonElement>(null);
+  const jsonTabRef = useRef<HTMLButtonElement>(null);
   const [contract, setContract] =
     useState<WorkflowInputContractResponse | null>(null);
   const [input, setInput] = useState<unknown>({});
@@ -104,11 +106,15 @@ export function RunSheet({
         setStaleSavedInput(Boolean(stored && nextErrors.length > 0));
         setValue(pretty(initial));
         requestAnimationFrame(() =>
-          (editorRef.current ??
-            panelRef.current?.querySelector<HTMLElement>("input, select, textarea"))?.focus(),
+          (
+            editorRef.current ??
+            panelRef.current?.querySelector<HTMLElement>(
+              "input, select, textarea",
+            )
+          )?.focus(),
         );
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (!current) return;
         setContract({
           status: "unavailable",
@@ -168,8 +174,8 @@ export function RunSheet({
     }
   };
 
-  const switchMode = (nextMode: "form" | "json"): void => {
-    if (nextMode === mode) return;
+  const switchMode = (nextMode: "form" | "json"): boolean => {
+    if (nextMode === mode) return true;
     if (nextMode === "form") {
       try {
         const parsed: unknown = JSON.parse(value);
@@ -178,13 +184,32 @@ export function RunSheet({
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Enter valid JSON.");
-        return;
+        return false;
       }
     } else {
       setValue(pretty(input));
       setError(null);
     }
     setMode(nextMode);
+    return true;
+  };
+
+  const hasFormMode = contract?.status === "available" && validator !== null;
+  const handleModeKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ): void => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const nextMode =
+      event.key === "Home"
+        ? "form"
+        : event.key === "End"
+          ? "json"
+          : mode === "form"
+            ? "json"
+            : "form";
+    if (switchMode(nextMode))
+      (nextMode === "form" ? formTabRef : jsonTabRef).current?.focus();
   };
 
   return (
@@ -199,15 +224,25 @@ export function RunSheet({
           if (event.key === "Tab") {
             const focusable = Array.from(
               panelRef.current?.querySelectorAll<HTMLElement>(
-                'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]',
+                "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
               ) ?? [],
             ).filter((element) => element.offsetParent !== null);
             const first = focusable[0];
             const last = focusable[focusable.length - 1];
-            if (first && last && event.shiftKey && document.activeElement === first) {
+            if (
+              first &&
+              last &&
+              event.shiftKey &&
+              document.activeElement === first
+            ) {
               event.preventDefault();
               last.focus();
-            } else if (first && last && !event.shiftKey && document.activeElement === last) {
+            } else if (
+              first &&
+              last &&
+              !event.shiftKey &&
+              document.activeElement === last
+            ) {
               event.preventDefault();
               first.focus();
             }
@@ -240,22 +275,36 @@ export function RunSheet({
 
         <div className="run-sheet-body">
           <div className="run-sheet-field-head">
-            <label htmlFor="run-sheet-json">Input</label>
-            {contract?.status === "available" && validator ? (
-              <div className="run-input-mode" role="tablist" aria-label="Input editor mode">
+            <h3 id="run-sheet-input-heading">Input</h3>
+            {hasFormMode ? (
+              <div
+                className="run-input-mode"
+                role="tablist"
+                aria-label="Input editor mode"
+              >
                 <button
+                  ref={formTabRef}
+                  id="run-sheet-fields-tab"
                   type="button"
                   role="tab"
+                  aria-controls="run-sheet-input-panel"
                   aria-selected={mode === "form"}
+                  tabIndex={mode === "form" ? 0 : -1}
                   onClick={() => switchMode("form")}
+                  onKeyDown={handleModeKeyDown}
                 >
                   Fields
                 </button>
                 <button
+                  ref={jsonTabRef}
+                  id="run-sheet-json-tab"
                   type="button"
                   role="tab"
+                  aria-controls="run-sheet-input-panel"
                   aria-selected={mode === "json"}
+                  tabIndex={mode === "json" ? 0 : -1}
                   onClick={() => switchMode("json")}
+                  onKeyDown={handleModeKeyDown}
                 >
                   JSON
                 </button>
@@ -264,91 +313,122 @@ export function RunSheet({
               <span>JSON</span>
             )}
           </div>
-          {!contract ? (
-            <div className="run-sheet-loading" role="status">
-              Loading input contract…
-            </div>
-          ) : (
-            <>
-              {contract.status === "none" && (
-                <p className="run-sheet-notice">
-                  This agent declares no input contract. Pass an object or any
-                  JSON value it accepts.
-                </p>
-              )}
-              {contract.status === "unavailable" && (
-                <p className="run-sheet-notice" data-tone="warning">
-                  {contract.reason}
-                </p>
-              )}
-              {staleSavedInput && (
-                <div className="run-sheet-stale" role="status">
-                  <span>
-                    The saved input no longer matches this agent's contract.
-                    Your values are still here so you can repair them.
-                  </span>
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => {
-                      if (contract.status !== "available") return;
-                      updateInput(resetValueForSchema(contract.jsonSchema));
-                    }}
-                  >
-                    Reset to defaults
-                  </button>
-                </div>
-              )}
-              {mode === "form" && contract.status === "available" && validator ? (
-                <div className="run-schema-form">
-                  <SchemaInputFields
-                    schema={contract.jsonSchema}
-                    value={input}
-                    onChange={updateInput}
-                    errors={validationErrors}
-                  />
-                  {!staleSavedInput && (
+          <div
+            id="run-sheet-input-panel"
+            role={hasFormMode ? "tabpanel" : undefined}
+            aria-labelledby={
+              hasFormMode
+                ? mode === "form"
+                  ? "run-sheet-fields-tab"
+                  : "run-sheet-json-tab"
+                : "run-sheet-input-heading"
+            }
+          >
+            {!contract ? (
+              <div className="run-sheet-loading" role="status">
+                Loading input contract…
+              </div>
+            ) : (
+              <>
+                {contract.status === "none" && (
+                  <p className="run-sheet-notice">
+                    This agent declares no input contract. Pass an object or any
+                    JSON value it accepts.
+                  </p>
+                )}
+                {contract.status === "unavailable" && (
+                  <p className="run-sheet-notice" data-tone="warning">
+                    {contract.reason}
+                  </p>
+                )}
+                {staleSavedInput && (
+                  <div className="run-sheet-stale" role="status">
+                    <span>
+                      The saved input no longer matches this agent's contract.
+                      Your values are still here so you can repair them.
+                    </span>
                     <button
                       type="button"
-                      className="btn-ghost run-sheet-reset"
-                      onClick={() =>
-                        updateInput(resetValueForSchema(contract.jsonSchema))
-                      }
+                      className="btn-ghost"
+                      onClick={() => {
+                        if (contract.status !== "available") return;
+                        updateInput(resetValueForSchema(contract.jsonSchema));
+                      }}
                     >
                       Reset to defaults
                     </button>
-                  )}
-                </div>
-              ) : (
-                <textarea
-                  id="run-sheet-json"
-                  ref={editorRef}
-                  className="run-sheet-editor"
-                  value={value}
-                  onChange={(event) => {
-                    setValue(event.target.value);
-                    setError(null);
-                  }}
-                  rows={12}
-                  spellCheck={false}
-                  aria-invalid={Boolean(error || validationErrors.length)}
-                  aria-describedby={error ? "run-sheet-error" : undefined}
-                />
-              )}
-            </>
-          )}
-          {mode === "json" && validationErrors.length > 0 && (
-            <ul className="run-sheet-validation-list">
-              {validationErrors.map((item, index) => (
-                <li key={index}>{humanizeValidationError(item)}</li>
-              ))}
-            </ul>
-          )}
-          {error && (
-            <div id="run-sheet-error" className="modal-error" role="alert">
-              {error}
-            </div>
-          )}
+                  </div>
+                )}
+                {mode === "form" &&
+                contract.status === "available" &&
+                validator ? (
+                  <div
+                    className="run-schema-form"
+                    role="group"
+                    aria-labelledby="run-sheet-input-heading"
+                  >
+                    <SchemaInputFields
+                      schema={contract.jsonSchema}
+                      value={input}
+                      onChange={updateInput}
+                      errors={validationErrors}
+                    />
+                    {!staleSavedInput && (
+                      <button
+                        type="button"
+                        className="btn-ghost run-sheet-reset"
+                        onClick={() =>
+                          updateInput(resetValueForSchema(contract.jsonSchema))
+                        }
+                      >
+                        Reset to defaults
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <textarea
+                    id="run-sheet-json"
+                    ref={editorRef}
+                    className="run-sheet-editor"
+                    value={value}
+                    onChange={(event) => {
+                      setValue(event.target.value);
+                      setError(null);
+                    }}
+                    rows={12}
+                    spellCheck={false}
+                    aria-labelledby="run-sheet-input-heading"
+                    aria-invalid={Boolean(error || validationErrors.length)}
+                    aria-describedby={
+                      [
+                        error ? "run-sheet-error" : null,
+                        validationErrors.length > 0
+                          ? "run-sheet-validation"
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
+                  />
+                )}
+              </>
+            )}
+            {mode === "json" && validationErrors.length > 0 && (
+              <ul
+                id="run-sheet-validation"
+                className="run-sheet-validation-list"
+              >
+                {validationErrors.map((item, index) => (
+                  <li key={index}>{humanizeValidationError(item)}</li>
+                ))}
+              </ul>
+            )}
+            {error && (
+              <div id="run-sheet-error" className="modal-error" role="alert">
+                {error}
+              </div>
+            )}
+          </div>
         </div>
 
         <footer className="run-sheet-actions">

@@ -20,9 +20,9 @@
 - Harness typecheck and production web build pass.
 - Harness Vitest: 139 files, 2,011 tests pass; performance suite: 4/4 pass.
 - Desktop Vitest: 18 files, 152 tests pass. Harness and desktop typechecks pass.
-- Remediation Playwright suite: 16/16 mocked run-entry and inspector scenarios pass.
-- New run-workspace Playwright coverage: 22/22 scenarios pass.
-- Full Studio Playwright compatibility pass: 305/305 tests pass. Eleven stale
+- Run-entry and run-inspector Playwright coverage: 18/18 deterministic,
+  content-safe scenarios pass. Canvas evidence has another 11/11 scenarios.
+- Full Studio Playwright compatibility pass: 311/311 tests pass. Eleven stale
   assertions describing the removed Test/Run accordions were migrated to the
   split control, timeline, evidence tabs, and compact header.
 - Manual browser review completed for the input sheet, artifact-first result,
@@ -56,8 +56,18 @@ rebuilds Harness before Electron, the visible entry graph is a last-known-good
 contract fallback, PTYs explicitly advertise true colour, artifacts use bounded
 disclosures, and Focus renders through an opaque document-level portal. The
 same Rendered/Raw artifact viewer is reused for structured attempt Input,
-Output, State, and Directive evidence; Logs and Calls retain their specialized
-inspection views. Canvas node selection also reuses that artifact viewer for
-observed step Input, Output, and Logs instead of falling back to raw-only
-disclosures; these compact Canvas evidence cards start collapsed. Recorded
-capability-call Arguments and Results follow the same pattern.
+Output, State, Directive, and Logs evidence. Calls retain their call grouping,
+with Arguments and Results rendered as collapsed artifacts. Canvas node
+selection also reuses that artifact viewer for observed step Input, Output, and
+Logs instead of falling back to raw-only disclosures; these compact Canvas
+evidence cards start collapsed. Recorded capability-call Arguments and Results
+follow the same pattern.
+
+The release-candidate audit completed on 2026-08-14. It tightened shared tab and
+listbox keyboard behavior, labelled every dynamic panel and scoped JSON editor,
+made Focus a true inert modal with one-layer Escape and focus restoration,
+bounded logs and calls through the shared artifact renderer, and fixed recursive
+prefill so partial defaults merge with required skeletons without materializing
+optional object groups. The recursive form, stale-contract recovery, exact
+payloads, Focus isolation, empty artifacts, long output, calls, logs, and
+content-free telemetry are all pinned by deterministic mocks.

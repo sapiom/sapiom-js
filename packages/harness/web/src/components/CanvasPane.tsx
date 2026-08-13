@@ -458,6 +458,10 @@ export function CanvasPane({
   // first; only then does the expanded overlay exit (its own exit button
   // still works either way).
   useEffect(() => {
+    // The run workspace portal owns Focus-mode Escape handling so each press
+    // unwinds exactly one layer and the underlying Canvas selection cannot
+    // react while it is inert.
+    if (surface === "steps" && run && expanded) return;
     if (!expanded && selectedNodeId == null) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
@@ -466,7 +470,7 @@ export function CanvasPane({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expanded, selectedNodeId, onToggleExpanded]);
+  }, [expanded, selectedNodeId, onToggleExpanded, run, surface]);
   const [overviewOpen, setOverviewOpen] = useState(true);
   // The chat (macros + ask) is a standalone panel, CLOSED by default and
   // toggled by the 💬 control — independent of the info panel (both can be

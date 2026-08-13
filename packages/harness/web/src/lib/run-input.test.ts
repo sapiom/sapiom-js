@@ -24,12 +24,14 @@ describe("run input helpers", () => {
     expect(
       resetValueForSchema({
         type: "object",
+        required: ["topic", "limit"],
         properties: {
           topic: { type: "string", default: "default" },
+          limit: { type: "integer" },
           optional: { type: "string" },
         },
       }),
-    ).toEqual({ topic: "default" });
+    ).toEqual({ topic: "default", limit: 0 });
 
     expect(
       resetValueForSchema({
@@ -56,9 +58,54 @@ describe("run input helpers", () => {
               note: { type: "string" },
             },
           },
+          optionalGroup: {
+            type: "object",
+            required: ["value"],
+            properties: { value: { type: "string" } },
+          },
         },
       }),
     ).toEqual({ delivery: { channel: "email" } });
+
+    expect(
+      resetValueForSchema({
+        type: "object",
+        required: ["delivery"],
+        properties: {
+          delivery: {
+            type: "object",
+            required: ["channel", "limit"],
+            properties: {
+              channel: { type: "string", default: "email" },
+              limit: { type: "integer" },
+            },
+          },
+          optionalGroup: {
+            type: "object",
+            required: ["value"],
+            properties: { value: { type: "string" } },
+          },
+        },
+      }),
+    ).toEqual({ delivery: { channel: "email", limit: 0 } });
+
+    expect(
+      resetValueForSchema({
+        type: "object",
+        default: { delivery: { channel: "email" } },
+        required: ["delivery"],
+        properties: {
+          delivery: {
+            type: "object",
+            required: ["channel", "limit"],
+            properties: {
+              channel: { type: "string" },
+              limit: { type: "integer" },
+            },
+          },
+        },
+      }),
+    ).toEqual({ delivery: { channel: "email", limit: 0 } });
   });
 
   it("builds nested required objects and validates with AJV", () => {
@@ -74,7 +121,9 @@ describe("run input helpers", () => {
         },
       },
     };
-    expect(requiredSkeletonFromSchema(schema)).toEqual({ delivery: { limit: 0 } });
+    expect(requiredSkeletonFromSchema(schema)).toEqual({
+      delivery: { limit: 0 },
+    });
     const errors = createInputValidator(schema).validateValue({
       delivery: { limit: 0 },
     });

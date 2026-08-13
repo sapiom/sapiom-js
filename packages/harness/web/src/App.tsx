@@ -1693,10 +1693,11 @@ export const App = (): JSX.Element => {
                     </a>
                   )}
                 {/* Canvas expand / Steps Focus sits beside the panel toggle. */}
-                {(rightTab === "canvas" || rightTab === "steps") && !canvasExpanded && (
+                {(rightTab === "canvas" || rightTab === "steps") && (
                   <button
                     className="theme-toggle"
                     data-testid="canvas-expand"
+                    hidden={canvasExpanded}
                     aria-label={rightTab === "steps" ? "Open Focus mode" : "Expand canvas"}
                     title={rightTab === "steps" ? "Open Focus mode" : "Expand canvas"}
                     onClick={() => setCanvasExpanded((v) => !v)}
