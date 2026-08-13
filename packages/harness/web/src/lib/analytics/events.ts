@@ -1,6 +1,6 @@
 import posthog from "posthog-js";
 
-import type { RunTarget } from "@shared/types";
+import type { HarnessKind, RunTarget } from "@shared/types";
 
 import { type HarnessView, type Journey, journeyForView } from "./journeys";
 import { type AgentSource, type RunErrorKind } from "./lifecycle";
@@ -210,12 +210,12 @@ export interface AppContextProperties {
   active_organization_id?: string;
   app_version?: string;
   /**
-   * The coding agent behind the ACTIVE session ("claude-code" / "codex"), or
-   * absent when no session is live. Re-registered when the active session
-   * changes, so a click is attributed to the agent that was on screen — not to
-   * whichever agent happened to boot first.
+   * The coding agent behind the ACTIVE session, or absent when no session is
+   * live. Re-registered when the active session changes, so a click is
+   * attributed to the agent that was on screen — not to whichever agent
+   * happened to boot first.
    */
-  harness_kind?: string;
+  harness_kind?: HarnessKind;
   /**
    * Which host is running the SPA — "cli" (npx) or "desktop" (Electron).
    *

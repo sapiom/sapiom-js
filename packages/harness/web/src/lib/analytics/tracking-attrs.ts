@@ -26,9 +26,14 @@ const ATTRIBUTE_PREFIX = "data-ph-capture-attribute-";
 export interface TrackingContext {
   /**
    * The arc of intent. Usually omitted — the current journey rides as a
-   * super-property (see events.ts `registerViewContext`). Set it explicitly only
-   * for UI that outlives its view (a global modal, a command palette) where the
-   * ambient view would misattribute the click.
+   * super-property (see events.ts `registerViewContext`).
+   *
+   * Set it explicitly only for UI that both outlives its view AND belongs to
+   * one journey — a modal that always means "deploy", say. A navigator like the
+   * command palette does NOT qualify: it can take you anywhere, so it has no
+   * journey of its own and the ambient value (which journey you reached for it
+   * FROM) is the more useful fact. That is why `CommandPalette` sets only
+   * `dialog`.
    */
   readonly journey?: Journey;
   /**

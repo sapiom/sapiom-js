@@ -9,6 +9,7 @@ import { relativeTimeLabel } from "../lib/relative-time";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface WorkflowActionsHeaderProps {
   workflow: WorkflowInfo;
@@ -72,7 +73,13 @@ export function WorkflowActionsHeader({
 
   if (detailStep) {
     return (
-      <div className="workflow-actions-header" data-testid="workflow-actions-header">
+      // Step names come from the user's own agent code, and this branch renders
+      // one as text, in `More actions for ${label}`, and in two prompts.
+      <div
+        className="workflow-actions-header"
+        data-testid="workflow-actions-header"
+        {...trackingAttrs({ object: "run" })}
+      >
         <button
           className="theme-toggle"
           data-testid="canvas-detail-back"
@@ -160,6 +167,11 @@ export function WorkflowActionsHeader({
       <div
         className={"workflow-actions-header" + (run ? " has-run" : "")}
         data-testid="workflow-actions-header"
+        // The agent's name is rendered here (and in `title`), and the step
+        // menu's aria-label interpolates a step name from the user's own agent
+        // code. Neither CanvasPane nor CodePanel — the two hosts — set `object`,
+        // so without this the canvas header ships the agent name on every click.
+        {...trackingAttrs({ object: "agent" })}
       >
         <span className="workflow-actions-name" title={workflow.name}>
           {displayAgentName(workflow.name)}

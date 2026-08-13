@@ -28,15 +28,42 @@ import type { CaptureResult } from "posthog-js";
 const MAX_EL_TEXT_LENGTH = 120;
 
 /**
- * Element attributes kept when scrubbing a secrets surface. `class`/`id` survive
- * because heatmaps and PostHog Actions match on them and neither is a plausible
- * place for a credential; everything else (aria-label, title, value, placeholder)
- * is dropped because any of them can carry the secret.
+ * The ONLY element attributes that ever leave the machine — an allowlist, applied
+ * in every redaction mode.
+ *
+ * This is deliberately an allowlist rather than a denylist of known-dangerous
+ * attributes, because the denylist version was wrong the moment it was written.
+ * posthog-js captures EVERY attribute as `attr__*` (`r.attributes["attr__" +
+ * i.name]` in `posthog-js@1.409.5`, with no default ignore list), and this
+ * codebase interpolates user data into attributes that read as ours:
+ *
+ *   - `data-testid={`workflow-${workflow.name}`}`   (WorkflowRow — the agent's name)
+ *   - `data-testid={`workspace-group-${label}`}`    (WorkflowsRail — the folder name)
+ *   - `data-testid={`dir-picker-item-${entry.name}`}` (DirectoryPicker)
+ *   - `title={isDirectory ? cwd : label}`           (WorkflowsRail — the ABSOLUTE PATH,
+ *                                                    which contains the OS username)
+ *
+ * A denylist has to enumerate every such attribute correctly, forever, across
+ * components nobody has written yet — and a miss is silent, because the payload
+ * still looks redacted. The allowlist inverts that: a new attribute is dropped
+ * until someone deliberately adds it here, so forgetting to tag a surface is
+ * safe rather than leaky.
+ *
+ * `class` and `id` survive because heatmaps and PostHog Actions match on them,
+ * and neither is a plausible place for user content. `data-testid` deliberately
+ * does NOT — it is interpolated with names today, and a name-bearing testid is a
+ * poor Actions selector regardless. Match on `class` instead.
  */
 const KEPT_ELEMENT_ATTRIBUTES: ReadonlySet<string> = new Set(["attr__class", "attr__id"]);
 
-/** `attr__href` values inside the serialized `$elements_chain` string. */
-const CHAIN_HREF_PATTERN = /attr__href="([^"]*)"/gi;
+/**
+ * Any `attr__*="…"` in the serialized chain. Tolerates posthog's own escaping:
+ * the serializer rewrites embedded quotes as `\"` (`e.replace(/"|\\"/g, '\\"')`
+ * in the vendored bundle), so a plain `[^"]*` stops at the first escaped quote
+ * and leaves the tail of the value behind — a partial leak in exactly the modes
+ * whose job is to leave nothing. `(?:\\.|[^"\\])*` consumes escape pairs whole.
+ */
+const CHAIN_ANY_ATTRIBUTE = /attr__([\w-]+)="(?:\\.|[^"\\])*"/g;
 
 /** Person-property keys whose values are URLs, matched by suffix. */
 const URL_VALUED_PERSON_PROPERTIES = /(?:current_url|referrer|pathname)$/;
@@ -78,37 +105,10 @@ function isUserNamedObject(properties: Record<string, unknown>): boolean {
   return USER_NAMED_OBJECTS.has(object);
 }
 
-/** `text="…"` segments inside the serialized `$elements_chain` string. */
-const CHAIN_TEXT_PATTERN = /\btext="[^"]*"/gi;
-
-/**
- * Element attributes that can carry a user-authored name alongside the visible
- * text — an icon button's accessible name, a truncated row's tooltip. Dropped
- * with `$el_text` on a user-named object; `class`/`id`/`data-testid` survive
- * because they are ours and are what Actions and heatmaps match on.
- *
- * Kept as both a key set and a pattern because posthog-js serializes elements
- * two different ways (`$elements` objects vs the `$elements_chain` string) and
- * a rule that covers only one of them is a rule a remote-config flip disables.
- */
-const NAME_BEARING_ATTRIBUTE_NAMES = [
-  "aria-label",
-  "title",
-  "alt",
-  "placeholder",
-  "value",
-  "data-tooltip",
-  "data-tip-stash",
-] as const;
-
-const NAME_BEARING_ATTRIBUTE_KEYS: ReadonlySet<string> = new Set(
-  NAME_BEARING_ATTRIBUTE_NAMES.map((name) => `attr__${name}`),
-);
-
-const NAME_BEARING_ATTRIBUTES = new RegExp(
-  `\\battr__(?:${NAME_BEARING_ATTRIBUTE_NAMES.join("|")})="[^"]*"`,
-  "gi",
-);
+/** `text="…"` segments inside the serialized chain. Escape-aware, same reason
+ *  as {@link CHAIN_ANY_ATTRIBUTE}: an agent named `my "cool" agent` would
+ *  otherwise leave `cool\" agent"` behind. */
+const CHAIN_TEXT_PATTERN = /\btext="(?:\\.|[^"\\])*"/g;
 
 /** Loopback hostnames the harness serves itself on. */
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
@@ -126,11 +126,18 @@ const CANONICAL_STUDIO_HOST = "localhost";
  * The port matters as much as the query string, for a different reason. The
  * harness binds a RANDOM free port every boot, so `$current_url` and `$host`
  * are unique per run — `127.0.0.1:57070`, `:53213`, `:64964`. Nothing
- * aggregates across that: URL breakdowns return one row per session, and
- * clickmaps/scrollmaps (which key on URL) never accumulate enough samples on
- * any one "page" to render, so `enable_heatmaps` silently produces nothing.
- * Collapsing every loopback origin to a single canonical host is what makes
- * those features work at all. Non-loopback URLs are left alone.
+ * aggregates across that: a URL breakdown returns one row per session, which
+ * is useless, and heatmap data is keyed by URL so it never accumulates enough
+ * samples on any one "page" to be worth rendering.
+ *
+ * The breakdown fix is unambiguous. The HEATMAP fix is not fully verified: the
+ * PostHog toolbar queries heatmaps for the URL of the page it is loaded on, and
+ * that page really is `http://127.0.0.1:57070/`, not the canonical host we now
+ * store under. So the data should aggregate correctly and may still be
+ * unreachable from inside the Studio. Confirm against a real boot before
+ * treating heatmaps as working; the port collapse is right either way.
+ *
+ * Non-loopback URLs are left alone.
  */
 export function sanitizeUrl(rawUrl: unknown): unknown {
   if (typeof rawUrl !== "string" || rawUrl.length === 0) return rawUrl;
@@ -167,11 +174,15 @@ function truncateElementText(text: string): string {
 /**
  * How hard to scrub a click's element data.
  *
+ * Element ATTRIBUTES are no longer part of this decision — every mode keeps
+ * only {@link KEPT_ELEMENT_ATTRIBUTES}. The mode now governs the visible label
+ * alone:
+ *
  *  - `truncate` — the default: keep the label, cap its length.
  *  - `drop_name` — the label is user-authored (an agent/workspace/session
- *    name), so remove it and the attributes that mirror it, but keep our own
- *    `class`/`id`/`data-testid` so the control is still identifiable.
- *  - `secret` — a credential surface: keep nothing but `class`/`id`.
+ *    name), so remove it, and do not synthesize a replacement from the
+ *    accessible name either.
+ *  - `secret` — a credential surface: drop the label and the whole chain.
  */
 type RedactionMode = "truncate" | "drop_name" | "secret";
 
@@ -181,26 +192,24 @@ function redactionModeFor(properties: Record<string, unknown>): RedactionMode {
   return "truncate";
 }
 
-/** Scrub one entry of `properties.$elements`. */
+/**
+ * Scrub one entry of `properties.$elements`.
+ *
+ * The attribute pass runs in EVERY mode, including `truncate`. That is the
+ * point of the allowlist: an untagged surface — one whose author never thought
+ * about `object` — is the common case, and it must not be the leaky one.
+ */
 function scrubElement(element: Record<string, unknown>, mode: RedactionMode): void {
-  if (mode === "secret") {
-    delete element.$el_text;
-    for (const key of Object.keys(element)) {
-      if (key.startsWith("attr__") && !KEPT_ELEMENT_ATTRIBUTES.has(key)) delete element[key];
+  for (const key of Object.keys(element)) {
+    if (key.startsWith("attr__") && !KEPT_ELEMENT_ATTRIBUTES.has(key)) delete element[key];
+  }
+  if (mode === "truncate") {
+    if (typeof element.$el_text === "string") {
+      element.$el_text = truncateElementText(element.$el_text);
     }
     return;
   }
-  if (mode === "drop_name") {
-    delete element.$el_text;
-    for (const key of Object.keys(element)) {
-      if (NAME_BEARING_ATTRIBUTE_KEYS.has(key)) delete element[key];
-    }
-  } else if (typeof element.$el_text === "string") {
-    element.$el_text = truncateElementText(element.$el_text);
-  }
-  if (typeof element.attr__href === "string") {
-    element.attr__href = sanitizeUrl(element.attr__href);
-  }
+  delete element.$el_text;
 }
 
 /**
@@ -222,17 +231,18 @@ function scrubElementCarriers(properties: Record<string, unknown>, mode: Redacti
     delete properties.$elements_chain;
     return;
   }
-  let chain = properties.$elements_chain;
+  // Same allowlist as the object carrier, applied to the serialized form. A rule
+  // that covers only one of the two is a rule a remote-config flip disables.
+  let chain = properties.$elements_chain.replace(CHAIN_ANY_ATTRIBUTE, (match, name: string) =>
+    KEPT_ELEMENT_ATTRIBUTES.has(`attr__${name}`) ? match : "",
+  );
   if (mode === "drop_name") {
-    // The chain carries the same name twice — as a `text="…"` segment and as
-    // the accessible-name attributes — so both have to go, or dropping
-    // `$el_text` upstream just moves the leak one property over.
-    chain = chain.replace(CHAIN_TEXT_PATTERN, 'text=""').replace(NAME_BEARING_ATTRIBUTES, "");
+    // The chain carries the name a second time as a `text="…"` segment, so
+    // dropping `$el_text` upstream without this just moves the leak one
+    // property over.
+    chain = chain.replace(CHAIN_TEXT_PATTERN, 'text=""');
   }
-  properties.$elements_chain = chain.replace(CHAIN_HREF_PATTERN, (match, href: string) => {
-    const sanitized = sanitizeUrl(href);
-    return typeof sanitized === "string" ? `attr__href="${sanitized}"` : match;
-  });
+  properties.$elements_chain = chain;
 }
 
 /**
@@ -278,6 +288,23 @@ const CHAIN_ARIA_LABEL_PATTERN = /attr__aria-label="([^"]*)"/i;
  * has written yet, and it reuses labels that are already maintained because
  * screen readers depend on them — strictly better than a hand-kept list of
  * per-button tracking attributes that silently rots.
+ *
+ * ## The contract this depends on, and how it is enforced
+ *
+ * An `aria-label` is NOT automatically safe: several in this codebase
+ * interpolate user data (`Copy path for ${label}`, `Focus ${label}`,
+ * `More actions for ${detailStep.label}`, `${field.name}, ${field.type}`).
+ * Promoting one of those would put a user-authored string straight into
+ * `$el_text` — the exact property the `drop_name` mode exists to clear.
+ *
+ * The rule is therefore: **a surface whose labels interpolate user data must
+ * carry an `object` from {@link USER_NAMED_OBJECTS}**, which puts it in
+ * `drop_name` and skips promotion entirely. That is a convention, and
+ * conventions rot, so it is pinned by a test rather than by this comment —
+ * see `redaction-gate.test.ts`, which renders every such component with
+ * fixture names and a fixture path and asserts neither reaches the payload.
+ * Add a component that interpolates a label, forget the tag, and that test
+ * fails.
  *
  * Only runs in `truncate` mode: on a user-named or secret surface the whole
  * point is that the label goes away.

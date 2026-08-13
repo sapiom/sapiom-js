@@ -97,9 +97,13 @@ export function DeadSessionPane({
       className="dead-session-pane"
       data-testid="dead-session-pane"
       data-has-record={showRecord}
-      {...trackingAttrs({ surface: "session_history", object: "session" })}
+      // `object` is on the summary block below, NOT here: at pane level it
+      // would blank the labels of Continue / Resume / Close / Start too, which
+      // is the blank-row problem this PR set out to fix. The name-bearing part
+      // is the summary (cwd + session title), so that is what carries it.
+      {...trackingAttrs({ surface: "session_history" })}
     >
-      <div className="dead-session-summary">
+      <div className="dead-session-summary" {...trackingAttrs({ object: "session" })}>
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
         </span>

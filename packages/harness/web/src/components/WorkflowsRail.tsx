@@ -147,7 +147,11 @@ function FolderHeader({
   onCopyPath: (path: string) => void;
 }): JSX.Element {
   return (
-    <div className="workspace-row" data-testid={`workspace-group-${label}`}>
+    <div
+      className="workspace-row"
+      data-testid={`workspace-group-${label}`}
+      {...trackingAttrs({ object: "workspace" })}
+    >
       <button
         className="workspace-row-main"
         onClick={onToggleCollapsed}
@@ -201,6 +205,7 @@ function BareFolderRow({
     <div
       className={"workspace-row" + (isFocused ? " is-selected" : "")}
       data-testid={`workspace-group-${label}`}
+      {...trackingAttrs({ object: "workspace" })}
     >
       <button
         className="workspace-row-main"
@@ -257,6 +262,7 @@ function PendingFolderRow({
     <div
       className={"workspace-row" + (isFocused ? " is-selected" : "")}
       data-testid={`workspace-group-${label}`}
+      {...trackingAttrs({ object: "workspace" })}
     >
       <button
         className="workspace-row-main"
@@ -324,6 +330,9 @@ function PastSessionRow({
       data-resumable={resumableAttr}
       title={cwd}
       onClick={onOpen}
+      // `title` is the absolute path and the row renders the session title,
+      // which is the user's first prompt.
+      {...trackingAttrs({ object: "session" })}
     >
       <span className="session-item-icon">
         <HarnessBrandIcon kind={harness} size={13} />

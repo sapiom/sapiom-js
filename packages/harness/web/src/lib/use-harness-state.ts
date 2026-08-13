@@ -63,6 +63,17 @@ const BUSY_WINDOW_MS = 3_000;
  *  cli/settings.ts) and its response replaces this guess. */
 const RECENT_DIRS_UI_CAP = 8;
 
+/** Consecutive failed `/api/runs/:id/state` polls tolerated before a run is
+ *  declared unobservable. At the 2s poll interval this is ~10s of grace, which
+ *  covers a gateway blip or a transient 503 without meaningfully delaying the
+ *  verdict on a server that never had the endpoint. */
+const MAX_RUN_POLL_FAILURES = 5;
+
+/** Upper bound on {@link announcedRuns}. A Studio left open for days can
+ *  accumulate executionIds without limit otherwise; the set only needs to
+ *  cover the redelivery window, not the whole session. */
+const ANNOUNCED_RUNS_CAP = 500;
+
 /** Re-exported from `@shared/types`, where it now lives so the analytics
  *  registry can name it without importing this module (which imports the
  *  registry). Existing `import { RunTarget } from "./use-harness-state"`
@@ -564,18 +575,37 @@ export function useHarnessState(): HarnessStateHook {
       // bus — so instrumenting here counts runs the user caused, not clicks.
       const runSlug = workflowPath ? slugFromPath(workflowPath) : undefined;
       const runBase = { workflow_slug: runSlug, session_id: sessionId, target };
-      // A repeat announcement re-polls but must not re-count. See announcedRuns.
+      // TWO independent latches, deliberately. Collapsing them into one — using
+      // the redelivery flag to seed `outcomeEmitted` — inverts the invariant it
+      // is supposed to protect: a redelivered `execution.started` clears the old
+      // interval, so the poller created here is the only live one, and starting
+      // it latched shut means the run emits a `run_started` and NEVER a terminal
+      // event. Dedupe the start; leave the outcome free to fire exactly once.
       const alreadyAnnounced = announcedRuns.current.has(executionId);
+      // Bounded: drop the oldest ids once past the cap. Insertion order is
+      // iteration order for a Set, so the first key is the oldest.
+      if (announcedRuns.current.size >= ANNOUNCED_RUNS_CAP) {
+        const oldest = announcedRuns.current.values().next().value;
+        if (oldest !== undefined) announcedRuns.current.delete(oldest);
+      }
       announcedRuns.current.add(executionId);
       // Exactly one terminal event per run. Polls are async and the immediate
       // `void poll()` overlaps the interval, so two in-flight polls can both
       // observe the terminal status before either clears the timer; without
       // this latch that run counts twice.
-      let outcomeEmitted = alreadyAnnounced;
+      let outcomeEmitted = false;
       // Whether any poll has succeeded. Distinguishes "we watched it and lost
       // it" (exception) from "we could never see it at all" (unobservable —
       // a server predating /api/runs/:id/state).
       let everObserved = false;
+      // Consecutive failed polls. A run is NOT declared failed on the first
+      // error: `/api/runs/:id/state` returns 503 whenever the harness itself
+      // holds no Sapiom credential (the coding agent can still have launched a
+      // real run from the pty with its own key), and 502 when the gateway
+      // blips. Both are recoverable and the run completes fine server-side, so
+      // giving up after one error books a false failure for a healthy run.
+      // `unobservable` only honestly means "old server" if we actually retried.
+      let consecutiveFailures = 0;
       const emitRunOutcome = (run: RunView | null): void => {
         if (outcomeEmitted) return;
         outcomeEmitted = true;
@@ -595,11 +625,20 @@ export function useHarnessState(): HarnessStateHook {
         }
       };
       if (!alreadyAnnounced) trackProduct("agent.run_started", runBase);
+      // A redelivery re-polls (so the UI still tracks the run) but must not
+      // re-count the start. The terminal event is NOT suppressed — see above.
+
+      const stopPolling = (): void => {
+        const timer = runPollers.current.get(sessionId);
+        if (timer) clearInterval(timer);
+        runPollers.current.delete(sessionId);
+      };
 
       const poll = async (): Promise<void> => {
         try {
           const run = await api.getRunState(executionId);
           everObserved = true;
+          consecutiveFailures = 0;
           setRunsByExecution((prev) =>
             new Map(prev).set(executionId, {
               run,
@@ -610,17 +649,18 @@ export function useHarnessState(): HarnessStateHook {
           );
           if (run.status !== "running") {
             emitRunOutcome(run);
-            const timer = runPollers.current.get(sessionId);
-            if (timer) clearInterval(timer);
-            runPollers.current.delete(sessionId);
+            stopPolling();
           }
         } catch {
           // Endpoint absent (server predates runtime analytics) or transient
-          // failure: stop polling quietly - the UI simply shows no run state.
+          // failure. Retry a few times before concluding anything: a single
+          // 2-second blip is not a failed run, and on a server that genuinely
+          // lacks the endpoint every attempt fails anyway, so the only cost of
+          // retrying is a few seconds before `unobservable` is recorded.
+          consecutiveFailures += 1;
+          if (consecutiveFailures < MAX_RUN_POLL_FAILURES) return;
           emitRunOutcome(null);
-          const timer = runPollers.current.get(sessionId);
-          if (timer) clearInterval(timer);
-          runPollers.current.delete(sessionId);
+          stopPolling();
         }
       };
       void poll();

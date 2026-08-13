@@ -1,6 +1,7 @@
 import type { JSX } from "react";
 
 import { BrandLogotypePixel, BrandMarkPixel } from "./BrandPixel";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface TerminalBrandProps {
   /** Working directory this session is rooted in, when the app knows it. */
@@ -41,7 +42,8 @@ export function TerminalBrand({ cwd, status, version }: TerminalBrandProps): JSX
 
       <dl className="terminal-masthead-facts">
         {cwd && (
-          <div className="terminal-masthead-fact">
+          // `cwd` is an absolute path — it contains the OS username.
+          <div className="terminal-masthead-fact" {...trackingAttrs({ object: "workspace" })}>
             <dt>dir</dt>
             <dd className="terminal-masthead-path" title={cwd}>
               {cwd}

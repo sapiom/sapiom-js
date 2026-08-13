@@ -1,6 +1,6 @@
 import posthog from "posthog-js";
 
-import type { AppState } from "@shared/types";
+import type { AppState, HarnessKind } from "@shared/types";
 
 import { getDesktopBridge } from "../desktop";
 
@@ -217,7 +217,7 @@ export function syncIdentity(state: AppState): void {
  * active session (or its kind) changes; `null` clears it rather than leaving
  * the previous session's agent stamped on an empty workbench.
  */
-export function syncHarnessKind(kind: string | null): void {
+export function syncHarnessKind(kind: HarnessKind | null): void {
   if (!initialized) return;
   try {
     if (kind) registerAppContext({ harness_kind: kind });

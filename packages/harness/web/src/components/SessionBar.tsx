@@ -212,6 +212,8 @@ export function SessionBar({
                   aria-expanded={menuOpen}
                   data-tooltip={`${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`}
                   onClick={() => setMenuOpen((v) => !v)}
+                  // The tooltip embeds the absolute cwd (OS username included).
+                  {...trackingAttrs({ object: "session" })}
                 >
                   {busy ? (
                     <span className="session-busy" data-testid="session-busy" aria-hidden="true" />
