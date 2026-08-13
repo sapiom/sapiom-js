@@ -33,6 +33,7 @@ import {
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir } from "./paths";
 import { mergeHistory } from "./history-meta";
+import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
 import { track as trackProduct } from "./analytics/events";
 import {
@@ -242,8 +243,9 @@ export interface HarnessStateHook {
    * by showing the reason inline rather than as a toast.
    */
   injectInput: (sessionId: string, text: string) => Promise<void>;
-  /** Expose the toast setter so panels can push their own toasts. */
-  showToast: (message: string) => void;
+  /** Expose the toast setter so panels can push their own toasts. Defaults
+   *  to the "error" tone; callers announcing a result opt into "info". */
+  showToast: (message: string, tone?: ToastTone) => void;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
   /** The run each session's Steps tab is showing (the latest observed by
@@ -265,7 +267,7 @@ export interface HarnessStateHook {
    *  run against a not-yet-ready session) — null when there's nothing to
    *  show. `runMacro` never rejects on this kind of failure; it sets this
    *  instead, since its only caller today fires it without awaiting. */
-  toast: string | null;
+  toast: ToastMessage | null;
   dismissToast: () => void;
   /** Session ids with terminal output in roughly the last `BUSY_WINDOW_MS` —
    *  drives each session tab's busy pulse (see `session.activity` BusMessage). */
@@ -329,7 +331,7 @@ export function useHarnessState(): HarnessStateHook {
   >(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
   // affects the render, and both are read/written within a single call.
@@ -678,9 +680,11 @@ export function useHarnessState(): HarnessStateHook {
         outcome = "failed";
         publish();
         setToast(
-          err instanceof ApiError && err.reason
-            ? err.reason
-            : (err as Error).message,
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
         );
       } finally {
         // Signal settle so the SessionStepsBar clears the Local Run button's
@@ -1079,9 +1083,11 @@ export function useHarnessState(): HarnessStateHook {
         // Surface resume failures as a toast so a failed resume is never silent
         // (the caller fires this with void and swallows the rejection).
         setToast(
-          err instanceof ApiError && err.reason
-            ? err.reason
-            : (err as Error).message,
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
         );
         throw err;
       }
@@ -1118,7 +1124,10 @@ export function useHarnessState(): HarnessStateHook {
       });
       if (!session.rehydratedFrom) {
         setToast(
-          "Nothing was recorded for that session, so this one starts fresh.",
+          createToastMessage(
+            "Nothing was recorded for that session, so this one starts fresh.",
+            "info",
+          ),
         );
       }
       return session;
@@ -1186,9 +1195,11 @@ export function useHarnessState(): HarnessStateHook {
         return adopted;
       } catch (err) {
         setToast(
-          err instanceof ApiError && err.reason
-            ? err.reason
-            : (err as Error).message,
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
         );
         throw err;
       }
@@ -1205,9 +1216,11 @@ export function useHarnessState(): HarnessStateHook {
         // overlay: the re-throw below skips the local removal, so a failed kill
         // never makes the session vanish from the UI as if it had succeeded.
         setToast(
-          err instanceof ApiError && err.reason
-            ? err.reason
-            : (err as Error).message,
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
         );
         throw err;
       }
@@ -1321,9 +1334,11 @@ export function useHarnessState(): HarnessStateHook {
         // the trust-dialog race originally went unnoticed: the macro's input
         // vanished and nothing told the user why).
         setToast(
-          err instanceof ApiError && err.reason
-            ? err.reason
-            : (err as Error).message,
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
         );
       }
     },
@@ -1341,7 +1356,7 @@ export function useHarnessState(): HarnessStateHook {
       if (existing) return existing;
 
       const run = (async (): Promise<void> => {
-        setToast("Deploying…");
+        setToast(createToastMessage("Deploying…", "info"));
         // Product metric — "agents deployed". Slug is the folder basename (never
         // the absolute path); duration is measured across the stream.
         const slug = slugFromPath(workflowPath);
@@ -1379,7 +1394,10 @@ export function useHarnessState(): HarnessStateHook {
               lastNonTerminalPhase = "linking";
               setDeployProgress(workflowPath, { phase: "linking" });
               setToast(
-                `Deploying — creating the agent "${event.name}" on Sapiom…`,
+                createToastMessage(
+                  `Deploying — creating the agent "${event.name}" on Sapiom…`,
+                  "info",
+                ),
               );
             } else if (event.phase === "warning") {
               // Non-terminal and advisory: the agent was created but its id
@@ -1389,11 +1407,11 @@ export function useHarnessState(): HarnessStateHook {
               // legitimately replaces this toast, so it's also remembered
               // above to resurface on success.
               pendingWarning = event.message;
-              setToast(event.message);
+              setToast(createToastMessage(event.message));
             } else if (event.phase === "building") {
               lastNonTerminalPhase = "building";
               setDeployProgress(workflowPath, { phase: "building" });
-              setToast("Deploying — building on Sapiom…");
+              setToast(createToastMessage("Deploying — building on Sapiom…", "info"));
               // The link is already durable at this point. Pull its mutable
               // build projection so the chip can say Building, not Deployed.
               void refreshWorkflows();
@@ -1407,10 +1425,12 @@ export function useHarnessState(): HarnessStateHook {
               ...provenance,
             });
             outcomeSettled = true;
+            // A resurfaced warning rides the success message — keep the error
+            // tone so the caveat isn't dressed as a clean win.
             setToast(
               pendingWarning
-                ? `Deployed to Sapiom. ${pendingWarning}`
-                : "Deployed to Sapiom.",
+                ? createToastMessage(`Deployed to Sapiom. ${pendingWarning}`)
+                : createToastMessage("Deployed to Sapiom.", "success"),
             );
             // Clear any prior deploy error for this workflow — it succeeded.
             setLastDeployErrorByPath((prev) => {
@@ -1440,7 +1460,7 @@ export function useHarnessState(): HarnessStateHook {
               ...provenance,
             });
             outcomeSettled = true;
-            setToast(msg);
+            setToast(createToastMessage(msg));
             // Persist the failure so the action bar can distinguish "last deploy
             // failed" from "never deployed" after the toast is dismissed.
             setLastDeployErrorByPath((prev) =>
@@ -1467,7 +1487,7 @@ export function useHarnessState(): HarnessStateHook {
               ...provenance,
             });
           }
-          setToast(msg);
+          setToast(createToastMessage(msg));
           // An exception from the deploy stream (e.g. network error) also counts
           // as a deploy failure — persist so the action bar reflects it.
           setLastDeployErrorByPath((prev) =>
@@ -1501,9 +1521,11 @@ export function useHarnessState(): HarnessStateHook {
         startRunPolling(sessionId, executionId, "prod");
       } catch (err) {
         setToast(
-          err instanceof ApiError && err.reason
-            ? err.reason
-            : (err as Error).message,
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
         );
       } finally {
         // Signal settle so the SessionStepsBar clears its pending ring for
@@ -1524,9 +1546,11 @@ export function useHarnessState(): HarnessStateHook {
       await api.disconnect();
     } catch (err) {
       setToast(
-        err instanceof ApiError && err.reason
-          ? err.reason
-          : (err as Error).message,
+        createToastMessage(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        ),
       );
     }
   }, []);
@@ -1543,9 +1567,12 @@ export function useHarnessState(): HarnessStateHook {
     [],
   );
 
-  const showToast = useCallback((message: string): void => {
-    setToast(message);
-  }, []);
+  const showToast = useCallback(
+    (message: string, tone: ToastTone = "error"): void => {
+      setToast(createToastMessage(message, tone));
+    },
+    [],
+  );
 
   const lastDeployErrorFor = useCallback(
     (workflowPath: string): string | null =>

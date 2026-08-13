@@ -4,6 +4,7 @@ import type { HarnessSession } from "@shared/types";
 
 import { HARNESS_LABELS, formatRelativeTime } from "../lib/history-meta";
 import { basenameOf } from "../lib/paths";
+import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
@@ -46,8 +47,9 @@ interface SessionBarProps {
   onOpenInEditor: (path: string) => void;
   /** The chosen editor's display name, so the item names where it lands. */
   editorLabel: string;
-  /** Push a message onto the app's toast rail. */
-  onToast: (message: string) => void;
+  /** Push a message onto the app's toast rail. Defaults to the "error" tone;
+   *  result announcements opt into "info". */
+  onToast: (message: string, tone?: ToastTone) => void;
   /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
   actions?: ReactNode;
   /** Start a new session (the + at the end of the queue). */
@@ -287,7 +289,7 @@ export function SessionBar({
                   onClick={() => {
                     void navigator.clipboard
                       ?.writeText(activeSession.cwd)
-                      .then(() => onToast("Path copied."))
+                      .then(() => onToast("Path copied.", "success"))
                       .catch(() => onToast("Couldn't copy the path."));
                     closeMenu();
                   }}

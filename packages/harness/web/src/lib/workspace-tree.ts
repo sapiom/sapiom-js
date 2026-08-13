@@ -71,7 +71,11 @@ export interface WorkspaceTree {
 }
 
 const basename = basenameOf;
-const isUnder = (childPath: string, cwd: string): boolean => isWithinDir(cwd, childPath);
+/** Segment-aware containment — a bare prefix check would put /a/scratch-2
+ *  under /a/scratch. Separator-insensitive on both sides, so a Windows path
+ *  matches its native spelling. Exported for the palette's agent-recency
+ *  derivation. */
+export const isUnder = (childPath: string, cwd: string): boolean => isWithinDir(cwd, childPath);
 
 // Agent rows have no recency signal (WorkflowInfo carries no timestamp), so
 // "recent" cannot order them — it falls back to a stable path sort. Only the

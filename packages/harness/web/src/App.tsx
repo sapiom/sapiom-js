@@ -70,6 +70,8 @@ import { resolveMacroUrl } from "./lib/macro-gating";
 import { directActionKind } from "./lib/macro-actions";
 import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
+import type { PaletteAction } from "./lib/palette";
+import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { useNavigationHistory, type NavigationVisit } from "./lib/navigation-history";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
@@ -607,6 +609,7 @@ export const App = (): JSX.Element => {
           task.status === "failed"
             ? "Couldn't generate descriptions — check the agent terminal for details."
             : "Describe run finished — the canvas updates if the agent changed the source.",
+          task.status === "failed" ? "error" : "success",
         );
       }
       describeTaskStatus.current.set(task.id, task.status);
@@ -899,12 +902,15 @@ export const App = (): JSX.Element => {
   // Bulk discovery from the add dialog.
   const handleScanWorkflows = async (root: string): Promise<number> => {
     const found = await harness.scanWorkflows(root);
+    // Finding agents is the win this dialog exists for; an empty sweep is a
+    // neutral fact, not a failure.
     harness.showToast(
       found.length === 0
         ? "No agent projects found under this folder."
         : found.length === 1
           ? "Found 1 agent project."
           : `Found ${found.length} agent projects.`,
+      found.length === 0 ? "info" : "success",
     );
     return found.length;
   };
@@ -954,7 +960,10 @@ export const App = (): JSX.Element => {
     // Nothing reports back whether the scheme found an application, so say who
     // we handed it to — otherwise a machine without that editor installed just
     // shows a menu item that does nothing.
-    harness.showToast(`Opening in ${editorLabel(editor)}… Pick a different editor in Settings.`);
+    harness.showToast(
+      `Opening in ${editorLabel(editor)}… Pick a different editor in Settings.`,
+      "info",
+    );
     window.location.href = editorUrl(editor, path);
   };
 
@@ -1773,14 +1782,62 @@ export const App = (): JSX.Element => {
           workflows={state.workflows}
           recentDirs={harness.settings?.recentDirs ?? []}
           history={harness.history}
+          sessionNames={sessionNames}
+          activeSessionId={harness.activeSessionId}
           listDir={harness.listDir}
+          listTemplates={harness.listTemplates}
           onSelectSession={openSession}
           onReviewSummary={reviewPastSession}
           onOpenPath={(cwd) => void handleCreateSession(cwd, "claude-code")}
-          onBrowseTemplates={() => {
+          onOpenTemplate={(templateId) => {
+            setDeepLinkTemplateId(templateId);
             setTemplatesOpen(true);
             setOverviewOpen(false);
           }}
+          actions={[
+            {
+              id: "browse-templates",
+              label: "Browse templates",
+              meta: "Gallery and starters",
+              icon: "LayoutTemplate",
+              run: () => {
+                setTemplatesOpen(true);
+                setOverviewOpen(false);
+              },
+            },
+            {
+              id: "toggle-theme",
+              label: "Toggle theme",
+              meta: "Light and dark",
+              icon: "Sun",
+              run: toggleTheme,
+            },
+            {
+              id: "toggle-rail",
+              label: railCollapsed ? "Show workspace panel" : "Hide workspace panel",
+              meta: "Left pane",
+              icon: "Menu",
+              run: () => setRailCollapsed((collapsed) => !collapsed),
+            },
+            {
+              id: "toggle-right",
+              label: rightCollapsed ? "Show canvas panel" : "Hide canvas panel",
+              meta: "Right pane",
+              icon: rightCollapsed ? "PanelRightOpen" : "PanelRightClose",
+              run: () => setRightCollapsed((collapsed) => !collapsed),
+            },
+            ...(activeSession
+              ? [
+                  {
+                    id: "new-session-here",
+                    label: "New session in this folder",
+                    meta: activeSession.cwd,
+                    icon: "Plus",
+                    run: () => void handleCreateSession(activeSession.cwd, "claude-code"),
+                  },
+                ]
+              : []),
+          ] satisfies PaletteAction[]}
           onClose={() => setPaletteOpen(false)}
         />
       )}
@@ -1793,7 +1850,13 @@ export const App = (): JSX.Element => {
         />
       )}
 
-      {harness.toast && <Toast message={harness.toast} onDismiss={harness.dismissToast} />}
+      {harness.toast && (
+        <Toast
+          message={harness.toast.message}
+          tone={harness.toast.tone}
+          onDismiss={harness.dismissToast}
+        />
+      )}
       <TooltipLayer />
     </div>
   );

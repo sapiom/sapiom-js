@@ -900,6 +900,88 @@ export const MOCK_WORKFLOWS: WorkflowInfo[] = [
   },
 ];
 
+/**
+ * `?mockFixtures=search` only — the shapes from the 2026-08-11 search bug
+ * report, kept out of the default fixtures so every fixture-count assertion
+ * elsewhere holds verbatim. Their paths deliberately stay out of
+ * MOCK_FS_TREE and MOCK_SETTINGS.recentDirs so directory-picker badges and
+ * bulk-scan counts never see them either.
+ */
+export const MOCK_SEARCH_WORKFLOWS: WorkflowInfo[] = [
+  // Raw scoped package name vs the rail's display name "slack-notifier" —
+  // the palette must search and show the short form.
+  {
+    name: "@sapiom/example-slack-notifier",
+    path: "/Users/demo/team-tools/slack-notifier",
+    definitionId: null,
+    definitionSlug: null,
+    source: "scan",
+  },
+  // Its PATH carries s…l…a…c…k scattered across segments ("social…stack"),
+  // which the old matcher accepted — a "slack" query must NOT surface it.
+  {
+    name: "daily-activity-analyst",
+    path: "/Users/demo/social-marketing/analytics-stack/daily-activity-analyst",
+    definitionId: null,
+    definitionSlug: null,
+    source: "scan",
+  },
+];
+
+export const MOCK_SEARCH_HISTORY: Record<string, SessionSummary[]> = {
+  // Under the boot session's cwd so the palette-open history fan-out already
+  // covers this directory — no recentDirs change needed.
+  "/Users/demo/acme-app": [
+    // Three transcript rows the user cannot tell apart (same title, same
+    // folder) — the palette collapses them to the newest.
+    ...[2, 4, 5].map((age, index) => ({
+      agentSessionId: `search-standup-${index + 1}`,
+      harness: "claude-code" as const,
+      cwd: "/Users/demo/acme-app",
+      title: "Standup summary for #eng",
+      lastActiveAt: daysAgo(age),
+      source: "transcript" as const,
+      resumeMode: "rehydrate" as const,
+      turnCount: 6 - index,
+    })),
+    // A raw first-prompt title — the old matcher let short queries land on
+    // characters scattered through strings like this.
+    {
+      agentSessionId: "search-annotate",
+      harness: "claude-code" as const,
+      cwd: "/Users/demo/acme-app",
+      title: "You are annotating an already-generated draft of the leasing docs",
+      lastActiveAt: daysAgo(3),
+      source: "transcript" as const,
+      resumeMode: "rehydrate" as const,
+      turnCount: 2,
+    },
+    // Noise rows for the "daily" query: titles that share letters with it
+    // (the old matcher scattered across them) but carry no boundary hit, so
+    // the agent must be the only match.
+    {
+      agentSessionId: "search-digest",
+      harness: "claude-code" as const,
+      cwd: "/Users/demo/acme-app",
+      title: "Digest and activity rollup",
+      lastActiveAt: daysAgo(1),
+      source: "transcript" as const,
+      resumeMode: "rehydrate" as const,
+      turnCount: 4,
+    },
+    {
+      agentSessionId: "search-activity-log",
+      harness: "claude-code" as const,
+      cwd: "/Users/demo/acme-app",
+      title: "Check the activity log",
+      lastActiveAt: daysAgo(6),
+      source: "transcript" as const,
+      resumeMode: "rehydrate" as const,
+      turnCount: 3,
+    },
+  ],
+};
+
 export const MOCK_MACROS: MacroDef[] = [
   {
     id: "run_local",

@@ -12,9 +12,11 @@ export const TYPE_LABELS = Object.freeze(
 );
 
 export const CONTRIBUTOR_LABELS = Object.freeze([
-  "contributor: member",
+  "contributor: trusted",
   "contributor: external",
 ]);
+
+const LEGACY_CONTRIBUTOR_LABELS = Object.freeze(["contributor: member"]);
 
 export const SIZE_LABELS = Object.freeze([
   "size: small",
@@ -25,6 +27,7 @@ export const SIZE_LABELS = Object.freeze([
 
 const CLASSIFICATION_LABELS = Object.freeze([
   ...CONTRIBUTOR_LABELS,
+  ...LEGACY_CONTRIBUTOR_LABELS,
   ...SIZE_LABELS,
   "contribution: incomplete",
   "review: sensitive",
@@ -353,10 +356,23 @@ function isOpaqueFile(file) {
   return file.patch === undefined || file.patch === null;
 }
 
-export function classifyContributor(authorAssociation) {
-  const association = String(authorAssociation ?? "").toUpperCase();
-  return association === "OWNER" || association === "MEMBER"
-    ? "contributor: member"
+const RESOLVED_REPOSITORY_PERMISSIONS = new Set([
+  "admin",
+  "write",
+  "read",
+  "none",
+]);
+
+function normalizeRepositoryPermission(repositoryPermission) {
+  return String(repositoryPermission ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+export function classifyContributor(repositoryPermission) {
+  const permission = normalizeRepositoryPermission(repositoryPermission);
+  return permission === "admin" || permission === "write"
+    ? "contributor: trusted"
     : "contributor: external";
 }
 
@@ -370,38 +386,57 @@ function shouldInitializeTriage(eventAction, initializeTriage) {
 
 export function classifyPullRequest({
   pullRequest,
+  repositoryPermission,
+  permissionResolved = false,
   files,
   eventAction,
   initializeTriage = false,
 }) {
-  const contributorLabel = classifyContributor(pullRequest?.author_association);
+  const normalizedPermission =
+    normalizeRepositoryPermission(repositoryPermission);
+  const repositoryPermissionResolved =
+    permissionResolved === true &&
+    RESOLVED_REPOSITORY_PERMISSIONS.has(normalizedPermission);
+  const contributorLabel = repositoryPermissionResolved
+    ? classifyContributor(normalizedPermission)
+    : "contributor: external";
   const size = calculateReviewSize(files);
   const template = validatePullRequestTemplate(pullRequest?.body);
   const sensitive = files.some(({ filename }) => isSensitivePath(filename));
   const reportedFileCount = Number(pullRequest?.changed_files) || files.length;
   const opaque = files.some(isOpaqueFile) || reportedFileCount > files.length;
   const external = contributorLabel === "contributor: external";
+  const trusted = contributorLabel === "contributor: trusted";
   const manual =
     external &&
-    (!template.complete ||
+    (!repositoryPermissionResolved ||
+      !template.complete ||
       sensitive ||
       size.label === "size: large" ||
       size.label === "size: xlarge" ||
       opaque);
 
-  const desiredLabels = new Set([contributorLabel, size.label]);
-  if (template.typeIsValid) desiredLabels.add(template.typeLabel);
-  if (!template.complete) desiredLabels.add("contribution: incomplete");
-  if (sensitive) desiredLabels.add("review: sensitive");
-  if (manual) desiredLabels.add("review: manual");
+  const desiredLabels = new Set();
+  // These labels route public contribution intake. Trusted authors are resolved
+  // from live repository access and remain outside the labeling pipeline.
+  if (!trusted) {
+    desiredLabels.add(contributorLabel);
+    desiredLabels.add(size.label);
+    if (template.typeIsValid) desiredLabels.add(template.typeLabel);
+    if (!template.complete) desiredLabels.add("contribution: incomplete");
+    if (sensitive) desiredLabels.add("review: sensitive");
+    if (manual) desiredLabels.add("review: manual");
+  }
 
   return {
     addNeedsTriage:
       external && shouldInitializeTriage(eventAction, initializeTriage),
+    clearAutomationLabels: trusted,
     desiredLabels: [...desiredLabels].sort((a, b) => a.localeCompare(b)),
     hasOpaqueFile: opaque,
+    repositoryPermissionResolved,
     reviewSize: size.changedLines,
-    synchronizeTypeLabels: template.typeIsValid,
+    synchronizeTypeLabels: trusted || template.typeIsValid,
     templateReasons: template.reasons,
   };
 }
@@ -413,15 +448,20 @@ export function reconcilePullRequestLabels(currentLabels, classification) {
   if (classification.synchronizeTypeLabels) {
     for (const label of TYPE_LABELS) managed.add(label);
   }
+  if (classification.clearAutomationLabels) {
+    managed.add("needs-triage");
+  }
 
   const add = [...desired].filter((label) => !current.has(label));
   if (classification.addNeedsTriage && !current.has("needs-triage")) {
     add.push("needs-triage");
   }
 
-  const remove = [...current].filter(
-    (label) => managed.has(label) && !desired.has(label),
-  );
+  const remove = [...current].filter((label) => {
+    const automationArea =
+      classification.clearAutomationLabels && label.startsWith("area: ");
+    return (managed.has(label) || automationArea) && !desired.has(label);
+  });
 
   return {
     add: add.sort((a, b) => a.localeCompare(b)),

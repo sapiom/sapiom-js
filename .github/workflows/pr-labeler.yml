@@ -35,13 +35,6 @@ jobs:
     name: Classify pull request
     runs-on: ubuntu-latest
     steps:
-      - name: Apply area labels
-        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
-        with:
-          configuration-path: .github/labeler.yml
-          pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
-          sync-labels: "true"
-
       # pull_request_target is privileged. Check out only the trusted base SHA;
       # never fetch or execute the contributor-controlled head ref in this job.
       - name: Check out trusted classifier
@@ -52,6 +45,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
 
       - name: Apply deterministic classification labels
+        id: classification
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           EVENT_ACTION: ${{ github.event.action || 'workflow_dispatch' }}
@@ -92,6 +86,31 @@ jobs:
               return;
             }
 
+            const authorLogin = pullRequest.user?.login;
+            let repositoryPermission;
+            let permissionResolved = false;
+            let permissionLookupFailure = "pull request author is unavailable";
+            if (authorLogin) {
+              try {
+                const { data: repositoryAccess } =
+                  await github.rest.repos.getCollaboratorPermissionLevel({
+                    owner,
+                    repo,
+                    username: authorLogin,
+                  });
+                repositoryPermission = repositoryAccess.permission;
+                permissionResolved = true;
+                permissionLookupFailure = null;
+              } catch (error) {
+                const status =
+                  error && typeof error === "object" && "status" in error
+                    ? error.status
+                    : "unknown";
+                permissionLookupFailure =
+                  `GitHub API status ${status ?? "unknown"}`;
+              }
+            }
+
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner,
               repo,
@@ -100,10 +119,21 @@ jobs:
             });
             const classification = classifyPullRequest({
               pullRequest,
+              repositoryPermission,
+              permissionResolved,
               files,
               eventAction: process.env.EVENT_ACTION,
               initializeTriage: process.env.INITIALIZE_TRIAGE === "true",
             });
+            if (!classification.repositoryPermissionResolved) {
+              const reason =
+                permissionLookupFailure ??
+                `unexpected permission ${JSON.stringify(repositoryPermission)}`;
+              core.warning(
+                `PR #${pullNumber}: repository permission unresolved (${reason}); ` +
+                  "treating the author as external and requiring manual review",
+              );
+            }
             const currentLabels = pullRequest.labels
               .map((label) =>
                 typeof label === "string" ? label : label.name,
@@ -112,6 +142,10 @@ jobs:
             const changes = reconcilePullRequestLabels(
               currentLabels,
               classification,
+            );
+            core.setOutput(
+              "trusted",
+              classification.clearAutomationLabels ? "true" : "false",
             );
 
             core.info(
@@ -144,3 +178,11 @@ jobs:
                 labels: changes.add,
               });
             }
+
+      - name: Apply area labels to external pull requests
+        if: steps.classification.outputs.trusted == 'false'
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          configuration-path: .github/labeler.yml
+          pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          sync-labels: "true"
