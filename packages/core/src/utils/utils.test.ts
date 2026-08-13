@@ -71,6 +71,20 @@ describe("Header Utilities", () => {
       expect(result["Authorization"]).toBe("old"); // Other headers preserved
     });
 
+    it("should keep unrelated undefined-valued headers omitted, not coerce to empty string", () => {
+      const headers = {
+        Authorization: undefined,
+        "Content-Type": "text/plain",
+      };
+
+      const result = setHeader(headers, "X-Sapiom-Transaction-Id", "tx_123");
+
+      expect(result["Authorization"]).toBeUndefined();
+      expect("Authorization" in result).toBe(false);
+      expect(result["Content-Type"]).toBe("text/plain");
+      expect(result["X-Sapiom-Transaction-Id"]).toBe("tx_123");
+    });
+
     it("should remove all case variants when setting same header", () => {
       const headers = {
         "x-custom": "value1",
@@ -102,6 +116,18 @@ describe("Header Utilities", () => {
 
       expect(result["Content-Type"]).toBeUndefined();
       expect(result["Authorization"]).toBe("Bearer token");
+    });
+
+    it("should keep unrelated undefined-valued headers omitted, not coerce to empty string", () => {
+      const headers = {
+        Authorization: undefined,
+        "Content-Type": "text/plain",
+      };
+
+      const result = removeHeader(headers, "Content-Type");
+
+      expect(result["Authorization"]).toBeUndefined();
+      expect("Authorization" in result).toBe(false);
     });
 
     it("should remove all case variants", () => {
