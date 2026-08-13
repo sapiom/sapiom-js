@@ -4,7 +4,9 @@ import {
   agentProvenance,
   agentSource,
   deployErrorKind,
+  localRunOutcomeKind,
   newAgentPaths,
+  runErrorKind,
   slugFromPath,
 } from "./lifecycle";
 
@@ -138,5 +140,34 @@ describe("deployErrorKind", () => {
   it("maps a terminal error after building (or unknown) to build_failed", () => {
     expect(deployErrorKind("building", false)).toBe("build_failed");
     expect(deployErrorKind(null, false)).toBe("build_failed");
+  });
+});
+
+describe("runErrorKind", () => {
+  it("distinguishes a cancellation from a failure", () => {
+    expect(runErrorKind("cancelled")).toBe("cancelled");
+    expect(runErrorKind("failed")).toBe("failed");
+  });
+
+  it("collapses non-terminal / successful statuses to failed rather than inventing a bucket", () => {
+    // Only unsuccessful terminal statuses should ever reach here; a call site
+    // bug must surface as an implausible `failed`, not a new enum value.
+    expect(runErrorKind("running")).toBe("failed");
+    expect(runErrorKind("completed")).toBe("failed");
+  });
+});
+
+describe("localRunOutcomeKind", () => {
+  it("maps the two terminal outcomes", () => {
+    expect(localRunOutcomeKind("completed")).toBe("succeeded");
+    expect(localRunOutcomeKind("failed")).toBe("failed");
+  });
+
+  it("treats a paused or unfinished run as pending, NOT as a failure", () => {
+    // A paused run is waiting on a signal and is still alive. Counting it as
+    // failed would understate the success rate by every signal-using agent.
+    expect(localRunOutcomeKind("paused")).toBe("pending");
+    expect(localRunOutcomeKind("running")).toBe("pending");
+    expect(localRunOutcomeKind(undefined)).toBe("pending");
   });
 });

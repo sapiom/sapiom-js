@@ -5,6 +5,7 @@ import { HARNESS_LABELS, formatDuration, formatRelativeTime, historyRowMeta } fr
 import { useSessionRecord, type SessionRecordState } from "../lib/use-session-record";
 import { Icon } from "./Icon";
 import { SessionTranscript } from "./SessionTranscript";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface DeadSessionPaneProps {
   session: HarnessSession;
@@ -92,7 +93,12 @@ export function DeadSessionPane({
   const canContinue = !canResume && record.status === "ready";
 
   return (
-    <div className="dead-session-pane" data-testid="dead-session-pane" data-has-record={showRecord}>
+    <div
+      className="dead-session-pane"
+      data-testid="dead-session-pane"
+      data-has-record={showRecord}
+      {...trackingAttrs({ surface: "session_history", object: "session" })}
+    >
       <div className="dead-session-summary">
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />

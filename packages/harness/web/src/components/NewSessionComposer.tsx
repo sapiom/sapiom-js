@@ -16,6 +16,7 @@ import { StartDialog } from "./StartDialog";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { HarnessMenuItems } from "./HarnessMenuItems";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
  * The composer-first "new session" home. It stands in the centre pane whenever
@@ -188,6 +189,7 @@ export function NewSessionComposer({
     <div
       className={"composer-home" + (leaving ? " is-leaving" : "")}
       data-testid="new-session-composer"
+      {...trackingAttrs({ surface: "composer" })}
     >
       <div className="composer-hero">
         <p className="composer-greeting" data-testid="composer-greeting">

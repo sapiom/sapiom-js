@@ -9,6 +9,7 @@ import type {
   HarnessSession,
   HarnessSettings,
   RunMacroRequest,
+  RunTarget,
   SessionRecord,
   SessionSummary,
   WorkflowInfo,
@@ -39,7 +40,9 @@ import { track as trackProduct } from "./analytics/events";
 import {
   agentProvenance,
   deployErrorKind,
+  localRunOutcomeKind,
   newAgentPaths,
+  runErrorKind,
   slugFromPath,
 } from "./analytics/lifecycle";
 import { renderLocalRun } from "@shared/render-local-run";
@@ -60,10 +63,11 @@ const BUSY_WINDOW_MS = 3_000;
  *  cli/settings.ts) and its response replaces this guess. */
 const RECENT_DIRS_UI_CAP = 8;
 
-/** Where a run executed — the server announces it on execution.started.
- *  "local" runs are stubbed (capabilities run against fixtures); "prod" runs
- *  are real cloud executions. */
-export type RunTarget = "prod" | "local";
+/** Re-exported from `@shared/types`, where it now lives so the analytics
+ *  registry can name it without importing this module (which imports the
+ *  registry). Existing `import { RunTarget } from "./use-harness-state"`
+ *  callers keep working. */
+export type { RunTarget };
 
 /** One observed run: the polled RunView plus the facts captured when its
  *  execution.started announcement arrived. */
@@ -369,6 +373,14 @@ export function useHarnessState(): HarnessStateHook {
   const runPollers = useRef<Map<string, ReturnType<typeof setInterval>>>(
     new Map(),
   );
+  // executionIds already counted into the run funnel. `execution.started` is a
+  // bus message, and nothing upstream promises it arrives exactly once — a
+  // reconnect that replays it, or the ExecutionDetector matching the CLI's
+  // "Started execution" line twice, would otherwise book a second
+  // `agent.run_started` for one run and inflate the funnel. Restarting the
+  // poller on a repeat is harmless (the UI just re-reads the same run), so the
+  // guard covers only the analytics.
+  const announcedRuns = useRef<Set<string>>(new Set());
   // One-click preview loop: the server's PortDetector announces a
   // dev server the agent started; the session surfaces a Preview chip.
   const [previewBySession, setPreviewBySession] = useState<
@@ -517,6 +529,11 @@ export function useHarnessState(): HarnessStateHook {
   const startRunPolling = useCallback(
     (sessionId: string, executionId: string, target: RunTarget) => {
       const existing = runPollers.current.get(sessionId);
+      // Superseding a live poller abandons the run it was watching, and that
+      // run gets NO terminal analytics event — deliberately. It is still
+      // executing server-side; we simply stopped looking. Calling it failed
+      // would be a lie, and calling it succeeded worse. This is the one place
+      // `run_started` legitimately outnumbers its terminal events.
       if (existing) clearInterval(existing);
       // Attribution facts are captured NOW, not at read time: the workflow the
       // session is bound to when the run is announced owns the run's cost.
@@ -540,9 +557,49 @@ export function useHarnessState(): HarnessStateHook {
         next.delete(sessionId);
         return next;
       });
+
+      // ---- run funnel -----------------------------------------------------
+      // This is the single door every prod run comes through — the Prod Run
+      // button AND a CLI-launched run the ExecutionDetector announced on the
+      // bus — so instrumenting here counts runs the user caused, not clicks.
+      const runSlug = workflowPath ? slugFromPath(workflowPath) : undefined;
+      const runBase = { workflow_slug: runSlug, session_id: sessionId, target };
+      // A repeat announcement re-polls but must not re-count. See announcedRuns.
+      const alreadyAnnounced = announcedRuns.current.has(executionId);
+      announcedRuns.current.add(executionId);
+      // Exactly one terminal event per run. Polls are async and the immediate
+      // `void poll()` overlaps the interval, so two in-flight polls can both
+      // observe the terminal status before either clears the timer; without
+      // this latch that run counts twice.
+      let outcomeEmitted = alreadyAnnounced;
+      // Whether any poll has succeeded. Distinguishes "we watched it and lost
+      // it" (exception) from "we could never see it at all" (unobservable —
+      // a server predating /api/runs/:id/state).
+      let everObserved = false;
+      const emitRunOutcome = (run: RunView | null): void => {
+        if (outcomeEmitted) return;
+        outcomeEmitted = true;
+        const duration_ms = Date.now() - observedAt;
+        if (run?.status === "completed") {
+          trackProduct("agent.run_succeeded", { ...runBase, duration_ms });
+        } else {
+          trackProduct("agent.run_failed", {
+            ...runBase,
+            duration_ms,
+            error_kind: run
+              ? runErrorKind(run.status)
+              : everObserved
+                ? "exception"
+                : "unobservable",
+          });
+        }
+      };
+      if (!alreadyAnnounced) trackProduct("agent.run_started", runBase);
+
       const poll = async (): Promise<void> => {
         try {
           const run = await api.getRunState(executionId);
+          everObserved = true;
           setRunsByExecution((prev) =>
             new Map(prev).set(executionId, {
               run,
@@ -552,6 +609,7 @@ export function useHarnessState(): HarnessStateHook {
             }),
           );
           if (run.status !== "running") {
+            emitRunOutcome(run);
             const timer = runPollers.current.get(sessionId);
             if (timer) clearInterval(timer);
             runPollers.current.delete(sessionId);
@@ -559,6 +617,7 @@ export function useHarnessState(): HarnessStateHook {
         } catch {
           // Endpoint absent (server predates runtime analytics) or transient
           // failure: stop polling quietly - the UI simply shows no run state.
+          emitRunOutcome(null);
           const timer = runPollers.current.get(sessionId);
           if (timer) clearInterval(timer);
           runPollers.current.delete(sessionId);
@@ -644,6 +703,17 @@ export function useHarnessState(): HarnessStateHook {
       // run immediately, before the first trace line lands.
       publish();
 
+      // ---- run funnel (local half; the prod half is in startRunPolling) ----
+      const runBase = {
+        workflow_slug: workflowPath ? slugFromPath(workflowPath) : undefined,
+        session_id: sessionId,
+        target: "local" as const,
+      };
+      // True when the stream itself broke, as opposed to the run reporting a
+      // failure — the difference between `exception` and `failed`.
+      let transportBroke = false;
+      trackProduct("agent.run_started", runBase);
+
       const onLine = (line: RunLocalLine): void => {
         if (line.kind === "summary") {
           outcome = line.outcome;
@@ -678,6 +748,7 @@ export function useHarnessState(): HarnessStateHook {
         // Transport failure (the stream itself broke) — mark the run failed so
         // it doesn't spin as "running" forever, and toast the reason.
         outcome = "failed";
+        transportBroke = true;
         publish();
         setToast(
           createToastMessage(
@@ -687,6 +758,20 @@ export function useHarnessState(): HarnessStateHook {
           ),
         );
       } finally {
+        // Close the run funnel. `pending` means the stream ended without a
+        // terminal outcome — a `paused` run waiting on a signal is still alive,
+        // so it gets no terminal event rather than a fabricated one.
+        const kind = localRunOutcomeKind(outcome);
+        const duration_ms = Date.now() - observedAt;
+        if (kind === "succeeded") {
+          trackProduct("agent.run_succeeded", { ...runBase, duration_ms });
+        } else if (kind === "failed") {
+          trackProduct("agent.run_failed", {
+            ...runBase,
+            duration_ms,
+            error_kind: transportBroke ? "exception" : "failed",
+          });
+        }
         // Signal settle so the SessionStepsBar clears the Local Run button's
         // pending ring — the stream ended (success or failure), the button's
         // "in flight" state is over.

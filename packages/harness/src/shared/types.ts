@@ -646,6 +646,16 @@ export interface RunView {
   stubWarnings?: string[];
 }
 
+/** Where a run executed — the server announces it on `execution.started`.
+ *  "local" runs are stubbed (capabilities run against fixtures); "prod" runs
+ *  are real cloud executions.
+ *
+ *  Lives here rather than in the SPA store because three unrelated consumers
+ *  need it: the store, the `execution.started` bus message below, and the
+ *  analytics registry — and the analytics module must not import the store
+ *  (the store imports IT, so that direction is a cycle). */
+export type RunTarget = "prod" | "local";
+
 // ---------------------------------------------------------------------------
 // Adapter registry (GET /api/harnesses)
 // ---------------------------------------------------------------------------

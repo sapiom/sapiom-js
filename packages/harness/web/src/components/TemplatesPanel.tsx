@@ -23,6 +23,8 @@ import { TemplateCard } from "./TemplateCard";
 import { TemplateDetail } from "./TemplateDetail";
 import { TemplateFilters } from "./TemplateFilters";
 import { TemplateUseDialog } from "./TemplateUseDialog";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+import { TrackScope } from "./analytics/TrackScope";
 
 interface TemplatesPanelProps {
   /** Seeds the destination suggestion — the resolved project root, shared with
@@ -160,6 +162,10 @@ export function TemplatesPanel({
       : "The template gallery is unreachable right now. The bundled starters below remain available.";
   })();
 
+  // No `surface` on the panel itself. It hosts two mutually exclusive modes —
+  // the grid and the opened detail — and an outer `surface` would win over the
+  // detail's own, collapsing both into one indistinguishable bucket. Each mode
+  // carries its own instead.
   return (
     <section
       className="templates-panel"
@@ -168,7 +174,7 @@ export function TemplatesPanel({
     >
       {/* Matches the session bar's height, so the shell's top edge does not
           shift as you enter and leave the browser. */}
-      <div className="templates-bar">
+      <div className="templates-bar" {...trackingAttrs({ surface: "template_gallery" })}>
         <button
           type="button"
           className="theme-toggle templates-back"
@@ -200,7 +206,7 @@ export function TemplatesPanel({
           {opened ? (
             <TemplateDetail template={opened} getTemplate={getTemplate} />
           ) : (
-            <>
+            <TrackScope surface="template_gallery">
               <header className="templates-hero">
                 <h2 className="templates-hero-title">Start from a template</h2>
                 <p className="templates-hero-copy">
@@ -293,7 +299,7 @@ export function TemplatesPanel({
                   )}
                 </div>
               </div>
-            </>
+            </TrackScope>
           )}
         </div>
       </div>

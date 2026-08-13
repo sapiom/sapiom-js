@@ -34,6 +34,7 @@ import type { RailGrouping, RailSort } from "../lib/workspace-tree";
 import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -525,7 +526,12 @@ export function WorkflowsRail({
   };
 
   return (
-    <aside ref={railRef} className="rail rail-workflows" style={{ width, minWidth }}>
+    <aside
+      ref={railRef}
+      className="rail rail-workflows"
+      style={{ width, minWidth }}
+      {...trackingAttrs({ surface: "agent_rail" })}
+    >
       <BrandHeader
         onCollapse={onCollapse}
         canGoBack={canGoBack}

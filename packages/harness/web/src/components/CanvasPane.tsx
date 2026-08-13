@@ -19,6 +19,7 @@ import {
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** How many of a running task's trailing status lines the activity view shows. */
 const ACTIVITY_LINES_SHOWN = 8;
@@ -787,7 +788,7 @@ export function CanvasPane({
   );
 
   return (
-    <aside className="canvas-pane">
+    <aside className="canvas-pane" {...trackingAttrs({ surface: "canvas" })}>
       {boundWorkflow && !overviewActive && (
         <WorkflowActionsHeader
           workflow={boundWorkflow}

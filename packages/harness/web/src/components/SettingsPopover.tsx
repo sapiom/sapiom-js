@@ -8,6 +8,7 @@ import { isMockMode } from "../lib/api";
 import { EDITOR_OPTIONS, resolveEditor } from "../lib/editors";
 import { Icon } from "./Icon";
 import { track } from "../lib/track";
+import { TrackScope } from "./analytics/TrackScope";
 
 /** Sign-in progress state in the Settings popover. */
 type AuthProgress =
@@ -139,7 +140,10 @@ export function SettingsPopover({
   // No positioned wrapper of its own: the host mounts this inside an
   // AnchoredPopover carrying the .settings-popover recipe and testid.
   return (
-    <>
+    // TrackScope, not a spread: this component's root is a fragment, so there
+    // is no element to attribute. The wrapper is `display: contents`, so it
+    // adds attribution without adding a box.
+    <TrackScope surface="settings">
       <div className="settings-identity">
         {authenticated ? (organizationName ?? "Signed in") : "Not signed in"}
       </div>
@@ -297,6 +301,6 @@ export function SettingsPopover({
         <em>for</em>, not just what it last did. With this off, continuing still works — it
         carries the last few turns instead.
       </p>
-    </>
+    </TrackScope>
   );
 }

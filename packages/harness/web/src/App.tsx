@@ -63,7 +63,7 @@ import {
   type StudioTemplate,
 } from "./lib/templates";
 import { track } from "./lib/track";
-import { initAnalytics } from "./lib/analytics/posthog";
+import { initAnalytics, syncHarnessKind } from "./lib/analytics/posthog";
 import { registerViewContext, track as trackProduct } from "./lib/analytics/events";
 import type { HarnessView } from "./lib/analytics/journeys";
 import { resolveMacroUrl } from "./lib/macro-gating";
@@ -482,6 +482,12 @@ export const App = (): JSX.Element => {
       rightTab,
     };
     registerViewContext(view);
+    // Which coding agent is on screen, as a super-property, so an autocaptured
+    // click can be broken down by agent. `session.started` already carries the
+    // kind for the session it creates, but that is one event — everything
+    // after it was unattributable. Null when nothing is active, rather than
+    // leaving the last session's agent stamped on an empty workbench.
+    syncHarnessKind(active?.harness ?? null);
   }, [st, harness.activeSessionId, settingsOpen, templatesOpen, rightTab]);
 
   // Crossing the breakpoint resets both panes to that mode's default.

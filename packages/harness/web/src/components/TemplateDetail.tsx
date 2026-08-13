@@ -11,6 +11,7 @@ import {
 } from "../lib/templates";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
  * The template's step structure, previewed with the canvas projections'
@@ -249,7 +250,11 @@ export function TemplateDetail({
   }, [template.kind, template.id, getTemplate]);
 
   return (
-    <div className="template-detail" data-testid="template-detail">
+    <div
+      className="template-detail"
+      data-testid="template-detail"
+      {...trackingAttrs({ surface: "template_detail", object: "template" })}
+    >
       <div className="template-detail-head">
         <h3 className="template-detail-name">{template.name}</h3>
         <div className="template-tags">

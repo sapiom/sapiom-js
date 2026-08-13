@@ -4,6 +4,7 @@ import type { WorkflowInfo } from "@shared/types";
 
 import { generateSnippet } from "../lib/generate-snippet";
 import { isWorkflowRunnable } from "../lib/workflow-deployment";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** Sapiom dashboard page where a user mints/manages the tenant API key that the
  *  snippet's `YOUR_SAPIOM_API_KEY` placeholder stands in for. Needed to run a
@@ -83,8 +84,10 @@ function SnippetPanelInner({ boundWorkflow, agentsBaseUrl }: SnippetPanelProps):
       });
   };
 
+  // `object`, not `surface`: this renders inside CodePanel, whose
+  // `surface: "code_panel"` is the outer one and would win.
   return (
-    <div className="snippet-panel" data-testid="snippet-panel">
+    <div className="snippet-panel" data-testid="snippet-panel" {...trackingAttrs({ object: "snippet" })}>
       <div className="snippet-panel-header">
         <span className="snippet-panel-title">Trigger from your code</span>
       </div>

@@ -6,6 +6,7 @@ import { classifyFolder, type FolderOutcome } from "../lib/detect-folder";
 import { useDismissable } from "../lib/use-dismissable";
 import { DirectoryPicker, type DirectoryResolution } from "./DirectoryPicker";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
  * Add existing agents.
@@ -142,6 +143,7 @@ export function StartDialog({
         aria-label="Add existing agents"
         ref={panelRef}
         onKeyDown={onKeyDown}
+        {...trackingAttrs({ dialog: "add_agents" })}
       >
         <div className="modal-header modal-start-header">
           <span className="modal-start-title">Add existing agents</span>

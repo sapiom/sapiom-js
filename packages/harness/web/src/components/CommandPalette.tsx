@@ -17,6 +17,7 @@ import { STARTER_TEMPLATES } from "../lib/templates";
 import { useTabIndicator } from "../lib/use-tab-indicator";
 import { looksAbsolutePath } from "../lib/paths";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface CommandPaletteProps {
   sessions: HarnessSession[];
@@ -294,7 +295,14 @@ export function CommandPalette({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal command-palette" onClick={(e) => e.stopPropagation()}>
+      {/* No explicit `journey` on the palette: it navigates ANYWHERE, so it has
+          no journey of its own. Letting the ambient super-property stand keeps
+          the useful fact — which journey the user reached for it FROM. */}
+      <div
+        className="modal command-palette"
+        onClick={(e) => e.stopPropagation()}
+        {...trackingAttrs({ dialog: "command_palette" })}
+      >
         <div className="command-palette-search">
           <Icon name="Search" size={16} />
           <input

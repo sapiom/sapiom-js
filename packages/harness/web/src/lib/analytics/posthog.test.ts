@@ -15,6 +15,7 @@ const ph = vi.hoisted(() => {
     identify: ReturnType<typeof vi.fn>;
     group: ReturnType<typeof vi.fn>;
     register: ReturnType<typeof vi.fn>;
+    unregister: ReturnType<typeof vi.fn>;
     reset: ReturnType<typeof vi.fn>;
     capture: ReturnType<typeof vi.fn>;
   } = {
@@ -28,6 +29,7 @@ const ph = vi.hoisted(() => {
     identify: vi.fn(),
     group: vi.fn(),
     register: vi.fn(),
+    unregister: vi.fn(),
     reset: vi.fn(),
     capture: vi.fn(),
   };
@@ -36,7 +38,8 @@ const ph = vi.hoisted(() => {
 
 vi.mock("posthog-js", () => ({ default: ph }));
 
-import { initAnalytics, resetAnalyticsForTest } from "./posthog";
+import { resetStudioBootIdForTest } from "./events";
+import { initAnalytics, resetAnalyticsForTest, syncHarnessKind } from "./posthog";
 
 function appState(over: Partial<AppState> = {}): AppState {
   return {
@@ -118,5 +121,80 @@ describe("initAnalytics consent gate", () => {
     expect(ph.init).not.toHaveBeenCalled();
     initAnalytics(appState({ productAnalyticsOptIn: true }));
     expect(ph.init).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("boot context super-properties", () => {
+  beforeEach(() => {
+    resetAnalyticsForTest();
+    resetStudioBootIdForTest();
+    ph.__loaded = false;
+    for (const fn of [ph.init, ph.register, ph.reset, ph.unregister, ph.identify]) fn.mockClear();
+    ph.has_opted_out_capturing.mockReturnValue(false);
+    vi.stubGlobal("window", {
+      __HARNESS__: { posthog: { key: "phc_test", apiHost: "https://h", uiHost: "https://u" } },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The merged object of every `posthog.register` call, newest value winning. */
+  function registered(): Record<string, unknown> {
+    return Object.assign({}, ...ph.register.mock.calls.map((c) => c[0] as Record<string, unknown>));
+  }
+
+  it('reports harness_host "cli" in a plain browser (no desktop bridge)', () => {
+    initAnalytics(appState());
+    expect(registered().harness_host).toBe("cli");
+  });
+
+  it('reports harness_host "desktop" when the Electron bridge is present', () => {
+    vi.stubGlobal("window", {
+      __HARNESS__: { posthog: { key: "phc_test", apiHost: "https://h", uiHost: "https://u" } },
+      // getDesktopBridge validates the shape, not just the flag.
+      sapiomDesktop: { appVersion: "1.2.3", checkForUpdates: () => Promise.resolve({ kind: "up-to-date" }) },
+    });
+    initAnalytics(appState());
+    expect(registered().harness_host).toBe("desktop");
+  });
+
+  it("registers a studio_boot_id, stable across re-syncs within one load", () => {
+    initAnalytics(appState());
+    const first = registered().studio_boot_id;
+    expect(typeof first).toBe("string");
+    expect(first).not.toBe("");
+    initAnalytics(appState());
+    expect(registered().studio_boot_id).toBe(first);
+  });
+
+  it("registers boot context BEFORE anything else, so the first pageview carries it", () => {
+    initAnalytics(appState());
+    // posthog-js defers the initial $pageview behind setTimeout(…, 1); the
+    // guarantee we need is that register ran synchronously during init.
+    const initOrder = ph.init.mock.invocationCallOrder[0];
+    const firstRegisterOrder = ph.register.mock.invocationCallOrder[0];
+    expect(firstRegisterOrder).toBeGreaterThan(initOrder);
+    expect(ph.capture).not.toHaveBeenCalled();
+  });
+
+  it("re-registers host and boot id after a sign-out reset clears them", () => {
+    initAnalytics(appState());
+    const bootId = registered().studio_boot_id;
+    ph.register.mockClear();
+
+    // Identified → anonymous is the only path that calls reset().
+    initAnalytics(appState({ authenticated: false, userId: null }));
+    expect(ph.reset).toHaveBeenCalledTimes(1);
+    expect(registered()).toMatchObject({ harness_host: "cli", studio_boot_id: bootId });
+  });
+
+  it("stamps the active session's agent, and clears it when none is active", () => {
+    initAnalytics(appState());
+    syncHarnessKind("claude-code");
+    expect(registered().harness_kind).toBe("claude-code");
+    syncHarnessKind(null);
+    expect(ph.unregister).toHaveBeenCalledWith("harness_kind");
   });
 });

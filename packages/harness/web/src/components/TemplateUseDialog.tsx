@@ -23,6 +23,7 @@ import type { StudioTemplate } from "../lib/templates";
 import { useDismissable } from "../lib/use-dismissable";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 export function TemplateUseDialog({
   template,
@@ -72,6 +73,10 @@ export function TemplateUseDialog({
         className="modal modal-confirm modal-template-use"
         role="dialog"
         aria-label={`Use ${template.name}`}
+        // No `object: "template"` here: it would shadow the nested
+        // DirectoryPicker's `object: "directory"`, and that value is what makes
+        // before-send drop the user's folder names from click text.
+        {...trackingAttrs({ dialog: "template_use" })}
         data-testid="template-use-dialog"
         ref={panelRef}
       >

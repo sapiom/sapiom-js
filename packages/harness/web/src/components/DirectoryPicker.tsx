@@ -5,6 +5,7 @@ import type { FsDirEntry, FsListResponse } from "../lib/api";
 import { getDesktopBridge } from "../lib/desktop";
 import { middleTruncatePath, parentOf } from "../lib/paths";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
  * The resolved state of the field, handed to `onResolve` so a host can classify
@@ -210,7 +211,7 @@ export function DirectoryPicker({
   };
 
   return (
-    <div className="dir-picker">
+    <div className="dir-picker" {...trackingAttrs({ object: "directory" })}>
       <div className="dir-picker-inputrow">
         <button
           type="button"

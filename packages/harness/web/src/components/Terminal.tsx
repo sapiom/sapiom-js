@@ -30,6 +30,7 @@ import { buildTerminalWsUrl } from "../lib/terminal-ws.js";
 import { getTheme, subscribeTheme, type Theme } from "../lib/theme.js";
 import { isMockMode } from "../lib/api.js";
 import { attachMockTerminal, type MockTerminalHandle } from "../lib/mock-terminal.js";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 export interface TerminalProps {
   sessionId: string;
@@ -314,7 +315,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
   return (
     // Full-bleed terminal block: the raw PTY screen, full-bleed.
     // All chrome styling is class + token based — see styles.css.
-    <div className="harness-terminal">
+    <div className="harness-terminal" {...trackingAttrs({ surface: "terminal" })}>
       <div ref={containerRef} className="terminal-screen" />
     </div>
   );

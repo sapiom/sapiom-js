@@ -1,4 +1,5 @@
-import type { WorkflowInfo } from "@shared/types";
+import type { LocalRunOutcome } from "@sapiom/agent-core";
+import type { RunView, WorkflowInfo } from "@shared/types";
 
 /**
  * Pure helpers behind the agent-lifecycle product events (`agent.created`,
@@ -48,6 +49,59 @@ export function deployErrorKind(
 ): "link_failed" | "build_failed" | "exception" {
   if (isException) return "exception";
   return lastNonTerminalPhase === "linking" ? "link_failed" : "build_failed";
+}
+
+/**
+ * A coarse, message-free failure enum for `agent.run_failed`, mirroring
+ * {@link deployErrorKind}:
+ *
+ *  - `failed` — the executor returned a terminal unsuccessful status.
+ *  - `cancelled` — stopped by the user or the server.
+ *  - `exception` — we were watching a live run and lost it: the local stream
+ *    threw, or the prod poller started failing partway through.
+ *  - `unobservable` — we never saw the run at all, because the very first poll
+ *    failed. Almost always a harness server too old to serve
+ *    `/api/runs/:id/state`, NOT a run that went wrong.
+ *
+ * `unobservable` exists so that bucket is labelled instead of hidden. Every
+ * `agent.run_started` should be followed by exactly one terminal event, and
+ * folding "old server" into `failed` would put a step change in the failure
+ * rate every time an old CLI is in the mix. The one deliberate exception to
+ * that balance is a local run that ends `paused` — see
+ * {@link localRunOutcomeKind}.
+ */
+export type RunErrorKind = "failed" | "cancelled" | "exception" | "unobservable";
+
+/**
+ * Map a terminal {@link RunView.status} onto {@link RunErrorKind}. Only the
+ * unsuccessful statuses reach here; `completed` is a success and `running` is
+ * not terminal, so both collapse to `failed` rather than inventing a bucket —
+ * a wrong call site should show up as an implausible `failed`, not as a new
+ * enum value nobody's dashboard knows about.
+ */
+export function runErrorKind(status: RunView["status"]): RunErrorKind {
+  return status === "cancelled" ? "cancelled" : "failed";
+}
+
+/**
+ * Classify how a local run ended, for the run funnel.
+ *
+ * `LocalRunOutcome` is not all-terminal: `paused` (the agent is waiting on a
+ * signal) and `running` mean the run has not finished, and `undefined` means
+ * the stream ended without ever sending its summary line. None of those are
+ * outcomes, so they map to `pending` and the caller emits nothing — counting a
+ * paused run as failed would understate the success rate by exactly the number
+ * of agents that use signals.
+ *
+ * `exception` is deliberately NOT reachable from here: it describes the
+ * transport breaking, which the caller knows about and this value doesn't.
+ */
+export function localRunOutcomeKind(
+  outcome: LocalRunOutcome | undefined,
+): "succeeded" | "failed" | "pending" {
+  if (outcome === "completed") return "succeeded";
+  if (outcome === "failed") return "failed";
+  return "pending";
 }
 
 /** The provenance bucket carried as `source` on the lifecycle events. */

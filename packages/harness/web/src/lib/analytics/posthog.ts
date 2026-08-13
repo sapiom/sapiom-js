@@ -2,8 +2,10 @@ import posthog from "posthog-js";
 
 import type { AppState } from "@shared/types";
 
+import { getDesktopBridge } from "../desktop";
+
 import { beforeSend } from "./before-send";
-import { registerAppContext } from "./events";
+import { registerAppContext, studioBootId } from "./events";
 
 /**
  * Client PostHog wiring for the Studio (SAP-1988).
@@ -80,6 +82,7 @@ export function initAnalytics(state: AppState): void {
 
   if (posthog.__loaded) {
     initialized = true;
+    registerBootContext(state);
     syncConsent(state);
     syncIdentity(state);
     return;
@@ -117,6 +120,12 @@ export function initAnalytics(state: AppState): void {
   });
 
   initialized = true;
+  // Register BEFORE anything can capture, so the very first event carries host
+  // and boot id. This is synchronous and `init()` has already returned, which
+  // beats the initial $pageview: posthog-js defers that one behind a
+  // `setTimeout(…, 1)` (it calls `config.loaded` first, then schedules the
+  // pageview), so a synchronous register here always wins the race.
+  registerBootContext(state);
   // syncConsent flips a stale localStorage opt-out back on (we only reach here
   // when consent is on); syncIdentity binds the person + org group.
   syncConsent(state);
@@ -138,6 +147,30 @@ export function syncConsent(state: AppState): void {
   } catch {
     // no-op
   }
+}
+
+/**
+ * Register the context that is true for the whole page load, regardless of who
+ * (if anyone) is signed in: which shell is hosting the SPA, and the id that
+ * stitches this run's events together.
+ *
+ * Deliberately NOT part of {@link syncIdentity}, for two reasons that each
+ * cost us the property on their own:
+ *
+ *  - `syncIdentity` returns early unless `authenticated`, so an anonymous
+ *    session — every pre-sign-in event, i.e. the entire onboarding funnel —
+ *    would carry neither.
+ *  - `posthog.reset()` on sign-out clears super properties, and host/boot id
+ *    survive a sign-out (the same window is still the same desktop app). So
+ *    the reset path re-registers rather than leaving the rest of the session
+ *    unattributed.
+ */
+function registerBootContext(state: AppState): void {
+  registerAppContext({
+    app_version: state.version,
+    harness_host: getDesktopBridge() ? "desktop" : "cli",
+    studio_boot_id: studioBootId(),
+  });
 }
 
 /**
@@ -169,7 +202,26 @@ export function syncIdentity(state: AppState): void {
     if (identifiedUserId) {
       identifiedUserId = null;
       posthog.reset();
+      // reset() clears super properties along with the distinct id. The page is
+      // still the same page on the same host, so put back what did not change.
+      registerBootContext(state);
     }
+  } catch {
+    // no-op
+  }
+}
+
+/**
+ * Stamp the coding agent behind the active session, so autocaptured clicks are
+ * attributable to the agent that was on screen. Called by App whenever the
+ * active session (or its kind) changes; `null` clears it rather than leaving
+ * the previous session's agent stamped on an empty workbench.
+ */
+export function syncHarnessKind(kind: string | null): void {
+  if (!initialized) return;
+  try {
+    if (kind) registerAppContext({ harness_kind: kind });
+    else posthog.unregister("harness_kind");
   } catch {
     // no-op
   }

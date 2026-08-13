@@ -8,6 +8,7 @@ import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** The workspace a session belongs to is its directory's basename — the
  *  same label the rail's workspace group carries. */
@@ -109,7 +110,7 @@ export function SessionBar({
   const orderedSessions = activeSession ? [activeSession, ...others] : [];
 
   return (
-    <div className="session-bar">
+    <div className="session-bar" {...trackingAttrs({ surface: "session_bar" })}>
       {onExpandRail && (
         <button
           className="theme-toggle rail-toggle"

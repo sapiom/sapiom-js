@@ -13,6 +13,7 @@ import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { SnippetPanel } from "./SnippetPanel";
 import { workflowDeploymentState } from "../lib/workflow-deployment";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface CodePanelProps {
   /** The workflow bound to the active session, if any. */
@@ -79,7 +80,7 @@ export function CodePanel({
           ? `${boundWorkflow.name} is linked to Sapiom, but Studio cannot confirm a ready cloud build. Deploy it before integrating.`
           : `${boundWorkflow.name} is a draft. Once it deploys, TypeScript SDK and cURL starter calls appear here.`;
   return (
-    <div className="code-panel">
+    <div className="code-panel" {...trackingAttrs({ surface: "code_panel" })}>
       {/* The SAME subheader recipe Canvas and Steps use: agent name left,
           the one server-provable status right (flat status tag). */}
       <div className="workflow-actions-header code-panel-header" data-testid="code-panel-header">

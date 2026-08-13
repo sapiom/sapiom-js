@@ -4,6 +4,7 @@ import type { WorkflowInfo } from "@shared/types";
 import { Icon } from "./Icon";
 import { displayAgentName } from "../lib/agent-name";
 import { workflowDeploymentState } from "../lib/workflow-deployment";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
  * One agent (workflow) row — the hero of the rail, LEVEL 2 under a workspace
@@ -42,6 +43,10 @@ export function WorkflowRow({
     <div
       className={"workflow-item" + (isFocused ? " is-focused" : "")}
       data-testid={`workflow-${workflow.name}`}
+      // `object: "agent"` is load-bearing for privacy, not just for breakdowns:
+      // before-send reads it to drop $el_text on this subtree, because an
+      // agent's label is a name its owner wrote. See USER_NAMED_OBJECTS.
+      {...trackingAttrs({ object: "agent" })}
     >
       <button
         className="tree-row workflow-item-trigger"
