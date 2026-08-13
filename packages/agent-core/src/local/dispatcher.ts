@@ -36,6 +36,7 @@ export interface LogEntry {
 /** One step attempt's record in the local run trace. */
 export interface LocalStepTrace {
   step: string;
+  /** Zero-based attempt index, matching agent-runtime's execution state. */
   attempt: number;
   input: unknown;
   status: "running" | "succeeded" | "threw";

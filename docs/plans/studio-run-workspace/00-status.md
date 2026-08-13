@@ -20,6 +20,7 @@
 - Harness typecheck and production web build pass.
 - Harness Vitest: 139 files, 2,011 tests pass; performance suite: 4/4 pass.
 - Desktop Vitest: 18 files, 152 tests pass. Harness and desktop typechecks pass.
+- Agent-core Jest: 18 files, 171 tests pass; build, typecheck, and lint pass.
 - Run-entry and run-inspector Playwright coverage: 18/18 deterministic,
   content-safe scenarios pass. Canvas evidence has another 11/11 scenarios.
 - Full Studio Playwright compatibility pass: 311/311 tests pass. Eleven stale
@@ -27,13 +28,6 @@
   split control, timeline, evidence tabs, and compact header.
 - Manual browser review completed for the input sheet, artifact-first result,
   attempt drill-in, and Focus timeline/inspector layout.
-
-Agent-core's distributable build passes. Its source-wide Jest/typecheck command
-is not a reliable verification target in this checkout because the lockfile's
-Zod 3.25 dev dependency is not linked into `packages/agent-core/node_modules`;
-the existing `zod/v4` test import fails before tests load. The runtime path is
-covered through the Harness bootstrap, renderer, stream parser, and browser
-suites above.
 
 ## Notes for a fresh session
 

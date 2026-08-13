@@ -51,7 +51,10 @@ describe("runLocal", () => {
       onStepTrace(phase, trace) {
         // Snapshot at callback time: the settled event later mutates different
         // data and must not make the start assertion pass accidentally.
-        events.push({ phase, trace: JSON.parse(JSON.stringify(trace)) as Record<string, unknown> });
+        events.push({
+          phase,
+          trace: JSON.parse(JSON.stringify(trace)) as Record<string, unknown>,
+        });
       },
     });
 
@@ -61,7 +64,7 @@ describe("runLocal", () => {
       phase: "started",
       trace: {
         step: "entry",
-        attempt: 1,
+        attempt: 0,
         input: { topic: "leases" },
         status: "running",
         logs: [],
@@ -73,7 +76,7 @@ describe("runLocal", () => {
       phase: "settled",
       trace: {
         step: "entry",
-        attempt: 1,
+        attempt: 0,
         status: "succeeded",
         output: { accepted: true },
         directive: { kind: "terminate", output: { accepted: true } },
