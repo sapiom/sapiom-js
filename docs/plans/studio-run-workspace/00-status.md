@@ -13,12 +13,14 @@
 - [x] Slice 4 — chronological adaptive run workspace and evidence tabs
 - [x] Slice 5 — safe artifact rendering and result-first completion behavior
 - [x] Slice 6 — contextual debugging, analytics, accessibility, and regression polish
-- [ ] Slice 7 — hands-on remediation: build coherence, terminal colour, adaptive ordering, bounded artifacts, and isolated Focus mode
+- [x] Slice 7 — hands-on remediation: build coherence, terminal colour, adaptive ordering, bounded artifacts, and isolated Focus mode
 
 ## Verification
 
 - Harness typecheck and production web build pass.
-- Harness Vitest: 139 files, 2,006 tests pass.
+- Harness Vitest: 139 files, 2,011 tests pass; performance suite: 4/4 pass.
+- Desktop Vitest: 18 files, 152 tests pass. Harness and desktop typechecks pass.
+- Remediation Playwright suite: 16/16 mocked run-entry and inspector scenarios pass.
 - New run-workspace Playwright coverage: 22/22 scenarios pass.
 - Full Studio Playwright compatibility pass: 305/305 tests pass. Eleven stale
   assertions describing the removed Test/Run accordions were migrated to the
@@ -48,3 +50,8 @@ changing the approved product or architecture. Acceptance now explicitly require
 - the result card is foldable, while long text and escaped HTML start behind bounded previews;
 - Focus is an opaque top-level layer with macOS traffic-light clearance and no underlying pane chrome;
 - deterministic mocks cover every behavior above, including disclosure and responsive ordering.
+
+The remediation slice completed on 2026-08-13. The desktop dev command now
+rebuilds Harness before Electron, the visible entry graph is a last-known-good
+contract fallback, PTYs explicitly advertise true colour, artifacts use bounded
+disclosures, and Focus renders through an opaque document-level portal.

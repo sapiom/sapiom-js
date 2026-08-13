@@ -2,7 +2,9 @@ import Ajv2020, {
   type ErrorObject,
   type ValidateFunction,
 } from "ajv/dist/2020.js";
+import type { WorkflowInputContractResponse } from "@shared/types";
 
+import type { CanvasGraph } from "./canvas-graph";
 import type { RunTarget } from "./use-harness-state";
 
 export interface StoredRunInput {
@@ -172,6 +174,25 @@ export function resetValueForSchema(schema: Record<string, unknown>): unknown {
   const defaults = defaultsFromSchema(schema);
   if (defaults !== undefined) return defaults;
   return requiredSkeletonFromSchema(schema);
+}
+
+/** Turn the manifest-backed graph already visible in Studio into the same
+ * contract shape as the server route. This is a last-known-good fallback only:
+ * a successful fresh extraction always wins, while an extraction/load failure
+ * must not force raw JSON when the exact entry schema is already on screen. */
+export function inputContractFromCanvasGraph(
+  graph: CanvasGraph,
+): WorkflowInputContractResponse | null {
+  const entry = graph.nodes.find((node) => node.id === graph.entry);
+  if (!entry) return null;
+  if (!entry.inputSchema) {
+    return { status: "none", jsonSchema: null, example: {} };
+  }
+  return {
+    status: "available",
+    jsonSchema: entry.inputSchema,
+    example: resetValueForSchema(entry.inputSchema),
+  };
 }
 
 export interface InputValidator {

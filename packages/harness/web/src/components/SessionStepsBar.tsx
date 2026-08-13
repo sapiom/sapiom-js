@@ -3,7 +3,6 @@ import type { JSX } from "react";
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
-import { AnchoredPopover } from "./AnchoredPopover";
 import { macroNeedsReadySession } from "../lib/macro-actions";
 import { macroDisabledReason } from "../lib/macro-gating";
 import type { RunTarget } from "../lib/use-harness-state";
@@ -17,6 +16,7 @@ import {
   prodRunDisabledReason,
   workflowDeploymentState,
 } from "../lib/workflow-deployment";
+import { RunTargetMenu } from "./RunTargetMenu";
 
 interface SessionStepsBarProps {
   workflow: WorkflowInfo;
@@ -212,51 +212,14 @@ export function SessionStepsBar({
         >
           <Icon name="ChevronDown" size={13} />
         </button>
-        <AnchoredPopover
+        <RunTargetMenu
           open={runMenuOpen}
           anchorRef={runMenuButtonRef}
           onDismiss={() => setRunMenuOpen(false)}
-          placement="down-end"
-          className="profile-menu canvas-run-menu session-run-menu"
-          role="menu"
-          testid="session-run-target-menu"
-        >
-          <button
-            className={
-              "profile-menu-item" +
-              (preferredTarget === "local" ? " is-selected" : "")
-            }
-            type="button"
-            role="menuitemradio"
-            aria-checked={preferredTarget === "local"}
-            onClick={() => selectRunTarget("local")}
-          >
-            <Icon name="SquareTerminal" size={14} />
-            <span>
-              <strong>Local</strong>
-              <small>Stubbed Sapiom capabilities</small>
-            </span>
-          </button>
-          <button
-            className={
-              "profile-menu-item" +
-              (preferredTarget === "prod" ? " is-selected" : "")
-            }
-            data-testid="session-step-run"
-            type="button"
-            role="menuitemradio"
-            aria-checked={preferredTarget === "prod"}
-            disabled={Boolean(cloudDisabledReason)}
-            title={cloudDisabledReason ?? undefined}
-            onClick={() => selectRunTarget("prod")}
-          >
-            <Icon name="Cloud" size={14} />
-            <span>
-              <strong>Cloud</strong>
-              <small>{cloudDisabledReason ?? "Real production execution"}</small>
-            </span>
-          </button>
-        </AnchoredPopover>
+          selected={preferredTarget}
+          cloudDisabledReason={cloudDisabledReason}
+          onSelect={selectRunTarget}
+        />
       </div>
 
       {actions.map((action) => {

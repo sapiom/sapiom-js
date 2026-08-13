@@ -107,6 +107,10 @@ interface CanvasPaneProps {
    *  arrives — the last case is what opens the pane the moment an agent
    *  finishes rendering a board, even one the user had collapsed. */
   onCanvasState?: (hasContent: boolean) => void;
+  /** Publishes the manifest-backed graph already visible in this pane so the
+   * Run sheet can reuse its entry contract if a fresh extraction is briefly
+   * unavailable. */
+  onGraphChange?: (workflowPath: string, graph: CanvasGraph) => void;
 }
 
 /** A legend row posted by a rendered document, validated before it is shown. */
@@ -143,6 +147,7 @@ export function CanvasPane({
   workflows,
   onOpenWorkflow,
   onCanvasState,
+  onGraphChange,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   // Latest reporter, read from the content effects without listing it in their
@@ -150,6 +155,10 @@ export function CanvasPane({
   // re-report stale content (re-opening a pane the user just collapsed).
   const onCanvasStateRef = useRef(onCanvasState);
   onCanvasStateRef.current = onCanvasState;
+  const onGraphChangeRef = useRef(onGraphChange);
+  onGraphChangeRef.current = onGraphChange;
+  const boundWorkflowPathRef = useRef(boundWorkflow?.path ?? null);
+  boundWorkflowPathRef.current = boundWorkflow?.path ?? null;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
   // True while the initial HEAD probe for this session is still in flight —
@@ -501,7 +510,12 @@ export function CanvasPane({
           legend: Array.isArray(data.legend) ? data.legend.filter(isLegendItem) : [],
         });
       } else if (data.type === "sapiom-canvas:graph") {
-        setGraph(parseCanvasGraph((data as { graph?: unknown }).graph));
+        const nextGraph = parseCanvasGraph((data as { graph?: unknown }).graph);
+        setGraph(nextGraph);
+        const workflowPath = boundWorkflowPathRef.current;
+        if (nextGraph && workflowPath) {
+          onGraphChangeRef.current?.(workflowPath, nextGraph);
+        }
         // THE reveal signal. Only a real render embeds the graph script that
         // posts this; the "preparing"/"pending" placeholders post nothing, so
         // this is what keeps the pane from opening on scaffolding. The
@@ -892,10 +906,7 @@ export function CanvasPane({
         /* No diagram yet, but a run was observed or a deploy is landing: the
            live per-step data (or the deploy banner) renders instead of the
            "No steps yet" empty state. */
-        <div
-          className={"canvas-frame-wrap" + (expanded ? " is-expanded" : "")}
-          data-view="steps"
-        >
+        <div className="canvas-frame-wrap" data-view="steps">
           <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
             {stepsHeader}
             {run && (
@@ -941,7 +952,7 @@ export function CanvasPane({
         />
       ) : (
         <div
-          className={"canvas-frame-wrap" + (expanded ? " is-expanded" : "")}
+          className={"canvas-frame-wrap" + (expanded && surface === "board" ? " is-expanded" : "")}
           data-view={surface === "board" ? "board" : "steps"}
         >
           {/* The active surface: the board on the Canvas tab, the steps list on

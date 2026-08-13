@@ -32,7 +32,9 @@ describe("attachMockTerminal", () => {
     onData?.("Map this agent");
     onData?.("\r");
 
-    const rendered = stripAnsi(writes.join(""));
+    const renderedWithAnsi = writes.join("");
+    const rendered = stripAnsi(renderedWithAnsi);
+    expect(renderedWithAnsi).toContain("\x1b[32m");
     expect(rendered).toContain(
       "? for shortcuts · demo, not a live coding agent",
     );

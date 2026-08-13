@@ -99,6 +99,36 @@ test.describe("unified run entry", () => {
     await expect(page.getByLabel(/Topic/)).toHaveValue("indie game development");
   });
 
+  test("reuses the visible entry contract when extraction reports unavailable", async ({ page }) => {
+    await page.getByTestId("right-tab-steps").click();
+    await expect(page.getByTestId("canvas-step-row-intake")).toBeVisible();
+    await page.evaluate(() => {
+      (window as unknown as {
+        __MOCK_INPUT_CONTRACT_MODE__?: "unavailable";
+      }).__MOCK_INPUT_CONTRACT_MODE__ = "unavailable";
+    });
+
+    await openLocalSheet(page);
+    await expect(page.getByLabel(/Topic/)).toHaveValue("indie game development");
+    await expect(page.getByText(/couldn't load this agent's input contract/i)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Fields" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("lays out Local and Cloud as distinct two-line target rows", async ({ page }) => {
+    await page.getByRole("button", { name: "Choose run target" }).click();
+    const local = page.getByRole("menuitemradio", { name: /Local/ });
+    const cloud = page.getByRole("menuitemradio", { name: /Cloud/ });
+    const [localBox, cloudBox] = await Promise.all([local.boundingBox(), cloud.boundingBox()]);
+
+    expect(localBox).not.toBeNull();
+    expect(cloudBox).not.toBeNull();
+    expect(localBox!.height).toBeGreaterThanOrEqual(52);
+    expect(cloudBox!.height).toBeGreaterThanOrEqual(52);
+    expect(localBox!.y + localBox!.height).toBeLessThanOrEqual(cloudBox!.y);
+    await expect(local).toContainText("Agent code runs here with Sapiom calls stubbed");
+    await expect(cloud).toContainText("Run the deployed agent with real capabilities");
+  });
+
   test("explicit Cloud selection persists and sends the exact cloud payload", async ({ page }) => {
     await openCloudSheet(page);
     await page.getByLabel(/Topic/).fill("warehouse renewals");

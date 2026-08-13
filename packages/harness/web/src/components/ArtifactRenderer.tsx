@@ -1,10 +1,39 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { JSX, ReactNode } from "react";
 
 import { formatPayload } from "../lib/format-payload";
 import { Icon } from "./Icon";
 
 const COLLECTION_PREVIEW = 8;
+const TEXT_PREVIEW_CHARS = 1_200;
+const TEXT_PREVIEW_LINES = 12;
+
+export interface ArtifactTextPreview {
+  kind: "html" | "text";
+  truncated: boolean;
+  preview: string;
+  omittedCharacters: number;
+}
+
+function looksLikeHtml(text: string): boolean {
+  return /<\/?(?:!doctype|html|head|body|style|script|main|section|article|div|span|img|svg|meta|link)\b/i.test(
+    text,
+  );
+}
+
+/** A deterministic content budget shared by rendered strings and Raw mode. */
+export function artifactTextPreview(text: string): ArtifactTextPreview {
+  const lines = text.split(/\r?\n/);
+  const lineBounded = lines.slice(0, TEXT_PREVIEW_LINES).join("\n");
+  const bounded = lineBounded.slice(0, TEXT_PREVIEW_CHARS);
+  const truncated = lines.length > TEXT_PREVIEW_LINES || text.length > bounded.length;
+  return {
+    kind: looksLikeHtml(text) ? "html" : "text",
+    truncated,
+    preview: truncated ? `${bounded.trimEnd()}\n…` : text,
+    omittedCharacters: truncated ? Math.max(0, text.length - bounded.length) : 0,
+  };
+}
 
 function fallbackCopy(text: string): boolean {
   try {
@@ -171,10 +200,39 @@ function MarkdownValue({ text }: { text: string }): JSX.Element {
   return <div className="artifact-markdown">{blocks}</div>;
 }
 
+function TextValue({ text, forceSource = false }: { text: string; forceSource?: boolean }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const preview = artifactTextPreview(text);
+  const source = forceSource || preview.kind === "html";
+  const visible = expanded ? text : preview.preview;
+  return (
+    <div className="artifact-text" data-kind={source ? "source" : "text"}>
+      {source ? (
+        <pre className="artifact-source">{visible}</pre>
+      ) : (
+        <MarkdownValue text={visible} />
+      )}
+      {preview.truncated && (
+        <button
+          type="button"
+          className="btn-ghost artifact-text-more"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={12} />
+          {expanded
+            ? "Show less"
+            : `Show full ${source ? "HTML" : "text"} · ${preview.omittedCharacters.toLocaleString()} more characters`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number }): JSX.Element {
   if (typeof value === "string") {
     const url = safeUrl(value);
-    return url ? <MediaValue url={url} /> : <MarkdownValue text={value} />;
+    return url ? <MediaValue url={url} /> : <TextValue text={value} />;
   }
   if (value === null || typeof value === "number" || typeof value === "boolean") {
     return <code className="artifact-scalar">{String(value)}</code>;
@@ -240,8 +298,10 @@ export function ArtifactRenderer({
   onViewed?: () => void;
 }): JSX.Element {
   const [mode, setMode] = useState<"rendered" | "raw">("rendered");
+  const [open, setOpen] = useState(true);
   const [copied, setCopied] = useState(false);
   const reported = useRef(false);
+  const bodyId = useId();
   const raw = formatPayload(value);
   useEffect(() => {
     if (reported.current) return;
@@ -249,9 +309,18 @@ export function ArtifactRenderer({
     onViewed?.();
   }, [onViewed]);
   return (
-    <section className="artifact-renderer" data-testid="run-artifact">
+    <section className="artifact-renderer" data-testid="run-artifact" data-collapsed={!open || undefined}>
       <header className="artifact-header">
-        <span className="artifact-title">{label}</span>
+        <button
+          type="button"
+          className="artifact-disclosure"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <Icon name={open ? "ChevronDown" : "ChevronRight"} size={13} />
+          <span className="artifact-title">{label}</span>
+        </button>
         <div className="artifact-actions">
           <div className="artifact-mode" role="tablist" aria-label="Result display">
             <button
@@ -286,7 +355,11 @@ export function ArtifactRenderer({
           </button>
         </div>
       </header>
-      {mode === "rendered" ? <StructuredValue value={value} /> : <pre className="artifact-raw">{raw}</pre>}
+      {open && (
+        <div className="artifact-body" id={bodyId}>
+          {mode === "rendered" ? <StructuredValue value={value} /> : <TextValue text={raw} forceSource />}
+        </div>
+      )}
     </section>
   );
 }

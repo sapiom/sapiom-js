@@ -1166,6 +1166,26 @@ class MockApi implements HarnessApi {
     await delay(120);
     const workflow = this.workflows.find((item) => item.path === workflowPath);
     if (!workflow) throw new ApiError(404, "Agent not found", "Agent not found");
+    if (typeof window !== "undefined") {
+      const mode = (window as unknown as {
+        __MOCK_INPUT_CONTRACT_MODE__?: "throw" | "unavailable";
+      }).__MOCK_INPUT_CONTRACT_MODE__;
+      if (mode === "throw") {
+        throw new ApiError(
+          500,
+          "GET /api/workflows/:id/input-contract → 500 (mock)",
+          "Input contract could not be loaded",
+        );
+      }
+      if (mode === "unavailable") {
+        return {
+          status: "unavailable",
+          jsonSchema: null,
+          example: {},
+          reason: "Input contract extraction failed in the mock runtime.",
+        };
+      }
+    }
     return {
       status: "available",
       jsonSchema: {

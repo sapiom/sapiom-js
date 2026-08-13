@@ -16,5 +16,6 @@ call records, while local calls render when the stub trace recorded them.
    single adaptive layout, add bounded/foldable artifact primitives, isolate
    Focus at the document layer, and pin all reported behaviors with mocked tests.
 
-Slice 7 was explicitly requested after hands-on review on 2026-08-13 and is in
-progress.
+Slice 7 was explicitly requested after hands-on review and completed on
+2026-08-13. Its acceptance suite uses deterministic mock contracts, runs,
+artifacts, window framing, terminal output, and launcher environment values.

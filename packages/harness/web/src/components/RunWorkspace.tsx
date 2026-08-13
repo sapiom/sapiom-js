@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
+import { createPortal } from "react-dom";
 import type { RunView, StepView, WorkflowInfo } from "@shared/types";
 
 import { formatTimeout } from "../lib/canvas-graph";
@@ -343,6 +344,7 @@ export function RunWorkspace({
 
   const overview = (
     <section className="run-overview">
+      {!focus && <Timeline attempts={attempts} run={run} selectedId={selectedId} onSelect={selectAttempt} />}
       {artifact ? (
         <ArtifactRenderer
           value={artifact.value}
@@ -361,11 +363,10 @@ export function RunWorkspace({
         <div className="run-result-pending">No result was recorded.</div>
       )}
       <StubNotices run={run} />
-      {!focus && <Timeline attempts={attempts} run={run} selectedId={selectedId} onSelect={selectAttempt} />}
     </section>
   );
 
-  return (
+  const workspace = (
     <div className={"run-workspace" + (focus ? " is-focus" : "")} data-testid="run-workspace">
       <header className="run-workspace-header">
         <span className="run-workspace-status" data-status={run.status}>
@@ -400,4 +401,13 @@ export function RunWorkspace({
       ) : overview}
     </div>
   );
+
+  return focus && typeof document !== "undefined"
+    ? createPortal(
+        <div className="run-focus-layer" data-testid="run-focus-layer">
+          {workspace}
+        </div>,
+        document.body,
+      )
+    : workspace;
 }

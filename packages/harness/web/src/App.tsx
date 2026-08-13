@@ -19,7 +19,14 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JSX } from "react";
-import type { HarnessKind, HarnessSession, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type {
+  HarnessKind,
+  HarnessSession,
+  MacroDef,
+  SessionSummary,
+  WorkflowInfo,
+  WorkflowInputContractResponse,
+} from "@shared/types";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { CodePanel } from "./components/CodePanel";
@@ -51,6 +58,7 @@ import {
 } from "./lib/project-dir";
 import { basenameOf, isWithinDir, samePath } from "./lib/paths";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
+import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
 import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
 import { deepLinkFromSearch } from "./lib/deep-link";
@@ -134,6 +142,22 @@ export const App = (): JSX.Element => {
     target: RunTarget;
     returnFocus: HTMLElement | null;
   } | null>(null);
+  const visibleInputContractsRef = useRef(
+    new Map<string, WorkflowInputContractResponse>(),
+  );
+  const loadRunInputContract = useCallback(
+    async (workflowPath: string): Promise<WorkflowInputContractResponse> => {
+      const fallback = visibleInputContractsRef.current.get(workflowPath);
+      try {
+        const fresh = await harness.getWorkflowInputContract(workflowPath);
+        return fresh.status === "unavailable" && fallback ? fallback : fresh;
+      } catch (error) {
+        if (fallback) return fallback;
+        throw error;
+      }
+    },
+    [harness.getWorkflowInputContract],
+  );
   // The composer-first "new session" home. `composing` is explicit New-session
   // intent (Create new / the +); the home also shows whenever nothing else
   // claims the centre pane (first run, or every session closed).
@@ -1738,6 +1762,10 @@ export const App = (): JSX.Element => {
                   emptyCollapsedKeyRef.current = emptyBoardKey;
                   setRightCollapsed(true);
                 }}
+                onGraphChange={(workflowPath, graph) => {
+                  const contract = inputContractFromCanvasGraph(graph);
+                  if (contract) visibleInputContractsRef.current.set(workflowPath, contract);
+                }}
                 expanded={canvasExpanded}
                 onToggleExpanded={() => setCanvasExpanded((v) => !v)}
                 macros={state.macros}
@@ -1899,7 +1927,7 @@ export const App = (): JSX.Element => {
         <RunSheet
           workflow={runRequest.workflow}
           target={runRequest.target}
-          loadContract={harness.getWorkflowInputContract}
+          loadContract={loadRunInputContract}
           returnFocus={runRequest.returnFocus}
           onClose={() => setRunRequest(null)}
           onRun={handleLaunchRun}

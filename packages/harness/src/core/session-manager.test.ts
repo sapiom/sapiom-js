@@ -1360,6 +1360,39 @@ describe("SessionManager", () => {
     expect(env?.["SAPIOM_HARNESS_SESSION_ID"]).toBe(session.id);
   });
 
+  it("owns a colour-capable PTY environment instead of inheriting launcher suppression", async () => {
+    const previous = {
+      NO_COLOR: process.env.NO_COLOR,
+      FORCE_COLOR: process.env.FORCE_COLOR,
+      TERM: process.env.TERM,
+      COLORTERM: process.env.COLORTERM,
+    };
+    process.env.NO_COLOR = "1";
+    process.env.FORCE_COLOR = "0";
+    process.env.TERM = "dumb";
+    process.env.COLORTERM = "";
+
+    try {
+      const capturedEnvs: Record<string, string | undefined>[] = [];
+      const spawnPty: PtySpawnFn = (_file, _args, options) => {
+        capturedEnvs.push(options.env ?? {});
+        return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+      };
+      const { manager } = makeManager({ spawnPty });
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      expect(capturedEnvs[0]?.NO_COLOR).toBeUndefined();
+      expect(capturedEnvs[0]?.FORCE_COLOR).toBeUndefined();
+      expect(capturedEnvs[0]?.TERM).toBe("xterm-256color");
+      expect(capturedEnvs[0]?.COLORTERM).toBe("truecolor");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("unsets env vars the adapter's SpawnSpec maps to null", async () => {
     process.env["HARNESS_TEST_UNSET_ME"] = "should-be-removed";
     const capturedEnvs: Record<string, string | undefined>[] = [];

@@ -183,7 +183,8 @@ test("renders safe artifacts, collapses long collections, and falls back when me
     status: "completed",
     output: {
       headline: "# Shipping report",
-      body: "<img src=x onerror=alert(1)>\n\n[Documentation](https://example.com/docs)",
+      body: "<img src=x onerror=alert(1)>",
+      documentation: "[Documentation](https://example.com/docs)",
       image: "http://127.0.0.1:1/broken.png",
       items: Array.from({ length: 10 }, (_, index) => `item-${index + 1}`),
     },
@@ -191,7 +192,8 @@ test("renders safe artifacts, collapses long collections, and falls back when me
   });
   const artifact = page.getByTestId("run-artifact");
   await expect(artifact.getByRole("heading", { name: "Shipping report" })).toBeVisible();
-  await expect(artifact.getByText("<img src=x onerror=alert(1)>", { exact: true })).toBeVisible();
+  await expect(artifact.locator("pre.artifact-source")).toContainText("<img src=x onerror=alert(1)>");
+  await expect(artifact.locator("img[src='x']")).toHaveCount(0);
   await expect(artifact.getByRole("link", { name: "Documentation" })).toHaveAttribute("href", "https://example.com/docs");
   await expect(artifact.getByText("Show 2 more")).toBeVisible();
   await expect(artifact.getByText(/Preview unavailable/)).toBeVisible({ timeout: 5_000 });
@@ -199,18 +201,84 @@ test("renders safe artifacts, collapses long collections, and falls back when me
   await expect(artifact.locator("pre")).toContainText("<img src=x onerror=alert(1)>");
 });
 
+test("puts attempts before the result and bounds long HTML until explicitly expanded", async ({ page }) => {
+  const tail = "TAIL_MUST_STAY_COLLAPSED";
+  await seedRun(page, {
+    executionId: "exec-long-html",
+    status: "completed",
+    output: {
+      html: `<!doctype html><html><body>${"weather ".repeat(300)}${tail}</body></html>`,
+    },
+    steps: [
+      { id: "render-1", name: "render", attempt: 1, status: "passed", latencyMs: 120 },
+    ],
+  });
+
+  const timeline = page.getByTestId("run-timeline");
+  const artifact = page.getByTestId("run-artifact");
+  const [timelineBox, artifactBox] = await Promise.all([timeline.boundingBox(), artifact.boundingBox()]);
+  expect(timelineBox).not.toBeNull();
+  expect(artifactBox).not.toBeNull();
+  expect(timelineBox!.y).toBeLessThan(artifactBox!.y);
+
+  await expect(artifact.locator("pre.artifact-source")).not.toContainText(tail);
+  const expandHtml = artifact.getByRole("button", { name: /Show full HTML/ });
+  await expect(expandHtml).toBeVisible();
+  await expandHtml.click();
+  await expect(artifact.locator("pre.artifact-source")).toContainText(tail);
+
+  const disclosure = artifact.getByRole("button", { name: "Result", exact: true });
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(artifact.locator(".artifact-body")).toHaveCount(0);
+  await disclosure.click();
+  await expect(artifact.locator(".artifact-body")).toBeVisible();
+});
+
 test("Focus mode shows the timeline and shared inspector side by side", async ({ page }) => {
+  await page.evaluate(() => {
+    document.documentElement.dataset.windowFrame = "macos";
+  });
   await page.getByTestId("session-step-local").click();
   await page.getByTestId("run-sheet-submit").click();
   await expect(page.getByTestId("run-artifact")).toBeVisible({ timeout: 8_000 });
+  const coveredTabsBox = await page.locator(".right-pane-tabs").boundingBox();
+  expect(coveredTabsBox).not.toBeNull();
   await page.getByRole("button", { name: "Open Focus mode" }).click();
+  const focusLayer = page.getByTestId("run-focus-layer");
+  await expect(focusLayer).toBeVisible();
   await expect(page.getByTestId("run-workspace")).toHaveClass(/is-focus/);
+  expect(await focusLayer.evaluate((element) => element.parentElement === document.body)).toBe(true);
+  const layerBox = await focusLayer.boundingBox();
+  expect(layerBox).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
+  expect(
+    await page.locator(".run-focus-layer .run-workspace-header").evaluate((header) =>
+      Number.parseFloat(getComputedStyle(header).paddingLeft),
+    ),
+  ).toBeGreaterThanOrEqual(78);
+  expect(
+    await page.evaluate(({ x, y }) =>
+      Boolean(document.elementFromPoint(x, y)?.closest("[data-testid='run-focus-layer']")), {
+        x: coveredTabsBox!.x + coveredTabsBox!.width / 2,
+        y: coveredTabsBox!.y + coveredTabsBox!.height / 2,
+      }),
+  ).toBe(true);
   await page.getByRole("option", { name: /screen/ }).click();
   const timelineBox = await page.getByTestId("run-timeline").boundingBox();
-  const inspectorBox = await page.getByRole("region", { name: "screen attempt 1" }).boundingBox();
+  const inspector = page.getByRole("region", { name: "screen attempt 1" });
+  const inspectorBox = await inspector.boundingBox();
   expect(timelineBox).not.toBeNull();
   expect(inspectorBox).not.toBeNull();
   expect(timelineBox!.x).toBeLessThan(inspectorBox!.x);
+  const [headerBox, backBox] = await Promise.all([
+    page.locator(".run-focus-layer .run-workspace-header").boundingBox(),
+    inspector.getByRole("button", { name: "Back" }).boundingBox(),
+  ]);
+  expect(headerBox).not.toBeNull();
+  expect(backBox).not.toBeNull();
+  expect(backBox!.x).toBeGreaterThanOrEqual(78);
+  expect(backBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
   await page.getByTestId("run-workspace").getByRole("button", { name: "Exit Focus mode" }).click();
-  await expect(page.getByTestId("run-workspace")).not.toHaveClass(/is-focus/);
+  await expect(focusLayer).toHaveCount(0);
 });

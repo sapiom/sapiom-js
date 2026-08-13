@@ -1011,6 +1011,16 @@ export class SessionManager {
       if (value === null) delete env[key];
       else env[key] = value;
     }
+    // The PTY is a real colour-capable xterm, regardless of the shell that
+    // launched Studio. Desktop development is often started from CI-like
+    // hosts (Codex included) that export NO_COLOR=1 and TERM=dumb for their
+    // own logs. Letting those ambient values leak into Claude/Codex makes the
+    // embedded terminal monochrome even though xterm can render the full ANSI
+    // palette. Own the terminal capability contract at this boundary.
+    delete env.NO_COLOR;
+    delete env.FORCE_COLOR;
+    env.TERM = "xterm-256color";
+    env.COLORTERM = "truecolor";
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
     env[ENV.ingestToken] = this.ingestToken;
     env[ENV.sessionId] = session.id;

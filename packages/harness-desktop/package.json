@@ -12,6 +12,7 @@
   "main": "./dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-renderer.mjs",
+    "predev": "pnpm --filter @sapiom/harness build",
     "dev": "pnpm run build && electron . --dev",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "pnpm run build && node scripts/pack.mjs",
