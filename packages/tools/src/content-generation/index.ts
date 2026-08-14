@@ -636,9 +636,10 @@ export async function createVideo(
   if (input.storage) body.storage = input.storage;
   if (input.params != null) body.params = input.params;
 
-  // Submit through the capability router — for an async model this returns a queue
-  // handle (camelCase requestId/statusUrl/responseUrl), not the result.
-  const submitted = await capabilityCall<VideoDispatchResponse & RawVideoResult>(
+  // Submit through the capability router — the video capability's adapter always
+  // returns a queue handle (camelCase requestId/statusUrl/responseUrl), never the
+  // finished result inline (its `fromGatewayResponse` throws without a handle).
+  const handle = await capabilityCall<VideoDispatchResponse>(
     "content.generation.video",
     body,
     {
@@ -649,10 +650,6 @@ export async function createVideo(
       errorPrefix: "Failed to submit video generation",
     },
   );
-  // Some Fal video operations (notably ffmpeg merge) complete synchronously and
-  // return the final `video` object instead of a queue handle.
-  if (submitted.video?.url) return mapVideoResult(submitted);
-  const handle = submitted;
   const responseUrl = videoResultUrl(handle);
   if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");

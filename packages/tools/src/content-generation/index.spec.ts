@@ -282,6 +282,14 @@ describe("contentGeneration.video.create()", () => {
       (c) =>
         c.init.method === "POST"
           ? jsonResponse({
+              requestId: "req-merge",
+              statusUrl: `${BASE}/queue/req-merge/status`,
+              responseUrl: `${BASE}/queue/req-merge`,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({
               video: {
                 url: "https://media/merged.mp4",
                 content_type: "video/mp4",
@@ -290,17 +298,22 @@ describe("contentGeneration.video.create()", () => {
           : null,
     ]);
 
-    const out = await createVideo({ prompt: "merge" }, transport, BASE);
+    const out = await createVideo(
+      { prompt: "merge", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
 
-    // The router returns the sync-completion `video` object (some fal ops, notably
-    // ffmpeg merge, complete inline) — mapped snake → camelCase.
+    // The submit always returns a queue handle (the video adapter's
+    // `fromGatewayResponse` throws without one) — the poll target still returns
+    // fal's raw snake_case result, mapped to camelCase here.
     expect(out).toEqual({
       video: {
         url: "https://media/merged.mp4",
         contentType: "video/mp4",
       },
     });
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     expect(calls[0]!.url).toBe(
       `${BASE}/v1/capabilities/content.generation.video`,
     );
@@ -319,12 +332,19 @@ describe("contentGeneration.video.create()", () => {
     const { transport, calls } = makeTransport([
       (c) =>
         c.init.method === "POST"
+          ? jsonResponse({
+              requestId: "req-alias",
+              responseUrl: `${BASE}/queue/req-alias`,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
           ? jsonResponse({ video: { url: "https://media/v.mp4" } })
           : null,
     ]);
 
     await createVideo(
-      { prompt: "a wave", model: "veo3-fast" },
+      { prompt: "a wave", model: "veo3-fast", pollIntervalMs: 1 },
       transport,
       BASE,
     );
@@ -338,6 +358,45 @@ describe("contentGeneration.video.create()", () => {
     });
     // The alias never gets turned into a URL path — the adapter resolves it server-side.
     expect(calls.some((c) => c.url.includes("/run/"))).toBe(false);
+  });
+
+  it("forwards `params` as a nested field, an explicit model verbatim, and `storage`", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              requestId: "req-body-shape",
+              responseUrl: `${BASE}/queue/req-body-shape`,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "https://media/v.mp4" } })
+          : null,
+    ]);
+
+    await createVideo(
+      {
+        prompt: "x",
+        model: "veo3-fast",
+        params: { duration: 8, seed: 42 },
+        storage: { visibility: "private" },
+        pollIntervalMs: 1,
+      },
+      transport,
+      BASE,
+    );
+
+    // model rides as a top-level body field (the caller's semantic alias, not a raw
+    // provider id — the adapter resolves it server-side), and params is nested — not
+    // spread to the top level — so the adapter forwards it verbatim. Mirrors
+    // createImage's identically-named body-shape test.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      model: "veo3-fast",
+      params: { duration: 8, seed: 42 },
+      storage: { visibility: "private" },
+    });
   });
 
   it("derives the result URL when the router returns only statusUrl", async () => {
@@ -549,10 +608,20 @@ describe("contentGeneration.video.create()", () => {
 
   it("`video.create` is the same operation as `createVideo`", async () => {
     const { transport, calls } = makeTransport([
-      () => jsonResponse({ video: { url: "u" } }),
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              requestId: "req-ns2",
+              responseUrl: `${BASE}/queue/req-ns2`,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "u" } })
+          : null,
     ]);
 
-    await video.create({ prompt: "x" }, transport, BASE);
+    await video.create({ prompt: "x", pollIntervalMs: 1 }, transport, BASE);
     expect(calls[0]!.url).toBe(
       `${BASE}/v1/capabilities/content.generation.video`,
     );
