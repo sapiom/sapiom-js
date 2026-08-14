@@ -9454,6 +9454,7 @@ button.rail-footer-card:hover {
 
 /* The composer box: a raised, rounded field with a two-part action row. */
 .composer-box {
+  position: relative;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -9471,6 +9472,30 @@ button.rail-footer-card:hover {
   border-color: color-mix(in srgb, var(--brand) 55%, var(--ui-line-strong));
   box-shadow: var(--shadow);
 }
+.composer-box.is-dragging-files {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface-raised));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+.composer-box.is-busy {
+  border-color: color-mix(in srgb, var(--brand) 38%, var(--ui-line-strong));
+  cursor: progress;
+}
+.composer-drop-hint {
+  position: absolute;
+  inset: var(--sp1);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp2);
+  border-radius: calc(var(--r-lg) - var(--sp1));
+  background: color-mix(in srgb, var(--brand) 10%, var(--surface-raised));
+  color: var(--text);
+  font-size: var(--type-ui);
+  font-weight: 590;
+  pointer-events: none;
+}
 .composer-input {
   width: 100%;
   border: 0;
@@ -9487,6 +9512,50 @@ button.rail-footer-card:hover {
 }
 .composer-input:focus-visible {
   outline: none;
+}
+.composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp2);
+  margin: var(--sp2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.composer-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp2);
+  min-width: 0;
+  max-width: 260px;
+  height: var(--control-h-xs);
+  padding: 0 var(--sp1) 0 var(--sp2);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-hover);
+  color: var(--text-dim);
+}
+.composer-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-label);
+}
+.composer-file-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-2xs);
+  height: var(--control-h-2xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm, 5px);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.composer-file-remove:hover {
+  background: var(--surface-raised);
+  color: var(--text);
 }
 .composer-box-actions {
   display: flex;
@@ -9543,8 +9612,78 @@ button.rail-footer-card:hover {
   transform: translateY(-1px);
   box-shadow: var(--shadow-soft);
 }
+.composer-send:disabled,
+.composer-attach:disabled,
+.composer-file-remove:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.composer-send:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
 .composer-send:active {
   transform: translateY(0);
+}
+.composer-chip:focus-visible,
+.composer-attach:focus-visible,
+.composer-file-remove:focus-visible,
+.composer-send:focus-visible,
+.composer-templates-all:focus-visible,
+.composer-template-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .composer-home {
+    justify-content: flex-start;
+    padding: var(--sp5) var(--sp3);
+  }
+  .composer-files {
+    width: 100%;
+    flex-direction: column;
+  }
+  .composer-file {
+    width: 100%;
+    max-width: 100%;
+    min-height: var(--icon-lg);
+    height: auto;
+  }
+  .composer-file-remove {
+    width: var(--icon-lg);
+    min-width: var(--icon-lg);
+    height: var(--icon-lg);
+    margin-left: auto;
+  }
+  .composer-box-actions {
+    flex-wrap: wrap;
+  }
+  .composer-box-right {
+    width: 100%;
+    margin-left: 0;
+  }
+  .composer-harness {
+    flex: 1;
+    justify-content: flex-start;
+  }
+  .composer-attach,
+  .composer-send {
+    width: var(--icon-lg);
+    height: var(--icon-lg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-home {
+    animation: none;
+  }
+  .composer-box,
+  .composer-chip,
+  .composer-attach,
+  .composer-send {
+    transition: none;
+  }
 }
 
 /* Starter template row. */

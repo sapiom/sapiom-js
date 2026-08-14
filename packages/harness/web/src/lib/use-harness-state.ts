@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
+  AttachFileRequest,
+  AttachFileResponse,
   BackgroundTask,
   BusMessage,
   RunView,
@@ -141,6 +143,10 @@ export interface HarnessStateHook {
    *  resume view, not one directory at a time). */
   loadHistory: (cwds: string[]) => Promise<void>;
   createSession: (req: CreateSessionRequest) => Promise<HarnessSession>;
+  attachFile: (
+    sessionId: string,
+    request: AttachFileRequest,
+  ) => Promise<AttachFileResponse>;
   /** The live template gallery + one template's detail (server relays core;
    *  the API key never reaches the browser). Surfaced here so components stay
    *  prop-driven rather than reaching for a module-level api singleton. */
@@ -1208,6 +1214,14 @@ export function useHarnessState(): HarnessStateHook {
     [selectSession],
   );
 
+  const attachFile = useCallback(
+    (
+      sessionId: string,
+      request: AttachFileRequest,
+    ): Promise<AttachFileResponse> => api.attachFile(sessionId, request),
+    [],
+  );
+
   const listTemplates = useCallback(
     (): Promise<TemplateListResponse> => api.listTemplates(),
     [],
@@ -1772,6 +1786,7 @@ export function useHarnessState(): HarnessStateHook {
     historyLoading,
     loadHistory,
     createSession,
+    attachFile,
     listTemplates,
     getTemplate,
     getWorkflowInputContract,

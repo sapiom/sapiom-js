@@ -83,6 +83,11 @@ import type { PaletteAction } from "./lib/palette";
 import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { useNavigationHistory, type NavigationVisit } from "./lib/navigation-history";
+import {
+  buildIdeaWithAttachments,
+  materializeAttachments,
+  type NewSessionAttachment,
+} from "./lib/new-session-attachments";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState, type ObservedRun, type RunTarget } from "./lib/use-harness-state";
 import {
@@ -107,6 +112,11 @@ const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
  * screen) survives the grace and surfaces the hint.
  */
 const HELD_PROMPT_HINT_DELAY_MS = 4_000;
+
+interface CreateSessionAtOptions {
+  /** Keep the create-new queue mounted while inline files are materialized. */
+  keepComposerOpen?: boolean;
+}
 
 /**
  * Live sessions belonging to the focused subject, in tab order (oldest first,
@@ -787,8 +797,12 @@ export const App = (): JSX.Element => {
 
   // The ONE choke point for session creation: sets the focus to the new
   // session's folder (so the main panel shows it) and fires telemetry once.
-  const createSessionAt = async (cwd: string, agentHarness: HarnessKind): Promise<HarnessSession> => {
-    setComposing(false);
+  const createSessionAt = async (
+    cwd: string,
+    agentHarness: HarnessKind,
+    options: CreateSessionAtOptions = {},
+  ): Promise<HarnessSession> => {
+    if (!options.keepComposerOpen) setComposing(false);
     setReviewSummary(null);
     setOverviewOpen(false);
     setFocusedAgentPath(cwd);
@@ -814,6 +828,24 @@ export const App = (): JSX.Element => {
     await createSessionAt(cwd, agentHarness);
   };
 
+  const sendScaffoldPrompt = (
+    session: HarnessSession,
+    cwd: string,
+    idea?: string,
+  ): void => {
+    const base =
+      `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(cwd, "default")}, ` +
+      "then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to";
+    const trimmedIdea = idea?.trim();
+    sendPromptWhenReady(
+      session.id,
+      trimmedIdea
+        ? `${base} build this:\n\n${trimmedIdea}`
+        : `${base} define the first agent.`,
+      "Couldn't send the scaffold prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
+    );
+  };
+
   // The idea-to-agent path. Starts a session at the (new) folder, then
   // hands the agent the scaffold prompt.
   /**
@@ -830,17 +862,7 @@ export const App = (): JSX.Element => {
     idea?: string,
   ): Promise<void> => {
     const session = await createSessionAt(cwd, agentHarness);
-    const base =
-      `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(cwd, "default")}, ` +
-      "then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to";
-    const trimmedIdea = idea?.trim();
-    sendPromptWhenReady(
-      session.id,
-      trimmedIdea
-        ? `${base} build this:\n\n${trimmedIdea}`
-        : `${base} define the first agent.`,
-      "Couldn't send the scaffold prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
-    );
+    sendScaffoldPrompt(session, cwd, idea);
   };
 
   // The tab strip's + and the empty state's Start: begin ANOTHER session on the
@@ -914,15 +936,42 @@ export const App = (): JSX.Element => {
     return projectDirSuggestion(nextAvailableName(base, taken), projectRoot || null);
   };
 
-  const handleComposerSubmitIdea = (idea: string, agentHarness: HarnessKind): void => {
+  const handleComposerSubmitIdea = async (
+    idea: string,
+    agentHarness: HarnessKind,
+    attachments: readonly NewSessionAttachment[],
+  ): Promise<void> => {
     const cwd = uniqueProjectDir(idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME);
     if (!cwd) {
-      harness.showToast("Set a project folder first — use the + to open one.");
-      return;
+      throw new Error("Set a project folder first — use the + to open one.");
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
-    void handleScaffoldSession(cwd, agentHarness, idea.trim() || undefined);
+    const session = await createSessionAt(cwd, agentHarness, {
+      keepComposerOpen: true,
+    });
+    try {
+      const resolved = await materializeAttachments(
+        session.id,
+        attachments,
+        harness.attachFile,
+      );
+      sendScaffoldPrompt(
+        session,
+        cwd,
+        buildIdeaWithAttachments(idea, resolved),
+      );
+      setComposing(false);
+    } catch (error) {
+      // The first prompt is registered only after every upload succeeds. Kill
+      // the provisional session on failure so retrying reuses the same folder
+      // and queue instead of leaving a blank tab behind.
+      await harness.closeSession(session.id).catch((rollbackError: unknown) => {
+        console.error("[harness] attachment rollback failed:", rollbackError);
+      });
+      harness.removePendingWorkspace(cwd);
+      throw error;
+    }
   };
 
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
@@ -1576,6 +1625,7 @@ export const App = (): JSX.Element => {
                 <NewSessionComposer
                   firstRun={state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
+                  onAttachmentError={harness.showToast}
                   onUseTemplate={handleComposerUseTemplate}
                   onBrowseTemplates={() => setTemplatesOpen(true)}
                   listHarnesses={harness.listHarnesses}

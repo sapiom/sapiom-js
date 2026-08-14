@@ -481,6 +481,148 @@ describe("createRestRouter", () => {
     });
   });
 
+  describe("POST /sessions/:id/attachments", () => {
+    let projectRoot: string;
+    let sessionManager: RestRouterOptions["sessionManager"];
+
+    beforeEach(async () => {
+      projectRoot = path.join(tmpHome, "project");
+      await fs.mkdir(projectRoot, { recursive: true });
+      projectRoot = await fs.realpath(projectRoot);
+      sessionManager = fakeSessionManager([
+        exitedSession({
+          id: "sess-upload",
+          cwd: projectRoot,
+          status: "running",
+          exitCode: null,
+        }),
+      ]);
+      start({ sessionManager });
+    });
+
+    const postAttachment = (
+      body: unknown,
+      sessionId = "sess-upload",
+    ): Promise<Response> =>
+      fetch(`${baseUrl}/sessions/${sessionId}/attachments`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    it("materializes clipboard bytes under the session cwd without injecting input", async () => {
+      const res = await postAttachment({
+        filename: "screenshot.png",
+        dataUrl: "data:image/png;base64,cGl4ZWxz",
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        path: string;
+        mediaType: string;
+        bytes: number;
+      };
+      expect(body.mediaType).toBe("image/png");
+      expect(body.bytes).toBe(6);
+      const relativePath = path.relative(projectRoot, body.path);
+      const relativeParts = relativePath.split(path.sep);
+      expect(relativeParts.slice(0, 2)).toEqual([".sapiom", "uploads"]);
+      expect(relativeParts[2]).toMatch(/^[0-9a-f-]+\.png$/);
+      await expect(fs.readFile(body.path, "utf8")).resolves.toBe("pixels");
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
+    it("uses a server-owned filename for a traversal-shaped display name", async () => {
+      const res = await postAttachment({
+        filename: "../../outside/escape.pdf",
+        dataUrl: "data:application/pdf;base64,UERG",
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { path: string };
+      expect(path.dirname(body.path)).toBe(
+        path.join(projectRoot, ".sapiom", "uploads"),
+      );
+      expect(path.basename(body.path)).toMatch(/^[0-9a-f-]+\.pdf$/);
+      expect(path.basename(body.path)).not.toBe("escape.pdf");
+    });
+
+    it.each([
+      ["image/png", "image.png"],
+      ["application/pdf", "document.pdf"],
+      ["text/plain", "notes.txt"],
+      ["application/octet-stream", "data.bin"],
+    ])("accepts %s clipboard data", async (mediaType, filename) => {
+      const res = await postAttachment({
+        filename,
+        dataUrl: `data:${mediaType};base64,YQ==`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ mediaType, bytes: 1 });
+    });
+
+    it.each([
+      [{ filename: "bad.bin", dataUrl: "not-a-data-url" }, 400],
+      [{ filename: "bad.bin", dataUrl: "data:text/plain;base64,%%%" }, 400],
+      [{ filename: "empty.bin", dataUrl: "data:text/plain;base64," }, 400],
+      [{ dataUrl: "data:text/plain;base64,YQ==" }, 400],
+    ])("rejects an invalid attachment request", async (body, status) => {
+      const res = await postAttachment(body);
+      expect(res.status).toBe(status);
+    });
+
+    it("rejects a decoded payload over 10 MiB", async () => {
+      const encoded = Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64");
+      const res = await postAttachment({
+        filename: "too-large.bin",
+        dataUrl: `data:application/octet-stream;base64,${encoded}`,
+      });
+      expect(res.status).toBe(413);
+    });
+
+    it("rejects an unknown session", async () => {
+      const res = await postAttachment(
+        { filename: "note.txt", dataUrl: "data:text/plain;base64,YQ==" },
+        "missing",
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "rejects an uploads symlink that escapes the session cwd",
+      async () => {
+        const outside = path.join(tmpHome, "outside");
+        await fs.mkdir(path.join(projectRoot, ".sapiom"), { recursive: true });
+        await fs.mkdir(outside, { recursive: true });
+        await fs.symlink(outside, path.join(projectRoot, ".sapiom", "uploads"));
+
+        const res = await postAttachment({
+          filename: "escape.txt",
+          dataUrl: "data:text/plain;base64,YQ==",
+        });
+
+        expect(res.status).toBe(400);
+        await expect(fs.readdir(outside)).resolves.toEqual([]);
+      },
+    );
+
+    it("rate limits a runaway attachment client", async () => {
+      for (let index = 0; index < 30; index += 1) {
+        const res = await postAttachment({
+          filename: `note-${index}.txt`,
+          dataUrl: "data:text/plain;base64,YQ==",
+        });
+        expect(res.status).toBe(200);
+      }
+      const limited = await postAttachment({
+        filename: "one-too-many.txt",
+        dataUrl: "data:text/plain;base64,YQ==",
+      });
+      expect(limited.status).toBe(429);
+    });
+  });
+
   describe("POST /sessions/:id/input", () => {
     it("submits input and returns ok:true", async () => {
       const sessionManager = fakeSessionManager();

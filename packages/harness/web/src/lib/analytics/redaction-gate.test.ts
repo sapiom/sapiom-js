@@ -30,8 +30,9 @@ import { beforeSend } from "./before-send";
 /** Fixture values chosen to be unmistakable if they ever survive. */
 const AGENT = "acme-client-secret";
 const FOLDER = "quarterly-revenue";
+const FILE = "confidential-acquisition-plan.pdf";
 const ABS_PATH = "/Users/jrandom/code/quarterly-revenue";
-const NEEDLES = [AGENT, FOLDER, ABS_PATH, "/Users/", "jrandom"];
+const NEEDLES = [AGENT, FOLDER, FILE, ABS_PATH, "/Users/", "jrandom"];
 
 function capture(properties: Record<string, unknown>): CaptureResult {
   return { event: "$autocapture", properties } as CaptureResult;
@@ -167,6 +168,21 @@ describe("redaction gate — realistic clicks must not carry user names or paths
           object: "directory",
           $el_text: FOLDER,
           $elements_chain: `button.dir-picker-item:attr__class="dir-picker-item"attr__data-testid="dir-picker-item-${FOLDER}"text="${FOLDER}"nth-child="1"`,
+        }),
+      ),
+    );
+  });
+
+  it("composer attachment row (object=file)", () => {
+    expectNoLeak(
+      beforeSend(
+        capture({
+          object: "file",
+          surface: "composer",
+          $el_text: FILE,
+          $elements_chain:
+            `button.composer-file-remove:attr__class="composer-file-remove"attr__aria-label="Remove ${FILE}"nth-child="1";` +
+            `li.composer-file:attr__class="composer-file"text="${FILE}"nth-child="1"`,
         }),
       ),
     );

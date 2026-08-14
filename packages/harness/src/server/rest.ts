@@ -5,13 +5,18 @@
  */
 
 import express, { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type {
   AdoptSessionRequest,
   AnalyticsEvent,
   AppState,
+  AttachFileRequest,
+  AttachFileResponse,
   BackgroundTask,
   BindWorkflowRequest,
   CreateSessionRequest,
@@ -28,7 +33,9 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import {
+  HARNESS_UPLOADS_DIR,
   JSON_BODY_LIMIT_BYTES,
+  MAX_INLINE_ATTACHMENT_BYTES,
   SPAWNABLE_HARNESS_KINDS,
   EDITOR_KINDS,
 } from "../shared/types.js";
@@ -37,7 +44,28 @@ import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
 import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
+import { resolveWithinRoot } from "../core/path-safety.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
+
+const DATA_URL_RE = /^data:([a-z0-9.+/-]+);base64,([\s\S]+)$/i;
+
+/** Validate standard padded base64 in one pass and return decoded size. */
+function decodedBase64Size(encoded: string): number | null {
+  if (encoded.length === 0 || encoded.length % 4 !== 0) return null;
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const contentLength = encoded.length - padding;
+  for (let index = 0; index < encoded.length; index += 1) {
+    const code = encoded.charCodeAt(index);
+    const isDataCharacter =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47;
+    if (index < contentLength ? !isDataCharacter : code !== 61) return null;
+  }
+  return (encoded.length / 4) * 3 - padding;
+}
 
 // Derived from SPAWNABLE_HARNESS_KINDS (shared/types.ts) so the zod
 // validation and the TypeScript type can never drift from each other.
@@ -55,6 +83,11 @@ const injectInputSchema = z.object({
   text: z.string(),
   submit: z.boolean().optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
+
+const attachFileSchema = z.object({
+  dataUrl: z.string().min(1),
+  filename: z.string().trim().min(1).max(255),
+}) satisfies z.ZodType<AttachFileRequest>;
 
 const bindWorkflowSchema = z.object({
   workflowPath: z.string().min(1).nullable(),
@@ -248,6 +281,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
     listMacros,
   } = options;
   const router = Router();
+  const attachmentUploadRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
   router.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
   router.get("/state", async (_req, res, next) => {
@@ -385,6 +424,91 @@ export function createRestRouter(options: RestRouterOptions): Router {
       next(err);
     }
   });
+
+  router.post(
+    "/sessions/:id/attachments",
+    attachmentUploadRateLimiter,
+    async (req, res, next) => {
+      const parsed = attachFileSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: parsed.error.message });
+        return;
+      }
+
+      const session = sessionManager.get(req.params.id);
+      if (!session) {
+        res.status(404).json({ error: "session not found" });
+        return;
+      }
+
+      const match = DATA_URL_RE.exec(parsed.data.dataUrl);
+      if (!match) {
+        res.status(400).json({ error: "dataUrl must be a base64 data: URL" });
+        return;
+      }
+
+      const mediaType = match[1]!.toLowerCase();
+      const encoded = match[2]!;
+      const decodedSize = decodedBase64Size(encoded);
+      if (decodedSize === null) {
+        res
+          .status(400)
+          .json({ error: "attachment payload is not valid base64" });
+        return;
+      }
+      if (decodedSize === 0) {
+        res.status(400).json({ error: "attachment payload is empty" });
+        return;
+      }
+      if (decodedSize > MAX_INLINE_ATTACHMENT_BYTES) {
+        res.status(413).json({
+          error: `Attachment is ${decodedSize} bytes; the limit is ${MAX_INLINE_ATTACHMENT_BYTES} bytes`,
+        });
+        return;
+      }
+      const buffer = Buffer.from(encoded, "base64");
+
+      const uploadsDir = resolveWithinRoot(session.cwd, HARNESS_UPLOADS_DIR);
+      if (!uploadsDir) {
+        res
+          .status(500)
+          .json({ error: "could not resolve the uploads directory" });
+        return;
+      }
+      const requestedExtension = path.extname(
+        path.basename(parsed.data.filename),
+      );
+      const extension = /^\.[a-z0-9]{1,12}$/i.test(requestedExtension)
+        ? requestedExtension.toLowerCase()
+        : ".bin";
+      try {
+        await fs.mkdir(uploadsDir, { recursive: true });
+        const [realCwd, realUploadsDir] = await Promise.all([
+          fs.realpath(session.cwd),
+          fs.realpath(uploadsDir),
+        ]);
+        if (!resolveWithinRoot(realCwd, realUploadsDir)) {
+          res.status(400).json({
+            error: "uploads directory escapes the session cwd",
+          });
+          return;
+        }
+        const filePath = path.join(
+          realUploadsDir,
+          `${randomUUID()}${extension}`,
+        );
+        await fs.writeFile(filePath, buffer);
+        const response: AttachFileResponse = {
+          path: filePath,
+          mediaType,
+          bytes: buffer.byteLength,
+        };
+        res.json(response);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.patch("/sessions/:id/workflow", async (req, res, next) => {
     const parsed = bindWorkflowSchema.safeParse(req.body);

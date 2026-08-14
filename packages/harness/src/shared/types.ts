@@ -71,6 +71,16 @@ export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
  */
 export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
 
+/** Renderer-only files are materialized here before their paths are included
+ * in a new session's first prompt. Disk-backed attachments never get copied. */
+export const HARNESS_UPLOADS_DIR = ".sapiom/uploads";
+
+/** Hard cap for one pathless clipboard attachment after base64 decoding. */
+export const MAX_INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/** Renderer-memory cap across all pathless files queued for one new session. */
+export const MAX_INLINE_ATTACHMENTS_TOTAL_BYTES = 50 * 1024 * 1024;
+
 /**
  * Body-parser byte limit for JSON `/api` routes, set well above express's
  * 100 KiB default so larger prompt / analytics payloads parse without a 413.
@@ -948,6 +958,7 @@ export interface SessionRecord {
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
 // PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // GET    /api/workflows                 → WorkflowInfo[]
 // POST   /api/workflows/connect         { path } → WorkflowInfo
@@ -992,6 +1003,22 @@ export interface CreateSessionRequest {
    * → server default (see createDefaultBuildLaunchOpts).
    */
   theme?: UiTheme;
+}
+
+/** One pathless clipboard file to materialize inside a new session's cwd. */
+export interface AttachFileRequest {
+  /** `data:<mediaType>;base64,<payload>`. */
+  dataUrl: string;
+  /** Display name only; the server always owns the stored filename. */
+  filename: string;
+}
+
+/** Result of materializing a pathless clipboard file. */
+export interface AttachFileResponse {
+  /** Absolute path beneath the session's `.sapiom/uploads` directory. */
+  path: string;
+  mediaType: string;
+  bytes: number;
 }
 
 /**

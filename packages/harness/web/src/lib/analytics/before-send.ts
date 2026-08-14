@@ -86,8 +86,8 @@ function isSecretSurface(properties: Record<string, unknown>): boolean {
 /**
  * `object` values whose on-screen label is written by the USER, not by us.
  *
- * An agent, workspace or session is named by whoever made it, so its label is
- * user content and lands in `$el_text` verbatim — production has shipped us
+ * An agent, workspace, session, or file is named by whoever made it, so its
+ * label is user content and lands in `$el_text` verbatim — production has shipped us
  * `fetch-recent-weather`, `newsletter-autopilot`, `twitter-run` and
  * `Ewan's Organization` this way. That is wrong twice: it puts user-authored
  * strings in analytics, and it shreds the numbers, because "clicked an agent in
@@ -97,7 +97,14 @@ function isSecretSurface(properties: Record<string, unknown>): boolean {
  * from OUR registry, low-cardinality and safe, and it's the label that makes
  * the on-ramp funnel readable.
  */
-const USER_NAMED_OBJECTS: ReadonlySet<string> = new Set(["agent", "workspace", "session", "run", "directory"]);
+const USER_NAMED_OBJECTS: ReadonlySet<string> = new Set([
+  "agent",
+  "workspace",
+  "session",
+  "run",
+  "directory",
+  "file",
+]);
 
 /** Whether this click's `object` marks it as a user-named entity. */
 function isUserNamedObject(properties: Record<string, unknown>): boolean {

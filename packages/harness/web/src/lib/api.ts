@@ -9,6 +9,8 @@ import type {
   AccountPlanView,
   AdoptSessionRequest,
   AppState,
+  AttachFileRequest,
+  AttachFileResponse,
   BindWorkflowRequest,
   CreateSessionRequest,
   FsDirEntry,
@@ -261,6 +263,7 @@ export interface HarnessApi {
   authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
+  attachFile(id: string, req: AttachFileRequest): Promise<AttachFileResponse>;
   listSessions(): Promise<HarnessSession[]>;
   sessionHistory(cwd: string): Promise<SessionSummary[]>;
   /**
@@ -409,6 +412,16 @@ class RealApi implements HarnessApi {
       method: "POST",
       body: JSON.stringify({ theme: getTheme(), ...req }),
     });
+  }
+
+  attachFile(id: string, req: AttachFileRequest): Promise<AttachFileResponse> {
+    return this.request<AttachFileResponse>(
+      `/api/sessions/${encodeURIComponent(id)}/attachments`,
+      {
+        method: "POST",
+        body: JSON.stringify(req),
+      },
+    );
   }
 
   listSessions(): Promise<HarnessSession[]> {
@@ -989,6 +1002,19 @@ class MockApi implements HarnessApi {
 
   async createSession(req: CreateSessionRequest): Promise<HarnessSession> {
     await delay(300);
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.createSessionCalls as unknown[] | undefined) ??
+        [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastCreateSession: { req },
+        createSessionCalls: [...previous, { req }],
+      };
+    }
     const session: HarnessSession = {
       id: `sess-mock-${this.sessions.length + 1}`,
       agentSessionId: null,
@@ -1050,6 +1076,54 @@ class MockApi implements HarnessApi {
       setTimeout(promote, 700);
     }
     return session;
+  }
+
+  async attachFile(
+    id: string,
+    req: AttachFileRequest,
+  ): Promise<AttachFileResponse> {
+    await delay();
+    const session = this.sessions.find((item) => item.id === id);
+    if (!session)
+      throw new ApiError(404, "session not found", "session not found");
+
+    const testWindow =
+      typeof window === "undefined"
+        ? undefined
+        : (window as unknown as {
+            __MOCK_ATTACH_FILE_FAIL_ONCE__?: boolean;
+          });
+    if (testWindow?.__MOCK_ATTACH_FILE_FAIL_ONCE__) {
+      testWindow.__MOCK_ATTACH_FILE_FAIL_ONCE__ = false;
+      throw new ApiError(
+        500,
+        "attachment materialization failed",
+        "attachment materialization failed",
+      );
+    }
+
+    const match = /^data:([^;]+);base64,([\s\S]+)$/i.exec(req.dataUrl);
+    if (!match)
+      throw new ApiError(400, "invalid attachment", "invalid attachment");
+    const filename = req.filename.split(/[\\/]/).pop() || "pasted-file";
+    const response: AttachFileResponse = {
+      path: `${session.cwd}/.sapiom/uploads/mock-${filename}`,
+      mediaType: match[1]!,
+      bytes: atob(match[2]!).length,
+    };
+
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.attachFileCalls as unknown[] | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        attachFileCalls: [...previous, { id, req, response }],
+      };
+    }
+    return response;
   }
 
   async listSessions(): Promise<HarnessSession[]> {
@@ -1127,6 +1201,17 @@ class MockApi implements HarnessApi {
         ? { ...session, status: "exited" as const, exitCode: 0 }
         : session,
     );
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.killSessionCalls as string[] | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        killSessionCalls: [...previous, id],
+      };
+    }
   }
 
   async injectInput(id: string, req: InjectInputRequest): Promise<void> {

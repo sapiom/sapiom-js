@@ -61,6 +61,419 @@ test("describing an outcome starts a session and hands the agent that outcome", 
     .toContain("Diff our competitors' pricing pages");
 });
 
+test("a picked file reaches the first request without naming the project", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: (file: File) => `/Users/test/My Files/${file.name}`,
+    };
+  });
+
+  await page.getByTestId("composer-input").fill("Build an onboarding flow.");
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "requirements.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("requirements"),
+  });
+
+  const files = page.getByTestId("composer-files");
+  await expect(files).toContainText("requirements.pdf");
+  await page.getByTestId("composer-send").click();
+
+  await expect
+    .poll(() => lastInjectText(page))
+    .toContain('"/Users/test/My Files/requirements.pdf"');
+
+  const createRequest = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __HARNESS_TEST__?: { lastCreateSession?: { req?: { cwd?: string } } };
+        }
+      ).__HARNESS_TEST__?.lastCreateSession?.req,
+  );
+  expect(createRequest?.cwd).toMatch(/\/build-onboarding-flow$/);
+  expect(createRequest?.cwd).not.toContain("requirements");
+});
+
+test("picker, drop, and pathless clipboard files reach one ordered first request", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: (file: File) =>
+        file.name === "screenshot.png"
+          ? ""
+          : `/Users/test/Drop Zone/${file.name}`,
+    };
+  });
+
+  await page.getByTestId("composer-input").fill("Build mixed context.");
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "requirements.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("requirements"),
+  });
+
+  const composerBox = page.getByTestId("composer-box");
+  await page.evaluate(() => {
+    const box = document.querySelector<HTMLElement>(
+      "[data-testid='composer-box']",
+    )!;
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File(["brief"], "brief.txt", { type: "text/plain" }),
+    );
+    box.dispatchEvent(
+      new DragEvent("dragenter", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      }),
+    );
+  });
+  await expect(composerBox).toHaveClass(/is-dragging-files/);
+  await expect(page.getByRole("status")).toHaveText("Drop files to attach.");
+  await page.evaluate(() => {
+    const box = document.querySelector<HTMLElement>(
+      "[data-testid='composer-box']",
+    )!;
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File(["brief"], "brief.txt", { type: "text/plain" }),
+    );
+    box.dispatchEvent(
+      new DragEvent("drop", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      }),
+    );
+  });
+  await expect(composerBox).not.toHaveClass(/is-dragging-files/);
+
+  await page.evaluate(() => {
+    const input = document.querySelector<HTMLTextAreaElement>(
+      "[data-testid='composer-input']",
+    )!;
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File(["pixels"], "screenshot.png", { type: "image/png" }),
+    );
+    input.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      }),
+    );
+  });
+
+  await expect(page.locator(".composer-file-name")).toHaveText([
+    "requirements.pdf",
+    "brief.txt",
+    "screenshot.png",
+  ]);
+  await page.getByTestId("composer-send").click();
+
+  await expect
+    .poll(() => lastInjectText(page))
+    .toContain("mock-screenshot.png");
+  const proof = await page.evaluate(() => {
+    const testState = (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          attachFileCalls?: unknown[];
+          lastInjectInput?: { req?: { text?: string } };
+          lastCreateSession?: { req?: { cwd?: string } };
+        };
+      }
+    ).__HARNESS_TEST__;
+    return {
+      calls: testState?.attachFileCalls ?? [],
+      text: testState?.lastInjectInput?.req?.text ?? "",
+      cwd: testState?.lastCreateSession?.req?.cwd ?? "",
+    };
+  });
+  expect(proof.calls).toHaveLength(1);
+  expect(proof.cwd).toMatch(/\/build-mixed-context$/);
+  expect(proof.text.indexOf("requirements.pdf")).toBeLessThan(
+    proof.text.indexOf("brief.txt"),
+  );
+  expect(proof.text.indexOf("brief.txt")).toBeLessThan(
+    proof.text.indexOf("mock-screenshot.png"),
+  );
+});
+
+test("ordinary clipboard text pastes natively without creating an attachment", async ({
+  context,
+  page,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => navigator.clipboard.writeText("pasted plain text"));
+
+  const input = page.getByTestId("composer-input");
+  await input.focus();
+  await page.keyboard.press("ControlOrMeta+V");
+
+  await expect(input).toHaveValue("pasted plain text");
+  await expect(page.getByTestId("composer-files")).toHaveCount(0);
+});
+
+test("attachment controls expose names, live status, and keyboard removal", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: (file: File) => `/Users/test/${file.name}`,
+    };
+  });
+
+  await expect(page.getByTestId("composer-attach-files")).toHaveAccessibleName(
+    "Attach files",
+  );
+  await expect(page.getByTestId("composer-send")).toHaveAccessibleName(
+    "Start session",
+  );
+  await expect(page.getByRole("status")).toHaveText("No files attached.");
+
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "keyboard.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("keyboard"),
+  });
+  await expect(page.getByRole("status")).toHaveText("1 file attached.");
+
+  const remove = page.getByRole("button", { name: "Remove keyboard.pdf" });
+  await page.getByTestId("composer-input").focus();
+  await page.keyboard.press("Tab");
+  await expect(remove).toBeFocused();
+  expect(
+    await remove.evaluate((element) => getComputedStyle(element).outlineStyle),
+  ).not.toBe("none");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("status")).toHaveText("No files attached.");
+});
+
+test("attachment rows stay contained with touch-sized removal at a narrow viewport", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: (file: File) => `/Users/test/Very Long Folder/${file.name}`,
+    };
+  });
+  await page.getByTestId("composer-file-input").setInputFiles([
+    {
+      name: "a-very-long-requirements-document-name.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("one"),
+    },
+    {
+      name: "another-very-long-reference-document-name.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("two"),
+    },
+  ]);
+  await expect(page.getByRole("status")).toHaveText("2 files attached.");
+
+  const layout = await page.getByTestId("composer-box").evaluate((box) => {
+    const rows = Array.from(
+      box.querySelectorAll<HTMLElement>(".composer-file"),
+    );
+    const boxRect = box.getBoundingClientRect();
+    return {
+      contained:
+        box.scrollWidth <= box.clientWidth + 1 &&
+        rows.every((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.left >= boxRect.left && rect.right <= boxRect.right + 1;
+        }),
+      removeWidths: Array.from(
+        box.querySelectorAll<HTMLElement>(".composer-file-remove"),
+        (button) => button.getBoundingClientRect().width,
+      ),
+    };
+  });
+  expect(layout.contained).toBe(true);
+  expect(layout.removeWidths.every((width) => width >= 44)).toBe(true);
+});
+
+test("re-adding and removing files keeps only the intended first-request paths", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: (file: File) => `/Users/test/${file.name}`,
+    };
+  });
+  const input = page.getByTestId("composer-file-input");
+  const repeated = {
+    name: "keep.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("same"),
+  };
+  await input.setInputFiles(repeated);
+  await input.setInputFiles(repeated);
+  await input.setInputFiles({
+    name: "remove.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("remove"),
+  });
+
+  await expect(page.locator(".composer-file-name")).toHaveText([
+    "keep.pdf",
+    "remove.txt",
+  ]);
+  await page.getByRole("button", { name: "Remove remove.txt" }).click();
+  await expect(page.locator(".composer-file-name")).toHaveText(["keep.pdf"]);
+
+  await page.getByTestId("composer-input").fill("Use selected context.");
+  await page.getByTestId("composer-send").click();
+  await expect
+    .poll(() => lastInjectText(page))
+    .toContain("/Users/test/keep.pdf");
+  expect(await lastInjectText(page)).not.toContain("remove.txt");
+});
+
+test("an attachment-only start uses the fallback project and sends the file", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: (file: File) => `/Users/test/${file.name}`,
+    };
+  });
+  await page.getByTestId("composer-file-input").setInputFiles({
+    name: "brief.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("brief"),
+  });
+
+  await page.getByTestId("composer-send").click();
+  await expect
+    .poll(() => lastInjectText(page))
+    .toContain("/Users/test/brief.pdf");
+  const cwd = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __HARNESS_TEST__?: { lastCreateSession?: { req?: { cwd?: string } } };
+        }
+      ).__HARNESS_TEST__?.lastCreateSession?.req?.cwd ?? "",
+  );
+  expect(cwd).toMatch(/\/sapiom-agent$/);
+});
+
+test("an upload failure rolls back, retains the queue, sends nothing, and retries once", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-create-new").click();
+  await page.evaluate(() => {
+    window.sapiomDesktop = {
+      appVersion: "test",
+      checkForUpdates: async () => ({ kind: "disabled" }),
+      pathForFile: () => "",
+    };
+  });
+  await page.getByTestId("composer-input").fill("Build from this screenshot.");
+  await page.evaluate(() => {
+    const input = document.querySelector<HTMLTextAreaElement>(
+      "[data-testid='composer-input']",
+    )!;
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File(["pixels"], "retry-screenshot.png", { type: "image/png" }),
+    );
+    input.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      }),
+    );
+  });
+  await expect(page.getByTestId("composer-files")).toContainText(
+    "retry-screenshot.png",
+  );
+  await page.evaluate(() => {
+    (
+      window as unknown as { __MOCK_ATTACH_FILE_FAIL_ONCE__?: boolean }
+    ).__MOCK_ATTACH_FILE_FAIL_ONCE__ = true;
+    const send = document.querySelector<HTMLButtonElement>(
+      "[data-testid='composer-send']",
+    )!;
+    send.click();
+    send.click();
+  });
+
+  await expect(page.getByTestId("composer-send")).toBeDisabled();
+  await expect(page.getByRole("status")).toHaveText(
+    "Starting session with 1 file attached.",
+  );
+  await expect(page.getByTestId("composer-send")).toBeEnabled();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("composer-files")).toContainText(
+    "retry-screenshot.png",
+  );
+  await expect(page.getByTestId("toast")).toContainText(
+    /retry-screenshot\.png.*materialization failed/i,
+  );
+
+  const failedProof = await page.evaluate(() => {
+    const state = (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          createSessionCalls?: unknown[];
+          killSessionCalls?: unknown[];
+          lastInjectInput?: unknown;
+        };
+      }
+    ).__HARNESS_TEST__;
+    return {
+      creates: state?.createSessionCalls?.length ?? 0,
+      kills: state?.killSessionCalls?.length ?? 0,
+      injected: state?.lastInjectInput != null,
+    };
+  });
+  expect(failedProof).toEqual({ creates: 1, kills: 1, injected: false });
+
+  await page.getByTestId("composer-send").click();
+  await expect
+    .poll(() => lastInjectText(page))
+    .toContain("mock-retry-screenshot.png");
+  const createCount = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __HARNESS_TEST__?: { createSessionCalls?: unknown[] };
+        }
+      ).__HARNESS_TEST__?.createSessionCalls?.length ?? 0,
+  );
+  expect(createCount).toBe(2);
+});
+
 test("holds the prompt until the session is ready (Claude signed in), then sends it", async ({
   page,
 }) => {

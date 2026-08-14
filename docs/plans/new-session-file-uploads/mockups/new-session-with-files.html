@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New session with files — product mockup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0e13;
+        --surface: #151920;
+        --surface-hover: #1c222b;
+        --line: #313844;
+        --text: #f3f3f5;
+        --muted: #9aa3af;
+        --faint: #697380;
+        --brand: #6be195;
+        --brand-ink: #07140c;
+        --danger: #f4a7a1;
+        --radius: 9px;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        width: min(640px, calc(100vw - 40px));
+        text-align: center;
+      }
+      .greeting {
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      h1 {
+        margin: 0 0 24px;
+        font-size: 26px;
+        letter-spacing: -0.02em;
+      }
+      .chips {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+      .chip,
+      .icon-button,
+      .agent-select {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--muted);
+        height: 30px;
+      }
+      .chip {
+        padding: 0 12px;
+        background: var(--surface);
+      }
+      .composer {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: var(--surface);
+        box-shadow: 0 14px 36px rgb(0 0 0 / 0.22);
+        text-align: left;
+      }
+      textarea {
+        width: 100%;
+        min-height: 68px;
+        resize: none;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        line-height: 1.5;
+      }
+      textarea::placeholder {
+        color: var(--faint);
+      }
+      .files {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 6px 0 12px;
+        padding: 0;
+        list-style: none;
+      }
+      .file {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        max-width: 250px;
+        height: 34px;
+        padding: 0 7px 0 9px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface-hover);
+        color: var(--text);
+      }
+      .file-icon {
+        color: var(--brand);
+      }
+      .file-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+      }
+      .remove {
+        border: 0;
+        background: transparent;
+        color: var(--faint);
+        font-size: 18px;
+        cursor: pointer;
+      }
+      .remove:hover {
+        color: var(--danger);
+      }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .icon-button {
+        width: 30px;
+        cursor: pointer;
+        font-size: 16px;
+      }
+      .icon-button:hover,
+      .agent-select:hover {
+        background: var(--surface-hover);
+        color: var(--text);
+      }
+      .right {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+      }
+      .agent-select {
+        padding: 0 10px;
+      }
+      .send {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        border-radius: var(--radius);
+        background: var(--brand);
+        color: var(--brand-ink);
+        font-size: 18px;
+        cursor: pointer;
+      }
+      .drop-overlay {
+        position: absolute;
+        inset: 6px;
+        display: none;
+        place-items: center;
+        border: 1px dashed var(--brand);
+        border-radius: 11px;
+        background: color-mix(in srgb, var(--bg) 86%, var(--brand));
+        color: var(--brand);
+        font-size: 14px;
+        font-weight: 600;
+        pointer-events: none;
+      }
+      .composer.is-dragging .drop-overlay {
+        display: grid;
+      }
+      .hint {
+        margin: 10px 0 0;
+        color: var(--faint);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="greeting">Good evening. Let's build a new agent.</p>
+      <h1>What should your agent do?</h1>
+      <div class="chips" aria-label="Suggestions">
+        <button class="chip">sales outreach</button>
+        <button class="chip">support triage</button>
+        <button class="chip">research digest</button>
+        <button class="chip">code review</button>
+      </div>
+      <section class="composer" id="composer" aria-label="Describe a new agent">
+        <textarea placeholder="Describe the outcome you want">
+Turn the attached sketches and requirements into a working onboarding flow.</textarea
+        >
+        <ul class="files" id="files" aria-label="Attached files">
+          <li class="file">
+            <span class="file-icon">▧</span
+            ><span class="file-name">onboarding-sketch.png</span
+            ><button class="remove" aria-label="Remove onboarding-sketch.png">
+              ×
+            </button>
+          </li>
+          <li class="file">
+            <span class="file-icon">▤</span
+            ><span class="file-name">requirements.pdf</span
+            ><button class="remove" aria-label="Remove requirements.pdf">
+              ×
+            </button>
+          </li>
+        </ul>
+        <div class="actions">
+          <button
+            class="icon-button"
+            aria-label="Open a folder"
+            title="Open a folder"
+          >
+            ＋
+          </button>
+          <button
+            class="icon-button"
+            id="attach"
+            aria-label="Attach files"
+            title="Attach files"
+          >
+            ⌕
+          </button>
+          <input id="picker" type="file" multiple hidden />
+          <div class="right">
+            <button class="agent-select">Claude Code⌄</button>
+            <button class="send" aria-label="Start session">↑</button>
+          </div>
+        </div>
+        <div class="drop-overlay">Drop files to attach</div>
+      </section>
+      <p class="hint">
+        Paste, drop, or choose files. Ordinary text paste still edits the
+        description. Files can be removed before starting.
+      </p>
+    </main>
+    <script>
+      const composer = document.querySelector("#composer");
+      const picker = document.querySelector("#picker");
+      const files = document.querySelector("#files");
+      const addFiles = (items) => {
+        for (const item of items) {
+          const row = document.createElement("li");
+          row.className = "file";
+          row.innerHTML = `<span class="file-icon">▧</span><span class="file-name"></span><button class="remove" aria-label="Remove file">×</button>`;
+          row.querySelector(".file-name").textContent = item.name;
+          row
+            .querySelector(".remove")
+            .addEventListener("click", () => row.remove());
+          files.append(row);
+        }
+      };
+      document
+        .querySelector("#attach")
+        .addEventListener("click", () => picker.click());
+      picker.addEventListener("change", () => addFiles(picker.files));
+      composer.addEventListener("paste", (event) => {
+        const pastedFiles = Array.from(event.clipboardData?.files ?? []);
+        if (pastedFiles.length === 0) return;
+        event.preventDefault();
+        addFiles(pastedFiles);
+      });
+      files.addEventListener("click", (event) => {
+        if (event.target.classList.contains("remove"))
+          event.target.closest(".file").remove();
+      });
+      composer.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        composer.classList.add("is-dragging");
+      });
+      composer.addEventListener("dragleave", () =>
+        composer.classList.remove("is-dragging"),
+      );
+      composer.addEventListener("drop", (event) => {
+        event.preventDefault();
+        composer.classList.remove("is-dragging");
+        addFiles(event.dataTransfer.files);
+      });
+    </script>
+  </body>
+</html>
