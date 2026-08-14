@@ -616,9 +616,7 @@ describe("contentGeneration.video.create()", () => {
             })
           : null,
       (c) =>
-        c.init.method === "GET"
-          ? jsonResponse({ video: { url: "u" } })
-          : null,
+        c.init.method === "GET" ? jsonResponse({ video: { url: "u" } }) : null,
     ]);
 
     await video.create({ prompt: "x", pollIntervalMs: 1 }, transport, BASE);
@@ -1172,6 +1170,125 @@ describe("contentGeneration.images.launch()", () => {
     const handle = await images.launch({ prompt: "x" }, transport, BASE);
     expect(handle.requestId).toBe("img-ns");
     expect(handle.dispatch.resultSignal).toBe(IMAGE_RESULT_SIGNAL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SAP-2576 — per-generation cost envelope surfaced on results + launch handles
+// ---------------------------------------------------------------------------
+
+describe("cost envelope (SAP-2576)", () => {
+  const COST = {
+    estimateUsd: 0.4,
+    currency: "USD",
+    isEstimate: true,
+    source: "quote",
+    reference: "txn_abc123",
+  } as const;
+
+  it("createVideo threads the submit handle's cost + resolvedModel onto the polled result", async () => {
+    const { transport } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              requestId: "req-cost",
+              responseUrl: `${BASE}/queue/req-cost`,
+              resolvedModel: "seedance-fast",
+              cost: COST,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "https://media/v.mp4" } })
+          : null,
+    ]);
+
+    const out = await createVideo(
+      { prompt: "a wave", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    // The queue passthrough (the GET poll) carries neither cost nor resolvedModel — both are
+    // threaded from the submit handle, so a reseller can price without a second API call.
+    expect(out.resolvedModel).toBe("seedance-fast");
+    expect(out.cost).toEqual(COST);
+    expect(out.cost?.reference).toBe("txn_abc123");
+    expect(out.video?.url).toBe("https://media/v.mp4");
+  });
+
+  it("createVideo leaves the result untouched when the submit handle carries no cost", async () => {
+    const { transport } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ requestId: "r", responseUrl: `${BASE}/queue/r` })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "https://media/v.mp4" } })
+          : null,
+    ]);
+
+    const out = await createVideo(
+      { prompt: "x", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    expect(out).toEqual({ video: { url: "https://media/v.mp4" } });
+    expect(out.cost).toBeUndefined();
+    expect(out.resolvedModel).toBeUndefined();
+  });
+
+  it("launchVideo exposes cost + resolvedModel on the handle AND on the wait() result", async () => {
+    const { transport } = makeLaunchTransport(
+      {
+        requestId: "req-lc",
+        responseUrl: `${BASE}/queue/req-lc`,
+        resolvedModel: "veo3-fast",
+        cost: COST,
+      },
+      { video: { url: "https://media/v.mp4" } },
+    );
+
+    const handle = await launchVideo({ prompt: "x" }, transport, BASE);
+    expect(handle.resolvedModel).toBe("veo3-fast");
+    expect(handle.cost).toEqual(COST);
+
+    const result = await handle.wait({ pollMs: 1 });
+    expect(result.cost?.reference).toBe("txn_abc123");
+    expect(result.resolvedModel).toBe("veo3-fast");
+  });
+
+  it("createImage surfaces the response body's cost + resolvedModel", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          images: [{ url: "https://media/x.png" }],
+          resolvedModel: "flux-fast",
+          cost: COST,
+        }),
+    ]);
+
+    const out = await createImage({ prompt: "x" }, transport, BASE);
+    expect(out.resolvedModel).toBe("flux-fast");
+    expect(out.cost).toEqual(COST);
+  });
+
+  it("launchImage exposes cost + resolvedModel on the handle", async () => {
+    const { transport } = makeLaunchTransport(
+      {
+        requestId: "img-c",
+        responseUrl: `${BASE}/queue/img-c`,
+        resolvedModel: "flux-fast",
+        cost: COST,
+      },
+      { images: [{ url: "u" }] },
+    );
+
+    const handle = await launchImage({ prompt: "x" }, transport, BASE);
+    expect(handle.resolvedModel).toBe("flux-fast");
+    expect(handle.cost?.reference).toBe("txn_abc123");
   });
 });
 
