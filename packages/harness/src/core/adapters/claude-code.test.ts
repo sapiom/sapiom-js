@@ -88,6 +88,8 @@ describe("ClaudeCodeAdapter", () => {
         "/tmp/proj/.sapiom/settings.json",
         "--mcp-config",
         "/tmp/proj/.sapiom/mcp.json",
+        "--permission-mode",
+        "auto",
         "--append-system-prompt",
         DEFAULT_SYSTEM_PROMPT,
       ]);
@@ -100,6 +102,8 @@ describe("ClaudeCodeAdapter", () => {
       expect(resumed.args).toEqual([
         "--resume",
         "agent-uuid-123",
+        "--permission-mode",
+        "auto",
         "--append-system-prompt",
         DEFAULT_SYSTEM_PROMPT,
       ]);
@@ -112,7 +116,12 @@ describe("ClaudeCodeAdapter", () => {
       const spec = adapter.resume("agent-uuid-123", { harnessSessionId: "h1", cwd: "/tmp/proj" });
 
       expect(spec.command).toBe("fake-claude");
-      expect(spec.args).toEqual(["--resume", "agent-uuid-123"]);
+      expect(spec.args).toEqual([
+        "--resume",
+        "agent-uuid-123",
+        "--permission-mode",
+        "auto",
+      ]);
       expect(spec.env).toEqual({ CLAUDECODE: null });
     });
 
@@ -162,7 +171,6 @@ describe("ClaudeCodeAdapter", () => {
         "stream-json",
         "--verbose",
       ]);
-
       await rm(promptDir, { recursive: true, force: true });
     });
 
@@ -195,6 +203,7 @@ describe("ClaudeCodeAdapter", () => {
     it("rejects a version below the floor and accepts the floor and above", () => {
       expect(isClaudeVersionSupported("1.9.9 (Claude Code)")).toBe(false);
       expect(isClaudeVersionSupported("0.5.0")).toBe(false);
+      expect(isClaudeVersionSupported("2.1.82 (Claude Code)")).toBe(false);
       expect(isClaudeVersionSupported(`${MIN_CLAUDE_CODE_VERSION} (Claude Code)`)).toBe(true);
       expect(isClaudeVersionSupported("2.4.1 (Claude Code)")).toBe(true);
       expect(isClaudeVersionSupported("10.0.0")).toBe(true);

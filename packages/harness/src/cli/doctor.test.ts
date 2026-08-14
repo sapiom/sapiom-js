@@ -53,12 +53,12 @@ import { MIN_CLAUDE_CODE_VERSION } from "../core/adapters/claude-code.js";
 describe("runDoctor", () => {
   it("passes when node, claude, and git are present and codex is absent", async () => {
     presentBinaries = new Set(["claude", "git"]);
-    claudeVersion = "2.1.4 (Claude Code)";
+    claudeVersion = "2.1.220 (Claude Code)";
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
     expect(byName.node.ok).toBe(true);
-    expect(byName.claude).toEqual({ name: "claude", ok: true, detail: "2.1.4 (Claude Code)" });
+    expect(byName.claude).toEqual({ name: "claude", ok: true, detail: "2.1.220 (Claude Code)" });
     expect(byName.git).toEqual({ name: "git", ok: true, detail: "git version 2.43.0" });
     expect(byName.codex.ok).toBe(false);
 
@@ -70,7 +70,8 @@ describe("runDoctor", () => {
 
   it("marks a present-but-too-old claude unavailable, with an upgrade remedy", async () => {
     // Present on PATH and answers --version, but predates the flags every
-    // launch injects (notably --plugin-dir) — so it exit-1s each session
+    // launch relies on (Auto mode and, on older releases, --plugin-dir) — so
+    // it exit-1s each session
     // before establishing a session id. Doctor must report it NOT ok.
     presentBinaries = new Set(["claude", "git"]);
     claudeVersion = "1.9.9 (Claude Code)";
@@ -95,7 +96,7 @@ describe("runDoctor", () => {
 
   it("passes on codex alone, with claude's check carrying the exact install remedy", async () => {
     presentBinaries = new Set(["codex", "git"]);
-    claudeVersion = "2.1.4 (Claude Code)";
+    claudeVersion = "2.1.220 (Claude Code)";
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
@@ -108,7 +109,7 @@ describe("runDoctor", () => {
 
   it("fails only when neither claude nor codex is present, surfacing both install remedies", async () => {
     presentBinaries = new Set(["git"]);
-    claudeVersion = "2.1.4 (Claude Code)";
+    claudeVersion = "2.1.220 (Claude Code)";
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
@@ -120,7 +121,7 @@ describe("runDoctor", () => {
 
   it("prefers claude-code when both agents are present", async () => {
     presentBinaries = new Set(["claude", "codex", "git"]);
-    claudeVersion = "2.1.4 (Claude Code)";
+    claudeVersion = "2.1.220 (Claude Code)";
     const report = await runDoctor();
 
     expect(report.ok).toBe(true);

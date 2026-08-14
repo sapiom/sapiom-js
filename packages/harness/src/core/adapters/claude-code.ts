@@ -24,17 +24,19 @@ import { stripAnsi } from "../strip-ansi.js";
 /**
  * Minimum `claude` version the harness supports.
  *
- * Below this, the binary predates flags {@link ClaudeCodeAdapter.launch} /
- * `resume` inject on EVERY spawn — most importantly `--plugin-dir`. A
- * commander-style CLI aborts on an unknown option with a fast `exit 1`, BEFORE
- * it ever runs its SessionStart hook, so the session dies with no
- * `agentSessionId` and only an opaque exit code (the pty's stderr is discarded
- * on exit) — exactly the "exited before establishing a session id" failure
- * users report. `doctor()` reports a below-floor claude as NOT ok so the
- * desktop host installs a current one and the CLI surfaces an actionable
- * upgrade remedy, instead of every session crash-looping silently.
+ * Below this, the binary predates behavior {@link ClaudeCodeAdapter.launch} /
+ * `resume` rely on for EVERY spawn — Auto permission mode at this floor, and
+ * `--plugin-dir` on older releases. A commander-style CLI aborts on an unknown
+ * option or value with a fast `exit 1`, BEFORE it ever runs its SessionStart
+ * hook, so the session dies with no `agentSessionId` and only an opaque exit
+ * code (the pty's stderr is discarded on exit). `doctor()` reports a
+ * below-floor claude as NOT ok so the desktop host installs a current one and
+ * the CLI surfaces an actionable upgrade remedy instead.
  *
- * Why 2.1.0, from the Claude Code CHANGELOG:
+ * Why 2.1.83:
+ * - Claude's permission-mode documentation identifies 2.1.83 as the first
+ *   version that supports Auto mode, which interactive Harness sessions use as
+ *   their initial mode.
  * - The plugin system did not exist before the "Plugin System Released" entry
  *   in `2.0.12`, so no `1.x` or `2.0.0`–`2.0.11` build can recognize
  *   `--plugin-dir` — they reject it outright.
@@ -43,15 +45,10 @@ import { stripAnsi } from "../strip-ansi.js";
  *   against `2.1.x` (see core/inject/skills-plugin.ts). `2.1.x` is thus the
  *   earliest range we can GUARANTEE both recognizes the flag and loads our
  *   skills.
- * We floor at `2.1.0` — the earliest verified-safe version — rather than the
- * `2.0.12` plugin-system release, because we can't prove `--plugin-dir` is
- * present across the whole `2.0.x` line, and a spurious "please upgrade" for a
- * rare old-`2.0.x` install is far cheaper than the silent exit-1 crash-loop
- * this floor exists to prevent. This is the SINGLE source of truth — bump it
- * whenever the adapter starts sending a flag, or relying on behavior, a newer
- * `claude` introduced.
+ * This is the SINGLE source of truth — bump it whenever the adapter starts
+ * sending a flag, or relying on behavior, a newer `claude` introduced.
  */
-export const MIN_CLAUDE_CODE_VERSION = "2.1.0";
+export const MIN_CLAUDE_CODE_VERSION = "2.1.83";
 
 /**
  * Extract a leading `major.minor.patch` from a `claude --version` line such as
@@ -365,6 +362,12 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
   return args;
 }
 
+function buildInteractiveConfigArgs(opts: LaunchOpts): string[] {
+  const args = buildConfigArgs(opts);
+  args.push("--permission-mode", "auto");
+  return args;
+}
+
 /**
  * Claude Code's known blocking startup screens, matched against stripped-ANSI
  * scrollback. Exported so the packaged smoke / e2e layers can pin the same
@@ -460,7 +463,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   }
 
   launch(opts: LaunchOpts): SpawnSpec {
-    const args = buildConfigArgs(opts);
+    const args = buildInteractiveConfigArgs(opts);
     if (opts.systemPromptFile) {
       args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
     }
@@ -476,7 +479,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   }
 
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec {
-    const args = ["--resume", agentSessionId, ...buildConfigArgs(opts)];
+    const args = ["--resume", agentSessionId, ...buildInteractiveConfigArgs(opts)];
     if (opts.systemPromptFile) {
       args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
     }
