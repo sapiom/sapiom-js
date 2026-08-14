@@ -554,12 +554,12 @@ interface RawVideoResult {
 
 /**
  * The routed async-submit handle the Core capability router returns for the video
- * capability — camelCase (the router normalizes fal's snake_case), with `servedBy`
+ * capability — camelCase (the router normalizes the provider's snake_case), with `servedBy`
  * stripped at the public `/v1` boundary. Mirrors {@link ImageDispatchResponse}.
  *
  * NOTE: this is only the SUBMIT envelope's shape. The URL it carries
  * (`responseUrl`/`statusUrl`) points at the gateway's queue passthrough, which still
- * returns fal's RAW snake_case result — see {@link RawVideoResult} and {@link mapVideo}.
+ * returns the provider's RAW snake_case result — see {@link RawVideoResult} and {@link mapVideo}.
  */
 interface VideoDispatchResponse {
   requestId: string;
@@ -618,7 +618,7 @@ const sleep = (ms: number): Promise<void> =>
  * adapter resolves (a semantic alias like `"veo3-fast"`, or a raw provider id, and
  * defaults when omitted); the SDK no longer builds a `/run/<model>` URL itself. The poll
  * loop is unchanged: the submit response's `responseUrl`/`statusUrl` point at the
- * gateway's queue passthrough, which still returns fal's raw snake_case result.
+ * gateway's queue passthrough, which still returns the provider's raw snake_case result.
  */
 export async function createVideo(
   input: VideoCreateInput,
@@ -779,7 +779,7 @@ export function toVideoResumePayload(
  * {@link workflowResumeHeaders} so the service resumes the paused step on
  * completion. `model` resolves the same way as `createVideo` (semantic alias or
  * raw provider id, defaulted when omitted). The poll stays unchanged: `wait()`
- * reads the gateway's queue passthrough, which still returns fal's raw
+ * reads the gateway's queue passthrough, which still returns the provider's raw
  * snake_case result.
  */
 export async function launchVideo(
