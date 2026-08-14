@@ -1,5 +1,36 @@
 # @sapiom/harness-desktop
 
+## 0.3.1
+
+### Patch Changes
+
+- b1d791b: Add an artifact-first Studio run workspace for local and cloud agents. Studio now
+  collects schema-driven input, streams chronological attempt evidence, renders
+  bounded outputs with Rendered and Raw views, and provides an isolated Focus mode
+  for inspecting input, output, state, directives, logs, and recorded capability
+  calls.
+
+  Local agent execution now emits start and settled trace events with timing,
+  directive, shared-state, log, and capability-call evidence. Desktop development
+  launches rebuild Harness first so Electron always opens the current Studio UI.
+
+- 8ef5374: Restore drag-and-drop of images (and any file) into the Studio terminal. Removing the image composer (#562) left drops with no handler at all — xterm.js has no native drop behavior, so in the desktop app a dropped image was handed to the OS viewer instead of the agent. A drop on the terminal now behaves like a native emulator: the desktop preload resolves the dropped File to its real path (`webUtils.getPathForFile`) and the SPA pastes the quoted path into the pty, which Claude/Codex pick up natively (`[Image #1]`). Stray drops elsewhere in the SPA no longer navigate the page away.
+- f5a67c2: Clicking a link in the terminal opens the actual URL instead of a macOS "no application set to open the URL about:blank" dialog
+
+  The xterm web-links addon's default activation opens a blank window first and
+  assigns `location.href` afterwards. The desktop app's window-open handler
+  intercepts that first call, sees only `about:blank`, and hands it to the OS —
+  which has no handler for that scheme, so the link dies in a system dialog. The
+  terminal now passes the clicked URL directly to `window.open`, and the desktop
+  host additionally refuses to hand anything but `http(s):`/`mailto:` URLs to
+  `shell.openExternal`.
+
+- Updated dependencies [bb0df7d]
+- Updated dependencies [b1d791b]
+- Updated dependencies [8ef5374]
+- Updated dependencies [f5a67c2]
+  - @sapiom/harness@0.8.0
+
 ## 0.3.0
 
 ### Minor Changes

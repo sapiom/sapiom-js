@@ -1,5 +1,52 @@
 # @sapiom/harness
 
+## 0.8.0
+
+### Minor Changes
+
+- b1d791b: Add an artifact-first Studio run workspace for local and cloud agents. Studio now
+  collects schema-driven input, streams chronological attempt evidence, renders
+  bounded outputs with Rendered and Raw views, and provides an isolated Focus mode
+  for inspecting input, output, state, directives, logs, and recorded capability
+  calls.
+
+  Local agent execution now emits start and settled trace events with timing,
+  directive, shared-state, log, and capability-call evidence. Desktop development
+  launches rebuild Harness first so Electron always opens the current Studio UI.
+
+### Patch Changes
+
+- bb0df7d: Canvas: open the right pane when a real step graph renders, not when scaffolding is written
+
+  A canvas WRITE is not a canvas RESULT. The pane revealed itself on every
+  `canvas.reload`, and the "Preparing your agent — installing dependencies"
+  placeholder written while npm runs is exactly such a write — so a fresh
+  scaffold popped the pane open on setup state and presented it as the result
+  (the server's "Rendering agent diagram…" pending document does the same to the
+  mount probe).
+
+  The reveal now waits for the document to post `sapiom-canvas:graph`, which only
+  a real render embeds and the placeholders deliberately omit. Nothing is
+  deferred but the reveal: a collapsed pane is hidden with `display:none`, never
+  unmounted, so the iframe still loads and swaps its document in the background
+  and the board is there the instant it is worth showing. Absence of content is
+  still announced immediately, so an empty pane still hides itself.
+
+- 8ef5374: Restore drag-and-drop of images (and any file) into the Studio terminal. Removing the image composer (#562) left drops with no handler at all — xterm.js has no native drop behavior, so in the desktop app a dropped image was handed to the OS viewer instead of the agent. A drop on the terminal now behaves like a native emulator: the desktop preload resolves the dropped File to its real path (`webUtils.getPathForFile`) and the SPA pastes the quoted path into the pty, which Claude/Codex pick up natively (`[Image #1]`). Stray drops elsewhere in the SPA no longer navigate the page away.
+- f5a67c2: Clicking a link in the terminal opens the actual URL instead of a macOS "no application set to open the URL about:blank" dialog
+
+  The xterm web-links addon's default activation opens a blank window first and
+  assigns `location.href` afterwards. The desktop app's window-open handler
+  intercepts that first call, sees only `about:blank`, and hands it to the OS —
+  which has no handler for that scheme, so the link dies in a system dialog. The
+  terminal now passes the clicked URL directly to `window.open`, and the desktop
+  host additionally refuses to hand anything but `http(s):`/`mailto:` URLs to
+  `shell.openExternal`.
+
+- Updated dependencies [b1d791b]
+  - @sapiom/agent-core@0.11.0
+  - @sapiom/mcp@0.12.6
+
 ## 0.7.0
 
 ### Minor Changes

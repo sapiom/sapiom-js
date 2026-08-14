@@ -1,5 +1,16 @@
 # @sapiom/cli
 
+## 7.0.0
+
+### Patch Changes
+
+- Updated dependencies [bb0df7d]
+- Updated dependencies [b1d791b]
+- Updated dependencies [8ef5374]
+- Updated dependencies [f5a67c2]
+  - @sapiom/harness@0.8.0
+  - @sapiom/agent-core@0.11.0
+
 ## 6.0.0
 
 ### Patch Changes

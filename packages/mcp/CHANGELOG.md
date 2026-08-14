@@ -1,5 +1,12 @@
 # @sapiom/mcp
 
+## 0.12.6
+
+### Patch Changes
+
+- Updated dependencies [b1d791b]
+  - @sapiom/agent-core@0.11.0
+
 ## 0.12.5
 
 ### Patch Changes
