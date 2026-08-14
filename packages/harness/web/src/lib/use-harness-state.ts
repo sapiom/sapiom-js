@@ -41,10 +41,12 @@ import { track as trackProduct } from "./analytics/events";
 import {
   agentProvenance,
   deployErrorKind,
+  initialRunFunnelState,
   localRunOutcomeKind,
   newAgentPaths,
-  runErrorKind,
+  runFunnelStep,
   slugFromPath,
+  type RunFunnelEvent,
 } from "./analytics/lifecycle";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
@@ -64,11 +66,6 @@ const BUSY_WINDOW_MS = 3_000;
  *  cli/settings.ts) and its response replaces this guess. */
 const RECENT_DIRS_UI_CAP = 8;
 
-/** Consecutive failed `/api/runs/:id/state` polls tolerated before a run is
- *  declared unobservable. At the 2s poll interval this is ~10s of grace, which
- *  covers a gateway blip or a transient 503 without meaningfully delaying the
- *  verdict on a server that never had the endpoint. */
-const MAX_RUN_POLL_FAILURES = 5;
 
 /** Upper bound on {@link announcedRuns}. A Studio left open for days can
  *  accumulate executionIds without limit otherwise; the set only needs to
@@ -578,14 +575,32 @@ export function useHarnessState(): HarnessStateHook {
       // This is the single door every prod run comes through — the Prod Run
       // button AND a CLI-launched run the ExecutionDetector announced on the
       // bus — so instrumenting here counts runs the user caused, not clicks.
+      // Every decision here — dedupe the start, emit at most one terminal,
+      // tolerate N failures, tell `exception` from `unobservable` — lives in
+      // the pure `runFunnelStep` reducer, unit-tested in lifecycle.test.ts.
+      // This block only drives it and sends what it returns; keeping the rules
+      // out of a closure over React refs and timers is what makes them testable
+      // at all (both bugs found in review round 1 were invisible to the suite).
       const runSlug = workflowPath ? slugFromPath(workflowPath) : undefined;
       const runBase = { workflow_slug: runSlug, session_id: sessionId, target };
-      // TWO independent latches, deliberately. Collapsing them into one — using
-      // the redelivery flag to seed `outcomeEmitted` — inverts the invariant it
-      // is supposed to protect: a redelivered `execution.started` clears the old
-      // interval, so the poller created here is the only live one, and starting
-      // it latched shut means the run emits a `run_started` and NEVER a terminal
-      // event. Dedupe the start; leave the outcome free to fire exactly once.
+      let funnel = initialRunFunnelState();
+
+      const advanceFunnel = (event: RunFunnelEvent): void => {
+        const { state: next, emit } = runFunnelStep(funnel, event);
+        funnel = next;
+        if (emit.event === null) return;
+        if (emit.event === "agent.run_started") {
+          trackProduct("agent.run_started", runBase);
+          return;
+        }
+        const duration_ms = Date.now() - observedAt;
+        if (emit.event === "agent.run_succeeded") {
+          trackProduct("agent.run_succeeded", { ...runBase, duration_ms });
+          return;
+        }
+        trackProduct("agent.run_failed", { ...runBase, duration_ms, error_kind: emit.error_kind });
+      };
+
       const alreadyAnnounced = announcedRuns.current.has(executionId);
       // Bounded: drop the oldest ids once past the cap. Insertion order is
       // iteration order for a Set, so the first key is the oldest.
@@ -594,44 +609,9 @@ export function useHarnessState(): HarnessStateHook {
         if (oldest !== undefined) announcedRuns.current.delete(oldest);
       }
       announcedRuns.current.add(executionId);
-      // Exactly one terminal event per run. Polls are async and the immediate
-      // `void poll()` overlaps the interval, so two in-flight polls can both
-      // observe the terminal status before either clears the timer; without
-      // this latch that run counts twice.
-      let outcomeEmitted = false;
-      // Whether any poll has succeeded. Distinguishes "we watched it and lost
-      // it" (exception) from "we could never see it at all" (unobservable —
-      // a server predating /api/runs/:id/state).
-      let everObserved = false;
-      // Consecutive failed polls. A run is NOT declared failed on the first
-      // error: `/api/runs/:id/state` returns 503 whenever the harness itself
-      // holds no Sapiom credential (the coding agent can still have launched a
-      // real run from the pty with its own key), and 502 when the gateway
-      // blips. Both are recoverable and the run completes fine server-side, so
-      // giving up after one error books a false failure for a healthy run.
-      // `unobservable` only honestly means "old server" if we actually retried.
-      let consecutiveFailures = 0;
-      const emitRunOutcome = (run: RunView | null): void => {
-        if (outcomeEmitted) return;
-        outcomeEmitted = true;
-        const duration_ms = Date.now() - observedAt;
-        if (run?.status === "completed") {
-          trackProduct("agent.run_succeeded", { ...runBase, duration_ms });
-        } else {
-          trackProduct("agent.run_failed", {
-            ...runBase,
-            duration_ms,
-            error_kind: run
-              ? runErrorKind(run.status)
-              : everObserved
-                ? "exception"
-                : "unobservable",
-          });
-        }
-      };
-      if (!alreadyAnnounced) trackProduct("agent.run_started", runBase);
       // A redelivery re-polls (so the UI still tracks the run) but must not
-      // re-count the start. The terminal event is NOT suppressed — see above.
+      // re-count the start. The terminal event is deliberately NOT suppressed.
+      advanceFunnel({ kind: "announced", duplicate: alreadyAnnounced });
 
       const stopPolling = (): void => {
         const timer = runPollers.current.get(sessionId);
@@ -642,8 +622,6 @@ export function useHarnessState(): HarnessStateHook {
       const poll = async (): Promise<void> => {
         try {
           const run = await api.getRunState(executionId);
-          everObserved = true;
-          consecutiveFailures = 0;
           setRunsByExecution((prev) =>
             new Map(prev).set(executionId, {
               run,
@@ -652,20 +630,15 @@ export function useHarnessState(): HarnessStateHook {
               observedAt,
             }),
           );
-          if (run.status !== "running") {
-            emitRunOutcome(run);
-            stopPolling();
-          }
+          advanceFunnel({ kind: "polled", status: run.status });
+          if (run.status !== "running") stopPolling();
         } catch {
           // Endpoint absent (server predates runtime analytics) or transient
-          // failure. Retry a few times before concluding anything: a single
-          // 2-second blip is not a failed run, and on a server that genuinely
-          // lacks the endpoint every attempt fails anyway, so the only cost of
-          // retrying is a few seconds before `unobservable` is recorded.
-          consecutiveFailures += 1;
-          if (consecutiveFailures < MAX_RUN_POLL_FAILURES) return;
-          emitRunOutcome(null);
-          stopPolling();
+          // failure. The reducer decides when enough consecutive failures have
+          // accrued to call it; until then this keeps polling, because a single
+          // 2-second blip is not a failed run.
+          advanceFunnel({ kind: "poll_failed" });
+          if (funnel.settled) stopPolling();
         }
       };
       void poll();

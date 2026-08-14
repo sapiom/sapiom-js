@@ -4,7 +4,11 @@ import {
   agentProvenance,
   agentSource,
   deployErrorKind,
+  initialRunFunnelState,
   localRunOutcomeKind,
+  MAX_RUN_POLL_FAILURES,
+  runFunnelStep,
+  type RunFunnelEvent,
   newAgentPaths,
   runErrorKind,
   slugFromPath,
@@ -169,5 +173,136 @@ describe("localRunOutcomeKind", () => {
     expect(localRunOutcomeKind("paused")).toBe("pending");
     expect(localRunOutcomeKind("running")).toBe("pending");
     expect(localRunOutcomeKind(undefined)).toBe("pending");
+  });
+});
+
+describe("runFunnelStep", () => {
+  /** Drive a sequence of events, collecting every emitted event name. */
+  function drive(events: RunFunnelEvent[], maxFailures = MAX_RUN_POLL_FAILURES): string[] {
+    let state = initialRunFunnelState();
+    const emitted: string[] = [];
+    for (const event of events) {
+      const step = runFunnelStep(state, event, maxFailures);
+      state = step.state;
+      if (step.emit.event !== null) {
+        emitted.push(
+          step.emit.event === "agent.run_failed"
+            ? `agent.run_failed:${step.emit.error_kind}`
+            : step.emit.event,
+        );
+      }
+    }
+    return emitted;
+  }
+
+  it("the happy path is one start and one success", () => {
+    expect(
+      drive([
+        { kind: "announced", duplicate: false },
+        { kind: "polled", status: "running" },
+        { kind: "polled", status: "completed" },
+      ]),
+    ).toEqual(["agent.run_started", "agent.run_succeeded"]);
+  });
+
+  it("maps a terminal failure and a cancellation to their own kinds", () => {
+    expect(drive([{ kind: "polled", status: "failed" }])).toEqual(["agent.run_failed:failed"]);
+    expect(drive([{ kind: "polled", status: "cancelled" }])).toEqual(["agent.run_failed:cancelled"]);
+  });
+
+  // ---- the two bugs review round 1 found, pinned ------------------------
+
+  it("a REDELIVERED announcement suppresses the start but NOT the terminal", () => {
+    // The bug: seeding the outcome latch from the dedupe flag. A replayed
+    // execution.started then yielded a start with no terminal, ever.
+    expect(
+      drive([
+        { kind: "announced", duplicate: true },
+        { kind: "polled", status: "completed" },
+      ]),
+    ).toEqual(["agent.run_succeeded"]);
+  });
+
+  it("never emits two starts for the same run", () => {
+    expect(
+      drive([
+        { kind: "announced", duplicate: false },
+        { kind: "announced", duplicate: false },
+        { kind: "announced", duplicate: true },
+      ]),
+    ).toEqual(["agent.run_started"]);
+  });
+
+  it("emits at most ONE terminal even if two polls both see it", () => {
+    // Two in-flight polls can both observe the terminal status before either
+    // stops the timer.
+    expect(
+      drive([
+        { kind: "polled", status: "completed" },
+        { kind: "polled", status: "completed" },
+        { kind: "polled", status: "failed" },
+      ]),
+    ).toEqual(["agent.run_succeeded"]);
+  });
+
+  it("stays silent until the failure threshold, then emits exactly once", () => {
+    // The bug: giving up on the first error, which books a false failure for a
+    // healthy run whenever /api/runs/:id/state answers 503 or 502.
+    const beforeThreshold = Array.from({ length: MAX_RUN_POLL_FAILURES - 1 }, () => ({
+      kind: "poll_failed" as const,
+    }));
+    expect(drive(beforeThreshold)).toEqual([]);
+    expect(drive([...beforeThreshold, { kind: "poll_failed" }])).toEqual([
+      "agent.run_failed:unobservable",
+    ]);
+    // …and not again on the next failure.
+    expect(
+      drive([...beforeThreshold, { kind: "poll_failed" }, { kind: "poll_failed" }]),
+    ).toEqual(["agent.run_failed:unobservable"]);
+  });
+
+  it("a success RESETS the failure count", () => {
+    // The subtlest of the three: without the reset, blips accumulate across an
+    // otherwise healthy run and trip the threshold later, showing up only as
+    // runs declared unobservable slightly too eagerly.
+    const blips = Array.from({ length: MAX_RUN_POLL_FAILURES - 1 }, () => ({
+      kind: "poll_failed" as const,
+    }));
+    expect(
+      drive([
+        ...blips,
+        { kind: "polled", status: "running" },
+        ...blips,
+        { kind: "polled", status: "completed" },
+      ]),
+    ).toEqual(["agent.run_succeeded"]);
+  });
+
+  it("distinguishes losing a watched run from never seeing it", () => {
+    const fail = Array.from({ length: MAX_RUN_POLL_FAILURES }, () => ({
+      kind: "poll_failed" as const,
+    }));
+    // Never observed → the endpoint is probably absent.
+    expect(drive(fail)).toEqual(["agent.run_failed:unobservable"]);
+    // Observed once, then lost → a real exception.
+    expect(drive([{ kind: "polled", status: "running" }, ...fail])).toEqual([
+      "agent.run_failed:exception",
+    ]);
+  });
+
+  it("does not emit a terminal after one already fired, however it failed", () => {
+    const fail = Array.from({ length: MAX_RUN_POLL_FAILURES }, () => ({
+      kind: "poll_failed" as const,
+    }));
+    expect(drive([{ kind: "polled", status: "completed" }, ...fail])).toEqual([
+      "agent.run_succeeded",
+    ]);
+  });
+
+  it("is pure — the input state is never mutated", () => {
+    const state = initialRunFunnelState();
+    runFunnelStep(state, { kind: "announced", duplicate: false });
+    runFunnelStep(state, { kind: "poll_failed" });
+    expect(state).toEqual({ started: false, settled: false, observed: false, failures: 0 });
   });
 });

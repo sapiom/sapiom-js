@@ -215,6 +215,34 @@ describe("redaction gate — realistic clicks must not carry user names or paths
     expect(payloadText(out)).not.toContain("cool");
     expect(quoted).toContain("cool"); // guards the needle itself from typos
   });
+
+  it("promotes an accessible name containing an escaped quote in full", () => {
+    // Same escape-awareness, on the promotion path. A plain `[^"]*` stops at
+    // the first `\"` and promotes a truncated label.
+    const out = beforeSend(
+      capture({
+        $elements_chain: `button.copy:attr__class="copy"attr__aria-label="Copy the \\"raw\\" output"nth-child="1"`,
+      }),
+    );
+    expect((out!.properties as Record<string, unknown>).$el_text).toBe('Copy the \\"raw\\" output');
+  });
+
+  it("drops attr__href entirely rather than sanitizing it", () => {
+    // Deliberate capability change: link destinations no longer reach PostHog
+    // in any mode. `$el_text` still carries the visible label on `truncate`
+    // surfaces, so most link analysis survives. Documented in the PR body.
+    const out = beforeSend(
+      capture({
+        $el_text: "Open dashboard",
+        $elements: [{ attr__class: "link", attr__href: "https://app.sapiom.ai/agents/123?token=secret" }],
+        $elements_chain: `a.link:attr__class="link"attr__href="https://app.sapiom.ai/agents/123?token=secret"nth-child="1"`,
+      }),
+    );
+    const text = payloadText(out);
+    expect(text).not.toContain("token=secret");
+    expect(text).not.toContain("attr__href");
+    expect((out!.properties as Record<string, unknown>).$el_text).toBe("Open dashboard");
+  });
 });
 
 /**
@@ -234,7 +262,13 @@ describe("redaction gate — realistic clicks must not carry user names or paths
  * `WorkflowActionsHeader` tags its steps branch and its detail branch
  * separately, and a file-level check would have waved the second one through.
  *
- * Closing that properly needs a rendered DOM, which this runner does not have
+ * It also only recognises TEMPLATE-LITERAL labels — ``aria-label={`…${x}`}``.
+ * `aria-label={"Focus " + label}` and `aria-label={computeLabel(x)}` pass
+ * silently. Neither form exists in the tree today, so this is about what the
+ * check promises rather than a live gap, but it is the obvious way to slip
+ * past it.
+ *
+ * Closing both properly needs a rendered DOM, which this runner does not have
  * (see vitest.config.ts: React components are the Playwright tier's job). The
  * durable version belongs in `web/e2e` — render each surface with a fixture
  * path and assert every element whose attributes contain it has an ancestor
@@ -259,9 +293,15 @@ const SAFE_INTERPOLATED_LABELS: Record<string, string> = {
 describe("components that build an aria-label by interpolation must tag their surface", () => {
   const componentsDir = fileURLToPath(new URL("../../components", import.meta.url));
 
-  const offenders = readdirSync(componentsDir)
+  // Recursive: the point of this check is the component nobody thought about,
+  // and "someone adds components/rail/WorkspaceRow.tsx" is exactly that. Node
+  // 20+ per the CI test matrix.
+  const offenders = readdirSync(componentsDir, { recursive: true, encoding: "utf8" })
     .filter((f) => f.endsWith(".tsx"))
-    .map((file) => ({ file, source: readFileSync(`${componentsDir}/${file}`, "utf8") }))
+    .map((file) => ({
+      file: file.split(/[\\/]/).pop() ?? file,
+      source: readFileSync(`${componentsDir}/${file}`, "utf8"),
+    }))
     .filter(({ source }) => /aria-label=\{`[^`]*\$\{/.test(source));
 
   it("finds the interpolating components at all (guards the regex itself)", () => {

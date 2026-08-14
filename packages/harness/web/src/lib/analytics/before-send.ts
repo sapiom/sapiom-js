@@ -269,8 +269,10 @@ function redactUrls(result: CaptureResult, properties: Record<string, unknown>):
 }
 
 /** An `attr__aria-label="…"` in the serialized chain. Anchored on the full
- *  attribute name so it cannot match `aria-labelledby` or `aria-hidden`. */
-const CHAIN_ARIA_LABEL_PATTERN = /attr__aria-label="([^"]*)"/i;
+ *  attribute name so it cannot match `aria-labelledby` or `aria-hidden`, and
+ *  escape-aware for the same reason as {@link CHAIN_ANY_ATTRIBUTE} — with a
+ *  plain `[^"]*` a label containing an escaped quote is promoted truncated. */
+const CHAIN_ARIA_LABEL_PATTERN = /attr__aria-label="((?:\\.|[^"\\])*)"/i;
 
 /**
  * Give icon-only controls a readable label.

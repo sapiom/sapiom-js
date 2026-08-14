@@ -104,6 +104,109 @@ export function localRunOutcomeKind(
   return "pending";
 }
 
+/**
+ * Consecutive failed `/api/runs/:id/state` polls tolerated before a run is
+ * declared unobservable. At the store's 2s poll interval this is ~10s of grace.
+ */
+export const MAX_RUN_POLL_FAILURES = 5;
+
+/**
+ * What the funnel remembers about ONE execution.
+ *
+ * Extracted from `startRunPolling` because the two bugs found in review round 1
+ * both lived in this state machine — a latch seeded from the wrong flag, and a
+ * failure counter that didn't exist — and neither was reachable by a test while
+ * the logic was tangled with React refs, timers and `api.getRunState`. Reverting
+ * either fix left the whole suite green. The rules are the part worth pinning,
+ * so they live here as a pure function and the store becomes a thin driver.
+ */
+export interface RunFunnelState {
+  /** `agent.run_started` has been emitted for this executionId. */
+  started: boolean;
+  /** A terminal event has been emitted. At most one, ever. */
+  settled: boolean;
+  /** At least one poll came back with a run state. */
+  observed: boolean;
+  /** Consecutive failed polls since the last success. */
+  failures: number;
+}
+
+export function initialRunFunnelState(): RunFunnelState {
+  return { started: false, settled: false, observed: false, failures: 0 };
+}
+
+/**
+ * `announced` — the run was announced to the Studio. `duplicate` marks a
+ * REDELIVERED announcement (same executionId seen before), which must not
+ * re-count the start and must NOT pre-settle the outcome.
+ */
+export type RunFunnelEvent =
+  | { kind: "announced"; duplicate: boolean }
+  | { kind: "polled"; status: RunView["status"] }
+  | { kind: "poll_failed" };
+
+/** What the caller should send, if anything. */
+export type RunFunnelEmit =
+  | { event: null }
+  | { event: "agent.run_started" }
+  | { event: "agent.run_succeeded" }
+  | { event: "agent.run_failed"; error_kind: RunErrorKind };
+
+const EMIT_NOTHING: RunFunnelEmit = { event: null };
+
+/**
+ * The funnel's whole decision, as a pure step.
+ *
+ * Invariants this encodes, each of which was a bug at some point:
+ *
+ *  - A duplicate announcement suppresses only the START. The terminal event
+ *    stays free to fire — collapsing these two into one latch means a
+ *    redelivered `execution.started` yields a `run_started` and no terminal,
+ *    ever, which is the opposite of the rule it was meant to protect.
+ *  - At most one terminal event per run, because two overlapping in-flight
+ *    polls can both observe the terminal status before either stops the timer.
+ *  - A failed poll is not a failed run until `maxFailures` consecutive
+ *    failures. `/api/runs/:id/state` answers 503 whenever the harness holds no
+ *    credential while the coding agent runs with its own, and 502 on a gateway
+ *    blip; both recover, and the run completes fine server-side.
+ *  - A success RESETS the failure count, so a blip mid-run doesn't accumulate
+ *    across an otherwise healthy run and trip the threshold later.
+ *  - `unobservable` (never saw the run at all — almost always a server
+ *    predating the endpoint) is distinct from `exception` (watched it, lost
+ *    it). The distinction only means anything because we retried first.
+ */
+export function runFunnelStep(
+  state: RunFunnelState,
+  event: RunFunnelEvent,
+  maxFailures: number = MAX_RUN_POLL_FAILURES,
+): { state: RunFunnelState; emit: RunFunnelEmit } {
+  if (event.kind === "announced") {
+    if (event.duplicate || state.started) return { state, emit: EMIT_NOTHING };
+    return { state: { ...state, started: true }, emit: { event: "agent.run_started" } };
+  }
+
+  if (event.kind === "polled") {
+    const observed = { ...state, observed: true, failures: 0 };
+    if (event.status === "running") return { state: observed, emit: EMIT_NOTHING };
+    if (state.settled) return { state: observed, emit: EMIT_NOTHING };
+    const settled = { ...observed, settled: true };
+    return event.status === "completed"
+      ? { state: settled, emit: { event: "agent.run_succeeded" } }
+      : { state: settled, emit: { event: "agent.run_failed", error_kind: runErrorKind(event.status) } };
+  }
+
+  const failures = state.failures + 1;
+  const counted = { ...state, failures };
+  if (failures < maxFailures || state.settled) return { state: counted, emit: EMIT_NOTHING };
+  return {
+    state: { ...counted, settled: true },
+    emit: {
+      event: "agent.run_failed",
+      error_kind: state.observed ? "exception" : "unobservable",
+    },
+  };
+}
+
 /** The provenance bucket carried as `source` on the lifecycle events. */
 export type AgentSource = "template" | "starter" | "fork" | "scratch";
 
