@@ -1084,9 +1084,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               ],
             }),
           ) as ImageGenerationResult;
+          // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
+          result.resolvedModel = input.model ?? "stub-model";
 
           const handle: ImageLaunchHandle = {
             requestId,
+            resolvedModel: result.resolvedModel,
             dispatch: {
               correlationId: requestId,
               resultSignal: IMAGE_RESULT_SIGNAL,
@@ -1138,9 +1141,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               },
             }),
           ) as VideoGenerationResult;
+          // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
+          result.resolvedModel = input.model ?? "stub-model";
 
           const handle: VideoLaunchHandle = {
             requestId,
+            resolvedModel: result.resolvedModel,
             dispatch: {
               correlationId: requestId,
               resultSignal: VIDEO_RESULT_SIGNAL,
