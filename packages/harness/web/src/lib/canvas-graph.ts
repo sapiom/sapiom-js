@@ -33,9 +33,12 @@ export interface CanvasGraphNode {
   capabilities: string[];
 }
 
-/** The subset of JSON Schema the manifest's inputSchema actually carries. */
-export interface CanvasInputSchema {
-  properties?: Record<string, { type?: string }>;
+/** The complete JSON Schema posted by the manifest-backed canvas document.
+ * Step summaries read only `properties`/`required`; the Run sheet can reuse
+ * the same known-good contract when a fresh server extraction is temporarily
+ * unavailable. */
+export interface CanvasInputSchema extends Record<string, unknown> {
+  properties?: Record<string, Record<string, unknown>>;
   required?: string[];
 }
 
@@ -51,7 +54,11 @@ export function stepInputFields(node: CanvasGraphNode): CanvasInputField[] {
   if (!props) return [];
   const required = new Set(node.inputSchema?.required ?? []);
   return Object.entries(props)
-    .map(([name, def]) => ({ name, type: def?.type ?? "unknown", required: required.has(name) }))
+    .map(([name, def]) => ({
+      name,
+      type: typeof def?.type === "string" ? def.type : "unknown",
+      required: required.has(name),
+    }))
     .sort((a, b) => Number(b.required) - Number(a.required));
 }
 
@@ -145,23 +152,33 @@ export function nodeKindLabel(kind: CanvasNodeKind): string {
   }
 }
 
-/** Normalize an untrusted inputSchema payload to the subset the UI renders. */
+function cloneJsonValue(value: unknown, depth = 0): unknown {
+  if (depth > 32) return undefined;
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) return value;
+  if (Array.isArray(value)) {
+    return value.map((child) => cloneJsonValue(child, depth + 1));
+  }
+  if (typeof value !== "object") return undefined;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, child]) => [key, cloneJsonValue(child, depth + 1)] as const)
+      .filter((entry) => entry[1] !== undefined),
+  );
+}
+
+/** Normalize an untrusted inputSchema payload without throwing away defaults,
+ * descriptions, enums, nested fields, or examples the Run sheet needs. */
 function parseInputSchema(raw: unknown): CanvasInputSchema | null {
   if (!raw || typeof raw !== "object") return null;
-  const schema = raw as Record<string, unknown>;
-  if (!schema.properties || typeof schema.properties !== "object") return null;
-  const properties: Record<string, { type?: string }> = {};
-  for (const [name, def] of Object.entries(schema.properties as Record<string, unknown>)) {
-    const type = def && typeof def === "object" ? (def as { type?: unknown }).type : undefined;
-    properties[name] = typeof type === "string" ? { type } : {};
-  }
-  if (Object.keys(properties).length === 0) return null;
-  return {
-    properties,
-    required: Array.isArray(schema.required)
-      ? schema.required.filter((r): r is string => typeof r === "string")
-      : [],
-  };
+  const cloned = cloneJsonValue(raw);
+  return cloned && typeof cloned === "object" && !Array.isArray(cloned)
+    ? (cloned as CanvasInputSchema)
+    : null;
 }
 
 /** Validate/normalize an untrusted posted payload into a CanvasGraph. */

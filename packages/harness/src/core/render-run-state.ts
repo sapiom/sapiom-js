@@ -11,7 +11,8 @@
  *
  * Honest absence is preserved end to end: a still-running step gets no
  * `latencyMs`, and a step with no logs gets no `logSlice`. The inspector
- * surfaces logs, latency, and pass/fail only — no cost.
+ * surfaces the projection's recorded input, output, state, directive, logs,
+ * timing, and status — never cost or invented call traces.
  */
 import { isExecutionTerminal } from "@sapiom/agent-core";
 import type {
@@ -81,8 +82,11 @@ function toStepView(step: StepProjection): StepView {
   const view: StepView = {
     id: step.spanId ?? `step-${step.stepOrder}-${step.attempt}`,
     name: step.stepName,
+    attempt: step.attempt,
     status: toStepStatus(step.status),
   };
+  if (step.startedAt) view.startedAt = step.startedAt;
+  if (step.finishedAt) view.finishedAt = step.finishedAt;
   const latencyMs = toLatencyMs(step.startedAt, step.finishedAt);
   if (latencyMs !== undefined) view.latencyMs = latencyMs;
   if (step.error?.message) view.error = step.error.message;
@@ -96,6 +100,8 @@ function toStepView(step: StepProjection): StepView {
   // step's own values, with no provider/model surfaced.
   if (step.input !== null) view.input = step.input;
   if (step.output !== null) view.output = step.output;
+  if (step.sharedStateAfter !== null) view.sharedState = step.sharedStateAfter;
+  if (step.nextDirective !== null) view.directive = step.nextDirective;
   // `step.events` are capability execution events forwarded by dispatched
   // capabilities (e.g. tool_use / thinking / result events from a coding run).
   // They do NOT represent dotted workflow capability calls (search.webSearch,
@@ -115,9 +121,15 @@ function toStepView(step: StepProjection): StepView {
  * projection is already the decoded, degradation-tolerant shape.
  */
 export function renderRunState(decoded: ExecutionProjection): RunView {
-  return {
+  const view: RunView = {
     executionId: decoded.id,
     status: toRunStatus(decoded.status),
     steps: decoded.steps.map(toStepView),
   };
+  if (decoded.input !== null) view.input = decoded.input;
+  if (decoded.output !== null) view.output = decoded.output;
+  if (decoded.error !== null) view.error = decoded.error;
+  if (decoded.startedAt) view.startedAt = decoded.startedAt;
+  if (decoded.finishedAt) view.finishedAt = decoded.finishedAt;
+  return view;
 }

@@ -114,10 +114,10 @@ describe("runBootstrap", () => {
 
     expect(code).toBe(0);
     const out = lines();
-    // First line is the step trace, forwarded verbatim.
-    expect(out[0]).toMatchObject({ step: "greet", status: "succeeded" });
+    // The mock does not invoke the onStepTrace callback, so only the summary is
+    // emitted here. Integration coverage in agent-core proves live callbacks.
     // Terminal summary carries the run outcome + both stub-hygiene signals.
-    const summary = out[1] as unknown as RunLocalSummaryLine;
+    const summary = out[0] as unknown as RunLocalSummaryLine;
     expect(summary.kind).toBe("summary");
     expect(summary.outcome).toBe("completed");
     expect(summary.unusedStubs).toEqual([{ step: "greet", key: "web.search" }]);
@@ -189,6 +189,61 @@ describe("runBootstrap", () => {
       input: { a: 1 },
       stubs: { version: 1, steps: {} },
       maxAttemptsPerStep: 2,
+      onStepTrace: expect.any(Function),
     });
+  });
+
+  it("streams started and settled events as the dispatcher emits them", async () => {
+    runLocalFromDir.mockImplementation(async (opts) => {
+      opts.onStepTrace("started", {
+        step: "greet",
+        attempt: 1,
+        input: { name: "Ada" },
+        status: "running",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        logs: [],
+      });
+      opts.onStepTrace("settled", {
+        step: "greet",
+        attempt: 1,
+        input: { name: "Ada" },
+        status: "succeeded",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-01T00:00:00.010Z",
+        output: { greeting: "hi" },
+        directive: { kind: "terminate" },
+        sharedStateAfter: { greeted: true },
+        logs: [],
+      });
+      return {
+        outcome: "completed",
+        executionId: "exec_1",
+        output: { greeting: "hi" },
+        steps: [],
+        unusedStubs: [],
+        stubWarnings: [],
+      };
+    });
+
+    const { sink, lines } = collect();
+    await runBootstrap({ sourceDir: "/proj/agent" }, sink);
+
+    expect(lines()).toEqual([
+      expect.objectContaining({
+        kind: "step",
+        phase: "started",
+        trace: expect.objectContaining({ step: "greet", status: "running" }),
+      }),
+      expect.objectContaining({
+        kind: "step",
+        phase: "settled",
+        trace: expect.objectContaining({
+          step: "greet",
+          status: "succeeded",
+          sharedStateAfter: { greeted: true },
+        }),
+      }),
+      expect.objectContaining({ kind: "summary", outcome: "completed" }),
+    ]);
   });
 });

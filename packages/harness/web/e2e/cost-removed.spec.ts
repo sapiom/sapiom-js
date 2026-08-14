@@ -324,12 +324,13 @@ test.describe("cost-removed guard", () => {
     await assertNoDollarInChrome(stepsPanel, "steps tab with run");
     await assertNoCostAffordance(stepsPanel, "steps tab with run");
 
-    // Explicit: the step-run-note shows "prod run" (not a cost label)
-    const runNote = page.getByTestId("canvas-steps-run-note");
-    await expect(runNote).toContainText("run");
-    await expect(runNote).not.toContainText("$");
-    await expect(runNote).not.toContainText("wallet");
-    await expect(runNote).not.toContainText("spend");
+    // Explicit: the compact run header shows status + target, never cost.
+    const runHeader = page.locator(".run-workspace-header");
+    await expect(runHeader).toContainText("Completed");
+    await expect(runHeader).toContainText("Cloud");
+    await expect(runHeader).not.toContainText("$");
+    await expect(runHeader).not.toContainText("wallet");
+    await expect(runHeader).not.toContainText("spend");
   });
 
   // -------------------------------------------------------------------------

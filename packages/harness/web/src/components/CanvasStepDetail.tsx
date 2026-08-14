@@ -13,6 +13,7 @@ import {
 } from "../lib/extract-step-context";
 import type { DeployProgress, RunTarget } from "../lib/use-harness-state";
 import { agentUrl } from "../lib/urls";
+import { ArtifactRenderer } from "./ArtifactRenderer";
 import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -36,7 +37,7 @@ function StubbedChip(): JSX.Element {
 }
 
 /**
- * A labelled disclosure for a run payload (Input / Output / Logs / Result) with
+ * A labelled disclosure for raw diagnostic payloads (Input / Logs) with
  * a Copy button — the one place these render, so every payload gets the same
  * copy affordance. `text` is pre-stringified by the caller (formatPayload for
  * JSON values, the raw string for logs). Copying reuses the SnippetPanel copy
@@ -100,6 +101,21 @@ function PayloadBlock({
       <pre>{text}</pre>
     </details>
   );
+}
+
+/** Canvas step evidence uses the same safe, bounded artifact experience as run
+ * results, but starts collapsed to keep the board inspector compact. Keeping
+ * this wrapper shared between Canvas and Steps node detail prevents drift. */
+function CanvasEvidenceArtifact({
+  label,
+  value,
+  testId,
+}: {
+  label: "Input" | "Output" | "Logs" | "Arguments" | "Result";
+  value: unknown;
+  testId: string;
+}): JSX.Element {
+  return <ArtifactRenderer value={value} label={label} testId={testId} defaultOpen={false} />;
 }
 
 /**
@@ -189,168 +205,6 @@ function RunStatusGlyph({ status }: { status: RunView["status"] }): JSX.Element 
 }
 
 /**
- * The run's headline card at the top of the Steps surface: outcome, live
- * progress while running, total duration, and the single most relevant "final
- * data" CTA so the user doesn't have to scroll into a step to find the payoff.
- * Result priority: the deployed agent's dashboard link → a running dev-server
- * preview → any URLs the run produced (aggregated across steps) → the final
- * step's output. Every part is honest-absence: duration only when a step
- * reported latency, the output only once the run is terminal, links only when
- * some exist — never a fabricated value.
- */
-export function RunSummaryBlock({
-  run,
-  runTarget,
-  workflow,
-  preview,
-}: {
-  run: RunView;
-  runTarget: RunTarget | null;
-  workflow: WorkflowInfo | null;
-  preview: { port: number; url: string } | null;
-}): JSX.Element {
-  const total = run.steps.length;
-  const passed = run.steps.filter((s) => s.status === "passed").length;
-  const running = run.status === "running";
-  const durationMs = run.steps.reduce((sum, s) => sum + (s.latencyMs ?? 0), 0);
-  const hasDuration = run.steps.some((s) => s.latencyMs !== undefined);
-
-  // Aggregate every URL the run produced, deduped, so the results surface at the
-  // top instead of hiding inside a per-step disclosure.
-  const seen = new Set<string>();
-  const links: ReturnType<typeof extractStepLinks> = [];
-  for (const step of run.steps) {
-    for (const link of extractStepLinks(step)) {
-      if (seen.has(link.url)) continue;
-      seen.add(link.url);
-      links.push(link);
-    }
-  }
-
-  const finalOutputStep = [...run.steps].reverse().find((s) => s.output !== undefined);
-  const dashboardUrl = workflow?.definitionId != null ? agentUrl(workflow.definitionId) : null;
-
-  // The first produced URL is the run's payoff → the primary "Open result" CTA;
-  // any others drop to the secondary row. The dashboard link shows as secondary
-  // whenever it isn't already the primary (i.e. the run produced something).
-  const resultLink = links[0] ?? null;
-  const restLinks = resultLink ? links.slice(1) : [];
-  const secondaryDashboard = dashboardUrl != null && resultLink != null;
-
-  const statusLabel = running
-    ? `Running — ${passed} of ${total} step${total === 1 ? "" : "s"}`
-    : run.status === "completed"
-      ? "Completed"
-      : run.status === "failed"
-        ? "Failed"
-        : "Cancelled";
-
-  return (
-    <section className="canvas-run-summary" data-testid="run-summary">
-      <div className="canvas-run-summary-head">
-        <span
-          className={"canvas-run-summary-status is-" + run.status}
-          data-testid="run-summary-status"
-        >
-          <RunStatusGlyph status={run.status} />
-          {statusLabel}
-        </span>
-        {hasDuration && (
-          <span className="canvas-run-summary-meta" data-testid="run-summary-duration">
-            {formatTimeout(durationMs)}
-          </span>
-        )}
-        {runTarget && (
-          <span className="canvas-run-summary-target">{runKindLabel(runTarget)}</span>
-        )}
-      </div>
-
-      {/* The payoff CTA. What the run PRODUCED (its first result URL) is the
-          primary, prominent action; a deployed dashboard link and preview drop
-          to secondary. When the run produced nothing, the dashboard (or
-          preview) takes the primary slot so there's always a real destination. */}
-      {resultLink ? (
-        <a
-          className="run-summary-open"
-          data-testid="run-summary-open"
-          href={resultLink.url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <Icon name="ArrowUpRight" size={14} />
-          Open result
-        </a>
-      ) : preview ? (
-        <a
-          className="run-summary-open"
-          data-testid="run-summary-preview-link"
-          href={preview.url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <Icon name="ArrowUpRight" size={14} />
-          Open preview
-        </a>
-      ) : dashboardUrl ? (
-        <a
-          className="run-summary-open"
-          data-testid="run-summary-dashboard-link"
-          href={dashboardUrl}
-          target="_blank"
-          rel="noreferrer"
-          data-tooltip="Open this agent in the Sapiom dashboard"
-        >
-          <Icon name="Cloud" size={14} />
-          Open in Sapiom
-        </a>
-      ) : null}
-
-      {/* Secondary destinations — flat links beneath the primary CTA. */}
-      {(secondaryDashboard || preview || restLinks.length > 0) && (
-        <div className="run-summary-secondary">
-          {secondaryDashboard && (
-            <a
-              className="status-tag status-tag-action run-summary-secondary-link"
-              data-testid="run-summary-dashboard-link"
-              href={dashboardUrl!}
-              target="_blank"
-              rel="noreferrer"
-              data-tooltip="Open this agent in the Sapiom dashboard"
-            >
-              <Icon name="Cloud" size={12} />
-              Open in Sapiom
-            </a>
-          )}
-          {resultLink && preview && (
-            <a
-              className="status-tag status-tag-action run-summary-secondary-link"
-              data-testid="run-summary-preview-link"
-              href={preview.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Icon name="ExternalLink" size={12} />
-              Open preview
-            </a>
-          )}
-          {restLinks.length > 0 && <LinksList links={restLinks} testid="run-summary-links" />}
-        </div>
-      )}
-
-      {!running && finalOutputStep?.output !== undefined && (
-        <PayloadBlock
-          label="Result"
-          text={formatPayload(finalOutputStep.output)}
-          className="canvas-run-result"
-          testid="run-summary-output"
-          copyTestid="payload-copy-result"
-        />
-      )}
-    </section>
-  );
-}
-
-/**
  * A deploy landing in the Steps surface, so Deploy reads as an ACTION with
  * progress and a payoff (like a run) rather than a silent toast. Shows the live
  * phase (linking → building) with a spinner, and on `ready` a completion banner
@@ -436,10 +290,10 @@ export function DeployStatusBanner({
 /**
  * "Capability calls" block: rendered when `step.calls` is present and
  * non-empty (local/offline runs). Each call shows the dotted capability id
- * with a "(stubbed)" marker when the call was served by a stub, and its
- * `result` behind a compact per-call disclosure so the panel is not
- * overwhelming. Absent when `calls` is absent (prod runs) or empty — that
- * is correct, not a bug.
+ * with a "(stubbed)" marker when the call was served by a stub. Recorded
+ * arguments and results reuse the collapsed Canvas artifact viewer. Absent
+ * evidence stays absent, as do calls in production traces that do not carry
+ * call records.
  *
  * Provider rule: only the capability dotted id is shown — never a provider
  * or model name.
@@ -463,11 +317,19 @@ function CapabilityCallsBlock({ step }: { step: StepView }): JSX.Element | null 
                 </span>
               )}
             </div>
+            {call.args !== undefined && (
+              <CanvasEvidenceArtifact
+                label="Arguments"
+                value={call.args}
+                testId={`canvas-call-arguments-${call.capability}`}
+              />
+            )}
             {call.result !== undefined && (
-              <details className="canvas-run-logs canvas-capability-call-result" data-testid={`canvas-call-result-${call.capability}`}>
-                <summary>Result</summary>
-                <pre>{formatPayload(call.result)}</pre>
-              </details>
+              <CanvasEvidenceArtifact
+                label="Result"
+                value={call.result}
+                testId={`canvas-call-result-${call.capability}`}
+              />
             )}
           </div>
         ))}
@@ -981,29 +843,27 @@ export function CanvasStepDetail({
                 honest `null`/`false`/`0`/`""` still renders; a step that never
                 carried an input/output shows no block at all (no fabrication).
                 Capability, not model: these are the step's own payloads, with
-                no provider/model surfaced anywhere. */}
+            no provider/model surfaced anywhere. */}
             {runStep.input !== undefined && (
-              <PayloadBlock
+              <CanvasEvidenceArtifact
                 label="Input"
-                text={formatPayload(runStep.input)}
-                testid={`canvas-detail-run-input-${node.id}`}
-                copyTestid={`payload-copy-input-${node.id}`}
+                value={runStep.input}
+                testId={`canvas-detail-run-input-${node.id}`}
               />
             )}
             {runStep.output !== undefined && (
-              <PayloadBlock
+              <CanvasEvidenceArtifact
                 label="Output"
-                text={formatPayload(runStep.output)}
-                testid={`canvas-detail-run-output-${node.id}`}
-                copyTestid={`payload-copy-output-${node.id}`}
+                value={runStep.output}
+                testId={`canvas-detail-run-output-${node.id}`}
               />
             )}
             {runStep.error && <pre className="canvas-run-error">{runStep.error}</pre>}
             {runStep.logSlice && (
-              <PayloadBlock
+              <CanvasEvidenceArtifact
                 label="Logs"
-                text={runStep.logSlice}
-                copyTestid={`payload-copy-logs-${node.id}`}
+                value={runStep.logSlice}
+                testId={`canvas-detail-run-logs-${node.id}`}
               />
             )}
           </section>
@@ -1187,28 +1047,25 @@ export function CanvasStepInspector({
       {/* Per-step IO — same honest-absence gate as the full-pane detail:
           gated on !==undefined so null/false/0/"" still render. */}
       {runStep?.input !== undefined && (
-        <PayloadBlock
+        <CanvasEvidenceArtifact
           label="Input"
-          text={formatPayload(runStep.input)}
-          testid={`canvas-inspector-run-input-${node.id}`}
-          copyTestid={`payload-copy-input-${node.id}`}
+          value={runStep.input}
+          testId={`canvas-inspector-run-input-${node.id}`}
         />
       )}
       {runStep?.output !== undefined && (
-        <PayloadBlock
+        <CanvasEvidenceArtifact
           label="Output"
-          text={formatPayload(runStep.output)}
-          testid={`canvas-inspector-run-output-${node.id}`}
-          copyTestid={`payload-copy-output-${node.id}`}
+          value={runStep.output}
+          testId={`canvas-inspector-run-output-${node.id}`}
         />
       )}
       {runStep?.error && <pre className="canvas-run-error">{runStep.error}</pre>}
       {runStep?.logSlice && (
-        <PayloadBlock
+        <CanvasEvidenceArtifact
           label="Logs"
-          text={runStep.logSlice}
-          testid={`canvas-inspector-run-logs-${node.id}`}
-          copyTestid={`payload-copy-logs-${node.id}`}
+          value={runStep.logSlice}
+          testId={`canvas-inspector-run-logs-${node.id}`}
         />
       )}
       {/* Capability calls: local runs carry per-call stub traces; absent for

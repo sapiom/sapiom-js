@@ -108,7 +108,7 @@ test.describe("board-click inspector shows Input, Output, and Logs", () => {
     await loadBoard(page);
   });
 
-  test("inspector shows Input and Output disclosures when a run step carries them", async ({
+  test("inspector shows collapsed Rendered/Raw Input and Output artifacts", async ({
     page,
   }) => {
     await seedRunState(page, "exec-io-test", {
@@ -137,20 +137,34 @@ test.describe("board-click inspector shows Input, Output, and Logs", () => {
     await expect(page.getByTestId("canvas-inspector-run")).toContainText("Agent run");
     await expect(page.getByTestId("canvas-inspector-run")).not.toContainText("Last run");
 
-    // Input disclosure must be present.
+    // Canvas evidence starts compact and expands into the shared renderer.
     const inputDetail = inspector.getByTestId("canvas-inspector-run-input-intake");
     await expect(inputDetail).toBeVisible();
-    await inputDetail.click();
-    await expect(inputDetail).toContainText("Ada");
+    const inputDisclosure = inputDetail.getByRole("button", { name: "Input", exact: true });
+    await expect(inputDisclosure).toHaveAttribute("aria-expanded", "false");
+    await inputDisclosure.click();
+    await expect(inputDisclosure).toHaveAttribute("aria-expanded", "true");
+    await expect(inputDetail.getByText("applicant", { exact: true })).toBeVisible();
+    await expect(inputDetail.getByText("Ada", { exact: true })).toBeVisible();
+    await inputDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(inputDetail.locator("pre")).toContainText('"applicant": "Ada"');
 
-    // Output disclosure must be present.
     const outputDetail = inspector.getByTestId("canvas-inspector-run-output-intake");
     await expect(outputDetail).toBeVisible();
-    await outputDetail.click();
-    await expect(outputDetail).toContainText("720");
+    const outputDisclosure = outputDetail.getByRole("button", { name: "Output", exact: true });
+    await expect(outputDisclosure).toHaveAttribute("aria-expanded", "false");
+    await outputDisclosure.click();
+    await expect(outputDetail.getByRole("tab", { name: "Rendered" })).toHaveAttribute("aria-selected", "true");
+    await expect(outputDetail.getByText("ok", { exact: true })).toBeVisible();
+    await expect(outputDetail.getByText("true", { exact: true })).toBeVisible();
+    await expect(outputDetail.getByText("score", { exact: true })).toBeVisible();
+    await expect(outputDetail.getByText("720", { exact: true })).toBeVisible();
+    await outputDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(outputDetail.locator("pre")).toContainText('"score": 720');
+    await expect(outputDetail.getByRole("button", { name: "Copy" })).toBeVisible();
   });
 
-  test("inspector shows a Logs disclosure when the run step carries logSlice", async ({
+  test("inspector shows collapsed Rendered/Raw Logs when the run step carries logSlice", async ({
     page,
   }) => {
     await seedRunState(page, "exec-logs-test", {
@@ -176,8 +190,12 @@ test.describe("board-click inspector shows Input, Output, and Logs", () => {
     const inspector = page.getByTestId("canvas-step-inspector");
     const logsDetail = inspector.getByTestId("canvas-inspector-run-logs-screen");
     await expect(logsDetail).toBeVisible();
-    await logsDetail.click();
-    await expect(logsDetail).toContainText("scoring complete");
+    const logsDisclosure = logsDetail.getByRole("button", { name: "Logs", exact: true });
+    await expect(logsDisclosure).toHaveAttribute("aria-expanded", "false");
+    await logsDisclosure.click();
+    await expect(logsDetail.getByText("INFO: scoring complete", { exact: true })).toBeVisible();
+    await logsDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(logsDetail.locator("pre")).toContainText("INFO: scoring complete");
   });
 
   test("inspector does not show Input/Output/Logs blocks when the step has none", async ({
@@ -227,6 +245,7 @@ test.describe("Capability calls block", () => {
             {
               capability: "records.read",
               stubUsed: true,
+              args: { applicant: "Ada" },
               result: { creditScore: 720, passed: true },
             },
           ],
@@ -254,12 +273,25 @@ test.describe("Capability calls block", () => {
     await expect(stubChip).toBeVisible();
     await expect(stubChip).toContainText("stubbed");
 
-    // The result disclosure must be present; open it to see the served value.
+    const argumentsDetail = callsSection.getByTestId("canvas-call-arguments-records.read");
+    const argumentsDisclosure = argumentsDetail.getByRole("button", { name: "Arguments", exact: true });
+    await expect(argumentsDisclosure).toHaveAttribute("aria-expanded", "false");
+    await argumentsDisclosure.click();
+    await expect(argumentsDetail.getByText("applicant", { exact: true })).toBeVisible();
+    await expect(argumentsDetail.getByText("Ada", { exact: true })).toBeVisible();
+    await argumentsDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(argumentsDetail.locator("pre")).toContainText('"applicant": "Ada"');
+
+    // Result follows the same collapsed Rendered/Raw contract.
     const resultDetail = callsSection.getByTestId("canvas-call-result-records.read");
     await expect(resultDetail).toBeVisible();
-    await resultDetail.click();
-    await expect(resultDetail).toContainText("720");
-    await expect(resultDetail).toContainText("creditScore");
+    const resultDisclosure = resultDetail.getByRole("button", { name: "Result", exact: true });
+    await expect(resultDisclosure).toHaveAttribute("aria-expanded", "false");
+    await resultDisclosure.click();
+    await expect(resultDetail.getByText("720", { exact: true })).toBeVisible();
+    await expect(resultDetail.getByText("creditScore", { exact: true })).toBeVisible();
+    await resultDetail.getByRole("tab", { name: "Raw" }).click();
+    await expect(resultDetail.locator("pre")).toContainText('"creditScore": 720');
   });
 
   test("a prod run step without calls does NOT show the Capability calls block", async ({
@@ -314,17 +346,13 @@ test.describe("Capability calls block", () => {
     await expect(chip).toBeVisible({ timeout: 8000 });
     await expect(chip).toContainText("completed", { timeout: 8000 });
 
-    // Expand the 'approve' row: the detail renders inline in its dropdown.
-    await page.getByTestId("canvas-step-row-approve").click();
-
-    const detail = page.getByTestId("canvas-step-detail");
+    // Drill into the attempt and use the workspace's predictable Calls tab.
+    await page.getByRole("option", { name: /approve/ }).click();
+    const detail = page.getByRole("region", { name: "approve attempt 1" });
     await expect(detail).toBeVisible({ timeout: 5000 });
-    await expect(detail.getByRole("heading", { name: "Agent run" })).toBeVisible();
-    await expect(detail).not.toContainText("Last run");
-
-    const callsSection = detail.getByTestId("canvas-detail-capability-calls");
-    await expect(callsSection).toBeVisible();
-    await expect(callsSection).toContainText("records.write");
+    await detail.getByRole("tab", { name: "Calls" }).click();
+    await expect(detail.getByRole("tabpanel")).toContainText("records.write");
+    await expect(detail.getByRole("tabpanel")).toContainText("stubbed");
   });
 });
 

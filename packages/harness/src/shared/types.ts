@@ -575,13 +575,20 @@ export type StepStatus = "pending" | "running" | "passed" | "failed";
 /** One step as the canvas renders it — status plus the deterministically
  *  derived latency/error/log slice. Optional fields are ABSENT (not
  *  `undefined`/`0`) when the decoded projection carries no value — honest
- *  absence. The inspector surfaces logs, latency, and pass/fail only. */
+ *  absence. Studio exposes every recorded field through the shared evidence
+ *  inspector and labels missing fields as not recorded. */
 export interface StepView {
   /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
   id: string;
   /** Human step label (the projection's stepName). */
   name: string;
+  /** Attempt number from the runtime; retries repeat as distinct rows. Absent
+   * only for legacy/synthetic structural rows that predate attempt evidence. */
+  attempt?: number;
   status: StepStatus;
+  /** Runtime timestamps when recorded. */
+  startedAt?: string;
+  finishedAt?: string;
   /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
   latencyMs?: number;
   /** Terminal error message; present only for a failed step that recorded one. */
@@ -600,6 +607,10 @@ export interface StepView {
    *  output, absent otherwise (a still-running or output-less step shows no
    *  Output block). Any JSON shape. */
   output?: unknown;
+  /** Snapshot of shared state immediately after this attempt settled. */
+  sharedState?: Record<string, unknown>;
+  /** Continue/retry/pause/terminate/fail directive returned by the step. */
+  directive?: unknown;
   /** The capability calls this step made during the run, in call order. Each
    *  entry is capability-scoped and provider-agnostic. Absent (never `[]`)
    *  when the source records no call information for this step — honest
@@ -626,14 +637,23 @@ export interface UnusedStubView {
  *  never carry them), and only when they carry real signal. A local run is
  *  stub-served by construction — every `ctx.sapiom.*` call resolves from a stub —
  *  so `stubbed` is the honest per-run truth the inspector marks each executed
- *  step with (agent-core records no per-CALL stub attribution, so the chip lives
- *  at the granularity the trace actually supports). `unusedStubs`/`stubWarnings`
+ *  step with. When the local trace records individual calls, `StepCall.stubUsed`
+ *  supplies the finer-grained attribution alongside that run-level signal.
+ *  `unusedStubs`/`stubWarnings`
  *  come from the run's terminal NDJSON summary and are ABSENT (not `[]`) when
  *  empty, so the read-only notice renders nothing when there is nothing wrong. */
 export interface RunView {
   executionId: string;
   status: "running" | "completed" | "failed" | "cancelled";
   steps: StepView[];
+  /** Exact entry input when recorded. */
+  input?: unknown;
+  /** Canonical terminal output when recorded. */
+  output?: unknown;
+  /** Canonical terminal error when recorded. */
+  error?: unknown;
+  startedAt?: string;
+  finishedAt?: string;
   /** True when this run was served entirely by stub capabilities. Absent for
    *  real (prod / local-backend) runs. Drives the
    *  per-step "stubbed" chip. */
@@ -1447,6 +1467,32 @@ export interface WorkflowInfo {
   /** How it entered the registry. */
   source: "scan" | "connect";
 }
+
+/**
+ * The entry-step contract Studio uses to collect an exact execution input.
+ * `unavailable` is deliberately distinct from `none`: the former means
+ * extraction failed and Studio must preserve a raw-JSON escape hatch, while
+ * the latter means the agent intentionally accepts opaque/no declared input.
+ */
+export type WorkflowInputContractResponse =
+  | {
+      status: "available";
+      jsonSchema: Record<string, unknown>;
+      /** Author example when declared, otherwise a runnable shape skeleton. */
+      example: unknown;
+    }
+  | {
+      status: "none";
+      jsonSchema: null;
+      example: Record<string, never>;
+    }
+  | {
+      status: "unavailable";
+      jsonSchema: null;
+      example: Record<string, never>;
+      /** Safe, user-facing explanation; never raw extraction diagnostics. */
+      reason: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Action macros (right icon rail)

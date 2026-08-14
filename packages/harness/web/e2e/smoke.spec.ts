@@ -262,8 +262,10 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   // "leasing" is deployed (has a definitionId) and is the focused agent /
   // active tab's binding — action bar is live and Prod Run is enabled.
   await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+  await page.getByRole("button", { name: "Choose run target" }).click();
   const prodRun = page.getByTestId("session-step-run");
   await expect(prodRun).toBeEnabled();
+  await page.keyboard.press("Escape");
 
   // The open_prod button has been removed from the action bar (SAP-1899);
   // the deployed pill (→ dashboard) now lives in the canvas tab bar for deployed workflows.
@@ -282,12 +284,13 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   await page.getByTestId("open-agent-start-session").click();
   // The bound agent surfaces as the active session's label (rfq).
   await expect(page.getByTestId("session-context-title")).toContainText("rfq");
+  await page.getByRole("button", { name: "Choose run target" }).click();
   await expect(prodRun).toBeDisabled();
-  await expect(prodRun).toHaveAttribute("aria-label", "Run: Not deployed yet");
+  await expect(prodRun).toHaveAttribute("title", "Not deployed yet");
 
-  // The gating reason survives the disabled state through the app tooltip
-  // (data-tooltip) and the aria-label above — no hover-reveal panel involved.
-  await expect(prodRun).toHaveAttribute("data-tooltip", "Run: Not deployed yet");
+  // The gating reason is carried by the disabled Cloud target while Local
+  // remains the split control's available fallback.
+  await expect(page.getByTestId("session-step-local")).toHaveAccessibleName("Run using Local");
   await page.screenshot({ path: "web/e2e/screenshots/workflow-macros-gated.png" });
 });
 
@@ -927,16 +930,18 @@ test.describe("workflow actions", () => {
     expect(overflowing).toBe(false);
   });
 
-  test("action bar shows Test and Run labels; the Prod globe stays; the deployed pill links to the dashboard", async ({
+  test("action bar shows the unified split Run control; the Prod globe stays; the deployed pill links to the dashboard", async ({
     page,
   }) => {
-    // The action bar's verbs are "Test" (run_local) and "Run" (prod_run).
+    // The main segment opens the last available target; the menu makes both
+    // Local and Cloud explicit without separate Test/Run buttons.
     const localBtn = page.getByTestId("session-step-local");
-    const runBtn = page.getByTestId("session-step-run");
     await expect(localBtn).toBeVisible();
-    await expect(localBtn).toContainText("Test");
-    await expect(runBtn).toBeVisible();
-    await expect(runBtn).toContainText("Run");
+    await expect(localBtn).toContainText("Run · Local");
+    await page.getByRole("button", { name: "Choose run target" }).click();
+    await expect(page.getByRole("menuitemradio", { name: /Local/ })).toBeVisible();
+    await expect(page.getByRole("menuitemradio", { name: /Cloud/ })).toBeEnabled();
+    await page.keyboard.press("Escape");
 
     // Prod is a real destination (the globe shortcut), not a removed button.
     await expect(page.getByTestId("session-step-prod")).toBeVisible();
@@ -1365,31 +1370,31 @@ test.describe("background-task canvas states", () => {
 });
 
 test.describe("agent action bar (status chip + right-anchored actions)", () => {
-  test("deployed workflow: Run is the primary CTA, the deployed pill links out, and Run fires a direct prod run", async ({ page }) => {
+  test("deployed workflow: the split Run is primary, the deployed pill links out, and Cloud fires a direct prod run", async ({ page }) => {
     // Boot session is bound to "leasing", which has a definitionId — the one
     // durable signal the server proves; everything else is a repeatable action.
     const bar = page.getByTestId("session-steps");
     await expect(bar).toBeVisible();
 
-    // Deployed → Run is the filled primary; the lifecycle pill lives once in the
+    // Deployed → the unified Run control is filled; the lifecycle pill lives once in the
     // right-pane header (the deployed dashboard link), not in the action bar.
-    const run = page.getByTestId("session-step-run");
+    const run = page.getByTestId("session-step-local");
     await expect(run).toBeEnabled();
     await expect(run).toHaveClass(/session-action-primary/);
     await page.getByTestId("right-tab-canvas").click();
     await expect(page.getByTestId("workflow-dashboard-link")).toContainText("deployed");
 
-    // Actions sit right-anchored, in order Test → Run → Deploy.
-    const localBox = await page.getByTestId("session-step-local").boundingBox();
+    // Actions sit right-anchored, in order split Run → Deploy.
     const runBox = await run.boundingBox();
     const deployBox = await page.getByTestId("session-step-deploy").boundingBox();
     expect((deployBox?.x ?? 0)).toBeGreaterThan(runBox?.x ?? 0);
-    expect((runBox?.x ?? 0)).toBeGreaterThan(localBox?.x ?? 0);
 
-    // Run fires the DIRECT prod-run route (no pty inject / user LLM credits):
+    // Explicit Cloud opens the input sheet, then fires the DIRECT prod route.
     // it records lastDirectAction, never lastMacroRun, and carries leasing's
     // definitionId as the runs route wants it (a string).
-    await page.getByTestId("session-step-run").click();
+    await page.getByRole("button", { name: "Choose run target" }).click();
+    await page.getByRole("menuitemradio", { name: /Cloud/ }).click();
+    await page.getByTestId("run-sheet-submit").click();
     await page.waitForFunction(
       () =>
         (window as unknown as { __HARNESS_TEST__?: { lastDirectAction?: unknown } }).__HARNESS_TEST__
@@ -1423,26 +1428,23 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
 
     await expect(page.getByTestId("session-step-local")).toBeEnabled();
     await expect(page.getByTestId("session-step-deploy")).toBeEnabled();
+    await page.getByRole("button", { name: "Choose run target" }).click();
     const run = page.getByTestId("session-step-run");
     await expect(run).toBeDisabled();
-    await expect(run).toHaveAttribute("aria-label", /Not deployed yet/);
+    await expect(run).toHaveAttribute("title", /Not deployed yet/);
 
     await page.screenshot({ path: "web/e2e/screenshots/session-steps.png" });
   });
 
-  test("narrow pane: secondary actions degrade to icon-only; the primary action keeps its label", async ({ page }) => {
+  test("narrow pane: the primary split Run keeps its target label", async ({ page }) => {
     // 820px squeezes the center pane to its 320px floor — under the bar's
     // 580px container threshold, so secondary labels hide while icons stay.
     await page.setViewportSize({ width: 820, height: 720 });
 
     const local = page.getByTestId("session-step-local");
     await expect(local).toBeVisible();
-    await expect(local.locator(".session-step-label")).toBeHidden();
-    // leasing is deployed on load, so Run is the one emphasized verb — the
-    // primary CTA never degrades to a bare glyph.
-    const run = page.getByTestId("session-step-run");
-    await expect(run).toBeVisible();
-    await expect(run.locator(".session-step-label")).toBeVisible();
+    await expect(local.locator(".session-step-label")).toBeVisible();
+    await expect(local).toContainText("Run · Local");
 
     // Icon-only stays accessible: name + tooltip ride the button itself.
     await expect(local).toHaveAttribute("aria-label", /.+/);
@@ -1937,19 +1939,18 @@ test("an observed run renders per-step status and latency in the steps tab", asy
   });
   await page.getByTestId("right-tab-steps").click();
 
-  // Run truth replaces the structural dot and facts: status glyph + latency.
-  const introRow = page.getByTestId("canvas-step-row-intake");
-  await expect(introRow.locator(".canvas-run-status")).toHaveAttribute("data-status", "passed");
+  // Run truth appears as chronological attempts with status + timing.
+  const introRow = page.getByRole("option", { name: /intake/ });
+  await expect(introRow.locator(".run-timeline-status")).toHaveAttribute("aria-label", "passed");
   await expect(introRow).toContainText("240ms");
-  await expect(page.getByTestId("canvas-step-row-credit-check")).toContainText("1.9s");
-  // The chip and note carry the run's origin — the server said this was a prod
-  // run. The Studio is cost-free: the run surface shows status and latency only.
+  await expect(page.getByRole("option", { name: /credit-check/ })).toContainText("1.9s");
+  // The chip and compact header carry status and Cloud target.
   await expect(page.getByTestId("canvas-run-chip")).toContainText("prod run completed");
-  await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("prod run");
+  await expect(page.locator(".run-workspace-header")).toContainText("Cloud");
 
-  // Detail carries the same run truth for the drilled step (inline dropdown).
+  // Detail carries the same run truth in the shared attempt inspector.
   await introRow.click();
-  const runSection = page.getByTestId("canvas-detail-run");
+  const runSection = page.getByRole("region", { name: "intake attempt 1" });
   await expect(runSection).toContainText("passed");
   await expect(runSection).toContainText("240ms");
 });
@@ -1972,18 +1973,14 @@ test("an observed run renders its real steps even before anything is visualized"
     });
   });
   await page.getByTestId("right-tab-steps").click();
-  const fallback = page.getByTestId("canvas-run-fallback");
-  await expect(fallback).toBeVisible();
-  await expect(page.getByTestId("canvas-run-step-intake")).toContainText("240ms");
-  await expect(page.getByTestId("canvas-run-step-credit-check")).toContainText("1.9s");
-  // The server declared this run local: the note carries the run origin. The
+  const workspace = page.getByTestId("run-workspace");
+  await expect(workspace).toBeVisible();
+  await expect(page.getByRole("option", { name: /intake/ })).toContainText("240ms");
+  await expect(page.getByRole("option", { name: /credit-check/ })).toContainText("1.9s");
+  // The server declared this run local: the compact header carries the target. The
   // Studio is cost-free, so no money renders anywhere on the run surface.
-  await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("local run");
-  await expect(fallback).not.toContainText("$");
-  // Structure (transitions, contracts) lives on the Canvas tab; the hint says so.
-  await expect(fallback).toContainText(
-    "Agent run data only. Open the Canvas tab for the diagram — transitions and contracts come from the agent.",
-  );
+  await expect(page.locator(".run-workspace-header")).toContainText("Local");
+  await expect(workspace).not.toContainText("$");
 });
 
 test("a second run never erases the first: the run picker recalls past runs", async ({
@@ -2021,7 +2018,8 @@ test("a second run never erases the first: the run picker recalls past runs", as
   await expect(menu.getByTestId("canvas-run-option-exec-demo-2")).toContainText("run 2 · completed · prod");
   await menu.getByTestId("canvas-run-option-exec-demo-1").click();
   await expect(menu).toHaveCount(0);
-  await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("prod run");
+  await chip.click();
+  await expect(page.getByTestId("canvas-run-option-exec-demo-1")).toHaveAttribute("aria-checked", "true");
 });
 
 test("board nodes get hover and selected states through the message contract", async ({ page }) => {

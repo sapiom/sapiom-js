@@ -177,7 +177,7 @@
   "name": "leasing",
   "entry": "intake",
   "nodes": [
-    { "id": "intake", "kind": "entry", "label": "intake", "role": "entry", "description": "Logs the incoming order and stamps the time it arrived.", "timeoutMs": null, "inputSchema": null, "capabilities": ["records.read"] },
+    { "id": "intake", "kind": "entry", "label": "intake", "role": "entry", "description": "Logs the incoming order and stamps the time it arrived.", "timeoutMs": null, "inputSchema": { "type": "object", "properties": { "topic": { "type": "string", "title": "Topic", "description": "The subject this run should work on.", "default": "indie game development" } }, "required": ["topic"] }, "capabilities": ["records.read"] },
     { "id": "screen", "kind": "step", "label": "screen", "role": "step", "description": "Runs the applicant against the screening rules.", "timeoutMs": null, "inputSchema": { "type": "object", "properties": { "application": { "type": "object" } }, "required": ["application"] }, "capabilities": ["records.read"] },
     { "id": "credit-check", "kind": "step", "label": "credit-check", "role": "step", "description": "Pulls the credit score used by the approval gate.", "timeoutMs": 30000, "inputSchema": { "type": "object", "properties": { "application": { "type": "object" }, "bureau": { "type": "string" } }, "required": ["application"] }, "capabilities": ["credit.check"] },
     { "id": "approve", "kind": "step", "label": "approve?", "role": "step · branches", "description": "Branches on the score: 620 and above auto-drafts a lease; everything else escalates.", "timeoutMs": null, "inputSchema": { "type": "object", "properties": { "score": { "type": "number" } }, "required": ["score"] }, "capabilities": ["rules.evaluate"] },

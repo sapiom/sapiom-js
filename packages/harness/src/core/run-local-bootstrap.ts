@@ -70,6 +70,14 @@ export interface RunLocalSummaryLine {
   stubWarnings: string[];
 }
 
+/** Live attempt event. `started` and `settled` share one stable trace key
+ * (`step + attempt`) so clients upsert rather than duplicate a row. */
+export interface RunLocalStepLine {
+  kind: "step";
+  phase: "started" | "settled";
+  trace: LocalStepTrace;
+}
+
 /**
  * The terminal line written when the run could not be *invoked* at all — a
  * malformed request, an unreadable stub file, a project that fails to load.
@@ -124,8 +132,8 @@ export function parseRunLocalRequest(raw: string): RunLocalRequest {
 }
 
 /** Serialize one step trace as a single NDJSON line (newline-terminated). */
-function traceLine(step: LocalStepTrace): string {
-  return JSON.stringify(step) + "\n";
+function traceLine(line: RunLocalStepLine): string {
+  return JSON.stringify(line) + "\n";
 }
 
 /** Serialize the terminal summary as a single NDJSON line. */
@@ -151,13 +159,10 @@ export async function runBootstrap(
       input: request.input,
       stubs: request.stubs,
       maxAttemptsPerStep: request.maxAttemptsPerStep,
+      onStepTrace(phase, trace) {
+        out.write(traceLine({ kind: "step", phase, trace }));
+      },
     });
-
-    // One line per step-attempt, in execution order — the consumer parses them
-    // incrementally rather than buffering the whole trace as a single blob.
-    for (const step of result.steps) {
-      out.write(traceLine(step));
-    }
 
     const summary: RunLocalSummaryLine = {
       kind: "summary",

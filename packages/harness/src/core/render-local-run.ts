@@ -16,9 +16,8 @@
  *  - **No cost** — local runs are stubbed and free by construction; a StepView
  *    from here never carries `costUsd` (so the inspector reads "local run ·
  *    free", never "$0.00").
- *  - **No latency** — a {@link LocalStepTrace} carries no timing (agent-core's
- *    in-process dispatcher records none, and agent-core is consumed as-is), so
- *    `latencyMs` is ABSENT rather than a fabricated `0`.
+ *  - **Timing is evidence-backed** — new traces carry start/finish timestamps
+ *    and produce latency; legacy traces without them keep `latencyMs` absent.
  *  - **Output** is present only when the trace captured one (a step that threw,
  *    or a `continue` with no value, carries none) — but ABSENCE is `undefined`
  *    on the trace, and a genuine `null`/`false`/`0`/`""` output is a real value
@@ -30,8 +29,9 @@
  *  - **Stub signal (WB15-2)** is RUN-LEVEL. A local run is stub-served by
  *    construction, so the run carries `stubbed: true` (prod's renderRunState
  *    never does) and the inspector marks each executed step with a "stubbed"
- *    chip — agent-core records no per-CALL stub attribution, so that is the
- *    honest granularity. The terminal summary's `unusedStubs` (a supplied key
+ *    chip. Recorded calls additionally carry their own `stubUsed` attribution;
+ *    the run-level flag remains useful for steps that made no call. The terminal
+ *    summary's `unusedStubs` (a supplied key
  *    that matched nothing) and `stubWarnings` (a wrong-shape value) pass through
  *    only when NON-empty, so a clean run surfaces no notice at all.
  */
@@ -85,6 +85,11 @@ export interface RenderLocalRunOptions {
    * {@link RenderLocalRunOptions.unusedStubs}: an empty list is dropped.
    */
   stubWarnings?: string[];
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 /**
@@ -96,6 +101,7 @@ export interface RenderLocalRunOptions {
  * `passed`.
  */
 function toStepStatus(raw: LocalStepTrace["status"]): StepStatus {
+  if (raw === "running") return "running";
   if (raw === "succeeded") return "passed";
   if (raw === "threw") return "failed";
   return "pending";
@@ -127,12 +133,24 @@ function toStepView(trace: LocalStepTrace): StepView {
     // collision-free key across a run's attempts of the same step.
     id: `${trace.step}-${trace.attempt}`,
     name: trace.step,
+    attempt: trace.attempt,
     status: toStepStatus(trace.status),
   };
-  // No costUsd, no latencyMs — a local run is free and untimed (see the file
-  // header). Their honest absence is the whole point of the local target.
+  if (trace.startedAt) view.startedAt = trace.startedAt;
+  if (trace.finishedAt) view.finishedAt = trace.finishedAt;
+  if (trace.startedAt && trace.finishedAt) {
+    const start = Date.parse(trace.startedAt);
+    const finish = Date.parse(trace.finishedAt);
+    if (Number.isFinite(start) && Number.isFinite(finish) && finish >= start) {
+      view.latencyMs = finish - start;
+    }
+  }
   if (trace.input !== undefined) view.input = trace.input;
   if (trace.output !== undefined) view.output = trace.output;
+  if (trace.sharedStateAfter !== undefined) {
+    view.sharedState = trace.sharedStateAfter;
+  }
+  if (trace.directive !== undefined) view.directive = trace.directive;
   if (trace.error?.message) view.error = trace.error.message;
   const logSlice = toLogSlice(trace.logs);
   if (logSlice !== undefined) view.logSlice = logSlice;
@@ -170,8 +188,8 @@ export function renderLocalRun(
     // A local run is stub-served by construction (every ctx.sapiom.* call
     // resolves from a stub, never the network) — so the run itself is `stubbed`,
     // and the inspector marks each executed step with the chip. This is the
-    // honest per-run truth: agent-core records no per-CALL stub attribution, so
-    // there is nothing finer to claim. renderRunState (prod) never sets this.
+    // honest per-run truth even when a step made no call. Recorded calls also
+    // carry their own `stubUsed` attribution. renderRunState (prod) never sets this.
     stubbed: true,
   };
   // Honest absence: only a NON-empty signal reaches the view, so the read-only
@@ -183,5 +201,10 @@ export function renderLocalRun(
   if (options.stubWarnings && options.stubWarnings.length > 0) {
     view.stubWarnings = options.stubWarnings;
   }
+  if (options.input !== undefined) view.input = options.input;
+  if (options.output !== undefined) view.output = options.output;
+  if (options.error !== undefined) view.error = options.error;
+  if (options.startedAt) view.startedAt = options.startedAt;
+  if (options.finishedAt) view.finishedAt = options.finishedAt;
   return view;
 }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Studio Run Workspace Mockup</title>
+<style>
+  :root { color-scheme:dark; font:14px/1.45 Inter,system-ui,sans-serif; background:#17191d;color:#f4f4f5 } *{box-sizing:border-box} body{margin:0;height:100vh;display:grid;grid-template-rows:52px 1fr;background:#17191d}
+  header{display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #343840} h1{font-size:15px;margin:0;flex:1}.pill{font-size:12px;color:#7ee2a8;background:#143526;padding:4px 8px;border-radius:99px}.muted{color:#9298a3}
+  main{display:grid;grid-template-columns:340px 1fr;min-height:0}.timeline{padding:14px;border-right:1px solid #343840;overflow:auto}.attempt{display:grid;grid-template-columns:18px 1fr auto;gap:10px;padding:12px;border-radius:10px;margin-bottom:4px;color:#b5bac4}.attempt.on{background:#292d34;color:white}.dot{width:9px;height:9px;border-radius:50%;margin-top:5px;background:#42c77a}.bar{height:4px;border-radius:4px;background:#3b4049;margin-top:8px}.bar i{display:block;height:100%;border-radius:4px;background:#8a929e}
+  .inspector{padding:22px 28px;overflow:auto}.summary{display:flex;align-items:center;gap:12px;margin-bottom:20px}.summary h2{font-size:18px;margin:0;flex:1}.tabs{display:flex;gap:4px;border-bottom:1px solid #343840;margin-bottom:20px}.tabs button{border:0;background:transparent;color:#969ca7;padding:9px 11px}.tabs .on{color:white;border-bottom:2px solid white}.artifact{max-width:760px}.artifact h3{font-size:24px;margin:0 0 12px}.hero{height:170px;border-radius:12px;background:linear-gradient(135deg,#084b47,#183b72);margin:18px 0}.card{border:1px solid #3a3f48;border-radius:12px;padding:16px;margin:12px 0}.link{color:#7cc7ff}.toolbar{display:flex;gap:6px}.toolbar button{border:1px solid #414650;color:#c9cdd4;background:#24272d;padding:6px 9px;border-radius:8px}
+</style>
+<body>
+  <header><h1>newsletter-autopilot</h1><span class="pill">✓ Completed</span><span class="muted">1m 5s · Local</span><span class="muted">Run 3 ▾</span></header>
+  <main>
+    <aside class="timeline">
+      <div class="attempt"><span class="dot"></span><div><b>research</b><div class="muted">attempt 1</div><div class="bar"><i style="width:18%"></i></div></div><span>4s</span></div>
+      <div class="attempt"><span class="dot"></span><div><b>dedupe</b><div class="muted">attempt 1</div><div class="bar"><i style="width:28%"></i></div></div><span>7s</span></div>
+      <div class="attempt"><span class="dot"></span><div><b>write</b><div class="muted">attempt 1</div><div class="bar"><i style="width:82%"></i></div></div><span>25s</span></div>
+      <div class="attempt"><span class="dot"></span><div><b>selfEdit</b><div class="muted">attempt 1</div><div class="bar"><i style="width:48%"></i></div></div><span>13s</span></div>
+      <div class="attempt"><span class="dot"></span><div><b>illustrate</b><div class="muted">attempt 1</div><div class="bar"><i style="width:31%"></i></div></div><span>8s</span></div>
+      <div class="attempt on"><span class="dot"></span><div><b>Result</b><div class="muted">final artifact</div></div><span>↗</span></div>
+    </aside>
+    <section class="inspector">
+      <div class="summary"><h2>Final result</h2><div class="toolbar"><button>Rendered</button><button>Raw</button><button>Copy</button></div></div>
+      <div class="tabs"><button>Input</button><button class="on">Output</button><button>State</button><button>Directive</button><button>Logs</button><button>Calls</button></div>
+      <article class="artifact"><h3>This Week in Indie Games</h3><p class="muted">A curated issue from five researched sources.</p><div class="hero"></div><div class="card"><b>Finding your people without the corporate noise</b><p>Three fresh reads for the solo dev and small studio grind, rendered as readable content instead of raw JSON.</p><a class="link">workwithindies.com ↗</a></div><div class="card"><b>A quiet workshop for hobby developers</b><p>Deep technical articles, community links, and a grounded view of discoverability.</p><a class="link">indiegamedev.net ↗</a></div></article>
+    </section>
+  </main>
+</body>
+</html>

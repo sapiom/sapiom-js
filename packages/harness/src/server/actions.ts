@@ -48,7 +48,9 @@ import {
 
 import { resolveCoreBaseUrl } from "../core/definition-slug-resolver.js";
 import { HOST_ESBUILD_PIN, unpackedPath } from "../core/asar-path.js";
+import { readWorkflowInputContract } from "../core/input-contract.js";
 import type { RunLocalRequest } from "../core/run-local-bootstrap.js";
+import type { WorkflowInputContractResponse } from "../shared/types.js";
 import {
   type ApiKeyProvider,
   staticApiKeyProvider,
@@ -270,6 +272,11 @@ export interface ActionsRouterOpts {
    * registry — the router does not read the registry directly.
    */
   resolveWorkflow: (id: string) => ActionWorkflow | null;
+  /** Resolve the entry contract for a registered workflow. Test seam; the
+   * default reads the cached manifest extraction for `workflow.path`. */
+  resolveInputContract?: (
+    workflow: ActionWorkflow,
+  ) => Promise<WorkflowInputContractResponse>;
   /**
    * The agent's DECLARED name (`defineAgent({ name })`) for a project the route
    * has to link on the fly, or null when it cannot be determined. Optional: the
@@ -422,6 +429,9 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const deps: ActionsCoreDeps = { ...DEFAULT_CORE_DEPS, ...opts.coreDeps };
   const baseUrl = opts.coreBaseUrl ?? resolveCoreBaseUrl();
   const runLocalSpawn = opts.runLocalSpawn ?? defaultRunLocalSpawn;
+  const resolveInputContract =
+    opts.resolveInputContract ??
+    ((workflow: ActionWorkflow) => readWorkflowInputContract(workflow.path));
   // Normalize to a provider so deploy/prod-run always authenticate with the
   // held API key and can refresh + retry when that key is rejected — a plain
   // string|null becomes a no-op static provider (no refresh). Mirrors the runs
@@ -433,6 +443,39 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   /** Mint a core client for a specific key against the resolved core host. */
   const clientFor = (apiKey: string): ReturnType<typeof createClient> =>
     deps.createClient({ host: baseUrl, apiKey });
+
+  /**
+   * GET /api/workflows/:id/input-contract
+   *
+   * The registry resolution happens before touching disk, so callers cannot
+   * turn this route into an arbitrary-path manifest reader. Extraction errors
+   * are normal 200 `unavailable` responses: Studio can still offer raw JSON.
+   */
+  router.get("/api/workflows/:id/input-contract", async (req, res) => {
+    const id = req.params.id;
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      res.status(400).json({ error: "agent id is required" });
+      return;
+    }
+
+    const workflow = opts.resolveWorkflow(id);
+    if (!workflow) {
+      res.status(404).json({ error: "agent not found" });
+      return;
+    }
+
+    try {
+      res.json(await resolveInputContract(workflow));
+    } catch {
+      res.json({
+        status: "unavailable",
+        jsonSchema: null,
+        example: {},
+        reason:
+          "Studio couldn't extract this agent's input contract. You can still run it with raw JSON.",
+      } satisfies WorkflowInputContractResponse);
+    }
+  });
 
   /**
    * POST /api/workflows/:id/deploy

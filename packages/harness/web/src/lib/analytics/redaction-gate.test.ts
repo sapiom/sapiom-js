@@ -253,6 +253,7 @@ const SAFE_INTERPOLATED_LABELS: Record<string, string> = {
     "`What ${template.name} runs and costs` — GalleryTemplate, served by GET /api/templates. " +
     "Ours, low-cardinality, and the label that makes the on-ramp funnel readable.",
   "CanvasOverviewPanel.tsx": "Static labels only; interpolation is over our own counts.",
+  "SchemaInputFields.tsx": "`Remove item ${index + 1}` — a list position, not a name.",
 };
 
 describe("components that build an aria-label by interpolation must tag their surface", () => {

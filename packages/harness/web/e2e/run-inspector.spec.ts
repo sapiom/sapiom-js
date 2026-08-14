@@ -1,353 +1,549 @@
-/**
- * Run-inspector e2e coverage.
- *
- * Contract under test — two scenarios, no network, no agent binary:
- *
- * (a) OFFLINE STUB RUN — the "Local" button triggers MockApi.runLocal, which
- *     streams per-step traces and a terminal summary. The Steps inspector
- *     must:
- *     - render each step's name and pass/fail status in the accordion;
- *     - show the "stubbed" chip on every step that ran (the run is
- *       stub-served by construction; agent-core records no per-CALL
- *       attribution, so the chip lives at the granularity the trace
- *       supports);
- *     - show the read-only stub-hygiene notice when unusedStubs or
- *       stubWarnings are present, and be ABSENT when neither are set
- *       (a clean run surfaces no chrome at all — honesty).
- *
- * (b) PROD RUN — a mocked bus message announces execution.started, which
- *     drives the run-state poll (MockApi.getRunState). The Steps inspector
- *     must:
- *     - render each step's name, pass/fail status icon, and latency in
- *       the accordion rows;
- *     - light up the run chip in the subheader (completed / running /
- *       failed).
- *
- * Both scenarios exercise the real component tree in mock mode. The canvas
- * document posts a graph for sess-boot (bundled public/canvas/sess-boot/),
- * so the CanvasStepsList accordion is shown (not the RunStepsList fallback).
- * The per-step accordion rows use `data-testid="canvas-step-row-{nodeId}"`;
- * the stubbed chip uses `data-testid="canvas-run-stub-chip"`.
- *
- * For tests that need a non-default run state (failed, hygiene signals),
- * Playwright seeds `window.__MOCK_RUN_STATE__[executionId]` before announcing
- * execution.started — the mock API checks and consumes this override exactly
- * once (same test-only escape hatch as `__MOCK_INJECT_FAIL_ONCE__`).
- */
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-/** Navigate to a clean slate with the Steps tab visible and the leasing
- *  workflow binding active (no demo seed, no pre-existing run). */
-const loadStepsTab = async (page: Page): Promise<void> => {
+async function loadSteps(page: Page): Promise<void> {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await page.getByTestId("right-tab-steps").click();
-  await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-};
+}
 
-/** Trigger the "Local" action-bar button (run_local macro → MockApi.runLocal). */
-const clickLocalButton = async (page: Page): Promise<void> => {
-  const btn = page.getByTestId("session-step-local");
-  await expect(btn).toBeEnabled();
-  await btn.click();
-};
-
-/** Publish a bus message via the test escape hatch (same pattern as
- *  canvas-inspector.spec.ts). */
-const publish = (page: Page, message: unknown): Promise<void> =>
-  page.evaluate((msg) => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } })
-      .__HARNESS_TEST__.publish(msg);
-  }, message);
-
-/** Seed window.__MOCK_RUN_STATE__[executionId] so MockApi.getRunState returns
- *  a custom RunView on the next poll for that id — consumed and cleared once. */
-const seedRunState = (page: Page, executionId: string, view: RunView): Promise<void> =>
-  page.evaluate(
-    ([id, v]) => {
-      const win = window as unknown as { __MOCK_RUN_STATE__?: Record<string, unknown> };
-      win.__MOCK_RUN_STATE__ = { ...(win.__MOCK_RUN_STATE__ ?? {}), [id]: v };
+async function seedRun(
+  page: Page,
+  run: RunView,
+  target: "prod" | "local" = "prod",
+): Promise<void> {
+  await page.evaluate(
+    ([id, view]) => {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE__?: Record<string, RunView>;
+      };
+      win.__MOCK_RUN_STATE__ = {
+        ...(win.__MOCK_RUN_STATE__ ?? {}),
+        [id]: view,
+      };
     },
-    [executionId, view] as [string, RunView],
+    [run.executionId, run] as [string, RunView],
   );
-
-// ---------------------------------------------------------------------------
-// (a) Offline stub run
-// ---------------------------------------------------------------------------
-
-test.describe("offline stub run — run-local inspector", () => {
-  test.beforeEach(async ({ page }) => {
-    await loadStepsTab(page);
+  await page.evaluate(
+    ([executionId, nextTarget]) => {
+      (
+        window as unknown as {
+          __HARNESS_TEST__: { publish: (message: unknown) => void };
+        }
+      ).__HARNESS_TEST__.publish({
+        type: "execution.started",
+        harnessSessionId: "sess-boot",
+        executionId,
+        target: nextTarget,
+      });
+    },
+    [run.executionId, target] as const,
+  );
+  await expect(page.getByTestId("run-workspace")).toBeVisible({
+    timeout: 8_000,
   });
+}
 
-  test("per-step pass/fail and the stubbed chip appear for each step that ran", async ({
-    page,
-  }) => {
-    await clickLocalButton(page);
-
-    // The run chip in the Steps subheader must appear and report completed.
-    // MockApi.runLocal emits: intake, screen, approve — all succeeded.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("local run completed", { timeout: 8000 });
-
-    // The Steps list (CanvasStepsList accordion) remains in view because the
-    // canvas document posts a graph for sess-boot.
-    const stepsList = page.getByTestId("canvas-steps-list");
-    await expect(stepsList).toBeVisible();
-
-    // Rows that received a run trace carry the pass/fail StepStatusIcon.
-    // intake — ran and passed.
-    const intakeRow = page.getByTestId("canvas-step-row-intake");
-    await expect(intakeRow).toBeVisible();
-    await expect(intakeRow.locator('[aria-label="passed"]')).toBeVisible();
-    // The "stubbed" chip: this step ran in a stub-served offline run.
-    await expect(intakeRow.getByTestId("canvas-run-stub-chip")).toBeVisible();
-
-    // screen — ran and passed.
-    const screenRow = page.getByTestId("canvas-step-row-screen");
-    await expect(screenRow).toBeVisible();
-    await expect(screenRow.locator('[aria-label="passed"]')).toBeVisible();
-    await expect(screenRow.getByTestId("canvas-run-stub-chip")).toBeVisible();
-
-    // approve — ran and passed.
-    const approveRow = page.getByTestId("canvas-step-row-approve");
-    await expect(approveRow).toBeVisible();
-    await expect(approveRow.locator('[aria-label="passed"]')).toBeVisible();
-    await expect(approveRow.getByTestId("canvas-run-stub-chip")).toBeVisible();
-
-    // Steps the run never reached must NOT carry the stubbed chip (honesty).
-    // credit-check is in the graph but not in the mock traces.
-    const creditRow = page.getByTestId("canvas-step-row-credit-check");
-    await expect(creditRow).toBeVisible();
-    await expect(creditRow.getByTestId("canvas-run-stub-chip")).toHaveCount(0);
-  });
-
-  test("the stub-hygiene notice is ABSENT when unusedStubs and stubWarnings are empty (clean run)", async ({
-    page,
-  }) => {
-    await clickLocalButton(page);
-
-    // Wait for the run to complete before asserting notice absence.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toContainText("local run completed", { timeout: 8000 });
-
-    // MockApi.runLocal emits unusedStubs: [], stubWarnings: [] — no notice.
-    await expect(page.getByTestId("canvas-detail-stub-notice")).toHaveCount(0);
-  });
-
-  test("the stub-hygiene notice shows unusedStubs and stubWarnings when present", async ({
-    page,
-  }) => {
-    // Seed a RunView with hygiene signals for the next getRunState poll.
-    // The same StubNoticeSection({run}) path renders for both local and prod
-    // runs — the notice is run-level and target-agnostic.
-    const hygieneRunView: RunView = {
-      executionId: "exec-hygiene-test",
-      status: "completed",
-      // stubbed:true is normally set by renderLocalRun but is a valid RunView
-      // field regardless of target; the notice fields are independent.
-      stubbed: true,
-      steps: [
-        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 100 },
-      ],
-      unusedStubs: [{ step: "intake", key: "contentGeneration.images.create" }],
-      stubWarnings: ["intake: stub for records.read had wrong shape"],
-    };
-    await seedRunState(page, "exec-hygiene-test", hygieneRunView);
-
-    await publish(page, {
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-hygiene-test",
-      target: "prod",
-    });
-
-    // Wait for the run to land in the inspector.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("completed", { timeout: 8000 });
-
-    // Expand the intake step (only ran step): the CanvasStepDetail — with the
-    // run's StubNoticeSection — renders INLINE in the row's dropdown.
-    await page.getByTestId("canvas-step-row-intake").click();
-    const detail = page.getByTestId("canvas-step-detail");
-    await expect(detail).toBeVisible({ timeout: 5000 });
-
-    // The stub-hygiene notice must appear in the detail pane.
-    const notice = detail.getByTestId("canvas-detail-stub-notice");
-    await expect(notice).toBeVisible({ timeout: 5000 });
-    await expect(notice).toContainText("Stub notices");
-
-    // unusedStubs section must name the unused key.
-    const unused = detail.getByTestId("canvas-stub-unused");
-    await expect(unused).toBeVisible();
-    await expect(unused).toContainText("contentGeneration.images.create");
-
-    // stubWarnings section must surface the warning text.
-    const warnings = detail.getByTestId("canvas-stub-warnings");
-    await expect(warnings).toBeVisible();
-    await expect(warnings).toContainText("wrong shape");
-  });
+test.beforeEach(async ({ page }) => {
+  await loadSteps(page);
 });
 
-// ---------------------------------------------------------------------------
-// (b) Prod run — mocked getRunState via __MOCK_RUN_STATE__ override
-// ---------------------------------------------------------------------------
-
-test.describe("prod run — run-state poll via mocked endpoint", () => {
-  test.beforeEach(async ({ page }) => {
-    await loadStepsTab(page);
+test("orders retries chronologically and exposes predictable, honest evidence tabs", async ({
+  page,
+}) => {
+  await seedRun(page, {
+    executionId: "exec-retries",
+    status: "completed",
+    input: { topic: "leases" },
+    output: { accepted: true },
+    startedAt: "2026-08-13T10:00:00.000Z",
+    finishedAt: "2026-08-13T10:00:03.000Z",
+    steps: [
+      {
+        id: "screen-2",
+        name: "screen",
+        attempt: 2,
+        status: "passed",
+        startedAt: "2026-08-13T10:00:02.000Z",
+        finishedAt: "2026-08-13T10:00:02.500Z",
+        latencyMs: 500,
+        input: { retry: true },
+        output: { score: 720 },
+        sharedState: { screened: true },
+        directive: {
+          kind: "continue",
+          stepName: "approve",
+          input: {
+            weather: {
+              locationName: "Strasbourg, Grand Est, France",
+              latitude: 48.58392,
+            },
+          },
+        },
+      },
+      {
+        id: "intake-1",
+        name: "intake",
+        attempt: 1,
+        status: "passed",
+        startedAt: "2026-08-13T10:00:00.100Z",
+        finishedAt: "2026-08-13T10:00:00.300Z",
+        latencyMs: 200,
+        output: { parsed: true },
+      },
+      {
+        id: "screen-1",
+        name: "screen",
+        attempt: 1,
+        status: "failed",
+        startedAt: "2026-08-13T10:00:01.000Z",
+        finishedAt: "2026-08-13T10:00:01.400Z",
+        latencyMs: 400,
+        error: "Transient provider error",
+        logSlice: "first attempt failed",
+      },
+    ],
   });
 
-  test("per-step status, latency, and pass/fail light up after execution.started", async ({
-    page,
-  }) => {
-    // Announce a prod execution — the SPA starts polling MockApi.getRunState.
-    // Default fixture returns: intake(240ms), screen(610ms),
-    // credit-check(1900ms), approve(130ms), draft-lease(800ms), all passed.
-    await publish(page, {
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-demo-1",
-      target: "prod",
-    });
+  const options = page.getByTestId("run-timeline").getByRole("option");
+  await expect(options).toHaveCount(3);
+  expect(await options.allTextContents()).toEqual([
+    expect.stringMatching(/intake.*Attempt 1/),
+    expect.stringMatching(/screen.*Attempt 1/),
+    expect.stringMatching(/screen.*Attempt 2/),
+  ]);
 
-    // The run chip in the subheader must appear and report completed.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("prod run completed", { timeout: 8000 });
+  await options.nth(2).click();
+  const inspector = page.getByRole("region", { name: "screen attempt 2" });
+  await expect(inspector).toBeVisible();
+  const evidenceTabs = inspector.locator(".run-evidence-tabs").getByRole("tab");
+  await expect(evidenceTabs).toHaveText([
+    "Input",
+    "Output",
+    "State",
+    "Directive",
+    "Logs",
+    "Calls",
+  ]);
+  const evidence = inspector.getByTestId("run-evidence-artifact");
+  await expect(evidence.getByText("score", { exact: true })).toBeVisible();
+  await expect(evidence.getByText("720", { exact: true })).toBeVisible();
+  await evidence.getByRole("tab", { name: "Raw" }).click();
+  await expect(evidence.locator("pre")).toContainText('"score": 720');
 
-    // The Steps accordion overlays run truth on each row.
-    const stepsList = page.getByTestId("canvas-steps-list");
-    await expect(stepsList).toBeVisible();
+  await inspector.getByRole("tab", { name: "Input", exact: true }).click();
+  await expect(evidence.locator("pre")).toContainText('"retry": true');
+  await evidence.getByRole("tab", { name: "Rendered" }).click();
+  await expect(evidence.getByText("retry", { exact: true })).toBeVisible();
+  await expect(evidence.getByText("true", { exact: true })).toBeVisible();
 
-    // intake — passed, latencyMs: 240.
-    const intakeRow = page.getByTestId("canvas-step-row-intake");
-    await expect(intakeRow).toBeVisible();
-    await expect(intakeRow.locator('[aria-label="passed"]')).toBeVisible();
+  await inspector.getByRole("tab", { name: "State" }).click();
+  await expect(evidence.getByText("screened", { exact: true })).toBeVisible();
+  await evidence.getByRole("tab", { name: "Raw" }).click();
+  await expect(evidence.locator("pre")).toContainText('"screened": true');
+  await inspector.getByRole("tab", { name: "Directive" }).click();
+  await expect(evidence.locator("pre")).toContainText('"stepName": "approve"');
+  await evidence.getByRole("tab", { name: "Rendered" }).click();
+  await expect(evidence.getByText("stepName", { exact: true })).toBeVisible();
+  await expect(
+    evidence.getByText("Strasbourg, Grand Est, France", { exact: true }),
+  ).toBeVisible();
+  const composite = evidence.locator(".artifact-field[data-composite]").first();
+  const [compositeLabel, compositeValue] = await Promise.all([
+    composite.locator(":scope > .artifact-field-label").boundingBox(),
+    composite.locator(":scope > .artifact-field-value").boundingBox(),
+  ]);
+  expect(compositeLabel).not.toBeNull();
+  expect(compositeValue).not.toBeNull();
+  expect(Math.abs(compositeLabel!.x - compositeValue!.x)).toBeLessThanOrEqual(
+    1,
+  );
+  await inspector.getByRole("tab", { name: "Calls" }).click();
+  await expect(
+    inspector.getByRole("tabpanel", { name: "Calls" }),
+  ).toContainText("Calls not recorded");
+  await inspector.getByRole("tab", { name: "Calls" }).press("ArrowLeft");
+  await expect(inspector.getByRole("tab", { name: "Logs" })).toBeFocused();
+  await expect(inspector.getByRole("tabpanel", { name: "Logs" })).toContainText(
+    "Logs not recorded",
+  );
+  await inspector.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("run-artifact")).toBeVisible();
+});
 
-    // screen — passed, latencyMs: 610.
-    const screenRow = page.getByTestId("canvas-step-row-screen");
-    await expect(screenRow).toBeVisible();
-    await expect(screenRow.locator('[aria-label="passed"]')).toBeVisible();
-
-    // credit-check — passed, latencyMs: 1900 → formatTimeout emits "1.9s".
-    const creditRow = page.getByTestId("canvas-step-row-credit-check");
-    await expect(creditRow).toBeVisible();
-    await expect(creditRow.locator('[aria-label="passed"]')).toBeVisible();
-    await expect(creditRow).toContainText("1.9s");
-
-    // approve — passed, latencyMs: 130.
-    const approveRow = page.getByTestId("canvas-step-row-approve");
-    await expect(approveRow).toBeVisible();
-    await expect(approveRow.locator('[aria-label="passed"]')).toBeVisible();
-
-    // draft-lease — passed, latencyMs: 800.
-    const draftRow = page.getByTestId("canvas-step-row-draft-lease");
-    await expect(draftRow).toBeVisible();
-    await expect(draftRow.locator('[aria-label="passed"]')).toBeVisible();
+test("a failed run automatically selects the failing attempt and Logs", async ({
+  page,
+}) => {
+  await seedRun(page, {
+    executionId: "exec-failed",
+    status: "failed",
+    error: { message: "Execution stopped" },
+    steps: [
+      {
+        id: "intake-1",
+        name: "intake",
+        attempt: 1,
+        status: "passed",
+        output: { ok: true },
+      },
+      {
+        id: "screen-2",
+        name: "screen",
+        attempt: 2,
+        status: "failed",
+        error: "Validation failed",
+        logSlice: "schema mismatch\nValidation failed",
+      },
+    ],
   });
 
-  test("a running prod run shows each step's running/passed status as polls advance", async ({
-    page,
-  }) => {
-    // First poll: intake passed, screen running (the override is consumed once).
-    await seedRunState(page, "exec-run-in-progress", {
-      executionId: "exec-run-in-progress",
-      status: "running",
-      steps: [
-        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 110 },
-        { id: "screen", name: "screen", status: "running" as const },
-      ],
-    });
+  const inspector = page.getByRole("region", { name: "screen attempt 2" });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByRole("tab", { name: "Logs" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(inspector.getByRole("tabpanel", { name: "Logs" })).toContainText(
+    "schema mismatch",
+  );
+  const logsArtifact = inspector.getByTestId("run-evidence-artifact");
+  await expect(
+    logsArtifact.getByRole("tab", { name: "Rendered" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await logsArtifact.getByRole("tab", { name: "Raw" }).click();
+  await expect(logsArtifact.locator("pre")).toContainText("Validation failed");
+  await expect(inspector).toContainText("Validation failed");
+});
 
-    await publish(page, {
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-run-in-progress",
-      target: "prod",
-    });
-
-    // The chip shows "running" on the first poll, then "completed" once the
-    // override is consumed and subsequent polls hit the default fixture.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    // Eventually the poller stops after reaching a terminal state from the
-    // default fixture (completed). Allow extra time for the retry interval.
-    await expect(chip).toContainText("completed", { timeout: 12000 });
-
-    const stepsList = page.getByTestId("canvas-steps-list");
-    await expect(stepsList).toBeVisible();
-
-    // intake passed in both polls.
-    await expect(
-      page.getByTestId("canvas-step-row-intake").locator('[aria-label="passed"]'),
-    ).toBeVisible();
+test("renders recorded capability arguments and results as compact artifacts", async ({
+  page,
+}) => {
+  await seedRun(page, {
+    executionId: "exec-calls",
+    status: "completed",
+    output: { ok: true },
+    steps: [
+      {
+        id: "lookup-1",
+        name: "lookup",
+        attempt: 1,
+        status: "passed",
+        calls: [
+          {
+            capability: "weather.current",
+            stubUsed: true,
+            args: { city: "Strasbourg" },
+            result: { temperatureC: 28.7 },
+          },
+        ],
+      },
+    ],
   });
 
-  test("a failed step shows the failed status icon and no $ cost is shown", async ({
-    page,
-  }) => {
-    await seedRunState(page, "exec-fail-test", {
-      executionId: "exec-fail-test",
+  await page.getByRole("option", { name: /lookup/ }).click();
+  const inspector = page.getByRole("region", { name: "lookup attempt 1" });
+  await inspector.getByRole("tab", { name: "Calls" }).click();
+  await expect(inspector.getByText("weather.current")).toBeVisible();
+  await expect(inspector.getByText("stubbed", { exact: true })).toBeVisible();
+
+  const args = inspector.getByTestId("run-call-arguments-0");
+  const result = inspector.getByTestId("run-call-result-0");
+  await expect(args.getByRole("button", { name: "Arguments" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(result.getByRole("button", { name: "Result" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await args.getByRole("button", { name: "Arguments" }).click();
+  await expect(args.getByText("Strasbourg", { exact: true })).toBeVisible();
+  await args.getByRole("tab", { name: "Raw" }).click();
+  await expect(args.locator("pre")).toContainText('"city": "Strasbourg"');
+  await result.getByRole("button", { name: "Result" }).click();
+  await expect(result.getByText("28.7", { exact: true })).toBeVisible();
+});
+
+test("manual inspection is preserved when a running execution later fails", async ({
+  page,
+}) => {
+  const running: RunView = {
+    executionId: "exec-manual",
+    status: "running",
+    steps: [
+      {
+        id: "intake-1",
+        name: "intake",
+        attempt: 1,
+        status: "passed",
+        output: { ok: true },
+      },
+      { id: "screen-1", name: "screen", attempt: 1, status: "running" },
+    ],
+  };
+  await seedRun(page, running);
+  await page.getByRole("option", { name: /intake/ }).click();
+  await expect(
+    page.getByRole("region", { name: "intake attempt 1" }),
+  ).toBeVisible();
+
+  await page.evaluate(() => {
+    const view: RunView = {
+      executionId: "exec-manual",
       status: "failed",
       steps: [
-        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 200 },
-        { id: "screen", name: "screen", status: "failed" as const, error: "Validation failed" },
+        {
+          id: "intake-1",
+          name: "intake",
+          attempt: 1,
+          status: "passed",
+          output: { ok: true },
+        },
+        {
+          id: "screen-1",
+          name: "screen",
+          attempt: 1,
+          status: "failed",
+          error: "late failure",
+          logSlice: "boom",
+        },
       ],
-    });
-
-    await publish(page, {
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-fail-test",
-      target: "prod",
-    });
-
-    // Chip reports failed.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("failed", { timeout: 8000 });
-
-    const stepsList = page.getByTestId("canvas-steps-list");
-    await expect(stepsList).toBeVisible();
-
-    // intake passed, screen failed.
-    await expect(
-      page.getByTestId("canvas-step-row-intake").locator('[aria-label="passed"]'),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId("canvas-step-row-screen").locator('[aria-label="failed"]'),
-    ).toBeVisible();
-
-    // Cost-free contract: the Steps inspector must never show $ amounts.
-    await expect(stepsList).not.toContainText("$");
+    };
+    (
+      window as unknown as { __MOCK_RUN_STATE__?: Record<string, RunView> }
+    ).__MOCK_RUN_STATE__ = {
+      "exec-manual": view,
+    };
   });
 
-  test("a prod run does not show the stubbed chip on any step", async ({
-    page,
-  }) => {
-    // Default MockApi.getRunState: prod run, no stubbed field on the view.
-    await publish(page, {
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-demo-1",
-      target: "prod",
-    });
-
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("prod run completed", { timeout: 8000 });
-
-    // The "stubbed" chip must NOT appear on any row of a prod run.
-    const stepsList = page.getByTestId("canvas-steps-list");
-    await expect(stepsList).toBeVisible();
-    await expect(stepsList.getByTestId("canvas-run-stub-chip")).toHaveCount(0);
+  await expect(page.locator(".run-workspace-status")).toContainText("Failed", {
+    timeout: 5_000,
   });
+  await expect(
+    page.getByRole("region", { name: "intake attempt 1" }),
+  ).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Output" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("uses canonical run output, then labels the successful-step fallback Latest output", async ({
+  page,
+}) => {
+  await seedRun(page, {
+    executionId: "exec-canonical",
+    status: "completed",
+    output: { source: "canonical" },
+    steps: [
+      {
+        id: "deliver-1",
+        name: "deliver",
+        status: "passed",
+        output: { source: "step" },
+      },
+    ],
+  });
+  await expect(page.getByTestId("run-artifact")).toContainText("canonical");
+  await expect(page.getByTestId("run-artifact")).not.toContainText(
+    "Latest output",
+  );
+
+  await seedRun(page, {
+    executionId: "exec-fallback",
+    status: "completed",
+    steps: [
+      {
+        id: "deliver-1",
+        name: "deliver",
+        status: "passed",
+        output: { source: "step" },
+      },
+    ],
+  });
+  await expect(page.getByTestId("run-artifact")).toContainText("Latest output");
+  await expect(page.getByTestId("run-artifact")).toContainText("step");
+});
+
+test("renders safe artifacts, collapses long collections, and falls back when media fails", async ({
+  page,
+}) => {
+  await seedRun(page, {
+    executionId: "exec-artifact",
+    status: "completed",
+    output: {
+      headline: "# Shipping report",
+      body: "<img src=x onerror=alert(1)>",
+      documentation: "[Documentation](https://example.com/docs)",
+      image: "http://127.0.0.1:1/broken.png",
+      emptyObject: {},
+      emptyArray: [],
+      items: Array.from({ length: 10 }, (_, index) => `item-${index + 1}`),
+    },
+    steps: [],
+  });
+  const artifact = page.getByTestId("run-artifact");
+  await expect(
+    artifact.getByRole("heading", { name: "Shipping report" }),
+  ).toBeVisible();
+  await expect(artifact.locator("pre.artifact-source")).toContainText(
+    "<img src=x onerror=alert(1)>",
+  );
+  await expect(artifact.locator("img[src='x']")).toHaveCount(0);
+  await expect(
+    artifact.getByRole("link", { name: "Documentation" }),
+  ).toHaveAttribute("href", "https://example.com/docs");
+  await expect(artifact.getByText("Show 2 more")).toBeVisible();
+  await expect(artifact.getByText("{}", { exact: true })).toBeVisible();
+  await expect(artifact.getByText("[]", { exact: true })).toBeVisible();
+  await expect(artifact.getByText(/Preview unavailable/)).toBeVisible({
+    timeout: 5_000,
+  });
+  const renderedTab = artifact.getByRole("tab", { name: "Rendered" });
+  const rawTab = artifact.getByRole("tab", { name: "Raw" });
+  await renderedTab.focus();
+  await renderedTab.press("ArrowRight");
+  await expect(rawTab).toBeFocused();
+  await expect(rawTab).toHaveAttribute("aria-selected", "true");
+  await expect(artifact.locator("pre")).toContainText(
+    "<img src=x onerror=alert(1)>",
+  );
+  await rawTab.press("Home");
+  await expect(renderedTab).toBeFocused();
+  await expect(renderedTab).toHaveAttribute("aria-selected", "true");
+});
+
+test("puts attempts before the result and bounds long HTML until explicitly expanded", async ({
+  page,
+}) => {
+  const tail = "TAIL_MUST_STAY_COLLAPSED";
+  await seedRun(page, {
+    executionId: "exec-long-html",
+    status: "completed",
+    output: {
+      html: `<!doctype html><html><body>${"weather ".repeat(300)}${tail}</body></html>`,
+    },
+    steps: [
+      {
+        id: "render-1",
+        name: "render",
+        attempt: 1,
+        status: "passed",
+        latencyMs: 120,
+      },
+    ],
+  });
+
+  const timeline = page.getByTestId("run-timeline");
+  const artifact = page.getByTestId("run-artifact");
+  const [timelineBox, artifactBox] = await Promise.all([
+    timeline.boundingBox(),
+    artifact.boundingBox(),
+  ]);
+  expect(timelineBox).not.toBeNull();
+  expect(artifactBox).not.toBeNull();
+  expect(timelineBox!.y).toBeLessThan(artifactBox!.y);
+
+  await expect(artifact.locator("pre.artifact-source")).not.toContainText(tail);
+  const expandHtml = artifact.getByRole("button", { name: /Show full HTML/ });
+  await expect(expandHtml).toBeVisible();
+  await expandHtml.click();
+  await expect(artifact.locator("pre.artifact-source")).toContainText(tail);
+
+  const disclosure = artifact.getByRole("button", {
+    name: "Result",
+    exact: true,
+  });
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(artifact.locator(".artifact-body")).toBeHidden();
+  await disclosure.click();
+  await expect(artifact.locator(".artifact-body")).toBeVisible();
+});
+
+test("Focus mode shows the timeline and shared inspector side by side", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    document.documentElement.dataset.windowFrame = "macos";
+  });
+  await page.getByTestId("session-step-local").click();
+  await page.getByTestId("run-sheet-submit").click();
+  await expect(page.getByTestId("run-artifact")).toBeVisible({
+    timeout: 8_000,
+  });
+  const coveredTabsBox = await page.locator(".right-pane-tabs").boundingBox();
+  expect(coveredTabsBox).not.toBeNull();
+  const openFocus = page.getByRole("button", { name: "Open Focus mode" });
+  await openFocus.click();
+  const focusLayer = page.getByTestId("run-focus-layer");
+  await expect(focusLayer).toBeVisible();
+  await expect(focusLayer).toHaveAttribute("role", "dialog");
+  await expect(focusLayer).toHaveAttribute("aria-modal", "true");
+  await expect(
+    focusLayer.getByRole("button", { name: "Exit Focus mode" }),
+  ).toBeFocused();
+  expect(
+    await page.locator("#root").evaluate((root) => ({
+      inert: (root as HTMLElement).inert,
+      ariaHidden: root.getAttribute("aria-hidden"),
+    })),
+  ).toEqual({ inert: true, ariaHidden: "true" });
+  await expect(page.getByTestId("run-workspace")).toHaveClass(/is-focus/);
+  expect(
+    await focusLayer.evaluate(
+      (element) => element.parentElement === document.body,
+    ),
+  ).toBe(true);
+  const layerBox = await focusLayer.boundingBox();
+  expect(layerBox).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
+  expect(
+    await page
+      .locator(".run-focus-layer .run-workspace-header")
+      .evaluate((header) =>
+        Number.parseFloat(getComputedStyle(header).paddingLeft),
+      ),
+  ).toBeGreaterThanOrEqual(78);
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        Boolean(
+          document
+            .elementFromPoint(x, y)
+            ?.closest("[data-testid='run-focus-layer']"),
+        ),
+      {
+        x: coveredTabsBox!.x + coveredTabsBox!.width / 2,
+        y: coveredTabsBox!.y + coveredTabsBox!.height / 2,
+      },
+    ),
+  ).toBe(true);
+  await page.getByRole("option", { name: /screen/ }).click();
+  const timelineBox = await page.getByTestId("run-timeline").boundingBox();
+  const inspector = page.getByRole("region", { name: "screen attempt 1" });
+  const inspectorBox = await inspector.boundingBox();
+  expect(timelineBox).not.toBeNull();
+  expect(inspectorBox).not.toBeNull();
+  expect(timelineBox!.x).toBeLessThan(inspectorBox!.x);
+  const [headerBox, backBox] = await Promise.all([
+    page.locator(".run-focus-layer .run-workspace-header").boundingBox(),
+    inspector.getByRole("button", { name: "Back" }).boundingBox(),
+  ]);
+  expect(headerBox).not.toBeNull();
+  expect(backBox).not.toBeNull();
+  expect(backBox!.x).toBeGreaterThanOrEqual(78);
+  expect(backBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveCount(0);
+  await expect(focusLayer).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(focusLayer).toHaveCount(0);
+  expect(
+    await page.locator("#root").evaluate((root) => ({
+      inert: (root as HTMLElement).inert,
+      ariaHidden: root.getAttribute("aria-hidden"),
+    })),
+  ).toEqual({ inert: false, ariaHidden: null });
+  await expect(openFocus).toBeFocused();
 });

@@ -168,6 +168,13 @@
     "reason": "The Studio localhost deploy route remains stable for existing clients."
   },
   {
+    "id": "actions-input-contract-route",
+    "path": "packages/harness/src/server/actions.ts",
+    "pattern": "^/api/workflows/:id/input-contract$",
+    "occurrences": 1,
+    "reason": "The input-contract endpoint extends the existing compatibility-sensitive Studio localhost workflow route family."
+  },
+  {
     "id": "server-workflow-change-event",
     "path": "packages/harness/src/server/index.ts",
     "pattern": "^workflows\\.changed$",
@@ -283,8 +290,15 @@
     "id": "web-api-local-workflow-routes",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^/api/workflows(?:/(?:connect|scan)?)?$",
-    "occurrences": 4,
+    "occurrences": 5,
     "reason": "Studio localhost API routes remain stable for existing clients."
+  },
+  {
+    "id": "web-api-input-contract-mock-error",
+    "path": "packages/harness/web/src/lib/api.ts",
+    "pattern": "^GET /api/workflows/:id/input-contract → 500 \\(mock\\)$",
+    "occurrences": 1,
+    "reason": "The test-only mock error names the compatibility-sensitive localhost endpoint it simulates."
   },
   {
     "id": "web-api-session-binding-route",

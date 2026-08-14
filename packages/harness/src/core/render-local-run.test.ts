@@ -100,15 +100,28 @@ describe("renderLocalRun — step id + name", () => {
   });
 });
 
-describe("renderLocalRun — never fabricates cost or latency", () => {
+describe("renderLocalRun — cost and recorded timing", () => {
   it("omits costUsd on every local step (local runs are free)", () => {
     const view = renderOne({ status: "succeeded", output: { total: 5 } });
     expect(view.steps[0]).not.toHaveProperty("costUsd");
   });
 
-  it("omits latencyMs on every local step (a trace carries no timing)", () => {
+  it("omits latencyMs when a trace carries no timing", () => {
     const view = renderOne({ status: "succeeded" });
     expect(view.steps[0]).not.toHaveProperty("latencyMs");
+  });
+
+  it("computes latency and preserves timestamps when the live trace records them", () => {
+    const view = renderOne({
+      startedAt: "2026-01-01T00:00:00.000Z",
+      finishedAt: "2026-01-01T00:00:00.025Z",
+    });
+    expect(view.steps[0]).toMatchObject({
+      attempt: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      finishedAt: "2026-01-01T00:00:00.025Z",
+      latencyMs: 25,
+    });
   });
 });
 
@@ -394,7 +407,7 @@ describe("renderLocalRun — whole run", () => {
       executionId: "local-9",
       outcome: "completed",
     });
-    expect(view.steps[0]).toEqual({ id: "s-1", name: "s", status: "passed", input: "in" });
+    expect(view.steps[0]).toEqual({ id: "s-1", name: "s", attempt: 1, status: "passed", input: "in" });
   });
 
   it("maps a realistic completed local run end to end", () => {
@@ -418,6 +431,7 @@ describe("renderLocalRun — whole run", () => {
         {
           id: "gather-1",
           name: "gather",
+          attempt: 1,
           status: "passed",
           input: { topic: "otters" },
           output: { facts: ["float on backs"] },
@@ -447,6 +461,7 @@ describe("renderLocalRun — whole run", () => {
     expect(view.steps[1]).toEqual({
       id: "summarize-1",
       name: "summarize",
+      attempt: 1,
       status: "failed",
       input: { n: 1 },
       error: "empty",

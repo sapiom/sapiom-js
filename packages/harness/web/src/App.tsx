@@ -19,7 +19,14 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JSX } from "react";
-import type { HarnessKind, HarnessSession, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type {
+  HarnessKind,
+  HarnessSession,
+  MacroDef,
+  SessionSummary,
+  WorkflowInfo,
+  WorkflowInputContractResponse,
+} from "@shared/types";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { CodePanel } from "./components/CodePanel";
@@ -30,6 +37,7 @@ import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
+import { RunSheet } from "./components/RunSheet";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
@@ -50,6 +58,7 @@ import {
 } from "./lib/project-dir";
 import { basenameOf, isWithinDir, samePath } from "./lib/paths";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
+import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
 import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
 import { deepLinkFromSearch } from "./lib/deep-link";
@@ -128,6 +137,27 @@ export const App = (): JSX.Element => {
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [runRequest, setRunRequest] = useState<{
+    workflow: WorkflowInfo;
+    target: RunTarget;
+    returnFocus: HTMLElement | null;
+  } | null>(null);
+  const visibleInputContractsRef = useRef(
+    new Map<string, WorkflowInputContractResponse>(),
+  );
+  const loadRunInputContract = useCallback(
+    async (workflowPath: string): Promise<WorkflowInputContractResponse> => {
+      const fallback = visibleInputContractsRef.current.get(workflowPath);
+      try {
+        const fresh = await harness.getWorkflowInputContract(workflowPath);
+        return fresh.status === "unavailable" && fallback ? fallback : fresh;
+      } catch (error) {
+        if (fallback) return fallback;
+        throw error;
+      }
+    },
+    [harness.getWorkflowInputContract],
+  );
   // The composer-first "new session" home. `composing` is explicit New-session
   // intent (Create new / the +); the home also shows whenever nothing else
   // claims the centre pane (first run, or every session closed).
@@ -1172,6 +1202,42 @@ export const App = (): JSX.Element => {
     })();
   };
 
+  const handleLaunchRun = (input: unknown): void => {
+    const request = runRequest;
+    if (!request) return;
+    // The launch surface closes immediately and the execution becomes the
+    // Steps pane's subject while binding / network work continues.
+    setRunRequest(null);
+    setRightTab("steps");
+    setRightCollapsed(false);
+    void (async () => {
+      const sessionId =
+        (await handleBindWorkflow(request.workflow.path)) ??
+        harness.activeSessionId;
+      if (!sessionId) return;
+      if (request.target === "prod") {
+        if (
+          request.workflow.definitionId == null ||
+          !isWorkflowRunnable(request.workflow)
+        ) {
+          harness.showToast("This agent needs a ready cloud deployment first.");
+          return;
+        }
+        await harness.startProdRun(
+          sessionId,
+          String(request.workflow.definitionId),
+          input,
+        );
+      } else {
+        await harness.runLocal(
+          sessionId,
+          request.workflow.path,
+          input,
+        );
+      }
+    })();
+  };
+
   // "Describe with AI": run the describe macro HEADLESS (execution:"background")
   // so the agent edits the workflow source out of sight — never the interactive
   // terminal. The prompt is passed as the macro's `subject`; the source watcher
@@ -1433,6 +1499,9 @@ export const App = (): JSX.Element => {
                     sessionReady={activeSession.ready === true && activeSession.status !== "exited"}
                     macros={state.macros}
                     onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+                    onRequestRun={(target, returnFocus) =>
+                      setRunRequest({ workflow: boundWorkflow, target, returnFocus })
+                    }
                     preview={harness.previewBySession.get(activeSession.id) ?? null}
                     lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
                     authenticated={state.authenticated}
@@ -1629,16 +1698,17 @@ export const App = (): JSX.Element => {
                             : "linked"}
                     </a>
                   )}
-                {/* Canvas expand sits right beside the collapse-panel toggle. */}
-                {rightTab === "canvas" && (
+                {/* Canvas expand / Steps Focus sits beside the panel toggle. */}
+                {(rightTab === "canvas" || rightTab === "steps") && (
                   <button
                     className="theme-toggle"
                     data-testid="canvas-expand"
-                    aria-label={canvasExpanded ? "Exit expanded canvas" : "Expand canvas"}
-                    title={canvasExpanded ? "Exit expanded canvas" : "Expand canvas"}
+                    hidden={canvasExpanded}
+                    aria-label={rightTab === "steps" ? "Open Focus mode" : "Expand canvas"}
+                    title={rightTab === "steps" ? "Open Focus mode" : "Expand canvas"}
                     onClick={() => setCanvasExpanded((v) => !v)}
                   >
-                    <Icon name={canvasExpanded ? "Minimize2" : "Maximize2"} size={15} />
+                    <Icon name="Maximize2" size={15} />
                   </button>
                 )}
                 <button
@@ -1698,6 +1768,10 @@ export const App = (): JSX.Element => {
                   if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
                   emptyCollapsedKeyRef.current = emptyBoardKey;
                   setRightCollapsed(true);
+                }}
+                onGraphChange={(workflowPath, graph) => {
+                  const contract = inputContractFromCanvasGraph(graph);
+                  if (contract) visibleInputContractsRef.current.set(workflowPath, contract);
                 }}
                 expanded={canvasExpanded}
                 onToggleExpanded={() => setCanvasExpanded((v) => !v)}
@@ -1853,6 +1927,17 @@ export const App = (): JSX.Element => {
           agentLabel={cloneRequest.slug ? `“${cloneRequest.slug}”` : `Agent ${cloneRequest.definitionId}`}
           onCancel={() => setCloneRequest(null)}
           onConfirm={() => void handleCloneDefinition(cloneRequest)}
+        />
+      )}
+
+      {runRequest && (
+        <RunSheet
+          workflow={runRequest.workflow}
+          target={runRequest.target}
+          loadContract={loadRunInputContract}
+          returnFocus={runRequest.returnFocus}
+          onClose={() => setRunRequest(null)}
+          onRun={handleLaunchRun}
         />
       )}
 

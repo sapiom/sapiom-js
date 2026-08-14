@@ -378,7 +378,7 @@ describe("renderRunState — whole run", () => {
       status: "running",
       steps: [step({ spanId: "s0" })],
     });
-    expect(view.steps[0]).toEqual({ id: "s0", name: "s", status: "passed" });
+    expect(view.steps[0]).toEqual({ id: "s0", name: "s", attempt: 1, status: "passed" });
   });
 
   it("emits only the derived keys for a minimal RUNNING step too", () => {
@@ -387,7 +387,7 @@ describe("renderRunState — whole run", () => {
       status: "running",
       steps: [step({ spanId: "s1", status: "running" })],
     });
-    expect(view.steps[0]).toEqual({ id: "s1", name: "s", status: "running" });
+    expect(view.steps[0]).toEqual({ id: "s1", name: "s", attempt: 1, status: "running" });
   });
 
   it("maps a realistic completed run end to end", () => {
@@ -413,7 +413,10 @@ describe("renderRunState — whole run", () => {
         {
           id: "span_0001",
           name: "gather",
+          attempt: 1,
           status: "passed",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:45.000Z",
           latencyMs: 45_000,
         },
       ],

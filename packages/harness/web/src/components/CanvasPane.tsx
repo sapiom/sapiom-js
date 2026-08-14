@@ -13,12 +13,12 @@ import {
   CanvasChatPanel,
   CanvasStepsList,
   DeployStatusBanner,
-  RunStepsList,
-  RunSummaryBlock,
 } from "./CanvasStepDetail";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
+import { RunWorkspace } from "./RunWorkspace";
+import { track as trackProduct } from "../lib/analytics/events";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** How many of a running task's trailing status lines the activity view shows. */
@@ -108,6 +108,10 @@ interface CanvasPaneProps {
    *  arrives — the last case is what opens the pane the moment an agent
    *  finishes rendering a board, even one the user had collapsed. */
   onCanvasState?: (hasContent: boolean) => void;
+  /** Publishes the manifest-backed graph already visible in this pane so the
+   * Run sheet can reuse its entry contract if a fresh extraction is briefly
+   * unavailable. */
+  onGraphChange?: (workflowPath: string, graph: CanvasGraph) => void;
 }
 
 /** A legend row posted by a rendered document, validated before it is shown. */
@@ -144,6 +148,7 @@ export function CanvasPane({
   workflows,
   onOpenWorkflow,
   onCanvasState,
+  onGraphChange,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   // Latest reporter, read from the content effects without listing it in their
@@ -151,6 +156,10 @@ export function CanvasPane({
   // re-report stale content (re-opening a pane the user just collapsed).
   const onCanvasStateRef = useRef(onCanvasState);
   onCanvasStateRef.current = onCanvasState;
+  const onGraphChangeRef = useRef(onGraphChange);
+  onGraphChangeRef.current = onGraphChange;
+  const boundWorkflowPathRef = useRef(boundWorkflow?.path ?? null);
+  boundWorkflowPathRef.current = boundWorkflow?.path ?? null;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
   // True while the initial HEAD probe for this session is still in flight —
@@ -450,6 +459,10 @@ export function CanvasPane({
   // first; only then does the expanded overlay exit (its own exit button
   // still works either way).
   useEffect(() => {
+    // The run workspace portal owns Focus-mode Escape handling so each press
+    // unwinds exactly one layer and the underlying Canvas selection cannot
+    // react while it is inert.
+    if (surface === "steps" && run && expanded) return;
     if (!expanded && selectedNodeId == null) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
@@ -458,7 +471,7 @@ export function CanvasPane({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expanded, selectedNodeId, onToggleExpanded]);
+  }, [expanded, selectedNodeId, onToggleExpanded, run, surface]);
   const [overviewOpen, setOverviewOpen] = useState(true);
   // The chat (macros + ask) is a standalone panel, CLOSED by default and
   // toggled by the 💬 control — independent of the info panel (both can be
@@ -502,7 +515,12 @@ export function CanvasPane({
           legend: Array.isArray(data.legend) ? data.legend.filter(isLegendItem) : [],
         });
       } else if (data.type === "sapiom-canvas:graph") {
-        setGraph(parseCanvasGraph((data as { graph?: unknown }).graph));
+        const nextGraph = parseCanvasGraph((data as { graph?: unknown }).graph);
+        setGraph(nextGraph);
+        const workflowPath = boundWorkflowPathRef.current;
+        if (nextGraph && workflowPath) {
+          onGraphChangeRef.current?.(workflowPath, nextGraph);
+        }
         // THE reveal signal. Only a real render embeds the graph script that
         // posts this; the "preparing"/"pending" placeholders post nothing, so
         // this is what keeps the pane from opening on scaffolding. The
@@ -776,14 +794,6 @@ export function CanvasPane({
           onOpenCode={onOpenCode}
         />
       )}
-      {run && (
-        <RunSummaryBlock
-          run={run}
-          runTarget={runTarget}
-          workflow={boundWorkflow}
-          preview={preview}
-        />
-      )}
     </>
   );
 
@@ -901,9 +911,23 @@ export function CanvasPane({
         /* No diagram yet, but a run was observed or a deploy is landing: the
            live per-step data (or the deploy banner) renders instead of the
            "No steps yet" empty state. */
-        <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
-          {stepsHeader}
-          {run && <RunStepsList run={run} target={runTarget} />}
+        <div className="canvas-frame-wrap" data-view="steps">
+          <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
+            {stepsHeader}
+            {run && (
+              <RunWorkspace
+                run={run}
+                target={runTarget}
+                workflow={boundWorkflow}
+                focus={expanded}
+                onToggleFocus={onToggleExpanded}
+                onAskAgent={onInjectPrompt}
+                onInspectionOpened={() => trackProduct("run.inspection_opened", { target: runTarget ?? "unknown" })}
+                onArtifactViewed={() => trackProduct("run.artifact_viewed", { target: runTarget ?? "unknown" })}
+                onDashboardOpened={() => trackProduct("run.dashboard_opened", { target: runTarget ?? "unknown" })}
+              />
+            )}
+          </div>
         </div>
       ) : !showsContent && sessionExited ? (
         /* nothing was generated and the session is dead — a render here would
@@ -933,7 +957,7 @@ export function CanvasPane({
         />
       ) : (
         <div
-          className={"canvas-frame-wrap" + (expanded ? " is-expanded" : "")}
+          className={"canvas-frame-wrap" + (expanded && surface === "board" ? " is-expanded" : "")}
           data-view={surface === "board" ? "board" : "steps"}
         >
           {/* The active surface: the board on the Canvas tab, the steps list on
@@ -1181,7 +1205,19 @@ export function CanvasPane({
           {surface === "steps" && (
             <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
               {stepsHeader}
-              {graph && graph.nodes.length > 0 ? (
+              {run ? (
+                <RunWorkspace
+                  run={run}
+                  target={runTarget}
+                  workflow={boundWorkflow}
+                  focus={expanded}
+                  onToggleFocus={onToggleExpanded}
+                  onAskAgent={onInjectPrompt}
+                  onInspectionOpened={() => trackProduct("run.inspection_opened", { target: runTarget ?? "unknown" })}
+                  onArtifactViewed={() => trackProduct("run.artifact_viewed", { target: runTarget ?? "unknown" })}
+                  onDashboardOpened={() => trackProduct("run.dashboard_opened", { target: runTarget ?? "unknown" })}
+                />
+              ) : graph && graph.nodes.length > 0 ? (
                 <CanvasStepsList
                   graph={graph}
                   run={run}
@@ -1192,10 +1228,6 @@ export function CanvasPane({
                   expandedId={expandedStepId}
                   onToggle={(id) => setExpandedStepId((cur) => (cur === id ? null : id))}
                 />
-              ) : run ? (
-                /* No structural graph, but a real run was observed:
-                   its per-step truth renders instead of a dead end. */
-                <RunStepsList run={run} target={runTarget} />
               ) : (
                 /* Same title as the pre-render empty state; the hint names
                    this cause (a rendered canvas that posted no graph). */
