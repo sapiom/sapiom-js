@@ -90,6 +90,7 @@ describe("ClaudeCodeAdapter", () => {
         "/tmp/proj/.sapiom/mcp.json",
         "--permission-mode",
         "auto",
+        "--allow-dangerously-skip-permissions",
         "--append-system-prompt",
         DEFAULT_SYSTEM_PROMPT,
       ]);
@@ -104,6 +105,7 @@ describe("ClaudeCodeAdapter", () => {
         "agent-uuid-123",
         "--permission-mode",
         "auto",
+        "--allow-dangerously-skip-permissions",
         "--append-system-prompt",
         DEFAULT_SYSTEM_PROMPT,
       ]);
@@ -121,6 +123,7 @@ describe("ClaudeCodeAdapter", () => {
         "agent-uuid-123",
         "--permission-mode",
         "auto",
+        "--allow-dangerously-skip-permissions",
       ]);
       expect(spec.env).toEqual({ CLAUDECODE: null });
     });
@@ -171,6 +174,7 @@ describe("ClaudeCodeAdapter", () => {
         "stream-json",
         "--verbose",
       ]);
+      expect(spec.args).not.toContain("--allow-dangerously-skip-permissions");
       await rm(promptDir, { recursive: true, force: true });
     });
 

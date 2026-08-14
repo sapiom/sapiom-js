@@ -364,7 +364,15 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
 
 function buildInteractiveConfigArgs(opts: LaunchOpts): string[] {
   const args = buildConfigArgs(opts);
-  args.push("--permission-mode", "auto");
+  // Auto remains the safe, classifier-backed default for eligible accounts.
+  // Claude Code silently downgrades when the account/model cannot enter Auto;
+  // the allow flag only adds Bypass to the Shift+Tab cycle so the user can
+  // explicitly opt in. It does not activate Bypass or suppress its warning.
+  args.push(
+    "--permission-mode",
+    "auto",
+    "--allow-dangerously-skip-permissions",
+  );
   return args;
 }
 
