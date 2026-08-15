@@ -1,5 +1,17 @@
 # @sapiom/harness-desktop
 
+## 0.3.2
+
+### Patch Changes
+
+- 13e5867: Start new and resumed interactive Claude Code sessions in Auto mode when the
+  account supports it. Bypass permissions is available as an explicit Shift+Tab
+  choice for accounts without Auto mode; it is never activated silently.
+  Headless tasks keep their existing permission mode.
+- Updated dependencies [7d4f13a]
+- Updated dependencies [13e5867]
+  - @sapiom/harness@0.8.1
+
 ## 0.3.1
 
 ### Patch Changes

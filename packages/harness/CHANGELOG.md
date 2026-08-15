@@ -1,5 +1,17 @@
 # @sapiom/harness
 
+## 0.8.1
+
+### Patch Changes
+
+- 7d4f13a: Allow files to be picked, dropped, or pasted into the create-new composer so they arrive with the agent's first request.
+- 13e5867: Start new and resumed interactive Claude Code sessions in Auto mode when the
+  account supports it. Bypass permissions is available as an explicit Shift+Tab
+  choice for accounts without Auto mode; it is never activated silently.
+  Headless tasks keep their existing permission mode.
+  - @sapiom/agent@0.9.4
+  - @sapiom/agent-core@0.11.1
+
 ## 0.8.0
 
 ### Minor Changes
