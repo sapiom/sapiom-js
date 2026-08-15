@@ -384,8 +384,12 @@ export interface ImageLaunchHandle extends DispatchHandle {
  * by then (`pauseUntilSignal` reduces it to its signal + `correlationId`).
  */
 export interface MediaResumeFields {
-  /** The semantic model alias that served this generation (SAP-2576). Always present. */
-  resolvedModel: string;
+  /**
+   * The semantic model alias that served this generation (SAP-2576). Omitted on the durable
+   * workflow-resume path when the model is not cataloged (best-effort) — the backend refuses to
+   * thread caller-controlled free text through this field on the resume payload — see SAP-2650.
+   */
+  resolvedModel?: string;
   /** Per-generation cost (SAP-2576) — `estimateUsd` inline, settled charge via `cost.reference`. */
   cost?: MediaCostEnvelope;
 }
