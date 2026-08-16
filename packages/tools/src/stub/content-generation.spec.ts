@@ -45,4 +45,24 @@ describe("createStubClient().contentGeneration — resolvedModel on the sync cre
     });
     expect(created.resolvedModel).toBe(handle.resolvedModel);
   });
+
+  it("a caller override's resolvedModel wins, and a frozen override is not mutated", async () => {
+    // Regression: resolvedModel lives in the fallback factory, so resolve() returns a caller-supplied
+    // override untouched — its resolvedModel is preserved (not clobbered by input.model), and a frozen
+    // override object is never mutated (post-mutating it would throw).
+    const override = Object.freeze({
+      images: [{ url: "https://cdn/override.png" }],
+      resolvedModel: "my-model",
+    });
+    const stub = createStubClient({
+      overrides: { "contentGeneration.images.create": override },
+    });
+
+    const out = await stub.contentGeneration.images.create({
+      prompt: "x",
+      model: "flux-fast",
+    });
+
+    expect(out.resolvedModel).toBe("my-model");
+  });
 });
