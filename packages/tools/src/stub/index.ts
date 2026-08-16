@@ -790,7 +790,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         const correlationId = `stub-run-${++launchSeq}`;
         // `launch()` honors `models.launch` first, then the shared `models.run`.
         const result = {
-          ...resolveModelResult(spec, dispatchedKeys("agent")),
+          ...resolveModelResult(spec, dispatchedKeys("models")),
           runId: correlationId,
         };
         // The resume payload IS the result (no live handles to strip).

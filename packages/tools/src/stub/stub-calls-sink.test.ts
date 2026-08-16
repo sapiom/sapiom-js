@@ -155,3 +155,38 @@ describe("stub calls sink — per-step isolation", () => {
     expect(callsB[0].capability).toBe("search.scrape");
   });
 });
+
+describe("stub models.launch — override key resolution", () => {
+  it("honors models.launch and models.run overrides for models.launch()", async () => {
+    const customResult = {
+      runId: "custom-run",
+      status: "completed" as const,
+      output: "custom agent output",
+      result: {
+        success: true,
+        stopReason: "end_turn",
+        turns: 1,
+        modelUsed: "stub-model",
+        durationMs: 0,
+        costUsd: 0,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          thinkingTokens: 0,
+        },
+      },
+      error: null,
+    };
+    const client = createStubClient({
+      overrides: { "models.launch": customResult },
+    });
+
+    const handle = await client.models.launch({ prompt: "test" });
+    const res = await handle.wait();
+
+    expect(res.output).toBe("custom agent output");
+  });
+});
+
