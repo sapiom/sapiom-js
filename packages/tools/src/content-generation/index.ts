@@ -101,27 +101,65 @@ export interface MediaCostEnvelope {
   reference?: string;
 }
 
+/**
+ * Neutral param vocabulary (E4/SAP-2579) — the SDK mirror of the backend catalog's `AspectRatio` /
+ * `Resolution` / `OutputFormat` (`media-catalog.types.ts`). A caller sets these as first-class fields
+ * on {@link ImageCreateInput} / {@link VideoCreateInput}; the router validates each against the
+ * resolved model's capabilities BEFORE payment and maps it to that model's provider wire key. Passing
+ * a value the model doesn't support is rejected `400 unsupported_param` (never silently dropped). Each
+ * model supports a subset — the union is the full vocabulary.
+ */
+/** Neutral aspect-ratio vocabulary. */
+export type AspectRatio = "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
+/** Neutral resolution vocabulary (video). */
+export type Resolution = "480p" | "720p" | "1080p";
+/** Neutral output-format vocabulary (`"mp4"` is video-only). */
+export type OutputFormat = "png" | "jpeg" | "webp" | "mp4";
+
 export interface ImageCreateInput {
   /** Text prompt describing the image to generate. */
   prompt: string;
-  /** Number of images to generate. */
-  numImages?: number;
   /**
-   * Optional model selector. Defaults to a fast image model; most callers omit it.
-   *
-   * When set, pass a raw *provider* model id — as with video, the SDK forwards `model`
-   * verbatim to the gateway, so a backend semantic alias is not resolved here.
+   * Optional model selector — a Sapiom semantic alias (e.g. `"flux-fast"`, `"flux-pro/kontext"`)
+   * resolved to a provider model server-side. A legacy raw provider id still works. Most callers
+   * omit it (defaults to a fast image model).
    */
   model?: string;
+
+  // ── Neutral params (E4/SAP-2579). Validated against the resolved model's capabilities BEFORE
+  // payment and mapped to its provider wire keys; an unsupported one → 400 `unsupported_param`
+  // (never silently dropped). Omit ⇒ the provider default. See {@link AspectRatio} et al.
+  /** Aspect ratio of the generated image. */
+  aspectRatio?: AspectRatio;
+  /** Number of images to generate. Supersedes the deprecated {@link ImageCreateInput.numImages}. */
+  count?: number;
+  /** Deterministic seed, where the model exposes one. */
+  seed?: number;
+  /** Negative prompt, where the model supports one. */
+  negativePrompt?: string;
+  /** Reference image (a hosted URL or a Sapiom `fileId`) for img2img, where the model supports it. */
+  referenceImage?: string;
+  /** Output image format. */
+  outputFormat?: OutputFormat;
+  /**
+   * Escape hatch: raw provider wire params, merged last so they win over the neutral fields.
+   * Supersedes the deprecated {@link ImageCreateInput.params}; use only for a knob the neutral
+   * vocabulary lacks.
+   */
+  passthrough?: Record<string, unknown>;
+
   /**
    * Optional: persist each generated output to Sapiom file storage. When set, every
    * item in `images` comes back annotated with `fileId` (or `storageError` if
    * persisting that one failed).
    */
   storage?: StorageOptions;
+  /** @deprecated use {@link ImageCreateInput.count}. Number of images to generate. Still honored. */
+  numImages?: number;
   /**
-   * Advanced: extra model-specific parameters, forwarded verbatim
-   * (e.g. `image_size`, `seed`, `guidance_scale`).
+   * @deprecated use the neutral fields above, or {@link ImageCreateInput.passthrough} for an
+   * uncovered knob. Extra model-specific parameters, forwarded verbatim (e.g. `image_size`,
+   * `guidance_scale`). Still honored.
    */
   params?: Record<string, unknown>;
 }
@@ -269,6 +307,52 @@ function workflowResumeHeaders(
 }
 
 /**
+ * The E4 (SAP-2579) neutral param fields + the deprecated aliases, forwarded verbatim as top-level
+ * camelCase body fields — matching the router's `ImageCreateRequest`. The SDK only forwards; the
+ * router validates against the resolved model's caps, maps to provider wire keys, and applies the
+ * merge precedence (`params` < neutral fields < `passthrough`). `count`/`outputFormat` are image-only.
+ */
+const IMAGE_PARAM_KEYS = [
+  "aspectRatio",
+  "count",
+  "seed",
+  "negativePrompt",
+  "referenceImage",
+  "outputFormat",
+  "passthrough",
+  "numImages",
+  "params",
+] as const;
+
+/** As {@link IMAGE_PARAM_KEYS}, for video: no `count`/`outputFormat`; adds `resolution`/`duration`/`audio`. */
+const VIDEO_PARAM_KEYS = [
+  "aspectRatio",
+  "resolution",
+  "duration",
+  "audio",
+  "seed",
+  "negativePrompt",
+  "referenceImage",
+  "passthrough",
+  "params",
+] as const;
+
+/**
+ * Copy each present param field from `input` onto the request `body` (top-level, camelCase). `!= null`
+ * drops an explicit JS `null` (treated as unset — mirroring the router's `pickNeutralParams` and the
+ * sibling `model` / `storage` handling), so `aspectRatio: null` from a JS caller never hits the wire.
+ */
+function applyMediaParams(
+  body: Record<string, unknown>,
+  input: Record<string, unknown>,
+  keys: readonly string[],
+): void {
+  for (const key of keys) {
+    if (input[key] != null) body[key] = input[key];
+  }
+}
+
+/**
  * Generate one or more images from a prompt. Pass `storage` to persist each output
  * (the returned images then carry `fileId`). Failed requests throw
  * {@link ContentGenerationHttpError}.
@@ -286,15 +370,14 @@ export async function createImage(
 ): Promise<ImageGenerationResult> {
   assertPrompt(input.prompt);
 
-  // Map to the router's camelCase `ImageCreateRequest`. `params` rides as a nested
-  // field (not spread) so the adapter forwards it verbatim. `!= null` keeps a JS
-  // caller's explicit null off the wire; `storage` uses a truthy check so
-  // `storage: null` is "no storage" rather than a null field.
+  // Map to the router's camelCase `ImageCreateRequest`. `model`/`storage` keep their own guards
+  // (`storage` truthy, so `storage: null` means "no storage"); the E4 neutral params + the
+  // deprecated `numImages`/`params` ride top-level via `applyMediaParams` for the router to
+  // validate + map (`params`/`passthrough` stay nested objects, forwarded verbatim).
   const body: Record<string, unknown> = { prompt: input.prompt };
   if (input.model != null) body.model = input.model;
-  if (input.numImages !== undefined) body.numImages = input.numImages;
   if (input.storage) body.storage = input.storage;
-  if (input.params != null) body.params = input.params;
+  applyMediaParams(body, input as unknown as Record<string, unknown>, IMAGE_PARAM_KEYS);
 
   const raw = await capabilityCall<RawImageResult>(
     "content.generation.images",
@@ -464,17 +547,14 @@ export async function launchImage(
 ): Promise<ImageLaunchHandle> {
   assertPrompt(input.prompt);
 
-  // Mirror createImage's body byte-for-byte, plus `dispatch: 'async'` to select the
-  // queue path. `params` rides nested; `storage` uses a truthy check (so `storage: null`
-  // is "no storage"); `!= null` keeps an explicit JS null off the wire.
+  // Mirror createImage's body, plus `dispatch: 'async'` to select the queue path.
   const body: Record<string, unknown> = {
     prompt: input.prompt,
     dispatch: "async",
   };
   if (input.model != null) body.model = input.model;
-  if (input.numImages !== undefined) body.numImages = input.numImages;
   if (input.storage) body.storage = input.storage;
-  if (input.params != null) body.params = input.params;
+  applyMediaParams(body, input as unknown as Record<string, unknown>, IMAGE_PARAM_KEYS);
 
   const handle = await capabilityCall<ImageDispatchResponse>(
     "content.generation.images",
@@ -600,13 +680,44 @@ export interface VideoCreateInput {
    * @example "veo3-fast"
    */
   model?: LiteralUnion<KnownVideoModel>;
+
+  // ── Neutral params (E4/SAP-2579) — same contract as {@link ImageCreateInput}: validated against
+  // the resolved model's capabilities BEFORE payment, mapped to its provider wire keys; an
+  // unsupported one → 400 `unsupported_param`. Omit ⇒ the provider default.
+  /** Aspect ratio of the generated video. */
+  aspectRatio?: AspectRatio;
+  /** Output resolution, where the model exposes one. */
+  resolution?: Resolution;
+  /**
+   * Duration in whole seconds. Omit to get the model's catalog default — the priced duration then
+   * equals the generated one (no under-authorization on a longer-than-priced render).
+   */
+  duration?: number;
+  /** Native audio, where the model supports it. */
+  audio?: boolean;
+  /** Deterministic seed, where the model exposes one. */
+  seed?: number;
+  /** Negative prompt, where the model supports one. */
+  negativePrompt?: string;
+  /** Reference image (a hosted URL or a Sapiom `fileId`) for image-to-video, where supported. */
+  referenceImage?: string;
+  /**
+   * Escape hatch: raw provider wire params, merged last so they win over the neutral fields.
+   * Supersedes the deprecated {@link VideoCreateInput.params}; use only for a knob the neutral
+   * vocabulary lacks.
+   */
+  passthrough?: Record<string, unknown>;
+
   /**
    * Optional: persist the generated output to Sapiom file storage. When set, the
    * returned `video` comes back annotated with `fileId` (or `storageError` if
    * persisting failed).
    */
   storage?: StorageOptions;
-  /** Advanced: extra model-specific parameters, forwarded verbatim. */
+  /**
+   * @deprecated use the neutral fields above, or {@link VideoCreateInput.passthrough} for an
+   * uncovered knob. Extra model-specific parameters, forwarded verbatim. Still honored.
+   */
   params?: Record<string, unknown>;
   /** How often to poll while the video generates (default 5s). */
   pollIntervalMs?: number;
@@ -762,14 +873,13 @@ export async function createVideo(
 ): Promise<VideoGenerationResult> {
   assertPrompt(input.prompt);
 
-  // Map to the router's camelCase video request. `params` rides as a nested field
-  // (not spread) so the adapter forwards it verbatim; `model` is a body field the
-  // adapter resolves — mirrors createImage's body byte-for-byte.
+  // Map to the router's camelCase `VideoCreateRequest` — mirrors createImage. `model` is a body
+  // field the adapter resolves; `storage` truthy so `storage: null` is "no storage"; the E4 neutral
+  // params + deprecated `params` ride top-level via `applyMediaParams`.
   const body: Record<string, unknown> = { prompt: input.prompt };
   if (input.model != null) body.model = input.model;
-  // Truthy check (not `!== undefined`) so `storage: null` is treated as "no storage".
   if (input.storage) body.storage = input.storage;
-  if (input.params != null) body.params = input.params;
+  applyMediaParams(body, input as unknown as Record<string, unknown>, VIDEO_PARAM_KEYS);
 
   // Submit through the capability router — the video capability's adapter always
   // returns a queue handle (camelCase requestId/statusUrl/responseUrl), never the
@@ -940,13 +1050,12 @@ export async function launchVideo(
 ): Promise<VideoLaunchHandle> {
   assertPrompt(input.prompt);
 
-  // Mirror createVideo's body byte-for-byte — video is async-only, so there's no
-  // `dispatch` field to add (unlike launchImage, which sets `dispatch: 'async'` to
-  // pick the queue path over images' sync default).
+  // Mirror createVideo's body — video is async-only, so there's no `dispatch` field to add
+  // (unlike launchImage, which sets `dispatch: 'async'`).
   const body: Record<string, unknown> = { prompt: input.prompt };
   if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
-  if (input.params != null) body.params = input.params;
+  applyMediaParams(body, input as unknown as Record<string, unknown>, VIDEO_PARAM_KEYS);
 
   const handle = await capabilityCall<VideoDispatchResponse>(
     "content.generation.video",

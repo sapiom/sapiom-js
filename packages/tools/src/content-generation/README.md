@@ -61,10 +61,12 @@ out.video?.downloadUrl; // ready-to-use, short-lived signed URL for the stored f
 out.video?.url; // provider-hosted URL (may be short-lived / unauthenticated)
 ```
 
-Video input takes `prompt`, plus optional `storage`, `model`, and `params` (as with
-images), and two async controls: `pollIntervalMs` (poll cadence, default 5s) and
-`timeoutMs` (give up and throw if it isn't ready in time, default 5 min). The
-returned `video` is `{ url, contentType?, fileId?, downloadUrl?, downloadUrlExpiresAt?, storageError? }`.
+Video input takes `prompt`, plus the optional neutral params (`aspectRatio`,
+`resolution`, `duration`, `audio`, `seed`, `negativePrompt`, `referenceImage` —
+see [Input params](#input-params)), `storage`, `model`, and two async controls:
+`pollIntervalMs` (poll cadence, default 5s) and `timeoutMs` (give up and throw if
+it isn't ready in time, default 5 min). The returned `video` is
+`{ url, contentType?, fileId?, downloadUrl?, downloadUrlExpiresAt?, storageError? }`.
 
 ## Dispatchable video: `video.launch`
 
@@ -135,18 +137,44 @@ Import `VideoResultPayload` from `@sapiom/tools` to annotate the resumed step's
 `input` type; import `toVideoResumePayload` to map a live `VideoGenerationResult`
 to this shape when wiring local tests.
 
-## Image input
+## Input params
 
-- `prompt` (required) — the text prompt.
-- `numImages` (optional) — how many images to generate.
+Describe **what you want** with neutral params instead of provider-specific knobs.
+They're validated against the chosen model *before* you're charged and mapped to
+that model's wire format, so switching models doesn't mean rewriting the call.
+Passing an unsupported param throws `ContentGenerationHttpError` (`unsupported_param`)
+**before any charge** — the response also carries `resolvedModel` and `cost`.
+
+```typescript
+const out = await sapiom.contentGeneration.video.create({
+  prompt: "a calm ocean wave at sunset",
+  aspectRatio: "9:16",
+  audio: true,
+  duration: 10,
+});
+out.resolvedModel; // the alias that served it
+out.cost?.estimateUsd; // what it cost
+```
+
+**Images** (`images.create` / `images.launch`): `prompt` (required), plus optional
+`aspectRatio`, `count`, `seed`, `negativePrompt`, `referenceImage`, `outputFormat`.
+
+**Video** (`video.create` / `video.launch`): `prompt` (required), plus optional
+`aspectRatio`, `resolution`, `duration` (whole seconds), `audio`, `seed`,
+`negativePrompt`, `referenceImage`.
+
+Shared:
+
+- `model` (optional) — a semantic alias (e.g. `"flux-fast"`, `"veo3-fast"`);
+  defaults to a fast model. Most callers omit it.
 - `storage` (optional) — persist outputs; `{ visibility: "private" | "public" }`.
-- `model` (optional) — defaults to a fast image model; most callers omit it.
-- `params` (optional) — advanced, model-specific parameters (e.g. `image_size`,
-  `seed`, `guidance_scale`).
+- `passthrough` (optional) — escape hatch for a raw provider knob the neutral
+  vocabulary doesn't cover yet.
+- `numImages` / `params` — **deprecated** aliases of `count` / `passthrough`, still honored.
 
 Each returned image is `{ url, contentType?, width?, height?, fileId?,
 downloadUrl?, downloadUrlExpiresAt?, storageError? }`; any additional
-model-specific fields (e.g. `seed`) are returned on the result as-is.
+model-specific fields are returned on the result as-is.
 
 ## Gotchas
 

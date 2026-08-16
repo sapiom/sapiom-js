@@ -97,10 +97,16 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
-// The concrete video model ids the gateway serves, so callers can discover valid
-// values (and avoid passing a backend semantic alias, which the SDK does not resolve).
+// Concrete video model ids the gateway serves, for callers that want to pin one. Prefer a semantic
+// alias (e.g. "veo3-fast") — the routed video capability resolves it server-side (SAP-2575).
 export { VIDEO_MODELS } from "./content-generation/index.js";
 export type { KnownVideoModel } from "./content-generation/index.js";
+// Neutral param vocabulary (E4/SAP-2579) — name these when building typed media inputs.
+export type {
+  AspectRatio,
+  Resolution,
+  OutputFormat,
+} from "./content-generation/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { VIDEO_RESULT_SIGNAL } from "./content-generation/index.js";
 export { IMAGE_RESULT_SIGNAL } from "./content-generation/index.js";

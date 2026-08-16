@@ -1323,6 +1323,145 @@ describe("cost envelope (SAP-2576)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// E4 (SAP-2579) — neutral param vocabulary forwarded top-level (camelCase)
+// ---------------------------------------------------------------------------
+
+describe("neutral params (E4/SAP-2579)", () => {
+  it("createImage forwards the image neutral params + passthrough top-level", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ images: [], resolvedModel: "flux-fast" }),
+    ]);
+
+    await createImage(
+      {
+        prompt: "x",
+        aspectRatio: "9:16",
+        count: 2,
+        seed: 7,
+        negativePrompt: "blurry",
+        referenceImage: "https://img/ref.png",
+        outputFormat: "webp",
+        passthrough: { guidance_scale: 3 },
+      },
+      transport,
+      BASE,
+    );
+
+    // Every neutral field rides top-level camelCase (matching the router's ImageCreateRequest);
+    // passthrough stays a nested object forwarded verbatim.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      aspectRatio: "9:16",
+      count: 2,
+      seed: 7,
+      negativePrompt: "blurry",
+      referenceImage: "https://img/ref.png",
+      outputFormat: "webp",
+      passthrough: { guidance_scale: 3 },
+    });
+  });
+
+  it("createVideo forwards the video neutral params (the M1 headline call) top-level", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ requestId: "r", responseUrl: `${BASE}/queue/r` })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "https://media/v.mp4" } })
+          : null,
+    ]);
+
+    // The literal M1 promise: no provider model id, no per-model param folklore.
+    await createVideo(
+      {
+        prompt: "a wave",
+        aspectRatio: "9:16",
+        audio: true,
+        duration: 10,
+        pollIntervalMs: 1,
+      },
+      transport,
+      BASE,
+    );
+
+    // pollIntervalMs is a client-side control — it stays off the wire.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "a wave",
+      aspectRatio: "9:16",
+      audio: true,
+      duration: 10,
+    });
+  });
+
+  it("launchImage + launchVideo forward neutral params alongside their dispatch shape", async () => {
+    const img = makeLaunchTransport(
+      { requestId: "i", responseUrl: `${BASE}/queue/i` },
+      { images: [{ url: "u" }] },
+    );
+    await launchImage(
+      { prompt: "x", aspectRatio: "1:1", count: 3 },
+      img.transport,
+      BASE,
+    );
+    expect(JSON.parse(img.calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      dispatch: "async",
+      aspectRatio: "1:1",
+      count: 3,
+    });
+
+    const vid = makeLaunchTransport(
+      { requestId: "v", responseUrl: `${BASE}/queue/v` },
+      { video: { url: "u" } },
+    );
+    await launchVideo(
+      { prompt: "x", resolution: "1080p", negativePrompt: "text" },
+      vid.transport,
+      BASE,
+    );
+    expect(JSON.parse(vid.calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      resolution: "1080p",
+      negativePrompt: "text",
+    });
+  });
+
+  it("keeps the deprecated numImages/params working (forwarded verbatim)", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({ images: [] })]);
+
+    await createImage(
+      { prompt: "x", numImages: 4, params: { image_size: "square" } },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      numImages: 4,
+      params: { image_size: "square" },
+    });
+  });
+
+  it("drops an explicit null neutral field (JS caller) instead of sending it", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({ images: [] })]);
+
+    await createImage(
+      {
+        prompt: "x",
+        aspectRatio: null as unknown as undefined,
+        count: null as unknown as undefined,
+      },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ prompt: "x" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // toVideoResumePayload()
 // ---------------------------------------------------------------------------
 
