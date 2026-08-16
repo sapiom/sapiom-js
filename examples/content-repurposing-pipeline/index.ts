@@ -513,7 +513,7 @@ const graphics = defineStep({
     });
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: quote.imagePrompt,
-      numImages: 1,
+      count: 1,
       // Public: quote graphics are linked from the emailed pack below, so they
       // need a durable permalink rather than a presigned URL that expires in ~15min.
       storage: { visibility: "public" },
@@ -588,7 +588,9 @@ const clip = defineStep({
     const handle = await ctx.sapiom.contentGeneration.video.launch({
       model,
       prompt: pack.videoScript,
-      params: {
+      // Kling 2.1 Pro image-to-video isn't in the semantic catalog, so pass the raw provider
+      // keys via `passthrough` (the escape hatch) rather than the deprecated `params`.
+      passthrough: {
         image_url: imageUrl,
         duration: CLIP_SECONDS,
         aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),

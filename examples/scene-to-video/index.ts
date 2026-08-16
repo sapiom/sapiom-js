@@ -389,7 +389,7 @@ const keyframe = defineStep({
     });
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: shot.image_prompt,
-      numImages: 1,
+      count: 1,
       // Intentionally private: a keyframe is never returned or linked to a
       // caller — it's only ever fed straight into `animate`'s `image_url`,
       // consumed immediately in-process, so a presigned URL is correct here.
@@ -459,7 +459,10 @@ const animate = defineStep({
     const handle = await ctx.sapiom.contentGeneration.video.launch({
       model,
       prompt: shot.motion_prompt,
-      params: {
+      // Kling 2.1 Pro image-to-video isn't in the semantic catalog, so the neutral param
+      // vocabulary doesn't apply here — pass the raw provider keys via `passthrough` (the
+      // escape hatch) rather than the deprecated `params`.
+      passthrough: {
         image_url: imageUrl,
         duration: String(normalizeClipDuration(shot.duration)),
         aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
@@ -555,7 +558,9 @@ const stitch = defineStep({
     const merged = await ctx.sapiom.contentGeneration.video.create({
       model: MERGE_MODEL,
       prompt: scene,
-      params: { video_urls: videoUrls },
+      // ffmpeg merge is a provider-specific op with no neutral param — use the `passthrough`
+      // escape hatch (not the deprecated `params`).
+      passthrough: { video_urls: videoUrls },
       // Public: the merged video is the run's headline shareable output below,
       // so it needs a durable permalink rather than a presigned URL that
       // expires in ~15min.

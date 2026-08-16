@@ -12,6 +12,7 @@ import {
   VIDEO_RESULT_SIGNAL,
   IMAGE_RESULT_SIGNAL,
   fileStorage,
+  type AspectRatio,
   type VideoResultPayload,
   type ImageResultPayload,
 } from "@sapiom/tools";
@@ -86,7 +87,7 @@ interface EntryInput {
   /** A creative direction folded into every prompt (e.g. "warm, editorial"). */
   style?: string;
   /** Aspect ratio for generated video (default "16:9"); images use the model default. */
-  aspectRatio?: string;
+  aspectRatio?: AspectRatio;
   /** Video model alias or raw id, passed through to `video.launch`. */
   videoModel?: string;
   /** Plan only — read the rows and prompts, generate and send nothing. */
@@ -117,7 +118,7 @@ interface Shared extends Record<string, unknown> {
   medium: Medium;
   schedule: string;
   style: string;
-  aspectRatio: string;
+  aspectRatio: AspectRatio;
   videoModel: string;
   rows: Recipient[];
   assets: Asset[];
@@ -316,10 +317,10 @@ const entryInput = z.object({
       'A creative direction folded into every prompt (e.g. "warm, editorial").',
     ),
   aspectRatio: z
-    .string()
+    .enum(["1:1", "16:9", "9:16", "4:3", "3:4"])
     .default("16:9")
     .describe(
-      "Aspect ratio for generated video; images use the model default.",
+      "Neutral aspect ratio for generated video; images use the model default.",
     ),
   videoModel: z
     .string()
@@ -345,7 +346,7 @@ const fetch = defineStep({
     const medium: Medium = input.medium === "video" ? "video" : "image";
     const dryRun = input.dryRun === true;
     const style = input.style?.trim() ?? "";
-    const aspectRatio = input.aspectRatio?.trim() || "16:9";
+    const aspectRatio: AspectRatio = input.aspectRatio ?? "16:9";
     const videoModel = input.videoModel?.trim() || DEFAULT_VIDEO_MODEL;
     const limit = clampLimit(input.limit);
 
@@ -453,7 +454,7 @@ const renderImage = defineStep({
     ctx.logger.info("rendering image", { index: index + 1, of: rows.length });
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: buildPrompt(row, "image", style),
-      numImages: 1,
+      count: 1,
       // Public: the render is emailed as a durable permalink below, not
       // fetched in-process, so it needs to outlive a presigned URL's ~15min TTL.
       storage: { visibility: "public" },
@@ -514,9 +515,9 @@ const renderClip = defineStep({
     const handle = await ctx.sapiom.contentGeneration.video.launch({
       model: must(ctx.shared.get("videoModel"), "videoModel"),
       prompt: buildPrompt(row, "video", style),
-      params: {
-        aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
-      },
+      // Neutral param (E4): the router validates it against the resolved model and maps it to
+      // the provider's aspect-ratio key — no per-model param name in caller code.
+      aspectRatio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
       // Public: the clip is emailed as a durable permalink below, not
       // fetched in-process, so it needs to outlive a presigned URL's ~15min TTL.
       storage: { visibility: "public" },

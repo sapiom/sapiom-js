@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@sapiom/agent": "^0.9.3",
-    "@sapiom/tools": "^0.26.0",
+    "@sapiom/tools": "^0.28.0",
     "postgres": "^3.4.5",
     "zod": "^3.25.76 || ^4.0.0"
   },
