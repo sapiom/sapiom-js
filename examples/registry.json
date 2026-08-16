@@ -144,14 +144,14 @@
         },
         {
           "name": "send",
-          "description": "Deliver the current touch to everyone still active and log it, then pause until the drip interval elapses or a prospect replies.",
+          "description": "Deliver the current touch to everyone still active and log it, then pause until the advance signal arrives.",
           "kind": "pause",
           "capability": "email.send",
           "next": ["advance", "done"]
         },
         {
           "name": "advance",
-          "description": "Wake on the reply-or-timeout, mark anyone who replied as done, then loop back for the next touch or end the run.",
+          "description": "Wake on the advance signal, mark anyone who replied as done, then loop back for the next touch or end the run.",
           "kind": "compute",
           "next": ["send", "done"]
         },

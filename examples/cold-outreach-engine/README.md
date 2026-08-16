@@ -1,8 +1,9 @@
 # Cold Outreach Personalization Engine
 
-Enrich a lead list, scrape each company site, write a personalized
-first line for every prospect, verify deliverability, then drip touches with
-durable, $0 waits between them — stopping the moment someone replies.
+Enrich a lead list, scrape each company site, write a personalized first line
+for every prospect, verify deliverability, then drip touches with durable, $0
+waits between them. A scheduler advances the next touch; a reply signal removes
+that prospect from the drip.
 
 ## What it does
 
@@ -28,10 +29,10 @@ enrich ──▶ scrape ──▶ personalize ──▶ verify ──▶ launch 
    (`ctx.sapiom.database`), then start the drip. A `dryRun` stops here and returns
    the full plan — every opener — without sending or persisting.
 6. **send** — deliver the current touch to everyone still active
-   (`ctx.sapiom.email`), log it, then **pause at $0** until the drip interval
-   elapses or a reply lands.
-7. **advance** — wakes on that reply-or-timeout, marks anyone who replied as done,
-   and either loops back for the next touch or ends the run.
+   (`ctx.sapiom.email`), log it, then **pause at $0** until an advance signal
+   arrives.
+7. **advance** — wakes on that signal, marks anyone who replied as done, and
+   either loops back for the next touch or ends the run.
 
 Input: `{ "leads": [{ "domain": "acme.com", "fullName": "Jordan Rivera" }], "senderName": "Dana", "dripIntervalDays": 3, "dryRun": true }`.
 
@@ -55,10 +56,11 @@ mode, and are what passing your own `leads` unlocks.
 
 ### The durable wait
 
-Between touches the run suspends via `pauseUntilSignal` with a timeout: it costs
-nothing while idle, resumes on its own when the interval passes, and
-short-circuits the instant a `reply.received` signal arrives — so a prospect who
-answers never gets the next follow-up.
+Between touches the run suspends via `pauseUntilSignal` without `timeoutMs`: the
+current engine treats elapsed pause timeouts as failed runs, so the drip cadence
+must come from an external scheduler or webhook. Fire `outreach.advance` with an
+empty payload when it is time for the next touch, or with `{ "email": "..." }`
+when a prospect replies so that address is removed before the loop continues.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -78,10 +80,10 @@ answers never gets the next follow-up.
    `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run`
    (a real, billed run that enriches, personalizes, verifies, and sends).
 
-4. To end the drip early when a prospect replies, fire the `reply.received`
-   signal with the `workflow_signal` MCP tool, passing `{ "email": "..." }` and
-   the run's `executionId` as the `correlationId`. To run it on a cadence, attach
-   the `schedule` as a cron trigger on the deployed agent.
+4. To advance the drip, fire the `outreach.advance` signal with the
+   `workflow_signal` MCP tool, passing the run's `executionId` as the
+   `correlationId`. Use an empty payload for the next scheduled touch, or
+   `{ "email": "..." }` when a prospect replied.
 
 ## Files
 
