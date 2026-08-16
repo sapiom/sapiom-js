@@ -169,8 +169,10 @@ Shared:
   defaults to a fast model. Most callers omit it.
 - `storage` (optional) — persist outputs; `{ visibility: "private" | "public" }`.
 - `passthrough` (optional) — escape hatch for a raw provider knob the neutral
-  vocabulary doesn't cover yet.
-- `numImages` / `params` — **deprecated** aliases of `count` / `passthrough`, still honored.
+  vocabulary doesn't cover; merged last, so it overrides the neutral fields.
+- `numImages` / `params` — **deprecated**, still honored; superseded by `count` /
+  `passthrough`. (`params` and `passthrough` are not drop-in aliases: the merge
+  order is `params` < neutral fields < `passthrough`.)
 
 Each returned image is `{ url, contentType?, width?, height?, fileId?,
 downloadUrl?, downloadUrlExpiresAt?, storageError? }`; any additional

@@ -102,18 +102,17 @@ export interface MediaCostEnvelope {
 }
 
 /**
- * Neutral param vocabulary (E4/SAP-2579) — the SDK mirror of the backend catalog's `AspectRatio` /
- * `Resolution` / `OutputFormat` (`media-catalog.types.ts`). A caller sets these as first-class fields
- * on {@link ImageCreateInput} / {@link VideoCreateInput}; the router validates each against the
- * resolved model's capabilities BEFORE payment and maps it to that model's provider wire key. Passing
- * a value the model doesn't support is rejected `400 unsupported_param` (never silently dropped). Each
- * model supports a subset — the union is the full vocabulary.
+ * Neutral aspect-ratio vocabulary — and the entry point to the E4 (SAP-2579) neutral param contract
+ * shared with {@link Resolution} and {@link OutputFormat}. A caller sets these as first-class fields on
+ * {@link ImageCreateInput} / {@link VideoCreateInput}; the router validates each against the resolved
+ * model's capabilities BEFORE payment and maps it to that model's provider wire key. A value the model
+ * doesn't support is rejected `400 unsupported_param` (never silently dropped). Each model supports a
+ * subset — the union is the full vocabulary. Mirrors the backend catalog (`media-catalog.types.ts`).
  */
-/** Neutral aspect-ratio vocabulary. */
 export type AspectRatio = "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
-/** Neutral resolution vocabulary (video). */
+/** Neutral resolution vocabulary (video). See {@link AspectRatio} for how neutral params validate. */
 export type Resolution = "480p" | "720p" | "1080p";
-/** Neutral output-format vocabulary (`"mp4"` is video-only). */
+/** Neutral output-format vocabulary (`"mp4"` is video-only). See {@link AspectRatio}. */
 export type OutputFormat = "png" | "jpeg" | "webp" | "mp4";
 
 export interface ImageCreateInput {
@@ -139,8 +138,8 @@ export interface ImageCreateInput {
   negativePrompt?: string;
   /** Reference image (a hosted URL or a Sapiom `fileId`) for img2img, where the model supports it. */
   referenceImage?: string;
-  /** Output image format. */
-  outputFormat?: OutputFormat;
+  /** Output image format (`"mp4"` is video-only, so it is excluded here). */
+  outputFormat?: Exclude<OutputFormat, "mp4">;
   /**
    * Escape hatch: raw provider wire params, merged last so they win over the neutral fields.
    * Supersedes the deprecated {@link ImageCreateInput.params}; use only for a knob the neutral

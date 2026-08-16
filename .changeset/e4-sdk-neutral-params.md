@@ -10,5 +10,6 @@ accept the neutral params as first-class typed fields — images: `aspectRatio`,
 `audio`, `seed`, `negativePrompt`, `referenceImage` — plus a `passthrough` escape hatch. The router
 validates each against the chosen model **before payment** and maps it to that model's provider
 format, so a caller can write `video.create({ prompt, aspectRatio: "9:16", audio: true, duration: 10 })`
-without any provider-specific param names. `numImages` and `params` keep working as `@deprecated`
-aliases of `count` and `passthrough`. New exported types: `AspectRatio`, `Resolution`, `OutputFormat`.
+without any provider-specific param names. `numImages` and `params` keep working, now `@deprecated`
+in favour of `count` and `passthrough` (not drop-in aliases — the merge order is `params` < neutral
+fields < `passthrough`). New exported types: `AspectRatio`, `Resolution`, `OutputFormat`.
