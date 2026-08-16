@@ -112,7 +112,7 @@ export interface MediaCostEnvelope {
 export type AspectRatio = "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
 /** Neutral resolution vocabulary (video). See {@link AspectRatio} for how neutral params validate. */
 export type Resolution = "480p" | "720p" | "1080p";
-/** Neutral output-format vocabulary (`"mp4"` is video-only). See {@link AspectRatio}. */
+/** Neutral output-format vocabulary (`"mp4"` for video; image formats otherwise). See {@link AspectRatio}. */
 export type OutputFormat = "png" | "jpeg" | "webp" | "mp4";
 
 export interface ImageCreateInput {
@@ -138,8 +138,8 @@ export interface ImageCreateInput {
   negativePrompt?: string;
   /** Reference image (a hosted URL or a Sapiom `fileId`) for img2img, where the model supports it. */
   referenceImage?: string;
-  /** Output image format (`"mp4"` is video-only, so it is excluded here). */
-  outputFormat?: Exclude<OutputFormat, "mp4">;
+  /** Output image format. */
+  outputFormat?: OutputFormat;
   /**
    * Escape hatch: raw provider wire params, merged last so they win over the neutral fields.
    * Supersedes the deprecated {@link ImageCreateInput.params}; use only for a knob the neutral
