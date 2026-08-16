@@ -1040,9 +1040,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     },
     contentGeneration: {
       images: {
-        create: (input) =>
-          Promise.resolve(
-            r("contentGeneration.images.create", [input], () => ({
+        create: (input) => {
+          const result = r(
+            "contentGeneration.images.create",
+            [input],
+            () => ({
               images: [
                 {
                   url: "https://content.local/stub-image.png",
@@ -1059,8 +1061,13 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                     : {}),
                 },
               ],
-            })) as ImageGenerationResult,
-          ),
+            }),
+          ) as ImageGenerationResult;
+          // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the
+          // stub so the sync `create` path matches the `launch` path (and the required type).
+          result.resolvedModel = input.model ?? "stub-model";
+          return Promise.resolve(result);
+        },
         launch: (input) => {
           const requestId = `stub-image-${++launchSeq}`;
           const result = r(
@@ -1105,23 +1112,26 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         },
       },
       video: {
-        create: (input) =>
-          Promise.resolve(
-            r("contentGeneration.video.create", [input], () => ({
-              video: {
-                url: "https://content.local/stub-video.mp4",
-                contentType: "video/mp4",
-                // mirror the real behavior: a fileId only when storage was requested.
-                ...(input.storage
-                  ? {
-                      fileId: "stub-file",
-                      downloadUrl: "https://content.local/stub-download",
-                      downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                    }
-                  : {}),
-              },
-            })) as VideoGenerationResult,
-          ),
+        create: (input) => {
+          const result = r("contentGeneration.video.create", [input], () => ({
+            video: {
+              url: "https://content.local/stub-video.mp4",
+              contentType: "video/mp4",
+              // mirror the real behavior: a fileId only when storage was requested.
+              ...(input.storage
+                ? {
+                    fileId: "stub-file",
+                    downloadUrl: "https://content.local/stub-download",
+                    downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
+                  }
+                : {}),
+            },
+          })) as VideoGenerationResult;
+          // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the
+          // stub so the sync `create` path matches the `launch` path (and the required type).
+          result.resolvedModel = input.model ?? "stub-model";
+          return Promise.resolve(result);
+        },
         launch: (input) => {
           const requestId = `stub-video-${++launchSeq}`;
           const result = r(
