@@ -1,0 +1,318 @@
+name: Claude Code Review
+
+# AI review for TRUSTED authors only. External contributors keep the human
+# triage path (`contributor: external` → needs-triage); this workflow skips
+# them entirely. Trust is resolved the same way the PR labeler resolves it:
+# repository permission (admin/write), plus an explicit allowlist escape
+# hatch in the CLAUDE_REVIEW_EXTRA_AUTHORS repository variable.
+#
+# This repo is PUBLIC. The review prompt therefore carries a public-copy
+# hygiene section: changesets are immortalized in CHANGELOGs and npm
+# tarballs, so customer names and internal business context must be caught
+# at review time — a static blocklist committed here would itself publish
+# the names it protects.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: >-
+    ${{
+      (
+        github.event_name == 'pull_request' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          (
+            contains(github.event.comment.body, '/review') ||
+            contains(github.event.comment.body, '/claude-review')
+          )
+        )
+      ) &&
+      format('claude-review-{0}', github.event.pull_request.number || github.event.issue.number) ||
+      format('claude-review-ignore-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       (contains(github.event.comment.body, '/review') || contains(github.event.comment.body, '/claude-review')))
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+      actions: read
+
+    steps:
+      - name: Load PR context and check author trust
+        id: pr
+        uses: actions/github-script@v8
+        env:
+          EXTRA_AUTHORS: ${{ vars.CLAUDE_REVIEW_EXTRA_AUTHORS }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request?.number ?? context.payload.issue.number;
+            const pr = (await github.rest.pulls.get({
+              owner, repo, pull_number: number,
+            })).data;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: number, per_page: 100,
+            });
+
+            const touchesWorkflow = files.some((file) => file.filename === '.github/workflows/claude-code-review.yml');
+            const sameRepoHead = pr.head.repo.full_name === `${owner}/${repo}`;
+            const headSha = pr.head.sha;
+
+            // ── Trust gate ─────────────────────────────────────────────
+            // Mirrors scripts/pr-label-classifier.mjs: admin/write repo
+            // permission == trusted. The changesets version PR
+            // (github-actions[bot] on changeset-release/main) is also
+            // reviewed — it is the last look at CHANGELOG text before
+            // publish makes it permanent. Everyone else is skipped, not
+            // failed: external PRs keep the human triage path.
+            const author = pr.user?.login ?? '';
+            const extraAuthors = (process.env.EXTRA_AUTHORS ?? '')
+              .split(',').map((s) => s.trim()).filter(Boolean);
+            const isVersionPr =
+              author === 'github-actions[bot]' &&
+              pr.head.ref === 'changeset-release/main';
+            let permission = 'none';
+            if (!isVersionPr) {
+              try {
+                permission = (await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner, repo, username: author,
+                })).data.permission ?? 'none';
+              } catch {
+                permission = 'none';
+              }
+            }
+            const trustedAuthor =
+              isVersionPr ||
+              permission === 'admin' ||
+              permission === 'write' ||
+              extraAuthors.includes(author);
+
+            // ── Round cap: at most 2 automatic reviews per PR ──────────
+            // Rounds are keyed by the reviewed COMMIT via the
+            // `claude-review-sha` marker; manual /review bypasses the cap.
+            const MAX_AUTO_REVIEWS = 2;
+            const isManualTrigger = context.eventName === 'issue_comment';
+            const reviewedShas = new Set();
+            const issueComments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
+            });
+            for (const comment of issueComments) {
+              const marker = /<!--\s*claude-review-sha:\s*([0-9a-f]{7,40})\s*-->/i.exec(comment.body ?? '');
+              if (marker) reviewedShas.add(marker[1].slice(0, 7));
+            }
+            const priorReviews = reviewedShas.size;
+            const alreadyReviewedHead = reviewedShas.has(headSha.slice(0, 7));
+            const reviewLimitReached =
+              !isManualTrigger && (priorReviews >= MAX_AUTO_REVIEWS || alreadyReviewedHead);
+
+            const shouldRun =
+              !pr.draft && sameRepoHead && trustedAuthor &&
+              !touchesWorkflow && !reviewLimitReached;
+
+            core.setOutput('number', String(number));
+            core.setOutput('head_sha', headSha);
+            core.setOutput('should_run', shouldRun ? 'true' : 'false');
+            core.setOutput('round', String(priorReviews + 1));
+            core.setOutput('is_followup', priorReviews > 0 ? 'true' : 'false');
+            core.setOutput('is_version_pr', isVersionPr ? 'true' : 'false');
+
+            if (!trustedAuthor) {
+              core.setOutput('skip_reason', 'external_contributor');
+            } else if (pr.draft) {
+              core.setOutput('skip_reason', 'draft_pr');
+            } else if (!sameRepoHead) {
+              core.setOutput('skip_reason', 'fork_pr');
+            } else if (touchesWorkflow) {
+              core.setOutput('skip_reason', 'workflow_file_changed');
+            } else if (alreadyReviewedHead) {
+              core.setOutput('skip_reason', `already_reviewed_${headSha.slice(0, 7)}`);
+            } else if (reviewLimitReached) {
+              core.setOutput('skip_reason', `review_limit_reached_${priorReviews}_of_${MAX_AUTO_REVIEWS}`);
+            } else {
+              core.setOutput('skip_reason', 'eligible');
+            }
+
+      - name: Skip unsupported Claude review context
+        if: steps.pr.outputs.should_run != 'true'
+        run: echo "::notice::Skipping Claude review (${{ steps.pr.outputs.skip_reason }})."
+
+      - name: Checkout repository
+        if: steps.pr.outputs.should_run == 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR branch
+        if: steps.pr.outputs.should_run == 'true'
+        run: gh pr checkout ${{ steps.pr.outputs.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Claude Code Review
+        if: steps.pr.outputs.should_run == 'true'
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The changesets version PR is opened by github-actions[bot]; the
+          # action gates on a human actor by default.
+          allowed_bots: "github-actions,devin-ai-integration"
+          prompt: |
+            Review PR #${{ steps.pr.outputs.number }} in this repository — the PUBLIC sapiom-js SDK
+            monorepo, published to npm. This is **review round ${{ steps.pr.outputs.round }}** of at
+            most 2 automatic rounds.
+
+            First run `gh pr view ${{ steps.pr.outputs.number }}`, then
+            `gh pr diff ${{ steps.pr.outputs.number }}`.
+
+            ## Your mode for this run
+
+            **${{ steps.pr.outputs.is_followup == 'true' && 'FOLLOW-UP REVIEW — report the delta, not the whole PR. Section A applies to you; skip Section B.' || 'FIRST REVIEW — no prior review exists on this PR. Section B applies to you; skip Section A entirely.' }}**
+
+            ### Section A — follow-up review (only if the line above says FOLLOW-UP)
+
+            A review of an earlier commit is already posted on this PR. Run
+            `gh pr view ${{ steps.pr.outputs.number }} --comments`, read it, then diff only what moved
+            since the commit in its `claude-review-sha` marker. Report ONLY: (1) genuinely new
+            findings, (2) earlier findings the push did NOT fix — one line each, (3) anything the
+            earlier round got wrong. If the push resolved everything, say so in two lines and stop.
+
+            ### Section B — first review (only if the line above says FIRST REVIEW)
+
+            Review the PR as a whole, subject to the scope rules below.
+
+            ## HIGHEST PRIORITY: public-copy hygiene
+
+            Every prose surface in this repo is published: changesets (`.changeset/*.md`) are compiled
+            into package `CHANGELOG.md` files and shipped inside npm tarballs, where they can never be
+            retracted. Read every changeset, CHANGELOG edit, README/doc, JSDoc block, code comment,
+            example, and test fixture in the diff as text addressed to an anonymous npm consumer.
+
+            Flag as **🔒 CONFIDENTIALITY** — the highest severity in this repo — any of:
+
+            1. **A company name that is not Sapiom and not an already-public provider.** The
+              deliberately public provider vocabulary is pinned in
+              `scripts/provider-neutral-copy-check.mjs`; a customer, design partner, or affiliated
+              company named anywhere in prose is a leak even when it feels like helpful context.
+              Sibling-product and internal codenames count.
+            2. **A description of any company's business arrangement with Sapiom** — who resells what,
+              billing/credit/wallet mechanics of a named company, revenue context, pricing plans not
+              on the public site.
+            3. **Internal-only context**: private hostnames or service names, incident or Slack
+              references, employee names, links into private repos beyond a bare `owner/repo#123`
+              cross-reference.
+
+            The correct fix is always a rewrite to the generic role: "Consumers re-billing their own
+            customers" — never the specific who. Changeset text deserves the closest read; it is the
+            one surface that cannot be edited after publish.
+            ${{ steps.pr.outputs.is_version_pr == 'true' && 'THIS IS THE CHANGESETS VERSION PR: the aggregated CHANGELOG.md additions in this diff are the final text npm will ship. Sweep every added changelog line for the three leak classes above before anything else.' || '' }}
+
+            ## Public-package best practice
+
+            These packages are consumed by strangers who read nothing but the types, the README, and
+            the changelog. Hold the PR to published-package standards:
+
+            - **API surface.** New exported types, fields, or options are contract commitments. If the
+              PR widens the public surface, say whether the addition is load-bearing or could stay
+              internal; flag types that assert backend behavior ("the backend always sends X") without
+              a cited backend guarantee.
+            - **Semver + changesets.** Every change to a published package needs a changeset at the
+              right level: bug fix → patch, backward-compatible addition → minor, anything a pinned
+              consumer could break on → called out as **Breaking** in the changeset body with a
+              migration note. A behavior change disguised as a patch is a finding. Prefer deprecating
+              (with a JSDoc `@deprecated` pointing at the replacement) over removing.
+            - **Dependencies are supply chain.** A new runtime dependency in a published package lands
+              in every consumer's node_modules: flag new runtime deps that could be devDependencies,
+              deps with install scripts, unpinned/loose ranges out of line with the repo's existing
+              policy, and heavyweight deps pulled in for a small utility.
+            - **Tarball hygiene.** Changes to `package.json` `files`, `exports`, `types`, `main`,
+              `engines`, or build config alter what ships to npm — check nothing internal (test
+              fixtures, source maps pointing at private paths, .env samples) becomes publishable, and
+              that new entry points resolve for both ESM and CJS consumers if the package ships both.
+            - **No internal defaults.** Hardcoded fallback URLs, hostnames, org ids, or tenant ids in
+              published code are both a leak and a footgun; defaults must be public endpoints or
+              required configuration.
+            - **Docs travel with the change.** A user-facing change without its README/JSDoc update is
+              incomplete, not "docs later."
+
+            ## Responsible disclosure
+
+            If the PR body, commit messages, or diff publicly describe an exploitable vulnerability in
+            a released version — beyond what fixing it inherently reveals — flag that the details
+            belong in private reporting per SECURITY.md, not in a public PR.
+
+            ## General review
+
+            Code quality, potential bugs, security concerns, test coverage. Use the repository's
+            CONTRIBUTING.md conventions. Be direct: state the problem plainly, do not pad with praise.
+
+            ## Scope — what NOT to write
+
+            A long review is a failed review. Severity floor: report a finding only if you can name
+            what breaks or what leaks. Nits capped at 3, one line each, only if no higher-severity
+            findings exist. No "what checks out" sections, no restating the PR, no effort estimates.
+            One root cause = one finding.
+
+            ## How to deliver the review — WRITE ONE FILE, DO NOT COMMENT
+
+            You cannot post to the PR; a later step does. Write your finished review, findings ordered
+            by severity then a one-line verdict, as markdown to exactly:
+
+                ${{ github.workspace }}/claude-review.md
+
+            Length budget: 6,000 characters for a first review, 2,000 for a follow-up — a budget to
+            come in under, not a target. Do not add the `claude-review-sha` marker yourself.
+
+          claude_args: '--allowed-tools "Write,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+
+      - name: Post review comment
+        if: steps.pr.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          REVIEW_FILE: ${{ github.workspace }}/claude-review.md
+          IS_FOLLOWUP: ${{ steps.pr.outputs.is_followup }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "$REVIEW_FILE" ]; then
+            echo "::error::Claude produced no review at $REVIEW_FILE — nothing to post."
+            exit 1
+          fi
+
+          LIMIT=64000
+          BODY_FILE="$RUNNER_TEMP/claude-review-body.md"
+          printf '<!-- claude-review-sha: %s -->\n' "$HEAD_SHA" > "$BODY_FILE"
+          head -c "$LIMIT" "$REVIEW_FILE" >> "$BODY_FILE"
+
+          SIZE="$(wc -c < "$REVIEW_FILE" | tr -d ' ')"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            printf '\n\n---\n_Review truncated at %s characters to fit a single GitHub comment._\n' "$LIMIT" >> "$BODY_FILE"
+            echo "::warning::Review exceeded $LIMIT chars and was truncated."
+          fi
+
+          if [ "$IS_FOLLOWUP" = 'true' ]; then BUDGET=2000; else BUDGET=6000; fi
+          if [ "$SIZE" -gt "$BUDGET" ]; then
+            echo "::warning::Review is $SIZE chars against a $BUDGET-char budget — the review prompt's scope rules are not holding."
+          fi
+          echo "Review size: $SIZE chars (budget $BUDGET)." >> "$GITHUB_STEP_SUMMARY"
+
+          gh pr comment "$PR_NUMBER" --body-file "$BODY_FILE"
