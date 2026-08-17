@@ -129,7 +129,7 @@ test("stitch sends every clip in order with a bounded polling fallback", async (
     ),
   );
 
-  assert.deepEqual(calls[0].params.video_urls, [
+  assert.deepEqual(calls[0].passthrough.video_urls, [
     fileStorage.getPublicUrl("first-file"),
     "https://clip/second",
   ]);
