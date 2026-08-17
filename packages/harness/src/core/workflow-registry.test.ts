@@ -351,9 +351,39 @@ describe("WorkflowRegistry", () => {
       expect(Array.isArray(parsed)).toBe(true);
       expect(parsed).toHaveLength(1);
 
-      // The .tmp file must NOT be left behind (rename completed).
-      const tmpPath = `${registryPath}.tmp`;
-      await expect(fs.access(tmpPath)).rejects.toThrow();
+      // No temp artefact must be left behind (rename completed). The temp name
+      // carries a pid + uuid suffix, so match on the prefix rather than one
+      // fixed path — asserting a fixed name would pass even if a differently
+      // named temp file were orphaned.
+      const base = path.basename(registryPath);
+      const leftovers = (await fs.readdir(path.dirname(registryPath))).filter((name) =>
+        name.startsWith(`${base}.tmp`),
+      );
+      expect(leftovers).toEqual([]);
+    });
+
+    it("two registries sharing one path do not collide on the temp file (the path is machine-wide)", async () => {
+      // writeQueue only serializes writers inside one instance, but the default
+      // registry path is machine-wide (~/.sapiom/harness/workflows.json), so a
+      // CLI and a desktop app run two registries over the same file. With a
+      // fixed .tmp name each would write into the other's temp and rename a
+      // half-written file over the target, which load() then swallows as an
+      // empty list — silent loss of connected workflows.
+      const other = new WorkflowRegistry(registryPath);
+      await writeMarker(path.join(tmpRoot, "proj-a"), 1);
+      await writeMarker(path.join(tmpRoot, "proj-b"), 1);
+
+      await Promise.all([registry.scan(tmpRoot), other.scan(tmpRoot)]);
+
+      const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as unknown[];
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(2);
+
+      const base = path.basename(registryPath);
+      const leftovers = (await fs.readdir(path.dirname(registryPath))).filter((name) =>
+        name.startsWith(`${base}.tmp`),
+      );
+      expect(leftovers).toEqual([]);
     });
 
     it("a failed persist does not poison the queue — subsequent writes succeed", async () => {

@@ -9,6 +9,7 @@
  * shared app.
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -186,10 +187,18 @@ export class WorkflowRegistry {
     // Atomic write: write to a temp file in the same directory (so rename is
     // same-filesystem and thus atomic on POSIX), then rename over the target.
     // A crash mid-write leaves the .tmp file, not a torn workflows.json.
-    // Mirrors the pattern used by SessionManager.persist().
-    const tmpPath = `${this.registryPath}.tmp`;
-    await fs.writeFile(tmpPath, JSON.stringify(this.workflows, null, 2));
-    await fs.rename(tmpPath, this.registryPath);
+    // The temp name is per-process and unique: writeQueue only serializes
+    // writers inside one process, and this path is machine-wide, so a second
+    // harness would otherwise write into the same .tmp concurrently and the
+    // rename would publish a torn file. Mirrors SessionManager.persist().
+    const tmpPath = `${this.registryPath}.tmp-${process.pid}-${randomUUID()}`;
+    try {
+      await fs.writeFile(tmpPath, JSON.stringify(this.workflows, null, 2));
+      await fs.rename(tmpPath, this.registryPath);
+    } catch (err) {
+      await fs.rm(tmpPath, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 
   /** Chains `run` onto the write queue so concurrent mutations never
