@@ -37,7 +37,18 @@ describe("Fetch failureMode", () => {
     fetchMock.unmockGlobal();
   });
 
-  describe('failureMode: "open" (default)', () => {
+  describe('failureMode: "open"', () => {
+    let consoleErrorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Mock console.error to prevent expected errors from polluting the test output
+      consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
     it("should allow request when Sapiom API returns 500", async () => {
       fetchMock.get("https://api.example.com/test", {
         status: 200,
@@ -71,7 +82,8 @@ describe("Fetch failureMode", () => {
 
       const fetch = createFetch({
         sapiomClient: mockSapiomClient,
-      }); // Default is "open"
+        failureMode: "open", // Explicitly set to open for testing
+      });
 
       const response = await fetch("https://api.example.com/test");
       expect(response.status).toBe(200);
