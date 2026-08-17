@@ -70,6 +70,6 @@ Ask **after** searching, name the sibling/guide, and put the real fork to them:
 
 ## Sibling skill
 
-This is the sapiom-js half of a pair. The Sapiom-frontend half is **`establishing-design-clarity`**
-(same spine; source of truth is Storybook / the design system instead of `AUTHORING.md`, and it
-dispatches to `enforcing-design-language`).
+**`establishing-studio-design-clarity`** (this repo) — the same intake for **Agent Studio / harness
+UI** work (source: the `@sapiom/design-system` seam). Use it for UI, this one for template/agent
+authoring.
