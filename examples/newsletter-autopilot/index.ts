@@ -673,7 +673,7 @@ const illustrate = defineStep({
     try {
       const result = await ctx.sapiom.contentGeneration.images.create({
         prompt: imagePrompt,
-        numImages: 1,
+        count: 1,
         storage: { visibility: "public" },
       });
       const img = result.images?.[0];

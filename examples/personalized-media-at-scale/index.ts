@@ -88,7 +88,7 @@ interface EntryInput {
   style?: string;
   /** Aspect ratio for generated video (default "16:9"); images use the model default. */
   aspectRatio?: AspectRatio;
-  /** Video model alias or raw id, passed through to `video.launch`. */
+  /** Video model — a Sapiom semantic alias (e.g. "veo3-fast"); neutral params like `aspectRatio` require a cataloged model. */
   videoModel?: string;
   /** Plan only — read the rows and prompts, generate and send nothing. */
   dryRun?: boolean;
@@ -325,7 +325,9 @@ const entryInput = z.object({
   videoModel: z
     .string()
     .optional()
-    .describe("Video model alias or raw id, passed through to video.launch."),
+    .describe(
+      'Video model — a semantic alias (e.g. "veo3-fast"). Neutral params like aspectRatio are validated against the resolved model, so a cataloged alias is required.',
+    ),
   dryRun: z
     .boolean()
     .optional()

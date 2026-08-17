@@ -811,7 +811,7 @@ const illustrate = defineStep({
     try {
       const handle = await ctx.sapiom.contentGeneration.images.launch({
         prompt: buildIllustrationPrompt(report, section),
-        numImages: 1,
+        count: 1,
         storage: { visibility: "public" },
       });
       return await pauseUntilSignal(handle, {
