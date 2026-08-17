@@ -8,8 +8,9 @@ description: Use at the START of authoring a Sapiom template or agent in sapiom-
 ## Overview
 
 Before you author a Sapiom template or agent, establish **what you're building from**. Same rule
-as the frontend intake it mirrors: **search first; then — only if you can't find it — ask before
-you build.** Never ask before searching; never invent the product in a vacuum.
+as its sibling intake, `establishing-studio-design-clarity`: **search first; then — only if you
+can't find it — ask before you build.** Never ask before searching; never invent the product in a
+vacuum.
 
 The authoring-specific trap: a published template is judged by *the person deciding whether to use
 it* (`examples/AUTHORING.md`) — so the **outcome, the target user, and the copy are the substance,
