@@ -45,6 +45,7 @@ beforeEach(() => {
   vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
   vi.mocked(fs.writeFile).mockResolvedValue();
   vi.mocked(fs.mkdir).mockResolvedValue(undefined);
+  vi.mocked(fs.chmod).mockResolvedValue();
 });
 
 afterEach(() => {
@@ -200,6 +201,38 @@ describe("writeCredentials", () => {
     expect(written.environments.production.credentials).toEqual(
       sampleCredentials,
     );
+  });
+
+  it("should chmod 0600 so a pre-existing file does not stay world-readable", async () => {
+    // `writeFile`'s `mode` is only honoured when the file is created. A
+    // credentials.json left behind with looser permissions would otherwise keep
+    // them while we write a fresh API key into it. `session.ts` and
+    // `analytics-core`'s identity store both chmod for this reason.
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sampleFile));
+
+    await writeCredentials(
+      "production",
+      "https://app.sapiom.ai",
+      "https://api.sapiom.ai",
+      sampleCredentials,
+    );
+
+    expect(fs.chmod).toHaveBeenCalledWith(credentialsPath, 0o600);
+  });
+
+  it("should still write when chmod fails (best effort)", async () => {
+    vi.mocked(fs.chmod).mockRejectedValue(new Error("EPERM"));
+
+    await expect(
+      writeCredentials(
+        "production",
+        "https://app.sapiom.ai",
+        "https://api.sapiom.ai",
+        sampleCredentials,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fs.writeFile).toHaveBeenCalled();
   });
 
   it("should update existing file preserving other environments", async () => {
