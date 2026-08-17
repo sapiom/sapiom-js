@@ -31,7 +31,18 @@ describe("Node-HTTP failureMode", () => {
     nock.cleanAll();
   });
 
-  describe('failureMode: "open" (default)', () => {
+  describe('failureMode: "open"', () => {
+    let consoleErrorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Mock console.error to prevent expected errors from polluting the test output
+      consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
     it("should allow request when Sapiom API returns 500", async () => {
       nock("https://api.example.com")
         .get("/test")
@@ -67,7 +78,8 @@ describe("Node-HTTP failureMode", () => {
 
       const client = createClient({
         sapiomClient: mockSapiomClient,
-      }); // Default is "open"
+        failureMode: "open", // Explicitly set to open for testing
+      });
 
       const response = await client.request({
         method: "GET",
@@ -208,10 +220,45 @@ describe("Node-HTTP failureMode", () => {
         }),
       ).rejects.toThrow("SDK bug");
     });
+
+    it("should throw when payment handling fails", async () => {
+      nock("https://api.example.com")
+        .get("/test")
+        .reply(402, {
+          x402Version: 1,
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "1000000",
+              resourceName: "https://api.example.com/test",
+              payTo: "0x123",
+              asset: "0xUSDC",
+            },
+          ],
+        });
+
+      mockTransactionAPI.create.mockRejectedValue(
+        new Error("Sapiom payment API error"),
+      );
+
+      const client = createClient({
+        sapiomClient: mockSapiomClient,
+        failureMode: "closed",
+      });
+
+      await expect(
+        client.request({
+          method: "GET",
+          url: "https://api.example.com/test",
+          headers: {},
+        }),
+      ).rejects.toThrow("Sapiom payment API error");
+    });
   });
 
   describe("default behavior", () => {
-    it('should default to "open" when not specified', async () => {
+    it('should default to "closed" when not specified', async () => {
       nock("https://api.example.com")
         .get("/test")
         .reply(200, { data: "success" });
@@ -223,14 +270,14 @@ describe("Node-HTTP failureMode", () => {
         // No failureMode specified
       });
 
-      // Should not throw (defaults to "open")
-      const response = await client.request({
-        method: "GET",
-        url: "https://api.example.com/test",
-        headers: {},
-      });
-
-      expect(response.status).toBe(200);
+      // Should throw (defaults to "closed")
+      await expect(
+        client.request({
+          method: "GET",
+          url: "https://api.example.com/test",
+          headers: {},
+        }),
+      ).rejects.toThrow("Sapiom error");
     });
   });
 
