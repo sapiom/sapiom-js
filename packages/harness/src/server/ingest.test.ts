@@ -88,6 +88,12 @@ describe("createIngestRouter", () => {
     expect(stored).toHaveLength(0);
   });
 
+  it("rejects requests with no Authorization header at all", async () => {
+    const res = await postIngest(baseUrl, { hookEvent: "SessionStart" }, "");
+    expect(res.status).toBe(401);
+    expect(stored).toHaveLength(0);
+  });
+
   it("responds 200 immediately and processes asynchronously", async () => {
     const res = await postIngest(baseUrl, {
       hookEvent: "UserPromptSubmit",

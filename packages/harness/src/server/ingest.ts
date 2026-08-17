@@ -13,6 +13,7 @@ import express, { type Router } from "express";
 import type { AnalyticsEvent, HarnessKind } from "../shared/types.js";
 import type { NormalizeContext } from "../core/collector/normalizer.js";
 import { createSeqCounter, type SeqCounter } from "../core/collector/seq.js";
+import { timingSafeEqualString } from "./auth.js";
 
 export interface IngestSessionContext {
   harness: HarnessKind;
@@ -162,7 +163,7 @@ export function createIngestRouter(deps: IngestDeps): Router {
 
   router.post("/ingest", (req, res) => {
     const token = bearerToken(req.headers.authorization);
-    if (token !== deps.ingestToken) {
+    if (!timingSafeEqualString(token ?? "", deps.ingestToken)) {
       res.status(401).json({ ok: false });
       return;
     }
