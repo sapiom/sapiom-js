@@ -222,7 +222,7 @@ describe("Fetch failureMode", () => {
   });
 
   describe("default behavior", () => {
-    it('should default to "open" when not specified', async () => {
+    it('should default to "closed" when not specified', async () => {
       fetchMock.get("https://api.example.com/test", {
         status: 200,
         body: { data: "success" },
@@ -235,9 +235,8 @@ describe("Fetch failureMode", () => {
         // No failureMode specified
       });
 
-      // Should not throw (defaults to "open")
-      const response = await fetch("https://api.example.com/test");
-      expect(response.status).toBe(200);
+      // Should throw (defaults to "closed")
+      await expect(fetch("https://api.example.com/test")).rejects.toThrow("Sapiom error");
     });
   });
 
