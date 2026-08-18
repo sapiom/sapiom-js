@@ -429,6 +429,10 @@ Stub naming rules:
 - To stub a coding run's resume payload, override `models.coding.run` (or
   `models.coding.launch`) in the **launching step** — that value is both the inline result
   and the payload the paused step resumes with.
+- The default model path works the same: `models.run` (or `models.launch`) controls both
+  `models.launch()`'s inline result and its resume payload. A partial value (e.g.
+  `{ "output": "..." }`) is merged over the built-in defaults, so the result stays a full
+  `ModelRunResult`.
 - `run_local` reports `unusedStubs` (key matched nothing — usually a typo or plural/singular
   slip) and `stubWarnings` (key matched but wrong shape). A green run with either non-empty
   means the stub silently didn't apply.

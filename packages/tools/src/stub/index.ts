@@ -705,8 +705,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     return { ...res, sandbox: asSandbox(res.sandbox, overrides, opts.calls) };
   };
 
-  // Default (instant) agent result — no sandbox to re-wrap, so it's the resolved
-  // value as-is. `keys` lets `launch()` accept `models.launch` and `models.run`.
+  // Default (instant) agent result for the blocking `run()` — no sandbox to re-wrap, so it's
+  // the resolved value as-is, verbatim (launch() resolves its own key list and merges over the
+  // defaults instead: its handle and resume payload need the full ModelRunResult shape).
   const resolveModelResult = (
     spec: unknown,
     keys: string | string[],
@@ -786,23 +787,51 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     },
     models: {
       run: (spec) => Promise.resolve(resolveModelResult(spec, "models.run")),
-      launch: (spec) => {
+      launch: async (spec) => {
         const correlationId = `stub-run-${++launchSeq}`;
         // `launch()` honors `models.launch` first, then the shared `models.run` — the keys the
-        // module docs promise and the ones `run()` above resolves. The `agent.*` spellings
-        // predate the orchestrations→agents rename (#167) and were the only keys this path
-        // actually consulted until now, so they stay honored last for back-compat with
-        // existing stub files.
-        const result = {
-          ...resolveModelResult(spec, [
-            ...dispatchedKeys("models"),
-            ...dispatchedKeys("agent"),
-          ]),
-          runId: correlationId,
+        // module docs promise and the ones `run()` above resolves. The `agent.*` spellings were
+        // stranded by the agent→models half of the #167 rename and were the only keys this
+        // path actually consulted until now, so they stay honored last for back-compat — with
+        // a warning, because they sit one character away from the unrelated `agents.*`
+        // namespace and would otherwise defeat the usedKeys typo detector.
+        const keys = [...dispatchedKeys("models"), ...dispatchedKeys("agent")];
+        const matched = keys.find((k) =>
+          Object.prototype.hasOwnProperty.call(overrides, k),
+        );
+        if (matched?.startsWith("agent.")) {
+          opts.warnings?.add(
+            `'${matched}' is a legacy spelling for models.launch overrides — rename it to 'models.run' ` +
+              `(or 'models.launch'). It is one character away from the 'agents.*' namespace, which it does NOT stub.`,
+          );
+        }
+        // Unlike `run()` (verbatim, longstanding), launch() must produce a full ModelRunResult:
+        // the handle reads `result.status` and the resume payload is schema-validated by the
+        // local runner. Merge the override OVER the defaults — the override wins field by
+        // field, missing required fields are filled, nothing is mutated. The await unwraps a
+        // function override that returned a Promise (run()'s Promise.resolve does the same).
+        const resolved = await Promise.resolve(
+          r(keys, [spec], () => stubAgentResult()),
+        );
+        if (resolved === null || typeof resolved !== "object") {
+          opts.warnings?.add(
+            `'${matched}' stub must be a ModelRunResult-shaped object; got ${describeShape(resolved)}. ` +
+              `Using the built-in default.`,
+          );
+        }
+        const base = (
+          resolved !== null && typeof resolved === "object" ? resolved : {}
+        ) as Partial<ModelRunResult>;
+        const result: ModelRunResult = {
+          ...stubAgentResult(),
+          ...base,
+          // Preserve an author-supplied runId (run() would return it verbatim, and in the real
+          // client run() IS launch().wait(), so the two paths must agree on the id).
+          runId: base.runId ?? correlationId,
         };
         // The resume payload IS the result (no live handles to strip).
         return dispatchable(
-          stubModelRunHandle(overrides, correlationId, result, opts.calls),
+          stubModelRunHandle(overrides, result.runId, result, opts.calls),
           opts.signals,
           () => result,
         );
