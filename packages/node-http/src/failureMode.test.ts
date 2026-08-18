@@ -15,6 +15,7 @@ describe("Node-HTTP failureMode", () => {
       create: jest.fn(),
       get: jest.fn(),
       reauthorizeWithPayment: jest.fn(),
+      complete: jest.fn().mockResolvedValue({} as any),
       list: jest.fn(),
       isAuthorized: jest.fn(),
       isCompleted: jest.fn(),
@@ -36,7 +37,9 @@ describe("Node-HTTP failureMode", () => {
 
     beforeEach(() => {
       // Mock console.error to prevent expected errors from polluting the test output
-      consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      consoleErrorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
     });
 
     afterEach(() => {
@@ -257,6 +260,44 @@ describe("Node-HTTP failureMode", () => {
     });
   });
 
+  it("should throw when payment handling fails even with failureMode open", async () => {
+    nock("https://api.example.com")
+      .get("/test")
+      .reply(402, {
+        x402Version: 1,
+        accepts: [
+          {
+            scheme: "exact",
+            network: "base",
+            maxAmountRequired: "1000000",
+            resource: "https://api.example.com/test",
+            payTo: "0x123",
+            asset: "0xUSDC",
+          },
+        ],
+      });
+
+    mockTransactionAPI.create.mockResolvedValue({
+      id: "tx_123",
+      status: "authorized",
+    } as any);
+    mockTransactionAPI.reauthorizeWithPayment.mockRejectedValue(
+      new Error("Sapiom payment API error"),
+    );
+
+    const client = createClient({
+      sapiomClient: mockSapiomClient,
+      failureMode: "open",
+    });
+
+    await expect(
+      client.request({
+        method: "GET",
+        url: "https://api.example.com/test",
+        headers: {},
+      }),
+    ).rejects.toThrow("Sapiom payment API error");
+  });
   describe("default behavior", () => {
     it('should default to "closed" when not specified', async () => {
       nock("https://api.example.com")
