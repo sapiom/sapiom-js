@@ -29,7 +29,7 @@ annotated inline with its own durable `fileId` and a ready-to-use `downloadUrl`:
 ```typescript
 const out = await sapiom.contentGeneration.images.create({
   prompt: "four color swatches",
-  numImages: 4,
+  count: 4,
   storage: { visibility: "public" },
 });
 for (const img of out.images ?? []) {
@@ -93,7 +93,8 @@ const handle = await sapiom.contentGeneration.video.launch({
   prompt: "a calm ocean wave at sunset",
 });
 return pauseUntilSignal(handle, { resumeStep: finalize });
-// `finalize` receives a VideoResultPayload: { outputs: [{ fileId?, downloadUrl?, storageError? }] }
+// `finalize` receives a VideoResultPayload: the outputs plus the generation's
+// `resolvedModel` / `cost` metadata (see the interface below).
 ```
 
 `handle.wait()` accepts the same `timeoutMs` and `pollMs` overrides as
@@ -124,10 +125,15 @@ The shape delivered to a step resumed from `pauseUntilSignal`:
 
 ```typescript
 interface VideoResultPayload {
+  // Generation metadata, so a step that bills AFTER the generation can still
+  // read what ran and what it cost (the launch handle is gone by resume time):
+  resolvedModel?: string; // the alias that served it (omitted for uncataloged models)
+  cost?: MediaCostEnvelope; // estimateUsd inline; settled charge via cost.reference
   outputs: Array<{
     fileId?: string; // durable ref — present when storage was requested and succeeded
     downloadUrl?: string; // ready-to-use short-lived URL (may have expired by resume)
     downloadUrlExpiresAt?: string; // ISO expiry of downloadUrl, when present
+    downloadUrlUnavailable?: boolean; // fileId is set but no URL could be minted — re-fetch from fileId
     storageError?: string; // present when storage was requested but failed
   }>;
 }
@@ -153,8 +159,17 @@ const out = await sapiom.contentGeneration.video.create({
   duration: 10,
 });
 out.resolvedModel; // the alias that served it
-out.cost?.estimateUsd; // what it cost
+out.cost?.estimateUsd; // what it cost (inline quote)
+out.cost?.reference; // Sapiom transaction id the charge lands on
 ```
+
+`cost` is the per-generation `MediaCostEnvelope`: `estimateUsd` (with `currency`,
+`isEstimate`, `source`) is the inline quote — for `upto`-priced video models it's
+the authorized **ceiling**, so the settled amount can be lower — and
+`cost.reference` is the transaction id where the authoritative **settled** amount
+lives out-of-band, at `GET /v1/transactions/:id/costs`. Either half is omitted
+(never zeroed or fabricated) when it didn't resolve; re-billing callers should
+persist `cost.reference` and settle from it.
 
 **Images** (`images.create` / `images.launch`): `prompt` (required), plus optional
 `aspectRatio`, `count`, `seed`, `negativePrompt`, `referenceImage`, `outputFormat`.

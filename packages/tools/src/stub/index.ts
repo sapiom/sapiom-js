@@ -1070,6 +1070,10 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           const result = r(
             dispatchedKeys("contentGeneration.images"),
             [input],
+            // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
+            // Set it INSIDE the fallback factory — not by post-mutating the resolved result — so a
+            // caller-supplied override wins and a frozen override is never mutated (same contract
+            // as the sync `create` path above).
             () => ({
               images: [
                 {
@@ -1086,14 +1090,15 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                     : {}),
                 },
               ],
+              resolvedModel: input.model ?? "stub-model",
             }),
           ) as ImageGenerationResult;
-          // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
-          result.resolvedModel = input.model ?? "stub-model";
 
           const handle: ImageLaunchHandle = {
             requestId,
-            resolvedModel: result.resolvedModel,
+            // The handle field is a required string; an override that omits resolvedModel still
+            // gets a handle-level value without the override object itself being touched.
+            resolvedModel: result.resolvedModel ?? input.model ?? "stub-model",
             dispatch: {
               correlationId: requestId,
               resultSignal: IMAGE_RESULT_SIGNAL,
@@ -1135,6 +1140,10 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           const result = r(
             dispatchedKeys("contentGeneration.video"),
             [input],
+            // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
+            // Set it INSIDE the fallback factory — not by post-mutating the resolved result — so a
+            // caller-supplied override wins and a frozen override is never mutated (same contract
+            // as the sync `create` path above).
             () => ({
               video: {
                 url: "https://content.local/stub-video.mp4",
@@ -1147,14 +1156,15 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                     }
                   : {}),
               },
+              resolvedModel: input.model ?? "stub-model",
             }),
           ) as VideoGenerationResult;
-          // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
-          result.resolvedModel = input.model ?? "stub-model";
 
           const handle: VideoLaunchHandle = {
             requestId,
-            resolvedModel: result.resolvedModel,
+            // The handle field is a required string; an override that omits resolvedModel still
+            // gets a handle-level value without the override object itself being touched.
+            resolvedModel: result.resolvedModel ?? input.model ?? "stub-model",
             dispatch: {
               correlationId: requestId,
               resultSignal: VIDEO_RESULT_SIGNAL,

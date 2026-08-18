@@ -461,9 +461,9 @@ export interface ImageLaunchHandle extends DispatchHandle {
  */
 /**
  * The SAP-2576 generation metadata a resumed step needs alongside its `outputs`. Carried on the
- * durable pause/resume payload so a workflow step that bills AFTER the generation (the Polsia
- * rebilling case) can still read `cost.reference` / `resolvedModel` — the launch handle is gone
- * by then (`pauseUntilSignal` reduces it to its signal + `correlationId`).
+ * durable pause/resume payload so a workflow step that bills AFTER the generation (a reseller
+ * re-billing its own customers) can still read `cost.reference` / `resolvedModel` — the launch
+ * handle is gone by then (`pauseUntilSignal` reduces it to its signal + `correlationId`).
  */
 export interface MediaResumeFields {
   /**

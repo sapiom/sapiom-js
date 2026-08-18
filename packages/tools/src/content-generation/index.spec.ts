@@ -1470,7 +1470,7 @@ describe("toVideoResumePayload()", () => {
 
   // SAP-2576: the durable resume payload MUST carry resolvedModel + cost, so a step that bills
   // in the resumed step (after generation) can still read cost.reference / resolvedModel.
-  it("carries resolvedModel + cost onto the resume payload (the Polsia rebilling case)", () => {
+  it("carries resolvedModel + cost onto the resume payload (the reseller rebilling case)", () => {
     const payload = toVideoResumePayload({
       video: { url: "https://media/v.mp4", fileId: "f-1" },
       resolvedModel: M,
@@ -1570,7 +1570,7 @@ describe("toVideoResumePayload()", () => {
 describe("toImageResumePayload()", () => {
   const M = "flux-fast";
 
-  it("carries resolvedModel + cost onto the resume payload (the Polsia rebilling case)", () => {
+  it("carries resolvedModel + cost onto the resume payload (the reseller rebilling case)", () => {
     const payload = toImageResumePayload({
       images: [{ url: "u1", fileId: "f-1" }],
       resolvedModel: M,
