@@ -788,9 +788,16 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       run: (spec) => Promise.resolve(resolveModelResult(spec, "models.run")),
       launch: (spec) => {
         const correlationId = `stub-run-${++launchSeq}`;
-        // `launch()` honors `models.launch` first, then the shared `models.run`.
+        // `launch()` honors `models.launch` first, then the shared `models.run` — the keys the
+        // module docs promise and the ones `run()` above resolves. The `agent.*` spellings
+        // predate the orchestrations→agents rename (#167) and were the only keys this path
+        // actually consulted until now, so they stay honored last for back-compat with
+        // existing stub files.
         const result = {
-          ...resolveModelResult(spec, dispatchedKeys("agent")),
+          ...resolveModelResult(spec, [
+            ...dispatchedKeys("models"),
+            ...dispatchedKeys("agent"),
+          ]),
           runId: correlationId,
         };
         // The resume payload IS the result (no live handles to strip).
