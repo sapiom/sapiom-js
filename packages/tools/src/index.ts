@@ -114,6 +114,10 @@ export { IMAGE_RESULT_SIGNAL } from "./content-generation/index.js";
 // — annotate the resumed step with it instead of hand-rolling the shape.
 export type { VideoResultPayload } from "./content-generation/index.js";
 export type { ImageResultPayload } from "./content-generation/index.js";
+// The per-generation cost envelope (SAP-2576) + the resume-metadata half both payloads share —
+// name these when typing a re-billing step that persists `cost.reference`.
+export type { MediaCostEnvelope } from "./content-generation/index.js";
+export type { MediaResumeFields } from "./content-generation/index.js";
 // Map a live generation result to the wire shape the resumed step receives.
 export { toVideoResumePayload } from "./content-generation/index.js";
 export { toImageResumePayload } from "./content-generation/index.js";

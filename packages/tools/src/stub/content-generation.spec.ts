@@ -71,7 +71,9 @@ describe("createStubClient().contentGeneration — resolvedModel on the sync cre
 // Same override contract on the dispatchable surface: the launch stubs previously post-mutated
 // `result.resolvedModel = input.model ?? "stub-model"` onto whatever resolve() returned — throwing
 // on a frozen override and silently clobbering a non-frozen one. resolvedModel now lives in the
-// launch fallback factories too; these tests lock that in.
+// launch fallback factories, and the launch paths stamp it onto a COPY of the resolved override
+// (mirroring the real client's `withDispatchCost`), so `handle.resolvedModel` and
+// `(await handle.wait()).resolvedModel` always agree. These tests lock both halves in.
 describe("createStubClient().contentGeneration — resolvedModel on the launch path", () => {
   it("images.launch / video.launch default and echo like create", async () => {
     const stub = createStubClient();
@@ -106,12 +108,12 @@ describe("createStubClient().contentGeneration — resolvedModel on the launch p
     expect(override.resolvedModel).toBe("my-model");
   });
 
-  it("a frozen video launch override without resolvedModel is honored untouched; the handle still gets one", async () => {
-    // The override object is returned verbatim (no resolvedModel injected — mirroring create's
-    // override semantics), while the handle's required string falls back to input.model.
-    const override = Object.freeze({
-      video: { url: "https://cdn/override.mp4" },
-    });
+  it("an override without resolvedModel is never mutated; handle and wait() agree on the fallback", async () => {
+    // Deliberately NOT frozen — this is the mutation guard for the common case (a frozen object
+    // would turn a reintroduced post-mutation into a throw instead of a silent clobber). The
+    // stamp lands on a copy, so the caller's object gains no key, and handle.resolvedModel ===
+    // wait().resolvedModel holds like it does on the routed path (`withDispatchCost`).
+    const override = { video: { url: "https://cdn/override.mp4" } };
     const stub = createStubClient({
       overrides: { "contentGeneration.video.launch": override },
     });
@@ -122,8 +124,8 @@ describe("createStubClient().contentGeneration — resolvedModel on the launch p
     });
 
     expect(handle.resolvedModel).toBe("veo3-fast");
-    const result = await handle.wait();
-    expect(result.resolvedModel).toBeUndefined();
-    expect(Object.isFrozen(override)).toBe(true);
+    expect((await handle.wait()).resolvedModel).toBe("veo3-fast");
+    expect("resolvedModel" in override).toBe(false);
+    expect(override).toEqual({ video: { url: "https://cdn/override.mp4" } });
   });
 });

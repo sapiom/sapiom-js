@@ -1067,7 +1067,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
         launch: (input) => {
           const requestId = `stub-image-${++launchSeq}`;
-          const result = r(
+          const resolved = r(
             dispatchedKeys("contentGeneration.images"),
             [input],
             // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
@@ -1093,12 +1093,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               resolvedModel: input.model ?? "stub-model",
             }),
           ) as ImageGenerationResult;
+          // Mirror the real client's `withDispatchCost`: stamp the resolvedModel onto a COPY, so
+          // the handle, `wait()`, and the resume payload all carry the same value — an invariant
+          // the routed path guarantees — while the caller's override object is never touched and
+          // its own resolvedModel wins when present.
+          const result: ImageGenerationResult = {
+            ...resolved,
+            resolvedModel: resolved.resolvedModel ?? input.model ?? "stub-model",
+          };
 
           const handle: ImageLaunchHandle = {
             requestId,
-            // The handle field is a required string; an override that omits resolvedModel still
-            // gets a handle-level value without the override object itself being touched.
-            resolvedModel: result.resolvedModel ?? input.model ?? "stub-model",
+            resolvedModel: result.resolvedModel,
             dispatch: {
               correlationId: requestId,
               resultSignal: IMAGE_RESULT_SIGNAL,
@@ -1137,7 +1143,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
         launch: (input) => {
           const requestId = `stub-video-${++launchSeq}`;
-          const result = r(
+          const resolved = r(
             dispatchedKeys("contentGeneration.video"),
             [input],
             // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
@@ -1159,12 +1165,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               resolvedModel: input.model ?? "stub-model",
             }),
           ) as VideoGenerationResult;
+          // Mirror the real client's `withDispatchCost`: stamp the resolvedModel onto a COPY, so
+          // the handle, `wait()`, and the resume payload all carry the same value — an invariant
+          // the routed path guarantees — while the caller's override object is never touched and
+          // its own resolvedModel wins when present.
+          const result: VideoGenerationResult = {
+            ...resolved,
+            resolvedModel: resolved.resolvedModel ?? input.model ?? "stub-model",
+          };
 
           const handle: VideoLaunchHandle = {
             requestId,
-            // The handle field is a required string; an override that omits resolvedModel still
-            // gets a handle-level value without the override object itself being touched.
-            resolvedModel: result.resolvedModel ?? input.model ?? "stub-model",
+            resolvedModel: result.resolvedModel,
             dispatch: {
               correlationId: requestId,
               resultSignal: VIDEO_RESULT_SIGNAL,

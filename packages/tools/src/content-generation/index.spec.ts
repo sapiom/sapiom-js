@@ -13,6 +13,10 @@ import {
   IMAGE_RESULT_SIGNAL,
   ContentGenerationHttpError,
 } from "./index.js";
+import type {
+  ImageGenerationResult,
+  VideoGenerationResult,
+} from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — the capability fn is tested directly with a real Transport wired to
@@ -1497,6 +1501,17 @@ describe("toVideoResumePayload()", () => {
     expect(payload.resolvedModel).toBe(M);
   });
 
+  it("omits resolvedModel (no undefined-valued key) when the result lacks it — matching the wire", () => {
+    // Reachable from a stub launch override that omits the field (StubOverrides values are
+    // untyped, hence the cast); a real webhook resume omits the key too (SAP-2650), so the
+    // mapper must not fabricate an own key holding `undefined`.
+    const payload = toVideoResumePayload({
+      video: { url: "u" },
+    } as VideoGenerationResult);
+    expect("resolvedModel" in payload).toBe(false);
+    expect(payload).toEqual({ outputs: [{}] });
+  });
+
   it("maps a video with fileId to outputs[0].fileId", () => {
     const payload = toVideoResumePayload({
       video: { url: "https://media/v.mp4", fileId: "f-1" },
@@ -1595,6 +1610,15 @@ describe("toImageResumePayload()", () => {
     });
     expect(payload.cost).toEqual({ reference: "txn_only" });
     expect(payload.resolvedModel).toBe(M);
+  });
+
+  it("omits resolvedModel (no undefined-valued key) when the result lacks it — matching the wire", () => {
+    // Same contract as the video mapper: no fabricated `resolvedModel: undefined` own key.
+    const payload = toImageResumePayload({
+      images: [{ url: "u" }],
+    } as ImageGenerationResult);
+    expect("resolvedModel" in payload).toBe(false);
+    expect(payload).toEqual({ outputs: [{}] });
   });
 
   it("maps each image to an outputs[] entry (one per image, order preserved)", () => {
