@@ -21,6 +21,10 @@ import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
 
+function zodV3ErrorMessage(issues: readonly Record<string, unknown>[]): string {
+  return JSON.stringify(issues, null, 2);
+}
+
 function fakeSessionManager(initial: HarnessSession[] = []) {
   const sessions = new Map(initial.map((s) => [s.id, s]));
   return {
@@ -341,6 +345,17 @@ describe("createRestRouter", () => {
         body: JSON.stringify({ telemetryOptIn: "yes" }),
       });
       expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: zodV3ErrorMessage([
+          {
+            code: "invalid_type",
+            expected: "boolean",
+            received: "string",
+            path: ["telemetryOptIn"],
+            message: "Expected boolean, received string",
+          },
+        ]),
+      });
     });
   });
 
@@ -380,10 +395,31 @@ describe("createRestRouter", () => {
       const res = await fetch(`${baseUrl}/sessions`, {
         method: "POST",
         headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-        body: JSON.stringify({ cwd: "" }),
+        body: JSON.stringify({ cwd: "", harness: "conductor" }),
       });
 
       expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: zodV3ErrorMessage([
+          {
+            code: "too_small",
+            minimum: 1,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: "String must contain at least 1 character(s)",
+            path: ["cwd"],
+          },
+          {
+            received: "conductor",
+            code: "invalid_enum_value",
+            options: ["claude-code", "codex"],
+            path: ["harness"],
+            message:
+              "Invalid enum value. Expected 'claude-code' | 'codex', received 'conductor'",
+          },
+        ]),
+      });
       expect(onSessionCreated).not.toHaveBeenCalled();
     });
 
@@ -572,6 +608,25 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(status);
     });
 
+    it("preserves the v3 required-field error body for attachment validation", async () => {
+      const res = await postAttachment({
+        dataUrl: "data:text/plain;base64,YQ==",
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: zodV3ErrorMessage([
+          {
+            code: "invalid_type",
+            expected: "string",
+            received: "undefined",
+            path: ["filename"],
+            message: "Required",
+          },
+        ]),
+      });
+    });
+
     it("rejects a decoded payload over 10 MiB", async () => {
       const encoded = Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64");
       const res = await postAttachment({
@@ -651,6 +706,17 @@ describe("createRestRouter", () => {
         body: JSON.stringify({ submit: true }),
       });
       expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: zodV3ErrorMessage([
+          {
+            code: "invalid_type",
+            expected: "string",
+            received: "undefined",
+            path: ["text"],
+            message: "Required",
+          },
+        ]),
+      });
     });
 
     it("404s when submitInput reports no live pty for the session", async () => {
@@ -817,6 +883,17 @@ describe("createRestRouter", () => {
         },
       );
       expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: zodV3ErrorMessage([
+          {
+            code: "invalid_type",
+            expected: "string",
+            received: "undefined",
+            path: ["workflowPath"],
+            message: "Required",
+          },
+        ]),
+      });
     });
   });
 
@@ -1160,6 +1237,21 @@ describe("createRestRouter", () => {
       expect((await adopt({ ...body, agentSessionId: "" })).status).toBe(400);
       expect((await adopt({ ...body, harness: "conductor" })).status).toBe(400);
       expect((await adopt({ cwd: "/tmp/proj" })).status).toBe(400);
+    });
+
+    it("preserves the v3 joined-issue error body for adoption", async () => {
+      start({ adapters: { "claude-code": historyAdapter() } });
+      const res = await adopt({
+        ...body,
+        agentSessionId: "",
+        harness: "conductor",
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error:
+          "String must contain at least 1 character(s); Invalid enum value. Expected 'claude-code' | 'codex', received 'conductor'",
+      });
     });
 
     it("is handled as its own route — 'adopt' is never read as a session id", async () => {
