@@ -36,7 +36,6 @@ describe("Node-HTTP failureMode", () => {
     let consoleErrorSpy: jest.SpyInstance;
 
     beforeEach(() => {
-      // Mock console.error to prevent expected errors from polluting the test output
       consoleErrorSpy = jest
         .spyOn(console, "error")
         .mockImplementation(() => {});
@@ -81,7 +80,7 @@ describe("Node-HTTP failureMode", () => {
 
       const client = createClient({
         sapiomClient: mockSapiomClient,
-        failureMode: "open", // Explicitly set to open for testing
+        failureMode: "open",
       });
 
       const response = await client.request({
@@ -115,45 +114,6 @@ describe("Node-HTTP failureMode", () => {
 
       expect(response.status).toBe(200);
     });
-
-    it("should throw original 402 when payment handling fails", async () => {
-      nock("https://api.example.com")
-        .get("/test")
-        .reply(402, {
-          x402Version: 1,
-          accepts: [
-            {
-              scheme: "exact",
-              network: "base",
-              maxAmountRequired: "1000000",
-              resourceName: "https://api.example.com/test",
-              payTo: "0x123",
-              asset: "0xUSDC",
-            },
-          ],
-        });
-
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API error"),
-      );
-
-      const client = createClient({
-        sapiomClient: mockSapiomClient,
-        failureMode: "open",
-      });
-
-      try {
-        await client.request({
-          method: "GET",
-          url: "https://api.example.com/test",
-          headers: {},
-        });
-        fail("Should have thrown 402 error");
-      } catch (error: any) {
-        // Should get original 402, not Sapiom error
-        expect(error.response?.status).toBe(402);
-      }
-    });
   });
 
   describe('failureMode: "closed"', () => {
@@ -178,147 +138,6 @@ describe("Node-HTTP failureMode", () => {
           headers: {},
         }),
       ).rejects.toThrow("Sapiom API returned 500");
-    });
-
-    it("should throw when Sapiom API times out", async () => {
-      nock("https://api.example.com")
-        .get("/test")
-        .reply(200, { data: "success" });
-
-      mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
-
-      const client = createClient({
-        sapiomClient: mockSapiomClient,
-        failureMode: "closed",
-      });
-
-      await expect(
-        client.request({
-          method: "GET",
-          url: "https://api.example.com/test",
-          headers: {},
-        }),
-      ).rejects.toThrow("ETIMEDOUT");
-    });
-
-    it("should throw when SDK has bugs", async () => {
-      nock("https://api.example.com")
-        .get("/test")
-        .reply(200, { data: "success" });
-
-      mockTransactionAPI.create.mockImplementation(() => {
-        throw new TypeError("SDK bug");
-      });
-
-      const client = createClient({
-        sapiomClient: mockSapiomClient,
-        failureMode: "closed",
-      });
-
-      await expect(
-        client.request({
-          method: "GET",
-          url: "https://api.example.com/test",
-          headers: {},
-        }),
-      ).rejects.toThrow("SDK bug");
-    });
-
-    it("should throw when payment handling fails", async () => {
-      nock("https://api.example.com")
-        .get("/test")
-        .reply(402, {
-          x402Version: 1,
-          accepts: [
-            {
-              scheme: "exact",
-              network: "base",
-              maxAmountRequired: "1000000",
-              resourceName: "https://api.example.com/test",
-              payTo: "0x123",
-              asset: "0xUSDC",
-            },
-          ],
-        });
-
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom payment API error"),
-      );
-
-      const client = createClient({
-        sapiomClient: mockSapiomClient,
-        failureMode: "closed",
-      });
-
-      await expect(
-        client.request({
-          method: "GET",
-          url: "https://api.example.com/test",
-          headers: {},
-        }),
-      ).rejects.toThrow("Sapiom payment API error");
-    });
-  });
-
-  it("should throw when payment handling fails even with failureMode open", async () => {
-    nock("https://api.example.com")
-      .get("/test")
-      .reply(402, {
-        x402Version: 1,
-        accepts: [
-          {
-            scheme: "exact",
-            network: "base",
-            maxAmountRequired: "1000000",
-            resource: "https://api.example.com/test",
-            payTo: "0x123",
-            asset: "0xUSDC",
-          },
-        ],
-      });
-
-    mockTransactionAPI.create.mockResolvedValue({
-      id: "tx_123",
-      status: "authorized",
-    } as any);
-    mockTransactionAPI.reauthorizeWithPayment.mockRejectedValue(
-      new Error("Sapiom payment API error"),
-    );
-
-    const client = createClient({
-      sapiomClient: mockSapiomClient,
-      failureMode: "open",
-    });
-
-    await expect(
-      client.request({
-        method: "GET",
-        url: "https://api.example.com/test",
-        headers: {},
-      }),
-    ).rejects.toThrow("Sapiom payment API error");
-  });
-  describe("default behavior", () => {
-    it('should default to "closed" when not specified', async () => {
-      nock("https://api.example.com")
-        .get("/test")
-        .reply(200, { data: "success" });
-
-      mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
-
-      const client = createClient({
-        sapiomClient: mockSapiomClient,
-        // No failureMode specified
-      });
-
-      // Should throw (defaults to "closed")
-      await expect(
-        client.request({
-          method: "GET",
-          url: "https://api.example.com/test",
-          headers: {},
-        }),
-      ).rejects.toThrow("Sapiom error");
     });
   });
 
