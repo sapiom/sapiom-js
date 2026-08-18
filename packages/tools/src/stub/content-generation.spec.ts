@@ -129,3 +129,63 @@ describe("createStubClient().contentGeneration — resolvedModel on the launch p
     expect(override).toEqual({ video: { url: "https://cdn/override.mp4" } });
   });
 });
+
+// contentGeneration has no `run` method — its blocking sibling is `create`. The launch stubs
+// therefore consult `<ns>.launch`, then `<ns>.create` (so a step that moves from create() to
+// launch() keeps its stub), then the legacy `<ns>.run` spelling for back-compat.
+describe("createStubClient().contentGeneration — launch override keys", () => {
+  it("honors a create-key override on launch (a step moving create → launch keeps its stub)", async () => {
+    const override = Object.freeze({
+      images: [{ url: "https://cdn/from-create-key.png" }],
+      resolvedModel: "my-model",
+    });
+    const stub = createStubClient({
+      overrides: { "contentGeneration.images.create": override },
+    });
+
+    const handle = await stub.contentGeneration.images.launch({ prompt: "x" });
+
+    expect(handle.resolvedModel).toBe("my-model");
+    expect((await handle.wait()).images?.[0]?.url).toBe(
+      "https://cdn/from-create-key.png",
+    );
+  });
+
+  it("the launch key wins over create when both are supplied", async () => {
+    const stub = createStubClient({
+      overrides: {
+        "contentGeneration.video.launch": {
+          video: { url: "https://cdn/launch.mp4" },
+          resolvedModel: "from-launch",
+        },
+        "contentGeneration.video.create": {
+          video: { url: "https://cdn/create.mp4" },
+          resolvedModel: "from-create",
+        },
+      },
+    });
+
+    const handle = await stub.contentGeneration.video.launch({ prompt: "x" });
+
+    expect(handle.resolvedModel).toBe("from-launch");
+    expect((await handle.wait()).video?.url).toBe("https://cdn/launch.mp4");
+  });
+
+  it("the legacy run key keeps working on launch (back-compat with pre-0.28.1 stubs)", async () => {
+    const stub = createStubClient({
+      overrides: {
+        "contentGeneration.images.run": {
+          images: [{ url: "https://cdn/from-run-key.png" }],
+          resolvedModel: "from-run",
+        },
+      },
+    });
+
+    const handle = await stub.contentGeneration.images.launch({ prompt: "x" });
+
+    expect(handle.resolvedModel).toBe("from-run");
+    expect((await handle.wait()).images?.[0]?.url).toBe(
+      "https://cdn/from-run-key.png",
+    );
+  });
+});

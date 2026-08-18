@@ -63,8 +63,10 @@ import {
   toImageResumePayload,
 } from "../content-generation/index.js";
 import type {
+  ImageCreateInput,
   ImageGenerationResult,
   ImageLaunchHandle,
+  VideoCreateInput,
   VideoGenerationResult,
   VideoLaunchHandle,
 } from "../content-generation/index.js";
@@ -278,6 +280,18 @@ function resolve(
  */
 function dispatchedKeys(namespace: string): string[] {
   return [`${namespace}.launch`, `${namespace}.run`];
+}
+
+/**
+ * The override keys a contentGeneration `launch` accepts, in precedence order: the method
+ * actually called (`<ns>.launch`), then the real blocking sibling (`<ns>.create` — the key
+ * authors already write for the sync verb, so a step that moves from `create()` to `launch()`
+ * keeps its stub), then the legacy `<ns>.run` spelling {@link dispatchedKeys} consulted here
+ * before 0.28.1 — contentGeneration has no `run` method, but the key resolved, so it stays
+ * honored for back-compat.
+ */
+function mediaDispatchedKeys(namespace: string): string[] {
+  return [`${namespace}.launch`, `${namespace}.create`, `${namespace}.run`];
 }
 
 /**
@@ -538,6 +552,52 @@ function stubRunHandle(
     {},
     callsSink,
   ) as RunHandle;
+}
+
+// Default media results for the contentGeneration stub — ONE factory per media type, shared by
+// `create` and `launch` so the two verbs can never drift (the create/launch resolvedModel drift
+// fixed in #664 came from inlined twin literals). SAP-2576: the routed backend always echoes a
+// resolvedModel (a required field), so the factory does too — set here, inside the fallback,
+// never post-mutated onto a resolved override.
+function stubImageResult(input: ImageCreateInput): ImageGenerationResult {
+  return {
+    images: [
+      {
+        url: "https://content.local/stub-image.png",
+        contentType: "image/png",
+        width: 512,
+        height: 512,
+        // mirror the real behavior: a fileId only when storage was requested.
+        ...(input.storage
+          ? {
+              fileId: "stub-file",
+              downloadUrl: "https://content.local/stub-download",
+              downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
+            }
+          : {}),
+      },
+    ],
+    resolvedModel: input.model ?? "stub-model",
+  };
+}
+
+/** As {@link stubImageResult}, for video. */
+function stubVideoResult(input: VideoCreateInput): VideoGenerationResult {
+  return {
+    video: {
+      url: "https://content.local/stub-video.mp4",
+      contentType: "video/mp4",
+      // mirror the real behavior: a fileId only when storage was requested.
+      ...(input.storage
+        ? {
+            fileId: "stub-file",
+            downloadUrl: "https://content.local/stub-download",
+            downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
+          }
+        : {}),
+    },
+    resolvedModel: input.model ?? "stub-model",
+  };
 }
 
 function stubAgentResult(): ModelRunResult {
@@ -1042,56 +1102,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       images: {
         create: (input) =>
           Promise.resolve(
-            // SAP-2576: the routed backend always echoes a resolvedModel (a required field), so the
-            // stub does too. Set it INSIDE the fallback factory — not by post-mutating the resolved
-            // result — so a caller-supplied override wins and a frozen override is never mutated.
-            r("contentGeneration.images.create", [input], () => ({
-              images: [
-                {
-                  url: "https://content.local/stub-image.png",
-                  contentType: "image/png",
-                  width: 512,
-                  height: 512,
-                  // mirror the real behavior: a fileId only when storage was requested.
-                  ...(input.storage
-                    ? {
-                        fileId: "stub-file",
-                        downloadUrl: "https://content.local/stub-download",
-                        downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                      }
-                    : {}),
-                },
-              ],
-              resolvedModel: input.model ?? "stub-model",
-            })) as ImageGenerationResult,
+            // Fallback shared with `launch` via stubImageResult (a caller-supplied override
+            // wins verbatim; a frozen override is never mutated).
+            r("contentGeneration.images.create", [input], () =>
+              stubImageResult(input),
+            ) as ImageGenerationResult,
           ),
         launch: (input) => {
           const requestId = `stub-image-${++launchSeq}`;
           const resolved = r(
-            dispatchedKeys("contentGeneration.images"),
+            mediaDispatchedKeys("contentGeneration.images"),
             [input],
-            // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
-            // Set it INSIDE the fallback factory — not by post-mutating the resolved result — so a
-            // caller-supplied override wins and a frozen override is never mutated (same contract
-            // as the sync `create` path above).
-            () => ({
-              images: [
-                {
-                  url: "https://content.local/stub-image.png",
-                  contentType: "image/png",
-                  width: 512,
-                  height: 512,
-                  ...(input.storage
-                    ? {
-                        fileId: "stub-file",
-                        downloadUrl: "https://content.local/stub-download",
-                        downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                      }
-                    : {}),
-                },
-              ],
-              resolvedModel: input.model ?? "stub-model",
-            }),
+            () => stubImageResult(input),
           ) as ImageGenerationResult;
           // Mirror the real client's `withDispatchCost`: stamp the resolvedModel onto a COPY, so
           // the handle, `wait()`, and the resume payload all carry the same value — an invariant
@@ -1122,48 +1144,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       video: {
         create: (input) =>
           Promise.resolve(
-            // SAP-2576: set resolvedModel INSIDE the fallback factory (not by post-mutating the
-            // resolved result) so a caller-supplied override wins and a frozen override is never
-            // mutated. The real routed backend always echoes it; the required type expects it.
-            r("contentGeneration.video.create", [input], () => ({
-              video: {
-                url: "https://content.local/stub-video.mp4",
-                contentType: "video/mp4",
-                // mirror the real behavior: a fileId only when storage was requested.
-                ...(input.storage
-                  ? {
-                      fileId: "stub-file",
-                      downloadUrl: "https://content.local/stub-download",
-                      downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                    }
-                  : {}),
-              },
-              resolvedModel: input.model ?? "stub-model",
-            })) as VideoGenerationResult,
+            // Fallback shared with `launch` via stubVideoResult (a caller-supplied override
+            // wins verbatim; a frozen override is never mutated).
+            r("contentGeneration.video.create", [input], () =>
+              stubVideoResult(input),
+            ) as VideoGenerationResult,
           ),
         launch: (input) => {
           const requestId = `stub-video-${++launchSeq}`;
           const resolved = r(
-            dispatchedKeys("contentGeneration.video"),
+            mediaDispatchedKeys("contentGeneration.video"),
             [input],
-            // SAP-2576: the routed backend always echoes a resolvedModel; mirror that in the stub.
-            // Set it INSIDE the fallback factory — not by post-mutating the resolved result — so a
-            // caller-supplied override wins and a frozen override is never mutated (same contract
-            // as the sync `create` path above).
-            () => ({
-              video: {
-                url: "https://content.local/stub-video.mp4",
-                contentType: "video/mp4",
-                ...(input.storage
-                  ? {
-                      fileId: "stub-file",
-                      downloadUrl: "https://content.local/stub-download",
-                      downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                    }
-                  : {}),
-              },
-              resolvedModel: input.model ?? "stub-model",
-            }),
+            () => stubVideoResult(input),
           ) as VideoGenerationResult;
           // Mirror the real client's `withDispatchCost`: stamp the resolvedModel onto a COPY, so
           // the handle, `wait()`, and the resume payload all carry the same value — an invariant
