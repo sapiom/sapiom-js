@@ -614,26 +614,28 @@ export function addPaymentInterceptor(
             existingTransactionId,
           );
 
-          if (
-            !transaction.requiresPayment &&
-            transaction.status === TransactionStatus.AUTHORIZED
-          ) {
-            transaction =
-              await config.sapiomClient.transactions.reauthorizeWithPayment(
-                existingTransactionId,
-                {
-                  x402: x402Response,
-                  metadata: {
-                    originalRequest: {
-                      url: originalConfig.url,
-                      method: originalConfig.method,
-                    },
-                    responseHeaders: error.response?.headers,
-                    httpStatusCode: 402,
+          // Submit the payment proof for this existing transaction, the same
+          // way @sapiom/fetch and @sapiom/node-http do unconditionally. The
+          // previous `!transaction.requiresPayment && status === AUTHORIZED`
+          // guard skipped this call in exactly the case it's needed — a
+          // transaction that genuinely still requires payment — leaving
+          // `transaction` without payment data and causing the flow below to
+          // poll a transaction that can never become authorized.
+          transaction =
+            await config.sapiomClient.transactions.reauthorizeWithPayment(
+              existingTransactionId,
+              {
+                x402: x402Response,
+                metadata: {
+                  originalRequest: {
+                    url: originalConfig.url,
+                    method: originalConfig.method,
                   },
+                  responseHeaders: error.response?.headers,
+                  httpStatusCode: 402,
                 },
-              );
-          }
+              },
+            );
         } catch (apiError) {
           // Clear payment handling flag so completion interceptor fires
           (originalConfig as any).__sapiomPaymentHandling = false;
