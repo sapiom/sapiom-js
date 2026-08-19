@@ -1,5 +1,20 @@
 # @sapiom/tools
 
+## 0.28.1
+
+### Patch Changes
+
+- aa7874b: content-generation (stub): `images.launch` / `video.launch` now also honor the sync verb's override key (`contentGeneration.images.create` / `contentGeneration.video.create`), so a step that moves from `create()` to `launch()` — the documented fix for long-running fan-outs — keeps its stub instead of silently falling back to the built-in default. Precedence: `<ns>.launch` (the call you wrote) wins, then `<ns>.create`, then the legacy `<ns>.run` spelling, which stays honored for back-compat (contentGeneration has no `run` method, but the key resolved before this release). Internally the four inlined media stub payloads collapsed into shared `stubImageResult` / `stubVideoResult` factories, so the `create` and `launch` defaults can no longer drift apart.
+- 9544a0f: content-generation (stub): the `images.launch` / `video.launch` stubs no longer post-mutate `resolvedModel` onto the resolved result. Previously a frozen caller override under `contentGeneration.images.launch` / `contentGeneration.video.launch` threw a `TypeError`, and a non-frozen one had its `resolvedModel` silently clobbered by `input.model ?? "stub-model"` with the caller's object mutated in place. Now the fallback factory sets it, and the launch paths stamp it onto a **copy** of the resolved override — mirroring the routed client's `withDispatchCost` — so a caller-supplied override wins verbatim and is never touched, while `handle.resolvedModel`, `(await handle.wait()).resolvedModel`, and the durable resume payload always agree (when the override omits the field, all three fall back to `input.model ?? "stub-model"`, exactly like the routed path).
+
+  Also: `toImageResumePayload` / `toVideoResumePayload` now omit `resolvedModel` instead of emitting an own key with value `undefined` when the input lacks it (mirroring the adjacent `cost` guard and the real webhook resume shape), and `MediaCostEnvelope` / `MediaResumeFields` are now named type exports of the package root alongside `VideoResultPayload` / `ImageResultPayload`.
+
+  Docs: the content-generation README's storage example uses `count` (not the deprecated `numImages`), its `VideoResultPayload` block now shows the `resolvedModel` / `cost` resume metadata and `downloadUrlUnavailable`, and the cost-envelope section documents `cost.reference` and the out-of-band settled amount (`GET /v1/transactions/:id/costs`). The 0.27.0 changelog entry retroactively documents the `VIDEO_MODELS` deprecation that shipped with the video repoint.
+
+- f70909f: models (stub): `models.launch` now honors the documented override keys. It previously resolved only the stale `agent.launch` / `agent.run` spellings — stranded by the agent→models half of the #167 rename — so a `models.launch` or `models.run` override was silently ignored by `launch()` (only `run()` honored `models.run`) and the built-in default was returned instead. `launch()` now consults `models.launch` > `models.run` > legacy `agent.launch` > `agent.run`; the legacy spellings stay honored for back-compat but now add a warning to the `warnings` sink (they sit one character from the unrelated `agents.*` namespace).
+
+  The launch path also merges the override **over** the built-in defaults instead of using it verbatim: a partial stub (e.g. `{ "output": "..." }`, the documented minimal shape) keeps `status` / `error` / `result` filled so `handle.status()` works and the resume payload stays schema-valid; a function override returning a Promise is awaited; and an author-supplied `runId` is preserved across `wait()` and the resume correlation (in the real client `run()` _is_ `launch().wait()`, so both paths agree on the id). `models.run()` is unchanged (verbatim, as before).
+
 ## 0.28.0
 
 ### Minor Changes

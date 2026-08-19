@@ -1,9 +1,0 @@
----
-"@sapiom/tools": patch
----
-
-content-generation (stub): the `images.launch` / `video.launch` stubs no longer post-mutate `resolvedModel` onto the resolved result. Previously a frozen caller override under `contentGeneration.images.launch` / `contentGeneration.video.launch` threw a `TypeError`, and a non-frozen one had its `resolvedModel` silently clobbered by `input.model ?? "stub-model"` with the caller's object mutated in place. Now the fallback factory sets it, and the launch paths stamp it onto a **copy** of the resolved override — mirroring the routed client's `withDispatchCost` — so a caller-supplied override wins verbatim and is never touched, while `handle.resolvedModel`, `(await handle.wait()).resolvedModel`, and the durable resume payload always agree (when the override omits the field, all three fall back to `input.model ?? "stub-model"`, exactly like the routed path).
-
-Also: `toImageResumePayload` / `toVideoResumePayload` now omit `resolvedModel` instead of emitting an own key with value `undefined` when the input lacks it (mirroring the adjacent `cost` guard and the real webhook resume shape), and `MediaCostEnvelope` / `MediaResumeFields` are now named type exports of the package root alongside `VideoResultPayload` / `ImageResultPayload`.
-
-Docs: the content-generation README's storage example uses `count` (not the deprecated `numImages`), its `VideoResultPayload` block now shows the `resolvedModel` / `cost` resume metadata and `downloadUrlUnavailable`, and the cost-envelope section documents `cost.reference` and the out-of-band settled amount (`GET /v1/transactions/:id/costs`). The 0.27.0 changelog entry retroactively documents the `VIDEO_MODELS` deprecation that shipped with the video repoint.
