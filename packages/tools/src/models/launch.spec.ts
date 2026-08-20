@@ -7,13 +7,23 @@
  * unaffected.
  */
 import { createClient } from "../index.js";
-import { CODING_RESULT_SIGNAL } from "./index.js";
+import { CODING_RESULT_SIGNAL, CodingRunHttpError } from "./index.js";
 
-function fakeLaunchFetch(capture?: {
+interface Capture {
   headers?: Record<string, string>;
-}): typeof globalThis.fetch {
+  body?: Record<string, unknown>;
+  calls?: number;
+}
+
+function fakeLaunchFetch(capture?: Capture): typeof globalThis.fetch {
   return (async (_url: string, init: RequestInit = {}) => {
-    if (capture) capture.headers = init.headers as Record<string, string>;
+    if (capture) {
+      capture.headers = init.headers as Record<string, string>;
+      capture.body = init.body
+        ? (JSON.parse(init.body as string) as Record<string, unknown>)
+        : undefined;
+      capture.calls = (capture.calls ?? 0) + 1;
+    }
     return {
       ok: true,
       status: 202,
@@ -43,6 +53,111 @@ describe("agent.coding.launch — dispatch handle", () => {
   it("CODING_RESULT_SIGNAL is the capability-stable terminal signal", () => {
     expect(CODING_RESULT_SIGNAL).toBe("models.coding.result");
   });
+
+  it("sends only an attached repository's slug and attach performs no request", async () => {
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+    const repo = sapiom.repositories.attach(
+      "external-looking",
+      "https://github.com/acme/example.git",
+    );
+
+    expect(capture.calls).toBeUndefined();
+    await sapiom.models.coding.launch({ task: "inspect", gitRepository: repo });
+
+    expect(capture.calls).toBe(1);
+    expect(capture.body).toMatchObject({
+      task: "inspect",
+      git_repository: "external-looking",
+    });
+    expect(JSON.stringify(capture.body)).not.toContain("github.com");
+    expect(capture.body).not.toHaveProperty("clone_url");
+    expect(capture.body).not.toHaveProperty("cloneUrl");
+  });
+});
+
+describe("agent.coding — typed HTTP failures", () => {
+  const repositoryMessage =
+    "The requested git_repository is not an active Sapiom repository available to this tenant. " +
+    "Use a repository returned by repositories.create(), repositories.get(), or repositories.list(). " +
+    "repositories.attach() only rehydrates a previously returned Sapiom repository; it does not import an external repository.";
+
+  it.each(["launch", "run"] as const)(
+    "exposes status, code, requestId, and parsed JSON for a %s 404",
+    async (operation) => {
+      const body = {
+        statusCode: 404,
+        error: "repository_not_found",
+        message: repositoryMessage,
+        requestId: "req-123",
+      };
+      const fetch = (async () => ({
+        ok: false,
+        status: 404,
+        text: async () => JSON.stringify(body),
+      })) as unknown as typeof globalThis.fetch;
+      const sapiom = createClient({ apiKey: "k", fetch });
+
+      const error = await sapiom.models.coding[operation]({
+        task: "inspect",
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CodingRunHttpError);
+      expect(error).toMatchObject({
+        name: "CodingRunHttpError",
+        status: 404,
+        code: "repository_not_found",
+        requestId: "req-123",
+        body,
+        message: repositoryMessage,
+      });
+    },
+  );
+
+  it("preserves non-JSON error text with null code and requestId", async () => {
+    const fetch = (async () => ({
+      ok: false,
+      status: 502,
+      text: async () => "upstream unavailable",
+    })) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch });
+
+    await expect(
+      sapiom.models.coding.launch({ task: "inspect" }),
+    ).rejects.toMatchObject({
+      name: "CodingRunHttpError",
+      status: 502,
+      code: null,
+      requestId: null,
+      body: "upstream unavailable",
+    });
+  });
+
+  it.each(["status", "wait"] as const)(
+    "uses the same typed error for handle.%s() polling",
+    async (operation) => {
+      const fetch = jest
+        .fn()
+        .mockImplementationOnce(fakeLaunchFetch())
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          text: async () =>
+            JSON.stringify({ code: "run_not_found", requestId: "req-poll" }),
+        } as Response) as unknown as typeof globalThis.fetch;
+      const sapiom = createClient({ apiKey: "k", fetch });
+      const handle = await sapiom.models.coding.launch({ task: "inspect" });
+
+      await expect(handle[operation]()).rejects.toMatchObject({
+        name: "CodingRunHttpError",
+        status: 404,
+        code: "run_not_found",
+        requestId: "req-poll",
+      });
+    },
+  );
 });
 
 describe("agent.coding.launch — workflow resume token", () => {

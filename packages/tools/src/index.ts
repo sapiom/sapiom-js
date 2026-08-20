@@ -37,6 +37,7 @@ export type {
 // Validate / build a `CodingResultPayload`, and the env `type` whose `id` is a
 // sandbox name for `sandboxes.attach(id)`.
 export {
+  CodingRunHttpError,
   codingResultSchema,
   CodingResultSchemaError,
   toResumePayload,

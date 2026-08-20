@@ -25,6 +25,7 @@ import {
   SpeechHttpError,
   BrowserAutomationHttpError,
   KeysHttpError,
+  CodingRunHttpError,
 } from "./index.js";
 
 describe("@sapiom/tools public surface", () => {
@@ -103,6 +104,8 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof SpeechHttpError).toBe("function");
     expect(typeof BrowserAutomationHttpError).toBe("function");
     expect(typeof KeysHttpError).toBe("function");
+    expect(typeof CodingRunHttpError).toBe("function");
+    expect(typeof models.CodingRunHttpError).toBe("function");
     expect(typeof Sandbox).toBe("function"); // class constructor
     expect(typeof Repository).toBe("function");
   });

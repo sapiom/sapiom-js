@@ -118,7 +118,12 @@ export class Repository {
       .catch(() => undefined);
   }
 
-  /** Adopt a known repo without a round-trip (e.g. one returned from another step). */
+  /**
+   * Rehydrate a Sapiom repository returned by `create`, `get`, or `list` without
+   * a round-trip. This does not validate or register the repository, and its
+   * clone URL is not an external-repository import mechanism. Coding launch
+   * sends only the slug, not the clone URL supplied here.
+   */
   static attach(
     slug: string,
     cloneUrl: string,

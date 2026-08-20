@@ -24,6 +24,9 @@ import { Transport, defaultTransport } from "../_client/index.js";
 import type { DispatchHandle } from "../dispatch.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { Repository } from "../repositories/index.js";
+import { ensureCodingRunOk, CodingRunHttpError } from "./errors.js";
+
+export { CodingRunHttpError };
 
 const DEFAULT_BASE_URL =
   process.env.SAPIOM_MODELS_URL ??
@@ -50,7 +53,10 @@ const TERMINAL = new Set<RunStatus>(["completed", "failed"]);
 export interface CodingRunSpec {
   /** Natural-language instruction for the coding agent. */
   task: string;
-  /** Repo to clone into the sandbox at `/workspace/<slug>` and operate on. */
+  /**
+   * Active Sapiom repository to clone at `/workspace/<slug>`. The gateway uses
+   * its slug; an attached external clone URL is not imported or sent.
+   */
   gitRepository?: Repository;
   /** Reuse an existing sandbox instead of provisioning a fresh one. */
   sandbox?: Sandbox;
@@ -317,17 +323,37 @@ function buildBody(spec: CodingRunSpec): Record<string, unknown> {
   };
 }
 
+async function codingRequest<T>(
+  url: string,
+  init: RequestInit,
+  transport: Transport,
+): Promise<T> {
+  const response = await transport.fetch(url, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init.headers ?? {}),
+    },
+  });
+  await ensureCodingRunOk(response, `${init.method ?? "GET"} ${url} failed`);
+  return (await response.json()) as T;
+}
+
 export async function codingLaunch(
   spec: CodingRunSpec,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<RunHandle> {
   // 202 + a launch document; the execution_environment relationship is always present.
-  const doc = await transport.request<RunDoc>(`${baseUrl}/models/v1/coding/runs`, {
-    method: "POST",
-    body: JSON.stringify(buildBody(spec)),
-    headers: workflowResumeHeaders(transport.resumeToken),
-  });
+  const doc = await codingRequest<RunDoc>(
+    `${baseUrl}/models/v1/coding/runs`,
+    {
+      method: "POST",
+      body: JSON.stringify(buildBody(spec)),
+      headers: workflowResumeHeaders(transport.resumeToken),
+    },
+    transport,
+  );
   const runId = doc.data.id;
   const envId = doc.data.relationships?.execution_environment?.data?.id;
   // Reuse the caller's sandbox handle when they supplied one; otherwise adopt the
@@ -336,8 +362,10 @@ export async function codingLaunch(
   const sandbox = spec.sandbox ?? Sandbox.attach(envId ?? runId, {}, transport);
 
   const fetchDoc = () =>
-    transport.request<RunDoc>(
+    codingRequest<RunDoc>(
       `${baseUrl}/models/v1/coding/runs/${encodeURIComponent(runId)}`,
+      {},
+      transport,
     );
   const toResult = (d: RunDoc): CodingRunResult => ({
     runId,

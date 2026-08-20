@@ -14,6 +14,8 @@ const { pushed, sha } = await repo.pushFromSandbox(run.sandbox, { message: "buil
 
 - **Repositories are hosted by Sapiom, not GitHub.** Clones and pushes are authenticated through the Sapiom git gateway using your tenant credentials — there are no personal access tokens or SSH keys to manage. The `cloneUrl` on a repository is the unauthenticated origin; the credentials to clone it yourself are returned when you create the repo.
 
+- **`attach` only rehydrates a Sapiom repository handle.** Use it with the `slug` and `cloneUrl` previously returned by `create`, `get`, or `list`, such as when passing repository data between workflow steps. It performs no network request, validation, or registration. Coding launch sends only the repository slug, so `attach` cannot import a GitHub repository or another external Git origin and its supplied `cloneUrl` is not sent with the coding request.
+
 - **`pushFromSandbox` requires the repo to already be checked out in the sandbox.** It does not clone — it commits and pushes from the repo's checkout at `/workspace/<slug>`. The straightforward way to get that checkout is to run a coding agent with `gitRepository: repo`, which clones the repo into exactly that path. The two methods are meant to be used together; calling `pushFromSandbox` on a sandbox where the repo was never cloned will fail.
 
 - **`pushFromSandbox` publishes the agent's work.** It commits any pending changes and pushes the current commit, so your work reaches the repo whether the agent left changes uncommitted, already committed them, or both. It returns `{ pushed, sha, branch }`; a failed push (e.g. the repo was never cloned into the sandbox) throws.
