@@ -118,12 +118,7 @@ export class Repository {
       .catch(() => undefined);
   }
 
-  /**
-   * Rehydrate a Sapiom repository returned by `create`, `get`, or `list` without
-   * a round-trip. This does not validate or register the repository, and its
-   * clone URL is not an external-repository import mechanism. Coding launch
-   * sends only the slug, not the clone URL supplied here.
-   */
+  /** Rehydrate a Sapiom repository handle returned by `create`, `get`, or `list`. */
   static attach(
     slug: string,
     cloneUrl: string,

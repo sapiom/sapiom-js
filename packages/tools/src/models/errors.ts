@@ -1,8 +1,4 @@
-/**
- * Error thrown when a coding-run HTTP request returns a non-2xx response.
- * Exposes the status, parsed response body, stable error code, and gateway
- * request id for programmatic handling.
- */
+/** Error thrown when a coding-run HTTP request is unsuccessful. */
 export class CodingRunHttpError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -19,7 +15,6 @@ export class CodingRunHttpError extends Error {
   }
 }
 
-/** Parse a failed response once, preserving JSON or raw text for the caller. */
 export async function ensureCodingRunOk(
   response: Response,
   errorPrefix: string,
