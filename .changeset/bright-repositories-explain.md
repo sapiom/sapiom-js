@@ -3,6 +3,6 @@
 "@sapiom/agent-core": patch
 ---
 
-Expose structured `CodingRunHttpError` details for failed coding requests and clarify that repository handles represent Sapiom-hosted repositories rather than external Git imports.
+Expose structured `CodingRunHttpError` details for failed coding requests and clarify repository-handle usage.
 
-Teach generated agent projects to terminate immediately on deterministic coding-repository failures instead of consuming the workflow step's remaining attempts.
+Add guidance for handling deterministic coding-repository failures.

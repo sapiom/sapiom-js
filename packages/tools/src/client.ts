@@ -181,11 +181,7 @@ export interface Sapiom {
     get(slug: string): Promise<Repository>;
     list(): Promise<Repository[]>;
     delete(slug: string): Promise<void>;
-    /**
-     * Rehydrate a previously returned Sapiom repository without a network
-     * request or validation. This cannot import an external Git origin, and
-     * coding launch sends only `slug`, not the supplied `cloneUrl`.
-     */
+    /** Rehydrate a Sapiom repository handle returned by `create`, `get`, or `list`. */
     attach(slug: string, cloneUrl: string): Repository;
   };
   readonly models: {

@@ -53,10 +53,7 @@ const TERMINAL = new Set<RunStatus>(["completed", "failed"]);
 export interface CodingRunSpec {
   /** Natural-language instruction for the coding agent. */
   task: string;
-  /**
-   * Active Sapiom repository to clone at `/workspace/<slug>`. The gateway uses
-   * its slug; an attached external clone URL is not imported or sent.
-   */
+  /** Sapiom repository to clone into the coding sandbox. */
   gitRepository?: Repository;
   /** Reuse an existing sandbox instead of provisioning a fresh one. */
   sandbox?: Sandbox;

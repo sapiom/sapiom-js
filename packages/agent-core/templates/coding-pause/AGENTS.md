@@ -74,8 +74,8 @@ return pauseUntilSignal(run, { resumeStep: "finalize" }); // suspend on the run'
 - **The resumed step's `input` IS the run's result signal payload.** Annotate it with `CodingResultPayload` (from `@sapiom/tools`) — you don't have to hand-roll the shape.
 - That payload crossed a wire boundary, so it carries **no live handles** — to act on the run's sandbox, re-attach one from **`executionEnvironment`** with `ctx.sapiom.sandboxes.attach(result.executionEnvironment.id)` (`executionEnvironment` is `null` when the run provisioned none, e.g. a launch failure). Anything else the resumed step needs, stash in `ctx.shared` before pausing.
 - **To stub the resume payload** (e.g. to exercise the failure branch), override `models.coding.run` _in the launching step_ — that one value is both the `run()` result and the payload the paused step resumes with. `models.coding.launch` is accepted there too.
-- `gitRepository` must be an active Sapiom repository returned by `repositories.create`, `get`, or `list`. `repositories.attach` only rehydrates a previously returned handle; it makes no request and cannot import an external Git origin. Coding launch sends its slug, not the attached `cloneUrl`.
-- Coding launch and polling throw `CodingRunHttpError` on HTTP failures. A step with `canFail: true` can catch `code === "repository_not_found"` and return `fail(error.message)` to stop immediately; rethrow failures that may be transient.
+- `gitRepository` accepts a Sapiom repository returned by `repositories.create`, `get`, or `list`; `repositories.attach` only rehydrates such a handle.
+- Coding requests throw `CodingRunHttpError` on HTTP failures. A step with `canFail: true` can return `fail(error.message)` for `repository_not_found` and rethrow other errors.
 
 ## Determinism
 
