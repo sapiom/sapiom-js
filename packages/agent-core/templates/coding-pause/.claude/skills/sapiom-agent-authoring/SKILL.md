@@ -264,6 +264,42 @@ types are the source of truth.** The full surface is the `Sapiom` interface in `
 `ctx.sapiom.` autocompletes what exists, `npm run typecheck` rejects what doesn't, and the full
 catalog with pricing lives at [docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
 
+### Coding Repositories and Deterministic Launch Failures
+
+`gitRepository` must be an active, tenant-owned Sapiom repository returned by
+`repositories.create()`, `repositories.get()`, or `repositories.list()`. `repositories.attach()`
+only reconstructs one of those previously returned handles from saved `slug` and `cloneUrl`
+values. It makes no network request, performs no validation or registration, and cannot import
+a GitHub repository or another external Git origin. Coding launch sends only the repository slug;
+the `cloneUrl` passed to `attach()` is not sent.
+
+Coding launch and polling throw `CodingRunHttpError` for non-successful HTTP responses. Catch the
+deterministic `repository_not_found` code and return `fail()` when the agent run should stop without
+using its remaining attempts. Set `canFail: true` on that step, and rethrow errors that may be
+transient:
+
+```typescript
+import { fail, pauseUntilSignal } from "@sapiom/agent";
+import { CodingRunHttpError } from "@sapiom/tools";
+
+// Inside a step with `canFail: true`:
+try {
+  const handle = await ctx.sapiom.models.coding.launch({
+    task,
+    gitRepository: repo,
+  });
+  return pauseUntilSignal(handle, { resumeStep: "finalize" });
+} catch (error) {
+  if (
+    error instanceof CodingRunHttpError &&
+    error.code === "repository_not_found"
+  ) {
+    return fail(error.message);
+  }
+  throw error;
+}
+```
+
 ## Failure Handling & Retries
 
 There is no automatic per-step retry. Express it explicitly — this keeps the graph readable.
