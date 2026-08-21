@@ -73,6 +73,42 @@ describe("agent.run — terminal result mapping", () => {
     expect(result.result?.stopReason).toBe("end_turn");
     expect(result.result?.costUsd).toBe(0.001);
     expect(result.result?.usage.inputTokens).toBe(10);
+    // The wire omits `warnings` on a clean run — the SDK normalizes to [].
+    expect(result.result?.warnings).toEqual([]);
+  });
+
+  it("surfaces routing warnings (SAP-2765: e.g. an unhonored `model` pin)", async () => {
+    const warning = "model 'gpt-5' is not a known routing label — the run was routed via the platform default.";
+    const fetch = (async (url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const attributes = isPost
+        ? { status: "pending" }
+        : {
+            status: "completed",
+            output: "OK",
+            result: {
+              success: true,
+              stop_reason: "end_turn",
+              turns: 1,
+              model_used: null,
+              duration_ms: 1200,
+              cost_usd: 0.001,
+              warnings: [warning],
+              usage: { input_tokens: 10, output_tokens: 5 },
+            },
+            error: null,
+          };
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({ data: { id: "run-abc", attributes } }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "k", fetch });
+    const result = await sapiom.models.run({ prompt: "say OK", model: "gpt-5" });
+    expect(result.result?.warnings).toEqual([warning]);
   });
 });
 
