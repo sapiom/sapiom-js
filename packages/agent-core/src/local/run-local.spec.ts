@@ -242,6 +242,63 @@ describe("runLocal", () => {
     ]);
   });
 
+  // Regression test for #155: under run_local, ctx.sapiom.memory/database/email/
+  // domains must be usable from inside a step, not undefined. The stub
+  // namespaces exist in createStubClient() (see @sapiom/tools/stub), but that
+  // was previously only exercised in isolation — nothing ran them through an
+  // actual step via runLocal(), which is exactly the repro reported in #155
+  // (`TypeError: Cannot read properties of undefined (reading 'append')`).
+  it("exercises ctx.sapiom.memory/database/email/domains from inside a step (#155)", async () => {
+    const persist = defineStep({
+      name: "persist",
+      next: [],
+      terminal: true,
+      async run(_input, ctx) {
+        const memoryResult = await ctx.sapiom.memory.append({
+          content: "hello",
+          namespace: "demo",
+        });
+        const db = await ctx.sapiom.database.create({
+          handle: "demo",
+          duration: "1h",
+        });
+        const inbox = await ctx.sapiom.email.inboxes.create({
+          username: "agent",
+          domain: "example.com",
+        });
+        const availability = await ctx.sapiom.domains.check({
+          domainNames: ["example.com"],
+        });
+        return terminate({
+          memoryId: memoryResult.id,
+          databaseHandle: db.handle,
+          inboxEmail: inbox.email,
+          domainChecked: availability[0]?.domainName,
+        });
+      },
+    });
+    const def = defineAgent({
+      name: "capability-smoke",
+      entry: "persist",
+      steps: { persist },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: {},
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.steps[0]?.status).toBe("succeeded");
+    expect(result.output).toEqual({
+      memoryId: expect.any(String),
+      databaseHandle: "demo",
+      inboxEmail: "agent@example.com",
+      domainChecked: "example.com",
+    });
+  });
+
   it("an override controls a branch (repositories.list returns an existing repo)", async () => {
     const prepare = defineStep({
       name: "prepare",
