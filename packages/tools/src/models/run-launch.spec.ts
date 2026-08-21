@@ -73,44 +73,54 @@ describe("agent.run — terminal result mapping", () => {
     expect(result.result?.stopReason).toBe("end_turn");
     expect(result.result?.costUsd).toBe(0.001);
     expect(result.result?.usage.inputTokens).toBe(10);
-    // The wire omits `warnings` on a clean run — the SDK normalizes to [].
-    expect(result.result?.warnings).toEqual([]);
+    // The wire omits `warnings` on a clean run — absent means none.
+    expect(result.result?.warnings).toBeUndefined();
   });
 
   it("surfaces routing warnings (SAP-2765: e.g. an unhonored `model` pin)", async () => {
-    const warning = "model 'gpt-5' is not a known routing label — the run was routed via the platform default.";
-    const fetch = (async (url: string, init: RequestInit = {}) => {
-      const isPost = (init.method ?? "GET") === "POST";
-      const attributes = isPost
-        ? { status: "pending" }
-        : {
-            status: "completed",
-            output: "OK",
-            result: {
-              success: true,
-              stop_reason: "end_turn",
-              turns: 1,
-              model_used: null,
-              duration_ms: 1200,
-              cost_usd: 0.001,
-              warnings: [warning],
-              usage: { input_tokens: 10, output_tokens: 5 },
-            },
-            error: null,
-          };
-      return {
-        ok: true,
-        status: isPost ? 202 : 200,
-        json: async () => ({ data: { id: "run-abc", attributes } }),
-        text: async () => "",
-      } as unknown as Response;
-    }) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch: fetchWithWireWarnings(["warn-1", "warn-2"]) });
+    const result = await sapiom.models.run({ prompt: "say OK", model: "not-a-known-label" });
+    expect(result.result?.warnings).toEqual(["warn-1", "warn-2"]);
+  });
 
-    const sapiom = createClient({ apiKey: "k", fetch });
-    const result = await sapiom.models.run({ prompt: "say OK", model: "gpt-5" });
-    expect(result.result?.warnings).toEqual([warning]);
+  it("guards the warnings passthrough — a malformed wire value never reaches the typed outcome", async () => {
+    const sapiom = createClient({ apiKey: "k", fetch: fetchWithWireWarnings("oops") });
+    const result = await sapiom.models.run({ prompt: "say OK" });
+    // Not an array → dropped entirely (absent = none), never a string leaking
+    // into a `string[]`-typed field.
+    expect(result.result?.warnings).toBeUndefined();
   });
 });
+
+/** Fake fetch whose terminal result carries an arbitrary wire `warnings` value. */
+function fetchWithWireWarnings(warnings: unknown): typeof globalThis.fetch {
+  return (async (_url: string, init: RequestInit = {}) => {
+    const isPost = (init.method ?? "GET") === "POST";
+    const attributes = isPost
+      ? { status: "pending" }
+      : {
+          status: "completed",
+          output: "OK",
+          result: {
+            success: true,
+            stop_reason: "end_turn",
+            turns: 1,
+            model_used: null,
+            duration_ms: 1200,
+            cost_usd: 0.001,
+            warnings,
+            usage: { input_tokens: 10, output_tokens: 5 },
+          },
+          error: null,
+        };
+    return {
+      ok: true,
+      status: isPost ? 202 : 200,
+      json: async () => ({ data: { id: "run-abc", attributes } }),
+      text: async () => "",
+    } as unknown as Response;
+  }) as unknown as typeof globalThis.fetch;
+}
 
 describe("agent.launch — workflow resume token", () => {
   const KEY = "SAPIOM_CAPABILITY_RESUME_TOKEN";

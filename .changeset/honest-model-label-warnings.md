@@ -2,4 +2,4 @@
 "@sapiom/tools": minor
 ---
 
-`models.run`: the `model` doc-comment now matches actual platform behavior (SAP-2765) — a supplied value is honored as a routing label when known, and never silently dropped: an unknown value routes via the platform default with a warning. `ModelRunOutcome` gains an additive `warnings` array surfacing those routing/honesty warnings (empty for a clean run).
+`models.run`: fix the `ModelRunSpec.model` doc-comment — it promised a model override the platform's routing path does not honor as written; the field is a routing label the platform resolves against its configured label set, and an unrecognized value routes via the platform default (SAP-2765). `ModelRunOutcome` gains an optional `warnings` array surfacing routing warnings when the platform reports them on the run result; absent means no warnings.

@@ -445,11 +445,11 @@ export interface ModelRunSpec {
   /** System prompt steering the agent. */
   system?: string;
   /**
-   * Routing label pinning the run's LLM calls (e.g. `smart`, `m2.7`, `sonnet`).
-   * A known label is honored; a value the platform doesn't recognize is never
-   * silently dropped — the run routes via the platform default and the result
-   * carries a `warnings` entry saying so (SAP-2765). Omit to let the platform
-   * choose (the recommended default).
+   * Routing label for the run's LLM calls. The platform resolves it against its
+   * configured label set: a recognized label pins routing; an unrecognized
+   * value is never silently dropped — the run routes via the platform default
+   * and the platform reports it in the result's `warnings` (SAP-2765). Omit to
+   * let the platform choose (the recommended default).
    */
   model?: string;
   /** Max output tokens per turn. */
@@ -466,10 +466,11 @@ export interface ModelRunOutcome {
   durationMs: number;
   costUsd: number;
   /**
-   * Routing/honesty warnings (SAP-2765) — e.g. a supplied `model` that isn't a
-   * known routing label (the run then routed via the platform default). Always
-   * populated by the SDK (empty for a clean run); optional only so existing
-   * consumer-constructed values keep type-checking.
+   * Routing/honesty warnings reported by the platform (SAP-2765) — e.g. a
+   * supplied `model` the platform didn't recognize (the run then routed via
+   * the platform default). Present only when the run has warnings: treat
+   * `undefined` as none (stub outcomes and resumed-step payloads omit the key,
+   * as does the wire on a clean run).
    */
   warnings?: string[];
   usage: CodingRunUsage;
@@ -537,7 +538,7 @@ interface ModelWireResult {
   model_used: string | null;
   duration_ms: number;
   cost_usd: number;
-  /** Present only when the run has warnings (e.g. an unhonored `model` pin). */
+  /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
   warnings?: string[];
   usage?: {
     input_tokens?: number;
@@ -569,7 +570,9 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     modelUsed: r.model_used ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
-    warnings: r.warnings ?? [],
+    // Passthrough with a runtime guard (the wire is untyped at runtime); the
+    // key stays absent when there are no warnings — `undefined` means none.
+    ...(Array.isArray(r.warnings) ? { warnings: r.warnings.filter((w): w is string => typeof w === "string") } : {}),
     usage: {
       inputTokens: r.usage?.input_tokens ?? 0,
       outputTokens: r.usage?.output_tokens ?? 0,
