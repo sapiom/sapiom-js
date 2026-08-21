@@ -445,11 +445,12 @@ export interface ModelRunSpec {
   /** System prompt steering the agent. */
   system?: string;
   /**
-   * Routing label for the run's LLM calls. The platform resolves it against its
-   * configured label set: a recognized label pins routing; an unrecognized
-   * value is never silently dropped — the run routes via the platform default
-   * and the platform reports it in the result's `warnings` (SAP-2765). Omit to
-   * let the platform choose (the recommended default).
+   * Model class for the run's LLM calls (e.g. `smart`). Models are
+   * platform-resolved — a provider model id is never selectable. A recognized
+   * class pins routing; an unrecognized value is never silently dropped — the
+   * run routes via the platform default and the platform reports it in the
+   * result's `warnings` (SAP-2765). Omit to let the platform choose (the
+   * recommended default).
    */
   model?: string;
   /** Max output tokens per turn. */
