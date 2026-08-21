@@ -274,31 +274,44 @@ function relaxAdditionalProperties(value: unknown): unknown {
 }
 
 /**
- * Remove from the JSON Schema's top-level `required` array any key whose
+ * Recursively remove from every object schema's `required` array any key whose
  * `properties` entry declares a `default`. A caller may omit such a field — Zod
  * supplies the default on parse — so it should not be reported as missing.
- * Operates only on the top level; nested objects are out of scope.
+ *
+ * Applied at every object node (top-level and nested), so a defaulted field
+ * inside a nested object, `items`, or a `oneOf`/`anyOf`/`allOf` branch is
+ * treated the same as a top-level one. This mirrors `relaxAdditionalProperties`:
+ * both walk the whole schema so the AJV pre-check is never stricter than the
+ * Zod parse it fronts. `z.toJSONSchema()` marks a defaulted field required at
+ * every level, so the same relaxation has to reach every level.
  */
-function dropDefaultedFromRequired(
-  schema: Record<string, unknown>,
-): Record<string, unknown> {
-  const required = schema.required;
-  const properties = schema.properties;
-  if (
-    !Array.isArray(required) ||
-    !properties ||
-    typeof properties !== "object"
-  ) {
-    return schema;
+function dropDefaultedFromRequired(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(dropDefaultedFromRequired);
   }
-  const props = properties as Record<string, unknown>;
-  const filtered = required.filter((key) => {
-    if (typeof key !== "string") return true;
-    const prop = props[key];
-    return !(prop && typeof prop === "object" && "default" in prop);
-  });
-  if (filtered.length === required.length) {
-    return schema;
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const required = obj.required;
+    const properties = obj.properties;
+    const defaultedHere =
+      Array.isArray(required) && properties && typeof properties === "object"
+        ? new Set(
+            required.filter((key) => {
+              if (typeof key !== "string") return false;
+              const prop = (properties as Record<string, unknown>)[key];
+              return prop && typeof prop === "object" && "default" in prop;
+            }),
+          )
+        : null;
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(obj)) {
+      if (key === "required" && defaultedHere) {
+        out[key] = (v as unknown[]).filter((k) => !defaultedHere.has(k));
+      } else {
+        out[key] = dropDefaultedFromRequired(v);
+      }
+    }
+    return out;
   }
-  return { ...schema, required: filtered };
+  return value;
 }
