@@ -154,14 +154,18 @@ describe("extractStepContext — input/output", () => {
     expect(ctx).toContain("[object Object]");
   });
 
-  it("truncates a very large value and marks the truncation", () => {
+  it("truncates a very large value and marks the truncation, bounding the total output", () => {
     const step: StepView = { id: "s1", name: "big", status: "passed" };
     const huge = "z".repeat(5000);
     const ctx = extractStepContext(step, { output: huge });
     expect(ctx).toContain("… (truncated, 5000 chars total)");
     // The head is kept; the value is not pasted whole.
     expect(ctx).not.toContain(huge);
-    expect(ctx).toContain("z".repeat(2000));
+    // The marker's own length has to come out of VALUE_CAP too, so slightly
+    // less than 2000 chars of content survive -- the total (content +
+    // marker) is what's bounded, not the content alone.
+    expect(ctx).toContain("z".repeat(1968));
+    expect(ctx).not.toContain("z".repeat(1969));
   });
 });
 
