@@ -444,7 +444,14 @@ export interface ModelRunSpec {
   prompt: string;
   /** System prompt steering the agent. */
   system?: string;
-  /** Override the model / routing alias. */
+  /**
+   * Model class for the run's LLM calls (e.g. `smart`). Models are
+   * platform-resolved — a provider model id is never selectable. A recognized
+   * class pins routing; an unrecognized value is never silently dropped — the
+   * run routes via the platform default and the platform reports it in the
+   * result's `warnings` (SAP-2765). Omit to let the platform choose (the
+   * recommended default).
+   */
   model?: string;
   /** Max output tokens per turn. */
   maxTokens?: number;
@@ -459,6 +466,13 @@ export interface ModelRunOutcome {
   modelUsed: string | null;
   durationMs: number;
   costUsd: number;
+  /**
+   * Routing/honesty warnings reported by the platform (SAP-2765) — e.g. a
+   * supplied `model` the platform didn't recognize (the run then routed via
+   * the platform default). Treat `undefined` as none on any path: the wire
+   * omits the key on a clean run and the stub never sets it.
+   */
+  warnings?: string[];
   usage: CodingRunUsage;
 }
 
@@ -524,6 +538,8 @@ interface ModelWireResult {
   model_used: string | null;
   duration_ms: number;
   cost_usd: number;
+  /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
+  warnings?: string[];
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -554,6 +570,9 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     modelUsed: r.model_used ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
+    // Passthrough with a runtime guard (the wire is untyped at runtime); the
+    // key stays absent when there are no warnings — `undefined` means none.
+    ...(Array.isArray(r.warnings) ? { warnings: r.warnings.filter((w): w is string => typeof w === "string") } : {}),
     usage: {
       inputTokens: r.usage?.input_tokens ?? 0,
       outputTokens: r.usage?.output_tokens ?? 0,
