@@ -468,9 +468,8 @@ export interface ModelRunOutcome {
   /**
    * Routing/honesty warnings reported by the platform (SAP-2765) — e.g. a
    * supplied `model` the platform didn't recognize (the run then routed via
-   * the platform default). Present only when the run has warnings: treat
-   * `undefined` as none (stub outcomes and resumed-step payloads omit the key,
-   * as does the wire on a clean run).
+   * the platform default). Treat `undefined` as none on any path: the wire
+   * omits the key on a clean run and the stub never sets it.
    */
   warnings?: string[];
   usage: CodingRunUsage;
