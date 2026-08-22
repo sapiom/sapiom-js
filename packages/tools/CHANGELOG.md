@@ -1,5 +1,13 @@
 # @sapiom/tools
 
+## 0.29.0
+
+### Minor Changes
+
+- 04b7df5: Expose structured `CodingRunHttpError` details for failed coding requests and clarify repository-handle usage.
+
+  Add guidance for handling deterministic coding-repository failures.
+
 ## 0.28.1
 
 ### Patch Changes

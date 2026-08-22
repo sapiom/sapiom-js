@@ -1,5 +1,17 @@
 # @sapiom/orchestration-core
 
+## 0.11.3
+
+### Patch Changes
+
+- 04b7df5: Expose structured `CodingRunHttpError` details for failed coding requests and clarify repository-handle usage.
+
+  Add guidance for handling deterministic coding-repository failures.
+
+- Updated dependencies [04b7df5]
+  - @sapiom/tools@0.29.0
+  - @sapiom/agent@0.9.6
+
 ## 0.11.2
 
 ### Patch Changes
