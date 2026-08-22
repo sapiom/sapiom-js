@@ -63,7 +63,7 @@ const REQUIRED_CONTRACT_PATTERNS_BY_PATH = {
 };
 
 const FORBIDDEN_PROVIDER_COPY_RE =
-  /\b(?:anthropic|openai|hunter|fal(?:\.ai)?|blaxel|firecracker)\b|claude code account/giu;
+  /\b(?:anthropic|openai|hunter|fal(?:\.ai)?|blaxel|firecracker|fireworks)\b|claude code account/giu;
 
 function toPosix(value) {
   return value.split(path.sep).join("/");

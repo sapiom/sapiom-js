@@ -304,6 +304,51 @@ function submitHeaders(spec: LlmSubmitSpec, resumeToken: string | undefined) {
 }
 
 /**
+ * Serving-disclosure fields as they appear on raw `/v2` non-streaming response
+ * bodies — snake_case, injected top-level by the server next to `model`, in
+ * the same casing as the rest of the raw body {@link run} returns. The
+ * response `model` field keeps echoing the requested label; these dedicated
+ * fields report what the request RESOLVED to, in the SKU vocabulary the
+ * platform bills in (billing class/size × lane) — never a model or provider
+ * id, and never a provider price. Absent = the server did not disclose (older
+ * server, resolution failure) — treat as unknown, never assume a value.
+ * (Streaming responses carry the same data as the `x-sapiom-served-class` /
+ * `x-sapiom-lane` response headers instead.)
+ */
+export interface LlmDisclosure {
+  /** The billing class (size) the request's label resolved to. */
+  served_class?: string;
+  /** The billing lane the call executed in (e.g. `run_now`). */
+  lane?: string;
+  /**
+   * Reserved: structured degradation annotation — absent on a clean call.
+   * Typed `unknown` on purpose: the shape is server-defined and not yet
+   * stable, so consumers must narrow before reading; a future concrete type
+   * is then purely additive.
+   */
+  degradation?: unknown;
+}
+
+/** Camel-cased view of {@link LlmDisclosure}; null = the server did not disclose. */
+export interface LlmDisclosureResult {
+  servedClass: string | null;
+  lane: string | null;
+}
+
+/**
+ * Read the serving disclosure off a raw `/v2` response body ({@link run} /
+ * {@link redeem} / {@link callSession} results), camelCased. Missing/malformed
+ * fields come back null (unknown) — safe on responses from older servers.
+ */
+export function readDisclosure(result: unknown): LlmDisclosureResult {
+  const body = (result ?? {}) as LlmDisclosure;
+  return {
+    servedClass: typeof body.served_class === "string" && body.served_class ? body.served_class : null,
+    lane: typeof body.lane === "string" && body.lane ? body.lane : null,
+  };
+}
+
+/**
  * Synchronous routed call: `POST /v2/anthropic/v1/messages` on the x402 edge (Surface A —
  * the PATH is the wire shape; this client speaks Anthropic Messages). The gateway
  * selects the deployment (the label via `spec.model`, else the default label), admits it
@@ -311,6 +356,10 @@ function submitHeaders(spec: LlmSubmitSpec, resumeToken: string | undefined) {
  * and returns the completion inline. Billing settles against the caller's
  * Sapiom API key at the edge (identity mode; the default `x-sapiom-api-key`
  * header is exactly what the edge's identity guard reads).
+ *
+ * The response `model` echoes the user-facing label; the body additionally
+ * carries the serving disclosure ({@link LlmDisclosure}: `served_class` +
+ * `lane`) — read it with {@link readDisclosure}.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,
@@ -386,8 +435,9 @@ export async function submit(
  * edge settles it against the caller's account ("payment at redemption",
  * SAP-1496), and the gateway routes it to the exact deployment the grant
  * reserved (single-use, consumed atomically; the response `model` carries the
- * user-facing label). `request.model` may be anything — the reserved deployment
- * wins. Returns the parsed LLM response.
+ * user-facing label, and the body carries the serving disclosure —
+ * {@link LlmDisclosure}, read with {@link readDisclosure}). `request.model` may
+ * be anything — the reserved deployment wins. Returns the parsed LLM response.
  */
 export async function redeem<T = Record<string, unknown>>(
   link: LlmGrantLink,
@@ -615,7 +665,8 @@ export async function getSession(
  * terminals return 410 (`session_expired` / `session_exhausted`); each call is
  * billed individually against the caller's Sapiom key, exactly like `run`.
  * `request.model` may be anything — the session's reserved deployment wins,
- * and the response `model` carries the user-facing label.
+ * and the response `model` carries the user-facing label (the body also carries
+ * the serving disclosure — {@link LlmDisclosure}, read with {@link readDisclosure}).
  */
 export async function callSession<T = Record<string, unknown>>(
   session: LlmSessionHandle | LlmSession | string,
