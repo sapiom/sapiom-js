@@ -297,6 +297,40 @@ describe('defineAgent agent-level inputSchema', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 1c. defineAgent — leaves the caller's def object unmutated (#572)
+// ---------------------------------------------------------------------------
+
+describe('defineAgent — does not mutate the caller def object (#572)', () => {
+  const contract = z.object({ companyId: z.number() });
+
+  it('returns a fresh object rather than the input reference', () => {
+    const def = { name: 'wf', entry: 'start', steps: { start: makeStep('start') } };
+    expect(defineAgent(def)).not.toBe(def);
+  });
+
+  it('attaches the brand to the returned copy, not to the caller object', () => {
+    const def = { name: 'wf', entry: 'start', steps: { start: makeStep('start') } };
+    const result = defineAgent(def);
+    // The returned value is branded...
+    expect(isAgentDefinition(result)).toBe(true);
+    // ...but the object the caller passed in is left plain.
+    expect(isAgentDefinition(def)).toBe(false);
+    expect((def as unknown as Record<symbol, unknown>)[AGENT_DEFINITION_BRAND]).toBeUndefined();
+  });
+
+  it('does not reassign the caller object steps reference when folding inputSchema', () => {
+    const originalSteps = { start: makeStep('start') };
+    const def = { name: 'wf', entry: 'start', inputSchema: contract, steps: originalSteps };
+    const result = defineAgent(def);
+    // The fold landed on the returned copy's steps map...
+    expect(result.steps.start.inputSchema).toBe(contract);
+    // ...while the caller's object still points at its own untouched map.
+    expect(def.steps).toBe(originalSteps);
+    expect(def.steps.start.inputSchema).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // isAgentDefinition type guard
 // ---------------------------------------------------------------------------
 
