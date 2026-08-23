@@ -129,29 +129,31 @@ describe("agent.run — terminal result mapping", () => {
     expect(result.result?.warnings).toEqual(["warn-1", "warn-2"]);
   });
 
-  it("omits warnings on a clean run and guards malformed wire values — absent means none", async () => {
-    // Base fixture has no `warnings` key → stays absent.
-    const clean = createClient({ apiKey: "k", fetch: fakeFetch({}) });
-    expect((await clean.models.run({ prompt: "say OK" })).result?.warnings).toBeUndefined();
-
-    // Not an array → dropped entirely, never a string leaking into a
-    // `string[]`-typed field.
-    const malformed = createClient({
-      apiKey: "k",
-      fetch: fakeFetch({
-        wireResult: {
-          success: true,
-          stop_reason: "end_turn",
-          turns: 1,
-          model_used: null,
-          duration_ms: 1200,
-          cost_usd: 0.001,
-          warnings: "oops",
-          usage: { input_tokens: 10, output_tokens: 5 },
-        },
-      }),
+  it("ONE encoding of 'no warnings' — absent for a missing key, a wire [], or malformed values", async () => {
+    const wireResult = (warnings?: unknown) => ({
+      success: true,
+      stop_reason: "end_turn",
+      turns: 1,
+      model_used: null,
+      duration_ms: 1200,
+      cost_usd: 0.001,
+      ...(warnings !== undefined ? { warnings } : {}),
+      usage: { input_tokens: 10, output_tokens: 5 },
     });
-    expect((await malformed.models.run({ prompt: "say OK" })).result?.warnings).toBeUndefined();
+    const runWith = async (warnings?: unknown) => {
+      const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ wireResult: wireResult(warnings) }) });
+      return (await sapiom.models.run({ prompt: "say OK" })).result?.warnings;
+    };
+
+    // Missing key → absent.
+    expect(await runWith()).toBeUndefined();
+    // Wire `[]` → ALSO absent — a consumer's `if (outcome.warnings)` must not
+    // render an empty banner depending on which empty encoding the server sent.
+    expect(await runWith([])).toBeUndefined();
+    // Not an array → absent, never a string leaking into a `string[]` field.
+    expect(await runWith("oops")).toBeUndefined();
+    // Mixed array → only the string elements survive the guard.
+    expect(await runWith([1, "warn-a", null])).toEqual(["warn-a"]);
   });
 });
 

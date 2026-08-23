@@ -622,9 +622,15 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     lane: r.lane ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
-    // Passthrough with a runtime guard (the wire is untyped at runtime); the
-    // key stays absent when there are no warnings — `undefined` means none.
-    ...(Array.isArray(r.warnings) ? { warnings: r.warnings.filter((w): w is string => typeof w === "string") } : {}),
+    // Passthrough with a runtime guard (the wire is untyped at runtime). ONE
+    // encoding of "no warnings" reaches consumers: the key is absent unless at
+    // least one string warning survives the guard — a wire `[]` (or a
+    // non-array, or an all-junk array) maps to absent, matching the documented
+    // "treat undefined as none".
+    ...(() => {
+      const warnings = Array.isArray(r.warnings) ? r.warnings.filter((w): w is string => typeof w === "string") : [];
+      return warnings.length ? { warnings } : {};
+    })(),
     usage: {
       inputTokens: r.usage?.input_tokens ?? 0,
       outputTokens: r.usage?.output_tokens ?? 0,
