@@ -56,11 +56,17 @@ export interface ExecutionStore {
   }): Promise<void>;
 
   /**
-   * Atomically terminal-fail the exact active dispatched attempt and its
-   * execution. Hosts must apply both records or neither so a sweeper cannot
-   * retry an attempt whose deterministic failure was only partially stored.
+   * Optional atomic capability for terminal platform errors. Hosts that
+   * implement it must fail the exact active dispatched attempt and its
+   * execution together, applying both records or neither so a sweeper cannot
+   * retry a partially settled attempt. The runtime preserves the legacy retry
+   * path when this capability is absent, keeping minor-version upgrades safe
+   * for external stores.
+   *
+   * `error` is a real `Error` decorated with only the recognized platform
+   * payload fields so existing host serializers retain name/message/stack.
    */
-  failActiveDispatchedStep(args: {
+  failActiveDispatchedStep?(args: {
     executionId: string;
     expectedVersion: number;
     stepRowId: string;

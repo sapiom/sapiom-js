@@ -776,6 +776,7 @@ describe("runLocal", () => {
       retryable: false,
       stepName: "validate",
     });
+    expect(result.error).toBeInstanceOf(Error);
     expect(runs).toBe(0);
   });
 

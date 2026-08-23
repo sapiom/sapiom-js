@@ -334,6 +334,7 @@ describe('AgentRunnerCore', () => {
       },
     ])('terminalizes $label on attempt zero', async ({ makeError, code }) => {
       const { store, dispatcher, core } = setupCore();
+      const atomicFail = jest.spyOn(store, 'failActiveDispatchedStep');
       let callCount = 0;
       dispatcher.setSyncBody('validate', async () => {
         callCount += 1;
@@ -351,6 +352,9 @@ describe('AgentRunnerCore', () => {
         dispatchDeadlineAt: null,
         error: { code, retryable: false, stepName: 'validate' },
       });
+      expect(state?.error).toBeInstanceOf(Error);
+      expect(atomicFail).toHaveBeenCalledTimes(1);
+      expect(atomicFail.mock.calls[0]?.[0].error).toBeInstanceOf(Error);
       expect(callCount).toBe(1);
 
       const terminal = await core.advance(executionId);
@@ -385,6 +389,79 @@ describe('AgentRunnerCore', () => {
         currentStepAttempt: 1,
         dispatchedStepRowId: null,
       });
+    });
+
+    it('keeps recognized errors on the legacy retry path when the store lacks atomic settlement', async () => {
+      const store = new InMemoryExecutionStore();
+      Object.defineProperty(store, 'failActiveDispatchedStep', {
+        value: undefined,
+      });
+      const retainStepForRetry = jest.spyOn(store, 'retainStepForRetry');
+      const { dispatcher, core } = setupCore(store);
+      dispatcher.setSyncBody('validate', async () => {
+        throw new StepInputValidationError('validate', [
+          {
+            code: 'custom',
+            path: ['email'],
+            message: 'required',
+            input: undefined,
+          },
+        ]);
+      });
+
+      const executionId = await core.createExecution('test-workflow', 'validate', {}, { manifest });
+      await core.advance(executionId);
+
+      expect(retainStepForRetry).toHaveBeenCalledTimes(1);
+      expect(store.getExecution(executionId)).toMatchObject({
+        status: EXECUTION_STATUS.RUNNING,
+        currentStepAttempt: 1,
+        dispatchedStepRowId: null,
+      });
+    });
+
+    it('returns a soft duplicate outcome when atomic terminal settlement loses its CAS', async () => {
+      const store = new InMemoryExecutionStore();
+      const core = new AgentRunnerCore({
+        store,
+        dispatcher: { dispatch: async () => undefined },
+      });
+      const executionId = await core.createExecution('test-workflow', 'validate', {}, { manifest });
+      await core.advance(executionId);
+
+      const before = store.getExecution(executionId);
+      if (!before?.dispatchedStepRowId) throw new Error('expected an active dispatch');
+      const settleAsConcurrentWinner = store.failActiveDispatchedStep.bind(store);
+      jest.spyOn(store, 'failActiveDispatchedStep').mockImplementation(async (args) => {
+        await settleAsConcurrentWinner(args);
+        return false;
+      });
+
+      const outcome = await core.completeDispatchedStep(
+        {
+          protocol: 1,
+          correlationId: `${executionId}:0:0`,
+          outcome: 'threw',
+          error: {
+            name: 'StepInputValidationError',
+            message: 'input is invalid',
+            code: 'STEP_INPUT_VALIDATION_FAILED',
+            version: 1,
+            stepName: 'validate',
+            retryable: false,
+          },
+          shared: { candidate: true },
+        },
+        { executionId, stepOrder: 0, attempt: 0 },
+      );
+
+      expect(outcome.applied).toBe(false);
+      expect(outcome.result).toMatchObject({
+        kind: ADVANCE_RESULT_KIND.FAILED,
+        error: { code: 'STEP_INPUT_VALIDATION_FAILED' },
+      });
+      if (outcome.result.kind !== ADVANCE_RESULT_KIND.FAILED) throw new Error('expected failed outcome');
+      expect(outcome.result.error).toBeInstanceOf(Error);
     });
 
     it('leaves both rows untouched when atomic settlement loses its CAS', async () => {

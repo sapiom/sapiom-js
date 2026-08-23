@@ -36,15 +36,25 @@ export type StepInputValidationErrorPayload = z.infer<typeof stepInputValidation
  * synchronously by `createExecution` (entry input rejected before any
  * row is written) and at advance time by the runner (which fails the
  * execution terminally — bad input is deterministic, so retrying is
- * pure waste). Carries the raw Zod issues so callers (the admin tool)
- * can surface field-level detail.
+ * pure waste). Carries the raw Zod issues so in-process callers (the admin
+ * tool) can surface field-level detail. Use `toStepErrorPayload()` at the wire
+ * boundary; ordinary `JSON.stringify(error)` retains its legacy local shape.
  */
 export class StepInputValidationError extends AgentError {
-  readonly code = STEP_INPUT_VALIDATION_ERROR_CONTRACT.errorCode;
-  readonly version = STEP_INPUT_VALIDATION_ERROR_CONTRACT.version;
   readonly stepName: string;
   readonly issues: readonly $ZodIssue[];
-  readonly retryable = STEP_INPUT_VALIDATION_ERROR_CONTRACT.retryable;
+
+  get code(): typeof STEP_INPUT_VALIDATION_ERROR_CONTRACT.errorCode {
+    return STEP_INPUT_VALIDATION_ERROR_CONTRACT.errorCode;
+  }
+
+  get version(): typeof STEP_INPUT_VALIDATION_ERROR_CONTRACT.version {
+    return STEP_INPUT_VALIDATION_ERROR_CONTRACT.version;
+  }
+
+  get retryable(): typeof STEP_INPUT_VALIDATION_ERROR_CONTRACT.retryable {
+    return STEP_INPUT_VALIDATION_ERROR_CONTRACT.retryable;
+  }
 
   constructor(stepName: string, issues: readonly $ZodIssue[]) {
     super(`Input for step '${stepName}' failed validation: ${formatIssues(issues)}`);
@@ -53,8 +63,8 @@ export class StepInputValidationError extends AgentError {
     this.issues = issues;
   }
 
-  /** Serialize only the stable machine contract, never version-specific Zod issues. */
-  toJSON(): StepInputValidationErrorPayload {
+  /** Build the bounded wire contract without changing global Error serialization. */
+  toStepErrorPayload(): StepInputValidationErrorPayload {
     return {
       name: 'StepInputValidationError',
       message: this.message,

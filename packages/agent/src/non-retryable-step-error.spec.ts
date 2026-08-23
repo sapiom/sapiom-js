@@ -10,7 +10,7 @@ import {
 } from './index.js';
 
 describe('non-retryable platform step errors', () => {
-  it('serializes StepInputValidationError without raw Zod issues', () => {
+  it("builds a bounded wire payload without changing the error's legacy JSON shape", () => {
     const error = new StepInputValidationError('validate', [
       {
         code: 'custom',
@@ -19,9 +19,20 @@ describe('non-retryable platform step errors', () => {
         input: undefined,
       },
     ]);
-    const payload = JSON.parse(JSON.stringify(error));
+    const serializedError = JSON.parse(JSON.stringify(error));
+    const payload = error.toStepErrorPayload();
 
     expect(Object.isFrozen(STEP_INPUT_VALIDATION_ERROR_CONTRACT)).toBe(true);
+    expect(serializedError).toMatchObject({
+      name: 'StepInputValidationError',
+      stepName: 'validate',
+      issues: [{ code: 'custom', path: ['email'], message: 'required' }],
+    });
+    expect(serializedError).not.toHaveProperty('message');
+    expect(serializedError).not.toHaveProperty('code');
+    expect(serializedError).not.toHaveProperty('version');
+    expect(serializedError).not.toHaveProperty('retryable');
+    expect(serializedError).not.toHaveProperty('stack');
     expect(payload).toMatchObject({
       name: 'StepInputValidationError',
       message: error.message,
@@ -33,6 +44,7 @@ describe('non-retryable platform step errors', () => {
     expect(payload).not.toHaveProperty('issues');
     expect(stepInputValidationErrorPayloadSchema.parse(payload)).toEqual(payload);
     expect(isStepInputValidationErrorPayload(payload)).toBe(true);
+    expect(parseNonRetryableStepErrorPayload(error)).toEqual(payload);
   });
 
   it('recognizes compatible future reporting versions and strips extra fields', () => {

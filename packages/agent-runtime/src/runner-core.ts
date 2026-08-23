@@ -18,7 +18,7 @@ import {
   isTerminate,
   parseNonRetryableStepErrorPayload,
 } from '@sapiom/agent';
-import type { NextStepDirective, AgentManifest } from '@sapiom/agent';
+import type { NextStepDirective, AgentManifest, NonRetryableStepErrorPayload } from '@sapiom/agent';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
 import type { AdvanceResult, CompleteDispatchOutcome, CreateExecutionOptions } from './advance-result.js';
@@ -246,8 +246,9 @@ export class AgentRunnerCore {
 
     let result: AdvanceResult;
     if (payload.outcome === STEP_COMPLETION_OUTCOME.THREW) {
-      const terminalError = parseNonRetryableStepErrorPayload(payload.error);
-      if (terminalError) {
+      const terminalPayload = parseNonRetryableStepErrorPayload(payload.error);
+      if (terminalPayload && this.deps.store.failActiveDispatchedStep) {
+        const terminalError = rehydrateNonRetryableStepError(terminalPayload);
         const won = await this.deps.store.failActiveDispatchedStep({
           executionId: row.id,
           expectedVersion: row.version,
@@ -257,11 +258,12 @@ export class AgentRunnerCore {
           logs: payload.logs,
         });
         if (!won) {
-          throw new StaleDispatchCompletionError(
-            parsed.executionId,
-            payload.correlationId,
-            'attempt was settled concurrently before its terminal error could be recorded',
-          );
+          this.recordCasLoss('terminal_platform_fail', row.id, row.version);
+          const reloaded = await this.deps.store.loadExecution(row.id);
+          const currentResult: AdvanceResult = reloaded
+            ? outcomeForFinishedRow(reloaded)
+            : { kind: ADVANCE_RESULT_KIND.RUNNING };
+          return { applied: false, result: currentResult };
         }
         await this.completeObserverStepTransaction(stepRow.id, 'error');
         this.trackStepFinish({
@@ -904,4 +906,9 @@ function rehydrateRemoteError(error: { name: string; message: string; stack?: st
     err.stack = error.stack;
   }
   return err;
+}
+
+/** Preserve Error identity while carrying only registry-normalized platform fields. */
+function rehydrateNonRetryableStepError(payload: NonRetryableStepErrorPayload): Error & NonRetryableStepErrorPayload {
+  return Object.assign(rehydrateRemoteError(payload), payload);
 }

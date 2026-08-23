@@ -10,8 +10,10 @@ errors. `CTX_SHARED_SIZE_LIMIT_EXCEEDED` and
 consuming workflow retries; unknown, author, and capability errors keep the
 legacy retry behavior.
 
-`StepInputValidationError` now serializes stable `code`, `version`,
-`stepName`, and `retryable: false` fields without exposing raw Zod issues.
-Hosts receive a normalizing `parseNonRetryableStepErrorPayload` registry, and
-`ExecutionStore` gains the atomic active-dispatch failure transition required
-to prevent partial settlement from reaching a deadline sweeper.
+`StepInputValidationError` now exposes a dedicated bounded wire payload with
+stable `code`, `version`, `stepName`, and `retryable: false` fields while its
+ordinary JSON representation continues carrying raw Zod issues for in-process
+callers. Hosts receive a normalizing `parseNonRetryableStepErrorPayload`
+registry and may implement the additive atomic active-dispatch failure
+capability required for terminal settlement. Older stores omit that capability
+and retain the legacy retry path.
