@@ -6,8 +6,8 @@
  * This is the OFFLINE FALLBACK: at startup the server fetches the live copy from
  * `GET {apiURL}/v1/mcp/instructions` (see instructions-fetch.ts) and serves that;
  * this constant is served only when the fetch fails. KEEP IT IDENTICAL to the
- * backend's `DEFAULT_MCP_INSTRUCTIONS` (Sapiom repo,
- * backend/src/mcp/mcp-instructions.constants.ts) — the two are one canonical text.
+ * server's live-fetched copy (a private companion repo) — the two are one
+ * canonical text.
  *
  * Kept intentionally short — it stays in the model's context for the whole session.
  * Deep authoring guidance lives in the scaffold-shipped `sapiom-agent-authoring`
