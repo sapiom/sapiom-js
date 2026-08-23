@@ -6,8 +6,17 @@
  * programmatic consumers; the CLI alias these as "logs" on its command surface.
  */
 import { GatewayClient } from "./client.js";
-import { decodeExecutionProjection, decodeExecutionRef } from "./decode.js";
-import type { ExecutionProjection, ExecutionRef, SseEvent } from "./types.js";
+import {
+  decodeExecutionProjection,
+  decodeExecutionRef,
+  decodeStepIoDetail,
+} from "./decode.js";
+import type {
+  ExecutionProjection,
+  ExecutionRef,
+  SseEvent,
+  StepIoDetail,
+} from "./types.js";
 import { watchExecution } from "./watch.js";
 
 export interface BuildDetail {
@@ -38,6 +47,36 @@ export async function inspect(
 ): Promise<ExecutionProjection> {
   const raw = await client.get<unknown>(`/executions/${opts.executionId}`);
   return decodeExecutionProjection(raw);
+}
+
+// ── Inspect one step attempt's full-fidelity I/O ───────────────────────────────
+
+export interface InspectStepOptions {
+  executionId: string;
+  /** A step attempt's row id — `ExecutionProjection.steps[].id` from {@link inspect}. */
+  stepExecutionId: string;
+}
+
+/**
+ * Fetch one step attempt's `input` / `output` / `error` / `logs` at a higher
+ * size cap than {@link inspect}'s own `steps[]` bounds its aggregate read to —
+ * reach for this when a step's fields on the execution projection look
+ * truncated (SAP-2778). The SDK is a thin passthrough of the REST shape,
+ * normalized (see {@link decodeStepIoDetail}) so a degraded body decodes
+ * rather than throwing.
+ *
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors —
+ * including a 404 for an unknown execution/step or one outside the caller's
+ * tenant (no existence leak).
+ */
+export async function inspectStep(
+  opts: InspectStepOptions,
+  client: GatewayClient,
+): Promise<StepIoDetail> {
+  const raw = await client.get<unknown>(
+    `/executions/${opts.executionId}/steps/${opts.stepExecutionId}/io`,
+  );
+  return decodeStepIoDetail(raw);
 }
 
 // ── Wait for an execution to settle ────────────────────────────────────────────

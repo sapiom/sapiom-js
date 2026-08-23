@@ -28,6 +28,7 @@ import type {
   StepErrorFrame,
   StepErrorTrace,
   StepEvent,
+  StepIoDetail,
   StepProjection,
 } from "./types.js";
 
@@ -172,6 +173,7 @@ export function decodeExecutionRef(raw: unknown): ExecutionRef {
 function decodeStep(raw: unknown): StepProjection {
   const r = rec(raw);
   return {
+    id: strOrNull(r.id),
     stepName: str("", r.stepName),
     stepOrder: numOr(0, r.stepOrder),
     attempt: numOr(0, r.attempt),
@@ -200,6 +202,29 @@ function decodeStep(raw: unknown): StepProjection {
  * fabricated `$0`). This is the reusable entry point tickets 2/4 use to re-decode
  * a projection body after an SSE-triggered refetch.
  */
+/**
+ * Normalize a raw `GET /executions/:id/steps/:stepId/io` body into a complete
+ * {@link StepIoDetail}. Same degradation posture as {@link decodeExecutionProjection}:
+ * missing structural fields fall back to empty-ish defaults rather than throwing.
+ */
+export function decodeStepIoDetail(raw: unknown): StepIoDetail {
+  const r = rec(raw);
+  return {
+    executionId: str("", r.executionId),
+    id: str("", r.id),
+    stepName: str("", r.stepName),
+    stepOrder: numOr(0, r.stepOrder),
+    attempt: numOr(0, r.attempt),
+    status: str("", r.status),
+    input: r.input ?? null,
+    output: r.output ?? null,
+    error: decodeStepError(r.error),
+    logs: r.logs ?? null,
+    startedAt: strOrNull(r.startedAt),
+    finishedAt: strOrNull(r.finishedAt),
+  };
+}
+
 export function decodeExecutionProjection(raw: unknown): ExecutionProjection {
   const r = rec(raw);
   const id = str("", r.id, r.executionId);
