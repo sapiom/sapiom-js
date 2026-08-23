@@ -14,14 +14,16 @@ repurpose ──▶ graphics ⇄ collectGraphic ──▶ clip ⇄ collectClip �
 
 1. **repurpose** — an LLM (`ctx.sapiom.models.run`) rewrites the source into every
    channel at once: the tweet thread, the LinkedIn post, the newsletter, the
-   pull-quotes to render, and a short video script. `dryRun` stops here with the
-   copy only (no paid media).
+   pull-quotes to render, and a short visual prompt for the teaser clip.
+   `dryRun` stops here with the copy only (no paid media).
 2. **graphics ⇄ collectGraphic** — one quote-graphic image at a time
    (`images.launch`, async): launch the job, pause until the webhook resumes
    `collectGraphic`, record it, then loop back for the next quote or advance.
-3. **clip ⇄ collectClip** — animates the first quote graphic into a short
-   teaser: launches an async image-to-video job (`video.launch`) and pauses on
-   it; the video-generation webhook resumes `collectClip` when the clip is ready.
+3. **clip ⇄ collectClip** — renders a short teaser clip that puts the lead
+   pull-quote on screen: launches an async text-to-video job (`video.launch`,
+   a cataloged semantic alias) with a purpose-written short visual prompt and
+   pauses on it; the video-generation webhook resumes `collectClip` when the
+   clip is ready.
 4. **package** — assembles the whole pack as one markdown document and uploads it
    to file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
 5. **deliver** — fans the pack out to every `deliverTo` recipient
@@ -31,8 +33,8 @@ repurpose ──▶ graphics ⇄ collectGraphic ──▶ clip ⇄ collectClip �
 Input: `{ "source": "<your blog post or transcript>", "title": "..." }`. With no
 `source` at all, the run repurposes a built-in sample post and says so in its output.
 Optional: `audience`, `numQuotes` (default 2, max 4), `deliverTo` (one or more
-recipient emails), `schedule` (a cron string), `model` (an advanced image-to-video
-model id), and `dryRun` (copy only).
+recipient emails), `schedule` (a cron string), `model` (a video model — a Sapiom
+semantic alias like `"veo3-fast"`), and `dryRun` (copy only).
 
 ## Delivery: fan-out per recipient
 
@@ -69,10 +71,12 @@ iterating on the copy, and keep `numQuotes` small for real runs.
 
 ## Model choice
 
-`clip` defaults to a high-quality image-to-video model. Pass a cheaper model via
-the `model` input to trade quality for cost. Model ids are an advanced, evolving
-surface and are passed through verbatim; most callers omit `model` and take the
-default.
+Quote graphics render on `ideogram-v3`, a typography-capable cataloged alias —
+the quote text is drawn INTO the image, so a model with strong text rendering is
+non-negotiable (`gpt-image-2` also fits). `clip` defaults to `kling-standard`, a
+cataloged semantic video alias. Pass a different alias via the `model` input to
+trade quality for cost; only cataloged aliases resolve (raw provider ids get no
+neutral-param normalization and are rejected once allowlist enforcement lands).
 
 ## Files
 

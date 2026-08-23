@@ -11,6 +11,7 @@ import {
   IMAGE_RESULT_SIGNAL,
   VIDEO_RESULT_SIGNAL,
   fileStorage,
+  type AspectRatio,
   type ImageResultPayload,
   type VideoResultPayload,
 } from "@sapiom/tools";
@@ -32,14 +33,18 @@ import { z } from "zod/v4";
  *
  *   1. repurpose — an LLM (`ctx.sapiom.models.run`) rewrites the source into every
  *      channel at once: the tweet thread, the LinkedIn post, the newsletter, the
- *      pull-quotes to render as graphics, and a short video script.
+ *      pull-quotes to render as graphics, and a short visual prompt for the teaser
+ *      clip.
  *   2. graphics — launch an async quote-graphic image job (`images.launch`) for the
  *      next pull-quote and `pauseUntilSignal` on it; the image-generation webhook
- *      resumes `collectGraphic` when it's ready.
+ *      resumes `collectGraphic` when it's ready. The launch prompt is composed in
+ *      code (`buildGraphicPrompt`) so the quote text is ALWAYS rendered into the
+ *      graphic, on a typography-capable model (`ideogram-v3`).
  *   3. collectGraphic — record the finished graphic, then loop back to `graphics`
  *      for the next quote, or advance once every quote graphic is in.
- *   4. clip — animate the first quote graphic into a short teaser clip: launch an
- *      async image-to-video job (`video.launch`) and `pauseUntilSignal` on it; the
+ *   4. clip — render a short teaser clip of the lead pull-quote: launch an async
+ *      text-to-video job (`video.launch`, cataloged alias) with a purpose-written
+ *      short visual prompt (`buildClipPrompt`) and `pauseUntilSignal` on it; the
  *      video-generation webhook resumes `collectClip` when the clip is ready.
  *   5. collectClip — record the finished clip.
  *   6. package — assemble the whole pack as one markdown document and upload it to
@@ -62,11 +67,16 @@ import { z } from "zod/v4";
  * A run with no `deliverTo` recipients skips every send and returns the pack instead.
  */
 
-/** One pull-quote plus the prompt used to render it as a graphic. */
+/** One pull-quote plus the art direction used to render it as a graphic. */
 interface QuoteGraphicSpec {
   /** The short, punchy line pulled from the source. */
   quote: string;
-  /** Full image prompt for the graphic that frames {@link quote}. */
+  /**
+   * Art direction ONLY (palette, background, typography style) for the graphic that
+   * frames {@link quote}. The quote text itself is composed into the final launch
+   * prompt by {@link buildGraphicPrompt} — never trusted to the LLM, which is how
+   * SAP-2781's blank "quote graphic" shipped.
+   */
   imagePrompt: string;
 }
 
@@ -80,7 +90,13 @@ interface Pack {
   newsletter: string;
   /** Pull-quotes to render as graphics. */
   quoteGraphics: QuoteGraphicSpec[];
-  /** Motion/narration prompt for a short teaser clip. */
+  /**
+   * Short single-shot VISUAL prompt for the teaser clip — what's on screen for
+   * {@link CLIP_SECONDS} seconds, not a narrated timeline. Guarded by
+   * {@link buildClipPrompt}: a narration-script-shaped value is replaced with a
+   * purpose-written prompt (feeding a 45s narration script to a 5s video model is
+   * how SAP-2781's garbled clip was made).
+   */
   videoScript: string;
 }
 
@@ -115,7 +131,7 @@ interface RepurposeInput {
   deliverTo?: string[];
   /** Cron cadence this pipeline is meant to run on (carried + reported). */
   schedule?: string;
-  /** Optional image-to-video model id (advanced), passed through verbatim to `video.launch`. */
+  /** Optional video model — a Sapiom semantic alias (e.g. `"veo3-fast"`); cataloged aliases only. */
   model?: string;
   /** When true, generate the copy only — skip graphics, clip, upload, and email. */
   dryRun?: boolean;
@@ -126,7 +142,7 @@ interface Shared extends Record<string, unknown> {
   audience: string;
   schedule: string;
   deliverTo: string[];
-  aspectRatio: string;
+  aspectRatio: AspectRatio;
   model?: string;
   /** Whether to render the (pricey) teaser clip. Off for the built-in sample run. */
   renderClip: boolean;
@@ -144,13 +160,23 @@ interface Shared extends Record<string, unknown> {
 type Ctx = AgentExecutionContext<Shared>;
 
 /**
- * Default image-to-video model, chosen for quality; swap for a budget model via the
- * `model` input. Model ids are an advanced, evolving surface passed through verbatim.
+ * Quote-graphic image model: a typography-capable CATALOGED semantic alias, because
+ * the quote text is rendered INTO the graphic (`gpt-image-2` also fits; the default
+ * fast image model has weak typography and shipped SAP-2781's blank background).
  */
-const DEFAULT_VIDEO_MODEL = "fal-ai/kling-video/v2.1/pro/image-to-video";
-/** Aspect ratio for the graphics + teaser clip. */
-const ASPECT_RATIO = "16:9";
-/** Teaser clip length in seconds — image-to-video models animate short clips best. */
+const IMAGE_MODEL = "ideogram-v3";
+/**
+ * Default teaser-clip model — a cataloged semantic alias (silent 5s text-to-video),
+ * swappable via the `model` input. Raw provider ids are off the menu: the allowlist
+ * (SAP-2582/E8) rejects uncataloged ids with `400 unknown_model`, and only cataloged
+ * models get neutral-param normalization (`aspectRatio`/`duration`). No cataloged
+ * image-to-video alias exists yet, so the teaser renders the quote itself rather
+ * than animating a finished graphic.
+ */
+const DEFAULT_VIDEO_MODEL = "kling-standard";
+/** Aspect ratio shared by the graphics + teaser clip so the pack reads as one set. */
+const ASPECT_RATIO: AspectRatio = "16:9";
+/** Teaser clip length in seconds — short video models render short clips best. */
 const CLIP_SECONDS = 5;
 /** Default cadence when the caller doesn't pass one: 09:00 every Monday. */
 const DEFAULT_SCHEDULE = "0 9 * * 1";
@@ -202,14 +228,58 @@ export function isReservedAddress(email: string): boolean {
   );
 }
 
-/** Resolve a single graphic's usable URL, re-minting from `fileId` when needed. */
-function resolveGraphicUrl(
-  graphic: Graphic,
-  getPublicUrl: (fileId: string) => string,
-): string {
-  if (graphic.downloadUrl) return graphic.downloadUrl;
-  if (graphic.fileId) return getPublicUrl(graphic.fileId);
-  throw new Error("quote graphic has no usable download URL");
+/**
+ * Compose the final launch prompt for one quote graphic. The quote TEXT is the
+ * artifact, so the render-the-text directive is built here in code rather than
+ * trusted to the LLM: SAP-2781 (execution 293742) shipped a blank navy background
+ * as the "quote graphic" because the LLM's imagePrompt asked for "negative space
+ * for text overlay … no text in the image" and no overlay step exists. The LLM's
+ * `imagePrompt` is demoted to art direction appended after the text directive.
+ */
+export function buildGraphicPrompt(spec: QuoteGraphicSpec): string {
+  const quote = spec.quote.trim();
+  const style = spec.imagePrompt.trim();
+  return (
+    `Typography-forward quote graphic. Render this exact text, large, legible, ` +
+    `and centered, as the visual centerpiece of the image: "${quote}". ` +
+    (style ||
+      "Clean, modern, solid dark background, generous margins, no watermark.")
+  );
+}
+
+/**
+ * True when a videoScript reads like a narration script rather than a short
+ * single-shot visual prompt: timeline markers ("HOOK (0-5s)"), script section
+ * headers, multi-paragraph structure, or simply far too much direction for a
+ * {@link CLIP_SECONDS}-second silent clip. Feeding one to a short video model is
+ * how SAP-2781's garbled clip was made — the model hallucinates text-panel UI
+ * trying to depict the script.
+ */
+export function isNarrationScript(script: string): boolean {
+  return (
+    script.length > 300 ||
+    /\(\s*\d+\s*[-–]\s*\d+\s*s(?:ec(?:onds)?)?\s*\)/i.test(script) ||
+    /\b(HOOK|PROBLEM|SOLUTION|CTA|CALL TO ACTION|NARRATOR|VOICE ?OVER|SCENE \d)\b/.test(
+      script,
+    ) ||
+    script.split("\n").filter((line) => line.trim()).length > 3
+  );
+}
+
+/**
+ * The teaser clip's visual prompt: the LLM's `videoScript` when it is genuinely a
+ * short visual prompt, else a purpose-written one that puts the lead pull-quote on
+ * screen — never a narration script (see {@link isNarrationScript}).
+ */
+export function buildClipPrompt(pack: Pack, title: string): string {
+  const script = pack.videoScript.trim();
+  if (script && !isNarrationScript(script)) return script;
+  const quote = pack.quoteGraphics[0]?.quote?.trim() || title;
+  return (
+    `A clean ${CLIP_SECONDS}-second social teaser: the pull-quote "${quote}" ` +
+    `in bold, legible type on a solid dark background, slow push-in, subtle ` +
+    `light sweep, no scene changes, no other text.`
+  );
 }
 
 /**
@@ -235,9 +305,11 @@ function parsePack(
     ],
     linkedInPost: `${title}\n\n${lead}`,
     newsletter: `## ${title}\n\n${lead}`,
-    quoteGraphics: Array.from({ length: numQuotes }, (_, i) => ({
+    quoteGraphics: Array.from({ length: numQuotes }, () => ({
       quote: fallbackQuote || title,
-      imagePrompt: `A clean, modern quote graphic on a solid background, 16:9, no watermark. Quote ${i + 1}: "${fallbackQuote || title}". Large legible sans-serif type, generous margins.`,
+      // Art direction only — the quote text itself is composed in by buildGraphicPrompt.
+      imagePrompt:
+        "Clean, modern, solid deep-navy background, large legible sans-serif type, generous margins, no watermark.",
     })),
     videoScript: `A short, upbeat teaser for "${title}"; slow push-in on the key quote; ${CLIP_SECONDS}s; bright, clean, social-ready.`,
   };
@@ -334,6 +406,65 @@ function renderPackMarkdown(
   ].join("\n");
 }
 
+/** Escape the small set of characters that would break out of HTML text. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Render the pack as a minimal HTML email so the graphics actually show in the
+ * inbox — a plain-text `[graphic](url)` markdown link never renders (SAP-2781's
+ * fourth finding). Graphics embed as `<img>` permalinks; the clip stays a link
+ * (inline `<video>` is stripped by most mail clients). Kept deliberately small,
+ * mirroring `newsletter-autopilot`'s `renderHtml`.
+ */
+export function renderPackHtml(
+  title: string,
+  pack: Pack,
+  graphics: Graphic[],
+  clip: Clip | null,
+  packDownloadUrl: string | null,
+): string {
+  const section = (heading: string, body: string) =>
+    `<h2 style="font-size:16px;margin:24px 0 8px;">${escapeHtml(heading)}</h2>` +
+    body;
+  const pre = (text: string) =>
+    `<div style="white-space:pre-wrap;line-height:1.5;">${escapeHtml(text)}</div>`;
+  const graphicCards = graphics
+    .map((g) => {
+      const caption = `<figcaption style="font-size:13px;color:#555;margin-top:4px;">“${escapeHtml(g.quote)}”</figcaption>`;
+      const image = g.downloadUrl
+        ? `<img src="${escapeHtml(g.downloadUrl)}" alt="${escapeHtml(g.quote)}" style="max-width:100%;border-radius:8px;" />`
+        : `<em>(graphic unavailable)</em>`;
+      return `<figure style="margin:0 0 16px;">${image}${caption}</figure>`;
+    })
+    .join("");
+  const clipHtml = clip?.downloadUrl
+    ? `<a href="${escapeHtml(clip.downloadUrl)}">Watch the teaser clip</a>`
+    : `<em>(not generated)</em>`;
+  const packLink = packDownloadUrl
+    ? `<p style="margin-top:24px;"><a href="${escapeHtml(packDownloadUrl)}">Download the full pack (markdown)</a></p>`
+    : "";
+  return (
+    `<div style="font-family:system-ui,sans-serif;max-width:640px;margin:0 auto;">` +
+    `<h1 style="font-size:20px;margin:0 0 16px;">Content pack: ${escapeHtml(title)}</h1>` +
+    section("Quote graphics", graphicCards || "<em>(none)</em>") +
+    section("Teaser clip", `<p style="margin:0;">${clipHtml}</p>`) +
+    section(
+      "Tweet thread",
+      pre(pack.tweetThread.map((t, i) => `${i + 1}. ${t}`).join("\n")),
+    ) +
+    section("LinkedIn post", pre(pack.linkedInPost)) +
+    section("Newsletter", pre(pack.newsletter)) +
+    packLink +
+    `</div>`
+  );
+}
+
 /**
  * The entry contract — this agent's public API, and what the dashboard "Run
  * once" form renders its labelled fields from. `source` stays optional so the
@@ -375,7 +506,7 @@ const entryInput = z.object({
     .string()
     .optional()
     .describe(
-      "Optional image-to-video model id, passed through to video.launch.",
+      'Optional video model — a Sapiom semantic alias (e.g. "veo3-fast"). Neutral params like aspectRatio are validated against the resolved model, so a cataloged alias is required.',
     ),
   dryRun: z
     .boolean()
@@ -429,8 +560,14 @@ const repurpose = defineStep({
       "You are a content strategist repurposing one long-form SOURCE (a blog post " +
       "or transcript) into a multi-channel content pack for " +
       `${audience}. Keep the author's meaning; do not invent facts. ` +
-      `Write ${numQuotes} short, punchy pull-quote(s), each with an image prompt ` +
-      "for a clean quote graphic. Tweets must each be <= 280 characters. " +
+      `Write ${numQuotes} short, punchy pull-quote(s). Each quote's "imagePrompt" ` +
+      "is ART DIRECTION ONLY for its quote graphic (palette, background, " +
+      "typography style) — the quote text itself is composed into the image " +
+      "prompt by the pipeline, so never request empty space or say the image " +
+      'should contain no text. "videoScript" is a short single-shot visual ' +
+      `prompt (under 300 characters) for a ${CLIP_SECONDS}-second silent teaser ` +
+      "clip — describe what is on screen, never a narrated timeline or script " +
+      "sections. Tweets must each be <= 280 characters. " +
       "Reply with ONLY minified JSON: " +
       '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
       '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.';
@@ -454,7 +591,7 @@ const repurpose = defineStep({
     ctx.shared.set("deliverTo", deliverTo);
     ctx.shared.set("aspectRatio", ASPECT_RATIO);
     if (input.model) ctx.shared.set("model", input.model);
-    // The teaser clip (image-to-video) is the priciest, slowest leg. A run nobody
+    // The teaser clip (video generation) is the priciest, slowest leg. A run nobody
     // configured — the built-in sample — renders the quote graphics but stops short of
     // the clip, so a zero-setup run still fires a real visual artifact without becoming
     // the most expensive one in the gallery. Supply your own `source` and the full pack
@@ -512,9 +649,17 @@ const graphics = defineStep({
       of: pack.quoteGraphics.length,
     });
     const handle = await ctx.sapiom.contentGeneration.images.launch({
-      prompt: quote.imagePrompt,
+      // Composed in code so the quote text is ALWAYS rendered into the graphic —
+      // the LLM's imagePrompt is art direction only (see buildGraphicPrompt).
+      prompt: buildGraphicPrompt(quote),
+      // Typography-capable cataloged alias — the default fast model can't render
+      // legible quote text.
+      model: IMAGE_MODEL,
+      // Neutral param (E4): validated against the resolved model and mapped to its
+      // wire key server-side; keeps the graphics consistent with the 16:9 clip.
+      aspectRatio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
       count: 1,
-      // Public: quote graphics are linked from the emailed pack below, so they
+      // Public: quote graphics are embedded in the emailed pack below, so they
       // need a durable permalink rather than a presigned URL that expires in ~15min.
       storage: { visibility: "public" },
     });
@@ -575,28 +720,27 @@ const clip = defineStep({
   pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: "collectClip" },
   async run(_input: unknown, ctx: Ctx) {
     const pack = must(ctx.shared.get("pack"), "pack");
-    const graphicsList = must(ctx.shared.get("graphics"), "graphics");
-    const frame = graphicsList[0];
-    const imageUrl = resolveGraphicUrl(frame, (fileId) =>
-      fileStorage.getPublicUrl(fileId),
-    );
+    const title = must(ctx.shared.get("title"), "title");
     const model = ctx.shared.get("model") ?? DEFAULT_VIDEO_MODEL;
+    const prompt = buildClipPrompt(pack, title);
 
-    ctx.logger.info("animating teaser clip", { from: frame.quote });
-    // Animate the first quote graphic into a short teaser. The shared aspect
-    // ratio keeps it consistent with the graphics.
+    ctx.logger.info("rendering teaser clip", { model });
+    // A short text-to-video teaser that puts the lead pull-quote on screen. The
+    // prompt is a purpose-written single-shot visual (buildClipPrompt) — never the
+    // narration script — and the model a CATALOGED semantic alias, so the neutral
+    // params below are validated against its capabilities and mapped to its wire
+    // keys server-side (E4). The previous raw `fal-ai/kling-video/v2.1/pro/…` pin
+    // got no normalization and will be rejected outright once the allowlist
+    // (SAP-2582/E8) closes.
     const handle = await ctx.sapiom.contentGeneration.video.launch({
       model,
-      prompt: pack.videoScript,
-      // Kling 2.1 Pro image-to-video isn't in the semantic catalog, so pass the raw provider
-      // keys via `passthrough` (the escape hatch) rather than the deprecated `params`.
-      passthrough: {
-        image_url: imageUrl,
-        // Kling 2.1 Pro takes duration only as the string enum "5"/"10" and accepts no seed —
-        // matching scene-to-video's handling of the same model.
-        duration: String(CLIP_SECONDS),
-        aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
-      },
+      prompt,
+      aspectRatio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
+      // Pin the teaser length only on the default alias (5s is in its catalog
+      // vocabulary). Duration vocabularies differ per model and an unsupported
+      // value is rejected `400 unsupported_param` (never silently dropped), so a
+      // caller-supplied alias keeps its own catalog default instead.
+      ...(model === DEFAULT_VIDEO_MODEL && { duration: CLIP_SECONDS }),
       // Public: the teaser clip is linked from the emailed pack below, so it
       // needs a durable permalink rather than a presigned URL that expires in ~15min.
       storage: { visibility: "public" },
@@ -792,6 +936,15 @@ const deliver = defineStep({
     // independently, then reduce into one delivered/skipped summary. A bad or
     // reserved address degrades that one recipient rather than sinking the batch.
     const inboxId = await resolveSenderInbox(ctx);
+    // HTML body so the graphics render in the inbox (a plain-text markdown link
+    // never does); the markdown stays as the text/plain fallback.
+    const html = renderPackHtml(
+      title,
+      pack,
+      graphicsList,
+      value,
+      packDownloadUrl,
+    );
     const results: { to: string; messageId?: string; skipped?: string }[] = [];
     for (const to of recipients) {
       if (isReservedAddress(to)) {
@@ -803,6 +956,7 @@ const deliver = defineStep({
           to,
           subject,
           text: markdown,
+          html,
         });
         results.push({ to, messageId: sent.messageId });
       } catch (err) {
