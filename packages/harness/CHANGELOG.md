@@ -1,5 +1,22 @@
 # @sapiom/harness
 
+## 0.8.3
+
+### Patch Changes
+
+- 5a8eeea: `DEFAULT_SYSTEM_PROMPT` gains a compact "Calling LLMs from agent code"
+  section — the same LLM call-surface rule taught in the MCP instructions and
+  the `sapiom-agent-authoring` skill, kept to ~8 lines since the prompt is
+  injected fresh into every Studio session's context. Also corrects the
+  adjacent "sapiom (remote, HTTP)" bullet's vague "models" capability mention
+  to point at the new section.
+- Updated dependencies [00b8814]
+- Updated dependencies [5a8eeea]
+- Updated dependencies [5a8eeea]
+  - @sapiom/agent-core@0.12.0
+  - @sapiom/mcp@0.12.8
+  - @sapiom/agent@0.10.1
+
 ## 0.8.2
 
 ### Patch Changes

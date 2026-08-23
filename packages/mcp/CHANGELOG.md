@@ -1,5 +1,22 @@
 # @sapiom/mcp
 
+## 0.12.8
+
+### Patch Changes
+
+- 5a8eeea: `AUTHORING_INSTRUCTIONS` (the offline fallback served when the startup fetch
+  to the backend's `GET /v1/mcp/instructions` fails) gains a "Calling LLMs and
+  running agent loops" section: `ctx.sapiom.llm.run` (one-shot) vs
+  `ctx.sapiom.models.run` (platform-driven multi-turn loop, never for a
+  one-shot) vs `ctx.sapiom.agents.run` (dispatch a deployed agent by slug); the
+  omit-`model`-or-pin-`"smart"` label rule; and a debugging pointer. Kept
+  byte-identical to the backend's live-fetched `DEFAULT_MCP_INSTRUCTIONS` copy
+  (companion Sapiom-repo PR).
+- Updated dependencies [00b8814]
+- Updated dependencies [5a8eeea]
+  - @sapiom/agent-core@0.12.0
+  - @sapiom/sandbox-preview@0.1.16
+
 ## 0.12.7
 
 ### Patch Changes
