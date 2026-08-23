@@ -187,10 +187,13 @@ export interface StepProjection {
   /**
    * The step-attempt row id — pass it as `stepExecutionId` to {@link inspectStep}
    * for this attempt's full-fidelity I/O (a higher size cap than this
-   * projection's own `input`/`output`/`logs`). `null` on a read from a server
-   * that doesn't yet report it.
+   * projection's own `input`/`output`/`logs`). Optional: absent (or `null`) on
+   * a read from a server that doesn't yet report it, or on a hand-constructed
+   * projection that predates this field — treat both the same way, by falling
+   * back to Run Inspector / the projection's own `input`/`output`/`logs`
+   * instead of calling {@link inspectStep}.
    */
-  id: string | null;
+  id?: string | null;
   stepName: string;
   stepOrder: number;
   attempt: number;

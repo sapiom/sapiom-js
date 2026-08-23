@@ -53,7 +53,14 @@ export async function inspect(
 
 export interface InspectStepOptions {
   executionId: string;
-  /** A step attempt's row id — `ExecutionProjection.steps[].id` from {@link inspect}. */
+  /**
+   * A step attempt's row id — `ExecutionProjection.steps[].id` from
+   * {@link inspect}. That field is optional and may be absent or `null` (a
+   * server that doesn't yet report it, or a step attempt from before this id
+   * existed) — there is no fallback for that case here; fall back to Run
+   * Inspector or the projection's own `input`/`output`/`logs` instead of
+   * calling `inspectStep`.
+   */
   stepExecutionId: string;
 }
 
