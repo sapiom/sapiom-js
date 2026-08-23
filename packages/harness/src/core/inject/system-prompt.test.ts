@@ -35,6 +35,10 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain("ctx.sapiom.models.run");
     expect(content).toContain("ctx.sapiom.agents.run");
     expect(content).toContain("pin the `smart` label");
+    // Structured/forced-tool output has no `text` block — the reply lives in the
+    // `tool_use` block's input. Reading only `type === 'text'` there returns
+    // `undefined` and invites exactly the string-parsing fallback this rule bans.
+    expect(content).toContain("tool_use");
     expect(content).not.toContain("Visualize button");
     expect(content).not.toContain("⌘K");
     expect(content.toLowerCase()).not.toContain("workflow");

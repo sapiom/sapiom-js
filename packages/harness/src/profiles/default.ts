@@ -25,8 +25,9 @@ active for the whole session. Follow them.
 **Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
 platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a
 one-shot — it overthinks); dispatching a deployed agent by slug →
-\`ctx.sapiom.agents.run\`. Structured output = tool-use/schema output, read
-only \`type === 'text'\` blocks — never "reply with only JSON". Omit \`model\`
+\`ctx.sapiom.agents.run\`. Structured output = tool-use/schema output — read
+the \`tool_use\` block's input, never string-parse; a plain-text reply reads
+only \`type === 'text'\` blocks. Omit \`model\`
 (recommended) or pin the \`smart\` label; raw provider ids are never
 honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented below.

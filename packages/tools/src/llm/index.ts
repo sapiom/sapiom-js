@@ -598,7 +598,7 @@ export interface LlmSessionCreateSpec {
    * Pin an exact Sapiom-supported alias rather than a resolved label.
    * Mutually exclusive with `label`.
    */
-  model?: RoutingLabel;
+  model?: string;
   /** How long you'll wait for capacity, in minutes. Omitted or <= 0 → run-now. */
   deadlineMinutes?: number;
   /**

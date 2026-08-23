@@ -143,3 +143,49 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     });
   });
 });
+
+describe("ctx.sapiom.llm.{structuredOf,textOf,readDisclosure} — reachable from the client", () => {
+  const SCHEMA = {
+    type: "object",
+    properties: { name: { type: "string" }, age: { type: "number" } },
+    required: ["name", "age"],
+  };
+
+  it("structuredOf works the same way through the client as the bare module import", async () => {
+    const cap: Captured = {};
+    const completion = {
+      id: "msg_1",
+      type: "message",
+      content: [{ type: "tool_use", name: "record_person", input: { name: "Priya", age: 34 } }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "extract" }], max_tokens: 256 },
+      output: { name: "record_person", schema: SCHEMA },
+    });
+    expect(sapiom.llm.structuredOf<{ name: string; age: number }>(res, "record_person")).toEqual({
+      name: "Priya",
+      age: 34,
+    });
+  });
+
+  it("textOf works through the client", async () => {
+    const cap: Captured = {};
+    const completion = { id: "msg_1", type: "message", content: [{ type: "text", text: "hi" }] };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "hi" }], max_tokens: 64 },
+    });
+    expect(sapiom.llm.textOf(res)).toBe("hi");
+  });
+
+  it("readDisclosure works through the client", async () => {
+    const cap: Captured = {};
+    const completion = { id: "msg_1", type: "message", served_class: "medium", lane: "run_now" };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "hi" }], max_tokens: 64 },
+    });
+    expect(sapiom.llm.readDisclosure(res)).toEqual({ servedClass: "medium", lane: "run_now" });
+  });
+});

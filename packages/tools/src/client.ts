@@ -51,6 +51,9 @@ import {
   getSession as llmGetSession,
   callSession as llmCallSession,
   releaseSession as llmReleaseSession,
+  readDisclosure as llmReadDisclosure,
+  textOf as llmTextOf,
+  structuredOf as llmStructuredOf,
 } from "./llm/index.js";
 import type {
   LlmRunSpec,
@@ -60,6 +63,7 @@ import type {
   LlmSessionCreateSpec,
   LlmSession,
   LlmSessionHandle,
+  LlmDisclosureResult,
 } from "./llm/index.js";
 import * as fileStorage from "./file-storage/index.js";
 import type {
@@ -231,6 +235,12 @@ export interface Sapiom {
     releaseSession(
       session: LlmSessionHandle | LlmSession | string,
     ): Promise<LlmSession>;
+    /** Read the serving disclosure (`servedClass`/`lane`) off a raw `run`/`redeem`/`callSession` result. */
+    readDisclosure(result: unknown): LlmDisclosureResult;
+    /** Read a `run`/`redeem`/`callSession` result's plain-text reply, skipping a `thinking` block if present. */
+    textOf(response: unknown): string | undefined;
+    /** Read a `run`/`redeem`/`callSession` result's structured output (see `LlmRunSpec.output`). */
+    structuredOf<TSchema = unknown>(response: unknown, name?: string): TSchema | undefined;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -563,6 +573,10 @@ function bind(transport: Transport): Sapiom {
       callSession: (session, request, opts) =>
         llmCallSession(session, request, opts, transport),
       releaseSession: (session) => llmReleaseSession(session, transport),
+      // Pure functions over a result value, not network calls — no transport binding.
+      readDisclosure: (result) => llmReadDisclosure(result),
+      textOf: (response) => llmTextOf(response),
+      structuredOf: (response, name) => llmStructuredOf(response, name),
     },
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),

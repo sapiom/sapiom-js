@@ -316,11 +316,10 @@ job is the most common mistake in authored agents:
 | `ctx.sapiom.models.run` | A platform-driven multi-turn reasoning + tool-calling loop (minutes, not seconds). `models.coding.run` for sandboxed coding tasks. | A one-shot completion — it will loop and overthink                    |
 | `ctx.sapiom.agents.run` | Dispatching a DEPLOYED agent by slug — composing systems from small deployed agents                  | Anything that isn't itself a deployed agent                           |
 
-**⚠️ The mistake to never repeat:** sending single-shot, fixed-shape intent through a
-multi-turn surface (`models.run`, or the deferred `llm.submit`/`redeem` lane) instead of
-one `llm.run` call. The symptom: the run takes far longer than the task needs, "overthinks"
-a trivial extraction, and — if the caller just grabs the first content block hoping it's the
-answer — returns a `thinking` block instead.
+**⚠️ The mistake to never repeat:** sending single-shot, fixed-shape intent through
+`models.run`'s multi-turn loop instead of one `llm.run` call. The symptom: the run takes
+far longer than the task needs, "overthinks" a trivial extraction, and — if the caller just
+grabs the first content block hoping it's the answer — returns a `thinking` block instead.
 
 ### Worked example: a trivial fixed-shape-JSON task
 
@@ -337,46 +336,40 @@ const run = await ctx.sapiom.models.run({
 const parsed = JSON.parse(run.output ?? "{}"); // brittle, and pays for a reasoning loop
 ```
 
-**Right** — `llm.run`, a forced tool call for the fixed shape, and an explicit
-`type`-filtered read (never assume `content[0]` is the answer — a `thinking` block can
-precede it):
+**Right** — `llm.run` with `output` for the fixed shape, read back with `structuredOf`
+(forced tool-use output has no `text` block — the result lives in `tool_use`, never
+`content[0]`):
 
 ```typescript
 const response = await ctx.sapiom.llm.run({
   request: {
     messages: [{ role: "user", content: `Classify this support ticket: ${input.text}` }],
     max_tokens: 256,
-    tools: [
-      {
-        name: "classify_ticket",
-        input_schema: {
-          type: "object",
-          properties: {
-            priority: { type: "string", enum: ["low", "medium", "high"] },
-            category: { type: "string" },
-          },
-          required: ["priority", "category"],
-        },
-      },
-    ],
-    tool_choice: { type: "tool", name: "classify_ticket" },
   },
   model: "smart", // a label — omit to let the platform choose (recommended)
+  output: {
+    name: "classify_ticket",
+    schema: {
+      type: "object",
+      properties: {
+        priority: { type: "string", enum: ["low", "medium", "high"] },
+        category: { type: "string" },
+      },
+      required: ["priority", "category"],
+    },
+  },
 });
 
-const content = response.content as Array<{ type: string; input?: unknown; text?: string }>;
-const toolUse = content.find((block) => block.type === "tool_use");
-const { priority, category } = toolUse!.input as { priority: string; category: string };
+const { priority, category } = ctx.sapiom.llm.structuredOf<{
+  priority: string;
+  category: string;
+}>(response)!;
 ```
 
-The same `type`-filter discipline applies to a **plain-text** reply too — read
-`content.find((b) => b.type === "text")?.text`, never `content[0]`.
-
-> `@sapiom/tools` is landing a structured-output convenience for exactly this pattern
-> (`llm.run({ ..., output: { name, schema } })` plus `structuredOf()`/`textOf()` helpers that
-> automate the tool/`tool_choice` wiring and the `type`-filtered read above). Check
-> `ctx.sapiom.llm`'s current types/autocomplete before hand-rolling it — it may already be
-> there by the time you're reading this.
+`output` automates the forced tool call and its `tool_choice` wiring; `structuredOf` reads
+the result back out. For a **plain-text** reply instead, use
+`ctx.sapiom.llm.textOf(response)` — it reads only the `type === 'text'` block, skipping a
+`thinking` block that may precede it.
 
 ### The label rule
 
@@ -402,12 +395,12 @@ uses — conflating two costs you a wrong capability choice, not just a wrong wo
 
 | Term         | Meaning(s) on this platform                                                                                                                                                                                                                                                                                                    |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **agent**    | (1) `@sapiom/agent` — this authoring framework (`defineAgent`, this skill). (2) A **deployed agent** — one project's compiled definition, dispatched by `ctx.sapiom.agents.run`/`launch` (addressed by its slug via `AgentRunSpec.definition`) — the customer-facing name is always "agent," even where the SDK's own internal source comments still use older, non-public vocabulary for the same concept. (3) `ctx.sapiom.models.run`'s managed multi-turn loop — a managed loop the platform runs for you; you call it, you never author it. (4) A **Claude Code subagent** — an unrelated feature of the coding tool itself, not part of the Sapiom SDK. |
+| **agent**    | (1) `@sapiom/agent` — this authoring framework (`defineAgent`, this skill). (2) A **deployed agent** — one project's compiled definition, dispatched by `ctx.sapiom.agents.run`/`launch` (addressed by its slug via `AgentRunSpec.definition`) — the customer-facing name is always "agent." (3) `ctx.sapiom.models.run`'s managed multi-turn loop — a managed loop the platform runs for you; you call it, you never author it. (4) A **Claude Code subagent** — an unrelated feature of the coding tool itself, not part of the Sapiom SDK. |
 | **run**      | (1) `ctx.sapiom.llm.run` — one synchronous LLM call. (2) `ctx.sapiom.models.run` / `agents.run` — `launch()` + `wait()`, blocking until terminal (vs. `launch()` alone, which returns a pausable handle). (3) An execution instance/row of any of the above — the thing you inspect/debug. (4) The dashboard's Run button / Local Run / Prod Run (Studio UI actions, not an API call).                                                                                                                                                                                                                                       |
 | **task**     | `CodingRunSpec.task` — the coding agent's prompt-equivalent field. Deliberately not called `prompt`: it's handed to a sandboxed coding agent, not a bare LLM call.                                                                                                                                                            |
 | **session**  | (1) `ctx.sapiom.llm.createSession`/`callSession` — reserved LLM capacity accepting repeated drop-in calls until its TTL/budget ends it (replacing the deferred `submit`/`redeem` lane). (2) A Studio harness terminal session — unrelated, no LLM-capacity semantics.                                                                |
 | **dispatch** | The structural contract (`DispatchHandle`) a long-running capability's `launch()` handle satisfies so a step can `pauseUntilSignal(handle, …)` and resume on completion. Every dispatched capability (coding, `models.run`, `agents.run`, more later) shares this ONE contract — "dispatch" always means this pattern, never anything else.  |
-| **label**    | The author-facing term for a `model:`/`label:` value (e.g. `"smart"`) — never "class" (a separate, future billing-size dimension) and never a raw provider model id (never honored, on any surface).                                                                                                                          |
+| **label**    | The author-facing term for a `model:`/`label:` value (e.g. `"smart"`) — never "class" and never a raw provider model id (never honored, on any surface).                                                                                                                                                                      |
 
 **The rule new capabilities must follow:** don't re-overload "agent" or "run" further. If a
 new capability needs its own verb, name it something else (`dispatch`, `launch`, `submit`,

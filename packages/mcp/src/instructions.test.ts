@@ -65,6 +65,10 @@ describe("server instructions", () => {
     // out here verbatim (matches this package's own scaffold terminology guard).
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
+    // Structured/forced-tool output has no `text` block — the reply lives in the
+    // `tool_use` block's `input`. Reading only `type === 'text'` there returns
+    // `undefined` and invites exactly the string-parsing fallback this rule bans.
+    expect(AUTHORING_INSTRUCTIONS).toContain("tool_use");
   });
 
   it("documents the complete ctx.shared quota contract", () => {
