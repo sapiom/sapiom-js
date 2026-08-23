@@ -19,6 +19,10 @@ Publish the authoritative 256 KiB `ctx.shared` whole-snapshot contract from
 preserves compatible structured quota payloads through protocol-1 parsing, and
 re-exports the canonical compatibility limit.
 
+Structured quota payloads include the reporting contract `version` and retain
+unknown non-empty future phases during mixed-version rollouts; current error
+construction remains limited to the three published enforcement phases.
+
 This release defines measurement and error contracts; it does not make
 `ctx.shared.set()` an atomic size gate or add local/final host-boundary
 enforcement by itself. Host versions must adopt the contract. Authoring skills,

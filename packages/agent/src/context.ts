@@ -79,7 +79,10 @@ export interface AgentExecutionContext<TShared extends Record<string, unknown> =
   /**
    * Typed named-slot store; persisted to shared_state after each step. The
    * whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota; keep
-   * compact state, IDs, and references here rather than bulk payloads.
+   * compact state, IDs, and references here rather than bulk payloads. This
+   * SDK contract does not make `set()` a synchronous size gate by itself;
+   * hosts enforce it at execution boundaries, and older hosts may temporarily
+   * enforce a smaller legacy limit during rollout.
    */
   readonly shared: TypedContextStore<TShared>;
 

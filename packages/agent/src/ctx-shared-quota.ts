@@ -67,10 +67,11 @@ export const ctxSharedSizeLimitExceededPayloadSchema = z
     name: z.literal('CtxSharedSizeLimitExceededError'),
     message: z.string(),
     code: z.literal(CTX_SHARED_QUOTA_CONTRACT.errorCode),
+    version: z.number().int().positive(),
     actualBytes: z.number().int().nonnegative(),
     limitBytes: z.number().int().positive(),
     stepName: z.string().min(1),
-    phase: z.enum(CTX_SHARED_SIZE_LIMIT_PHASES),
+    phase: z.string().min(1),
     retryable: z.literal(false),
     stack: z.string().optional(),
   })
@@ -91,6 +92,7 @@ export interface CtxSharedSizeLimitExceededErrorOptions {
 /** Public error used at every boundary that enforces the shared quota. */
 export class CtxSharedSizeLimitExceededError extends AgentError {
   readonly code = CTX_SHARED_QUOTA_CONTRACT.errorCode;
+  readonly version = CTX_SHARED_QUOTA_CONTRACT.version;
   readonly actualBytes: number;
   readonly limitBytes = MAX_SHARED_SNAPSHOT_BYTES;
   readonly stepName: string;
@@ -116,6 +118,7 @@ export class CtxSharedSizeLimitExceededError extends AgentError {
       name: 'CtxSharedSizeLimitExceededError',
       message: this.message,
       code: this.code,
+      version: this.version,
       actualBytes: this.actualBytes,
       limitBytes: this.limitBytes,
       stepName: this.stepName,

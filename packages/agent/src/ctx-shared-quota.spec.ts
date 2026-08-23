@@ -91,6 +91,7 @@ describe('CtxSharedSizeLimitExceededError', () => {
       name: 'CtxSharedSizeLimitExceededError',
       message: error.message,
       code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      version: CTX_SHARED_QUOTA_CONTRACT.version,
       actualBytes: MAX_SHARED_SNAPSHOT_BYTES + 17,
       limitBytes: MAX_SHARED_SNAPSHOT_BYTES,
       stepName: 'collect',
@@ -108,6 +109,7 @@ describe('CtxSharedSizeLimitExceededError', () => {
       name: 'CtxSharedSizeLimitExceededError',
       message: 'oversized',
       code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      version: CTX_SHARED_QUOTA_CONTRACT.version,
       actualBytes: MAX_SHARED_SNAPSHOT_BYTES + 1,
       limitBytes: MAX_SHARED_SNAPSHOT_BYTES,
       stepName: 'summarize',
@@ -119,16 +121,17 @@ describe('CtxSharedSizeLimitExceededError', () => {
     expect(payload).not.toBeInstanceOf(CtxSharedSizeLimitExceededError);
   });
 
-  it('recognizes a valid payload from a compatible package version with a different limit', () => {
+  it('recognizes a valid payload from a compatible package version with a different limit and phase', () => {
     const otherVersionLimitBytes = 100_000;
     const payload = {
       name: 'CtxSharedSizeLimitExceededError',
       message: 'oversized under the reporting host contract',
       code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      version: CTX_SHARED_QUOTA_CONTRACT.version + 1,
       actualBytes: otherVersionLimitBytes + 1,
       limitBytes: otherVersionLimitBytes,
       stepName: 'summarize',
-      phase: 'step_completion',
+      phase: 'future_host_boundary',
       retryable: false,
     };
 
@@ -143,6 +146,7 @@ describe('CtxSharedSizeLimitExceededError', () => {
         name: 'CtxSharedSizeLimitExceededError',
         message: 'not actually oversized',
         code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+        version: CTX_SHARED_QUOTA_CONTRACT.version,
         actualBytes: reportedLimitBytes,
         limitBytes: reportedLimitBytes,
         stepName: 'summarize',
@@ -158,8 +162,25 @@ describe('CtxSharedSizeLimitExceededError', () => {
         name: 'CtxSharedSizeLimitExceededError',
         message: 'invalid limit',
         code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+        version: CTX_SHARED_QUOTA_CONTRACT.version,
         actualBytes: 1,
         limitBytes: 0,
+        stepName: 'summarize',
+        phase: 'step_completion',
+        retryable: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a non-positive reporting contract version', () => {
+    expect(
+      isCtxSharedSizeLimitExceededPayload({
+        name: 'CtxSharedSizeLimitExceededError',
+        message: 'invalid version',
+        code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+        version: 0,
+        actualBytes: MAX_SHARED_SNAPSHOT_BYTES + 1,
+        limitBytes: MAX_SHARED_SNAPSHOT_BYTES,
         stepName: 'summarize',
         phase: 'step_completion',
         retryable: false,

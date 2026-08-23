@@ -1,4 +1,5 @@
 import {
+  CTX_SHARED_QUOTA_CONTRACT,
   MAX_SHARED_SNAPSHOT_BYTES as CANONICAL_MAX_SHARED_SNAPSHOT_BYTES,
   ctxSharedSizeLimitExceededPayloadSchema,
 } from '@sapiom/agent';
@@ -28,6 +29,7 @@ describe('step completion error compatibility', () => {
       name: 'CtxSharedSizeLimitExceededError',
       message: 'snapshot is too large',
       code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      version: CTX_SHARED_QUOTA_CONTRACT.version,
       actualBytes: MAX_SHARED_SNAPSHOT_BYTES + 1,
       limitBytes: MAX_SHARED_SNAPSHOT_BYTES,
       stepName: 'collect',
@@ -40,16 +42,17 @@ describe('step completion error compatibility', () => {
     expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual(error);
   });
 
-  it('preserves structured fields from a compatible contract version with a different limit', () => {
+  it('preserves structured fields from a compatible contract version with a different limit and phase', () => {
     const otherVersionLimitBytes = 100_000;
     const error = {
       name: 'CtxSharedSizeLimitExceededError',
       message: 'snapshot is too large for the reporting host',
       code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      version: CTX_SHARED_QUOTA_CONTRACT.version + 1,
       actualBytes: otherVersionLimitBytes + 1,
       limitBytes: otherVersionLimitBytes,
       stepName: 'collect',
-      phase: 'step_completion',
+      phase: 'future_host_boundary',
       retryable: false,
     };
 
