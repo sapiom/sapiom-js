@@ -14,6 +14,7 @@ legacy retry behavior.
 stable `code`, `version`, `stepName`, and `retryable: false` fields while its
 ordinary JSON representation continues carrying raw Zod issues for in-process
 callers. Hosts receive a normalizing `parseNonRetryableStepErrorPayload`
-registry and may implement the additive atomic active-dispatch failure
-capability required for terminal settlement. Older stores omit that capability
-and retain the legacy retry path.
+registry plus `serializeStepCompletionError()` for completion reporters, and
+may implement the additive atomic active-dispatch failure capability required
+for terminal settlement. Older stores omit that capability and retain the
+legacy retry path.

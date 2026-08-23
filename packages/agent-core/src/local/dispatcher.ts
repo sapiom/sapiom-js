@@ -14,7 +14,6 @@ import {
   type AgentDefinition,
   InMemoryContextStore,
   StepInputValidationError,
-  parseNonRetryableStepErrorPayload,
 } from "@sapiom/agent";
 import {
   type StepCompletionPayload,
@@ -22,6 +21,7 @@ import {
   type StepDispatchRequest,
   type AgentRunnerCore,
   parseCorrelationId,
+  serializeStepCompletionError,
   STEP_COMPLETION_OUTCOME,
 } from "@sapiom/agent-runtime";
 import { createStubClient, type StubCallRecord } from "@sapiom/tools/stub";
@@ -216,7 +216,7 @@ export class LocalStubDispatcher implements StepDispatcher {
           protocol: 1,
           correlationId: request.correlationId,
           outcome: STEP_COMPLETION_OUTCOME.THREW,
-          error: serializeThrownError(e),
+          error: serializeStepCompletionError(e),
           shared: sharedStore.snapshot(),
         },
         parsed,
@@ -254,18 +254,6 @@ export class LocalStubDispatcher implements StepDispatcher {
       this.maxAttemptsPerStep,
     );
   }
-}
-
-function serializeThrownError(
-  error: Error,
-): NonNullable<StepCompletionPayload["error"]> {
-  return (
-    parseNonRetryableStepErrorPayload(error) ?? {
-      name: error.name,
-      message: error.message,
-      ...(error.stack === undefined ? {} : { stack: error.stack }),
-    }
-  );
 }
 
 function makeLogger(sink: LogEntry[]): AgentExecutionContext["logger"] {

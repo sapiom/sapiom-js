@@ -5,7 +5,9 @@
  * step's result arrives later as a completion the runner applies. The
  * dispatcher is transport-only: "make the step body start executing." It must
  * not interpret directives, mutate execution state, or retry — those are the
- * runner's.
+ * runner's. When an executor reports a caught error in its completion, it must
+ * use `serializeStepCompletionError()` so recognized platform error fields are
+ * preserved for retry classification.
  */
 
 /** Everything a step body needs to run once, plus the coordinates to report back. */
@@ -39,7 +41,9 @@ export interface StepDispatcher {
   /**
    * Start the step body executing. Resolve once the work is HANDED OFF, not
    * when it finishes. A throw here is treated as a step-attempt failure (retry
-   * path) — so transport failures self-heal up to the cap like any transient error.
+   * path) — so transport failures self-heal up to the cap like any transient
+   * error. Executors reporting a later `outcome: "threw"` completion must pass
+   * the caught value through `serializeStepCompletionError()`.
    */
   dispatch(request: StepDispatchRequest): Promise<void>;
 }

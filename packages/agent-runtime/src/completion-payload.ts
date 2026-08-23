@@ -123,6 +123,27 @@ export const stepCompletionPayloadSchema = z
   });
 
 export type StepCompletionPayload = z.infer<typeof stepCompletionPayloadSchema>;
+export type StepCompletionError = z.infer<typeof stepCompletionErrorSchema>;
+
+/**
+ * Serialize a caught step error for a protocol-1 completion.
+ *
+ * Dispatch hosts must use this boundary helper instead of selecting only
+ * `name`, `message`, and `stack`: it preserves normalized fields for the
+ * closed set of platform errors that the runner may settle without retrying.
+ * Ordinary and unrecognized throws retain the legacy error shape.
+ */
+export function serializeStepCompletionError(error: unknown): StepCompletionError {
+  const platformError = parseNonRetryableStepErrorPayload(error);
+  if (platformError) return platformError;
+
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  return {
+    name: normalized.name,
+    message: normalized.message,
+    ...(normalized.stack === undefined ? {} : { stack: normalized.stack }),
+  };
+}
 
 /** Host ingress cap on the serialized `logs` buffer. */
 export const MAX_LOGS_BYTES = 512 * 1024;

@@ -2,11 +2,13 @@ import {
   CTX_SHARED_QUOTA_CONTRACT,
   MAX_SHARED_SNAPSHOT_BYTES as CANONICAL_MAX_SHARED_SNAPSHOT_BYTES,
   STEP_INPUT_VALIDATION_ERROR_CONTRACT,
+  StepInputValidationError,
   ctxSharedSizeLimitExceededPayloadSchema,
 } from '@sapiom/agent';
 
 import {
   MAX_SHARED_SNAPSHOT_BYTES,
+  serializeStepCompletionError,
   STEP_COMPLETION_OUTCOME,
   stepCompletionPayloadSchema,
 } from './completion-payload.js';
@@ -67,6 +69,26 @@ describe('step completion error compatibility', () => {
       stack: 'stack trace',
     };
     expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual(error);
+  });
+
+  it('exports the dispatcher boundary serializer that preserves recognized platform fields', () => {
+    const error = new StepInputValidationError('validate', [
+      {
+        code: 'custom',
+        path: ['email'],
+        message: 'required',
+        input: undefined,
+      },
+    ]);
+
+    expect(serializeStepCompletionError(error)).toEqual(error.toStepErrorPayload());
+
+    const authorError = Object.assign(new Error('ordinary failure'), { retryable: false });
+    expect(serializeStepCompletionError(authorError)).toEqual({
+      name: 'Error',
+      message: 'ordinary failure',
+      stack: authorError.stack,
+    });
   });
 
   it('round-trips the platform input-validation payload and strips raw issues', () => {

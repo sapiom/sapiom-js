@@ -9,14 +9,10 @@
  * in the test before calling core.advance().
  */
 
-import {
-  parseNonRetryableStepErrorPayload,
-  type NextStepDirective,
-  type PauseUntilSignalDirective,
-} from '@sapiom/agent';
+import { type NextStepDirective, type PauseUntilSignalDirective } from '@sapiom/agent';
 
 import type { StepCompletionPayload } from './completion-payload.js';
-import { STEP_COMPLETION_OUTCOME } from './completion-payload.js';
+import { serializeStepCompletionError, STEP_COMPLETION_OUTCOME } from './completion-payload.js';
 import type { StepDispatchRequest, StepDispatcher } from './dispatch.js';
 import { parseCorrelationId } from './dispatch.js';
 import { EXECUTION_STATUS, STEP_STATUS } from './execution-state.js';
@@ -483,7 +479,7 @@ export class SyncInProcessDispatcher implements StepDispatcher {
         protocol: 1,
         correlationId: request.correlationId,
         outcome: STEP_COMPLETION_OUTCOME.THREW,
-        error: serializeThrownError(e),
+        error: serializeStepCompletionError(e),
         shared: request.shared,
       };
     }
@@ -499,14 +495,4 @@ export class SyncInProcessDispatcher implements StepDispatcher {
     }
     await this.core.completeDispatchedStep(payload, parsed, this.maxAttemptsPerStep);
   }
-}
-
-function serializeThrownError(error: Error): NonNullable<StepCompletionPayload['error']> {
-  return (
-    parseNonRetryableStepErrorPayload(error) ?? {
-      name: error.name,
-      message: error.message,
-      ...(error.stack === undefined ? {} : { stack: error.stack }),
-    }
-  );
 }
