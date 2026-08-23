@@ -48,10 +48,34 @@ export interface ExecutionStore {
     sharedStateAfter: Record<string, unknown>;
     logs?: unknown;
   }): Promise<void>;
-  failStep(args: { stepRowId: string; error: unknown; sharedStateAfter: Record<string, unknown>; logs?: unknown }): Promise<void>;
+  failStep(args: {
+    stepRowId: string;
+    error: unknown;
+    sharedStateAfter: Record<string, unknown>;
+    logs?: unknown;
+  }): Promise<void>;
+
+  /**
+   * Atomically terminal-fail the exact active dispatched attempt and its
+   * execution. Hosts must apply both records or neither so a sweeper cannot
+   * retry an attempt whose deterministic failure was only partially stored.
+   */
+  failActiveDispatchedStep(args: {
+    executionId: string;
+    expectedVersion: number;
+    stepRowId: string;
+    error: unknown;
+    sharedState: Record<string, unknown>;
+    logs?: unknown;
+  }): Promise<boolean>;
 
   // ── CAS transitions — boolean = "won the version race?" ──────────────────
-  markStepDispatched(args: { executionId: string; expectedVersion: number; stepRowId: string; deadlineAt: Date }): Promise<boolean>;
+  markStepDispatched(args: {
+    executionId: string;
+    expectedVersion: number;
+    stepRowId: string;
+    deadlineAt: Date;
+  }): Promise<boolean>;
   transitionToStep(args: {
     executionId: string;
     expectedVersion: number;
@@ -59,7 +83,11 @@ export interface ExecutionStore {
     nextStepInput: unknown;
     sharedState: Record<string, unknown>;
   }): Promise<boolean>;
-  retainStepForRetry(args: { executionId: string; expectedVersion: number; sharedState: Record<string, unknown> }): Promise<boolean>;
+  retainStepForRetry(args: {
+    executionId: string;
+    expectedVersion: number;
+    sharedState: Record<string, unknown>;
+  }): Promise<boolean>;
   pauseExecution(args: {
     executionId: string;
     expectedVersion: number;

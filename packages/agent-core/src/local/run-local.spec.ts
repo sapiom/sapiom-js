@@ -736,6 +736,49 @@ describe("runLocal", () => {
     expect(runs).toBe(2);
   });
 
+  it("terminalizes authoritative Zod input validation without consuming retries", async () => {
+    let runs = 0;
+    const validate = defineStep({
+      name: "validate",
+      next: [],
+      terminal: true,
+      // The manifest pre-gate deliberately relaxes additionalProperties while
+      // this authoritative Zod schema remains strict, exercising the remote-
+      // runner mismatch path rather than the engine pre-gate.
+      inputSchema: z.strictObject({ allowed: z.string().optional() }),
+      async run() {
+        runs += 1;
+        return terminate({ ok: true });
+      },
+    });
+    const def = defineAgent({
+      name: "strict-input",
+      entry: "validate",
+      steps: { validate },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: { unexpected: true },
+      maxAttemptsPerStep: 3,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]).toMatchObject({
+      step: "validate",
+      attempt: 0,
+      status: "threw",
+    });
+    expect(result.error).toMatchObject({
+      code: "STEP_INPUT_VALIDATION_FAILED",
+      retryable: false,
+      stepName: "validate",
+    });
+    expect(runs).toBe(0);
+  });
+
   // Prod parity: the server-side run defaults an absent input to {} (run.ts:63
   // `const { definitionId, input = {} } = opts`). Local must match — an absent
   // input must NOT reach the first step as undefined. A step that reads

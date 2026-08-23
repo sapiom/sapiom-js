@@ -1,6 +1,7 @@
 import {
   CTX_SHARED_QUOTA_CONTRACT,
   MAX_SHARED_SNAPSHOT_BYTES as CANONICAL_MAX_SHARED_SNAPSHOT_BYTES,
+  STEP_INPUT_VALIDATION_ERROR_CONTRACT,
   ctxSharedSizeLimitExceededPayloadSchema,
 } from '@sapiom/agent';
 
@@ -66,5 +67,50 @@ describe('step completion error compatibility', () => {
       stack: 'stack trace',
     };
     expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual(error);
+  });
+
+  it('round-trips the platform input-validation payload and strips raw issues', () => {
+    const error = {
+      name: 'StepInputValidationError',
+      message: 'input is invalid',
+      code: STEP_INPUT_VALIDATION_ERROR_CONTRACT.errorCode,
+      version: STEP_INPUT_VALIDATION_ERROR_CONTRACT.version,
+      stepName: 'validate',
+      retryable: false,
+      issues: [{ path: ['secret'], message: 'not a wire field' }],
+    };
+
+    expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual({
+      name: 'StepInputValidationError',
+      message: 'input is invalid',
+      code: 'STEP_INPUT_VALIDATION_FAILED',
+      version: 1,
+      stepName: 'validate',
+      retryable: false,
+    });
+  });
+
+  it.each([
+    { name: 'Error', message: 'ordinary failure', retryable: false },
+    {
+      name: 'CustomError',
+      message: 'unknown code',
+      code: 'UNKNOWN_CODE',
+      version: 1,
+      retryable: false,
+    },
+    {
+      name: 'StepInputValidationError',
+      message: 'wrong disposition',
+      code: 'STEP_INPUT_VALIDATION_FAILED',
+      version: 1,
+      stepName: 'validate',
+      retryable: true,
+    },
+  ])('falls back to the retryable legacy shape for unrecognized payload %#', (error) => {
+    expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual({
+      name: error.name,
+      message: error.message,
+    });
   });
 });

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import { isCtxSharedSizeLimitExceededPayload } from '@sapiom/agent';
-import type { CtxSharedSizeLimitExceededPayload } from '@sapiom/agent';
+import { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from '@sapiom/agent';
+import type { NonRetryableStepErrorPayload } from '@sapiom/agent';
 
 export { MAX_SHARED_SNAPSHOT_BYTES } from '@sapiom/agent';
 
@@ -61,7 +61,7 @@ export const STEP_COMPLETION_OUTCOME = {
   THREW: 'threw',
 } as const;
 
-/** Legacy protocol-1 errors remain valid for every non-quota throw. */
+/** Legacy protocol-1 errors remain valid for every non-platform throw. */
 const legacyStepCompletionErrorSchema = z.object({
   name: z.string(),
   message: z.string(),
@@ -69,16 +69,19 @@ const legacyStepCompletionErrorSchema = z.object({
 });
 
 /**
- * Canonical quota errors are parsed first so their structured fields survive;
- * the legacy branch preserves protocol-1 compatibility for ordinary errors.
- * Use the structural guard instead of composing the exported schema directly:
- * this package supports a separate compatible Zod peer instance/version from
- * the one that constructed `@sapiom/agent`'s schema.
+ * Platform-owned terminal errors are parsed first so their structured fields
+ * survive. The transform returns normalized schema data, stripping arbitrary
+ * extra properties. The structural registry also avoids composing schemas from
+ * potentially separate compatible Zod peer instances.
  */
+const nonRetryableStepCompletionErrorSchema = z
+  .custom<NonRetryableStepErrorPayload>(isNonRetryableStepErrorPayload, {
+    message: 'Invalid non-retryable platform step error payload',
+  })
+  .transform((value) => parseNonRetryableStepErrorPayload(value) as NonRetryableStepErrorPayload);
+
 export const stepCompletionErrorSchema = z.union([
-  z.custom<CtxSharedSizeLimitExceededPayload>(isCtxSharedSizeLimitExceededPayload, {
-    message: 'Invalid ctx.shared size-limit error payload',
-  }),
+  nonRetryableStepCompletionErrorSchema,
   legacyStepCompletionErrorSchema,
 ]);
 

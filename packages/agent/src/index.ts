@@ -52,7 +52,16 @@ export {
 } from './agent.js';
 
 // Errors that are part of the public contract surface
-export { AgentError, UnknownStepError, StepInputValidationError, DisallowedTransitionError } from './errors.js';
+export {
+  AgentError,
+  UnknownStepError,
+  StepInputValidationError,
+  DisallowedTransitionError,
+  STEP_INPUT_VALIDATION_ERROR_CONTRACT,
+  stepInputValidationErrorPayloadSchema,
+  isStepInputValidationErrorPayload,
+} from './errors.js';
+export type { StepInputValidationErrorPayload } from './errors.js';
 
 // ctx.shared quota — the versioned cross-process size/error contract
 export {
@@ -70,6 +79,10 @@ export type {
   CtxSharedSizeLimitPhase,
   CtxSharedSizeViolation,
 } from './ctx-shared-quota.js';
+
+// Closed platform retry-classification registry.
+export { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from './non-retryable-step-error.js';
+export type { NonRetryableStepErrorPayload } from './non-retryable-step-error.js';
 
 // Injected run configuration — the seam a step reads a chosen resource handle
 // from (the entry input the setup panel's settings / resource picker drive).

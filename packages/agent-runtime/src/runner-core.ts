@@ -16,6 +16,7 @@ import {
   isPause,
   isRetry,
   isTerminate,
+  parseNonRetryableStepErrorPayload,
 } from '@sapiom/agent';
 import type { NextStepDirective, AgentManifest } from '@sapiom/agent';
 
@@ -245,25 +246,55 @@ export class AgentRunnerCore {
 
     let result: AdvanceResult;
     if (payload.outcome === STEP_COMPLETION_OUTCOME.THREW) {
-      const err = rehydrateRemoteError(payload.error);
-      await this.deps.store.failStep({
-        stepRowId: stepRow.id,
-        error: err,
-        sharedStateAfter: sharedSnapshot,
-        logs: payload.logs,
-      });
-      // Complete the step's Core spine leg — best-effort.
-      await this.completeObserverStepTransaction(stepRow.id, 'error');
-      this.trackStepFinish({
-        executionId: row.id,
-        workflowName: row.name,
-        stepName: stepRow.stepName,
-        stepRowId: stepRow.id,
-        attempt: stepRow.attempt,
-        outcome: 'error',
-        errorName: err.name,
-      });
-      result = await this.handleRetryOrCap(row, stepRow.stepName, sharedSnapshot, maxAttemptsPerStep);
+      const terminalError = parseNonRetryableStepErrorPayload(payload.error);
+      if (terminalError) {
+        const won = await this.deps.store.failActiveDispatchedStep({
+          executionId: row.id,
+          expectedVersion: row.version,
+          stepRowId: stepRow.id,
+          error: terminalError,
+          sharedState: sharedSnapshot,
+          logs: payload.logs,
+        });
+        if (!won) {
+          throw new StaleDispatchCompletionError(
+            parsed.executionId,
+            payload.correlationId,
+            'attempt was settled concurrently before its terminal error could be recorded',
+          );
+        }
+        await this.completeObserverStepTransaction(stepRow.id, 'error');
+        this.trackStepFinish({
+          executionId: row.id,
+          workflowName: row.name,
+          stepName: stepRow.stepName,
+          stepRowId: stepRow.id,
+          attempt: stepRow.attempt,
+          outcome: 'error',
+          errorName: terminalError.name,
+        });
+        result = { kind: ADVANCE_RESULT_KIND.FAILED, error: terminalError };
+      } else {
+        const err = rehydrateRemoteError(payload.error);
+        await this.deps.store.failStep({
+          stepRowId: stepRow.id,
+          error: err,
+          sharedStateAfter: sharedSnapshot,
+          logs: payload.logs,
+        });
+        // Complete the step's Core spine leg — best-effort.
+        await this.completeObserverStepTransaction(stepRow.id, 'error');
+        this.trackStepFinish({
+          executionId: row.id,
+          workflowName: row.name,
+          stepName: stepRow.stepName,
+          stepRowId: stepRow.id,
+          attempt: stepRow.attempt,
+          outcome: 'error',
+          errorName: err.name,
+        });
+        result = await this.handleRetryOrCap(row, stepRow.stepName, sharedSnapshot, maxAttemptsPerStep);
+      }
     } else {
       const stepResult = {
         output: payload.result?.output,
@@ -393,7 +424,10 @@ export class AgentRunnerCore {
       this.recordCasLoss('pause_timeout', executionId, row.version);
       return null;
     }
-    const result: AdvanceResult = { kind: ADVANCE_RESULT_KIND.FAILED, error: err };
+    const result: AdvanceResult = {
+      kind: ADVANCE_RESULT_KIND.FAILED,
+      error: err,
+    };
     await this.recordTerminalOutcome(row, result);
     return result;
   }
@@ -440,7 +474,10 @@ export class AgentRunnerCore {
 
     // Dispatch already in flight: a duplicate advance must NOT re-dispatch.
     if (row.dispatchedStepRowId != null) {
-      return { kind: ADVANCE_RESULT_KIND.DISPATCHED, deadlineAt: row.dispatchDeadlineAt };
+      return {
+        kind: ADVANCE_RESULT_KIND.DISPATCHED,
+        deadlineAt: row.dispatchDeadlineAt,
+      };
     }
 
     // Denominator for the CAS-conflict retry rate.
@@ -533,7 +570,11 @@ export class AgentRunnerCore {
         } catch (err) {
           if (err instanceof StepInputValidationError) {
             const sharedSnapshot = row.sharedState ?? {};
-            await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: sharedSnapshot });
+            await this.deps.store.failStep({
+              stepRowId,
+              error: err,
+              sharedStateAfter: sharedSnapshot,
+            });
             const won = await this.deps.store.failExecution({
               executionId,
               expectedVersion: row.version,
@@ -568,7 +609,11 @@ export class AgentRunnerCore {
         if (!won) {
           this.recordCasLoss('dispatch_mark', executionId, row.version);
           const err = new Error('Dispatch superseded by a concurrent advance (lost CAS before dispatching)');
-          await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: row.sharedState ?? {} });
+          await this.deps.store.failStep({
+            stepRowId,
+            error: err,
+            sharedStateAfter: row.sharedState ?? {},
+          });
           await this.completeObserverStepTransaction(stepRowId, 'error');
           this.trackStepFinish({
             executionId,
@@ -600,7 +645,11 @@ export class AgentRunnerCore {
             artifactEntryFile: manifest.artifact.entryFile,
           });
         } catch (err) {
-          await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: row.sharedState ?? {} });
+          await this.deps.store.failStep({
+            stepRowId,
+            error: err,
+            sharedStateAfter: row.sharedState ?? {},
+          });
           await this.completeObserverStepTransaction(stepRowId, 'error');
           this.trackStepFinish({
             executionId,
@@ -612,7 +661,10 @@ export class AgentRunnerCore {
             errorName: errorNameOf(err),
           });
           // After markStepDispatched won, the version was bumped +1.
-          const postMarkRow = { ...row, version: row.version + 1 } as ExecutionState;
+          const postMarkRow = {
+            ...row,
+            version: row.version + 1,
+          } as ExecutionState;
           return this.handleRetryOrCap(postMarkRow, stepName, row.sharedState ?? {}, maxAttemptsPerStep);
         }
 
@@ -758,23 +810,21 @@ export class AgentRunnerCore {
     }
   }
 
-  private async openObserverStepTransaction(
-    row: ExecutionState,
-    stepName: string,
-    stepRowId: string,
-  ): Promise<void> {
+  private async openObserverStepTransaction(row: ExecutionState, stepName: string, stepRowId: string): Promise<void> {
     if (!row.tenantId) return;
     try {
-      await this.obs.openStep?.({ executionId: row.id, stepName, stepRowId, tenantId: row.tenantId });
+      await this.obs.openStep?.({
+        executionId: row.id,
+        stepName,
+        stepRowId,
+        tenantId: row.tenantId,
+      });
     } catch {
       // Best-effort — step continues unrecorded.
     }
   }
 
-  private async completeObserverStepTransaction(
-    stepRowId: string,
-    outcome: 'success' | 'error',
-  ): Promise<void> {
+  private async completeObserverStepTransaction(stepRowId: string, outcome: 'success' | 'error'): Promise<void> {
     try {
       await this.obs.completeStep?.({ stepRowId, outcome });
     } catch {
@@ -866,7 +916,11 @@ function sleep(ms: number): Promise<void> {
 
 /** Error class name for analytics payloads (names only — never messages). */
 function errorNameOf(err: unknown): string {
-  return err instanceof Error ? err.name : 'Error';
+  if (err instanceof Error) return err.name;
+  if (err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string') {
+    return (err as { name: string }).name;
+  }
+  return 'Error';
 }
 
 /**
@@ -881,4 +935,3 @@ function rehydrateRemoteError(error: { name: string; message: string; stack?: st
   }
   return err;
 }
-

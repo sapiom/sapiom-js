@@ -9,7 +9,11 @@
  * in the test before calling core.advance().
  */
 
-import type { NextStepDirective, PauseUntilSignalDirective } from '@sapiom/agent';
+import {
+  parseNonRetryableStepErrorPayload,
+  type NextStepDirective,
+  type PauseUntilSignalDirective,
+} from '@sapiom/agent';
 
 import type { StepCompletionPayload } from './completion-payload.js';
 import { STEP_COMPLETION_OUTCOME } from './completion-payload.js';
@@ -262,6 +266,44 @@ export class InMemoryExecutionStore implements ExecutionStore {
     if (args.logs !== undefined) s.logs = args.logs;
   }
 
+  async failActiveDispatchedStep(args: {
+    executionId: string;
+    expectedVersion: number;
+    stepRowId: string;
+    error: unknown;
+    sharedState: Record<string, unknown>;
+    logs?: unknown;
+  }): Promise<boolean> {
+    const e = this.executions.get(args.executionId);
+    const s = this.stepsById.get(args.stepRowId);
+    if (
+      !e ||
+      !s ||
+      e.version !== args.expectedVersion ||
+      e.status !== EXECUTION_STATUS.RUNNING ||
+      e.dispatchedStepRowId !== args.stepRowId ||
+      s.executionId !== args.executionId ||
+      s.status !== STEP_STATUS.DISPATCHED
+    ) {
+      return false;
+    }
+
+    // All preconditions are checked before either in-memory row is mutated,
+    // mirroring a durable host's single transaction.
+    e.status = EXECUTION_STATUS.FAILED;
+    e.error = args.error;
+    e.sharedState = args.sharedState;
+    e.dispatchedStepRowId = null;
+    e.dispatchDeadlineAt = null;
+    e.version += 1;
+
+    s.status = STEP_STATUS.FAILED;
+    s.error = args.error;
+    s.sharedStateAfter = args.sharedState;
+    if (args.logs !== undefined) s.logs = args.logs;
+    return true;
+  }
+
   // ── CAS transitions ────────────────────────────────────────────────────────
   // Single-writer: always return true and bump version.
 
@@ -441,7 +483,7 @@ export class SyncInProcessDispatcher implements StepDispatcher {
         protocol: 1,
         correlationId: request.correlationId,
         outcome: STEP_COMPLETION_OUTCOME.THREW,
-        error: { name: e.name, message: e.message, stack: e.stack },
+        error: serializeThrownError(e),
         shared: request.shared,
       };
     }
@@ -457,4 +499,14 @@ export class SyncInProcessDispatcher implements StepDispatcher {
     }
     await this.core.completeDispatchedStep(payload, parsed, this.maxAttemptsPerStep);
   }
+}
+
+function serializeThrownError(error: Error): NonNullable<StepCompletionPayload['error']> {
+  return (
+    parseNonRetryableStepErrorPayload(error) ?? {
+      name: error.name,
+      message: error.message,
+      ...(error.stack === undefined ? {} : { stack: error.stack }),
+    }
+  );
 }
