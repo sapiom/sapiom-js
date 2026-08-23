@@ -1,11 +1,12 @@
 /**
- * `agent` capability — LLM execution (coding agents). The fuzzy counterpart to a
- * deterministic step: hand it a task in natural language, it edits a checkout in a
- * sandbox.
+ * `models` capability — LLM execution (coding agents + the instant loop). The fuzzy
+ * counterpart to a deterministic step: hand it a task in natural language, it edits
+ * a checkout in a sandbox (`models.coding`) or runs an in-server reasoning loop
+ * (`models.run`, below).
  *
- *   import { agent, repositories } from "@sapiom/tools";
+ *   import { models, repositories } from "@sapiom/tools";
  *   const repo = await repositories.create("landing");
- *   const run = await agent.coding.run({
+ *   const run = await models.coding.run({
  *     task: "Build a one-page landing site in index.html.",
  *     gitRepository: repo,        // auto-cloned into the sandbox at /workspace/<slug>
  *   });
@@ -441,23 +442,23 @@ export async function codingRun(
   return handle.wait();
 }
 
-/** Ambient-bound `agent.coding` namespace. */
+/** Ambient-bound `models.coding` namespace. */
 export const coding = { run: codingRun, launch: codingLaunch };
 
 // ============================================================================
-// Default agent (instant, in-server loop) — `agent.run` / `agent.launch`
+// Default model run (instant, in-server loop) — `models.run` / `models.launch`
 //
-// The fast, no-sandbox sibling of `agent.coding`: hand it a prompt (and optional
+// The fast, no-sandbox sibling of `models.coding`: hand it a prompt (and optional
 // remote MCP tools), the loop runs in Sapiom's server and returns text. No
 // filesystem, no sandbox handle. Multi-model under the hood; you just call
-// `agent.run`. Same dispatch contract as coding, so `launch()` works with
+// `models.run`. Same dispatch contract as coding, so `launch()` works with
 // `pauseUntilSignal(handle, { resumeStep })`.
 // ============================================================================
 
 /**
- * Capability-stable signal an instant agent run fires when it reaches a terminal
+ * Capability-stable signal an instant model run fires when it reaches a terminal
  * state (completed OR failed — it carries the result either way). A workflow step
- * paused on an agent-run handle resumes on this; it's the handle's
+ * paused on a model-run handle resumes on this; it's the handle's
  * `dispatch.resultSignal`.
  */
 export const MODEL_RUN_RESULT_SIGNAL = "models.run.result";
