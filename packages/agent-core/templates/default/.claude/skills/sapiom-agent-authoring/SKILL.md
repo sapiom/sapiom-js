@@ -305,6 +305,108 @@ try {
 }
 ```
 
+## Calling LLMs from Steps
+
+Three DIFFERENT capabilities call an LLM from step code — picking the wrong one for the
+job is the most common mistake in authored agents:
+
+| Capability              | Use for                                                                                            | Never for                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `ctx.sapiom.llm.run`    | ONE LLM call — summarize, extract, classify, one-shot generate                                       | A multi-turn task, or anything needing its own tool-calling loop      |
+| `ctx.sapiom.models.run` | A platform-driven multi-turn reasoning + tool-calling loop (minutes, not seconds). `models.coding.run` for sandboxed coding tasks. | A one-shot completion — it will loop and overthink                    |
+| `ctx.sapiom.agents.run` | Dispatching a DEPLOYED agent by slug — composing systems from small deployed agents                  | Anything that isn't itself a deployed agent                           |
+
+**⚠️ The mistake to never repeat:** sending single-shot, fixed-shape intent through
+`models.run`'s multi-turn loop instead of one `llm.run` call. The symptom: the run takes
+far longer than the task needs, "overthinks" a trivial extraction, and — if the caller just
+grabs the first content block hoping it's the answer — returns a `thinking` block instead.
+
+### Worked example: a trivial fixed-shape-JSON task
+
+**Wrong** — one-shot intent sent through the multi-turn loop, then the answer string-parsed
+out of free text:
+
+```typescript
+// DON'T: models.run for a one-shot extraction — it loops and overthinks, and
+// "reply with only JSON" is brittle (prose, invalid JSON, or a leading
+// `thinking` block all break a naive `JSON.parse(content[0])`).
+const run = await ctx.sapiom.models.run({
+  prompt: `Reply with ONLY JSON: {"priority": "...", "category": "..."} for: ${input.text}`,
+});
+const parsed = JSON.parse(run.output ?? "{}"); // brittle, and pays for a reasoning loop
+```
+
+**Right** — `llm.run` with `output` for the fixed shape, read back with `structuredOf`
+(forced tool-use output has no `text` block — the result lives in `tool_use`, never
+`content[0]`):
+
+```typescript
+const response = await ctx.sapiom.llm.run({
+  request: {
+    messages: [{ role: "user", content: `Classify this support ticket: ${input.text}` }],
+    max_tokens: 256,
+  },
+  // No `model` — omit it and let the platform choose (recommended). To pin
+  // instead: `model: "smart"` (a label, never a raw provider model id).
+  output: {
+    name: "classify_ticket",
+    schema: {
+      type: "object",
+      properties: {
+        priority: { type: "string", enum: ["low", "medium", "high"] },
+        category: { type: "string" },
+      },
+      required: ["priority", "category"],
+    },
+  },
+});
+
+const { priority, category } = ctx.sapiom.llm.structuredOf<{
+  priority: string;
+  category: string;
+}>(response)!;
+```
+
+`output` automates the forced tool call and its `tool_choice` wiring; `structuredOf` reads
+the result back out. For a **plain-text** reply instead, use
+`ctx.sapiom.llm.textOf(response)` — it reads only the `type === 'text'` block, skipping a
+`thinking` block that may precede it.
+
+### The label rule
+
+**You never pick a model.** Every `model`/`label` field across `llm.*`, `models.run`, and
+`models.coding.run` takes a **routing label** (e.g. `"smart"`) that the platform resolves
+against its configured label set — never a raw provider model id (never honored, on any
+surface). Omit it entirely to let the platform choose (the recommended default); pass
+`"smart"` if you must pin. The result discloses what actually served, in the platform's own
+vocabulary — `servedClass` (the billing size the label resolved to) and `lane` (the billing
+lane it executed in) — never a model or provider id.
+
+### Debugging a run
+
+Find the run in the dashboard's run detail view, find the suspicious step's row id, then
+open the **Run Inspector** for that step's full-fidelity input/output/error/logs.
+
+Full guide: [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface).
+
+## Naming Conventions
+
+Several words are overloaded across this platform. Know which meaning a given context
+uses — conflating two costs you a wrong capability choice, not just a wrong word:
+
+| Term         | Meaning(s) on this platform                                                                                                                                                                                                                                                                                                    |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **agent**    | (1) `@sapiom/agent` — this authoring framework (`defineAgent`, this skill). (2) A **deployed agent** — one project's compiled definition, dispatched by `ctx.sapiom.agents.run`/`launch` (addressed by its slug via `AgentRunSpec.definition`) — the customer-facing name is always "agent." (3) `ctx.sapiom.models.run`'s managed multi-turn loop — a managed loop the platform runs for you; you call it, you never author it. (4) A **Claude Code subagent** — an unrelated feature of the coding tool itself, not part of the Sapiom SDK. |
+| **run**      | (1) `ctx.sapiom.llm.run` — one synchronous LLM call. (2) `ctx.sapiom.models.run` / `agents.run` — `launch()` + `wait()`, blocking until terminal (vs. `launch()` alone, which returns a pausable handle). (3) An execution instance/row of any of the above — the thing you inspect/debug. (4) The dashboard's Run button / Local Run / Prod Run (Studio UI actions, not an API call).                                                                                                                                                                                                                                       |
+| **task**     | `CodingRunSpec.task` — the coding agent's prompt-equivalent field. Deliberately not called `prompt`: it's handed to a sandboxed coding agent, not a bare LLM call.                                                                                                                                                            |
+| **session**  | (1) `ctx.sapiom.llm.createSession`/`callSession` — reserved LLM capacity accepting repeated drop-in calls until its TTL/budget ends it (replacing the deferred `submit`/`redeem` lane). (2) A Studio harness terminal session — unrelated, no LLM-capacity semantics.                                                                |
+| **dispatch** | The structural contract (`DispatchHandle`) a long-running capability's `launch()` handle satisfies so a step can `pauseUntilSignal(handle, …)` and resume on completion. Every dispatched capability (coding, `models.run`, `agents.run`, more later) shares this ONE contract — "dispatch" always means this pattern, never anything else.  |
+| **label**    | The author-facing term for a `model:`/`label:` *input* value (e.g. `"smart"`) — never a raw provider model id (never honored, on any surface). Not a contradiction that a result's `servedClass` field says "class": that field *reports* the billing class the platform resolved your label to — it's a disclosure field, not author-facing input vocabulary. You still write `label`; the platform still reports back `servedClass`.                                                                                                     |
+
+**The rule new capabilities must follow:** don't re-overload "agent" or "run" further. If a
+new capability needs its own verb, name it something else (`dispatch`, `launch`, `submit`,
+`create*`) rather than adding a sixth meaning to a word that already has five.
+
 ## Failure Handling & Retries
 
 There is no automatic per-step retry. Express it explicitly — this keeps the graph readable.
@@ -522,4 +624,5 @@ Write each step the way it should run in production — never weaken logic to sh
 | [Authoring guide](https://docs.sapiom.ai/agents/authoring) | Full step model, failure patterns, pause/resume, determinism |
 | [Quickstart](https://docs.sapiom.ai/agents/quick-start)    | Scaffold → write → test → deploy walkthrough                 |
 | [Capabilities](https://docs.sapiom.ai/capabilities)        | The full `ctx.sapiom.*` catalog with pricing                 |
+| [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface) | `llm.run` vs `models.run` vs `agents.run` — which to call and why |
 | `AGENTS.md` in your scaffold                               | The quick in-project reference                               |

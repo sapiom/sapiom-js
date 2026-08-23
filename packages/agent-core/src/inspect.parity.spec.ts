@@ -15,11 +15,12 @@
  * is what these tests do.
  */
 import type { GatewayClient } from "./client.js";
-import { decodeExecutionProjection } from "./decode.js";
-import { inspect, listExecutions } from "./inspect.js";
+import { decodeExecutionProjection, decodeStepIoDetail } from "./decode.js";
+import { inspect, inspectStep, listExecutions } from "./inspect.js";
 import wireFixture from "./__tests__/execution-detail.wire.fixture.json";
 import withCostFixture from "./__tests__/execution-projection.with-cost.fixture.json";
 import preseamFixture from "./__tests__/execution-projection.preseam.fixture.json";
+import stepIoWireFixture from "./__tests__/step-io-detail.wire.fixture.json";
 
 /** A GatewayClient that returns `body` for any GET, recording the path. */
 function clientReturning(body: unknown): { client: GatewayClient; paths: string[] } {
@@ -55,6 +56,14 @@ describe("inspect() decodes the real execution-detail wire", () => {
     expect(result.traceParent).toBeNull();
     expect(result.parentExecutionId).toBeNull();
     expect(result.steps[1]?.spanId).toBe("span_0002");
+  });
+
+  it("carries each step attempt's row id (SAP-2778: the stepExecutionId inspectStep takes)", async () => {
+    const { client } = clientReturning(wireFixture);
+    const result = await inspect({ executionId: "exec_0001" }, client);
+
+    expect(result.steps[0]?.id).toBe("step_0001");
+    expect(result.steps[1]?.id).toBe("step_0002");
   });
 
   it("reports cost as null when the detail read is cost-agnostic (no fabricated $0)", async () => {
@@ -184,5 +193,75 @@ describe("listExecutions() is tree-aware (with documented server-side degrade)",
   it("returns [] for a non-array body rather than throwing", async () => {
     const { client } = clientReturning(null);
     expect(await listExecutions(client)).toEqual([]);
+  });
+});
+
+describe("inspectStep() decodes the real step-io wire (SAP-2778)", () => {
+  it("hits the per-attempt endpoint and carries identity + status through", async () => {
+    const { client, paths } = clientReturning(stepIoWireFixture);
+    const result = await inspectStep(
+      { executionId: "exec_0001", stepExecutionId: "step_0002" },
+      client,
+    );
+
+    expect(paths).toEqual(["/executions/exec_0001/steps/step_0002/io"]);
+    expect(result.executionId).toBe("exec_0001");
+    expect(result.id).toBe("step_0002");
+    expect(result.stepName).toBe("render");
+    expect(result.stepOrder).toBe(1);
+    expect(result.attempt).toBe(2);
+    expect(result.status).toBe("failed");
+  });
+
+  it("carries input/output/logs at the higher per-attempt fidelity", async () => {
+    const { client } = clientReturning(stepIoWireFixture);
+    const result = await inspectStep(
+      { executionId: "exec_0001", stepExecutionId: "step_0002" },
+      client,
+    );
+
+    expect(result.input).toEqual({ items: 12 });
+    expect(result.output).toBeNull();
+    expect(result.logs).toEqual([
+      { ts: "2026-01-01T00:00:46.000Z", level: "error", msg: "template not found" },
+    ]);
+    expect(result.startedAt).toBe("2026-01-01T00:00:45.000Z");
+    expect(result.finishedAt).toBe("2026-01-01T00:02:30.000Z");
+  });
+
+  it("decodes the structured error the same way as the execution-detail read", async () => {
+    const { client } = clientReturning(stepIoWireFixture);
+    const result = await inspectStep(
+      { executionId: "exec_0001", stepExecutionId: "step_0002" },
+      client,
+    );
+
+    expect(result.error?.message).toBe("template not found");
+    expect(result.error?.traceUnavailableReason).toBeNull();
+    expect(result.error?.trace?.sourceMapped).toBe(true);
+    expect(result.error?.trace?.frames).toEqual([
+      { function: "render", file: "src/steps/render.ts", line: 12, column: 11 },
+      { function: "run", file: "src/engine/runner.ts", line: 88, column: 5 },
+    ]);
+  });
+
+  it("does not throw on an empty/garbage body — missing fields degrade honestly", () => {
+    expect(() => decodeStepIoDetail(undefined)).not.toThrow();
+    expect(() => decodeStepIoDetail({})).not.toThrow();
+    const degraded = decodeStepIoDetail({});
+    expect(degraded).toEqual({
+      executionId: "",
+      id: "",
+      stepName: "",
+      stepOrder: 0,
+      attempt: 0,
+      status: "",
+      input: null,
+      output: null,
+      error: null,
+      logs: null,
+      startedAt: null,
+      finishedAt: null,
+    });
   });
 });

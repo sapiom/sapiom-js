@@ -86,6 +86,7 @@ export type { RunOptions, RunResult } from "./run.js";
 export type {
   ExecutionProjection,
   StepProjection,
+  StepIoDetail,
   CostNode,
   SettleState,
   ExecutionRef,
@@ -102,11 +103,12 @@ export { SSE_EVENT_TYPES } from "./types.js";
 // projection decode (tolerant normalization of the REST body) — the reusable
 // entry point consumers use to re-decode a body after an SSE refetch. The
 // finer-grained helpers stay module-internal to keep the published surface small.
-export { decodeExecutionProjection } from "./decode.js";
+export { decodeExecutionProjection, decodeStepIoDetail } from "./decode.js";
 
 // inspect / logs (networked)
 export {
   inspect,
+  inspectStep,
   listExecutions,
   inspectBuild,
   waitForExecution,
@@ -114,6 +116,7 @@ export {
 } from "./inspect.js";
 export type {
   InspectOptions,
+  InspectStepOptions,
   InspectBuildOptions,
   InspectBuildResult,
   BuildDetail,

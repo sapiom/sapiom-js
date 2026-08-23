@@ -674,6 +674,10 @@ const illustrate = defineStep({
       const result = await ctx.sapiom.contentGeneration.images.create({
         prompt: imagePrompt,
         count: 1,
+        // Neutral param (E4): a header banner should be landscape by intent, not
+        // by the model's default (the SAP-2781 lesson — an unpinned ratio ships
+        // whatever the provider felt like).
+        aspectRatio: "16:9",
         storage: { visibility: "public" },
       });
       const img = result.images?.[0];

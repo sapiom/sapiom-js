@@ -141,6 +141,37 @@ function must<T>(v: T | undefined, name: string): T {
   return v;
 }
 
+/** Escape the small set of characters that would break out of HTML text. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Minimal HTML email body so the personalized asset actually shows in the inbox
+ * (the SAP-2781 lesson: a bare URL in a plain-text body renders as a link at
+ * best). An image embeds inline; a clip stays a link — inline `<video>` is
+ * stripped by most mail clients. The plain-text body remains as the fallback.
+ */
+function renderAssetHtml(asset: Asset): string {
+  const media = !asset.downloadUrl
+    ? `<em>(asset link unavailable)</em>`
+    : asset.medium === "image"
+      ? `<img src="${escapeHtml(asset.downloadUrl)}" alt="A personalized image for ${escapeHtml(asset.name)}" style="max-width:100%;border-radius:8px;" />`
+      : `<a href="${escapeHtml(asset.downloadUrl)}">Watch your personalized clip</a>`;
+  return (
+    `<div style="font-family:system-ui,sans-serif;max-width:640px;margin:0 auto;">` +
+    `<p>Hi ${escapeHtml(asset.name)},</p>` +
+    `<p>We put together a personalized ${escapeHtml(asset.medium)} just for you:</p>` +
+    media +
+    `<p>— The team</p>` +
+    `</div>`
+  );
+}
+
 /**
  * Build the personalized generation prompt for a row. Deterministic on purpose —
  * this template generates media, not copy, so no LLM is in the loop. Swap in
@@ -629,6 +660,9 @@ const deliver = defineStep({
           to: asset.email,
           subject,
           text,
+          // HTML body so an image renders inline in the inbox; `text` stays as
+          // the plain-text fallback.
+          html: renderAssetHtml(asset),
         });
         results.push({
           recipientId: asset.recipientId,

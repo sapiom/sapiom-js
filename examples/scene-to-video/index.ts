@@ -133,6 +133,12 @@ const SAMPLE_SCENE =
 /**
  * Default image-to-video model. Kling 2.1 Pro is chosen for quality (the v1
  * default); swap for a budget model (Wan i2v, Seedance i2v) via the `model` input.
+ *
+ * ⚠️ Raw provider id, uncataloged (SAP-2781 audit): the semantic video catalog has
+ * no image-to-video alias yet, and this template's keyframe→animate design needs
+ * one — so this pin gets no neutral-param normalization and WILL be rejected with
+ * `400 unknown_model` once allowlist enforcement (SAP-2582/E8) closes. Repoint to
+ * the image-to-video semantic alias the moment the catalog grows one.
  */
 const DEFAULT_VIDEO_MODEL = "fal-ai/kling-video/v2.1/pro/image-to-video";
 /** Video merge model used by `stitch` — concats the clips into one video. */

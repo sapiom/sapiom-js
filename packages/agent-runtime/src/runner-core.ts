@@ -424,10 +424,7 @@ export class AgentRunnerCore {
       this.recordCasLoss('pause_timeout', executionId, row.version);
       return null;
     }
-    const result: AdvanceResult = {
-      kind: ADVANCE_RESULT_KIND.FAILED,
-      error: err,
-    };
+    const result: AdvanceResult = { kind: ADVANCE_RESULT_KIND.FAILED, error: err };
     await this.recordTerminalOutcome(row, result);
     return result;
   }
@@ -474,10 +471,7 @@ export class AgentRunnerCore {
 
     // Dispatch already in flight: a duplicate advance must NOT re-dispatch.
     if (row.dispatchedStepRowId != null) {
-      return {
-        kind: ADVANCE_RESULT_KIND.DISPATCHED,
-        deadlineAt: row.dispatchDeadlineAt,
-      };
+      return { kind: ADVANCE_RESULT_KIND.DISPATCHED, deadlineAt: row.dispatchDeadlineAt };
     }
 
     // Denominator for the CAS-conflict retry rate.
@@ -570,11 +564,7 @@ export class AgentRunnerCore {
         } catch (err) {
           if (err instanceof StepInputValidationError) {
             const sharedSnapshot = row.sharedState ?? {};
-            await this.deps.store.failStep({
-              stepRowId,
-              error: err,
-              sharedStateAfter: sharedSnapshot,
-            });
+            await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: sharedSnapshot });
             const won = await this.deps.store.failExecution({
               executionId,
               expectedVersion: row.version,
@@ -609,11 +599,7 @@ export class AgentRunnerCore {
         if (!won) {
           this.recordCasLoss('dispatch_mark', executionId, row.version);
           const err = new Error('Dispatch superseded by a concurrent advance (lost CAS before dispatching)');
-          await this.deps.store.failStep({
-            stepRowId,
-            error: err,
-            sharedStateAfter: row.sharedState ?? {},
-          });
+          await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: row.sharedState ?? {} });
           await this.completeObserverStepTransaction(stepRowId, 'error');
           this.trackStepFinish({
             executionId,
@@ -645,11 +631,7 @@ export class AgentRunnerCore {
             artifactEntryFile: manifest.artifact.entryFile,
           });
         } catch (err) {
-          await this.deps.store.failStep({
-            stepRowId,
-            error: err,
-            sharedStateAfter: row.sharedState ?? {},
-          });
+          await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: row.sharedState ?? {} });
           await this.completeObserverStepTransaction(stepRowId, 'error');
           this.trackStepFinish({
             executionId,
@@ -661,10 +643,7 @@ export class AgentRunnerCore {
             errorName: errorNameOf(err),
           });
           // After markStepDispatched won, the version was bumped +1.
-          const postMarkRow = {
-            ...row,
-            version: row.version + 1,
-          } as ExecutionState;
+          const postMarkRow = { ...row, version: row.version + 1 } as ExecutionState;
           return this.handleRetryOrCap(postMarkRow, stepName, row.sharedState ?? {}, maxAttemptsPerStep);
         }
 
@@ -813,12 +792,7 @@ export class AgentRunnerCore {
   private async openObserverStepTransaction(row: ExecutionState, stepName: string, stepRowId: string): Promise<void> {
     if (!row.tenantId) return;
     try {
-      await this.obs.openStep?.({
-        executionId: row.id,
-        stepName,
-        stepRowId,
-        tenantId: row.tenantId,
-      });
+      await this.obs.openStep?.({ executionId: row.id, stepName, stepRowId, tenantId: row.tenantId });
     } catch {
       // Best-effort — step continues unrecorded.
     }
@@ -916,11 +890,7 @@ function sleep(ms: number): Promise<void> {
 
 /** Error class name for analytics payloads (names only — never messages). */
 function errorNameOf(err: unknown): string {
-  if (err instanceof Error) return err.name;
-  if (err && typeof err === 'object' && typeof (err as { name?: unknown }).name === 'string') {
-    return (err as { name: string }).name;
-  }
-  return 'Error';
+  return err instanceof Error ? err.name : 'Error';
 }
 
 /**

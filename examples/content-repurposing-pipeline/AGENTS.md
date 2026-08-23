@@ -24,8 +24,9 @@ repurpose ─▶ graphics ⇄ collectGraphic ─▶ clip ⇄ collectClip ─▶ 
   'collectGraphic' }`); `collectGraphic` records it and loops back for the next quote or
   advances once every graphic is in. Sequential, not a concurrent `Promise.all` — see
   "Why sequential" below.
-- **clip ⇄ collectClip** — launches an async image-to-video job from the first
-  graphic and `pauseUntilSignal`s on it. The
+- **clip ⇄ collectClip** — launches an async text-to-video job (a cataloged
+  semantic alias, with a purpose-written short visual prompt — never the LLM's
+  narration-shaped output; see `buildClipPrompt`) and `pauseUntilSignal`s on it. The
   `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: 'collectClip' }` declaration is
   the graph edge; the video-generation webhook fires the signal to resume `collectClip`.
 - **package** — renders the whole pack as one markdown doc and uploads it to file

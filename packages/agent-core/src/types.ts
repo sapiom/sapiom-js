@@ -184,6 +184,16 @@ export interface DispatchRef {
  * inside {@link ExecutionProjection.steps}.
  */
 export interface StepProjection {
+  /**
+   * The step-attempt row id — pass it as `stepExecutionId` to {@link inspectStep}
+   * for this attempt's full-fidelity I/O (a higher size cap than this
+   * projection's own `input`/`output`/`logs`). Optional: absent (or `null`) on
+   * a read from a server that doesn't yet report it, or on a hand-constructed
+   * projection that predates this field — treat both the same way, by falling
+   * back to Run Inspector / the projection's own `input`/`output`/`logs`
+   * instead of calling {@link inspectStep}.
+   */
+  id?: string | null;
   stepName: string;
   stepOrder: number;
   attempt: number;
@@ -288,4 +298,31 @@ export interface ExecutionProjection {
 
   // ── steps ────────────────────────────────────────────────────────────────────
   steps: StepProjection[];
+}
+
+/**
+ * One step attempt's full-fidelity I/O — {@link inspectStep}'s result, fetched
+ * by execution id + `StepProjection.id`. Same audit columns as
+ * {@link StepProjection}, at a higher size cap than the execution-detail read
+ * bounds its aggregate `steps[]` to: reach for this when a step's `input` /
+ * `output` / `logs` on the execution projection looks truncated.
+ */
+export interface StepIoDetail {
+  executionId: string;
+  /** The step-attempt row id — the same value as the source `StepProjection.id`. */
+  id: string;
+  stepName: string;
+  stepOrder: number;
+  attempt: number;
+  status: string;
+  /** Input this attempt was handed, at the higher per-attempt size cap. */
+  input: unknown;
+  /** Output this attempt produced (null on throw), at the higher size cap. */
+  output: unknown;
+  /** Structured error if the attempt threw; null on success — same shape as {@link StepProjection.error}. */
+  error: StepError | null;
+  /** Executor-side log buffer (dispatched attempts only); null for in-process steps. */
+  logs: unknown;
+  startedAt: string | null;
+  finishedAt: string | null;
 }

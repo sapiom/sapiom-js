@@ -1,11 +1,12 @@
 /**
- * `agent` capability — LLM execution (coding agents). The fuzzy counterpart to a
- * deterministic step: hand it a task in natural language, it edits a checkout in a
- * sandbox.
+ * `models` capability — LLM execution (coding agents + the instant loop). The fuzzy
+ * counterpart to a deterministic step: hand it a task in natural language, it edits
+ * a checkout in a sandbox (`models.coding`) or runs an in-server reasoning loop
+ * (`models.run`, below).
  *
- *   import { agent, repositories } from "@sapiom/tools";
+ *   import { models, repositories } from "@sapiom/tools";
  *   const repo = await repositories.create("landing");
- *   const run = await agent.coding.run({
+ *   const run = await models.coding.run({
  *     task: "Build a one-page landing site in index.html.",
  *     gitRepository: repo,        // auto-cloned into the sandbox at /workspace/<slug>
  *   });
@@ -61,9 +62,24 @@ export interface CodingRunSpec {
   workingDirectory?: string;
   /** Keep the sandbox alive after the run finishes. SDK default: true (the mesh needs it). */
   keepSandbox?: boolean;
-  /** Override the model the agent runs on. */
-  model?: string;
+  /**
+   * Routing label for the coding agent's LLM calls (e.g. `"smart"`). The
+   * platform resolves it against its configured label set — a raw provider
+   * model id is never honored. Omit to let the platform choose (the
+   * recommended default); pass `"smart"` if you need to pin explicitly.
+   */
+  model?: ModelLabel;
 }
+
+/**
+ * A routing label — the vocabulary the platform resolves against its
+ * configured label set (never a raw provider model id). `"smart"` is
+ * suggested for autocomplete; any other string is still accepted, since the
+ * full label set is configured server-side. `Record<never, never>` is the
+ * lint-safe spelling of the `string & {}` idiom (see
+ * `content-generation/index.ts`'s `LiteralUnion`).
+ */
+export type ModelLabel = "smart" | (string & Record<never, never>);
 
 export interface CodingRunUsage {
   inputTokens: number;
@@ -77,6 +93,19 @@ export interface CodingRunOutcome {
   success: boolean;
   turns: number;
   modelUsed: string | null;
+  /**
+   * The billing class (size) the run's label resolved to, in the SKU
+   * vocabulary the platform bills in (e.g. `"medium"`) — never a model or
+   * provider id. `undefined`/`null` means the server did not disclose it
+   * (coding runs cannot observe this today, and older servers omit the
+   * field) — treat as unknown, never fabricate a value.
+   */
+  servedClass?: string | null;
+  /**
+   * The billing lane the run executed in (e.g. `"run_now"`).
+   * `undefined`/`null` means not disclosed — same caveats as `servedClass`.
+   */
+  lane?: string | null;
   durationMs: number;
   toolCallCount: number;
   usage: CodingRunUsage;
@@ -267,6 +296,8 @@ interface WireResult {
   success: boolean;
   turns: number;
   model_used: string | null;
+  served_class?: string | null;
+  lane?: string | null;
   duration_ms: number;
   tool_call_count: number;
   usage?: {
@@ -297,6 +328,9 @@ function mapResult(r: WireResult | null | undefined): CodingRunOutcome | null {
     success: r.success,
     turns: r.turns,
     modelUsed: r.model_used ?? null,
+    // Disclosure fields: absent on older servers ⇒ null (unknown), never fabricated.
+    servedClass: r.served_class ?? null,
+    lane: r.lane ?? null,
     durationMs: r.duration_ms,
     toolCallCount: r.tool_call_count,
     usage: {
@@ -408,23 +442,23 @@ export async function codingRun(
   return handle.wait();
 }
 
-/** Ambient-bound `agent.coding` namespace. */
+/** Ambient-bound `models.coding` namespace. */
 export const coding = { run: codingRun, launch: codingLaunch };
 
 // ============================================================================
-// Default agent (instant, in-server loop) — `agent.run` / `agent.launch`
+// Default model run (instant, in-server loop) — `models.run` / `models.launch`
 //
-// The fast, no-sandbox sibling of `agent.coding`: hand it a prompt (and optional
+// The fast, no-sandbox sibling of `models.coding`: hand it a prompt (and optional
 // remote MCP tools), the loop runs in Sapiom's server and returns text. No
 // filesystem, no sandbox handle. Multi-model under the hood; you just call
-// `agent.run`. Same dispatch contract as coding, so `launch()` works with
+// `models.run`. Same dispatch contract as coding, so `launch()` works with
 // `pauseUntilSignal(handle, { resumeStep })`.
 // ============================================================================
 
 /**
- * Capability-stable signal an instant agent run fires when it reaches a terminal
+ * Capability-stable signal an instant model run fires when it reaches a terminal
  * state (completed OR failed — it carries the result either way). A workflow step
- * paused on an agent-run handle resumes on this; it's the handle's
+ * paused on a model-run handle resumes on this; it's the handle's
  * `dispatch.resultSignal`.
  */
 export const MODEL_RUN_RESULT_SIGNAL = "models.run.result";
@@ -444,8 +478,15 @@ export interface ModelRunSpec {
   prompt: string;
   /** System prompt steering the agent. */
   system?: string;
-  /** Override the model / routing alias. */
-  model?: string;
+  /**
+   * Routing label for the run's LLM calls (e.g. `"smart"`). The platform
+   * resolves it against its configured label set — a raw provider model id
+   * is never honored. An unrecognized value is never silently dropped: the
+   * run routes via the platform default and the platform reports it in the
+   * result's `warnings` (SAP-2765). Omit to let the platform choose (the
+   * recommended default); pass `"smart"` if you need to pin explicitly.
+   */
+  model?: ModelLabel;
   /** Max output tokens per turn. */
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
@@ -457,6 +498,26 @@ export interface ModelRunOutcome {
   stopReason: string;
   turns: number;
   modelUsed: string | null;
+  /**
+   * The billing class (size) the run's label resolved to (the final turn's,
+   * on a multi-turn run), in the SKU vocabulary the platform bills in (e.g.
+   * `"medium"`) — never a model or provider id. `undefined`/`null` means the
+   * server did not disclose it (older server, resolution failure) — treat as
+   * unknown, never fabricate a value.
+   */
+  servedClass?: string | null;
+  /**
+   * The billing lane the run executed in (e.g. `"run_now"`).
+   * `undefined`/`null` means not disclosed — same caveats as `servedClass`.
+   */
+  lane?: string | null;
+  /**
+   * Routing/honesty warnings reported by the platform (SAP-2765) — e.g. a
+   * supplied `model` the platform didn't recognize (the run then routed via
+   * the platform default). Treat `undefined` as none on any path: the wire
+   * omits the key on a clean run and the stub never sets it.
+   */
+  warnings?: string[];
   durationMs: number;
   costUsd: number;
   usage: CodingRunUsage;
@@ -497,6 +558,18 @@ export type ModelRunResultPayload = ModelRunResult;
 /** Thrown by {@link modelRunResultSchema}.parse on a malformed resume payload. */
 export class ModelRunResultSchemaError extends Error {}
 
+/**
+ * Guarded `warnings` normalization — enforces the ONE encoding of "no
+ * warnings" (`undefined`) on every path that hands a {@link ModelRunOutcome}
+ * to a consumer: only string elements survive; an empty/absent/malformed value
+ * becomes `undefined`, never a present-but-empty array a consumer's
+ * `if (outcome.warnings)` would misread.
+ */
+function normalizeWarnings(value: unknown): string[] | undefined {
+  const warnings = Array.isArray(value) ? value.filter((w): w is string => typeof w === "string") : [];
+  return warnings.length ? warnings : undefined;
+}
+
 /** Runtime validator for {@link ModelRunResultPayload}. */
 export const modelRunResultSchema = {
   parse(value: unknown): ModelRunResultPayload {
@@ -511,6 +584,15 @@ export const modelRunResultSchema = {
     if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
     if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
     if (v.error !== null && (typeof v.error !== "object" || !v.error)) fail("error must be an object or null");
+    if (v.result) {
+      // Same warnings encoding as the polled path (mapModelResult): the resume
+      // payload is server-serialized, so a wire `[]` would otherwise reach the
+      // resumed step present-but-empty.
+      const r = v.result as Record<string, unknown>;
+      const warnings = normalizeWarnings(r.warnings);
+      if (warnings) r.warnings = warnings;
+      else delete r.warnings;
+    }
     return value as ModelRunResultPayload;
   },
 };
@@ -522,6 +604,10 @@ interface ModelWireResult {
   stop_reason: string;
   turns: number;
   model_used: string | null;
+  served_class?: string | null;
+  lane?: string | null;
+  /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
+  warnings?: string[];
   duration_ms: number;
   cost_usd: number;
   usage?: {
@@ -552,8 +638,19 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     stopReason: r.stop_reason,
     turns: r.turns,
     modelUsed: r.model_used ?? null,
+    // Disclosure fields: absent on older servers ⇒ null (unknown), never fabricated.
+    servedClass: r.served_class ?? null,
+    lane: r.lane ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
+    // Passthrough via the shared guard (`normalizeWarnings`): the key is
+    // absent unless at least one string warning survives — a wire `[]`, a
+    // non-array, or an all-junk array maps to absent, matching the documented
+    // "treat undefined as none".
+    ...(() => {
+      const warnings = normalizeWarnings(r.warnings);
+      return warnings ? { warnings } : {};
+    })(),
     usage: {
       inputTokens: r.usage?.input_tokens ?? 0,
       outputTokens: r.usage?.output_tokens ?? 0,

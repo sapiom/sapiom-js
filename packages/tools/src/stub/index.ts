@@ -34,6 +34,9 @@ import { AGENTS_RESULT_SIGNAL } from "../agents/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
+  readDisclosure as llmReadDisclosure,
+  textOf as llmTextOf,
+  structuredOf as llmStructuredOf,
 } from "../llm/index.js";
 import type {
   AgentRunResult,
@@ -1084,6 +1087,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             state: "expired" as const,
           })) as LlmSession,
         ),
+      // Pure functions over a result value, not network calls — no stub
+      // recording needed; delegate straight to the real implementation.
+      readDisclosure: (result) => llmReadDisclosure(result),
+      textOf: (response) => llmTextOf(response),
+      structuredOf: (response, name) => llmStructuredOf(response, name),
     },
     fileStorage: {
       upload: (input) =>
