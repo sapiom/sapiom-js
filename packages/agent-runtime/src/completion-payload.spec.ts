@@ -40,6 +40,22 @@ describe('step completion error compatibility', () => {
     expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual(error);
   });
 
+  it('preserves structured fields from a compatible contract version with a different limit', () => {
+    const otherVersionLimitBytes = 100_000;
+    const error = {
+      name: 'CtxSharedSizeLimitExceededError',
+      message: 'snapshot is too large for the reporting host',
+      code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      actualBytes: otherVersionLimitBytes + 1,
+      limitBytes: otherVersionLimitBytes,
+      stepName: 'collect',
+      phase: 'step_completion',
+      retryable: false,
+    };
+
+    expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual(error);
+  });
+
   it('continues to accept the legacy name/message/stack shape', () => {
     const error = {
       name: 'Error',

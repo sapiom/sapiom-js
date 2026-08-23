@@ -66,7 +66,10 @@ and returns a live URL; a \`failed\` status carries the build/start logs — fix
   (\`zod/v4\`); give fields \`.default()\` so a zero-input run still validates.
 - Cross-step state: \`ctx.shared\` — the entry input reaches only the entry step. The whole
   snapshot has an inclusive 256 KiB (262,144-byte) quota, measured as compact
-  \`JSON.stringify\` UTF-8 bytes; keep IDs/references here instead of bulk state.
+  \`JSON.stringify\` UTF-8 bytes; keep IDs/references here instead of bulk state. The SDK
+  contract does not make \`ctx.shared.set()\` a synchronous size gate by itself; hosts
+  enforce it at execution boundaries, and older hosts may temporarily enforce a smaller
+  legacy limit during rollout.
 - Capabilities run via the typed \`ctx.sapiom.*\` client (sandboxes, repositories,
   models.coding, fileStorage, search, database, email, domains, memory, and more) —
   don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are

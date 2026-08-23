@@ -93,10 +93,15 @@ bytes), inclusive**, measured as the UTF-8 byte length of compact
 `JSON.stringify(snapshot)`. Keys, JSON punctuation, existing values, and the
 new value all count toward the same limit.
 
+This package publishes the quota contract and its measurement helpers; it does
+not make `ctx.shared.set()` a synchronous size gate by itself. Hosts enforce the
+contract at execution boundaries, and older hosts may temporarily enforce a
+smaller legacy limit during rollout.
+
 Keep small scalars, IDs, and durable-storage references in `ctx.shared`. Put
 bulk API responses, documents, research results, and other large state in
 durable storage, then carry only the resulting ID or reference. The stable
-machine code for an oversized candidate is
+machine code when an enforcing host rejects an oversized candidate is
 `CTX_SHARED_SIZE_LIMIT_EXCEEDED`; use its structured byte counts rather than
 parsing the human-readable message.
 

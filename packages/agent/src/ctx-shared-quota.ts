@@ -57,24 +57,27 @@ export type CtxSharedSizeLimitPhase = (typeof CTX_SHARED_SIZE_LIMIT_PHASES)[numb
 /**
  * Serializable machine contract for a `ctx.shared` quota failure.
  *
- * Kept as a Zod object (rather than a refined/effects schema) so a backend can
- * add transport-only fields such as `sourceMap` with `.extend()` without
- * restating any quota fields.
+ * Recognition is intentionally relative to the limit carried by the payload,
+ * rather than this package copy's enforcement constant. That keeps structured
+ * fields intact while compatible contract versions coexist across bundles and
+ * processes. Enforcement always uses `CTX_SHARED_QUOTA_CONTRACT.limitBytes`.
  */
-export const ctxSharedSizeLimitExceededPayloadSchema = z.object({
-  name: z.literal('CtxSharedSizeLimitExceededError'),
-  message: z.string(),
-  code: z.literal(CTX_SHARED_QUOTA_CONTRACT.errorCode),
-  actualBytes: z
-    .number()
-    .int()
-    .min(MAX_SHARED_SNAPSHOT_BYTES + 1),
-  limitBytes: z.literal(MAX_SHARED_SNAPSHOT_BYTES),
-  stepName: z.string().min(1),
-  phase: z.enum(CTX_SHARED_SIZE_LIMIT_PHASES),
-  retryable: z.literal(false),
-  stack: z.string().optional(),
-});
+export const ctxSharedSizeLimitExceededPayloadSchema = z
+  .object({
+    name: z.literal('CtxSharedSizeLimitExceededError'),
+    message: z.string(),
+    code: z.literal(CTX_SHARED_QUOTA_CONTRACT.errorCode),
+    actualBytes: z.number().int().nonnegative(),
+    limitBytes: z.number().int().positive(),
+    stepName: z.string().min(1),
+    phase: z.enum(CTX_SHARED_SIZE_LIMIT_PHASES),
+    retryable: z.literal(false),
+    stack: z.string().optional(),
+  })
+  .refine(({ actualBytes, limitBytes }) => actualBytes > limitBytes, {
+    message: 'actualBytes must be greater than limitBytes',
+    path: ['actualBytes'],
+  });
 
 export type CtxSharedSizeLimitExceededPayload = z.infer<typeof ctxSharedSizeLimitExceededPayloadSchema>;
 

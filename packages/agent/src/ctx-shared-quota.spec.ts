@@ -119,14 +119,47 @@ describe('CtxSharedSizeLimitExceededError', () => {
     expect(payload).not.toBeInstanceOf(CtxSharedSizeLimitExceededError);
   });
 
-  it('rejects near-miss payloads with the canonical code but no actual violation', () => {
+  it('recognizes a valid payload from a compatible package version with a different limit', () => {
+    const otherVersionLimitBytes = 100_000;
+    const payload = {
+      name: 'CtxSharedSizeLimitExceededError',
+      message: 'oversized under the reporting host contract',
+      code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+      actualBytes: otherVersionLimitBytes + 1,
+      limitBytes: otherVersionLimitBytes,
+      stepName: 'summarize',
+      phase: 'step_completion',
+      retryable: false,
+    };
+
+    expect(isCtxSharedSizeLimitExceededPayload(payload)).toBe(true);
+    expect(ctxSharedSizeLimitExceededPayloadSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('rejects near-miss payloads whose actual size does not exceed their reported limit', () => {
+    const reportedLimitBytes = 100_000;
     expect(
       isCtxSharedSizeLimitExceededPayload({
         name: 'CtxSharedSizeLimitExceededError',
         message: 'not actually oversized',
         code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
-        actualBytes: MAX_SHARED_SNAPSHOT_BYTES,
-        limitBytes: MAX_SHARED_SNAPSHOT_BYTES,
+        actualBytes: reportedLimitBytes,
+        limitBytes: reportedLimitBytes,
+        stepName: 'summarize',
+        phase: 'step_completion',
+        retryable: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a non-positive reported limit', () => {
+    expect(
+      isCtxSharedSizeLimitExceededPayload({
+        name: 'CtxSharedSizeLimitExceededError',
+        message: 'invalid limit',
+        code: 'CTX_SHARED_SIZE_LIMIT_EXCEEDED',
+        actualBytes: 1,
+        limitBytes: 0,
         stepName: 'summarize',
         phase: 'step_completion',
         retryable: false,

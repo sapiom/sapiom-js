@@ -63,5 +63,11 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "IDs/references here instead of bulk state",
     );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "does not make `ctx.shared.set()` a synchronous size gate by itself",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "older hosts may temporarily enforce a smaller",
+    );
   });
 });
