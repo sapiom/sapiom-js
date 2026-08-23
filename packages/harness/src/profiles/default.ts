@@ -30,7 +30,7 @@ the \`tool_use\` block's input, never string-parse; a plain-text reply reads
 only \`type === 'text'\` blocks. Omit \`model\`
 (recommended) or pin the \`smart\` label; raw provider ids are never
 honored. Results disclose the served class + lane. Debugging a run: the
-Run Inspector, or the per-step I/O endpoint documented below.
+Run Inspector, or the per-step I/O endpoint documented in the guide.
 Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
 
 **When something about Sapiom is wrong, send it upstream.** If the user hits a

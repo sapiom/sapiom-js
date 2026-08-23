@@ -346,7 +346,8 @@ const response = await ctx.sapiom.llm.run({
     messages: [{ role: "user", content: `Classify this support ticket: ${input.text}` }],
     max_tokens: 256,
   },
-  model: "smart", // a label — omit to let the platform choose (recommended)
+  // No `model` — omit it and let the platform choose (recommended). To pin
+  // instead: `model: "smart"` (a label, never a raw provider model id).
   output: {
     name: "classify_ticket",
     schema: {
@@ -400,7 +401,7 @@ uses — conflating two costs you a wrong capability choice, not just a wrong wo
 | **task**     | `CodingRunSpec.task` — the coding agent's prompt-equivalent field. Deliberately not called `prompt`: it's handed to a sandboxed coding agent, not a bare LLM call.                                                                                                                                                            |
 | **session**  | (1) `ctx.sapiom.llm.createSession`/`callSession` — reserved LLM capacity accepting repeated drop-in calls until its TTL/budget ends it (replacing the deferred `submit`/`redeem` lane). (2) A Studio harness terminal session — unrelated, no LLM-capacity semantics.                                                                |
 | **dispatch** | The structural contract (`DispatchHandle`) a long-running capability's `launch()` handle satisfies so a step can `pauseUntilSignal(handle, …)` and resume on completion. Every dispatched capability (coding, `models.run`, `agents.run`, more later) shares this ONE contract — "dispatch" always means this pattern, never anything else.  |
-| **label**    | The author-facing term for a `model:`/`label:` value (e.g. `"smart"`) — never "class" and never a raw provider model id (never honored, on any surface).                                                                                                                                                                      |
+| **label**    | The author-facing term for a `model:`/`label:` *input* value (e.g. `"smart"`) — never a raw provider model id (never honored, on any surface). Not a contradiction that a result's `servedClass` field says "class": that field *reports* the billing class the platform resolved your label to — it's a disclosure field, not author-facing input vocabulary. You still write `label`; the platform still reports back `servedClass`.                                                                                                     |
 
 **The rule new capabilities must follow:** don't re-overload "agent" or "run" further. If a
 new capability needs its own verb, name it something else (`dispatch`, `launch`, `submit`,

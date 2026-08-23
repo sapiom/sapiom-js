@@ -39,6 +39,10 @@ describe("generateSystemPromptFile", () => {
     // `tool_use` block's input. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
     expect(content).toContain("tool_use");
+    // The debugging pointer must point at the guide (the very next line), not
+    // at a "below" that this prompt never actually documents.
+    expect(content).toContain("documented in the guide");
+    expect(content).not.toContain("documented below");
     expect(content).not.toContain("Visualize button");
     expect(content).not.toContain("⌘K");
     expect(content.toLowerCase()).not.toContain("workflow");
