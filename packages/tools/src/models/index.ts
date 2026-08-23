@@ -558,6 +558,18 @@ export type ModelRunResultPayload = ModelRunResult;
 /** Thrown by {@link modelRunResultSchema}.parse on a malformed resume payload. */
 export class ModelRunResultSchemaError extends Error {}
 
+/**
+ * Guarded `warnings` normalization — enforces the ONE encoding of "no
+ * warnings" (`undefined`) on every path that hands a {@link ModelRunOutcome}
+ * to a consumer: only string elements survive; an empty/absent/malformed value
+ * becomes `undefined`, never a present-but-empty array a consumer's
+ * `if (outcome.warnings)` would misread.
+ */
+function normalizeWarnings(value: unknown): string[] | undefined {
+  const warnings = Array.isArray(value) ? value.filter((w): w is string => typeof w === "string") : [];
+  return warnings.length ? warnings : undefined;
+}
+
 /** Runtime validator for {@link ModelRunResultPayload}. */
 export const modelRunResultSchema = {
   parse(value: unknown): ModelRunResultPayload {
@@ -572,6 +584,15 @@ export const modelRunResultSchema = {
     if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
     if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
     if (v.error !== null && (typeof v.error !== "object" || !v.error)) fail("error must be an object or null");
+    if (v.result) {
+      // Same warnings encoding as the polled path (mapModelResult): the resume
+      // payload is server-serialized, so a wire `[]` would otherwise reach the
+      // resumed step present-but-empty.
+      const r = v.result as Record<string, unknown>;
+      const warnings = normalizeWarnings(r.warnings);
+      if (warnings) r.warnings = warnings;
+      else delete r.warnings;
+    }
     return value as ModelRunResultPayload;
   },
 };
@@ -622,14 +643,13 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     lane: r.lane ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
-    // Passthrough with a runtime guard (the wire is untyped at runtime). ONE
-    // encoding of "no warnings" reaches consumers: the key is absent unless at
-    // least one string warning survives the guard — a wire `[]` (or a
-    // non-array, or an all-junk array) maps to absent, matching the documented
+    // Passthrough via the shared guard (`normalizeWarnings`): the key is
+    // absent unless at least one string warning survives — a wire `[]`, a
+    // non-array, or an all-junk array maps to absent, matching the documented
     // "treat undefined as none".
     ...(() => {
-      const warnings = Array.isArray(r.warnings) ? r.warnings.filter((w): w is string => typeof w === "string") : [];
-      return warnings.length ? { warnings } : {};
+      const warnings = normalizeWarnings(r.warnings);
+      return warnings ? { warnings } : {};
     })(),
     usage: {
       inputTokens: r.usage?.input_tokens ?? 0,

@@ -4,7 +4,7 @@
  * fake fetch (no real network).
  */
 import { createClient } from "../index.js";
-import { MODEL_RUN_RESULT_SIGNAL } from "./index.js";
+import { MODEL_RUN_RESULT_SIGNAL, modelRunResultSchema } from "./index.js";
 
 function fakeFetch(opts: {
   capture?: { headers?: Record<string, string>; url?: string };
@@ -154,6 +154,34 @@ describe("agent.run — terminal result mapping", () => {
     expect(await runWith("oops")).toBeUndefined();
     // Mixed array → only the string elements survive the guard.
     expect(await runWith([1, "warn-a", null])).toEqual(["warn-a"]);
+  });
+
+  it("the resume payload gets the SAME warnings encoding (modelRunResultSchema normalizes)", async () => {
+    // A step resumed via pauseUntilSignal receives the server-serialized
+    // payload through modelRunResultSchema.parse, not mapModelResult — the
+    // one-encoding guarantee must hold there too.
+    const payload = (warnings?: unknown) => ({
+      runId: "run-abc",
+      status: "completed",
+      output: "OK",
+      result: {
+        success: true,
+        stopReason: "end_turn",
+        turns: 1,
+        modelUsed: null,
+        durationMs: 1200,
+        costUsd: 0.001,
+        ...(warnings !== undefined ? { warnings } : {}),
+        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreateTokens: 0, thinkingTokens: 0 },
+      },
+      error: null,
+    });
+
+    expect(modelRunResultSchema.parse(payload()).result?.warnings).toBeUndefined();
+    expect(modelRunResultSchema.parse(payload([])).result?.warnings).toBeUndefined();
+    expect(modelRunResultSchema.parse(payload("oops")).result?.warnings).toBeUndefined();
+    expect(modelRunResultSchema.parse(payload([1, "warn-a", null])).result?.warnings).toEqual(["warn-a"]);
+    expect(modelRunResultSchema.parse(payload(["warn-1"])).result?.warnings).toEqual(["warn-1"]);
   });
 });
 
