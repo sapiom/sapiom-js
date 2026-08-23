@@ -54,6 +54,19 @@ describe("server instructions", () => {
     );
   });
 
+  it("teaches the LLM call-surface rule (SAP-2775) — kept byte-identical to the backend copy", () => {
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.llm.run");
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.models.run");
+    expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
+    expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
+    // The internal `workflows`-service naming must never reach this customer-facing
+    // primer — the per-step debugging endpoint lives in the docs guide, not spelled
+    // out here verbatim (matches this package's own scaffold terminology guard).
+    expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
+  });
+
   it("documents the complete ctx.shared quota contract", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "inclusive 256 KiB (262,144-byte) quota",
