@@ -61,9 +61,24 @@ export interface CodingRunSpec {
   workingDirectory?: string;
   /** Keep the sandbox alive after the run finishes. SDK default: true (the mesh needs it). */
   keepSandbox?: boolean;
-  /** Override the model the agent runs on. */
-  model?: string;
+  /**
+   * Routing label for the coding agent's LLM calls (e.g. `"smart"`). The
+   * platform resolves it against its configured label set — a raw provider
+   * model id is never honored. Omit to let the platform choose (the
+   * recommended default); pass `"smart"` if you need to pin explicitly.
+   */
+  model?: ModelLabel;
 }
+
+/**
+ * A routing label — the vocabulary the platform resolves against its
+ * configured label set (never a raw provider model id). `"smart"` is
+ * suggested for autocomplete; any other string is still accepted, since the
+ * full label set is configured server-side. `Record<never, never>` is the
+ * lint-safe spelling of the `string & {}` idiom (see
+ * `content-generation/index.ts`'s `LiteralUnion`).
+ */
+export type ModelLabel = "smart" | (string & Record<never, never>);
 
 export interface CodingRunUsage {
   inputTokens: number;
@@ -77,6 +92,19 @@ export interface CodingRunOutcome {
   success: boolean;
   turns: number;
   modelUsed: string | null;
+  /**
+   * The billing class (size) the run's label resolved to, in the SKU
+   * vocabulary the platform bills in (e.g. `"medium"`) — never a model or
+   * provider id. `undefined`/`null` means the server did not disclose it
+   * (coding runs cannot observe this today, and older servers omit the
+   * field) — treat as unknown, never fabricate a value.
+   */
+  servedClass?: string | null;
+  /**
+   * The billing lane the run executed in (e.g. `"run_now"`).
+   * `undefined`/`null` means not disclosed — same caveats as `servedClass`.
+   */
+  lane?: string | null;
   durationMs: number;
   toolCallCount: number;
   usage: CodingRunUsage;
@@ -267,6 +295,8 @@ interface WireResult {
   success: boolean;
   turns: number;
   model_used: string | null;
+  served_class?: string | null;
+  lane?: string | null;
   duration_ms: number;
   tool_call_count: number;
   usage?: {
@@ -297,6 +327,9 @@ function mapResult(r: WireResult | null | undefined): CodingRunOutcome | null {
     success: r.success,
     turns: r.turns,
     modelUsed: r.model_used ?? null,
+    // Disclosure fields: absent on older servers ⇒ null (unknown), never fabricated.
+    servedClass: r.served_class ?? null,
+    lane: r.lane ?? null,
     durationMs: r.duration_ms,
     toolCallCount: r.tool_call_count,
     usage: {
@@ -444,8 +477,13 @@ export interface ModelRunSpec {
   prompt: string;
   /** System prompt steering the agent. */
   system?: string;
-  /** Override the model / routing alias. */
-  model?: string;
+  /**
+   * Routing label for the run's LLM calls (e.g. `"smart"`). The platform
+   * resolves it against its configured label set — a raw provider model id
+   * is never honored. Omit to let the platform choose (the recommended
+   * default); pass `"smart"` if you need to pin explicitly.
+   */
+  model?: ModelLabel;
   /** Max output tokens per turn. */
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
@@ -457,6 +495,19 @@ export interface ModelRunOutcome {
   stopReason: string;
   turns: number;
   modelUsed: string | null;
+  /**
+   * The billing class (size) the run's label resolved to (the final turn's,
+   * on a multi-turn run), in the SKU vocabulary the platform bills in (e.g.
+   * `"medium"`) — never a model or provider id. `undefined`/`null` means the
+   * server did not disclose it (older server, resolution failure) — treat as
+   * unknown, never fabricate a value.
+   */
+  servedClass?: string | null;
+  /**
+   * The billing lane the run executed in (e.g. `"run_now"`).
+   * `undefined`/`null` means not disclosed — same caveats as `servedClass`.
+   */
+  lane?: string | null;
   durationMs: number;
   costUsd: number;
   usage: CodingRunUsage;
@@ -522,6 +573,8 @@ interface ModelWireResult {
   stop_reason: string;
   turns: number;
   model_used: string | null;
+  served_class?: string | null;
+  lane?: string | null;
   duration_ms: number;
   cost_usd: number;
   usage?: {
@@ -552,6 +605,9 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     stopReason: r.stop_reason,
     turns: r.turns,
     modelUsed: r.model_used ?? null,
+    // Disclosure fields: absent on older servers ⇒ null (unknown), never fabricated.
+    servedClass: r.served_class ?? null,
+    lane: r.lane ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
     usage: {

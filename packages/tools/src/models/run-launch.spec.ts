@@ -9,6 +9,7 @@ import { MODEL_RUN_RESULT_SIGNAL } from "./index.js";
 function fakeFetch(opts: {
   capture?: { headers?: Record<string, string>; url?: string };
   terminal?: boolean;
+  wireResult?: Record<string, unknown>;
 }): typeof globalThis.fetch {
   return (async (url: string, init: RequestInit = {}) => {
     if (opts.capture) {
@@ -21,7 +22,7 @@ function fakeFetch(opts: {
       : {
           status: "completed",
           output: "OK",
-          result: {
+          result: opts.wireResult ?? {
             success: true,
             stop_reason: "end_turn",
             turns: 1,
@@ -73,6 +74,39 @@ describe("agent.run — terminal result mapping", () => {
     expect(result.result?.stopReason).toBe("end_turn");
     expect(result.result?.costUsd).toBe(0.001);
     expect(result.result?.usage.inputTokens).toBe(10);
+  });
+
+  it("maps the serving disclosure (servedClass/lane) when the server reports it", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeFetch({
+        wireResult: {
+          success: true,
+          stop_reason: "end_turn",
+          turns: 1,
+          model_used: "smart",
+          served_class: "medium",
+          lane: "run_now",
+          duration_ms: 1200,
+          cost_usd: 0.001,
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      }),
+    });
+    const result = await sapiom.models.run({ prompt: "say OK" });
+    expect(result.result?.servedClass).toBe("medium");
+    expect(result.result?.lane).toBe("run_now");
+    // The label echo keeps its own meaning, independent of the disclosed class.
+    expect(result.result?.modelUsed).toBe("smart");
+  });
+
+  it("maps a result from an older server (no disclosure fields) to null, never a fabricated value", async () => {
+    // Same wire doc as the base fixture — no served_class/lane keys at all,
+    // the shape a pre-disclosure server emits.
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({}) });
+    const result = await sapiom.models.run({ prompt: "say OK" });
+    expect(result.result?.servedClass).toBeNull();
+    expect(result.result?.lane).toBeNull();
   });
 });
 
