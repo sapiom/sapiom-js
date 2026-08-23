@@ -74,7 +74,7 @@ test("isNarrationScript flags a sectioned narration script (the SAP-2781 shape)"
 test("isNarrationScript accepts a short single-shot visual prompt", () => {
   assert.equal(
     isNarrationScript(
-      "Slow push-in on a bold pull-quote over a deep-navy background, subtle light sweep.",
+      "Slow push-in over a deep-navy gradient, subtle light sweep, no text.",
     ),
     false,
   );
@@ -96,10 +96,21 @@ test("buildClipPrompt replaces a narration script with a purpose-written visual 
   assert.ok(prompt.length <= 300);
 });
 
-test("buildClipPrompt keeps a genuinely short visual videoScript", () => {
+test("buildClipPrompt keeps a genuinely short visual videoScript verbatim when it already forbids text", () => {
   const script = "Slow push-in over a bright gradient, no text, 16:9.";
   const prompt = buildClipPrompt({ ...basePack, videoScript: script });
   assert.equal(prompt, script);
+});
+
+test("buildClipPrompt appends the no-text directive to an accepted script that asks for text", () => {
+  // The LLM path must carry the same guarantee as the fallback: a script that
+  // slips past isNarrationScript but asks for on-screen text still must not
+  // hand a text-rendering job to a general video model.
+  const script =
+    "Slow push-in on a bold pull-quote over a deep-navy background, subtle light sweep.";
+  const prompt = buildClipPrompt({ ...basePack, videoScript: script });
+  assert.match(prompt, /^Slow push-in on a bold pull-quote/);
+  assert.match(prompt, /No text, no watermark\.$/);
 });
 
 /** Build a media-step context: fake shared state + capturing launch fakes. */

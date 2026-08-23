@@ -274,11 +274,17 @@ export function isNarrationScript(script: string): boolean {
  * narration script (see {@link isNarrationScript}). Deliberately NO on-screen
  * text either way: a general video model renders text illegibly (the garbled-clip
  * half of SAP-2781), so the quote lives in the typography-model graphics and the
- * teaser stays abstract.
+ * teaser stays abstract. The system prompt asks the LLM for a text-free visual,
+ * but the guarantee lives here — an accepted script that doesn't already forbid
+ * text gets the directive appended.
  */
 export function buildClipPrompt(pack: Pack): string {
   const script = pack.videoScript.trim();
-  if (script && !isNarrationScript(script)) return script;
+  if (script && !isNarrationScript(script)) {
+    return /\bno (?:on-screen )?text\b/i.test(script)
+      ? script
+      : `${script.replace(/[.\s]+$/, "")}. No text, no watermark.`;
+  }
   return (
     `Abstract, elegant ${CLIP_SECONDS}-second social teaser: slow camera ` +
     `push-in over a deep-navy gradient with a soft light sweep and drifting ` +
