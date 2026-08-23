@@ -39,8 +39,8 @@ test("buildGraphicPrompt always renders the quote text into the prompt", () => {
   assert.match(prompt, /Solid deep-navy background/);
 });
 
-test("buildGraphicPrompt leads with the text directive even when the LLM's art direction is the 293742 background-only ask", () => {
-  // The execution-293742 failure shape: the LLM asked for a text-free background.
+test("buildGraphicPrompt leads with the text directive even when the LLM's art direction is a background-only ask", () => {
+  // The SAP-2781 failure shape: the LLM asked for a text-free background.
   const prompt = buildGraphicPrompt({
     quote: "Small teams ship faster.",
     imagePrompt:
@@ -67,7 +67,7 @@ const NARRATION_SCRIPT =
   "SOLUTION (20-40s): Keep the team small enough to see the whole system.\n" +
   "CTA (40-45s): Read the full post.";
 
-test("isNarrationScript flags the execution-293742 narration script", () => {
+test("isNarrationScript flags a sectioned narration script (the SAP-2781 shape)", () => {
   assert.equal(isNarrationScript(NARRATION_SCRIPT), true);
 });
 
@@ -81,18 +81,24 @@ test("isNarrationScript accepts a short single-shot visual prompt", () => {
 });
 
 test("buildClipPrompt replaces a narration script with a purpose-written visual prompt", () => {
-  const prompt = buildClipPrompt(
-    { ...basePack, videoScript: NARRATION_SCRIPT },
-    "Why small teams ship faster",
-  );
+  const prompt = buildClipPrompt({
+    ...basePack,
+    videoScript: NARRATION_SCRIPT,
+  });
   assert.ok(!prompt.includes("HOOK"), "narration script must not be used");
-  assert.match(prompt, /"q1"/, "the lead pull-quote goes on screen instead");
+  // Deliberately decorative: a general video model renders on-screen text
+  // illegibly, so the quote stays in the graphics and the teaser asks for none.
+  assert.match(prompt, /no text/i);
+  assert.ok(
+    !prompt.includes('"q1"'),
+    "no quote text handed to the video model",
+  );
   assert.ok(prompt.length <= 300);
 });
 
 test("buildClipPrompt keeps a genuinely short visual videoScript", () => {
-  const script = "Slow push-in on the pull-quote, bright and clean, 16:9.";
-  const prompt = buildClipPrompt({ ...basePack, videoScript: script }, "Title");
+  const script = "Slow push-in over a bright gradient, no text, 16:9.";
+  const prompt = buildClipPrompt({ ...basePack, videoScript: script });
   assert.equal(prompt, script);
 });
 
@@ -152,7 +158,6 @@ test("graphics launches a typography-capable cataloged model with the quote in t
 test("clip launches a cataloged semantic alias with neutral params and a short visual prompt", async () => {
   const { context, launches } = mediaContext({
     pack: { ...basePack, videoScript: NARRATION_SCRIPT },
-    title: "Why small teams ship faster",
     graphics: [{ quote: "q1", downloadUrl: "https://files/q1.png" }],
     aspectRatio: "16:9",
   });
@@ -178,7 +183,6 @@ test("clip launches a cataloged semantic alias with neutral params and a short v
 test("clip honors a caller-supplied semantic alias", async () => {
   const { context, launches } = mediaContext({
     pack: basePack,
-    title: "T",
     graphics: [],
     aspectRatio: "16:9",
     model: "veo3-fast",

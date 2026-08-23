@@ -42,10 +42,11 @@ import { z } from "zod/v4";
  *      graphic, on a typography-capable model (`ideogram-v3`).
  *   3. collectGraphic — record the finished graphic, then loop back to `graphics`
  *      for the next quote, or advance once every quote graphic is in.
- *   4. clip — render a short teaser clip of the lead pull-quote: launch an async
- *      text-to-video job (`video.launch`, cataloged alias) with a purpose-written
- *      short visual prompt (`buildClipPrompt`) and `pauseUntilSignal` on it; the
- *      video-generation webhook resumes `collectClip` when the clip is ready.
+ *   4. clip — render a short decorative teaser clip: launch an async text-to-video
+ *      job (`video.launch`, cataloged alias) with a purpose-written short visual
+ *      prompt (`buildClipPrompt`, deliberately no on-screen text) and
+ *      `pauseUntilSignal` on it; the video-generation webhook resumes
+ *      `collectClip` when the clip is ready.
  *   5. collectClip — record the finished clip.
  *   6. package — assemble the whole pack as one markdown document and upload it to
  *      file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
@@ -91,8 +92,8 @@ interface Pack {
   /** Pull-quotes to render as graphics. */
   quoteGraphics: QuoteGraphicSpec[];
   /**
-   * Short single-shot VISUAL prompt for the teaser clip — what's on screen for
-   * {@link CLIP_SECONDS} seconds, not a narrated timeline. Guarded by
+   * Short single-shot VISUAL prompt for the teaser clip — decorative motion with
+   * no on-screen text, not a narrated timeline. Guarded by
    * {@link buildClipPrompt}: a narration-script-shaped value is replaced with a
    * purpose-written prompt (feeding a 45s narration script to a 5s video model is
    * how SAP-2781's garbled clip was made).
@@ -167,11 +168,12 @@ type Ctx = AgentExecutionContext<Shared>;
 const IMAGE_MODEL = "ideogram-v3";
 /**
  * Default teaser-clip model — a cataloged semantic alias (silent 5s text-to-video),
- * swappable via the `model` input. Raw provider ids are off the menu: the allowlist
- * (SAP-2582/E8) rejects uncataloged ids with `400 unknown_model`, and only cataloged
- * models get neutral-param normalization (`aspectRatio`/`duration`). No cataloged
- * image-to-video alias exists yet, so the teaser renders the quote itself rather
- * than animating a finished graphic.
+ * swappable via the `model` input. Raw provider ids are off the menu: only cataloged
+ * models get neutral-param normalization (`aspectRatio`/`duration`), and allowlist
+ * enforcement (SAP-2582/E8) will reject uncataloged ids with `400 unknown_model`
+ * once it lands. At the time of writing no cataloged alias advertises
+ * `referenceImage` (image-to-video), so the teaser is a decorative text-free motion
+ * piece rather than an animation of a finished graphic.
  */
 const DEFAULT_VIDEO_MODEL = "kling-standard";
 /** Aspect ratio shared by the graphics + teaser clip so the pack reads as one set. */
@@ -231,7 +233,7 @@ export function isReservedAddress(email: string): boolean {
 /**
  * Compose the final launch prompt for one quote graphic. The quote TEXT is the
  * artifact, so the render-the-text directive is built here in code rather than
- * trusted to the LLM: SAP-2781 (execution 293742) shipped a blank navy background
+ * trusted to the LLM: SAP-2781 shipped a blank navy background
  * as the "quote graphic" because the LLM's imagePrompt asked for "negative space
  * for text overlay … no text in the image" and no overlay step exists. The LLM's
  * `imagePrompt` is demoted to art direction appended after the text directive.
@@ -268,17 +270,19 @@ export function isNarrationScript(script: string): boolean {
 
 /**
  * The teaser clip's visual prompt: the LLM's `videoScript` when it is genuinely a
- * short visual prompt, else a purpose-written one that puts the lead pull-quote on
- * screen — never a narration script (see {@link isNarrationScript}).
+ * short visual prompt, else a purpose-written decorative fallback — never a
+ * narration script (see {@link isNarrationScript}). Deliberately NO on-screen
+ * text either way: a general video model renders text illegibly (the garbled-clip
+ * half of SAP-2781), so the quote lives in the typography-model graphics and the
+ * teaser stays abstract.
  */
-export function buildClipPrompt(pack: Pack, title: string): string {
+export function buildClipPrompt(pack: Pack): string {
   const script = pack.videoScript.trim();
   if (script && !isNarrationScript(script)) return script;
-  const quote = pack.quoteGraphics[0]?.quote?.trim() || title;
   return (
-    `A clean ${CLIP_SECONDS}-second social teaser: the pull-quote "${quote}" ` +
-    `in bold, legible type on a solid dark background, slow push-in, subtle ` +
-    `light sweep, no scene changes, no other text.`
+    `Abstract, elegant ${CLIP_SECONDS}-second social teaser: slow camera ` +
+    `push-in over a deep-navy gradient with a soft light sweep and drifting ` +
+    `bokeh particles, a single continuous shot, no text, no watermark.`
   );
 }
 
@@ -311,7 +315,9 @@ function parsePack(
       imagePrompt:
         "Clean, modern, solid deep-navy background, large legible sans-serif type, generous margins, no watermark.",
     })),
-    videoScript: `A short, upbeat teaser for "${title}"; slow push-in on the key quote; ${CLIP_SECONDS}s; bright, clean, social-ready.`,
+    // Decorative and text-free, like buildClipPrompt's fallback — video models
+    // render on-screen text illegibly.
+    videoScript: `Upbeat ${CLIP_SECONDS}-second social teaser: slow push-in over a bright, clean gradient, a single continuous shot, no text, no watermark.`,
   };
   if (!output) return fallback;
   try {
@@ -566,8 +572,10 @@ const repurpose = defineStep({
       "prompt by the pipeline, so never request empty space or say the image " +
       'should contain no text. "videoScript" is a short single-shot visual ' +
       `prompt (under 300 characters) for a ${CLIP_SECONDS}-second silent teaser ` +
-      "clip — describe what is on screen, never a narrated timeline or script " +
-      "sections. Tweets must each be <= 280 characters. " +
+      "clip — describe decorative motion with NO on-screen text (video models " +
+      "render text illegibly; the quote lives in the graphics), never a " +
+      "narrated timeline or script sections. Tweets must each be <= 280 " +
+      "characters. " +
       "Reply with ONLY minified JSON: " +
       '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
       '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.';
@@ -720,13 +728,12 @@ const clip = defineStep({
   pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: "collectClip" },
   async run(_input: unknown, ctx: Ctx) {
     const pack = must(ctx.shared.get("pack"), "pack");
-    const title = must(ctx.shared.get("title"), "title");
     const model = ctx.shared.get("model") ?? DEFAULT_VIDEO_MODEL;
-    const prompt = buildClipPrompt(pack, title);
+    const prompt = buildClipPrompt(pack);
 
     ctx.logger.info("rendering teaser clip", { model });
-    // A short text-to-video teaser that puts the lead pull-quote on screen. The
-    // prompt is a purpose-written single-shot visual (buildClipPrompt) — never the
+    // A short decorative text-to-video teaser. The prompt is a purpose-written
+    // single-shot visual with no on-screen text (buildClipPrompt) — never the
     // narration script — and the model a CATALOGED semantic alias, so the neutral
     // params below are validated against its capabilities and mapped to its wire
     // keys server-side (E4). The previous raw `fal-ai/kling-video/v2.1/pro/…` pin

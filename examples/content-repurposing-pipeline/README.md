@@ -19,11 +19,11 @@ repurpose ──▶ graphics ⇄ collectGraphic ──▶ clip ⇄ collectClip �
 2. **graphics ⇄ collectGraphic** — one quote-graphic image at a time
    (`images.launch`, async): launch the job, pause until the webhook resumes
    `collectGraphic`, record it, then loop back for the next quote or advance.
-3. **clip ⇄ collectClip** — renders a short teaser clip that puts the lead
-   pull-quote on screen: launches an async text-to-video job (`video.launch`,
-   a cataloged semantic alias) with a purpose-written short visual prompt and
-   pauses on it; the video-generation webhook resumes `collectClip` when the
-   clip is ready.
+3. **clip ⇄ collectClip** — renders a short decorative teaser clip: launches an
+   async text-to-video job (`video.launch`, a cataloged semantic alias) with a
+   purpose-written short visual prompt — deliberately no on-screen text, since
+   general video models render text illegibly — and pauses on it; the
+   video-generation webhook resumes `collectClip` when the clip is ready.
 4. **package** — assembles the whole pack as one markdown document and uploads it
    to file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
 5. **deliver** — fans the pack out to every `deliverTo` recipient
@@ -74,9 +74,11 @@ iterating on the copy, and keep `numQuotes` small for real runs.
 Quote graphics render on `ideogram-v3`, a typography-capable cataloged alias —
 the quote text is drawn INTO the image, so a model with strong text rendering is
 non-negotiable (`gpt-image-2` also fits). `clip` defaults to `kling-standard`, a
-cataloged semantic video alias. Pass a different alias via the `model` input to
-trade quality for cost; only cataloged aliases resolve (raw provider ids get no
-neutral-param normalization and are rejected once allowlist enforcement lands).
+cataloged semantic video alias; the teaser is decorative and text-free, because
+general video models render on-screen text illegibly. Pass a different alias via
+the `model` input to trade quality for cost. Prefer cataloged aliases: raw
+provider ids get no neutral-param normalization, and allowlist enforcement
+(SAP-2582) is expected to reject them outright.
 
 ## Files
 
