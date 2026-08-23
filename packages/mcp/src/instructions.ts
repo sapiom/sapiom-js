@@ -88,7 +88,8 @@ and returns a live URL; a \`failed\` status carries the build/start logs — fix
   small deployed agents rather than one large monolith.
 - **You never pick a model.** Say how long you can wait (\`deadlineMinutes\` where supported)
   — the platform picks the model. \`llm.run\`/\`models.run\` report the served class and lane
-  on the result; \`models.coding.run\` reports both as \`null\` today.
+  on the result (absent on older servers — treat missing as unknown); \`models.coding.run\`
+  reports both as \`null\` today.
   **Omit \`model\` entirely (recommended)** — the platform routes it. Raw provider model ids
   are never honored.
 - **Debugging a run:** open the Run Inspector, or fetch a step's full input/output via

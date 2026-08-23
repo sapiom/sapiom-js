@@ -69,6 +69,15 @@ describe("server instructions", () => {
     // `tool_use` block's `input`. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
     expect(AUTHORING_INSTRUCTIONS).toContain("tool_use");
+    // `output` is sugar for a forced tool call — one mechanism, one payload location.
+    expect(AUTHORING_INSTRUCTIONS).toContain("it forces a tool");
+    // The disclosure claim stays scoped: coding runs report honest nulls, and older
+    // servers omit the fields entirely — never a flat "always on the result" promise.
+    expect(AUTHORING_INSTRUCTIONS).toContain("treat missing as unknown");
+    expect(AUTHORING_INSTRUCTIONS).toContain("reports both as `null` today");
+    // "Pin the `smart` label" was a no-op (smart IS the default) and wrong-field on
+    // the sessions surface — it must not come back.
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("If you must pin");
   });
 
   it("documents the complete ctx.shared quota contract", () => {
