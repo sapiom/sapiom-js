@@ -14,13 +14,23 @@ active for the whole session. Follow them.
 **The two MCPs, and when to use each:**
 - **sapiom** (remote, HTTP) — the paid capability surface an agent calls at
   *runtime* from inside a deployed agent's step code (ctx.sapiom.*):
-  repositories, sandboxes, models, and so on. You don't call this directly
-  while authoring.
+  repositories, sandboxes, LLM calls (see below), and so on. You don't call
+  this directly while authoring.
 - **sapiom-dev** (local, stdio) — the developer surface for this session. Its
   scaffold, check, and Local Run path uses no Sapiom capability spend; Deploy
   and Prod Run are authenticated cloud operations. Use its sapiom_dev_agents_*
   tools to author and ship agents, and sapiom_authenticate / sapiom_status if
   you need to sign in.
+
+**Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
+platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a
+one-shot — it overthinks); dispatching a deployed agent by slug →
+\`ctx.sapiom.agents.run\`. Structured output = tool-use/schema output, read
+only \`type === 'text'\` blocks — never "reply with only JSON". Omit \`model\`
+(recommended) or pin the \`smart\` label; raw provider ids are never
+honored. Results disclose the served class + lane. Debugging a run: the
+Run Inspector, or the per-step I/O endpoint documented below.
+Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
 
 **When something about Sapiom is wrong, send it upstream.** If the user hits a
 bug, calls something confusing or broken, or wishes it worked differently,

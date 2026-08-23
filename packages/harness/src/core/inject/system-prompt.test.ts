@@ -29,6 +29,12 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain('"agents"');
     expect(content).toContain("The Canvas follows that selection");
     expect(content).toContain("Local Run, Prod Run, and Deploy");
+    // LLM call-surface rule (SAP-2775) — kept in sync with the MCP instructions
+    // (sapiom-js#679) and the backend DEFAULT_MCP_INSTRUCTIONS copy.
+    expect(content).toContain("ctx.sapiom.llm.run");
+    expect(content).toContain("ctx.sapiom.models.run");
+    expect(content).toContain("ctx.sapiom.agents.run");
+    expect(content).toContain("pin the `smart` label");
     expect(content).not.toContain("Visualize button");
     expect(content).not.toContain("⌘K");
     expect(content.toLowerCase()).not.toContain("workflow");
