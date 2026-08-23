@@ -481,8 +481,10 @@ export interface ModelRunSpec {
   /**
    * Routing label for the run's LLM calls (e.g. `"smart"`). The platform
    * resolves it against its configured label set — a raw provider model id
-   * is never honored. Omit to let the platform choose (the recommended
-   * default); pass `"smart"` if you need to pin explicitly.
+   * is never honored. An unrecognized value is never silently dropped: the
+   * run routes via the platform default and the platform reports it in the
+   * result's `warnings` (SAP-2765). Omit to let the platform choose (the
+   * recommended default); pass `"smart"` if you need to pin explicitly.
    */
   model?: ModelLabel;
   /** Max output tokens per turn. */
@@ -509,6 +511,13 @@ export interface ModelRunOutcome {
    * `undefined`/`null` means not disclosed — same caveats as `servedClass`.
    */
   lane?: string | null;
+  /**
+   * Routing/honesty warnings reported by the platform (SAP-2765) — e.g. a
+   * supplied `model` the platform didn't recognize (the run then routed via
+   * the platform default). Treat `undefined` as none on any path: the wire
+   * omits the key on a clean run and the stub never sets it.
+   */
+  warnings?: string[];
   durationMs: number;
   costUsd: number;
   usage: CodingRunUsage;
@@ -576,6 +585,8 @@ interface ModelWireResult {
   model_used: string | null;
   served_class?: string | null;
   lane?: string | null;
+  /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
+  warnings?: string[];
   duration_ms: number;
   cost_usd: number;
   usage?: {
@@ -611,6 +622,9 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     lane: r.lane ?? null,
     durationMs: r.duration_ms,
     costUsd: r.cost_usd,
+    // Passthrough with a runtime guard (the wire is untyped at runtime); the
+    // key stays absent when there are no warnings — `undefined` means none.
+    ...(Array.isArray(r.warnings) ? { warnings: r.warnings.filter((w): w is string => typeof w === "string") } : {}),
     usage: {
       inputTokens: r.usage?.input_tokens ?? 0,
       outputTokens: r.usage?.output_tokens ?? 0,
