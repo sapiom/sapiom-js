@@ -234,10 +234,18 @@ const taskId = ctx.shared.get("taskId"); // typed as string | undefined
 
 `ctx.shared` API: `get(key)`, `set(key, value)`, `has(key)`, `snapshot()`.
 
+The **whole snapshot** has an inclusive **256 KiB (262,144-byte)** quota,
+measured as the UTF-8 byte length of compact `JSON.stringify(snapshot)`. Keys,
+JSON punctuation, all existing values, and the value being set count together.
+Exactly 262,144 bytes is valid; 262,145 bytes is rejected. Keep compact state,
+IDs, and durable-storage references in `ctx.shared`; put bulk API responses,
+documents, or research data in durable storage and carry only the ID/reference.
+
 **A step's `run(input, ctx)` first argument is its inbound input** — the entry input at the
 entry step, or the previous step's `goto(target, payload)` value at later steps. The entry
-input reaches only the entry step's argument; to use it in later steps, write it into
-`ctx.shared` from the entry step.
+input reaches only the entry step's argument; if it is compact and later steps need it,
+write it into `ctx.shared` from the entry step. Persist bulk input separately and carry a
+reference instead.
 
 ## `ctx` Reference
 

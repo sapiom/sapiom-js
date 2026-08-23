@@ -72,11 +72,11 @@ return pauseUntilSignal(run, { resumeStep: "finalize" }); // suspend on the run'
 ```
 
 - **The resumed step's `input` IS the run's result signal payload.** Annotate it with `CodingResultPayload` (from `@sapiom/tools`) — you don't have to hand-roll the shape.
-- That payload crossed a wire boundary, so it carries **no live handles** — to act on the run's sandbox, re-attach one from **`executionEnvironment`** with `ctx.sapiom.sandboxes.attach(result.executionEnvironment.id)` (`executionEnvironment` is `null` when the run provisioned none, e.g. a launch failure). Anything else the resumed step needs, stash in `ctx.shared` before pausing.
+- That payload crossed a wire boundary, so it carries **no live handles** — to act on the run's sandbox, re-attach one from **`executionEnvironment`** with `ctx.sapiom.sandboxes.attach(result.executionEnvironment.id)` (`executionEnvironment` is `null` when the run provisioned none, e.g. a launch failure). Before pausing, stash only compact state, IDs, or durable-storage references in `ctx.shared`; its whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota.
 - **To stub the resume payload** (e.g. to exercise the failure branch), override `models.coding.run` _in the launching step_ — that one value is both the `run()` result and the payload the paused step resumes with. `models.coding.launch` is accepted there too.
 - `gitRepository` accepts a Sapiom repository returned by `repositories.create`, `get`, or `list`; `repositories.attach` only rehydrates such a handle.
 - Coding requests throw `CodingRunHttpError` on HTTP failures. A step with `canFail: true` can return `fail(error.message)` for `repository_not_found` and rethrow other errors.
 
 ## Determinism
 
-A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Don't rely on a value being recomputed identically across a pause/resume — capture non-deterministic values (timestamps, ids) once and pass them forward via the `goto(...)` input or `ctx.shared`.
+A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Don't rely on a value being recomputed identically across a pause/resume — capture compact non-deterministic values (timestamps, ids) once and pass them forward via the `goto(...)` input or `ctx.shared`; persist bulk state and carry a reference.

@@ -54,6 +54,23 @@ export {
 // Errors that are part of the public contract surface
 export { AgentError, UnknownStepError, StepInputValidationError, DisallowedTransitionError } from './errors.js';
 
+// ctx.shared quota — the versioned cross-process size/error contract
+export {
+  CTX_SHARED_QUOTA_CONTRACT,
+  MAX_SHARED_SNAPSHOT_BYTES,
+  CtxSharedSizeLimitExceededError,
+  ctxSharedSizeLimitExceededPayloadSchema,
+  findCtxSharedSizeViolation,
+  isCtxSharedSizeLimitExceededPayload,
+  measureCtxSharedSnapshotBytes,
+} from './ctx-shared-quota.js';
+export type {
+  CtxSharedSizeLimitExceededErrorOptions,
+  CtxSharedSizeLimitExceededPayload,
+  CtxSharedSizeLimitPhase,
+  CtxSharedSizeViolation,
+} from './ctx-shared-quota.js';
+
 // Injected run configuration — the seam a step reads a chosen resource handle
 // from (the entry input the setup panel's settings / resource picker drive).
 export { resolveResourceHandle } from './config.js';

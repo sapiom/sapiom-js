@@ -53,4 +53,15 @@ describe("server instructions", () => {
       "entry step's `inputSchema` is the agent's public API",
     );
   });
+
+  it("documents the complete ctx.shared quota contract", () => {
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "inclusive 256 KiB (262,144-byte) quota",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("measured as compact");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`JSON.stringify` UTF-8 bytes");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "IDs/references here instead of bulk state",
+    );
+  });
 });

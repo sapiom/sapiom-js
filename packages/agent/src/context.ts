@@ -76,7 +76,11 @@ export interface AgentExecutionContext<TShared extends Record<string, unknown> =
   /** The value passed to the workflow's entry step. Unchanged across the run. */
   readonly input: unknown;
 
-  /** Typed named-slot store; persisted to shared_state after each step. */
+  /**
+   * Typed named-slot store; persisted to shared_state after each step. The
+   * whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota; keep
+   * compact state, IDs, and references here rather than bulk payloads.
+   */
   readonly shared: TypedContextStore<TShared>;
 
   /** Completed step executions in this run, oldest first. */

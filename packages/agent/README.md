@@ -85,6 +85,21 @@ const start = defineStep({
 `inputSchema` on a non-entry step types that step's inbound payload the same way — including
 a **resumed** step's signal payload, shown next.
 
+## Cross-step state and its quota
+
+`ctx.shared` is the typed key/value store for compact state that several later
+steps need. Its **entire snapshot** may contain at most **256 KiB (262,144
+bytes), inclusive**, measured as the UTF-8 byte length of compact
+`JSON.stringify(snapshot)`. Keys, JSON punctuation, existing values, and the
+new value all count toward the same limit.
+
+Keep small scalars, IDs, and durable-storage references in `ctx.shared`. Put
+bulk API responses, documents, research results, and other large state in
+durable storage, then carry only the resulting ID or reference. The stable
+machine code for an oversized candidate is
+`CTX_SHARED_SIZE_LIMIT_EXCEEDED`; use its structured byte counts rather than
+parsing the human-readable message.
+
 ## Pausing on a long-running capability
 
 Some `ctx.sapiom` capabilities are **dispatched**: you launch them, they run far

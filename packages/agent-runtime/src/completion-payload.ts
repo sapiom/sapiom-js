@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import { isCtxSharedSizeLimitExceededPayload } from '@sapiom/agent';
+import type { CtxSharedSizeLimitExceededPayload } from '@sapiom/agent';
+
+export { MAX_SHARED_SNAPSHOT_BYTES } from '@sapiom/agent';
+
 /**
  * The step-completion wire contract (protocol 1) — what an executor reports
  * back after running one dispatched step body. The directive union mirrors the
@@ -56,6 +61,27 @@ export const STEP_COMPLETION_OUTCOME = {
   THREW: 'threw',
 } as const;
 
+/** Legacy protocol-1 errors remain valid for every non-quota throw. */
+const legacyStepCompletionErrorSchema = z.object({
+  name: z.string(),
+  message: z.string(),
+  stack: z.string().optional(),
+});
+
+/**
+ * Canonical quota errors are parsed first so their structured fields survive;
+ * the legacy branch preserves protocol-1 compatibility for ordinary errors.
+ * Use the structural guard instead of composing the exported schema directly:
+ * this package supports a separate compatible Zod peer instance/version from
+ * the one that constructed `@sapiom/agent`'s schema.
+ */
+export const stepCompletionErrorSchema = z.union([
+  z.custom<CtxSharedSizeLimitExceededPayload>(isCtxSharedSizeLimitExceededPayload, {
+    message: 'Invalid ctx.shared size-limit error payload',
+  }),
+  legacyStepCompletionErrorSchema,
+]);
+
 export const stepCompletionPayloadSchema = z
   .object({
     protocol: z.literal(1),
@@ -67,13 +93,7 @@ export const stepCompletionPayloadSchema = z
         directive: wireDirectiveSchema,
       })
       .optional(),
-    error: z
-      .object({
-        name: z.string(),
-        message: z.string(),
-        stack: z.string().optional(),
-      })
-      .optional(),
+    error: stepCompletionErrorSchema.optional(),
     shared: z.record(z.string(), z.unknown()).optional(),
     logs: z
       .array(
@@ -100,9 +120,6 @@ export const stepCompletionPayloadSchema = z
   });
 
 export type StepCompletionPayload = z.infer<typeof stepCompletionPayloadSchema>;
-
-/** Host ingress cap on the `shared` snapshot. */
-export const MAX_SHARED_SNAPSHOT_BYTES = 256 * 1024;
 
 /** Host ingress cap on the serialized `logs` buffer. */
 export const MAX_LOGS_BYTES = 512 * 1024;
