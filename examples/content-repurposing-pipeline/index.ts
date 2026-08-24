@@ -265,25 +265,11 @@ export function resolveRenderClip(
 }
 
 /**
- * Strip lines carrying bracketed fill-ins ("[Your name]", "[Company]") from LLM-written copy.
- * The prompt (buildRepurposeSystem) already forbids them, but a prompt is a hope, not a
- * guarantee — the same rule this file applies to quote text (the SAP-2781 note on
- * buildGraphicPrompt: built in code rather than trusted to the LLM). A markdown link
- * `[text](url)` is NOT a placeholder — the lookahead spares it.
- */
-export function stripPlaceholderLines(text: string): string {
-  return text
-    .split("\n")
-    .filter((line) => !/\[[^\]\n]{1,40}\](?!\()/.test(line))
-    .join("\n")
-    .trim();
-}
-
-/**
  * System prompt for the repurpose step. Exported so tests can pin the rules
  * that keep shipping-quality output: art-direction-only imagePrompts, text-free
- * videoScript, tweet length, and — SAP-2858 — a newsletter with no bracketed
- * placeholders (a run delivered "More soon, [Your name]" verbatim to an inbox).
+ * videoScript, tweet length, and — SAP-2858 — no placeholders: the model is told
+ * it has no author/reader identity to fill in, so it stops writing sign-offs
+ * that need one (a run delivered "More soon, [Your name]" verbatim to an inbox).
  */
 export function buildRepurposeSystem(
   audience: string,
@@ -303,9 +289,10 @@ export function buildRepurposeSystem(
     "render text illegibly; the quote lives in the graphics), never a " +
     "narrated timeline or script sections. Tweets must each be <= 280 " +
     "characters. " +
-    'The "newsletter" must be ready to send VERBATIM: complete copy with a ' +
-    "neutral sign-off and NO bracketed placeholders or fill-ins (never " +
-    '"[Your name]", "[Company]", or similar). ' +
+    "You do not know the author's name, company, or the reader's name, and " +
+    "nothing is filled in later — so no greetings or sign-offs that need one, " +
+    "and no bracketed fill-ins anywhere in the pack. End the newsletter on its " +
+    "takeaway line. " +
     "Reply with ONLY minified JSON: " +
     '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
     '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.'
@@ -427,9 +414,8 @@ function parsePack(
           ? raw.linkedInPost
           : fallback.linkedInPost,
       newsletter:
-        typeof raw.newsletter === "string" &&
-        stripPlaceholderLines(raw.newsletter)
-          ? stripPlaceholderLines(raw.newsletter)
+        typeof raw.newsletter === "string" && raw.newsletter.trim()
+          ? raw.newsletter
           : fallback.newsletter,
       quoteGraphics:
         quoteGraphics.length > 0 ? quoteGraphics : fallback.quoteGraphics,

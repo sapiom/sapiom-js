@@ -9,7 +9,6 @@ import {
   isNarrationScript,
   isReservedAddress,
   resolveRenderClip,
-  stripPlaceholderLines,
 } from "./index.ts";
 
 test("flags RFC 2606 reserved domains as undeliverable", () => {
@@ -409,33 +408,14 @@ test("entry schema declares renderClip so an explicit input survives validation"
 
 test("buildRepurposeSystem bans placeholders and keeps the load-bearing rules", () => {
   const system = buildRepurposeSystem("payments operators", 3);
-  assert.match(system, /NO bracketed placeholders/i);
-  assert.match(system, /\[Your name\]/);
+  // No identity is available to the model, so it must not write copy that needs one.
+  assert.match(system, /do not know the author's name/i);
+  assert.match(system, /no bracketed fill-ins anywhere in the pack/i);
+  assert.match(system, /End the newsletter on its takeaway line/);
   assert.match(system, /payments operators/);
   assert.match(system, /3 short, punchy pull-quote/);
   // The rules that predate this test must survive it.
   assert.match(system, /ART DIRECTION ONLY/);
   assert.match(system, /NO on-screen text/);
   assert.match(system, /<= 280/);
-});
-
-// ── SAP-2858: placeholders are stripped in CODE, not just banned in the prompt ─
-
-test("stripPlaceholderLines drops a sign-off line carrying a bracketed fill-in", () => {
-  const newsletter = "Great issue body.\n\nMore soon,\n[Your name]";
-  const cleaned = stripPlaceholderLines(newsletter);
-  assert.ok(!cleaned.includes("[Your name]"));
-  assert.ok(cleaned.includes("Great issue body."));
-});
-
-test("stripPlaceholderLines spares markdown links — [text](url) is not a placeholder", () => {
-  const newsletter =
-    "Read the [full post](https://example.com/post) for more.\n\n[Company] update inside.";
-  const cleaned = stripPlaceholderLines(newsletter);
-  assert.ok(cleaned.includes("[full post](https://example.com/post)"));
-  assert.ok(!cleaned.includes("[Company]"));
-});
-
-test("stripPlaceholderLines returns empty for placeholder-only copy (parsePack then falls back)", () => {
-  assert.equal(stripPlaceholderLines("[Your name]\n[Company]"), "");
 });
