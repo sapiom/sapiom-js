@@ -12,4 +12,4 @@ This project defines exactly one Sapiom agent in `index.ts`, authored against `@
 
 - Use `npm run check` as the tight feedback loop — prefer it over reasoning about whether the graph is valid.
 - For exact command options, run `sapiom agents --help`, and pass `--json` to any command for machine-readable output. Don't hardcode capability lists or schemas — query them at runtime.
-- Keep exactly one `defineAgent(...)` export in `index.ts`.
+- Keep exactly one `defineAgent(...)` export in `index.ts` — one agent per project. A multi-stage system is several small projects composed with `ctx.sapiom.agents.run` (see the sapiom-agent-authoring skill’s "Composing Deployed Agents").

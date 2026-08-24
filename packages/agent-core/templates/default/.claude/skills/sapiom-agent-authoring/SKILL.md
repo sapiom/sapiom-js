@@ -352,8 +352,9 @@ const response = await ctx.sapiom.llm.run({
     messages: [{ role: "user", content: `Classify this support ticket: ${input.text}` }],
     max_tokens: 256,
   },
-  // No `model` — omit it and let the platform choose (recommended). To pin
-  // instead: `model: "smart"` (a label, never a raw provider model id).
+  // No `model` — omit it and let the platform choose (recommended; passing
+  // "smart" would be a no-op — it already is the default — and a raw provider
+  // model id is never honored).
   output: {
     name: "classify_ticket",
     schema: {
@@ -383,8 +384,8 @@ the result back out. For a **plain-text** reply instead, use
 **You never pick a model.** Every `model`/`label` field across `llm.*`, `models.run`, and
 `models.coding.run` takes a **routing label** (e.g. `"smart"`) that the platform resolves
 against its configured label set — never a raw provider model id (never honored, on any
-surface). Omit it entirely to let the platform choose (the recommended default); pass
-`"smart"` if you must pin. The result discloses what actually served, in the platform's own
+surface). Omit it entirely to let the platform choose (the recommended default) — passing
+`"smart"` is a no-op: it already is the default. The result discloses what actually served, in the platform's own
 vocabulary — `servedClass` (the billing size the label resolved to) and `lane` (the billing
 lane it executed in) — never a model or provider id.
 
@@ -394,6 +395,53 @@ Find the run in the dashboard's run detail view, find the suspicious step's row 
 open the **Run Inspector** for that step's full-fidelity input/output/error/logs.
 
 Full guide: [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface).
+
+## Composing Deployed Agents (System Design)
+
+**One agent per project — but a system is several projects.** The "keep exactly one
+`defineAgent(...)` export" rule is a statement about a PROJECT, not about your system. A
+multi-stage system ("research → write script → voiceover → assemble → post") is not one
+big agent with five steps: it is several small agents, each its own project, deployed
+separately, composed by a thin coordinator that dispatches them by slug. A small deployed
+agent is independently testable, versioned, and reusable from more than one caller; a
+monolith couples every stage into a single deploy unit and step graph, so any stage change
+redeploys — and risks — all of them.
+
+**Wrong** — one project inlining every stage as a step:
+
+```typescript
+// DON'T: video-pipeline/index.ts with research, script, voiceover, assemble,
+// post as five steps of ONE defineAgent. No stage is reusable or
+// independently testable, and every stage change redeploys all five.
+```
+
+**Right** — each stage its own deployed project; a coordinator composes them:
+
+```typescript
+// research-topic/, write-script/, generate-voiceover/, assemble-video/,
+// post-video/: five small projects, each deployed on its own slug.
+// video-pipeline/ is then just the coordinator:
+const research = await ctx.sapiom.agents.run({
+  definition: "research-topic", // the deployed child's slug
+  input: { topic: input.topic },
+});
+// agents.run resolves on ANY terminal status (completed | failed | cancelled)
+// and does NOT throw — a non-completed child is data the coordinator must
+// branch on, or a failed stage silently feeds `null` downstream.
+if (research.status !== "completed") {
+  // (fail() requires this step to declare canFail: true)
+  return fail(`research-topic ${research.status}: ${String(research.error)}`);
+}
+const script = await ctx.sapiom.agents.run({
+  definition: "write-script",
+  input: { research: research.output },
+});
+// …and so on. Use agents.launch + pauseUntilSignal for a long-running child
+// so the coordinator's step doesn't time out.
+```
+
+Building a system in one session? Scaffold the stages as separate projects and deploy
+bottom-up — children first, the coordinator last (it dispatches them by their slugs).
 
 ## Naming Conventions
 
