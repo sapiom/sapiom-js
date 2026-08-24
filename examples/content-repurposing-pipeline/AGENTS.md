@@ -110,7 +110,8 @@ Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev t
 ## Cost
 
 A full run bills an LLM call, N quote **images**, one image-to-**video** clip, and one
-email per recipient. Use `dryRun` while iterating on the copy, and start with a small
+email per recipient. Use `dryRun` while iterating on the copy, `renderClip: false` for the cheaper
+middle ground (real graphics, no clip — the clip is the priciest leg), and start with a small
 `numQuotes` for real runs.
 
 ## Determinism

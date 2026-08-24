@@ -240,6 +240,17 @@ export function isReservedAddress(email: string): boolean {
  * for text overlay … no text in the image" and no overlay step exists. The LLM's
  * `imagePrompt` is demoted to art direction appended after the text directive.
  */
+export function buildGraphicPrompt(spec: QuoteGraphicSpec): string {
+  const quote = spec.quote.trim();
+  const style = spec.imagePrompt.trim();
+  return (
+    `Typography-forward quote graphic. Render this exact text, large, legible, ` +
+    `and centered, as the visual centerpiece of the image: "${quote}". ` +
+    (style ||
+      "Clean, modern, solid dark background, generous margins, no watermark.")
+  );
+}
+
 /**
  * The explicit `renderClip` input always wins; the sample-source heuristic is
  * only the default for callers who didn't say (SAP-2858 — the field used to be
@@ -251,6 +262,21 @@ export function resolveRenderClip(
   usedSampleSource: boolean,
 ): boolean {
   return explicit ?? !usedSampleSource;
+}
+
+/**
+ * Strip lines carrying bracketed fill-ins ("[Your name]", "[Company]") from LLM-written copy.
+ * The prompt (buildRepurposeSystem) already forbids them, but a prompt is a hope, not a
+ * guarantee — the same rule this file applies to quote text (the SAP-2781 note on
+ * buildGraphicPrompt: built in code rather than trusted to the LLM). A markdown link
+ * `[text](url)` is NOT a placeholder — the lookahead spares it.
+ */
+export function stripPlaceholderLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/\[[^\]\n]{1,40}\](?!\()/.test(line))
+    .join("\n")
+    .trim();
 }
 
 /**
@@ -283,17 +309,6 @@ export function buildRepurposeSystem(
     "Reply with ONLY minified JSON: " +
     '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
     '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.'
-  );
-}
-
-export function buildGraphicPrompt(spec: QuoteGraphicSpec): string {
-  const quote = spec.quote.trim();
-  const style = spec.imagePrompt.trim();
-  return (
-    `Typography-forward quote graphic. Render this exact text, large, legible, ` +
-    `and centered, as the visual centerpiece of the image: "${quote}". ` +
-    (style ||
-      "Clean, modern, solid dark background, generous margins, no watermark.")
   );
 }
 
@@ -412,8 +427,9 @@ function parsePack(
           ? raw.linkedInPost
           : fallback.linkedInPost,
       newsletter:
-        typeof raw.newsletter === "string" && raw.newsletter.trim()
-          ? raw.newsletter
+        typeof raw.newsletter === "string" &&
+        stripPlaceholderLines(raw.newsletter)
+          ? stripPlaceholderLines(raw.newsletter)
           : fallback.newsletter,
       quoteGraphics:
         quoteGraphics.length > 0 ? quoteGraphics : fallback.quoteGraphics,
@@ -650,7 +666,10 @@ const repurpose = defineStep({
     // (clip included) renders — unless the caller explicitly said otherwise: an explicit
     // `renderClip` input always wins (SAP-2858 — it used to be silently ignored, so a
     // `renderClip: false` run still billed a clip).
-    ctx.shared.set("renderClip", resolveRenderClip(input.renderClip, usedSampleSource));
+    ctx.shared.set(
+      "renderClip",
+      resolveRenderClip(input.renderClip, usedSampleSource),
+    );
     ctx.shared.set("pack", pack);
     ctx.shared.set("graphics", []);
     ctx.shared.set("graphicIndex", 0);

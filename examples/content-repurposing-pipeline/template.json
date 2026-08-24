@@ -12,7 +12,7 @@
     "Distribution-list send",
     "Scheduled repurposing"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\n`source` is the only required input. Paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it before any images or video are generated. Keep `numQuotes` small (default 2, max 4). To have it email the pack, set `deliverTo` to one or more addresses; the pack fans out, one send per recipient. Without it the run returns the pack and sends nothing. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step, or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\n`source` is the only required input. Paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it before any images or video are generated. Keep `numQuotes` small (default 2, max 4). Set `renderClip: false` to keep the quote graphics but skip the teaser clip — the priciest, slowest leg. To have it email the pack, set `deliverTo` to one or more addresses; the pack fans out, one send per recipient. Without it the run returns the pack and sends nothing. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step, or edit and deploy it with the Sapiom MCP.",
   "settings": [
     {
       "path": "deliverTo",
@@ -20,7 +20,9 @@
       "description": "One or more addresses to fan the pack out to. Leave it empty and the pack is returned in the run's output instead.",
       "type": "email[]",
       "default": [],
-      "example": ["you@yourcompany.com"]
+      "example": [
+        "you@yourcompany.com"
+      ]
     }
   ],
   "defaultInput": {
@@ -61,7 +63,10 @@
         "source": "Long-form blog post about why small teams ship faster...",
         "title": "Why small teams ship faster",
         "numQuotes": 2,
-        "deliverTo": ["me@example.com", "team@example.com"],
+        "deliverTo": [
+          "me@example.com",
+          "team@example.com"
+        ],
         "schedule": "0 9 * * 1"
       },
       "output": {
@@ -80,18 +85,41 @@
         "rendered": 2,
         "delivered": 2,
         "recipients": [
-          { "to": "me@example.com", "messageId": "msg_789" },
-          { "to": "team@example.com", "messageId": "msg_790" }
+          {
+            "to": "me@example.com",
+            "messageId": "msg_789"
+          },
+          {
+            "to": "team@example.com",
+            "messageId": "msg_790"
+          }
         ]
+      }
+    },
+    {
+      "title": "Full pack, no clip (skip the priciest leg)",
+      "input": {
+        "source": "Paste your blog post or transcript here.",
+        "renderClip": false
       }
     }
   ],
   "zeroSetup": {
     "terminalState": "completed_partial",
     "expect": [
-      { "path": "graphics", "assert": "nonEmptyArray" },
-      { "path": "delivered", "assert": "equals", "value": 0 },
-      { "path": "unmet", "assert": "nonEmptyArray" }
+      {
+        "path": "graphics",
+        "assert": "nonEmptyArray"
+      },
+      {
+        "path": "delivered",
+        "assert": "equals",
+        "value": 0
+      },
+      {
+        "path": "unmet",
+        "assert": "nonEmptyArray"
+      }
     ],
     "narrative": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipients are set."
   }

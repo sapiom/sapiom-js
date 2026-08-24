@@ -34,7 +34,10 @@ Input: `{ "source": "<your blog post or transcript>", "title": "..." }`. With no
 `source` at all, the run repurposes a built-in sample post and says so in its output.
 Optional: `audience`, `numQuotes` (default 2, max 4), `deliverTo` (one or more
 recipient emails), `schedule` (a cron string), `model` (a video model — a Sapiom
-semantic alias like `"veo3-fast"`), and `dryRun` (copy only).
+semantic alias like `"veo3-fast"`), `renderClip`
+(set `false` to keep the graphics but skip the teaser clip — the priciest leg;
+defaults to `true` with your own `source`, `false` for the built-in sample),
+and `dryRun` (copy only).
 
 ## Delivery: fan-out per recipient
 
@@ -49,7 +52,8 @@ nothing was sent.
 A full run bills an LLM call, one **image** per quote, one image-to-**video** clip,
 and one email per recipient — so the estimated per-run cost card (derived from
 `capabilities`) is higher than the text-only templates. Use `dryRun` while
-iterating on the copy, and keep `numQuotes` small for real runs.
+iterating on the copy, `renderClip: false` for real graphics without the clip (the
+priciest leg), and keep `numQuotes` small for real runs.
 
 ## Run it with Claude + the Sapiom MCP
 
