@@ -240,9 +240,15 @@ JSON punctuation, all existing values, and the value being set count together.
 Exactly 262,144 bytes is valid; 262,145 bytes is rejected. Keep compact state,
 IDs, and durable-storage references in `ctx.shared`; put bulk API responses,
 documents, or research data in durable storage and carry only the ID/reference.
-The SDK contract does not by itself make `ctx.shared.set()` a synchronous size
-gate. Hosts enforce it at execution boundaries, and older hosts may temporarily
-enforce a smaller legacy limit during rollout.
+On current hosts, `ctx.shared.set()` synchronously measures the complete
+candidate snapshot before committing it. An oversized or unserializable write
+throws and leaves the previous snapshot unchanged. Measurement follows
+`JSON.stringify`: circular references, BigInt values, and throwing `toJSON`
+methods fail, while values JSON normally omits or coerces retain those
+semantics. Older hosts may temporarily enforce the contract only at execution
+boundaries during rollout. If you catch a failure, use the exported structural
+payload guards rather than `instanceof`, because host and definition bundles
+can contain separate SDK copies.
 
 **A step's `run(input, ctx)` first argument is its inbound input** — the entry input at the
 entry step, or the previous step's `goto(target, payload)` value at later steps. The entry

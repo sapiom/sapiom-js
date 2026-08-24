@@ -1,5 +1,7 @@
 import {
   CTX_SHARED_QUOTA_CONTRACT,
+  CTX_SHARED_SERIALIZATION_ERROR_CONTRACT,
+  CtxSharedSerializationError,
   MAX_SHARED_SNAPSHOT_BYTES as CANONICAL_MAX_SHARED_SNAPSHOT_BYTES,
   STEP_INPUT_VALIDATION_ERROR_CONTRACT,
   StepInputValidationError,
@@ -62,6 +64,29 @@ describe('step completion error compatibility', () => {
     expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual(error);
   });
 
+  it('round-trips and normalizes the terminal ctx.shared serialization payload', () => {
+    const error = {
+      name: 'CtxSharedSerializationError',
+      message: 'snapshot serialization failed',
+      code: CTX_SHARED_SERIALIZATION_ERROR_CONTRACT.errorCode,
+      version: CTX_SHARED_SERIALIZATION_ERROR_CONTRACT.version + 1,
+      stepName: 'collect',
+      phase: 'future_host_boundary',
+      retryable: false,
+      candidate: 'must be stripped',
+    };
+
+    expect(stepCompletionPayloadSchema.parse(threwPayload(error)).error).toEqual({
+      name: 'CtxSharedSerializationError',
+      message: 'snapshot serialization failed',
+      code: 'CTX_SHARED_SERIALIZATION_FAILED',
+      version: 2,
+      stepName: 'collect',
+      phase: 'future_host_boundary',
+      retryable: false,
+    });
+  });
+
   it('continues to accept the legacy name/message/stack shape', () => {
     const error = {
       name: 'Error',
@@ -89,6 +114,12 @@ describe('step completion error compatibility', () => {
       message: 'ordinary failure',
       stack: authorError.stack,
     });
+
+    const serializationError = new CtxSharedSerializationError({
+      stepName: 'collect',
+      phase: 'ctx_shared_set',
+    });
+    expect(serializeStepCompletionError(serializationError)).toEqual(serializationError.toJSON());
   });
 
   it('round-trips the platform input-validation payload and strips raw issues', () => {
@@ -127,6 +158,15 @@ describe('step completion error compatibility', () => {
       code: 'STEP_INPUT_VALIDATION_FAILED',
       version: 1,
       stepName: 'validate',
+      retryable: true,
+    },
+    {
+      name: 'CtxSharedSerializationError',
+      message: 'wrong disposition',
+      code: 'CTX_SHARED_SERIALIZATION_FAILED',
+      version: 1,
+      stepName: 'collect',
+      phase: 'ctx_shared_set',
       retryable: true,
     },
   ])('falls back to the retryable legacy shape for unrecognized payload %#', (error) => {

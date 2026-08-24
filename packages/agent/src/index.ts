@@ -35,6 +35,7 @@ export type { Step, StepResult, StepDefinition, Allowed } from './step.js';
 export type {
   AgentExecutionContext,
   TypedContextStore,
+  InMemoryContextStoreOptions,
   StepExecutionRecord,
   StepLogger,
   FinishedStepStatus,
@@ -79,6 +80,19 @@ export type {
   CtxSharedSizeLimitPhase,
   CtxSharedSizeViolation,
 } from './ctx-shared-quota.js';
+
+// ctx.shared serialization — terminal JSON encoding failures at enforcement boundaries
+export {
+  CTX_SHARED_SERIALIZATION_ERROR_CONTRACT,
+  CtxSharedSerializationError,
+  ctxSharedSerializationErrorPayloadSchema,
+  isCtxSharedSerializationErrorPayload,
+} from './ctx-shared-serialization.js';
+export type {
+  CtxSharedSerializationErrorOptions,
+  CtxSharedSerializationErrorPayload,
+  CtxSharedSerializationPhase,
+} from './ctx-shared-serialization.js';
 
 // Closed platform retry-classification registry.
 export { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from './non-retryable-step-error.js';

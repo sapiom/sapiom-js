@@ -1,5 +1,6 @@
 import {
   CTX_SHARED_QUOTA_CONTRACT,
+  CTX_SHARED_SERIALIZATION_ERROR_CONTRACT,
   MAX_SHARED_SNAPSHOT_BYTES,
   STEP_INPUT_VALIDATION_ERROR_CONTRACT,
   StepInputValidationError,
@@ -85,6 +86,30 @@ describe('non-retryable platform step errors', () => {
     expect(isNonRetryableStepErrorPayload(payload)).toBe(true);
   });
 
+  it('recognizes and normalizes the terminal ctx.shared serialization payload', () => {
+    const payload = {
+      name: 'CtxSharedSerializationError',
+      message: 'shared state could not be serialized',
+      code: CTX_SHARED_SERIALIZATION_ERROR_CONTRACT.errorCode,
+      version: CTX_SHARED_SERIALIZATION_ERROR_CONTRACT.version + 1,
+      stepName: 'collect',
+      phase: 'future_host_boundary',
+      retryable: false,
+      candidate: 'must not cross the wire',
+    };
+
+    expect(parseNonRetryableStepErrorPayload(payload)).toEqual({
+      name: 'CtxSharedSerializationError',
+      message: 'shared state could not be serialized',
+      code: 'CTX_SHARED_SERIALIZATION_FAILED',
+      version: 2,
+      stepName: 'collect',
+      phase: 'future_host_boundary',
+      retryable: false,
+    });
+    expect(isNonRetryableStepErrorPayload(payload)).toBe(true);
+  });
+
   it.each([
     { name: 'Error', message: 'ordinary author error', retryable: false },
     {
@@ -112,6 +137,15 @@ describe('non-retryable platform step errors', () => {
       stepName: 'collect',
       phase: 'ctx_shared_set',
       retryable: false,
+    },
+    {
+      name: 'CtxSharedSerializationError',
+      message: 'wrong disposition',
+      code: 'CTX_SHARED_SERIALIZATION_FAILED',
+      version: 1,
+      stepName: 'collect',
+      phase: 'ctx_shared_set',
+      retryable: true,
     },
   ])('defaults unrecognized payloads to retryable: %#', (payload) => {
     expect(parseNonRetryableStepErrorPayload(payload)).toBeUndefined();

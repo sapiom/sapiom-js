@@ -1,5 +1,7 @@
 import type { Sapiom } from '@sapiom/tools';
 
+import { CtxSharedSizeLimitExceededError, findCtxSharedSizeViolation } from './ctx-shared-quota.js';
+import { CtxSharedSerializationError } from './ctx-shared-serialization.js';
 import type { NextStepDirective } from './directives.js';
 
 /**
@@ -78,11 +80,11 @@ export interface AgentExecutionContext<TShared extends Record<string, unknown> =
 
   /**
    * Typed named-slot store; persisted to shared_state after each step. The
-   * whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota; keep
-   * compact state, IDs, and references here rather than bulk payloads. This
-   * SDK contract does not make `set()` a synchronous size gate by itself;
-   * hosts enforce it at execution boundaries, and older hosts may temporarily
-   * enforce a smaller legacy limit during rollout.
+   * whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota. `set()`
+   * measures the complete candidate snapshot before committing it, so quota or
+   * JSON serialization failures leave the previous state unchanged. Keep
+   * compact state, IDs, and references here rather than bulk payloads. Older
+   * hosts may temporarily enforce the contract only at execution boundaries.
    */
   readonly shared: TypedContextStore<TShared>;
 
@@ -117,6 +119,11 @@ export interface TypedContextStore<TShared extends Record<string, unknown>> {
   snapshot(): Partial<TShared>;
 }
 
+/** Diagnostic context supplied by hosts that construct an in-memory store. */
+export interface InMemoryContextStoreOptions {
+  readonly stepName: string;
+}
+
 /**
  * History entry exposed to steps via ctx.history. Matches the shape of
  * a finished workflow_step_executions row.
@@ -146,9 +153,12 @@ export interface StepExecutionRecord {
  */
 export class InMemoryContextStore<TShared extends Record<string, unknown>> implements TypedContextStore<TShared> {
   private state: Partial<TShared>;
+  private readonly stepName: string;
 
-  constructor(initial: Partial<TShared> = {}) {
+  constructor(initial: Partial<TShared> = {}, options?: InMemoryContextStoreOptions) {
     this.state = { ...initial };
+    const stepName = options?.stepName;
+    this.stepName = typeof stepName === 'string' && stepName.trim().length > 0 ? stepName : '(unknown step)';
   }
 
   get<K extends keyof TShared>(key: K): TShared[K] | undefined {
@@ -156,7 +166,27 @@ export class InMemoryContextStore<TShared extends Record<string, unknown>> imple
   }
 
   set<K extends keyof TShared>(key: K, value: TShared[K]): void {
-    this.state[key] = value;
+    const candidate: Partial<TShared> = { ...this.state, [key]: value };
+
+    let violation: ReturnType<typeof findCtxSharedSizeViolation>;
+    try {
+      violation = findCtxSharedSizeViolation(candidate);
+    } catch {
+      throw new CtxSharedSerializationError({
+        stepName: this.stepName,
+        phase: 'ctx_shared_set',
+      });
+    }
+
+    if (violation) {
+      throw new CtxSharedSizeLimitExceededError({
+        actualBytes: violation.actualBytes,
+        stepName: this.stepName,
+        phase: 'ctx_shared_set',
+      });
+    }
+
+    this.state = candidate;
   }
 
   has<K extends keyof TShared>(key: K): boolean {

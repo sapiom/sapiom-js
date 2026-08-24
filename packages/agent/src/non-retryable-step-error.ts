@@ -1,4 +1,8 @@
 import { ctxSharedSizeLimitExceededPayloadSchema, type CtxSharedSizeLimitExceededPayload } from './ctx-shared-quota.js';
+import {
+  ctxSharedSerializationErrorPayloadSchema,
+  type CtxSharedSerializationErrorPayload,
+} from './ctx-shared-serialization.js';
 import { stepInputValidationErrorPayloadSchema, type StepInputValidationErrorPayload } from './errors.js';
 
 /**
@@ -6,7 +10,10 @@ import { stepInputValidationErrorPayloadSchema, type StepInputValidationErrorPay
  * Unknown codes and arbitrary `retryable: false` properties are intentionally
  * excluded and therefore retain the legacy retry behavior.
  */
-export type NonRetryableStepErrorPayload = CtxSharedSizeLimitExceededPayload | StepInputValidationErrorPayload;
+export type NonRetryableStepErrorPayload =
+  | CtxSharedSizeLimitExceededPayload
+  | StepInputValidationErrorPayload
+  | CtxSharedSerializationErrorPayload;
 
 /**
  * Validate and normalize a platform terminal error. Returning parsed schema
@@ -19,6 +26,9 @@ export function parseNonRetryableStepErrorPayload(value: unknown): NonRetryableS
 
   const inputValidation = stepInputValidationErrorPayloadSchema.safeParse(value);
   if (inputValidation.success) return inputValidation.data;
+
+  const serialization = ctxSharedSerializationErrorPayloadSchema.safeParse(value);
+  if (serialization.success) return serialization.data;
 
   return undefined;
 }

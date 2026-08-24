@@ -13,6 +13,9 @@
 import { z } from 'zod/v4';
 
 import {
+  MAX_SHARED_SNAPSHOT_BYTES,
+  CtxSharedSerializationError,
+  CtxSharedSizeLimitExceededError,
   DIRECTIVE_KIND,
   InMemoryContextStore,
   StepInputValidationError,
@@ -509,6 +512,160 @@ describe('InMemoryContextStore', () => {
     // intentional: asserts a repeated set overwrites the prior value
     store.set('count', 2);
     expect(store.get('count')).toBe(2);
+  });
+
+  describe('atomic whole-snapshot validation', () => {
+    interface QuotaShared extends Record<string, unknown> {
+      existing: string;
+      value: unknown;
+      toJSON: () => unknown;
+    }
+
+    function asciiValueForSnapshotBytes(snapshotBytes: number, existing?: string): string {
+      const empty = existing === undefined ? { value: '' } : { existing, value: '' };
+      return 'x'.repeat(snapshotBytes - Buffer.byteLength(JSON.stringify(empty), 'utf8'));
+    }
+
+    it('copies constructor state without validating it', () => {
+      const initial: Partial<QuotaShared> = { value: BigInt(1) };
+      const store = new InMemoryContextStore<QuotaShared>(initial, { stepName: 'construct' });
+
+      initial.value = 'changed outside the store';
+
+      expect(store.get('value')).toBe(BigInt(1));
+    });
+
+    it('accepts exactly 262,144 bytes while counting existing state and punctuation', () => {
+      const store = new InMemoryContextStore<QuotaShared>({ existing: 'kept' }, { stepName: 'collect' });
+      const value = asciiValueForSnapshotBytes(MAX_SHARED_SNAPSHOT_BYTES, 'kept');
+
+      store.set('value', value);
+
+      expect(Buffer.byteLength(JSON.stringify(store.snapshot()), 'utf8')).toBe(MAX_SHARED_SNAPSHOT_BYTES);
+      expect(store.snapshot()).toEqual({ existing: 'kept', value });
+    });
+
+    it('rejects one byte over and leaves a failed insertion uncommitted', () => {
+      const store = new InMemoryContextStore<QuotaShared>({}, { stepName: 'collect' });
+      const value = asciiValueForSnapshotBytes(MAX_SHARED_SNAPSHOT_BYTES + 1);
+
+      let thrown: unknown;
+      try {
+        store.set('value', value);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toMatchObject({
+        name: 'CtxSharedSizeLimitExceededError',
+        actualBytes: MAX_SHARED_SNAPSHOT_BYTES + 1,
+        limitBytes: MAX_SHARED_SNAPSHOT_BYTES,
+        stepName: 'collect',
+        phase: 'ctx_shared_set',
+        retryable: false,
+      });
+      expect(thrown).toBeInstanceOf(CtxSharedSizeLimitExceededError);
+      expect(store.snapshot()).toEqual({});
+    });
+
+    it('preserves the previous value when an oversized replacement fails', () => {
+      const store = new InMemoryContextStore<QuotaShared>(
+        { existing: 'kept', value: 'accepted' },
+        { stepName: 'replace' },
+      );
+
+      expect(() => store.set('value', 'x'.repeat(MAX_SHARED_SNAPSHOT_BYTES))).toThrow(CtxSharedSizeLimitExceededError);
+      expect(store.snapshot()).toEqual({ existing: 'kept', value: 'accepted' });
+    });
+
+    it('measures multibyte values as UTF-8 bytes at set time', () => {
+      const store = new InMemoryContextStore<QuotaShared>({}, { stepName: 'unicode' });
+
+      expect(() => store.set('value', '😀'.repeat(70_000))).toThrow(CtxSharedSizeLimitExceededError);
+      expect(store.snapshot()).toEqual({});
+    });
+
+    it.each([
+      {
+        label: 'a circular reference',
+        value: () => {
+          const circular: Record<string, unknown> = {};
+          circular.self = circular;
+          return circular;
+        },
+      },
+      { label: 'a BigInt', value: () => BigInt(1) },
+      {
+        label: 'a throwing toJSON method',
+        value: () => ({
+          toJSON() {
+            throw new Error('private serialization detail');
+          },
+        }),
+      },
+    ])('rejects $label atomically as a typed terminal serialization error', ({ value }) => {
+      const store = new InMemoryContextStore<QuotaShared>(
+        { existing: 'accepted', value: 'previous' },
+        { stepName: 'serialize' },
+      );
+
+      let thrown: unknown;
+      try {
+        store.set('value', value());
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(CtxSharedSerializationError);
+      expect(thrown).toMatchObject({
+        code: 'CTX_SHARED_SERIALIZATION_FAILED',
+        stepName: 'serialize',
+        phase: 'ctx_shared_set',
+        retryable: false,
+      });
+      expect((thrown as Error).message).not.toContain('private serialization detail');
+      expect(store.snapshot()).toEqual({
+        existing: 'accepted',
+        value: 'previous',
+      });
+    });
+
+    it('rejects a root toJSON method that makes the whole snapshot undefined', () => {
+      const store = new InMemoryContextStore<QuotaShared>({}, { stepName: 'root-json' });
+
+      expect(() => store.set('toJSON', () => undefined)).toThrow(CtxSharedSerializationError);
+      expect(store.snapshot()).toEqual({});
+    });
+
+    it('uses JSON.stringify omission and coercion semantics without normalizing stored values', () => {
+      const store = new InMemoryContextStore<QuotaShared>({}, { stepName: 'json-semantics' });
+      const date = new Date('2026-08-24T00:00:00.000Z');
+      const value = {
+        omitted: undefined,
+        functionValue: () => 'ignored',
+        symbolValue: Symbol('ignored'),
+        date,
+        notANumber: Number.NaN,
+        infinity: Number.POSITIVE_INFINITY,
+      };
+
+      store.set('value', value);
+
+      expect(store.get('value')).toBe(value);
+      expect(JSON.parse(JSON.stringify(store.snapshot()))).toEqual({
+        value: {
+          date: date.toISOString(),
+          notANumber: null,
+          infinity: null,
+        },
+      });
+    });
+
+    it('uses a stable fallback step name for legacy direct construction', () => {
+      const store = new InMemoryContextStore<QuotaShared>();
+
+      expect(() => store.set('value', BigInt(1))).toThrow(expect.objectContaining({ stepName: '(unknown step)' }));
+    });
   });
 });
 

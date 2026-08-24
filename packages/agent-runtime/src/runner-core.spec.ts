@@ -10,6 +10,7 @@
 import type { AgentManifest } from '@sapiom/agent';
 import {
   CtxSharedSizeLimitExceededError,
+  CtxSharedSerializationError,
   DIRECTIVE_KIND,
   MAX_SHARED_SNAPSHOT_BYTES,
   StepInputValidationError,
@@ -332,9 +333,19 @@ describe('AgentRunnerCore', () => {
           ]),
         code: 'STEP_INPUT_VALIDATION_FAILED',
       },
+      {
+        label: 'ctx.shared serialization',
+        makeError: () =>
+          new CtxSharedSerializationError({
+            stepName: 'validate',
+            phase: 'ctx_shared_set',
+          }),
+        code: 'CTX_SHARED_SERIALIZATION_FAILED',
+      },
     ])('terminalizes $label on attempt zero', async ({ makeError, code }) => {
       const { store, dispatcher, core } = setupCore();
       const atomicFail = jest.spyOn(store, 'failActiveDispatchedStep');
+      const retainStepForRetry = jest.spyOn(store, 'retainStepForRetry');
       let callCount = 0;
       dispatcher.setSyncBody('validate', async () => {
         callCount += 1;
@@ -355,6 +366,7 @@ describe('AgentRunnerCore', () => {
       expect(state?.error).toBeInstanceOf(Error);
       expect(atomicFail).toHaveBeenCalledTimes(1);
       expect(atomicFail.mock.calls[0]?.[0].error).toBeInstanceOf(Error);
+      expect(retainStepForRetry).not.toHaveBeenCalled();
       expect(callCount).toBe(1);
 
       const terminal = await core.advance(executionId);

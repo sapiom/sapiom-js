@@ -14,3 +14,7 @@ A host executor reporting an `outcome: "threw"` completion should serialize the
 caught value with `serializeStepCompletionError(error)`. This retains the
 allowlisted fields that let the runner recognize terminal platform errors while
 ordinary, author, and unknown errors keep the legacy retryable shape.
+
+The closed terminal set includes step-input validation plus `ctx.shared` quota
+and JSON-serialization failures. A bare `retryable: false` flag or unrecognized
+code still follows the retry path.

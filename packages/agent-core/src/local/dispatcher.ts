@@ -134,6 +134,9 @@ export class LocalStubDispatcher implements StepDispatcher {
     });
     const sharedStore = new InMemoryContextStore<Record<string, unknown>>(
       request.shared,
+      {
+        stepName: request.stepName,
+      },
     );
     // The step's stub block is interpreted as capability overrides; unmatched
     // calls fall back to @sapiom/tools/stub's built-in defaults.

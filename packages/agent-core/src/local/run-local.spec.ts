@@ -1,5 +1,6 @@
 import {
   buildManifest,
+  MAX_SHARED_SNAPSHOT_BYTES,
   defineAgent,
   defineStep,
   fail,
@@ -8,6 +9,7 @@ import {
   terminate,
   agentManifestSchema,
   type AgentDefinition,
+  type AgentExecutionContext,
   type AgentManifest,
 } from "@sapiom/agent";
 import { CODING_RESULT_SIGNAL } from "@sapiom/tools";
@@ -779,6 +781,69 @@ describe("runLocal", () => {
     expect(result.error).toBeInstanceOf(Error);
     expect(runs).toBe(0);
   });
+
+  it.each([
+    {
+      label: "an oversized candidate",
+      code: "CTX_SHARED_SIZE_LIMIT_EXCEEDED",
+      write(ctx: AgentExecutionContext) {
+        ctx.shared.set("candidate", "x".repeat(MAX_SHARED_SNAPSHOT_BYTES));
+      },
+    },
+    {
+      label: "an unserializable candidate",
+      code: "CTX_SHARED_SERIALIZATION_FAILED",
+      write(ctx: AgentExecutionContext) {
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+        ctx.shared.set("candidate", circular);
+      },
+    },
+  ])(
+    "terminalizes $label at set time without retrying or committing it",
+    async ({ code, write }) => {
+      let runs = 0;
+      const collect = defineStep({
+        name: "collect",
+        next: [],
+        terminal: true,
+        async run(_input, ctx) {
+          runs += 1;
+          ctx.shared.set("accepted", "previous value");
+          write(ctx);
+          return terminate({ unreachable: true });
+        },
+      });
+      const def = defineAgent({
+        name: "shared-set-gate",
+        entry: "collect",
+        steps: { collect },
+      });
+
+      const result = await runLocal({
+        definition: def,
+        manifest: manifestFor(def),
+        maxAttemptsPerStep: 3,
+      });
+
+      expect(result.outcome).toBe("failed");
+      expect(result.steps).toHaveLength(1);
+      expect(result.steps[0]).toMatchObject({
+        step: "collect",
+        attempt: 0,
+        status: "threw",
+        sharedStateAfter: { accepted: "previous value" },
+      });
+      expect(result.error).toMatchObject({
+        code,
+        retryable: false,
+        stepName: "collect",
+        phase: "ctx_shared_set",
+      });
+      expect(result.error).toBeInstanceOf(Error);
+      expect(runs).toBe(1);
+    },
+  );
 
   // Prod parity: the server-side run defaults an absent input to {} (run.ts:63
   // `const { definitionId, input = {} } = opts`). Local must match — an absent
