@@ -585,6 +585,16 @@ describe('InMemoryContextStore', () => {
       expect(store.snapshot()).toEqual({});
     });
 
+    it('remeasures existing mutable references on every set', () => {
+      const mutable = { payload: 'small' };
+      const store = new InMemoryContextStore<QuotaShared>({ value: mutable }, { stepName: 'mutable' });
+      mutable.payload = 'x'.repeat(MAX_SHARED_SNAPSHOT_BYTES);
+
+      expect(() => store.set('existing', 'new')).toThrow(CtxSharedSizeLimitExceededError);
+      expect(store.has('existing')).toBe(false);
+      expect(store.get('value')).toBe(mutable);
+    });
+
     it.each([
       {
         label: 'a circular reference',

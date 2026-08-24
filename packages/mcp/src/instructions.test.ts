@@ -93,10 +93,16 @@ describe("server instructions", () => {
       "`ctx.shared.set()` validates the complete candidate synchronously",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "previous snapshot unchanged after an oversized or unserializable write",
+      "construct this SDK version's `InMemoryContextStore`",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "snapshot unchanged after an oversized or unserializable write",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain("structural payload guards");
     expect(AUTHORING_INSTRUCTIONS).toContain("than `instanceof`");
-    expect(AUTHORING_INSTRUCTIONS).toContain("Older hosts may");
+    expect(AUTHORING_INSTRUCTIONS).toContain("Hosts that have not adopted");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "There is no `delete()` operation",
+    );
   });
 });

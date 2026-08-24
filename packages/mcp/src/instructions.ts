@@ -66,12 +66,16 @@ and returns a live URL; a \`failed\` status carries the build/start logs — fix
   (\`zod/v4\`); give fields \`.default()\` so a zero-input run still validates.
 - Cross-step state: \`ctx.shared\` — the entry input reaches only the entry step. The whole
   snapshot has an inclusive 256 KiB (262,144-byte) quota, measured as compact
-  \`JSON.stringify\` UTF-8 bytes; keep IDs/references here instead of bulk state. On current
-  hosts, \`ctx.shared.set()\` validates the complete candidate synchronously and leaves the
-  previous snapshot unchanged after an oversized or unserializable write. Older hosts may
-  enforce only at execution boundaries during rollout. Use structural payload guards rather
-  than \`instanceof\` when catching these errors because host and definition bundles can
-  contain separate SDK copies.
+  \`JSON.stringify\` UTF-8 bytes; keep IDs/references here instead of bulk state. Hosts that
+  construct this SDK version's \`InMemoryContextStore\` get setter-time validation:
+  \`ctx.shared.set()\` validates the complete candidate synchronously and leaves the previous
+  snapshot unchanged after an oversized or unserializable write. Hosts that have not adopted
+  this store version may enforce only at execution boundaries during rollout. Use
+  structural payload guards rather than \`instanceof\` when catching these errors because
+  host and definition bundles can contain separate SDK copies.
+  There is no \`delete()\` operation; to recover from legacy invalid state, replace an
+  offending key with a compact, JSON-compatible value that brings the complete candidate
+  within the quota.
 - Capabilities run via the typed \`ctx.sapiom.*\` client (sandboxes, repositories,
   models.coding, fileStorage, search, database, email, domains, memory, and more) —
   don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are

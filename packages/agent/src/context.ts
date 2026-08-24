@@ -80,11 +80,12 @@ export interface AgentExecutionContext<TShared extends Record<string, unknown> =
 
   /**
    * Typed named-slot store; persisted to shared_state after each step. The
-   * whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota. `set()`
-   * measures the complete candidate snapshot before committing it, so quota or
-   * JSON serialization failures leave the previous state unchanged. Keep
-   * compact state, IDs, and references here rather than bulk payloads. Older
-   * hosts may temporarily enforce the contract only at execution boundaries.
+   * whole compact-JSON snapshot has an inclusive 256 KiB UTF-8 quota. When a
+   * host supplies this SDK version's `InMemoryContextStore`, `set()` measures
+   * the complete candidate before committing it, so quota or JSON serialization
+   * failures leave the previous state unchanged. Keep compact state, IDs, and
+   * references here rather than bulk payloads. Hosts that have not adopted this
+   * store version may enforce the contract only at execution boundaries.
    */
   readonly shared: TypedContextStore<TShared>;
 
@@ -168,6 +169,8 @@ export class InMemoryContextStore<TShared extends Record<string, unknown>> imple
   set<K extends keyof TShared>(key: K, value: TShared[K]): void {
     const candidate: Partial<TShared> = { ...this.state, [key]: value };
 
+    // Re-measure the whole candidate: stored values are mutable references, and
+    // root-level toJSON behavior cannot be represented by cached per-key sizes.
     let violation: ReturnType<typeof findCtxSharedSizeViolation>;
     try {
       violation = findCtxSharedSizeViolation(candidate);

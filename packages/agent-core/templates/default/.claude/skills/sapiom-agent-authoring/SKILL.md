@@ -240,15 +240,18 @@ JSON punctuation, all existing values, and the value being set count together.
 Exactly 262,144 bytes is valid; 262,145 bytes is rejected. Keep compact state,
 IDs, and durable-storage references in `ctx.shared`; put bulk API responses,
 documents, or research data in durable storage and carry only the ID/reference.
-On current hosts, `ctx.shared.set()` synchronously measures the complete
-candidate snapshot before committing it. An oversized or unserializable write
-throws and leaves the previous snapshot unchanged. Measurement follows
-`JSON.stringify`: circular references, BigInt values, and throwing `toJSON`
-methods fail, while values JSON normally omits or coerces retain those
-semantics. Older hosts may temporarily enforce the contract only at execution
-boundaries during rollout. If you catch a failure, use the exported structural
-payload guards rather than `instanceof`, because host and definition bundles
-can contain separate SDK copies.
+Hosts that construct this SDK version's `InMemoryContextStore` get setter-time
+validation: `ctx.shared.set()` synchronously measures the complete candidate
+snapshot before committing it. An oversized or unserializable write throws and
+leaves the previous snapshot unchanged. Measurement follows `JSON.stringify`:
+circular references, BigInt values, and throwing `toJSON` methods fail, while
+values JSON normally omits or coerces retain those semantics. Hosts that have
+not adopted this store version may temporarily enforce the contract only at
+execution boundaries during rollout. If you catch a failure, use the exported
+structural payload guards rather than `instanceof`, because host and definition
+bundles can contain separate SDK copies. There is no `delete()` operation; to
+recover from legacy invalid state, replace an offending key with a compact,
+JSON-compatible value that brings the complete candidate within the quota.
 
 **A step's `run(input, ctx)` first argument is its inbound input** — the entry input at the
 entry step, or the previous step's `goto(target, payload)` value at later steps. The entry

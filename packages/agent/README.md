@@ -93,10 +93,11 @@ bytes), inclusive**, measured as the UTF-8 byte length of compact
 `JSON.stringify(snapshot)`. Keys, JSON punctuation, existing values, and the
 new value all count toward the same limit.
 
-On hosts using this SDK, `ctx.shared.set()` synchronously measures the complete
+The SDK's `InMemoryContextStore.set()` synchronously measures the complete
 candidate snapshot before committing it. An oversized or unserializable
-candidate throws and leaves the previous snapshot unchanged. Older hosts may
-temporarily enforce the contract only at execution boundaries during rollout.
+candidate throws and leaves the previous snapshot unchanged. Hosts gain this
+setter-time gate when they construct this store version; hosts that have not
+adopted it may enforce the contract only at execution boundaries during rollout.
 
 Measurement follows `JSON.stringify` rather than a stricter JSON-value
 validator: values JSON normally omits or coerces retain those semantics, while
@@ -110,6 +111,10 @@ JSON encoding failures use `CTX_SHARED_SERIALIZATION_FAILED`. Use the exported
 structural guards and structured fields rather than parsing messages or relying
 on `instanceof`: the host runner and an authored definition may carry separate
 inlined SDK copies.
+
+`TypedContextStore` has no `delete()` operation. To recover from legacy invalid
+state, replace an offending key with a compact, JSON-compatible value small
+enough to bring the complete candidate within the quota.
 
 ## Pausing on a long-running capability
 
