@@ -46,6 +46,38 @@ describe("sapiom-agent-authoring skill sync", () => {
   }
 });
 
+// Content guards on the canonical (propagated to every copy by the identity
+// tests above). Byte-identity alone cannot stop an identical WRONG copy: the
+// pin no-op below already survived one correction round in this file.
+describe("sapiom-agent-authoring content guards", () => {
+  const canonical = readFileSync(CANONICAL, "utf8");
+
+  it("never re-teaches the pin no-op (smart already is the default)", () => {
+    expect(canonical.toLowerCase()).not.toContain("if you must pin");
+  });
+
+  it("teaches composition for multi-stage systems, with failure branching", () => {
+    expect(canonical).toContain("Composing Deployed Agents");
+    // agents.run resolves on any terminal status and does not throw — the
+    // worked example must branch on a non-completed child.
+    expect(canonical).toContain('research.status !== "completed"');
+  });
+});
+
+// The scaffold templates also ship an AGENTS.md; it has no canonical source, so
+// guard the load-bearing composition rule and the encoding directly (a mojibake
+// em dash — bytes \u00e2\u0080\u0094 as characters — shipped here once).
+describe("template AGENTS.md content", () => {
+  for (const template of readdirSync(TEMPLATES_DIR)) {
+    it(`template "${template}" AGENTS.md is clean UTF-8 and carries the composition rule`, () => {
+      const md = readFileSync(path.join(TEMPLATES_DIR, template, "AGENTS.md"), "utf8");
+      expect(md).not.toContain("\u00e2"); // mojibake telltale (â)
+      expect(md).toContain("one agent per project");
+      expect(md).toContain("ctx.sapiom.agents.run");
+    });
+  }
+});
+
 // The Claude Code plugin (repo root, plugins/sapiom — SAP-1366) carries its own
 // copy of the skill. Guarded: the plugin may not exist yet on this branch.
 describe("plugin skill copy (when present)", () => {

@@ -419,6 +419,12 @@ const research = await ctx.sapiom.agents.run({
   definition: "research-topic", // the deployed child's slug
   input: { topic: input.topic },
 });
+// agents.run resolves on ANY terminal status (completed | failed | cancelled)
+// and does NOT throw — a non-completed child is data the coordinator must
+// branch on, or a failed stage silently feeds `null` downstream.
+if (research.status !== "completed") {
+  return fail(`research-topic ${research.status}: ${research.error?.message}`);
+}
 const script = await ctx.sapiom.agents.run({
   definition: "write-script",
   input: { research: research.output },
