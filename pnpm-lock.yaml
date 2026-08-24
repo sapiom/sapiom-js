@@ -256,7 +256,7 @@ importers:
         specifier: workspace:^
         version: link:../analytics-core
       '@sapiom/harness':
-        specifier: '>=0.8.4'
+        specifier: '>=0.8.5'
         version: link:../harness
       '@sapiom/sandbox-preview':
         specifier: workspace:^
