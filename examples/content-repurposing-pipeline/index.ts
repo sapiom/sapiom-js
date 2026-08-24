@@ -134,6 +134,8 @@ interface RepurposeInput {
   schedule?: string;
   /** Optional video model — a Sapiom semantic alias (e.g. `"veo3-fast"`); cataloged aliases only. */
   model?: string;
+  /** Render the teaser clip. Defaults to true for your own `source`, false for the built-in sample. */
+  renderClip?: boolean;
   /** When true, generate the copy only — skip graphics, clip, upload, and email. */
   dryRun?: boolean;
 }
@@ -238,6 +240,52 @@ export function isReservedAddress(email: string): boolean {
  * for text overlay … no text in the image" and no overlay step exists. The LLM's
  * `imagePrompt` is demoted to art direction appended after the text directive.
  */
+/**
+ * The explicit `renderClip` input always wins; the sample-source heuristic is
+ * only the default for callers who didn't say (SAP-2858 — the field used to be
+ * absent from the schema, so an explicit `false` was stripped and a clip was
+ * rendered and billed anyway).
+ */
+export function resolveRenderClip(
+  explicit: boolean | undefined,
+  usedSampleSource: boolean,
+): boolean {
+  return explicit ?? !usedSampleSource;
+}
+
+/**
+ * System prompt for the repurpose step. Exported so tests can pin the rules
+ * that keep shipping-quality output: art-direction-only imagePrompts, text-free
+ * videoScript, tweet length, and — SAP-2858 — a newsletter with no bracketed
+ * placeholders (a run delivered "More soon, [Your name]" verbatim to an inbox).
+ */
+export function buildRepurposeSystem(
+  audience: string,
+  numQuotes: number,
+): string {
+  return (
+    "You are a content strategist repurposing one long-form SOURCE (a blog post " +
+    "or transcript) into a multi-channel content pack for " +
+    `${audience}. Keep the author's meaning; do not invent facts. ` +
+    `Write ${numQuotes} short, punchy pull-quote(s). Each quote's "imagePrompt" ` +
+    "is ART DIRECTION ONLY for its quote graphic (palette, background, " +
+    "typography style) — the quote text itself is composed into the image " +
+    "prompt by the pipeline, so never request empty space or say the image " +
+    'should contain no text. "videoScript" is a short single-shot visual ' +
+    `prompt (under 300 characters) for a ${CLIP_SECONDS}-second silent teaser ` +
+    "clip — describe decorative motion with NO on-screen text (video models " +
+    "render text illegibly; the quote lives in the graphics), never a " +
+    "narrated timeline or script sections. Tweets must each be <= 280 " +
+    "characters. " +
+    'The "newsletter" must be ready to send VERBATIM: complete copy with a ' +
+    "neutral sign-off and NO bracketed placeholders or fill-ins (never " +
+    '"[Your name]", "[Company]", or similar). ' +
+    "Reply with ONLY minified JSON: " +
+    '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
+    '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.'
+  );
+}
+
 export function buildGraphicPrompt(spec: QuoteGraphicSpec): string {
   const quote = spec.quote.trim();
   const style = spec.imagePrompt.trim();
@@ -520,6 +568,12 @@ const entryInput = z.object({
     .describe(
       'Optional video model — a Sapiom semantic alias (e.g. "veo3-fast"). Neutral params like aspectRatio are validated against the resolved model, so a cataloged alias is required.',
     ),
+  renderClip: z
+    .boolean()
+    .optional()
+    .describe(
+      "Render the teaser clip (the priciest, slowest leg). Defaults to true when you pass your own `source`, false for the built-in sample.",
+    ),
   dryRun: z
     .boolean()
     .optional()
@@ -568,23 +622,7 @@ const repurpose = defineStep({
       ),
     );
 
-    const system =
-      "You are a content strategist repurposing one long-form SOURCE (a blog post " +
-      "or transcript) into a multi-channel content pack for " +
-      `${audience}. Keep the author's meaning; do not invent facts. ` +
-      `Write ${numQuotes} short, punchy pull-quote(s). Each quote's "imagePrompt" ` +
-      "is ART DIRECTION ONLY for its quote graphic (palette, background, " +
-      "typography style) — the quote text itself is composed into the image " +
-      "prompt by the pipeline, so never request empty space or say the image " +
-      'should contain no text. "videoScript" is a short single-shot visual ' +
-      `prompt (under 300 characters) for a ${CLIP_SECONDS}-second silent teaser ` +
-      "clip — describe decorative motion with NO on-screen text (video models " +
-      "render text illegibly; the quote lives in the graphics), never a " +
-      "narrated timeline or script sections. Tweets must each be <= 280 " +
-      "characters. " +
-      "Reply with ONLY minified JSON: " +
-      '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
-      '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.';
+    const system = buildRepurposeSystem(audience, numQuotes);
     const prompt = `TITLE: ${title}\n\nSOURCE:\n${source}`;
 
     ctx.logger.info("repurposing source", {
@@ -609,8 +647,10 @@ const repurpose = defineStep({
     // configured — the built-in sample — renders the quote graphics but stops short of
     // the clip, so a zero-setup run still fires a real visual artifact without becoming
     // the most expensive one in the gallery. Supply your own `source` and the full pack
-    // (clip included) renders.
-    ctx.shared.set("renderClip", !usedSampleSource);
+    // (clip included) renders — unless the caller explicitly said otherwise: an explicit
+    // `renderClip` input always wins (SAP-2858 — it used to be silently ignored, so a
+    // `renderClip: false` run still billed a clip).
+    ctx.shared.set("renderClip", resolveRenderClip(input.renderClip, usedSampleSource));
     ctx.shared.set("pack", pack);
     ctx.shared.set("graphics", []);
     ctx.shared.set("graphicIndex", 0);

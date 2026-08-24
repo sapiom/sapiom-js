@@ -5,8 +5,10 @@ import {
   agent,
   buildClipPrompt,
   buildGraphicPrompt,
+  buildRepurposeSystem,
   isNarrationScript,
   isReservedAddress,
+  resolveRenderClip,
 } from "./index.ts";
 
 test("flags RFC 2606 reserved domains as undeliverable", () => {
@@ -379,4 +381,39 @@ test("a failed send is reported per-recipient rather than failing the run", asyn
       .messageId,
     undefined,
   );
+});
+
+// ── SAP-2858: the explicit renderClip input wins; heuristic is only a default ─
+
+test("resolveRenderClip: explicit input always wins over the sample-source heuristic", () => {
+  assert.equal(resolveRenderClip(false, false), false); // real source, clip declined
+  assert.equal(resolveRenderClip(true, true), true); // sample source, clip demanded
+});
+
+test("resolveRenderClip: omitted input falls back to the sample-source heuristic", () => {
+  assert.equal(resolveRenderClip(undefined, false), true); // real source ⇒ full pack
+  assert.equal(resolveRenderClip(undefined, true), false); // sample ⇒ skip the pricey leg
+});
+
+test("entry schema declares renderClip so an explicit input survives validation", () => {
+  // The SAP-2858 bug: the field was absent from the schema, so zod stripped it
+  // and `renderClip: false` still rendered (and billed) a clip.
+  const schema = agent.steps.repurpose.inputSchema;
+  assert.ok(schema, "repurpose declares an inputSchema");
+  const parsed = schema.parse({ renderClip: false });
+  assert.equal(parsed.renderClip, false);
+});
+
+// ── SAP-2858: the newsletter must ship without bracketed placeholders ────────
+
+test("buildRepurposeSystem bans placeholders and keeps the load-bearing rules", () => {
+  const system = buildRepurposeSystem("payments operators", 3);
+  assert.match(system, /NO bracketed placeholders/i);
+  assert.match(system, /\[Your name\]/);
+  assert.match(system, /payments operators/);
+  assert.match(system, /3 short, punchy pull-quote/);
+  // The rules that predate this test must survive it.
+  assert.match(system, /ART DIRECTION ONLY/);
+  assert.match(system, /NO on-screen text/);
+  assert.match(system, /<= 280/);
 });
