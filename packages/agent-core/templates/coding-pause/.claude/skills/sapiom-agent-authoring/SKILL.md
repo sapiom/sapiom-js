@@ -423,7 +423,8 @@ const research = await ctx.sapiom.agents.run({
 // and does NOT throw — a non-completed child is data the coordinator must
 // branch on, or a failed stage silently feeds `null` downstream.
 if (research.status !== "completed") {
-  return fail(`research-topic ${research.status}: ${research.error?.message}`);
+  // (fail() requires this step to declare canFail: true)
+  return fail(`research-topic ${research.status}: ${String(research.error)}`);
 }
 const script = await ctx.sapiom.agents.run({
   definition: "write-script",

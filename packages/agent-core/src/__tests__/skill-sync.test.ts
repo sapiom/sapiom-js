@@ -68,9 +68,18 @@ describe("sapiom-agent-authoring content guards", () => {
 // guard the load-bearing composition rule and the encoding directly (a mojibake
 // em dash — bytes \u00e2\u0080\u0094 as characters — shipped here once).
 describe("template AGENTS.md content", () => {
-  for (const template of readdirSync(TEMPLATES_DIR)) {
-    it(`template "${template}" AGENTS.md is clean UTF-8 and carries the composition rule`, () => {
-      const md = readFileSync(path.join(TEMPLATES_DIR, template, "AGENTS.md"), "utf8");
+  const agentsMdPaths = [
+    ...readdirSync(TEMPLATES_DIR).map((template) =>
+      path.join(TEMPLATES_DIR, template, "AGENTS.md"),
+    ),
+    // The CLI ships its own separately published template copy — the exact
+    // drift path that let a mojibake em dash land in two files and not the third.
+    path.resolve(PKG_ROOT, "..", "cli", "templates", "default", "AGENTS.md"),
+  ];
+  for (const mdPath of agentsMdPaths) {
+    it(`${path.relative(path.resolve(PKG_ROOT, "..", ".."), mdPath)} is clean UTF-8 and carries the composition rule`, () => {
+      if (!existsSync(mdPath)) return; // cli package may not exist on every branch
+      const md = readFileSync(mdPath, "utf8");
       expect(md).not.toContain("\u00e2"); // mojibake telltale (â)
       expect(md).toContain("one agent per project");
       expect(md).toContain("ctx.sapiom.agents.run");
