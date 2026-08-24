@@ -148,9 +148,9 @@ export interface StepExecutionRecord {
 }
 
 /**
- * Internal: in-memory ContextStore backed by a plain object. The runner
- * builds one of these per advance() call, seeded from the execution row's
- * shared_state, and writes the mutated snapshot back after the step runs.
+ * In-memory ContextStore backed by a plain object. The runner builds one of
+ * these per advance() call, seeded from the execution row's shared_state, and
+ * writes the mutated snapshot back after the step runs.
  */
 export class InMemoryContextStore<TShared extends Record<string, unknown>> implements TypedContextStore<TShared> {
   private state: Partial<TShared>;

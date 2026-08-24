@@ -7,8 +7,8 @@
 
 Make `ctx.shared.set()` on the SDK's `InMemoryContextStore` an atomic
 whole-snapshot quota gate. `runLocal` now constructs this store with step
-context; platform hosts continue enforcing the snapshot contract at execution
-boundaries until they adopt this store version. The store measures the complete
+context; hosts that have not adopted this store version may enforce the contract
+only at execution boundaries during rollout. The store measures the complete
 candidate as compact JSON UTF-8 before committing it, so oversized writes throw
 `CTX_SHARED_SIZE_LIMIT_EXCEEDED` and retain the previous state.
 
