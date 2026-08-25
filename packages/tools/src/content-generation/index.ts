@@ -127,7 +127,7 @@ export interface ImageCreateInput {
 
   /**
    * Optional cross-call idempotency key: a repeat with the same key (per tenant) returns the
-   * existing generation instead of a new one, matching `agents.run`. Arbitrary string ≤255.
+   * existing generation instead of a new one, matching `agents.run`. Arbitrary string ≤255 (not a UUID).
    * Forwarded verbatim — the platform validates and deduplicates; the SDK adds no logic.
    */
   idempotencyKey?: string;
@@ -699,7 +699,7 @@ export interface VideoCreateInput {
 
   /**
    * Optional cross-call idempotency key: a repeat with the same key (per tenant) returns the
-   * existing generation instead of a new one, matching `agents.run`. Arbitrary string ≤255.
+   * existing generation instead of a new one, matching `agents.run`. Arbitrary string ≤255 (not a UUID).
    * Forwarded verbatim — the platform validates and deduplicates; the SDK adds no logic.
    */
   idempotencyKey?: string;
