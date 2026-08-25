@@ -45,18 +45,63 @@ const ROLLOUT_HEAD_BYTES = 65_536;
 const MAX_SCAN_DEPTH = 4; // ~/.codex/sessions/YYYY/MM/DD/*.jsonl
 
 /**
- * Matches Codex's directory-trust confirmation prompt ("Do you trust the
- * contents of this directory? ... 1. Yes, continue  2. No, quit"), after
- * `stripAnsi` — confirmed against a real capture: Codex's TUI positions
- * each *word* with its own cursor-addressing escape sequence instead of
- * emitting literal spaces between them (`trust\x1b[3;16Hthe\x1b[3;20H...`),
- * so even a stripped buffer runs the words together with no separator at
- * all; `\s*` between them tolerates that (and ordinary whitespace, in case
- * a future TUI revision renders differently). See `detectBlockingPrompt`
- * for why this exists at all (Codex's own structured readiness signal can't
- * be relied on standalone, unlike Claude Code's).
+ * Turn a rendered phrase into a pattern that also matches Codex's cursor-
+ * positioned output. Confirmed against real captures: the TUI can position
+ * each *word* separately instead of emitting literal spaces
+ * (`trust\x1b[3;16Hthe\x1b[3;20H...`), so `stripAnsi()` leaves adjacent words.
+ * `\s*` accepts both that representation and ordinary terminal text.
  */
-const TRUST_PROMPT_PATTERN = /trust\s*the\s*contents\s*of\s*this\s*directory/i;
+function tuiPhrase(phrase: string): RegExp {
+  const escapedWords = phrase
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(escapedWords.join("\\s*"), "i");
+}
+
+/**
+ * Recognizable signatures for Codex screens that need a human choice before
+ * the composer is safe for injected input. A signature may require multiple
+ * phrases so ordinary agent output mentioning one short label does not hold
+ * later programmatic input indefinitely.
+ *
+ * These strings are verified against codex-cli 0.147.0's onboarding, auth,
+ * model-migration, personality, and theme-picker sources. Detection remains
+ * deliberately best-effort: when Codex adds a new interactive startup screen,
+ * its stable rendered copy must be added here.
+ */
+const BLOCKING_PROMPT_SIGNATURES: readonly (readonly RegExp[])[] = [
+  [tuiPhrase("trust the contents of this directory")],
+  [
+    tuiPhrase("Sign in with ChatGPT to use Codex as part of your paid plan"),
+    tuiPhrase("connect an API key for usage-based billing"),
+  ],
+  [
+    tuiPhrase("Finish signing in via your browser"),
+    tuiPhrase("open the following link to authenticate"),
+  ],
+  [
+    tuiPhrase("Preparing device code login"),
+    tuiPhrase("Open this link in your browser and sign in"),
+  ],
+  [
+    tuiPhrase("Use your own OpenAI API key for usage-based billing"),
+    tuiPhrase("Paste or type your API key"),
+  ],
+  [
+    tuiPhrase("Before you start"),
+    tuiPhrase("Decide how much autonomy you want to grant Codex"),
+  ],
+  [
+    tuiPhrase("Codex just got an upgrade"),
+    tuiPhrase("Choose how you'd like Codex to proceed"),
+  ],
+  [
+    tuiPhrase("Select Personality"),
+    tuiPhrase("Choose a communication style for Codex"),
+  ],
+  [tuiPhrase("Select Syntax Theme"), tuiPhrase("Type to filter themes")],
+];
 
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
@@ -234,28 +279,21 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   /**
-   * See `HarnessAdapter.detectBlockingPrompt`. Codex needs this (Claude Code
-   * doesn't) because its rollout file — and therefore the SessionStart-
-   * equivalent event `SessionManager` otherwise waits on — isn't written
-   * until the *first* turn is actually submitted, confirmed empirically
-   * against a real `codex-cli 0.134.0`: an idle, fully-interactive session
-   * (trust prompt already accepted, composer visibly ready) produces zero
-   * files under `~/.codex/sessions` for as long as nothing is submitted.
-   * That real signal therefore can't arrive before the very first
-   * injection that needs it — a scrollback check is the only thing that
-   * can stand in for it up to that point.
-   */
-  /**
-   * See `HarnessAdapter.readyFallback`: SessionManager proactively publishes
-   * readiness once Codex has rendered non-blocking output, and
-   * `isReadyEnough` retains the same settled-scrollback rule as a request-time
-   * safeguard. Codex's real readiness signal cannot arrive before the first
-   * injection needs it (see detectBlockingPrompt).
+   * See `HarnessAdapter.readyFallback` and `detectBlockingPrompt`. Codex's
+   * rollout file — and therefore the SessionStart-equivalent event
+   * `SessionManager` otherwise waits on — isn't written until the first turn
+   * is submitted. Confirmed empirically against codex-cli 0.134.0: an idle,
+   * fully-interactive session produces no rollout for as long as nothing is
+   * submitted. SessionManager therefore publishes fallback readiness after a
+   * quiet, non-blocking frame, while retaining the same check at request time.
    */
   readonly readyFallback = "immediate" as const;
 
   detectBlockingPrompt(scrollback: string): boolean {
-    return TRUST_PROMPT_PATTERN.test(stripAnsi(scrollback));
+    const rendered = stripAnsi(scrollback);
+    return BLOCKING_PROMPT_SIGNATURES.some((signature) =>
+      signature.every((pattern) => pattern.test(rendered)),
+    );
   }
 
   /**

@@ -153,9 +153,92 @@ describe("CodexAdapter", () => {
       "\x1b[6;1H\x1b[38;5;6;49m› 1. Yes, continue\x1b[7;3H\x1b[39;49m2." +
       "\x1b[7;6HNo,\x1b[7;10Hquit\x1b[9;3H\x1b[2mPress enter to continue";
 
+    // Codex commonly positions words independently. Build that same output
+    // shape around stable copy from codex-cli 0.147.0's checked-in TUI
+    // sources so every signature is also exercised without literal spaces.
+    const cursorPositioned = (...lines: string[]) =>
+      lines
+        .map((line, row) =>
+          line
+            .split(" ")
+            .map((word, column) => `\x1b[${row + 1};${column * 8 + 1}H${word}`)
+            .join(""),
+        )
+        .join("");
+
     it("detects the trust prompt in a real, unmodified pty capture", () => {
       const adapter = new CodexAdapter();
       expect(adapter.detectBlockingPrompt(REAL_TRUST_PROMPT_CAPTURE)).toBe(true);
+    });
+
+    it.each([
+      [
+        "the sign-in chooser",
+        cursorPositioned(
+          "Sign in with ChatGPT to use Codex as part of your paid plan",
+          "or connect an API key for usage-based billing",
+          "Sign in with Device Code",
+          "Provide your own API key",
+        ),
+      ],
+      [
+        "browser authentication",
+        cursorPositioned(
+          "Finish signing in via your browser",
+          "If the link doesn't open automatically, open the following link to authenticate:",
+        ),
+      ],
+      [
+        "device-code authentication",
+        cursorPositioned(
+          "Preparing device code login",
+          "1. Open this link in your browser and sign in",
+          "2. Enter this one-time code after you are signed in",
+        ),
+      ],
+      [
+        "API-key entry",
+        cursorPositioned(
+          "Use your own OpenAI API key for usage-based billing",
+          "Paste or type your API key below. It will be stored locally in auth.json.",
+        ),
+      ],
+      [
+        "the post-login onboarding notice",
+        cursorPositioned(
+          "Before you start:",
+          "Decide how much autonomy you want to grant Codex",
+          "Codex can make mistakes",
+        ),
+      ],
+      [
+        "model migration",
+        cursorPositioned(
+          "Codex just got an upgrade. Introducing GPT-5.5.",
+          "Choose how you'd like Codex to proceed.",
+          "1. Try new model",
+          "2. Use existing model",
+        ),
+      ],
+      [
+        "personality selection",
+        cursorPositioned(
+          "Select Personality",
+          "Choose a communication style for Codex.",
+          "Press enter to confirm or esc to go back",
+        ),
+      ],
+      [
+        "syntax-theme selection",
+        cursorPositioned(
+          "Select Syntax Theme",
+          "Type to filter themes...",
+          "Move up/down to live preview themes",
+        ),
+      ],
+    ])("detects %s as blocking", (_name, capture) => {
+      const adapter = new CodexAdapter();
+      expect(adapter.detectBlockingPrompt(capture)).toBe(true);
     });
 
     it("does not false-positive on ordinary composer/output text", () => {
@@ -164,6 +247,13 @@ describe("CodexAdapter", () => {
         "\x1b]0;my-project\x07\x1b[1;1H\x1b[38;2;231;231;231;49m› Find and fix a bug in @filename" +
         "\x1b[3;1Hgpt-5.5 xhigh · /private/tmp/proj";
       expect(adapter.detectBlockingPrompt(composer)).toBe(false);
+    });
+
+    it("does not treat one isolated onboarding label in ordinary output as a whole blocking screen", () => {
+      const adapter = new CodexAdapter();
+      expect(adapter.detectBlockingPrompt("The docs mention Sign in with ChatGPT to use Codex as part of your paid plan.")).toBe(false);
+      expect(adapter.detectBlockingPrompt("You can choose Provide your own API key during setup.")).toBe(false);
+      expect(adapter.detectBlockingPrompt("The next heading says Select Personality.")).toBe(false);
     });
 
     it("does not false-positive on an OSC sequence terminated by ST (ESC \\\\) rather than BEL", () => {
