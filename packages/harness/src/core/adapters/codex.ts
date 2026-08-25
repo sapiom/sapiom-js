@@ -131,6 +131,19 @@ const READY_PROMPT_PATTERNS = [
 const COMPOSER_INPUT_MARKER = /›/u;
 const COMPOSER_CWD_FOOTER = /·\s*(?:~[\\/]|\/|[A-Za-z]:[\\/])/u;
 
+/**
+ * A modal can repaint only its moved selection row while leaving Codex's
+ * underlying footer visible. Full blocker detection deliberately requires a
+ * whole multi-phrase signature, but clearing an already-latched blocker is
+ * stricter: any one known modal fragment vetoes composer readiness until a
+ * clean frame arrives.
+ */
+function hasBlockingPromptFragment(rendered: string): boolean {
+  return BLOCKING_PROMPT_SIGNATURES.some((signature) =>
+    signature.some((pattern) => pattern.test(rendered)),
+  );
+}
+
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
   binary?: string;
@@ -327,6 +340,7 @@ export class CodexAdapter implements HarnessAdapter {
 
   detectReadyPrompt(terminalOutput: string): boolean {
     const rendered = stripAnsi(terminalOutput);
+    if (hasBlockingPromptFragment(rendered)) return false;
     return (
       READY_PROMPT_PATTERNS.some((pattern) => pattern.test(rendered)) ||
       (COMPOSER_INPUT_MARKER.test(rendered) &&
