@@ -1466,6 +1466,97 @@ describe("neutral params (E4/SAP-2579)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// E7 phase 3 (SAP-2578) — caller-supplied idempotencyKey reaches the request
+// body (cross-call dedup lives on the platform; the SDK is a verbatim passthrough,
+// so the only contract to prove is that the allow-list doesn't drop the field).
+// ---------------------------------------------------------------------------
+
+describe("idempotencyKey passthrough (E7 phase 3 / SAP-2578)", () => {
+  it("createImage forwards idempotencyKey as a top-level body field", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({ images: [] })]);
+
+    await createImage(
+      { prompt: "x", idempotencyKey: "dedupe-abc-123" },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      idempotencyKey: "dedupe-abc-123",
+    });
+  });
+
+  it("createVideo forwards idempotencyKey as a top-level body field", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ requestId: "r", responseUrl: `${BASE}/queue/r` })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "https://media/v.mp4" } })
+          : null,
+    ]);
+
+    await createVideo(
+      { prompt: "x", idempotencyKey: "dedupe-vid-9", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    // pollIntervalMs is a client-side control and stays off the wire; idempotencyKey rides top-level.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      idempotencyKey: "dedupe-vid-9",
+    });
+  });
+
+  it("launchImage + launchVideo forward idempotencyKey alongside their dispatch shape", async () => {
+    const img = makeLaunchTransport(
+      { requestId: "i", responseUrl: `${BASE}/queue/i` },
+      { images: [{ url: "u" }] },
+    );
+    await launchImage(
+      { prompt: "x", idempotencyKey: "dedupe-img-launch" },
+      img.transport,
+      BASE,
+    );
+    expect(JSON.parse(img.calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      dispatch: "async",
+      idempotencyKey: "dedupe-img-launch",
+    });
+
+    const vid = makeLaunchTransport(
+      { requestId: "v", responseUrl: `${BASE}/queue/v` },
+      { video: { url: "u" } },
+    );
+    await launchVideo(
+      { prompt: "x", idempotencyKey: "dedupe-vid-launch" },
+      vid.transport,
+      BASE,
+    );
+    expect(JSON.parse(vid.calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      idempotencyKey: "dedupe-vid-launch",
+    });
+  });
+
+  it("drops an explicit null idempotencyKey (JS caller) instead of sending it", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({ images: [] })]);
+
+    await createImage(
+      { prompt: "x", idempotencyKey: null as unknown as undefined },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ prompt: "x" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // toVideoResumePayload()
 // ---------------------------------------------------------------------------
 

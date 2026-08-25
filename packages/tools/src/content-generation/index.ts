@@ -125,6 +125,13 @@ export interface ImageCreateInput {
    */
   model?: string;
 
+  /**
+   * Optional cross-call idempotency key: a repeat with the same key (per tenant) returns the
+   * existing generation instead of a new one, matching `agents.run`. Arbitrary string ≤255.
+   * Forwarded verbatim — the platform validates and deduplicates; the SDK adds no logic.
+   */
+  idempotencyKey?: string;
+
   // ── Neutral params (E4/SAP-2579). Validated against the resolved model's capabilities BEFORE
   // payment and mapped to its provider wire keys; an unsupported one → 400 `unsupported_param`
   // (never silently dropped). Omit ⇒ the provider default. See {@link AspectRatio} et al.
@@ -376,6 +383,9 @@ export async function createImage(
   const body: Record<string, unknown> = { prompt: input.prompt };
   if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
+  // Request-level control (like `model`/`storage`), not a neutral media param: forwarded
+  // verbatim for the platform to validate + dedup. `!= null` drops an explicit JS `null`.
+  if (input.idempotencyKey != null) body.idempotencyKey = input.idempotencyKey;
   applyMediaParams(body, input as unknown as Record<string, unknown>, IMAGE_PARAM_KEYS);
 
   const raw = await capabilityCall<RawImageResult>(
@@ -557,6 +567,9 @@ export async function launchImage(
   };
   if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
+  // Request-level control (like `model`/`storage`), not a neutral media param: forwarded
+  // verbatim for the platform to validate + dedup. `!= null` drops an explicit JS `null`.
+  if (input.idempotencyKey != null) body.idempotencyKey = input.idempotencyKey;
   applyMediaParams(body, input as unknown as Record<string, unknown>, IMAGE_PARAM_KEYS);
 
   const handle = await capabilityCall<ImageDispatchResponse>(
@@ -683,6 +696,13 @@ export interface VideoCreateInput {
    * @example "veo3-fast"
    */
   model?: LiteralUnion<KnownVideoModel>;
+
+  /**
+   * Optional cross-call idempotency key: a repeat with the same key (per tenant) returns the
+   * existing generation instead of a new one, matching `agents.run`. Arbitrary string ≤255.
+   * Forwarded verbatim — the platform validates and deduplicates; the SDK adds no logic.
+   */
+  idempotencyKey?: string;
 
   // ── Neutral params (E4/SAP-2579) — same contract as {@link ImageCreateInput}: validated against
   // the resolved model's capabilities BEFORE payment, mapped to its provider wire keys; an
@@ -882,6 +902,9 @@ export async function createVideo(
   const body: Record<string, unknown> = { prompt: input.prompt };
   if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
+  // Request-level control (like `model`/`storage`), not a neutral media param: forwarded
+  // verbatim for the platform to validate + dedup. `!= null` drops an explicit JS `null`.
+  if (input.idempotencyKey != null) body.idempotencyKey = input.idempotencyKey;
   applyMediaParams(body, input as unknown as Record<string, unknown>, VIDEO_PARAM_KEYS);
 
   // Submit through the capability router — the video capability's adapter always
@@ -1062,6 +1085,9 @@ export async function launchVideo(
   const body: Record<string, unknown> = { prompt: input.prompt };
   if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
+  // Request-level control (like `model`/`storage`), not a neutral media param: forwarded
+  // verbatim for the platform to validate + dedup. `!= null` drops an explicit JS `null`.
+  if (input.idempotencyKey != null) body.idempotencyKey = input.idempotencyKey;
   applyMediaParams(body, input as unknown as Record<string, unknown>, VIDEO_PARAM_KEYS);
 
   const handle = await capabilityCall<VideoDispatchResponse>(
