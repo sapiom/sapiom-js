@@ -391,17 +391,25 @@ export interface HarnessAdapter {
    */
   detectBlockingPrompt?(terminalOutput: string): boolean;
   /**
+   * Best-effort positive match for this harness's empty interactive composer.
+   * Immediate fallbacks use it only after they previously recognized a
+   * blocking screen: a partial TUI repaint cannot erase that blocker latch;
+   * a positively identified composer can. Optional when the adapter's output
+   * is not diff-rendered or it never declares an immediate fallback.
+   */
+  detectReadyPrompt?(terminalOutput: string): boolean;
+  /**
    * How SessionManager may proactively mark this harness ready WITHOUT its
    * real readiness signal (SessionStart hook / tailer equivalent). Absent =
    * never publish fallback readiness; detect-only legacy adapters retain only
    * their request-time `isReadyEnough` compatibility path.
    *
-   *  - `"immediate"` (Codex): after the pty has produced output and settled,
-   *    SessionManager proactively publishes `ready` when no recognized
-   *    blocking prompt is visible, releasing a held first prompt.
-   *    `isReadyEnough` applies the same settled-frame rule as a request-
-   *    time race safeguard. Codex's real signal cannot arrive before the first
-   *    injection needs it (see CodexAdapter).
+   *  - `"immediate"` (Codex): after the pty has produced output and settled
+   *    (or reached a bounded liveness ceiling), SessionManager proactively
+   *    publishes `ready` when no recognized blocking prompt is visible,
+   *    releasing a held first prompt. `isReadyEnough` applies the same rule
+   *    as a request-time race safeguard. Codex's real signal cannot arrive
+   *    before the first injection needs it (see CodexAdapter).
    *  - `"hook-timeout"` (Claude Code): the hook is the primary signal, but a
    *    generously-timed fallback flips `ready` when it never arrives — the
    *    hook chain runs `node` through whatever shell Claude uses for hooks,

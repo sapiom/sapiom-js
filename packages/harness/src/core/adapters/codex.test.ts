@@ -251,9 +251,26 @@ describe("CodexAdapter", () => {
 
     it("does not treat one isolated onboarding label in ordinary output as a whole blocking screen", () => {
       const adapter = new CodexAdapter();
-      expect(adapter.detectBlockingPrompt("The docs mention Sign in with ChatGPT to use Codex as part of your paid plan.")).toBe(false);
-      expect(adapter.detectBlockingPrompt("You can choose Provide your own API key during setup.")).toBe(false);
-      expect(adapter.detectBlockingPrompt("The next heading says Select Personality.")).toBe(false);
+      expect(
+        adapter.detectBlockingPrompt(
+          "The docs say to trust the contents of this directory.",
+        ),
+      ).toBe(false);
+      expect(
+        adapter.detectBlockingPrompt(
+          "The docs mention Sign in with ChatGPT to use Codex as part of your paid plan.",
+        ),
+      ).toBe(false);
+      expect(
+        adapter.detectBlockingPrompt(
+          "You can choose Provide your own API key during setup.",
+        ),
+      ).toBe(false);
+      expect(
+        adapter.detectBlockingPrompt(
+          "The next heading says Select Personality.",
+        ),
+      ).toBe(false);
     });
 
     it("does not false-positive on an OSC sequence terminated by ST (ESC \\\\) rather than BEL", () => {
@@ -267,7 +284,8 @@ describe("CodexAdapter", () => {
       const capture =
         "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]0;proj\x07" +
         "\x1b[3;3HDo\x1b[3;6Hyou\x1b[3;10Htrust\x1b[3;16Hthe\x1b[3;20Hcontents" +
-        "\x1b[3;29Hof\x1b[3;32Hthis\x1b[3;37Hdirectory?";
+        "\x1b[3;29Hof\x1b[3;32Hthis\x1b[3;37Hdirectory?" +
+        "\x1b[6;3HYes,\x1b[6;8Hcontinue\x1b[7;3HNo,\x1b[7;7Hquit";
       const adapter = new CodexAdapter();
       expect(adapter.detectBlockingPrompt(capture)).toBe(true);
     });
@@ -275,6 +293,27 @@ describe("CodexAdapter", () => {
     it("returns false for plain text with no escape sequences at all", () => {
       const adapter = new CodexAdapter();
       expect(adapter.detectBlockingPrompt("just some ordinary agent output, nothing special")).toBe(false);
+    });
+  });
+
+  describe("detectReadyPrompt", () => {
+    it("recognizes the empty Codex composer through cursor-positioned rendering", () => {
+      const adapter = new CodexAdapter();
+      expect(
+        adapter.detectReadyPrompt(
+          "\x1b[?2026h\x1b[12;3HAsk\x1b[12;7HCodex\x1b[12;13Hto\x1b[12;16Hdo" +
+            "\x1b[12;19Hanything\x1b[?2026l",
+        ),
+      ).toBe(true);
+    });
+
+    it("does not mistake an onboarding screen for the empty composer", () => {
+      const adapter = new CodexAdapter();
+      expect(
+        adapter.detectReadyPrompt(
+          "Finish signing in via your browser\r\nopen the following link to authenticate",
+        ),
+      ).toBe(false);
     });
   });
 

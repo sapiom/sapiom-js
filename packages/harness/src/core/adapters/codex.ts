@@ -71,7 +71,11 @@ function tuiPhrase(phrase: string): RegExp {
  * its stable rendered copy must be added here.
  */
 const BLOCKING_PROMPT_SIGNATURES: readonly (readonly RegExp[])[] = [
-  [tuiPhrase("trust the contents of this directory")],
+  [
+    tuiPhrase("trust the contents of this directory"),
+    tuiPhrase("Yes, continue"),
+    tuiPhrase("No, quit"),
+  ],
   [
     tuiPhrase("Sign in with ChatGPT to use Codex as part of your paid plan"),
     tuiPhrase("connect an API key for usage-based billing"),
@@ -102,6 +106,11 @@ const BLOCKING_PROMPT_SIGNATURES: readonly (readonly RegExp[])[] = [
   ],
   [tuiPhrase("Select Syntax Theme"), tuiPhrase("Type to filter themes")],
 ];
+
+/** Stable empty-composer copy from codex-cli 0.147.0. This is not required
+ * for the ordinary already-trusted path; SessionManager uses it to prove that
+ * a previously detected onboarding screen has actually been replaced. */
+const READY_PROMPT_PATTERNS = [tuiPhrase("Ask Codex to do anything")];
 
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
@@ -285,7 +294,8 @@ export class CodexAdapter implements HarnessAdapter {
    * is submitted. Confirmed empirically against codex-cli 0.134.0: an idle,
    * fully-interactive session produces no rollout for as long as nothing is
    * submitted. SessionManager therefore publishes fallback readiness after a
-   * quiet, non-blocking frame, while retaining the same check at request time.
+   * non-blocking frame settles (or reaches its bounded liveness ceiling),
+   * while retaining the same check at request time.
    */
   readonly readyFallback = "immediate" as const;
 
@@ -294,6 +304,11 @@ export class CodexAdapter implements HarnessAdapter {
     return BLOCKING_PROMPT_SIGNATURES.some((signature) =>
       signature.every((pattern) => pattern.test(rendered)),
     );
+  }
+
+  detectReadyPrompt(terminalOutput: string): boolean {
+    const rendered = stripAnsi(terminalOutput);
+    return READY_PROMPT_PATTERNS.some((pattern) => pattern.test(rendered));
   }
 
   /**

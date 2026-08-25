@@ -586,10 +586,15 @@ describe("SessionManager", () => {
       vi.useRealTimers();
     });
 
-    const immediateAdapter = (detect: (scrollback: string) => boolean = () => false) =>
+    const immediateAdapter = (
+      detect: (scrollback: string) => boolean = () => false,
+      detectReady: (scrollback: string) => boolean = (scrollback) =>
+        scrollback.includes("Ask Codex to do anything"),
+    ) =>
       createFakeAdapter({
         readyFallback: "immediate",
         detectBlockingPrompt: vi.fn(detect),
+        detectReadyPrompt: vi.fn(detectReady),
       });
 
     it("publishes ready after output settles without waiting for submitInput()", async () => {
@@ -664,10 +669,106 @@ describe("SessionManager", () => {
       expect(manager.get(session.id)?.ready).toBe(false);
       expect(detectBlockingPrompt).toHaveBeenCalledWith(expect.stringContaining("Sign in with ChatGPT"));
 
-      // The next content-bearing synchronized repaint replaces the old screen.
-      spawns[0]?.emitData("\x1b[?2026h\x1b[1;1H› Ask Codex to do anything\r\n\x1b[?2026l");
+      // A positive composer frame clears the old-screen latch.
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1H› Ask Codex to do anything\r\n\x1b[?2026l",
+      );
       await vi.advanceTimersByTimeAsync(700);
       expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("retains a blocking screen across partial synchronized diff repaints until the composer is proven", async () => {
+      const detectBlockingPrompt = vi.fn(
+        (output: string) =>
+          output.includes("Sign in with ChatGPT to use Codex") &&
+          output.includes("connect an API key for usage-based billing"),
+      );
+      const { manager, spawns } = makeManager({
+        adapter: immediateAdapter(detectBlockingPrompt),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1HSign in with ChatGPT to use Codex\r\n" +
+          "or connect an API key for usage-based billing\x1b[?2026l",
+      );
+      // Real Ratatui arrow-key navigation repaints only the changed choice
+      // row. Losing the earlier full frame here was the review regression.
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[8;1H  1. Sign in with ChatGPT\r\n> 2. Sign in with Device Code\x1b[?2026l",
+      );
+
+      // Even the liveness ceiling must never override a recognized blocker.
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(manager.get(session.id)?.ready).toBe(false);
+      expect(detectBlockingPrompt).toHaveBeenCalledWith(
+        expect.stringContaining("connect an API key for usage-based billing"),
+      );
+
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1H› Ask Codex to do anything\r\n\x1b[?2026l",
+      );
+      await vi.advanceTimersByTimeAsync(750);
+      expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("uses a hard ceiling when visible startup animation never leaves a 700ms quiet window", async () => {
+      const { manager, spawns } = makeManager({ adapter: immediateAdapter() });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+
+      for (let frame = 1; frame <= 12; frame += 1) {
+        spawns[0]?.emitData(
+          `\x1b[?2026h\x1b[1;1HStarting Codex ${frame}\x1b[?2026l`,
+        );
+        await vi.advanceTimersByTimeAsync(400);
+      }
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      // Only 300ms since the latest visible frame, but more than five seconds
+      // since the first: the liveness ceiling now wins.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("uses the hard ceiling when a clean synchronized repaint never emits its end marker", async () => {
+      const { manager, spawns } = makeManager({ adapter: immediateAdapter() });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      spawns[0]?.emitData("\x1b[?2026h\x1b[1;1H› Ask Codex to do anything\r\n");
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(151);
+      expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("does not let the hard ceiling override a blocking repaint missing its end marker", async () => {
+      const detectBlockingPrompt = (output: string) =>
+        output.includes("Finish signing in via your browser") &&
+        output.includes("open the following link to authenticate");
+      const { manager, spawns } = makeManager({
+        adapter: immediateAdapter(detectBlockingPrompt),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1HFinish signing in via your browser\r\n" +
+          "open the following link to authenticate\r\n",
+      );
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
     });
 
     it("restarts the settle window when later startup output arrives", async () => {
@@ -748,12 +849,15 @@ describe("SessionManager", () => {
       spawns[0]?.emitData("› Ask Codex to do anything\r\n");
 
       await vi.advanceTimersByTimeAsync(300);
+      const detectorCallsBeforeSignal = detectBlockingPrompt.mock.calls.length;
       manager.setReady(session.id);
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(manager.get(session.id)?.ready).toBe(true);
       expect(readyStatuses.filter(Boolean)).toHaveLength(1);
-      expect(detectBlockingPrompt).not.toHaveBeenCalled();
+      expect(detectBlockingPrompt).toHaveBeenCalledTimes(
+        detectorCallsBeforeSignal,
+      );
     });
 
     it("stops the old monitor when its pty exits and is replaced on resume", async () => {

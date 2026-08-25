@@ -150,18 +150,26 @@ const KILL_ESCALATION_CONFIRM_MS = 500;
  * the race against a trust/login screen that renders a moment later.
  */
 const READY_SETTLE_MS = 700;
+/**
+ * A content-animating TUI may never be quiet for READY_SETTLE_MS, and a
+ * malformed/incomplete synchronized-output frame may never close. Do not let
+ * either condition deadlock the first prompt forever: once this much time has
+ * elapsed since the first visible output, an immediate fallback may bypass
+ * the quiet/complete-frame requirement. Recognized blocking prompts still
+ * win, so this is a liveness ceiling, not a safety bypass.
+ */
+const READY_SETTLE_CEILING_MS = 5_000;
 /** Codex/Ratatui brackets each atomic terminal repaint in synchronized-output
  *  mode. Treat one such repaint as the readiness frame even when node-pty
  *  splits it across chunks. Pure cursor/style repaints are intentionally
  *  ignored — Codex emits them roughly every 80ms while sitting idle. */
 const SYNC_OUTPUT_START = "\x1b[?2026h";
 const SYNC_OUTPUT_END = "\x1b[?2026l";
-/** See `isReadyEnough()` / `armReadyFallback()`: how much of the tail of
- *  retained scrollback to scan for a blocking prompt — recent output only,
- *  not the full history a full-screen TUI never truly clears. Generous
- *  relative to one redraw frame (confirmed against a real capture: a single
- *  Codex trust-prompt frame is well under 2KB) without re-scanning unbounded
- *  history. */
+/** See `isReadyEnough()` / `armReadyFallback()`: how much of the bounded
+ *  recent-frame union to scan for a blocking prompt — not the full history a
+ *  full-screen TUI never truly clears. Generous relative to one redraw frame
+ *  (confirmed against a real capture: a single Codex trust-prompt frame is
+ *  well under 2KB) without re-scanning unbounded history. */
 const BLOCKING_PROMPT_SCAN_BYTES = 4_096;
 /**
  * See `armReadyFallback()`: how long after spawn a `readyFallback:
@@ -328,16 +336,27 @@ export interface SessionManagerOptions {
 interface PtyHandle {
   pty: IPty;
   buffer: string;
-  /** Latest content-bearing terminal repaint used only for readiness checks.
+  /** Latest content-bearing terminal repaint used for current-screen checks.
    * Unlike `buffer`, animation-only ANSI churn cannot evict the visible text. */
   readinessBuffer: string;
+  /** Bounded union of recent content-bearing repaints. Ratatui redraws only
+   * changed rows, so one atomic frame does not necessarily describe the whole
+   * screen; this history lets multi-phrase prompt signatures span those diffs. */
+  readinessHistory: string;
+  /** A detected blocking screen remains latched across partial repaints until
+   * the adapter positively identifies its empty interactive composer. */
+  blockingPromptSeen: boolean;
   /** Possible beginning of a synchronized-output marker split across chunks. */
   pendingReadinessPrefix: string;
   /** Synchronized repaint being assembled across node-pty chunks. */
   pendingReadinessFrame: string | null;
+  /** Whether the pending synchronized repaint has produced visible text. */
+  pendingReadinessFrameHasContent: boolean;
   emitter: EventEmitter;
   /** Epoch ms this pty was spawned — anchors the Claude hook-timeout fallback. */
   spawnedAt: number;
+  /** Epoch ms of the first content-bearing output, or null until one draws. */
+  firstContentAt: number | null;
   /** Epoch ms of the latest content-bearing repaint, or null until one draws. */
   lastOutputAt: number | null;
   /**
@@ -915,10 +934,15 @@ export class SessionManager {
    * prevents the 700ms settle window from ever completing and pushes a real
    * sign-in/trust prompt out of the raw 4KB tail. Synchronized-output markers
    * give us an atomic repaint boundary: retain the latest repaint containing
-   * visible text, and ignore control-only frames. Non-Ratatui adapters fall
-   * back to an ordinary rolling buffer.
+   * visible text, keep a bounded union for diff-rendered blocking prompts,
+   * and ignore control-only frames. Non-Ratatui adapters fall back to an
+   * ordinary rolling buffer.
    */
-  private recordReadinessOutput(handle: PtyHandle, chunk: string): void {
+  private recordReadinessOutput(
+    handle: PtyHandle,
+    chunk: string,
+    adapter: HarnessAdapter,
+  ): void {
     let rest = handle.pendingReadinessPrefix + chunk;
     handle.pendingReadinessPrefix = "";
     while (rest.length > 0) {
@@ -929,12 +953,20 @@ export class SessionManager {
         const end = combined.indexOf(SYNC_OUTPUT_END);
         if (end === -1) {
           handle.pendingReadinessFrame = combined.slice(-SCROLLBACK_BYTES);
+          if (
+            !handle.pendingReadinessFrameHasContent &&
+            this.hasVisibleReadinessContent(handle.pendingReadinessFrame)
+          ) {
+            handle.pendingReadinessFrameHasContent = true;
+            this.noteReadinessContent(handle);
+          }
           return;
         }
         const throughEnd = end + SYNC_OUTPUT_END.length;
         const frame = combined.slice(0, throughEnd);
         handle.pendingReadinessFrame = null;
-        this.commitReadinessOutput(handle, frame, true);
+        handle.pendingReadinessFrameHasContent = false;
+        this.commitReadinessOutput(handle, frame, true, adapter);
         rest = combined.slice(throughEnd);
         continue;
       }
@@ -949,26 +981,63 @@ export class SessionManager {
           prefixLength -= 1;
         }
         const outputEnd = rest.length - prefixLength;
-        this.commitReadinessOutput(handle, rest.slice(0, outputEnd), false);
+        this.commitReadinessOutput(
+          handle,
+          rest.slice(0, outputEnd),
+          false,
+          adapter,
+        );
         handle.pendingReadinessPrefix = rest.slice(outputEnd);
         return;
       }
-      this.commitReadinessOutput(handle, rest.slice(0, start), false);
+      this.commitReadinessOutput(handle, rest.slice(0, start), false, adapter);
       handle.pendingReadinessFrame = SYNC_OUTPUT_START;
+      handle.pendingReadinessFrameHasContent = false;
       rest = rest.slice(start + SYNC_OUTPUT_START.length);
     }
   }
 
-  private commitReadinessOutput(handle: PtyHandle, output: string, replace: boolean): void {
+  private hasVisibleReadinessContent(output: string): boolean {
     // stripAnsi intentionally targets common display escapes and leaves a few
     // private CSI controls (for example ESC[>4;0m). Remove those first so a
     // protocol negotiation cannot count as visible TUI content.
-    // eslint-disable-next-line no-control-regex
-    const rendered = stripAnsi(output.replace(/\x1b\[[?>][0-9;]*[ -/]*[@-~]/g, ""));
-    // eslint-disable-next-line no-control-regex
-    if (!/[^\s\x00-\x1f\x7f]/u.test(rendered)) return;
-    handle.lastOutputAt = Date.now();
-    handle.readinessBuffer = (replace ? output : handle.readinessBuffer + output).slice(-SCROLLBACK_BYTES);
+    /* eslint-disable no-control-regex -- readiness parsing must match literal
+     * ESC/BEL control bytes emitted by the pty. */
+    const rendered = stripAnsi(
+      output.replace(/\x1b\[[?>][0-9;]*[ -/]*[@-~]/g, ""),
+    )
+      // An atomic repaint can be split in the middle of a CSI/OSC sequence.
+      // Do not treat the printable parameter bytes in that unfinished suffix
+      // as visible content before the next pty chunk completes it.
+      .replace(/\x1b\[[0-?]*[ -/]*$/u, "")
+      .replace(/\x1b\][^\x07]*$/u, "")
+      .replace(/\x1b[()>=]?$/u, "");
+    const hasVisibleContent = /[^\s\x00-\x1f\x7f]/u.test(rendered);
+    /* eslint-enable no-control-regex */
+    return hasVisibleContent;
+  }
+
+  private noteReadinessContent(handle: PtyHandle): void {
+    const now = Date.now();
+    handle.firstContentAt ??= now;
+    handle.lastOutputAt = now;
+  }
+
+  private commitReadinessOutput(
+    handle: PtyHandle,
+    output: string,
+    replace: boolean,
+    adapter: HarnessAdapter,
+  ): void {
+    if (!this.hasVisibleReadinessContent(output)) return;
+    this.noteReadinessContent(handle);
+    handle.readinessBuffer = (
+      replace ? output : handle.readinessBuffer + output
+    ).slice(-SCROLLBACK_BYTES);
+    handle.readinessHistory = `${handle.readinessHistory}\n${output}`.slice(
+      -BLOCKING_PROMPT_SCAN_BYTES,
+    );
+    this.refreshImmediatePromptState(adapter, handle);
   }
 
   setAgentSessionId(id: string, agentSessionId: string): void {
@@ -1000,9 +1069,10 @@ export class SessionManager {
    * immediate-fallback adapter gets one last recognized-blocker scan because
    * readiness is latched while its TUI can still paint a late onboarding
    * frame. Before readiness, immediate and legacy detect-only adapters require
-   * at least `READY_SETTLE_MS` of quiet output and a clean latest frame. Claude
-   * Code has no immediate shortcut — its SessionStart hook (or preserved
-   * 20-second hook-timeout path) controls readiness.
+   * at least `READY_SETTLE_MS` of quiet output (or the bounded liveness
+   * ceiling) and a clean recent-screen view. Claude Code has no immediate
+   * shortcut — its SessionStart hook (or preserved 20-second hook-timeout
+   * path) controls readiness.
    */
   private isReadyEnough(session: HarnessSession, handle: PtyHandle): boolean {
     const adapter = this.adapters[session.harness];
@@ -1013,7 +1083,10 @@ export class SessionManager {
     // can answer the screen. Real-signal/hook-timeout adapters keep their
     // existing ready semantics unchanged.
     if (session.ready) {
-      return adapter?.readyFallback !== "immediate" || !this.hasBlockingPrompt(adapter, handle);
+      return (
+        adapter?.readyFallback !== "immediate" ||
+        !this.hasCurrentBlockingPrompt(adapter, handle)
+      );
     }
     // Gated on the DECLARED fallback mode, not on detectBlockingPrompt's mere
     // presence: claude-code now implements detectBlockingPrompt too (for the
@@ -1026,19 +1099,120 @@ export class SessionManager {
     // detectBlockingPrompt-without-readyFallback as the legacy "immediate"
     // contract it used to imply.
     if (!adapter?.detectBlockingPrompt) return false;
-    if (adapter.readyFallback !== undefined && adapter.readyFallback !== "immediate") return false;
-    if (handle.lastOutputAt === null || Date.now() - handle.lastOutputAt < READY_SETTLE_MS) return false;
-    // Only the tail of the latest content-bearing repaint: full-screen TUIs
-    // never truly clear raw scrollback, while animation-only ANSI churn can
-    // evict still-visible text from it. `recordReadinessOutput` maintains the
-    // bounded frame view that avoids both failure modes.
-    return !this.hasBlockingPrompt(adapter, handle);
+    if (
+      adapter.readyFallback !== undefined &&
+      adapter.readyFallback !== "immediate"
+    )
+      return false;
+    if (adapter.readyFallback === "immediate") {
+      if (!this.isImmediateFallbackSettled(handle)) return false;
+      return !this.hasImmediateBlockingPrompt(adapter, handle);
+    }
+    if (
+      handle.lastOutputAt === null ||
+      Date.now() - handle.lastOutputAt < READY_SETTLE_MS
+    )
+      return false;
+    return !this.hasRetainedBlockingPrompt(adapter, handle);
   }
 
-  /** Scan only the latest rendered frame; dismissed full-screen prompts remain
-   * in older scrollback forever and must not permanently block the session. */
-  private hasBlockingPrompt(adapter: HarnessAdapter, handle: PtyHandle): boolean {
-    return adapter.detectBlockingPrompt?.(handle.readinessBuffer.slice(-BLOCKING_PROMPT_SCAN_BYTES)) ?? false;
+  private isImmediateFallbackSettled(handle: PtyHandle): boolean {
+    if (handle.firstContentAt === null || handle.lastOutputAt === null)
+      return false;
+    const now = Date.now();
+    const hitCeiling = now - handle.firstContentAt >= READY_SETTLE_CEILING_MS;
+    const completedFrameSettled =
+      handle.pendingReadinessFrame === null &&
+      now - handle.lastOutputAt >= READY_SETTLE_MS;
+    return hitCeiling || completedFrameSettled;
+  }
+
+  /** The best available current frame, excluding older diff repaint history.
+   * Used after readiness has latched so ordinary agent output that quotes old
+   * onboarding copy cannot permanently gate later writes. */
+  private currentReadinessOutput(handle: PtyHandle): string {
+    const output =
+      handle.pendingReadinessFrame ??
+      handle.readinessBuffer + handle.pendingReadinessPrefix;
+    return output.slice(-BLOCKING_PROMPT_SCAN_BYTES);
+  }
+
+  /** A bounded union of recent diff repaints, including an unfinished current
+   * repaint. This is intentionally only used before immediate readiness. */
+  private recentReadinessOutput(handle: PtyHandle): string {
+    const pending =
+      handle.pendingReadinessFrame ?? handle.pendingReadinessPrefix;
+    return `${handle.readinessHistory}\n${pending}`.slice(
+      -BLOCKING_PROMPT_SCAN_BYTES,
+    );
+  }
+
+  /** Preserve a recognized blocker across Ratatui's partial row repaints. The
+   * latch is cleared only by a positive empty-composer match in a clean current
+   * frame; merely failing to re-render every phrase is not evidence that the
+   * screen was dismissed. */
+  private refreshImmediatePromptState(
+    adapter: HarnessAdapter,
+    handle: PtyHandle,
+  ): void {
+    if (
+      adapter.readyFallback !== "immediate" ||
+      !adapter.detectBlockingPrompt ||
+      !adapter.detectReadyPrompt
+    ) {
+      return;
+    }
+
+    const current = this.currentReadinessOutput(handle);
+    const recent = this.recentReadinessOutput(handle);
+    if (adapter.detectBlockingPrompt(recent)) handle.blockingPromptSeen = true;
+    if (!handle.blockingPromptSeen) return;
+
+    if (
+      adapter.detectReadyPrompt(current) &&
+      !adapter.detectBlockingPrompt(current)
+    ) {
+      handle.blockingPromptSeen = false;
+      // Once the real composer is visible, older onboarding frames are no
+      // longer part of the current screen and must not be re-latched later.
+      handle.readinessHistory = current;
+    }
+  }
+
+  private hasImmediateBlockingPrompt(
+    adapter: HarnessAdapter,
+    handle: PtyHandle,
+  ): boolean {
+    if (!adapter.detectReadyPrompt)
+      return this.hasRetainedBlockingPrompt(adapter, handle);
+    this.refreshImmediatePromptState(adapter, handle);
+    return handle.blockingPromptSeen;
+  }
+
+  /** The original readiness-buffer check retained for Claude's hook-timeout
+   * and legacy detect-only adapters. Their fallback semantics must not change
+   * merely because Codex needs partial-frame reconstruction. */
+  private hasRetainedBlockingPrompt(
+    adapter: HarnessAdapter,
+    handle: PtyHandle,
+  ): boolean {
+    return (
+      adapter.detectBlockingPrompt?.(
+        handle.readinessBuffer.slice(-BLOCKING_PROMPT_SCAN_BYTES),
+      ) ?? false
+    );
+  }
+
+  /** Scan only the best available current frame; dismissed full-screen prompts
+   * remain in older scrollback forever and must not block already-ready input. */
+  private hasCurrentBlockingPrompt(
+    adapter: HarnessAdapter,
+    handle: PtyHandle,
+  ): boolean {
+    return (
+      adapter.detectBlockingPrompt?.(this.currentReadinessOutput(handle)) ??
+      false
+    );
   }
 
   /**
@@ -1088,6 +1262,7 @@ export class SessionManager {
   }
 
   private async spawn(session: HarnessSession, spec: SpawnSpec): Promise<void> {
+    const adapter = this.getAdapter(session.harness);
     const spawnFn = this.spawnPty ?? (await loadDefaultSpawn());
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
@@ -1143,10 +1318,14 @@ export class SessionManager {
       pty,
       buffer: "",
       readinessBuffer: "",
+      readinessHistory: "",
+      blockingPromptSeen: false,
       pendingReadinessPrefix: "",
       pendingReadinessFrame: null,
+      pendingReadinessFrameHasContent: false,
       emitter,
       spawnedAt: Date.now(),
+      firstContentAt: null,
       lastOutputAt: null,
       bracketedPaste: initialBracketedPasteState,
       exited,
@@ -1167,7 +1346,7 @@ export class SessionManager {
     pty.onData((chunk) => {
       handle.bracketedPaste = trackBracketedPaste(handle.bracketedPaste, chunk);
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
-      this.recordReadinessOutput(handle, chunk);
+      this.recordReadinessOutput(handle, chunk, adapter);
       handle.emitter.emit("data", chunk);
       this.recordActivity(session.id);
     });
@@ -1191,9 +1370,10 @@ export class SessionManager {
    *  - dies with the handle (exit clears the interval; a replaced handle is
    *    detected via the ptys map, same idempotency rule as markExited()).
    *
-   * `"immediate"` (Codex) reuses the same quiet-window and frame rule as
-   * `isReadyEnough()`, but proactively calls `setReady()` after visible output
-   * has stopped changing. That status event closes the first-prompt deadlock:
+   * `"immediate"` (Codex) reuses the same quiet-window/ceiling and frame rule
+   * as `isReadyEnough()`, but proactively calls `setReady()` once output is
+   * stable or reaches the bounded liveness ceiling. That status event closes
+   * the first-prompt deadlock:
    * Codex writes no rollout/session_meta before turn one, while the SPA waits
    * for `ready` before submitting turn one. Only an EXPLICIT declaration arms
    * this persistent state transition; detect-only legacy adapters retain their
@@ -1227,7 +1407,7 @@ export class SessionManager {
         return;
       }
       if (mode === "immediate") {
-        if (handle.lastOutputAt === null || Date.now() - handle.lastOutputAt < READY_SETTLE_MS) return;
+        if (!this.isImmediateFallbackSettled(handle)) return;
       } else {
         // Preserve Claude's original fallback contract exactly: 20 seconds
         // from spawn and at least one output byte, without a quiet-window
@@ -1235,7 +1415,11 @@ export class SessionManager {
         if (Date.now() - handle.spawnedAt < HOOK_READY_FALLBACK_MS) return;
         if (!handle.buffer) return;
       }
-      if (this.hasBlockingPrompt(adapter, handle)) return;
+      const hasBlockingPrompt =
+        mode === "immediate"
+          ? this.hasImmediateBlockingPrompt(adapter, handle)
+          : this.hasRetainedBlockingPrompt(adapter, handle);
+      if (hasBlockingPrompt) return;
       clearInterval(poll);
       if (mode === "hook-timeout") {
         console.warn(
