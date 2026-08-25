@@ -1,5 +1,11 @@
 # @sapiom/harness-desktop
 
+## 0.3.3
+
+### Patch Changes
+
+- Ship the Codex initial-prompt readiness fix in the Sapiom Studio desktop app.
+
 ## 0.3.2
 
 ### Patch Changes
