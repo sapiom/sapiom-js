@@ -246,9 +246,11 @@ export class CodexAdapter implements HarnessAdapter {
    * can stand in for it up to that point.
    */
   /**
-   * See `HarnessAdapter.readyFallback`: `isReadyEnough` may trust a settled,
-   * prompt-free scrollback immediately — Codex's real readiness signal cannot
-   * arrive before the first injection needs it (see detectBlockingPrompt).
+   * See `HarnessAdapter.readyFallback`: SessionManager proactively publishes
+   * readiness once Codex has rendered non-blocking output, and
+   * `isReadyEnough` retains the same settled-scrollback rule as a request-time
+   * safeguard. Codex's real readiness signal cannot arrive before the first
+   * injection needs it (see detectBlockingPrompt).
    */
   readonly readyFallback = "immediate" as const;
 

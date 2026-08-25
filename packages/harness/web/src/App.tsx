@@ -99,17 +99,18 @@ type RightTab = "canvas" | "steps" | "code";
 
 /**
  * How long a held initial prompt waits for the coding agent to become ready
- * (i.e. the user to finish signing in) before we give up and surface the
- * failure. The normal end of a hold is the session going ready (prompt sent)
- * or exiting — this is only a leak-guard for a login the user walks away from.
+ * (i.e. the user to finish any sign-in, trust, or onboarding step) before we
+ * give up and surface the failure. The normal end of a hold is the session
+ * going ready (prompt sent) or exiting — this is only a leak-guard for setup
+ * the user walks away from.
  */
 const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * Grace before nudging the user toward the terminal login. A signed-in agent
- * reports ready within a beat, so its held prompt sends before this fires and
- * no hint shows; only a session still stuck (on the Claude login/onboarding
- * screen) survives the grace and surfaces the hint.
+ * Grace before nudging the user toward the terminal. A ready agent reports
+ * within a beat, so its held prompt sends before this fires and no hint shows;
+ * only a session still stuck on sign-in, trust, or onboarding survives the
+ * grace and surfaces the hint.
  */
 const HELD_PROMPT_HINT_DELAY_MS = 4_000;
 
@@ -283,10 +284,10 @@ export const App = (): JSX.Element => {
     [clearPending, harness.injectInput, harness.showToast],
   );
 
-  // Register a prompt to be sent once its session is ready (i.e. Claude is
-  // signed in). Sends immediately if already ready. While waiting, a delayed
-  // hint (only if the session is still not ready after a grace) points the
-  // user at the terminal login — so first-run intent is held, not lost.
+  // Register a prompt to be sent once its coding agent is ready. Sends
+  // immediately if already ready. While waiting, a delayed hint (only if the
+  // session is still not ready after a grace) points the user at terminal
+  // setup — so first-run intent is held, not lost.
   const sendPromptWhenReady = useCallback(
     (sessionId: string, prompt: string, failMessage: string): void => {
       clearPending(sessionId);
@@ -296,7 +297,7 @@ export const App = (): JSX.Element => {
       const hintTimer = window.setTimeout(() => {
         if (pendingPromptsRef.current.has(sessionId)) {
           harness.showToast(
-            "Sign in to Claude in the terminal — your prompt sends automatically once you're signed in.",
+            "Finish signing in or dismiss any trust or setup prompt in the terminal — your prompt sends automatically once the coding agent is ready.",
           );
         }
       }, HELD_PROMPT_HINT_DELAY_MS);

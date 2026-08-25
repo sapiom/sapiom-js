@@ -143,27 +143,28 @@ const KILL_ESCALATION_MS = 2_000;
  *  to report the exit itself before synthesizing it from an OS-level check. */
 const KILL_ESCALATION_CONFIRM_MS = 500;
 /**
- * See `isReadyEnough()`: for a harness with `detectBlockingPrompt`, how long
- * to give the pty to render its first real frame before trusting a clean
- * scrollback (no known blocking prompt) as a genuine "no prompt showing"
- * rather than just "hasn't drawn anything yet".
+ * See `isReadyEnough()` / `armReadyFallback()`: for an immediate-fallback
+ * harness, how long to give the pty to render its first real frame before
+ * trusting a clean scrollback (no known blocking prompt) as a genuine "no
+ * prompt showing" rather than just "hasn't drawn anything yet".
  */
 const READY_SETTLE_MS = 700;
-/** See `isReadyEnough()`: how much of the tail of retained scrollback to
- *  scan for a blocking prompt — recent output only, not the full history a
- *  full-screen TUI never truly clears. Generous relative to one redraw
- *  frame (confirmed against a real capture: a single Codex trust-prompt
- *  frame is well under 2KB) without re-scanning unbounded history. */
+/** See `isReadyEnough()` / `armReadyFallback()`: how much of the tail of
+ *  retained scrollback to scan for a blocking prompt — recent output only,
+ *  not the full history a full-screen TUI never truly clears. Generous
+ *  relative to one redraw frame (confirmed against a real capture: a single
+ *  Codex trust-prompt frame is well under 2KB) without re-scanning unbounded
+ *  history. */
 const BLOCKING_PROMPT_SCAN_BYTES = 4_096;
 /**
- * See `armHookReadyFallback()`: how long after spawn a `readyFallback:
+ * See `armReadyFallback()`: how long after spawn a `readyFallback:
  * "hook-timeout"` harness may sit un-ready before the fallback flips it.
  * Generous on purpose: a healthy SessionStart hook lands in 1–3s, so 20s
  * only ever fires when the hook chain is genuinely broken (the Windows
  * node-resolution failure this exists for) — never racing a working hook.
  */
 const HOOK_READY_FALLBACK_MS = 20_000;
-/** Poll cadence for `armHookReadyFallback()` — coarse; nothing user-visible
+/** Poll cadence for `armReadyFallback()`'s hook-timeout mode — coarse; nothing user-visible
  *  rides on sub-second precision 20s after spawn. */
 const HOOK_READY_POLL_MS = 1_000;
 /**
@@ -901,10 +902,10 @@ export class SessionManager {
 
   /**
    * Marks a session's TUI as genuinely interactive — see `HarnessSession.ready`.
-   * Called from the ingest pipeline when a SessionStart(-equivalent) event
-   * is processed for this session (real hook for Claude Code, tailer-
-   * translated for Codex). Idempotent; a session that's exited or already
-   * ready is a silent no-op.
+   * Called either from the ingest pipeline when a SessionStart(-equivalent)
+   * event is processed for this session (real hook for Claude Code, tailer-
+   * translated for Codex), or from an adapter-declared readiness fallback.
+   * Idempotent; a session that's exited or already ready is a silent no-op.
    */
   setReady(id: string): void {
     const session = this.sessions.get(id);
@@ -1082,35 +1083,50 @@ export class SessionManager {
 
     pty.onExit(({ exitCode }) => this.markExited(session.id, handle, exitCode));
 
-    this.armHookReadyFallback(session.id, handle);
+    this.armReadyFallback(session.id, handle);
   }
 
   /**
-   * For a `readyFallback: "hook-timeout"` harness (Claude Code): rescue a
-   * session whose real readiness signal never arrives. `ready` is normally
-   * flipped by the SessionStart hook POSTing to /ingest — but that chain runs
-   * `node` through the agent's hook shell, and where it breaks (Windows: Git
-   * Bash resolves no `.cmd`, so a machine whose only node is a .cmd shim runs
-   * zero hooks) the session looked fine in the terminal while every held
-   * prompt was silently dropped after the SPA's timeout.
+   * Publishes adapter-declared fallback readiness so the SPA's held first
+   * prompt can be released even when the harness's real lifecycle signal
+   * cannot arrive yet (Codex) or never arrived (Claude Code with a broken
+   * SessionStart hook).
    *
-   * Conservative on purpose:
-   *  - fires no earlier than HOOK_READY_FALLBACK_MS after spawn — a healthy
-   *    hook (1–3s) always wins the race, so behaviour only changes on
-   *    machines where the hook is already broken;
+   * Both modes are conservative on purpose:
    *  - requires SOME output — a pty that hasn't drawn anything yet isn't an
-   *    interactive TUI missing its hook, it's still starting;
+   *    interactive TUI, it's still starting;
    *  - keeps waiting while a known blocking prompt (trust dialog, theme
    *    picker, login) is on screen, so the submit `\r` that follows readiness
    *    can never answer a dialog the user hasn't seen — once the user
    *    dismisses it, the next poll flips ready;
    *  - dies with the handle (exit clears the interval; a replaced handle is
    *    detected via the ptys map, same idempotency rule as markExited()).
+   *
+   * `"immediate"` (Codex) reuses the same settle window and scrollback rule
+   * as `isReadyEnough()`, but proactively calls `setReady()` after output is
+   * visible. That status event closes the first-prompt deadlock: Codex writes
+   * no rollout/session_meta before turn one, while the SPA waits for `ready`
+   * before submitting turn one. Only an EXPLICIT declaration arms this
+   * persistent state transition; detect-only legacy adapters retain their
+   * request-time `isReadyEnough()` compatibility path without being promoted.
+   *
+   * `"hook-timeout"` (Claude Code) retains its generous 20s delay: a healthy
+   * hook (1–3s) always wins the race, so behaviour only changes on machines
+   * where the hook is already broken.
    */
-  private armHookReadyFallback(id: string, handle: PtyHandle): void {
+  private armReadyFallback(id: string, handle: PtyHandle): void {
     const session = this.sessions.get(id);
     const adapter = session ? this.adapters[session.harness] : undefined;
-    if (adapter?.readyFallback !== "hook-timeout") return;
+    if (!adapter) return;
+    const mode = adapter.readyFallback;
+    if (mode !== "immediate" && mode !== "hook-timeout") return;
+    // An immediate promotion is only safe when the adapter can positively
+    // exclude its own known blocking screens. Hook-timeout preserves its
+    // existing optional-detector behaviour for third-party adapters.
+    if (mode === "immediate" && !adapter.detectBlockingPrompt) return;
+
+    const delayMs = mode === "immediate" ? READY_SETTLE_MS : HOOK_READY_FALLBACK_MS;
+    const pollMs = mode === "immediate" ? READY_POLL_MS : HOOK_READY_POLL_MS;
 
     const poll = setInterval(() => {
       const current = this.sessions.get(id);
@@ -1122,18 +1138,20 @@ export class SessionManager {
         clearInterval(poll);
         return;
       }
-      if (Date.now() - handle.spawnedAt < HOOK_READY_FALLBACK_MS) return;
+      if (Date.now() - handle.spawnedAt < delayMs) return;
       if (!handle.buffer) return;
       if (adapter.detectBlockingPrompt?.(handle.buffer.slice(-BLOCKING_PROMPT_SCAN_BYTES))) return;
       clearInterval(poll);
-      console.warn(
-        `[harness] session ${id}: SessionStart hook never reached /ingest after ${
-          HOOK_READY_FALLBACK_MS / 1000
-        }s — marking ready by fallback. The hook command may be failing on this machine ` +
-          `(is \`node\` resolvable from the agent's hook shell?).`,
-      );
+      if (mode === "hook-timeout") {
+        console.warn(
+          `[harness] session ${id}: SessionStart hook never reached /ingest after ${
+            HOOK_READY_FALLBACK_MS / 1000
+          }s — marking ready by fallback. The hook command may be failing on this machine ` +
+            `(is \`node\` resolvable from the agent's hook shell?).`,
+        );
+      }
       this.setReady(id);
-    }, HOOK_READY_POLL_MS);
+    }, pollMs);
     // Never the reason the process stays alive; tests with fake timers and
     // the real server both tear down via the exited hook below anyway.
     poll.unref?.();

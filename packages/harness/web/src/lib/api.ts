@@ -1057,9 +1057,9 @@ class MockApi implements HarnessApi {
       });
     };
     // Test-only: a session that never reaches ready on its own, so Playwright
-    // can exercise the hold-the-prompt-until-signed-in path (a not-logged-in
-    // Claude sits on its login screen and never fires SessionStart). The test
-    // fires readiness by hand via window.__HARNESS_TEST__.promoteReady().
+    // can exercise the hold-the-prompt-until-agent-ready path (for example,
+    // Claude login or Codex directory trust). The test fires readiness by hand
+    // via window.__HARNESS_TEST__.promoteReady().
     const win =
       typeof window === "undefined"
         ? undefined
@@ -1234,9 +1234,14 @@ class MockApi implements HarnessApi {
       }
       // Record the submission for Playwright to assert on — same pattern as
       // runMacro's lastMacroRun.
+      const previous =
+        (win.__HARNESS_TEST__?.injectInputCalls as
+          | Array<{ id: string; req: InjectInputRequest }>
+          | undefined) ?? [];
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         lastInjectInput: { id, req },
+        injectInputCalls: [...previous, { id, req }],
       };
     }
   }
