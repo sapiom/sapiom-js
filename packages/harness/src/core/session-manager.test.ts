@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HarnessAdapter, HarnessKind, HarnessSession, SpawnSpec } from "../shared/types.js";
+import { CodexAdapter } from "./adapters/codex.js";
+import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 import {
   SessionManager,
   sanitizeExitTail,
   type PtySpawnFn,
   type SessionManagerOptions,
 } from "./session-manager.js";
-import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -675,6 +676,38 @@ describe("SessionManager", () => {
       );
       await vi.advanceTimersByTimeAsync(700);
       expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("clears a trust-screen latch on the Codex 0.143 empty composer", async () => {
+      const { manager, spawns } = makeManager({
+        adapter: new CodexAdapter({ binary: "fake-codex" }),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1HDo you trust the contents of this directory?\r\n" +
+          "\x1b[6;1H1. Yes, continue\r\n\x1b[7;1H2. No, quit\x1b[?2026l",
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      // Real empty-composer copy captured from Codex 0.143.0 after the user
+      // accepted the trust screen. v0.3.3 only recognized the newer "Ask
+      // Codex to do anything" copy, so the safety latch never reopened.
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[10;1H⚠ MCP startup incomplete (failed: notion, render)\r\n" +
+          "\x1b[12;1H› Use /skills to list available skills\r\n" +
+          "\x1b[14;1Hgpt-5.5 default · /tmp/proj\x1b[?2026l",
+      );
+      await vi.advanceTimersByTimeAsync(749);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(manager.get(session.id)?.ready).toBe(true);
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
     });
 
     it("retains a blocking screen across partial synchronized diff repaints until the composer is proven", async () => {

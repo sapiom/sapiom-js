@@ -107,10 +107,19 @@ const BLOCKING_PROMPT_SIGNATURES: readonly (readonly RegExp[])[] = [
   [tuiPhrase("Select Syntax Theme"), tuiPhrase("Type to filter themes")],
 ];
 
-/** Stable empty-composer copy from codex-cli 0.147.0. This is not required
- * for the ordinary already-trusted path; SessionManager uses it to prove that
- * a previously detected onboarding screen has actually been replaced. */
-const READY_PROMPT_PATTERNS = [tuiPhrase("Ask Codex to do anything")];
+/**
+ * Stable empty-composer copy across supported Codex CLI releases. This is not
+ * required for the ordinary already-trusted path; SessionManager uses it to
+ * prove that a previously detected onboarding screen has actually been
+ * replaced. Keep older copy here as well as newer copy: a real 0.143.0 startup
+ * renders "Use /skills to list available skills", while 0.147.0 renders "Ask
+ * Codex to do anything". Without both, accepting a trust prompt on 0.143.0
+ * leaves the safety latch closed even though the composer is visible.
+ */
+const READY_PROMPT_PATTERNS = [
+  tuiPhrase("Ask Codex to do anything"),
+  tuiPhrase("Use /skills to list available skills"),
+];
 
 export interface CodexAdapterOptions {
   /** Overridable for tests. */

@@ -249,6 +249,16 @@ describe("CodexAdapter", () => {
       expect(adapter.detectBlockingPrompt(composer)).toBe(false);
     });
 
+    it("does not treat MCP startup authentication warnings as blocking prompts", () => {
+      const adapter = new CodexAdapter();
+      expect(
+        adapter.detectBlockingPrompt(
+          "MCP client for `notion` failed to start: Auth error: OAuth authorization required\r\n" +
+            "MCP startup incomplete (failed: notion, render)",
+        ),
+      ).toBe(false);
+    });
+
     it("does not treat one isolated onboarding label in ordinary output as a whole blocking screen", () => {
       const adapter = new CodexAdapter();
       expect(
@@ -303,6 +313,16 @@ describe("CodexAdapter", () => {
         adapter.detectReadyPrompt(
           "\x1b[?2026h\x1b[12;3HAsk\x1b[12;7HCodex\x1b[12;13Hto\x1b[12;16Hdo" +
             "\x1b[12;19Hanything\x1b[?2026l",
+        ),
+      ).toBe(true);
+    });
+
+    it("recognizes the Codex 0.143 empty-composer copy", () => {
+      const adapter = new CodexAdapter();
+      expect(
+        adapter.detectReadyPrompt(
+          "\x1b[?2026h\x1b[12;3HUse\x1b[12;7H/skills\x1b[12;15Hto" +
+            "\x1b[12;18Hlist\x1b[12;23Havailable\x1b[12;33Hskills\x1b[?2026l",
         ),
       ).toBe(true);
     });
