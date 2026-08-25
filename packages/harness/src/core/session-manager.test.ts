@@ -711,7 +711,7 @@ describe("SessionManager", () => {
       spawns[0]?.emitData(
         "\x1b[?2026h\x1b[1;1H› Ask Codex to do anything\r\n\x1b[?2026l",
       );
-      await vi.advanceTimersByTimeAsync(750);
+      await vi.advanceTimersByTimeAsync(850);
       expect(manager.get(session.id)?.ready).toBe(true);
     });
 
@@ -797,13 +797,15 @@ describe("SessionManager", () => {
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
       spawns[0]?.emitData("Do you trust the contents of this directory?\r\n");
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      // Leave the prompt open beyond the hard ceiling. Clearing it must start
+      // a fresh candidate window rather than inheriting an already-expired one.
+      await vi.advanceTimersByTimeAsync(6_000);
       expect(manager.get(session.id)?.ready).toBe(false);
 
       // A human answers through raw terminal input; Codex redraws its composer.
       showingPrompt = false;
       spawns[0]?.emitData("\x1b[1;1H› Ask Codex to do anything\r\n");
-      await vi.advanceTimersByTimeAsync(699);
+      await vi.advanceTimersByTimeAsync(749);
       expect(manager.get(session.id)?.ready).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);

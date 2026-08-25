@@ -355,8 +355,9 @@ interface PtyHandle {
   emitter: EventEmitter;
   /** Epoch ms this pty was spawned — anchors the Claude hook-timeout fallback. */
   spawnedAt: number;
-  /** Epoch ms of the first content-bearing output, or null until one draws. */
-  firstContentAt: number | null;
+  /** Epoch ms the current non-blocking readiness candidate began. A recognized
+   * blocker resets it so an expired ceiling cannot promote the next screen. */
+  readinessCandidateAt: number | null;
   /** Epoch ms of the latest content-bearing repaint, or null until one draws. */
   lastOutputAt: number | null;
   /**
@@ -1019,7 +1020,7 @@ export class SessionManager {
 
   private noteReadinessContent(handle: PtyHandle): void {
     const now = Date.now();
-    handle.firstContentAt ??= now;
+    handle.readinessCandidateAt ??= now;
     handle.lastOutputAt = now;
   }
 
@@ -1117,10 +1118,11 @@ export class SessionManager {
   }
 
   private isImmediateFallbackSettled(handle: PtyHandle): boolean {
-    if (handle.firstContentAt === null || handle.lastOutputAt === null)
+    if (handle.readinessCandidateAt === null || handle.lastOutputAt === null)
       return false;
     const now = Date.now();
-    const hitCeiling = now - handle.firstContentAt >= READY_SETTLE_CEILING_MS;
+    const hitCeiling =
+      now - handle.readinessCandidateAt >= READY_SETTLE_CEILING_MS;
     const completedFrameSettled =
       handle.pendingReadinessFrame === null &&
       now - handle.lastOutputAt >= READY_SETTLE_MS;
@@ -1167,12 +1169,17 @@ export class SessionManager {
     const recent = this.recentReadinessOutput(handle);
     if (adapter.detectBlockingPrompt(recent)) handle.blockingPromptSeen = true;
     if (!handle.blockingPromptSeen) return;
+    // The ceiling applies only to a continuously non-blocking candidate. If a
+    // user leaves onboarding open for a minute, that elapsed minute must not
+    // make the first clean repaint after dismissal ready immediately.
+    handle.readinessCandidateAt = null;
 
     if (
       adapter.detectReadyPrompt(current) &&
       !adapter.detectBlockingPrompt(current)
     ) {
       handle.blockingPromptSeen = false;
+      handle.readinessCandidateAt = handle.lastOutputAt ?? Date.now();
       // Once the real composer is visible, older onboarding frames are no
       // longer part of the current screen and must not be re-latched later.
       handle.readinessHistory = current;
@@ -1183,8 +1190,11 @@ export class SessionManager {
     adapter: HarnessAdapter,
     handle: PtyHandle,
   ): boolean {
-    if (!adapter.detectReadyPrompt)
-      return this.hasRetainedBlockingPrompt(adapter, handle);
+    if (!adapter.detectReadyPrompt) {
+      const blocked = this.hasRetainedBlockingPrompt(adapter, handle);
+      if (blocked) handle.readinessCandidateAt = null;
+      return blocked;
+    }
     this.refreshImmediatePromptState(adapter, handle);
     return handle.blockingPromptSeen;
   }
@@ -1325,7 +1335,7 @@ export class SessionManager {
       pendingReadinessFrameHasContent: false,
       emitter,
       spawnedAt: Date.now(),
-      firstContentAt: null,
+      readinessCandidateAt: null,
       lastOutputAt: null,
       bracketedPaste: initialBracketedPasteState,
       exited,
