@@ -694,6 +694,18 @@ describe("SessionManager", () => {
       await vi.advanceTimersByTimeAsync(6_000);
       expect(manager.get(session.id)?.ready).toBe(false);
 
+      // A diff-rendered modal can retain the underlying composer and footer.
+      // The recognized blocker must still win even though detectReadyPrompt
+      // has enough structural evidence to identify the composer underneath.
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1HDo you trust the contents of this directory?\r\n" +
+          "\x1b[6;1H1. Yes, continue\r\n\x1b[7;1H2. No, quit\r\n" +
+          "\x1b[12;1H› Use /skills to list available skills\r\n" +
+          "\x1b[14;1Hgpt-5.5 default · /tmp/proj\x1b[?2026l",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
       // Real empty-composer copy captured from Codex 0.143.0 after the user
       // accepted the trust screen. v0.3.3 only recognized the newer "Ask
       // Codex to do anything" copy, so the safety latch never reopened.
@@ -702,10 +714,12 @@ describe("SessionManager", () => {
           "\x1b[12;1H› Use /skills to list available skills\r\n" +
           "\x1b[14;1Hgpt-5.5 default · /tmp/proj\x1b[?2026l",
       );
-      await vi.advanceTimersByTimeAsync(749);
+      await vi.advanceTimersByTimeAsync(600);
       expect(manager.get(session.id)?.ready).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1);
+      // Give the poll loop a generous crossing beyond READY_SETTLE_MS rather
+      // than pinning this regression to the exact constant by one millisecond.
+      await vi.advanceTimersByTimeAsync(600);
       expect(manager.get(session.id)?.ready).toBe(true);
       expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
     });

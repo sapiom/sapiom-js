@@ -121,6 +121,16 @@ const READY_PROMPT_PATTERNS = [
   tuiPhrase("Use /skills to list available skills"),
 ];
 
+/**
+ * Copy-independent composer proof. Codex's empty input row carries the `›`
+ * marker and its footer separates the mode from the cwd with `·`; onboarding
+ * selectors can use the same marker, but do not render that cwd footer. The
+ * blocker check in SessionManager still wins when a known modal and the
+ * underlying composer are present in the same diff-rendered frame.
+ */
+const COMPOSER_INPUT_MARKER = /›/u;
+const COMPOSER_CWD_FOOTER = /·\s*(?:~[\\/]|\/|[A-Za-z]:[\\/])/u;
+
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
   binary?: string;
@@ -317,7 +327,11 @@ export class CodexAdapter implements HarnessAdapter {
 
   detectReadyPrompt(terminalOutput: string): boolean {
     const rendered = stripAnsi(terminalOutput);
-    return READY_PROMPT_PATTERNS.some((pattern) => pattern.test(rendered));
+    return (
+      READY_PROMPT_PATTERNS.some((pattern) => pattern.test(rendered)) ||
+      (COMPOSER_INPUT_MARKER.test(rendered) &&
+        COMPOSER_CWD_FOOTER.test(rendered))
+    );
   }
 
   /**

@@ -327,6 +327,26 @@ describe("CodexAdapter", () => {
       ).toBe(true);
     });
 
+    it("recognizes a future composer copy from its input marker and cwd footer", () => {
+      const adapter = new CodexAdapter();
+      expect(
+        adapter.detectReadyPrompt(
+          "\x1b[?2026h\x1b[12;3H› A future placeholder\r\n" +
+            "\x1b[14;3Hgpt-next medium · C:\\work\\project\x1b[?2026l",
+        ),
+      ).toBe(true);
+    });
+
+    it("does not treat a selection marker without the cwd footer as a composer", () => {
+      const adapter = new CodexAdapter();
+      expect(
+        adapter.detectReadyPrompt(
+          "\x1b[?2026h\x1b[6;3H› 1. Yes, continue\r\n" +
+            "\x1b[7;3H2. No, quit\x1b[?2026l",
+        ),
+      ).toBe(false);
+    });
+
     it("does not mistake an onboarding screen for the empty composer", () => {
       const adapter = new CodexAdapter();
       expect(
