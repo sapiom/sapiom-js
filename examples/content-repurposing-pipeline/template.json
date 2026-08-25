@@ -12,7 +12,7 @@
     "Distribution-list send",
     "Scheduled repurposing"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\n`source` is the only required input. Paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it before any images or video are generated. Keep `numQuotes` small (default 2, max 4). Set `renderClip: false` to keep the quote graphics but skip the teaser clip — the priciest, slowest leg. To have it email the pack, set `deliverTo` to one or more addresses; the pack fans out, one send per recipient. Without it the run returns the pack and sends nothing. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step, or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\n`source` is the only required input. Paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it before any images or video are generated. Keep `numQuotes` small (default 2, max 4). Set `renderClip: false` to keep the quote graphics but skip the teaser clip, the priciest, slowest leg. To have it email the pack, set `deliverTo` to one or more addresses; the pack fans out, one send per recipient. Without it the run returns the pack and sends nothing. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step, or edit and deploy it with the Sapiom MCP.",
   "settings": [
     {
       "path": "deliverTo",
@@ -30,7 +30,7 @@
   },
   "examples": [
     {
-      "title": "Draft only (dryRun — no billed media)",
+      "title": "Draft only (dryRun, no billed media)",
       "input": {
         "source": "Long-form blog post about why small teams ship faster...",
         "title": "Why small teams ship faster",
