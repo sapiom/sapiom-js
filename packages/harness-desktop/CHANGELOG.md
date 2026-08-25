@@ -1,5 +1,11 @@
 # @sapiom/harness-desktop
 
+## 0.3.4
+
+### Patch Changes
+
+- Ship Codex 0.143 initial-prompt compatibility and post-trust readiness hardening in Sapiom Studio.
+
 ## 0.3.3
 
 ### Patch Changes
