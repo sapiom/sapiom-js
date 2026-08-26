@@ -76,17 +76,32 @@ const MANIFEST_SCHEMA_PATH = path.join(EXAMPLES_DIR, "template.schema.json");
 
 const errors = [];
 
-/** Every `.ts` file under `examples/`, skipping `node_modules` and build output. */
-function collectTemplateTypeScript(dir) {
+/**
+ * Every source file under `examples/`, skipping `node_modules` and build output.
+ *
+ * `.mjs` and `.js` are in scope alongside `.ts`: templates ship helper scripts
+ * and test suites in plain JS, and a slice-parse hidden in one of those is the
+ * same defect. `.d.ts` is excluded — a declaration file has no parse in it, and
+ * a generated one shouldn't fail an author's check.
+ */
+const TEMPLATE_SOURCE_EXTENSIONS = [".ts", ".mjs", ".cjs", ".js"];
+
+function collectTemplateSources(dir) {
   const files = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist") continue;
     const absolutePath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...collectTemplateTypeScript(absolutePath));
+      files.push(...collectTemplateSources(absolutePath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".ts")) files.push(absolutePath);
+    if (
+      entry.isFile() &&
+      !entry.name.endsWith(".d.ts") &&
+      TEMPLATE_SOURCE_EXTENSIONS.some((ext) => entry.name.endsWith(ext))
+    ) {
+      files.push(absolutePath);
+    }
   }
   return files;
 }
@@ -195,11 +210,11 @@ for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
 // parse used to live in `lib/` helpers and sibling modules as well as
 // `index.ts`, and the whole point is that a NEW template can't reintroduce it
 // (SAP-2892).
-for (const tsPath of collectTemplateTypeScript(EXAMPLES_DIR)) {
+for (const sourcePath of collectTemplateSources(EXAMPLES_DIR)) {
   errors.push(
     ...checkNoSliceParse({
-      path: path.relative(ROOT, tsPath).split(path.sep).join("/"),
-      source: readFileSync(tsPath, "utf8"),
+      path: path.relative(ROOT, sourcePath).split(path.sep).join("/"),
+      source: readFileSync(sourcePath, "utf8"),
     }),
   );
 }

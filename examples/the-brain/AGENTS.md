@@ -23,9 +23,10 @@ out on the injected `SLACK_BOT_TOKEN` via a raw `fetch`.
   re-check — they are the prompt-injection boundary.
 - **A plan this template can't read is a failed sweep.** `readPlan()` throws; it
   never synthesizes a plan from the situation kinds. The plan launches child
-  agents and escalates to people, so an invented one spent real money and
-  reported the sweep as coordinated (SAP-2892). The guardrails bound the damage;
-  they do not make the plan the model's.
+  agents and escalates to people — both metered, both outward-facing — so an
+  invented one spends real money and reports the sweep as coordinated
+  (SAP-2892). The guardrails bound the damage; they do not make the plan the
+  model's.
 - **Keep the six actuate guardrails.** allow-list re-check, drop `no_action`,
   escalate-only (no launch), only-surfaced-targets, per-day cooldown, single-open,
   and the fan-out cap (`MAX_LAUNCHES_PER_RUN`). Each launch uses the idempotency

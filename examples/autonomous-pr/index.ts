@@ -714,21 +714,22 @@ const review = defineStep({
       `Diff (stat):\n${diffStat}\n\n` +
       `Check output (tail):\n${checkTail}`;
 
-    const res = await ctx.sapiom.llm.run({
-      request: {
-        system,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 500,
-      },
-      output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
-    });
-
     // The branch is already pushed, so — exactly as with the preview above —
-    // this advisory step never fails the run. What it must never do is invent a
-    // verdict: an unavailable self-review is reported as `review: null` plus a
-    // reason, so a reader can tell "the model didn't answer" from "the model
-    // approved it".
+    // this advisory step never fails the run. The `llm.run` call is inside the
+    // try for that reason: a transport error is no more worth failing a pushed
+    // branch over than an unreadable reply. What the step must never do is
+    // invent a verdict — an unavailable self-review is reported as
+    // `review: null` plus a reason, so a reader can tell "the model didn't
+    // answer" from "the model approved it".
     try {
+      const res = await ctx.sapiom.llm.run({
+        request: {
+          system,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 500,
+        },
+        output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
+      });
       const rev = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
       ctx.shared.set("review", rev);
       ctx.shared.set("reviewUnavailable", null);

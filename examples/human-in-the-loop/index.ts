@@ -809,11 +809,13 @@ const RANK_SCHEMA: Record<string, unknown> = {
 /**
  * Read the forced tool call back into a `ParsedRequest`.
  *
- * Throws when the model returned no such block or no summary. The criteria this
- * produces are what `rank` then scores every candidate against, so a silent
- * `{ summary: <first 120 chars of the request>, criteria: [] }` did not degrade
- * gracefully — it made the ranking step grade against nothing and report the
- * result as a considered shortlist.
+ * Throws when the model returned no such block, no summary, or no criteria
+ * list. The criteria are what `rank` then scores every candidate against, so a
+ * silent `{ summary: <first 120 chars of the request>, criteria: [] }` did not
+ * degrade gracefully — it made the ranking step grade against nothing and
+ * report the result as a considered shortlist. An *empty* criteria list is a
+ * real answer (a request may name none); a missing one is not, which is why
+ * only the array's presence is required here.
  */
 export function readParsed(structured: unknown): ParsedRequest {
   if (structured === null || typeof structured !== "object") {
@@ -827,11 +829,14 @@ export function readParsed(structured: unknown): ParsedRequest {
       "parse: the model returned no request summary — refusing to invent one.",
     );
   }
+  if (!Array.isArray(obj.criteria)) {
+    throw new Error(
+      "parse: the model returned no criteria list — refusing to rank against nothing.",
+    );
+  }
   return {
     summary: obj.summary.trim(),
-    criteria: Array.isArray(obj.criteria)
-      ? obj.criteria.filter((c): c is string => typeof c === "string")
-      : [],
+    criteria: obj.criteria.filter((c): c is string => typeof c === "string"),
   };
 }
 
@@ -840,12 +845,16 @@ export function readParsed(structured: unknown): ParsedRequest {
  * ranking, attach score + rationale, and guarantee every candidate appears
  * exactly once (falling back to input order for anything the model dropped).
  *
- * Throws when the model returned no ranking at all. A missing ranking used to
- * leave every candidate at `score: 0, rationale: "(unranked)"` in input order —
- * an offer sent to whoever happened to be listed first, presented to the
- * approving human as a ranked shortlist. Individual candidates the model
- * dropped are still appended as `(unranked)`: that is visible in the output the
- * approver reads, and the alternative is silently shortening their pool.
+ * Throws when the model ranked nothing this code can match to a candidate —
+ * whether the `ranking` key was absent, an empty list, or full of ids from
+ * nowhere. All three used to leave every candidate at
+ * `score: 0, rationale: "(unranked)"` in input order: an offer sent to whoever
+ * happened to be listed first, presented to the approving human as a ranked
+ * shortlist. A container with nothing usable in it is not a ranking.
+ *
+ * Individual candidates the model dropped, once it ranked at least one, are
+ * still appended as `(unranked)`: that is visible in the output the approver
+ * reads, and the alternative is silently shortening their pool.
  */
 export function applyRanking(
   structured: unknown,
@@ -879,6 +888,15 @@ export function applyRanking(
       rationale:
         typeof e.rationale === "string" ? e.rationale : "(no rationale)",
     });
+  }
+
+  // Nothing in the list matched a candidate — an empty `ranking`, or ids from
+  // nowhere. Falling through here would append every candidate as `(unranked)`
+  // in input order and hand that to the approver as the ranking.
+  if (ranked.length === 0) {
+    throw new Error(
+      "rank: the model ranked none of the candidates — refusing to present the input order as a ranked shortlist.",
+    );
   }
 
   // Append any candidate the model omitted, preserving input order.

@@ -54,3 +54,21 @@ test("throws rather than falling the batch back to a canned greeting", () => {
     /no usable openers/,
   );
 });
+
+test("an entry with no prospect index is dropped, not filed as prospect 0", () => {
+  // `Number(null)` is `0`, so a coercing check would hand this line to prospect
+  // 0 — a real person, who gets emailed it.
+  assert.throws(
+    () => readOpeners({ lines: [{ i: null, firstLine: "Real opener." }] }),
+    /no usable openers/,
+  );
+  assert.deepEqual(
+    readOpeners({
+      lines: [
+        { i: null, firstLine: "Belongs to nobody." },
+        { i: 1, firstLine: "Belongs to prospect 1." },
+      ],
+    }),
+    { 1: "Belongs to prospect 1." },
+  );
+});

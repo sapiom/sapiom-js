@@ -15,9 +15,8 @@ test("readIssue reads the forced tool call's issue", () => {
 
 // ── SAP-2892: an unusable reply must never become a newsletter ──────────────
 //
-// The old fallback sent `"<name>: <niche>"` over a bare link list — a
-// subscriber received an issue no model wrote, on a run reported as
-// `succeeded`.
+// The fallback this replaced sent `"<name>: <niche>"` over a bare link list —
+// an issue no model wrote, delivered on a run that reports `succeeded`.
 
 test("readIssue throws when the response carried no structured issue", () => {
   assert.throws(() => readIssue(undefined), /no structured issue/);
@@ -69,4 +68,17 @@ test("readJudgeReply throws rather than scoring an unanswered draft 0", () => {
     () => readJudgeReply({ score: "high", critique: "" }),
     /no usable score/,
   );
+});
+
+// A coercing check (`Number.isFinite(Number(x))`) would let all of these read
+// as a finite 0 — a rejection nobody issued, which then spends a second model
+// call revising against a critique the judge never wrote.
+test("readJudgeReply treats a falsy non-number score as no score", () => {
+  for (const score of [null, "", [], false]) {
+    assert.throws(
+      () => readJudgeReply({ score, critique: "" }),
+      /no usable score/,
+      `${JSON.stringify(score)} must not read as 0.0`,
+    );
+  }
 });

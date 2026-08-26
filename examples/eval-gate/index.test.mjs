@@ -49,3 +49,15 @@ test("the judge prompt no longer dictates a reply format — the schema does", (
   assert.match(prompt, /must be concrete/);
   assert.deepEqual(JUDGE_SCHEMA.required, ["score", "rationale"]);
 });
+
+// A coercing check (`Number.isFinite(Number(x))`) would let all of these read
+// as a finite 0 — the substituted grade this reader exists to refuse.
+test("a falsy non-number score is no score, not a grade of zero", () => {
+  for (const score of [null, "", [], false]) {
+    assert.throws(
+      () => readScore({ score, rationale: "" }),
+      /no usable score/,
+      `${JSON.stringify(score)} must not read as 0.0`,
+    );
+  }
+});

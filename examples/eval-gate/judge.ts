@@ -98,14 +98,16 @@ export function readScore(structured: unknown): JudgeResult {
     throw new Error("eval-gate judge: the judge returned no structured score");
   }
   const obj = structured as { score?: unknown; rationale?: unknown };
-  const n = Number(obj.score);
-  if (!Number.isFinite(n)) {
+  // `typeof`, not `Number(...)`: `Number(null)`, `Number("")`, `Number([])` and
+  // `Number(false)` are all a finite `0`, so coercing would turn "the judge gave
+  // no score" back into a grade of 0.0 — the substituted score this refuses.
+  if (typeof obj.score !== "number" || !Number.isFinite(obj.score)) {
     throw new Error(
       `eval-gate judge: the judge returned no usable score (${JSON.stringify(obj.score)})`,
     );
   }
   return {
-    score: clamp01(n),
+    score: clamp01(obj.score),
     rationale: typeof obj.rationale === "string" ? obj.rationale : "",
   };
 }

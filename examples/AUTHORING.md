@@ -608,8 +608,10 @@ reply comes back as a typed `tool_use` block. `structuredOf` reads it, and retur
 - **A reply you can't read is a failed step. Say so.** `throw`. Do not substitute a
   default, and above all do not substitute _content_: a fabricated verdict, summary,
   deliverable, or price on a run that reports `succeeded` is indistinguishable from a
-  real one, and it is worse than an error because nothing downstream can tell. One
-  template shipped `"<title>: a quick thread. 🧵"` to a paying customer this way.
+  real one, and it is worse than an error because nothing downstream can tell. A
+  fallback that composes a tweet thread out of the first 240 characters of the source
+  is not a graceful degradation — it is a deliverable nobody wrote, and it leaves by
+  the same door as a real one.
 - **An empty answer is not the same as no answer.** `[]` is a fine result when the
   prompt says so ("no issues found is a valid answer") — which is exactly why a _missing_
   list has to throw instead of reading as an empty one.

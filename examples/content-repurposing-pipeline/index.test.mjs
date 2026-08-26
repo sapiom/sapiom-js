@@ -424,10 +424,11 @@ test("buildRepurposeSystem bans placeholders and keeps the load-bearing rules", 
 
 // ── SAP-2892: an unusable reply must never become a content pack ────────────
 //
-// Run 352343 is the exhibit: the model echoed the JSON schema back to itself
-// mid-reasoning, the first-`{`-to-last-`}` slice caught that, `JSON.parse`
-// threw, and the customer was emailed `"<title>: a quick thread. 🧵"` plus the
-// first 240 characters of their own source — on a run reported as `succeeded`.
+// The shape this guards against: the model echoes the JSON schema back to
+// itself mid-reasoning, the first-`{`-to-last-`}` slice catches that instead of
+// the answer, `JSON.parse` throws, and the canned fallback — a tweet thread of
+// `"<title>: a quick thread. 🧵"` over the first 240 characters of the source —
+// is packaged and emailed on a run that reports `succeeded`.
 
 const PACK = {
   tweetThread: ["Small teams ship faster.", "Here's why. 🧵"],

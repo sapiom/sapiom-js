@@ -51,7 +51,8 @@ test("throws rather than substituting a summary", () => {
 });
 
 test("never returns the old canned review", () => {
-  // The exact shape that used to ship: `comment` plus "see the raw findings".
+  // The exact shape the old fallback returned: `comment` plus "see the raw
+  // findings" — a verdict, indistinguishable from one the model formed.
   for (const unusable of [undefined, null, {}, { verdict: "comment" }]) {
     assert.throws(() => readReview(unusable));
   }

@@ -574,3 +574,15 @@ test("neither prompt dictates a reply format any more — the schemas do", () =>
   assert.match(critiquePrompt, /engineering leaders/);
   assert.deepEqual(CRITIQUE_SCHEMA.required, ["score", "rationale"]);
 });
+
+test("readJudgment treats a falsy non-number score as no score", () => {
+  // A coercing check would read every one of these as a finite 0 and send the
+  // report back for a revision the judge never asked for.
+  for (const score of [null, "", [], false]) {
+    assert.throws(
+      () => readJudgment({ score, rationale: "" }),
+      /no usable score/,
+      `${JSON.stringify(score)} must not read as 0.0`,
+    );
+  }
+});

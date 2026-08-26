@@ -639,6 +639,17 @@ const personalize = defineStep({
       };
     });
     const withOpener = personalized.filter((c) => c.firstLine).length;
+    // Not one prospect matched an opener — the model answered about nobody in
+    // this batch. Marking every contact undeliverable would reach `launch`'s
+    // no-deliverable terminal, which reports `unmet: ["leads"]` and "none of
+    // the N lead(s) verified as deliverable": the operator would read "your
+    // leads are bad" for a model failure, about addresses this run never even
+    // checked. Fail the step instead, like every other read here.
+    if (withOpener === 0) {
+      throw new Error(
+        "personalize: the model wrote no opener for any prospect in this batch — refusing to report it as an undeliverable lead list.",
+      );
+    }
     if (withOpener < contacts.length) {
       ctx.logger.warn(
         "some prospects got no opener; they will not be emailed",
@@ -1008,6 +1019,10 @@ const done = defineStep({
         email: c.email,
         company: c.company,
         deliverable: c.deliverable,
+        // Why a contact is out, not just that it is: `no-personalized-opener`
+        // is a model miss on that prospect, not a bad address, and the two
+        // read identically from a `deliverable: false` alone.
+        verifyStatus: c.verifyStatus,
         status: c.status,
       })),
       ...(demoRun
@@ -1089,9 +1104,14 @@ export function readOpeners(structured: unknown): Record<number, string> {
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
     const r = entry as Record<string, unknown>;
-    const i = Number(r.i);
-    const firstLine = String(r.firstLine ?? "").trim();
-    if (Number.isInteger(i) && i >= 0 && firstLine) out[i] = firstLine;
+    // `typeof`, not `Number(...)`: `Number(null)` is `0`, so coercing would
+    // quietly file an entry with no index as prospect 0's opener — and prospect
+    // 0 is a real person who gets emailed it.
+    const i = r.i;
+    const firstLine = typeof r.firstLine === "string" ? r.firstLine.trim() : "";
+    if (typeof i === "number" && Number.isInteger(i) && i >= 0 && firstLine) {
+      out[i] = firstLine;
+    }
   }
   if (Object.keys(out).length === 0) {
     throw new Error(

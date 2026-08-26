@@ -309,9 +309,9 @@ const ISSUE_SCHEMA: Record<string, unknown> = {
  * Read the forced tool call back into an `Issue`.
  *
  * Throws on a missing block or an empty field. The subject and body ARE the
- * deliverable — this used to substitute `"<name>: <niche>"` over a bare link
- * list and send it, on a run that reported `succeeded`, so a subscriber
- * received a newsletter no model wrote.
+ * deliverable — the fallback this replaced substituted `"<name>: <niche>"` over
+ * a bare link list and sent it, on a run that reports `succeeded`, which puts a
+ * newsletter no model wrote in front of every subscriber.
  */
 export function readIssue(structured: unknown): Issue {
   if (structured === null || typeof structured !== "object") {
@@ -422,12 +422,15 @@ export function readJudgeReply(structured: unknown): JudgeResult {
     );
   }
   const raw = structured as { score?: unknown; critique?: unknown };
-  const n = Number(raw.score);
-  if (!Number.isFinite(n)) {
+  // `typeof`, not `Number(...)`: `Number(null)`, `Number("")`, `Number([])` and
+  // `Number(false)` are all a finite `0`, so coercing would turn "the judge gave
+  // no score" back into the substituted 0.0 this refuses.
+  if (typeof raw.score !== "number" || !Number.isFinite(raw.score)) {
     throw new Error(
       `selfEdit: the judge returned no usable score (${JSON.stringify(raw.score)}) — refusing to invent one.`,
     );
   }
+  const n = raw.score;
   return {
     score: Math.max(0, Math.min(1, n > 1 && n <= 100 ? n / 100 : n)),
     critique:

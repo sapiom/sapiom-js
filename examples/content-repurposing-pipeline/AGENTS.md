@@ -81,9 +81,9 @@ that wall no longer applies.
 - **A pack this template can't read is a failed run.** `readPack` throws; it never
   substitutes anything. Every field is the deliverable — the thread, the post, the
   newsletter, the quotes that get rendered and emailed — and the fallback this replaced
-  shipped `"<title>: a quick thread. 🧵"` over the first 240 characters of the customer's
-  own source on a run that reported `succeeded` (SAP-2892). Copy the shape, not the old
-  one: if you cannot say what a missing field should be, throw.
+  composed `"<title>: a quick thread. 🧵"` over the first 240 characters of the source
+  and emailed that, on a run that reports `succeeded` (SAP-2892). Copy the shape, not
+  the old one: if you cannot say what a missing field should be, throw.
 
 ## Validating
 

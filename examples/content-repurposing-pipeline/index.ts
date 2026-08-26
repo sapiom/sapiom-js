@@ -302,11 +302,12 @@ export function buildRepurposeSystem(
  * arrives as a typed `tool_use` block.
  *
  * This replaced a "reply with ONLY minified JSON" prompt plus a
- * first-`{`-to-last-`}` slice. That slice caught the model echoing this very
- * schema back to itself mid-reasoning, `JSON.parse` threw, and the customer was
- * emailed a canned pack — a tweet thread reading `"<title>: a quick thread. 🧵"`
- * over the first 240 characters of their own source — on a run that reported
- * `succeeded`. There is now no prose to slice.
+ * first-`{`-to-last-`}` slice. Ask a model to echo a schema and it will
+ * sometimes echo it mid-reasoning, which is what that slice then caught instead
+ * of the answer; `JSON.parse` threw, and the canned pack — a tweet thread
+ * reading `"<title>: a quick thread. 🧵"` over the first 240 characters of the
+ * source — was packaged and emailed on a run that reports `succeeded`. There is
+ * now no prose to slice.
  */
 export const REPURPOSE_TOOL = "emit_content_pack";
 

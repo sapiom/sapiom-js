@@ -82,3 +82,31 @@ test("applyRanking throws rather than presenting input order as a shortlist", ()
     /no ranking/,
   );
 });
+
+test("applyRanking throws when the list is present but ranks nobody", () => {
+  // A container with nothing usable in it is not a ranking. Falling through
+  // would append every candidate as `(unranked)` in input order and hand that
+  // to the approver as the shortlist.
+  assert.throws(() => applyRanking({ ranking: [] }, CANDIDATES), /ranked none/);
+  assert.throws(
+    () =>
+      applyRanking(
+        { ranking: [{ id: "nobody", score: 90, rationale: "?" }] },
+        CANDIDATES,
+      ),
+    /ranked none/,
+  );
+});
+
+test("readParsed throws on a missing criteria list, but allows an empty one", () => {
+  // Same empty-vs-missing rule: a request may name no criteria, but a reply
+  // that carried no list at all must not read as "no criteria apply".
+  assert.throws(
+    () => readParsed({ summary: "Need a courier" }),
+    /no criteria list/,
+  );
+  assert.deepEqual(readParsed({ summary: "Need a courier", criteria: [] }), {
+    summary: "Need a courier",
+    criteria: [],
+  });
+});

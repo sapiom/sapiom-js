@@ -100,14 +100,17 @@ export function readJudgment(structured: unknown): Judgment {
     );
   }
   const obj = structured as { score?: unknown; rationale?: unknown };
-  const n = Number(obj.score);
-  if (!Number.isFinite(n)) {
+  // `typeof`, not `Number(...)`: `Number(null)`, `Number("")`, `Number([])` and
+  // `Number(false)` are all a finite `0`, so coercing would turn "the judge gave
+  // no score" back into a grade of 0.0 — a rejection nobody issued, which then
+  // spends another model call on a revision.
+  if (typeof obj.score !== "number" || !Number.isFinite(obj.score)) {
     throw new Error(
       `research-to-microsite critique: the judge returned no usable score (${JSON.stringify(obj.score)})`,
     );
   }
   return {
-    score: clamp01(n),
+    score: clamp01(obj.score),
     rationale: typeof obj.rationale === "string" ? obj.rationale : "",
   };
 }
