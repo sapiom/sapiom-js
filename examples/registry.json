@@ -300,6 +300,80 @@
       "rank": 11
     },
     {
+      "id": "fintech-exec-radar",
+      "name": "Fintech Exec Radar",
+      "description": "Track executive moves, funding, and hiring across a fintech watchlist, with durable findings and honest coverage gaps.",
+      "tags": ["research", "fintech", "watchlist", "fan-out"],
+      "category": "data-knowledge",
+      "discipline": "Research",
+      "cadence": "scheduled",
+      "complexity": "advanced",
+      "sourcePath": "examples/fintech-exec-radar",
+      "capabilities": [
+        "agents.run",
+        "web.search",
+        "web.scrape",
+        "memory.recall",
+        "memory.append",
+        "llm.run",
+        "email.send"
+      ],
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Resolve the watchlist, signals, lookback, scrape cap, delivery, and exact maximum call envelope; dry runs and oversized plans terminate here unspent.",
+          "kind": "compute",
+          "next": ["research", "fanOut", "planned", "budgetBlocked"]
+        },
+        {
+          "name": "research",
+          "description": "In each child run, search one company, keep only bounded third-party article URLs, suppress recent per-company source keys, and persist the full findings immediately.",
+          "kind": "capability",
+          "capability": "web.search",
+          "terminal": true
+        },
+        {
+          "name": "fanOut",
+          "description": "Launch one independently metered research child per company in parallel, converting every child failure into a coverage row instead of sinking the batch.",
+          "kind": "capability",
+          "capability": "agents.run",
+          "next": ["reduce"]
+        },
+        {
+          "name": "reduce",
+          "description": "Rank only the bounded, sourced child items, compute same-run departure clusters and coverage, and assemble a deterministic markdown digest.",
+          "kind": "llm",
+          "capability": "llm.run",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Return the digest in the terminal result and email the same text only when a recipient is configured; delivery failure never hides the digest.",
+          "kind": "capability",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "planned",
+          "description": "Dry-run terminal with the resolved plan and exact maximum capability-call counts; nothing is dispatched.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "budgetBlocked",
+          "description": "Unspent terminal when the plan exceeds maxCapabilityCalls, explaining which inputs to reduce or which ceiling to raise.",
+          "kind": "compute",
+          "terminal": true
+        }
+      ],
+      "setup": {
+        "runsWithNoSetup": true,
+        "connectionCount": 0,
+        "settingCount": 7,
+        "degradedWithoutSetup": "Previews an exact call envelope for 15 fictional company placeholders without spending; replace them with the companies you track and disable dryRun for a live sourced digest."
+      }
+    },
+    {
       "id": "logged-in-screenshots",
       "name": "Website QA Crawler",
       "description": "Crawl a site's pages, screenshot each one, audit content with a model, and check that Terms and Privacy links resolve.",

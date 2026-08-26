@@ -1,0 +1,135 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Track executive moves, investment events, and hiring clusters across a fintech watchlist. Each company runs independently, findings persist as they land, and the terminal result is a sourced digest with honest coverage gaps.",
+  "longDescription": "Give it a company watchlist and it launches one bounded research child per company, searches third-party sources for executive moves, funding, and hiring signals, persists every company's findings, and suppresses source URLs found in up to 50 recent per-company snapshots. The parent ranks only sourced items, assembles a markdown digest deterministically, and returns it inline even when some companies fail; set `deliverTo` to email the same digest. `dryRun` resolves the exact maximum capability-call envelope without spending, while `maxCapabilityCalls` blocks an oversized plan before fan-out.",
+  "useCases": [
+    "Executive-move radar",
+    "Funding watchlist",
+    "Hiring-signal brief"
+  ],
+  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no input it previews 15 fictional placeholders without invoking any capability. Replace `companies` with the companies you track, choose any of the three `signals`, then set `dryRun: false` for a live run; a live run using the unchanged fictional defaults is rejected before any capability call. Set `deliverTo` only when you want a real email. Email delivery reuses the account's first existing sender inbox, or creates a Fintech Exec Radar inbox when none exists. The preview returns the exact maximum call counts. Current dollar pricing comes from Sapiom's signed-in capability catalog rather than copied constants; account spending rules enforce dollar limits, while `maxCapabilityCalls` is this agent's structural hard stop.\n\nAttach a weekly cron trigger to the deployed agent for a standing radar. Precise headcount, LinkedIn scraping, paywall bypassing, CRM write-back, and a custom watchlist UI are deliberately outside v1.",
+  "settings": [
+    {
+      "path": "companies",
+      "label": "Companies to track",
+      "description": "One independent child run per company; deduped, with plans over 15 unique names rejected before fan-out.",
+      "type": "string[]",
+      "default": [
+        "Example Fintech A",
+        "Example Fintech B",
+        "Example Fintech C",
+        "Example Fintech D",
+        "Example Fintech E",
+        "Example Fintech F",
+        "Example Fintech G",
+        "Example Fintech H",
+        "Example Fintech I",
+        "Example Fintech J",
+        "Example Fintech K",
+        "Example Fintech L",
+        "Example Fintech M",
+        "Example Fintech N",
+        "Example Fintech O"
+      ]
+    },
+    {
+      "path": "window",
+      "label": "Search recency hint",
+      "description": "Adds 1d, 7d, or 30d wording to each query; the search provider may return older results.",
+      "type": "string",
+      "default": "7d",
+      "example": "7d"
+    },
+    {
+      "path": "signals",
+      "label": "Signals to track",
+      "description": "Choose one or more of exec_moves, funding, and hiring.",
+      "type": "string[]",
+      "default": ["exec_moves", "funding", "hiring"]
+    },
+    {
+      "path": "maxScrapesPerCompany",
+      "label": "Article reads per company",
+      "description": "Maximum article pages read across all signals for one company.",
+      "type": "number",
+      "default": 3
+    },
+    {
+      "path": "maxCapabilityCalls",
+      "label": "Maximum capability calls",
+      "description": "Blocks before fan-out when the plan's exact maximum call envelope exceeds this value.",
+      "type": "number",
+      "default": 160
+    },
+    {
+      "path": "deliverTo",
+      "label": "Email the digest to",
+      "description": "Leave empty to return the digest inline only.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    },
+    {
+      "path": "dryRun",
+      "label": "Preview without spending",
+      "description": "Enabled by default. Disable only after replacing the fictional company placeholders.",
+      "type": "boolean",
+      "default": true
+    }
+  ],
+  "defaultInput": {},
+  "examples": [
+    {
+      "title": "Preview a three-company radar without spending",
+      "input": {
+        "companies": [
+          "Example Fintech A",
+          "Example Fintech B",
+          "Example Fintech C"
+        ],
+        "signals": ["exec_moves", "funding", "hiring"],
+        "window": "7d",
+        "maxScrapesPerCompany": 3,
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "dispatched": false,
+        "companies": [
+          "Example Fintech A",
+          "Example Fintech B",
+          "Example Fintech C"
+        ],
+        "estimate": {
+          "companies": 3,
+          "signalsPerCompany": 3,
+          "maxScrapesPerCompany": 3,
+          "calls": {
+            "childRuns": 3,
+            "searches": 9,
+            "scrapes": 9,
+            "memoryReads": 3,
+            "memoryWrites": 6,
+            "reduceLlmCalls": 1,
+            "emails": 0,
+            "maximumTotal": 31
+          },
+          "pricing": "quoted-by-platform-catalog-at-run-time"
+        }
+      }
+    }
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "dryRun", "assert": "equals", "value": true },
+      { "path": "dispatched", "assert": "equals", "value": false }
+    ],
+    "narrative": "Previews an exact call envelope for 15 fictional company placeholders without spending; replace them with the companies you track and disable dryRun for a live sourced digest."
+  }
+}
