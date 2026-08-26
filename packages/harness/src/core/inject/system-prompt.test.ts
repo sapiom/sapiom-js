@@ -34,7 +34,14 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain("ctx.sapiom.llm.run");
     expect(content).toContain("ctx.sapiom.models.run");
     expect(content).toContain("ctx.sapiom.agents.run");
-    expect(content).toContain("pin the `smart` label");
+    // Omit-only is the advice. This assertion used to require the OPPOSITE
+    // ("pin the `smart` label"), which pinned a no-op into the highest-authority
+    // teaching surface and made correcting it fail CI — see the eval finding in
+    // the PR body. Guard the direction the rule actually points, matching
+    // agent-core's skill-sync content guard.
+    expect(content).toContain("Omit `model` entirely");
+    expect(content.toLowerCase()).not.toContain("pin the `smart`");
+    expect(content.toLowerCase()).not.toContain("if you must pin");
     // Structured/forced-tool output has no `text` block — the reply lives in the
     // `tool_use` block's input. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
