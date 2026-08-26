@@ -16,7 +16,7 @@ import { z } from "zod/v4";
  * by hand for every inbound request, done as one durable agent:
  *
  *   draft ─▶ render ─▶ review ─┬─(pause: proposal.decision, $0 while idle)─▶ onDecision
- *  (models.run) (sandbox+      │ (approver set)                                 │
+ *  (llm.run) (sandbox+      │ (approver set)                                 │
  *               fileStorage)   │                            approve ◀─────────┼─▶ reject
  *                              │                              ▼               ▼
  *                              │                            send          rejected
@@ -24,7 +24,7 @@ import { z } from "zod/v4";
  *                              └─(no approver)─▶ pending
  *                                                (terminal)
  *
- *   1. draft — an LLM (`ctx.sapiom.models.run`) turns the free-text requirement
+ *   1. draft — an LLM (`ctx.sapiom.llm.run`) turns the free-text requirement
  *      into a structured proposal: a title, a summary, a scope list, priced line
  *      items, and terms. Deterministic code then totals the line items. Omit
  *      `request` entirely and it drafts against a built-in sample brief, so a
@@ -57,8 +57,8 @@ import { z } from "zod/v4";
  * README) to drive the approve → send path.
  *
  * `pauseUntilSignal` is a runtime primitive, not a metered capability. The billed
- * calls are the model reasoning (`ctx.sapiom.models.run` — the live x402 path;
- * `ctx.sapiom.llm` does NOT exist), the sandbox render, the file upload, and the
+ * calls are the model reasoning (`ctx.sapiom.llm.run` — the live x402 path;
+ * one-shot gateway call), the sandbox render, the file upload, and the
  * emails.
  */
 
@@ -274,12 +274,14 @@ async function draftProposal(
     '{"title":string,"summary":string,"scope":string[],' +
     '"lineItems":[{"description":string,"quantity":number,"unitPrice":number}],' +
     '"terms":string}.';
-  const res = await ctx.sapiom.models.run({
-    prompt: request,
-    system,
-    maxTokens: 900,
+  const res = await ctx.sapiom.llm.run({
+    request: {
+      system,
+      messages: [{ role: "user", content: request }],
+      max_tokens: 900,
+    },
   });
-  return coerceDraft(res.output, request);
+  return coerceDraft(ctx.sapiom.llm.textOf(res) ?? null, request);
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──

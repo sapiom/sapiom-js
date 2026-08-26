@@ -8,7 +8,7 @@ scheduled, LLM-curated, delivered sibling of
 
 ```
 search  ──▶  scrape  ──▶  curate  ──▶  deliver  (terminal)
-(web.search)  (web.scrape)  (models.run)  (email)
+(web.search)  (web.scrape)  (llm.run)  (email)
 ```
 
 1. **search** — takes a `topic`, calls `ctx.sapiom.search.webSearch` for
@@ -17,7 +17,7 @@ search  ──▶  scrape  ──▶  curate  ──▶  deliver  (terminal)
    (`ctx.sapiom.search.scrape`), degrading per-item on failure. Bodies are
    truncated and stay bounded — they never enter shared state.
 3. **curate** — hands the ranked, scraped sources to an LLM
-   (`ctx.sapiom.models.run` — the live x402-served model) to synthesize a short
+   (`ctx.sapiom.llm.run` — the live x402-served model) to synthesize a short
    sourced brief. This is the step `web-research-digest` deliberately omits (it
    formats in-process, no LLM).
 4. **deliver** — emails the brief to the recipient. A `dryRun` guard computes the

@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Draft a priced client proposal from an inbound request, render it to a PDF, and wait for a person to approve before it emails the client. Same structure and the same sign-off on every quote.",
-  "longDescription": "Turn an inbound request into a client-ready quote without the copy-paste. Give it the requirement, brief, or RFP, and a model (`models.run`) drafts a proposal with a title, summary, scope, and line items; your code, not the model, totals the numbers. It renders the draft into a PDF and saves it to storage. Before anything reaches the client it pauses, emailing your approver the summary and PDF and waiting for approval (`pauseUntilSignal`). Approve and it emails the client; reject and the run stops.",
+  "longDescription": "Turn an inbound request into a client-ready quote without the copy-paste. Give it the requirement, brief, or RFP, and a model (`llm.run`) drafts a proposal with a title, summary, scope, and line items; your code, not the model, totals the numbers. It renders the draft into a PDF and saves it to storage. Before anything reaches the client it pauses, emailing your approver the summary and PDF and waiting for approval (`pauseUntilSignal`). Approve and it emails the client; reject and the run stops.",
   "useCases": [
     "Priced PDF quote",
     "Approval before send",

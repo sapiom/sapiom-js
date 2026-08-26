@@ -13,7 +13,7 @@ import { z } from "zod/v4";
  *
  * On each tick (built to run weekly) it searches a `niche`, reads the top
  * results for full text, dedupes and ranks them down to the strongest,
- * distinct set, asks an LLM (`ctx.sapiom.models.run` — the live x402-served
+ * distinct set, asks an LLM (`ctx.sapiom.llm.run` — the live x402-served
  * model, NOT a hardcoded formatter) to curate and WRITE the issue, grades its
  * own draft against a fixed quality bar with a second, chained model call and
  * revises — bounded — if it falls short, generates a header image, and
@@ -21,7 +21,7 @@ import { z } from "zod/v4";
  *
  * Composition, in one legible graph:
  *   research   →  dedupe    →  write      ─▶ selfEdit ─┬─▶ illustrate  →  deliver
- *  (web.search)  (web.scrape)  (models.run)  (models.run)  (contentGeneration.images)  (email.send)
+ *  (web.search)  (web.scrape)  (llm.run)  (llm.run)  (contentGeneration.images)  (email.send)
  *                                  ▲_______________loop, bounded_______┘
  *
  * This is the fusion of three siblings that used to ship separately —
@@ -319,7 +319,11 @@ const QUALITY_BAR =
   "placeholder text such as 'insert here', 'TBD', 'lorem ipsum', or a " +
   "bracketed instruction.";
 
-function buildJudgePrompt(niche: string, sources: Source[], issue: Issue): string {
+function buildJudgePrompt(
+  niche: string,
+  sources: Source[],
+  issue: Issue,
+): string {
   const sourceList =
     sources.map((s, i) => `[${i + 1}] ${s.title} (${s.url})`).join("\n") ||
     "(none)";
@@ -574,21 +578,33 @@ const write = defineStep({
       // The live, x402-served model curates AND writes the issue — ranking the
       // sources, dropping the weak ones, and producing a subject, a markdown
       // body, and a header-image prompt in one structured reply.
-      const res = await ctx.sapiom.models.run({
-        system:
-          `You are the editor of a newsletter called "${newsletterName}". Given a ` +
-          "NICHE and a set of web SOURCES (each: [n] title, url, extracted text), " +
-          "curate the strongest, distinct items and write this week's issue. The " +
-          "body is markdown: an engaging '# ' subject headline, a 2-3 sentence " +
-          "intro, then 3-5 short sections that each summarize a story and link it " +
-          "as a [n] reference, then a '## Sources' list mapping each [n] to its " +
-          "title and url. Also write a vivid header-image prompt (no text in " +
-          "the image). Reply with ONLY minified JSON: " +
-          '{"subject":string,"body":string,"imagePrompt":string}.',
-        prompt: `NICHE: ${niche}\n\nSOURCES:\n${research}${revision}`,
-        maxTokens: 1200,
+      const res = await ctx.sapiom.llm.run({
+        request: {
+          system:
+            `You are the editor of a newsletter called "${newsletterName}". Given a ` +
+            "NICHE and a set of web SOURCES (each: [n] title, url, extracted text), " +
+            "curate the strongest, distinct items and write this week's issue. The " +
+            "body is markdown: an engaging '# ' subject headline, a 2-3 sentence " +
+            "intro, then 3-5 short sections that each summarize a story and link it " +
+            "as a [n] reference, then a '## Sources' list mapping each [n] to its " +
+            "title and url. Also write a vivid header-image prompt (no text in " +
+            "the image). Reply with ONLY minified JSON: " +
+            '{"subject":string,"body":string,"imagePrompt":string}.',
+          messages: [
+            {
+              role: "user",
+              content: `NICHE: ${niche}\n\nSOURCES:\n${research}${revision}`,
+            },
+          ],
+          max_tokens: 1200,
+        },
       });
-      issue = parseIssue(res.output, niche, newsletterName, slimSources);
+      issue = parseIssue(
+        ctx.sapiom.llm.textOf(res) ?? null,
+        niche,
+        newsletterName,
+        slimSources,
+      );
     }
 
     ctx.shared.set("subject", issue.subject);
@@ -622,11 +638,20 @@ const selfEdit = defineStep({
     // Chained judgment: this call's input is the `write` step's own output,
     // not caller-supplied data — a second model reading the first model's
     // reply, same shape as `eval-gate`'s `draft` → `judge`.
-    const res = await ctx.sapiom.models.run({
-      prompt: buildJudgePrompt(niche, slimSources, input.issue),
-      maxTokens: 300,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        messages: [
+          {
+            role: "user",
+            content: buildJudgePrompt(niche, slimSources, input.issue),
+          },
+        ],
+        max_tokens: 300,
+      },
     });
-    const { score, critique } = parseJudgeReply(res.output);
+    const { score, critique } = parseJudgeReply(
+      ctx.sapiom.llm.textOf(res) ?? null,
+    );
     const passed = score >= SELF_EDIT_THRESHOLD;
     const exhausted = iteration >= MAX_SELF_EDIT_ITERATIONS;
     ctx.logger.info(
@@ -663,7 +688,8 @@ const illustrate = defineStep({
   name: "illustrate",
   next: ["deliver"],
   async run(input: IllustrateInput, ctx: Ctx) {
-    const imagePrompt = input.issue.imagePrompt || ctx.shared.get("imagePrompt") || "";
+    const imagePrompt =
+      input.issue.imagePrompt || ctx.shared.get("imagePrompt") || "";
     let headerImageUrl: string | null = null;
     let headerImageFileId: string | null = null;
 
@@ -698,7 +724,9 @@ const illustrate = defineStep({
       });
     }
 
-    ctx.logger.info("illustration ready", { hasImage: Boolean(headerImageUrl) });
+    ctx.logger.info("illustration ready", {
+      hasImage: Boolean(headerImageUrl),
+    });
     return goto("deliver", {
       issue: input.issue,
       selfEdit: input.selfEdit,
@@ -723,7 +751,10 @@ const deliver = defineStep({
     const niche = ctx.shared.get("niche") || "your niche";
     const schedule = ctx.shared.get("schedule") || DEFAULT_SCHEDULE;
     const dryRun = ctx.shared.get("dryRun") ?? false;
-    const subject = input.issue.subject || ctx.shared.get("subject") || `Newsletter: ${niche}`;
+    const subject =
+      input.issue.subject ||
+      ctx.shared.get("subject") ||
+      `Newsletter: ${niche}`;
     const body = input.issue.body || ctx.shared.get("body") || "";
     const sources = ctx.shared.get("sources") ?? [];
     const headerImageUrl = input.headerImageUrl ?? null;
@@ -784,10 +815,13 @@ const deliver = defineStep({
         text: body,
         html,
       });
-      ctx.logger.info("delivered to the demo inbox (no subscribers configured)", {
-        to: inboxId,
-        messageId: sent.messageId,
-      });
+      ctx.logger.info(
+        "delivered to the demo inbox (no subscribers configured)",
+        {
+          to: inboxId,
+          messageId: sent.messageId,
+        },
+      );
       return terminate({
         niche,
         schedule,

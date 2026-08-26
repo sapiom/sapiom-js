@@ -40,7 +40,7 @@ plan ─▶ implement ──(pause: models.coding.result → verify)──▶ ve
    the actual result, not just a diff. A failed deploy degrades honestly
    (`previewStatus`, `previewUrl: null`) rather than failing an otherwise
    green, already-pushed run.
-6. **review** — a second model (`models.run`) reads the diff and the coding
+6. **review** — a second model (`llm.run`) reads the diff and the coding
    agent's own notes and writes a short self-review: a verdict, a summary,
    and what it would flag.
 

@@ -22,7 +22,7 @@ scan ──▶ assess ──▶ actuate ──▶ report  (terminal)
 scan     read the event bus + fold the log into cadence/idempotency facts;
          compute deterministic situations (no_child_ran_today, cooldown_due,
          stale_no_result). The event log IS the memory; a cursor tracks "new".
-assess   hand the situations to models.run with a FIXED allow-list of plays;
+assess   hand the situations to llm.run with a FIXED allow-list of plays;
          re-validate the JSON against the allow-list (deterministic fallback).
 actuate  execute the plan behind six guardrails; launch each due member as a
          child agent with an idempotency key; append a member.launched row.
@@ -37,7 +37,7 @@ report   post a briefing to a low-noise channel, append a brain.briefing row,
    - `cooldown_due` — a periodic member is past its cadence.
    - `stale_no_result` — a launch never reported a result and aged past
      `staleHours`.
-2. **assess** — hands the situations to `ctx.sapiom.models.run` with a system
+2. **assess** — hands the situations to `ctx.sapiom.llm.run` with a system
    prompt that permits **only** a fixed allow-list of plays: `launch_member`,
    `escalate_to_human`, `no_action`. `parsePlan()` re-validates every play/target
    against the allow-list and falls back to a deterministic plan on bad JSON.
@@ -97,7 +97,7 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
 
 - **`dryRun`** — `run_local` with `{ "dryRun": true }` traces the full
   `scan → assess → actuate → report` graph: raw Postgres / Slack / child-launch
-  I/O is skipped, while the real `models.run` call still runs. With no API key,
+  I/O is skipped, while the real `llm.run` call still runs. With no API key,
   `launchChild` returns a synthetic execution id.
 - **`observeOnly`** — do everything real (read the bus, post the briefing) but
   **launch nothing**; the briefing shows what it WOULD launch. Run a live cron in
@@ -114,7 +114,7 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
    `sapiom_status`. Your agent becomes an API-key principal; `scan`/`assess`/
    `actuate`/`report` inherit that authority to read the DB handle, call
-   `models.run` and launch children.
+   `llm.run` and launch children.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`

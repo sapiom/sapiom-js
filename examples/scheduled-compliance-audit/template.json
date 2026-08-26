@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Audit your resources against a policy on a schedule, wait for a person to sign off, then archive the signed attestation. Reads the current state of whatever you point it at, compares it to the policy, and files nothing until a real review happens.",
-  "longDescription": "Point it at the resources that prove you are compliant and give it the policy to hold them to. On each tick it reads their current state, hands that and your policy to a model (`models.run`), and gets back a report with an overall verdict and one check per requirement. Then it pauses for a person: only an explicit approval writes the signed attestation to storage, while a decline archives nothing. Resources that will not load are marked unknown, and `dryRun` returns a preview.",
+  "longDescription": "Point it at the resources that prove you are compliant and give it the policy to hold them to. On each tick it reads their current state, hands that and your policy to a model (`llm.run`), and gets back a report with an overall verdict and one check per requirement. Then it pauses for a person: only an explicit approval writes the signed attestation to storage, while a decline archives nothing. Resources that will not load are marked unknown, and `dryRun` returns a preview.",
   "useCases": [
     "Recurring policy audit",
     "Human sign-off required",

@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Turn a noisy error stream into one digest of what is actually new. Takes errors from a webhook or a scheduled pull, clusters and summarizes them with an LLM, dedupes against everything already seen, and emails the result once a day.",
-  "longDescription": "Point it at your errors and it turns the noise into one readable digest. A cron run hands it a batch, or set `webhook: true` and it waits for your pipeline to push one in. A model (`models.run`) clusters the raw entries into distinct issues with a stable fingerprint, then dedupes each against a small Postgres store so recurring errors fade into counts and new ones stand out. It writes the markdown and emails it. `dryRun` returns the digest without writing or sending.",
+  "longDescription": "Point it at your errors and it turns the noise into one readable digest. A cron run hands it a batch, or set `webhook: true` and it waits for your pipeline to push one in. A model (`llm.run`) clusters the raw entries into distinct issues with a stable fingerprint, then dedupes each against a small Postgres store so recurring errors fade into counts and new ones stand out. It writes the markdown and emails it. `dryRun` returns the digest without writing or sending.",
   "useCases": [
     "Clustered overnight errors",
     "Only genuinely new failures",

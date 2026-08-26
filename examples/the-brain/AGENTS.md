@@ -5,7 +5,7 @@ authored against `@sapiom/agent`. It is a fleet orchestrator: a meta-workflow th
 runs a `scan → assess → actuate → report` loop over a set of child workflows,
 launching the right member as a child, never doing irreversible work itself.
 Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
-`ctx.sapiom.database.get/create`, `ctx.sapiom.models.run`). The Slack briefing goes
+`ctx.sapiom.database.get/create`, `ctx.sapiom.llm.run`). The Slack briefing goes
 out on the injected `SLACK_BOT_TOKEN` via a raw `fetch`.
 
 ## Authoring
@@ -55,7 +55,7 @@ it after every small edit.
 - **run_local** — runs your **real** step code against **stub capabilities**.
   Pass `{ "dryRun": true }`: the full `scan → assess → actuate → report` graph
   traces offline — raw Postgres/Slack/child-launch I/O is skipped, while the real
-  `models.run` call still runs, with no API key needed.
+  `llm.run` call still runs, with no API key needed.
 - **deploy**, then **run** — ship it, then a real run. Pass `{ "observeOnly": true }`
   first to report what it WOULD launch without launching; then run with actuation
   on. A second run the same day is cooldown-skipped (idempotency).

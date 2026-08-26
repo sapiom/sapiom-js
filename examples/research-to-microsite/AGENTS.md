@@ -15,7 +15,7 @@ with `drafted` (dry-run, or nothing to research), `failed`, and
 score parser, the same shape `eval-gate/judge.ts` uses. Inside a step's
 `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
 `ctx.sapiom.search.webSearch`, `ctx.sapiom.search.scrape`,
-`ctx.sapiom.models.run`, `ctx.sapiom.contentGeneration.images.launch`,
+`ctx.sapiom.llm.run`, `ctx.sapiom.contentGeneration.images.launch`,
 `ctx.sapiom.fileStorage.getDownloadUrl`, `ctx.sapiom.models.coding.launch`,
 `ctx.sapiom.sandboxes.attach` + `box.deployPreview`,
 `ctx.sapiom.domains.dns.create`).

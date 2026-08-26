@@ -2,11 +2,11 @@
 
 This project defines exactly one Sapiom agent in `index.ts` — **Scheduled
 Compliance Audit + Attestation** — authored against `@sapiom/agent`. It has six
-steps: `collect` (calls `web.scrape`) → `audit` (calls `models.run`, the live
+steps: `collect` (calls `web.scrape`) → `audit` (calls `llm.run`, the live
 LLM) → `review` (pauses on the `attestation.signoff` signal) → `onSignoff`
 (reads the decision) → `archive` (calls `fileStorage.upload`) or `rejected`.
 Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g.
-`ctx.sapiom.search.scrape(...)`, `ctx.sapiom.models.run(...)`,
+`ctx.sapiom.search.scrape(...)`, `ctx.sapiom.llm.run(...)`,
 `ctx.sapiom.fileStorage.upload(...)`).
 
 It composes the scheduled-collect-and-curate shape of `scheduled-research-brief`
@@ -48,7 +48,7 @@ after every small edit.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full
   local pre-flight before deploy.
 - **run_local** — runs your **real** step code against **stub capabilities**, so
-  `web.scrape` / `models.run` / `fileStorage.upload` return built-in defaults and
+  `web.scrape` / `llm.run` / `fileStorage.upload` return built-in defaults and
   the agent runs end-to-end offline for free. The pause is auto-resumed with no
   decision, so the offline trace lands on `rejected`; pass `dryRun: true` so
   `archive` would skip the (stubbed) upload if you drive the approve path with a

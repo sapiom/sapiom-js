@@ -24,7 +24,7 @@ watch  ──(pause: wait for "pr.opened", $0 while idle)──▶  review  ─�
    (`ctx.sapiom.models.coding.run`) checks the code out in a sandbox and
    analyzes the diff, told to surface changes that lack tests. It's read-only —
    the agent reviews, it doesn't push.
-4. **assess** — an LLM (`ctx.sapiom.models.run`) turns the raw findings into a
+4. **assess** — an LLM (`ctx.sapiom.llm.run`) turns the raw findings into a
    structured review: a verdict, a summary, and the list of missing tests.
 5. **reportEmail | reportSlack** — posts the review. Email uses the built-in
    `ctx.sapiom.email` capability; Slack uses a bot token Sapiom injects as

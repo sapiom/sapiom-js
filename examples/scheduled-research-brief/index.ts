@@ -14,14 +14,14 @@ import { z } from "zod/v4";
  * `web-research-digest`.
  *
  * On each tick it searches the web for a `topic`, scrapes the top candidates for
- * full article text, asks an LLM (`ctx.sapiom.models.run` — the live x402-served
+ * full article text, asks an LLM (`ctx.sapiom.llm.run` — the live x402-served
  * model, NOT a hardcoded formatter) to rank + curate the findings into a short
  * sourced brief, then delivers that brief by email. It ships with a `schedule`
  * input so it reads as a standing "morning brief" agent rather than a manual
  * one-shot.
  *
  * Composition, in one legible graph:
- *   search (web.search) → scrape (web.scrape) → curate (models.run) → deliver (email)
+ *   search (web.search) → scrape (web.scrape) → curate (llm.run) → deliver (email)
  *
  * vs. `web-research-digest`: fork THAT for a one-shot digest that formats
  * in-process (no LLM, no delivery); fork THIS for a standing, LLM-curated brief
@@ -260,20 +260,27 @@ const curate = defineStep({
         .join("\n\n");
       // The live, x402-served model does the ranking + synthesis — this is the
       // capability web-research-digest deliberately avoids (it formats in-process).
-      const curation = await ctx.sapiom.models.run({
-        system:
-          "You are a research analyst writing a short morning brief. Given a " +
-          "TOPIC and a set of web SOURCES (each: [n] title, url, extracted text), " +
-          "rank them by relevance and credibility, drop thin or duplicate items, " +
-          "and write markdown with: a 2-3 sentence summary, then 3-5 bullet " +
-          "takeaways that each cite their source as a [n] reference, then a " +
-          "'## Sources' list mapping each [n] to its title and url. Output ONLY " +
-          "the markdown brief — no preamble, no code fences.",
-        prompt: `TOPIC: ${topic}\n\nSOURCES:\n${research}`,
-        maxTokens: 800,
+      const curation = await ctx.sapiom.llm.run({
+        request: {
+          system:
+            "You are a research analyst writing a short morning brief. Given a " +
+            "TOPIC and a set of web SOURCES (each: [n] title, url, extracted text), " +
+            "rank them by relevance and credibility, drop thin or duplicate items, " +
+            "and write markdown with: a 2-3 sentence summary, then 3-5 bullet " +
+            "takeaways that each cite their source as a [n] reference, then a " +
+            "'## Sources' list mapping each [n] to its title and url. Output ONLY " +
+            "the markdown brief — no preamble, no code fences.",
+          messages: [
+            {
+              role: "user",
+              content: `TOPIC: ${topic}\n\nSOURCES:\n${research}`,
+            },
+          ],
+          max_tokens: 800,
+        },
       });
       brief =
-        (curation.output ?? "").trim() ||
+        (ctx.sapiom.llm.textOf(curation) ?? "").trim() ||
         `# Research brief: ${topic}\n\n_The model returned no content._`;
     }
 

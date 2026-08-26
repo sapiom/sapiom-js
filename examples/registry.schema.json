@@ -19,29 +19,87 @@
       "required": ["id", "name", "description", "sourcePath"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "minLength": 1, "description": "Stable gallery id + the example directory name. Never changes — it is the directory name, the sourcePath, and the gallery's stable key. Renaming a template changes `name`, never this." },
-        "name": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Display name shown on the card. Names the OUTCOME, not the machinery — the same axis `category` uses. No arrows, no slashes, no parentheticals, and no mechanism word (saga, engine, pipeline, runner, endpoint, gate, durable, keep-alive): those belong in `tags`, which is what drives search. Enforced by the `copy-name` check." },
-        "description": { "type": "string", "maxLength": 160, "description": "One-line card description — one plain sentence." },
-        "rank": { "type": "integer", "minimum": 1, "description": "Optional gallery ordering weight — lower = higher priority. Ranked templates lead the browse gallery in ascending rank; unranked templates keep registry (id) order behind them. Used to feature the strongest templates up front; most templates carry none. The backend owns the sort (single source of truth), so the frontend adds no sort of its own. Independent of `category` grouping and of runnability — a rank is an editorial choice, not a derived signal." },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable gallery id + the example directory name. Never changes — it is the directory name, the sourcePath, and the gallery's stable key. Renaming a template changes `name`, never this."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Display name shown on the card. Names the OUTCOME, not the machinery — the same axis `category` uses. No arrows, no slashes, no parentheticals, and no mechanism word (saga, engine, pipeline, runner, endpoint, gate, durable, keep-alive): those belong in `tags`, which is what drives search. Enforced by the `copy-name` check."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "One-line card description — one plain sentence."
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional gallery ordering weight — lower = higher priority. Ranked templates lead the browse gallery in ascending rank; unranked templates keep registry (id) order behind them. Used to feature the strongest templates up front; most templates carry none. The backend owns the sort (single source of truth), so the frontend adds no sort of its own. Independent of `category` grouping and of runnability — a rank is an editorial choice, not a derived signal."
+        },
         "onboarding": {
           "type": "object",
           "additionalProperties": false,
           "required": ["eligible"],
           "description": "First-impression (onboarding shelf) curation, owned HERE so the app never hard-codes template ids. The bar is STRICTER than the gallery's `setup.runsWithNoSetup`: a clean, side-effect-free, zero-setup run that leaves a REAL, impressive artifact worth showing a brand-new user — set only after verifying it against a fresh tenant. `eligible` gates membership in the onboarding suggestion pool; `order` is the shelf sequence (lower leads), independent of the gallery `rank`.",
           "properties": {
-            "eligible": { "type": "boolean", "description": "True only when a fresh-tenant zero-setup run was verified to leave a real, impressive artifact. Absent = not eligible; never assert without evidence." },
-            "order": { "type": "integer", "minimum": 1, "description": "Onboarding shelf priority — lower leads the first-run grid. First-impression sequence, NOT browse ordering, so it is deliberately separate from `rank`. Eligible templates without an order sort after ordered ones." }
+            "eligible": {
+              "type": "boolean",
+              "description": "True only when a fresh-tenant zero-setup run was verified to leave a real, impressive artifact. Absent = not eligible; never assert without evidence."
+            },
+            "order": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Onboarding shelf priority — lower leads the first-run grid. First-impression sequence, NOT browse ordering, so it is deliberately separate from `rank`. Eligible templates without an order sort after ordered ones."
+            }
           }
         },
-        "tags": { "type": "array", "items": { "type": "string" }, "description": "Freeform browse tags." },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Freeform browse tags."
+        },
         "category": {
           "type": "string",
-          "enum": ["starter", "product-engineering", "reliability-governance", "revenue-marketing", "customer-experience", "data-knowledge", "finance-legal-people"],
+          "enum": [
+            "starter",
+            "product-engineering",
+            "reliability-governance",
+            "revenue-marketing",
+            "customer-experience",
+            "data-knowledge",
+            "finance-legal-people"
+          ],
           "description": "Primary gallery category (the source-of-truth taxonomy). Exactly one per template; the frontend owns the display label, icon, and section order keyed off this id. The axis is OUTCOME — \"what am I trying to produce?\" — not mechanism: `starter` aside, a template belongs to the business job it does, never to the primitive it demonstrates. Mechanism words (durable, pause-resume, hitl, evals, media, orchestration) stay in freeform `tags`, which drive secondary browse/search. Optional for now — every template should carry one, and the examples CI check flags any invalid value."
         },
         "discipline": {
           "type": "string",
-          "enum": ["AI operations", "Customer success", "Data", "Engineering", "FinOps", "Finance", "Governance", "Knowledge", "Legal", "Marketing", "Operations", "People", "Product", "Release engineering", "Reliability", "Research", "Revenue", "Security", "Starter", "Strategy", "Support"],
+          "enum": [
+            "AI operations",
+            "Customer success",
+            "Data",
+            "Engineering",
+            "FinOps",
+            "Finance",
+            "Governance",
+            "Knowledge",
+            "Legal",
+            "Marketing",
+            "Operations",
+            "People",
+            "Product",
+            "Release engineering",
+            "Reliability",
+            "Research",
+            "Revenue",
+            "Security",
+            "Starter",
+            "Strategy",
+            "Support"
+          ],
           "description": "The one-or-two-word FUNCTION shown on the card's badge — who owns this outcome. Finer than `category`, on the same OUTCOME axis: `category` groups the gallery rail, `discipline` labels the individual card, so two templates in one category routinely carry different disciplines (both `pr-review-bot` and `dependency-upgrade` are `product-engineering`; only the second is `Release engineering`). Human-readable and rendered VERBATIM — unlike `category`, this is not an id the app relabels. The app owns only the glyph beside it. Must be one of the disciplines allowed for this row's `category`, a cross-field constraint JSON Schema cannot express and `examples:check` therefore gates; the enum here is the union across all categories, not the set valid for any one of them. Optional — a template without one falls back to a short label derived from its `category`, so the badge never disappears."
         },
         "complexity": {
@@ -79,11 +137,21 @@
               "type": "boolean",
               "description": "True ONLY when a measured run proved the template reaches a meaningful terminal state with zero input and zero credentials. Defaults false — never assert it without evidence."
             },
-            "connectionCount": { "type": "integer", "minimum": 0, "description": "Number of `requiredSecrets` entries in the manifest. Drives \"needs 1 credential to do anything real\"." },
-            "settingCount": { "type": "integer", "minimum": 0, "description": "Number of declared `settings` (all of which have defaults)." },
+            "connectionCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of `requiredSecrets` entries in the manifest. Drives \"needs 1 credential to do anything real\"."
+            },
+            "settingCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of declared `settings` (all of which have defaults)."
+            },
             "provisions": {
               "type": "array",
-              "items": { "enum": ["postgres", "sandbox", "repository", "inbox"] },
+              "items": {
+                "enum": ["postgres", "sandbox", "repository", "inbox"]
+              },
               "description": "Managed resource kinds the run provisions, driving the cost disclosure on the card. DERIVED from the manifest's `resources[]` — the distinct kinds, sorted. Never hand-maintained: the `setup-provisions` check fails when this disagrees with the manifest, which is what stops the drift that let `capabilities[]` fill up with SDK method paths instead of catalog ids."
             },
             "degradedWithoutSetup": {
@@ -99,8 +167,15 @@
       "required": ["name"],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string", "minLength": 1, "description": "Step name (graph node label)." },
-        "description": { "type": "string", "description": "What the step does." },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Step name (graph node label)."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the step does."
+        },
         "capability": {
           "type": ["string", "null"],
           "description": "Catalog capability id this step calls, or null/omitted for an in-process step."
@@ -108,7 +183,7 @@
         "kind": {
           "type": "string",
           "enum": ["capability", "llm", "compute", "pause"],
-          "description": "What the step structurally IS, which picks its glyph in the rendered graph. `capability` calls a priced catalog capability; `llm` calls a model (`models.run` / `models.coding`); `compute` is in-process logic, a branch, or a terminal; `pause` suspends the run at $0 until something wakes it. A step that both calls a capability and then suspends is `pause` — suspending is the step's defining behaviour."
+          "description": "What the step structurally IS, which picks its glyph in the rendered graph. `capability` calls a priced catalog capability; `llm` calls a model (`llm.run` / `models.run` / `models.coding`); `compute` is in-process logic, a branch, or a terminal; `pause` suspends the run at $0 until something wakes it. A step that both calls a capability and then suspends is `pause` — suspending is the step's defining behaviour."
         },
         "checkpoint": {
           "type": "boolean",
@@ -119,7 +194,10 @@
           "items": { "type": "string", "minLength": 1 },
           "description": "Names of steps this step continues to."
         },
-        "terminal": { "type": "boolean", "description": "True when this step is a sink (ends the run)." }
+        "terminal": {
+          "type": "boolean",
+          "description": "True when this step is a sink (ends the run)."
+        }
       }
     }
   }

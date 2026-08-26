@@ -1,6 +1,6 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Meeting Notes → CRM Updater** — authored against `@sapiom/agent`. It has four steps: `intake` (pause/take the transcript) → `extract` (calls `models.run`, the live LLM) → `upsert` (calls `database`) → `summary` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.models.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`).
+This project defines exactly one Sapiom agent in `index.ts` — **Meeting Notes → CRM Updater** — authored against `@sapiom/agent`. It has four steps: `intake` (pause/take the transcript) → `extract` (calls `llm.run`, the live LLM) → `upsert` (calls `database`) → `summary` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.llm.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`).
 
 It combines a durability primitive with a real store: it can **pause at $0** for a pushed transcript (`pauseUntilSignal`) or take one directly, and it keeps a **Postgres CRM store** of contacts and action items so a re-processed transcript updates the record instead of duplicating it.
 
@@ -20,7 +20,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so `models.run` / `database` / `email` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `upsert` skips the (stubbed) DB and `summary` skips the (stubbed) send and returns the recap. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so `llm.run` / `database` / `email` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `upsert` skips the (stubbed) DB and `summary` skips the (stubbed) send and returns the recap. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed LLM extraction that writes to the CRM store and emails the summary. Push a transcript with the `transcript.ready` signal.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

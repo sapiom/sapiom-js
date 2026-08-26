@@ -60,7 +60,7 @@ import { SEED_PREAMBLE } from "./seed.js";
  *                failed deploy degrades honestly (`previewStatus`,
  *                `previewUrl: null`) rather than failing an otherwise green,
  *                already-pushed run.
- *   - review     a second model (`models.run`) reads the diff and the coding
+ *   - review     a second model (`llm.run`) reads the diff and the coding
  *                agent's own notes and writes a short self-review: a verdict,
  *                a summary, and what it would flag.
  *   - summary    returns everything: the repo, the branch, the sha, the
@@ -549,9 +549,10 @@ const push = defineStep({
     // `pushFromSandbox` commits — the exact inverse of the `exec`-cwd trap
     // `verify` documents. base64-pipe so the source survives shell quoting
     // intact, then stage it explicitly.
-    const previewServerB64 = Buffer.from(PREVIEW_SERVER_SOURCE, "utf8").toString(
-      "base64",
-    );
+    const previewServerB64 = Buffer.from(
+      PREVIEW_SERVER_SOURCE,
+      "utf8",
+    ).toString("base64");
     await box.exec(
       `printf %s '${previewServerB64}' | base64 -d > "${cwd}/${PREVIEW_SERVER_FILE}"`,
       { timeout: 30_000 },
@@ -708,8 +709,14 @@ const review = defineStep({
       `Diff (stat):\n${diffStat}\n\n` +
       `Check output (tail):\n${checkTail}`;
 
-    const res = await ctx.sapiom.models.run({ prompt, system, maxTokens: 500 });
-    const rev = parseReview(res.output);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 500,
+      },
+    });
+    const rev = parseReview(ctx.sapiom.llm.textOf(res) ?? null);
     ctx.shared.set("review", rev);
     ctx.logger.info("self-review complete", { verdict: rev.verdict });
     return goto("summary", {});

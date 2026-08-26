@@ -11,7 +11,7 @@ this one instead of either.
 
 ```
 research  ──▶  dedupe   ──▶  write      ─▶ selfEdit ─┬─▶ illustrate ──▶ deliver  (terminal)
-(web.search)  (web.scrape)  (models.run)  (models.run) │  (images)       (email.send)
+(web.search)  (web.scrape)  (llm.run)  (llm.run) │  (images)       (email.send)
                                  ▲______loop, bounded___┘
 ```
 
@@ -22,12 +22,12 @@ research  ──▶  dedupe   ──▶  write      ─▶ selfEdit ─┬─▶
    near-duplicate stories (same URL, or titles that overlap heavily) and
    ranks the survivors, capped to the strongest few.
 3. **write** — hands the deduped, ranked sources to an LLM
-   (`ctx.sapiom.models.run` — the live x402-served model) to curate and write
+   (`ctx.sapiom.llm.run` — the live x402-served model) to curate and write
    this week's issue: a subject, a markdown body, and a header-image prompt.
    On a revision, it also gets its own rejected draft and the judge's
    critique.
 4. **selfEdit** — grades the draft against a fixed quality bar with a second,
-   chained `models.run` call. At or above the bar, or once the attempt cap is
+   chained `llm.run` call. At or above the bar, or once the attempt cap is
    hit, it moves on; otherwise it sends the draft and the critique back to
    `write` for one revision. Bounded, so the run always reaches a terminal.
 5. **illustrate** — generates a header image for the issue

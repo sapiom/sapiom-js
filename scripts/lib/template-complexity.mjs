@@ -34,7 +34,7 @@
  * camelCase near-miss `contentGeneration.images`. Matching one spelling only
  * would make the scorer quietly wrong on whichever side of that fix it is not.
  *
- * `models.run` / `models.coding` are deliberately absent — a step calling
+ * `llm.run` / `models.run` / `models.coding` are deliberately absent — a step calling
  * either is already declared `kind: "llm"` and counted as a judgment point, so
  * counting both would double-weight the same signal.
  */

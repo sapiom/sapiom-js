@@ -4,7 +4,7 @@
  * — the previous draft plus the judge's critique.
  *
  * Mirrors `judge.ts`: this file only builds a prompt string. The model call
- * itself lives in the `draft` step in `index.ts`, via `ctx.sapiom.models.run`.
+ * itself lives in the `draft` step in `index.ts`, via `ctx.sapiom.llm.run`.
  */
 
 /** What the previous attempt was, and why it fell short. */

@@ -125,12 +125,15 @@ function anomalyContext({ modelOutput } = {}) {
   return {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     sapiom: {
-      models: {
+      llm: {
         async run() {
           if (modelOutput === undefined) {
-            throw new Error("models.run should not be called with no metrics");
+            throw new Error("llm.run should not be called with no metrics");
           }
-          return { output: modelOutput };
+          return { content: [{ type: "text", text: modelOutput }] };
+        },
+        textOf(response) {
+          return response.content.find((block) => block.type === "text")?.text;
         },
       },
     },

@@ -14,7 +14,7 @@ cited digest is a strict subset of what `gather` → `synthesize` does here
 
 ```
 plan  ─▶  gather  ─▶  synthesize  ⇄  critique  ─▶  illustrate  ⇄  collectIllustration  ─▶  build  ─▶  publish  ─▶  mapDomain  ─▶  live
-(compute) (web.search × N, web.scrape) (models.run) (models.run, bounded revise loop) (contentGeneration.images, bounded fan-out) (models.coding) (deployPreview) (domains.dns)  (terminal)
+(compute) (web.search × N, web.scrape) (llm.run) (llm.run, bounded revise loop) (contentGeneration.images, bounded fan-out) (models.coding) (deployPreview) (domains.dns)  (terminal)
 ```
 
 1. **plan** — takes a `topic`, plans a couple of complementary search queries
@@ -23,7 +23,7 @@ plan  ─▶  gather  ─▶  synthesize  ⇄  critique  ─▶  illustrate  ⇄
    combined hits by normalized URL, then reads the survivors for full article
    text (`ctx.sapiom.search.scrape`), degrading per-item on failure. Bodies
    are truncated and stay bounded.
-3. **synthesize** — hands the sources to an LLM (`ctx.sapiom.models.run`) to
+3. **synthesize** — hands the sources to an LLM (`ctx.sapiom.llm.run`) to
    write a structured, cited report (title, tagline, summary, sections).
    Nothing gathered → stops here via `drafted`.
 4. **critique** — a second, independent model call (chained judgment) grades

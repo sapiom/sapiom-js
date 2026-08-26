@@ -127,7 +127,7 @@ test("judgment outranks graph size — the axis the rubric leads with", () => {
   });
   // Two chained model steps in a graph less than half the size.
   const chained = scoreTemplateComplexity({
-    capabilities: ["models.run"],
+    capabilities: ["llm.run"],
     steps: [
       { name: "parse", kind: "llm", next: ["rank"] },
       { name: "rank", kind: "llm", next: [] },

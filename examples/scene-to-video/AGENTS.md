@@ -1,12 +1,12 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Scene → Images → Video** — authored against `@sapiom/agent`. It is the richest onboarding template: a real multi-step generative pipeline, not a one-shot text-to-image. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`, `ctx.sapiom.contentGeneration.images.launch`, and `ctx.sapiom.contentGeneration.video.{launch,create}`).
+This project defines exactly one Sapiom agent in `index.ts` — **Scene → Images → Video** — authored against `@sapiom/agent`. It is the richest onboarding template: a real multi-step generative pipeline, not a one-shot text-to-image. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.llm.run`, `ctx.sapiom.contentGeneration.images.launch`, and `ctx.sapiom.contentGeneration.video.{launch,create}`).
 
 ## The graph
 
 ```
 decompose ─▶ keyframe ⇄ collectKeyframe ─▶ animate ⇄ collect ─▶ stitch ─▶ finalize
-(models.run) (images.launch)  (drain)     (video.launch) (drain) (video.create) (terminal)
+(llm.run) (images.launch)  (drain)     (video.launch) (drain) (video.create) (terminal)
 ```
 
 - **decompose** — an LLM decomposes the scene into a global style/identity **bible** + an ordered shot list. An explicit `dryRun: true` input terminates here with the plan only (no paid generation) — omitted, it always continues into real generation, clamped to a single shot when `scene` itself was omitted too.
@@ -24,7 +24,7 @@ decompose ─▶ keyframe ⇄ collectKeyframe ─▶ animate ⇄ collect ─▶ 
 ## Authoring
 
 - An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run, ... })`. Keep exactly one `defineAgent(...)` export.
-- **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. Note `ctx.sapiom.llm` does **not** exist; the LLM path is `ctx.sapiom.models.run({ prompt, system, maxTokens })`.
+- **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. One-shot LLM work uses `ctx.sapiom.llm.run({ request: { system, messages, max_tokens } })` through the gateway.
 - **Async pause/resume.** A launched capability (`images.launch`, `video.launch`) returns a dispatch handle; `return pauseUntilSignal(handle, { resumeStep })` suspends the step until the job's signal arrives. The step must also **declare** the edge: `pause: { signal, resumeStep }`. The resumed step receives an `ImageResultPayload` / `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl? }] }`).
 - **Why `keyframe`/`animate` are sequential, not one paused step per job at once.** A paused step waits on a single `(signal, correlationId)` pair. Launching every job up front and then draining would risk one finishing before we've paused on it — its resume signal would have nowhere to land. Launching shot `i` only after shot `i-1` resumes keeps a paused step always waiting before its job can complete. This is also why keyframes use `images.launch` rather than a concurrent `Promise.all` of `images.create`: the synchronous routed call holds its request open for the full generate+store, which meets Core's 30s router cap under fan-out — `launch` submits and returns as soon as the job is enqueued, so it never does.
 

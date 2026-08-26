@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom agent template: ingest errors via webhook or a scheduled pull, cluster + summarize them with an LLM (models.run), dedupe against a Postgres store, and email a daily digest.",
+  "description": "Sapiom agent template: ingest errors via webhook or a scheduled pull, cluster + summarize them with an LLM (llm.run), dedupe against a Postgres store, and email a daily digest.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
   },
   "dependencies": {
-    "@sapiom/agent": "^0.8.0",
-    "@sapiom/tools": "^0.24.0",
+    "@sapiom/agent": "^0.12.0",
+    "@sapiom/tools": "^0.31.0",
     "postgres": "^3.4.5",
     "zod": "^3.25.76 || ^4.0.0"
   },

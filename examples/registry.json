@@ -19,7 +19,7 @@
         "sandboxes.exec",
         "repositories.pushFromSandbox",
         "sandboxes.deployPreview",
-        "models.run"
+        "llm.run"
       ],
       "steps": [
         {
@@ -60,7 +60,7 @@
           "name": "review",
           "description": "Asks a model to self-review the diff and write a verdict, a summary, and what it would flag.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["summary"]
         },
         {
@@ -100,7 +100,7 @@
         "email.domain.search",
         "email.find",
         "web.scrape",
-        "models.run",
+        "llm.run",
         "email.verify",
         "database.get",
         "database.create",
@@ -125,7 +125,7 @@
           "name": "personalize",
           "description": "Ask the live model to write one specific opener per prospect, falling back to a safe generic line when it returns nothing usable.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["verify"]
         },
         {
@@ -182,7 +182,7 @@
       "sourcePath": "examples/content-repurposing-pipeline",
       "onboarding": { "eligible": true, "order": 2 },
       "capabilities": [
-        "models.run",
+        "llm.run",
         "contentGeneration.images",
         "contentGeneration.video",
         "fileStorage",
@@ -193,7 +193,7 @@
           "name": "repurpose",
           "description": "An LLM rewrites your source into every channel at once: the tweet thread, LinkedIn post, newsletter, pull-quotes, and a video script. If you set dryRun, it stops here and returns the copy.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["graphics"]
         },
         {
@@ -256,7 +256,7 @@
       "complexity": "advanced",
       "sourcePath": "examples/eval-gate",
       "onboarding": { "eligible": true, "order": 7 },
-      "capabilities": ["models.run"],
+      "capabilities": ["llm.run"],
       "steps": [
         {
           "name": "parse",
@@ -268,14 +268,14 @@
           "name": "draft",
           "description": "Write the piece from the brief. On a revision, address the rejected draft and the judge's critique too.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["judge"]
         },
         {
           "name": "judge",
           "description": "Score the draft against your rubric with a second model call and parse a 0-to-1 score plus a critique.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["decide"]
         },
         {
@@ -314,7 +314,7 @@
         "web.scrape",
         "browser.session",
         "browser.screenshot",
-        "models.run"
+        "llm.run"
       ],
       "steps": [
         {
@@ -335,7 +335,7 @@
           "name": "audit",
           "description": "Ask a model to read every crawled page's content in one call and flag concrete content and structure issues.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["linkCheck"]
         },
         {
@@ -379,7 +379,7 @@
       "capabilities": [
         "web.search",
         "web.scrape",
-        "models.run",
+        "llm.run",
         "contentGeneration.images",
         "email.send"
       ],
@@ -402,14 +402,14 @@
           "name": "write",
           "description": "Hand the deduped sources to an LLM to curate them and write this week's issue: a subject, a body that cites each source, and a header-image prompt.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["selfEdit"]
         },
         {
           "name": "selfEdit",
           "description": "Grade the draft against a fixed quality bar with a second model call; below the bar it revises once via write, otherwise it moves on.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["write", "illustrate"]
         },
         {
@@ -446,7 +446,7 @@
       "cadence": "on-event",
       "complexity": "involved",
       "sourcePath": "examples/nl-db-query-endpoint",
-      "capabilities": ["database.get", "models.run", "sandboxes.deployPreview"],
+      "capabilities": ["database.get", "llm.run", "sandboxes.deployPreview"],
       "steps": [
         {
           "name": "validate",
@@ -465,7 +465,7 @@
           "name": "plan",
           "description": "Translates the sample question into SQL with an LLM, or, for the built-in demo question, uses a fixed known-safe SELECT so the zero-setup path needs no model.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["guard"]
         },
         {
@@ -538,7 +538,7 @@
       "sourcePath": "examples/proposal-generator",
       "onboarding": { "eligible": true, "order": 5 },
       "capabilities": [
-        "models.run",
+        "llm.run",
         "sandboxes.create",
         "fileStorage.upload",
         "email.send"
@@ -548,7 +548,7 @@
           "name": "draft",
           "description": "An LLM turns the request into a structured proposal, including a title, summary, scope, and priced line items, then the totals are computed in code, not trusted from the model.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["render", "rejected"]
         },
         {
@@ -615,7 +615,7 @@
       "capabilities": [
         "web.search",
         "web.scrape",
-        "models.run",
+        "llm.run",
         "models.coding",
         "contentGeneration.images",
         "sandboxes.deployPreview",
@@ -639,14 +639,14 @@
           "name": "synthesize",
           "description": "Hand the sources to an LLM to write a structured, cited report, or revise one after a critique. No sources at all stops here with an empty report.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["critique", "drafted"]
         },
         {
           "name": "critique",
           "description": "Grade the report against a fixed editorial rubric; below the bar with attempts left, send it back to synthesize for a revision, bounded by maxDraftAttempts.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["synthesize", "illustrate", "drafted"]
         },
         {
@@ -728,7 +728,7 @@
       "complexity": "advanced",
       "sourcePath": "examples/scene-to-video",
       "capabilities": [
-        "models.run",
+        "llm.run",
         "contentGeneration.images",
         "contentGeneration.video"
       ],
@@ -737,7 +737,7 @@
           "name": "decompose",
           "description": "An LLM turns your scene into a style guide and an ordered shot list. A zero-setup run plans a single shot; pass dryRun to stop here and return just the plan.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["keyframe"]
         },
         {
@@ -801,7 +801,7 @@
       "capabilities": [
         "database.get",
         "database.create",
-        "models.run",
+        "llm.run",
         "sandboxes.create",
         "fileStorage.upload",
         "fileStorage.getDownloadUrl",
@@ -819,14 +819,14 @@
           "name": "detectAnomalies",
           "description": "A model flags the one table most worth attention, trusting only labels the snapshot actually returned.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["narrate"]
         },
         {
           "name": "narrate",
           "description": "A model writes the narrative around the movement, leading with the flagged anomaly.",
           "kind": "llm",
-          "capability": "models.run",
+          "capability": "llm.run",
           "next": ["followUp"]
         },
         {

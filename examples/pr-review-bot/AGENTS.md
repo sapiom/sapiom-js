@@ -7,7 +7,7 @@ pause/resume spine: `watch` registers a PR webhook and returns
 `review` (the resume target) receives the PR payload as its input, hands the diff
 to a coding agent (`ctx.sapiom.models.coding.run`) that checks the code out and
 analyzes it; `assess` turns the findings into a structured review with
-`ctx.sapiom.models.run`; then `reportEmail` / `reportSlack` post it.
+`ctx.sapiom.llm.run`; then `reportEmail` / `reportSlack` post it.
 
 ## The pause/resume spine
 
@@ -24,9 +24,8 @@ analyzes it; `assess` turns the findings into a structured review with
   the pause.
 - `pauseUntilSignal` is a **runtime primitive, not a metered capability**. The
   billed calls are the coding run (`models.coding.run`), the model summary
-  (`models.run`) and the email send (`email`). The Slack post goes out on the
+  (`llm.run`) and the email send (`email`). The Slack post goes out on the
   injected `SLACK_BOT_TOKEN` via a raw `fetch`, which is not a metered capability.
-  Note: `ctx.sapiom.llm` does **not** exist — use `models.run`.
 
 ## Read-only review
 
@@ -59,7 +58,14 @@ A real `run` pauses at `watch`. To resume it without a real webhook, fire the si
 {
   "signal": "pr.opened",
   "correlationId": "<executionId of the paused run>",
-  "payload": { "repo": { "owner": "acme", "name": "api" }, "number": 42, "title": "…", "branch": "feat/x", "baseBranch": "main", "diff": "…" }
+  "payload": {
+    "repo": { "owner": "acme", "name": "api" },
+    "number": 42,
+    "title": "…",
+    "branch": "feat/x",
+    "baseBranch": "main",
+    "diff": "…"
+  }
 }
 ```
 

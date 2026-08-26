@@ -5,7 +5,7 @@ authored against `@sapiom/agent`. It fans one long-form source (a blog post or
 transcript) out into a multi-channel content pack: tweet thread, LinkedIn post,
 newsletter, quote graphics, and a short teaser clip — then fans the finished
 pack back out to every recipient on the list. Inside a step's `run`, Sapiom
-capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`,
+capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.llm.run`,
 `ctx.sapiom.contentGeneration.images.launch`,
 `ctx.sapiom.contentGeneration.video.launch`, `ctx.sapiom.fileStorage`, and
 `ctx.sapiom.email`).
@@ -14,14 +14,14 @@ capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`,
 
 ```
 repurpose ─▶ graphics ⇄ collectGraphic ─▶ clip ⇄ collectClip ─▶ package ─▶ deliver
-(models.run) (images.launch) (drain)      (video.launch) (drain) (fileStorage) (email.send × N)
+(llm.run) (images.launch) (drain)      (video.launch) (drain) (fileStorage) (email.send × N)
 ```
 
 - **repurpose** — an LLM rewrites the source into every channel at once and returns
   minified JSON. A `dryRun` input terminates here with the copy only (no paid media).
 - **graphics ⇄ collectGraphic** — one quote graphic at a time, launched async
   (`images.launch`) and paused on (`pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep:
-  'collectGraphic' }`); `collectGraphic` records it and loops back for the next quote or
+'collectGraphic' }`); `collectGraphic` records it and loops back for the next quote or
   advances once every graphic is in. Sequential, not a concurrent `Promise.all` — see
   "Why sequential" below.
 - **clip ⇄ collectClip** — launches an async text-to-video job (a cataloged
@@ -64,8 +64,9 @@ that wall no longer applies.
   step const is `packageStep`, registered under the `package` key.)
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by
   `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong
-  capability or method name fails typecheck. Note `ctx.sapiom.llm` does **not** exist;
-  the LLM path is `ctx.sapiom.models.run({ prompt, system, maxTokens })`.
+  capability or method name fails typecheck. One-shot LLM work uses
+  `ctx.sapiom.llm.run({ request: { system, messages, max_tokens } })` through the
+  gateway.
 - **Async pause/resume.** A launched capability (`images.launch`, `video.launch`)
   returns a dispatch handle; `return pauseUntilSignal(handle, { resumeStep })`
   suspends the step until the job's signal arrives. The step must also **declare**

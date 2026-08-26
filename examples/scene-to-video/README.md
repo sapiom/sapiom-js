@@ -10,10 +10,10 @@ agent from a plain script.
 
 ```
 decompose ──▶ keyframe ⇄ collectKeyframe ──▶ animate ⇄ collect ──▶ stitch ──▶ finalize
-(models.run)  (images.launch)  (drain)      (video.launch) (drain) (video.create) (terminal)
+(llm.run)  (images.launch)  (drain)      (video.launch) (drain) (video.create) (terminal)
 ```
 
-1. **decompose** — an LLM (`ctx.sapiom.models.run`) turns the scene into a global
+1. **decompose** — an LLM (`ctx.sapiom.llm.run`) turns the scene into a global
    style/identity **bible** plus an ordered shot list (each shot: `image_prompt`,
    `motion_prompt`, `duration`, `transition`). Run it with no `scene` and it plans
    (and later shoots) the built-in sample scene as a single shot.

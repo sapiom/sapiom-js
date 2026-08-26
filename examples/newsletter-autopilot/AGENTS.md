@@ -3,12 +3,12 @@
 This project defines exactly one Sapiom agent in `index.ts` — **Newsletter
 Autopilot** — authored against `@sapiom/agent`. It has six steps: `research`
 (calls `web.search`) → `dedupe` (calls `web.scrape`, then dedupes/ranks
-in-process) → `write` (calls `models.run`, the live LLM) → `selfEdit` (calls
-`models.run` again to grade the draft, looping back to `write` at most once)
+in-process) → `write` (calls `llm.run`, the live LLM) → `selfEdit` (calls
+`llm.run` again to grade the draft, looping back to `write` at most once)
 → `illustrate` (calls `contentGeneration.images`) → `deliver` (emails the
 issue to a list, or to a demo inbox with none set). Inside a step's `run`,
 Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g.
-`ctx.sapiom.search.webSearch(...)`, `ctx.sapiom.models.run(...)`,
+`ctx.sapiom.search.webSearch(...)`, `ctx.sapiom.llm.run(...)`,
 `ctx.sapiom.contentGeneration.images.create(...)`,
 `ctx.sapiom.email.messages.send(...)`).
 
@@ -35,7 +35,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` / `web.scrape` / `models.run` / `images.create` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `deliver` skips the (stubbed) send and returns the preview. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` / `web.scrape` / `llm.run` / `images.create` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `deliver` skips the (stubbed) send and returns the preview. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed search + scrape + two-model write/self-edit + header image, and deliver the issue. Attach the `schedule` as a cron trigger to run it weekly.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

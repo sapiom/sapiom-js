@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Turn what was said on a call into an updated CRM record without hand-copying anything. Pull the contact, the fields to change, and the action items out of a transcript, write them to a database deduped against prior meetings, and email a summary.",
-  "longDescription": "Hand it a meeting transcript and it does the CRM busywork: who the call was with, what to change, and the action items. Set `webhook: true` to wait for your note-taker to push one in. `extract` (`models.run`) returns structured data; `upsert` writes to a small Postgres CRM store keyed by email, without wiping fields the call did not mention and recording each item under a stable id so a re-run never double-writes. `summary` emails a recap, and `dryRun` skips the database and mail.",
+  "longDescription": "Hand it a meeting transcript and it does the CRM busywork: who the call was with, what to change, and the action items. Set `webhook: true` to wait for your note-taker to push one in. `extract` (`llm.run`) returns structured data; `upsert` writes to a small Postgres CRM store keyed by email, without wiping fields the call did not mention and recording each item under a stable id so a re-run never double-writes. `summary` emails a recap, and `dryRun` skips the database and mail.",
   "useCases": [
     "Transcript to CRM record",
     "Action items extracted",

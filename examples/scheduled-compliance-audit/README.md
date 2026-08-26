@@ -11,7 +11,7 @@ person reviewed and approved, so it is never archived automatically.
 
 ```
 collect ──▶ audit ─(pause: attestation.signoff, $0 while idle)─▶ onSignoff
-(web.scrape)  (models.run)                                          │
+(web.scrape)  (llm.run)                                          │
                                              reject ◀────────────────┼─▶ approve
                                                │                      ▼
                                            rejected (terminal)   archive (fileStorage, terminal)
@@ -22,7 +22,7 @@ collect ──▶ audit ─(pause: attestation.signoff, $0 while idle)─▶ onS
    degrading per-item on failure. Bodies are truncated and stay bounded — they
    never enter shared state.
 2. **audit** — hands the collected state and your `policy` to an LLM
-   (`ctx.sapiom.models.run` — the live x402-served model) to produce a structured
+   (`ctx.sapiom.llm.run` — the live x402-served model) to produce a structured
    report: an overall verdict plus one check per requirement, each with evidence
    and a remediation for failures.
 3. **review** — `pauseUntilSignal({ signal: "attestation.signoff", resumeStep: "onSignoff" })`.
@@ -39,8 +39,16 @@ Input:
 ```json
 {
   "resources": [
-    { "id": "api-config", "url": "https://example.com/security.txt", "label": "API security policy" },
-    { "id": "status", "url": "https://example.com/status", "label": "Service status" }
+    {
+      "id": "api-config",
+      "url": "https://example.com/security.txt",
+      "label": "API security policy"
+    },
+    {
+      "id": "status",
+      "url": "https://example.com/status",
+      "label": "Service status"
+    }
   ],
   "policy": "All services must publish a security contact and enforce TLS. Status page must show 99.9% uptime.",
   "schedule": "0 6 * * 1",

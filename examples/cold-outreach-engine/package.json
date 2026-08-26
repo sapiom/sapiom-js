@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom agent template: enrich a lead list, scrape each company site, write personalized first lines (models.run), verify deliverability, then drip touches with durable waits between them.",
+  "description": "Sapiom agent template: enrich a lead list, scrape each company site, write personalized first lines (llm.run), verify deliverability, then drip touches with durable waits between them.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
   },
   "dependencies": {
-    "@sapiom/agent": "^0.8.0",
-    "@sapiom/tools": "^0.24.0",
+    "@sapiom/agent": "^0.12.0",
+    "@sapiom/tools": "^0.31.0",
     "postgres": "^3.4.5",
     "zod": "^3.25.76 || ^4.0.0"
   },

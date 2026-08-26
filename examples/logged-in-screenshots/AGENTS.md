@@ -9,7 +9,7 @@ resolving):
 off-ramp when `siteUrl` isn't a usable URL. Inside a step's `run`, Sapiom
 capabilities are pre-auth'd on `ctx.sapiom` (here: `ctx.sapiom.search.scrape`,
 `ctx.sapiom.browserAutomation.withSession` + the session-bound
-`session.screenshot`, and `ctx.sapiom.models.run`).
+`session.screenshot`, and `ctx.sapiom.llm.run`).
 
 ## Authoring
 
@@ -31,7 +31,7 @@ capabilities are pre-auth'd on `ctx.sapiom` (here: `ctx.sapiom.search.scrape`,
   `finally`, so the session can't leak at the $1.00 ceiling. Keep the render
   loop inside the `withSession` callback.
 - **The audit is one model call.** `audit` reads every crawled page's content
-  in a single `ctx.sapiom.models.run` call rather than one call per page —
+  in a single `ctx.sapiom.llm.run` call rather than one call per page —
   keep it that way; chaining per-page model calls would compound drift and
   cost with no benefit here.
 - **Every page yields a row.** A page that fails to crawl, render, or resolve

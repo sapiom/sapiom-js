@@ -22,7 +22,7 @@ plan ─▶ bump ──(pause: models.coding.result → verify)──▶ verify 
 3. **verify** — re-attaches the coding run's sandbox, runs `git diff --stat`, then
    installs and runs the test suite (`sandboxes.exec`). A failed coding run, a
    failed install, or a non-zero test exit all route to `rejected`.
-4. **assess** — a model (`models.run`) rates the upgrade `low`/`medium`/`high`
+4. **assess** — a model (`llm.run`) rates the upgrade `low`/`medium`/`high`
    from the dependency diff. Above `maxAutoRisk` (default `medium`) → `held`.
 5. **publish** — pushes the bumped branch from the sandbox and archives the
    triage report. **held** / **rejected** archive the report but never push.

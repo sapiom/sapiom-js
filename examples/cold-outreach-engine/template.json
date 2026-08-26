@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Turns a list of target companies into personalized outreach that follows up on its own. It finds a real contact at each company, verifies the address, writes a first line from what it learned, and stops the moment someone replies.",
-  "longDescription": "Give it a list of companies, one domain each and optionally a person, and it handles the cold outreach prep. It finds a real contact through email search (`findEmail` when you name the person, `domainSearch` when you don't), reads each site for context, and asks a model (`models.run`) to write an opener per prospect, checking every address for deliverability. It then runs the sequence itself, pausing durably between touches, and drops anyone the moment they reply. Set `dryRun` to research and write without sending.",
+  "longDescription": "Give it a list of companies, one domain each and optionally a person, and it handles the cold outreach prep. It finds a real contact through email search (`findEmail` when you name the person, `domainSearch` when you don't), reads each site for context, and asks a model (`llm.run`) to write an opener per prospect, checking every address for deliverability. It then runs the sequence itself, pausing durably between touches, and drops anyone the moment they reply. Set `dryRun` to research and write without sending.",
   "useCases": [
     "Verified contact per company",
     "Personalized first line",

@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Research a topic on a schedule and email a short, sourced brief. Searches the web, reads the top results in full, and links every claim back to where it came from. Scrapes fail routinely; when one does it keeps the snippet and still sends a brief from the survivors.",
-  "longDescription": "You give it a topic and a schedule. On each tick `search` (`web.search`) finds candidates, `scrape` reads them for full text, `curate` (`models.run`) ranks and synthesizes them into a sourced brief, and `deliver` emails it with every claim linked to its source. Scrapes fail routinely on paywalls and timeouts; when one does it keeps the snippet and still sends a brief from the survivors. With no `deliverTo` it emails the agent's own demo inbox, and `dryRun` returns the brief as a preview without sending.",
+  "longDescription": "You give it a topic and a schedule. On each tick `search` (`web.search`) finds candidates, `scrape` reads them for full text, `curate` (`llm.run`) ranks and synthesizes them into a sourced brief, and `deliver` emails it with every claim linked to its source. Scrapes fail routinely on paywalls and timeouts; when one does it keeps the snippet and still sends a brief from the survivors. With no `deliverTo` it emails the agent's own demo inbox, and `dryRun` returns the brief as a preview without sending.",
   "useCases": [
     "Sourced brief on a cadence",
     "Every claim links out",

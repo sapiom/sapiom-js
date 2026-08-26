@@ -44,6 +44,19 @@ function stepContext({ seed = {}, sapiom = {} } = {}) {
   };
 }
 
+function llmDouble(run) {
+  return {
+    run,
+    textOf(response) {
+      return response.content.find((block) => block.type === "text")?.text;
+    },
+  };
+}
+
+function llmText(text) {
+  return { content: [{ type: "text", text }] };
+}
+
 /**
  * Minimal ctx double for `publish`. Records sandbox attaches so we can assert
  * none happen on a non-deployable environment; stubs `repositories.get`
@@ -162,8 +175,16 @@ test("gather dedupes candidates across queries by normalized URL before scraping
         webSearch: async ({ query }) => ({
           query,
           results: [
-            { title: "Same page", url: "https://Example.com/a/", snippet: "s1" },
-            { title: "Same page (www)", url: "https://www.example.com/a", snippet: "s2" },
+            {
+              title: "Same page",
+              url: "https://Example.com/a/",
+              snippet: "s1",
+            },
+            {
+              title: "Same page (www)",
+              url: "https://www.example.com/a",
+              snippet: "s2",
+            },
           ],
         }),
         scrape: async ({ url }) => {
@@ -193,12 +214,10 @@ test("synthesize stops at drafted, without calling the model, when gather found 
   const ctx = stepContext({
     seed: { topic: "empty topic", audience: "a general audience" },
     sapiom: {
-      models: {
-        run: async () => {
-          modelCalled = true;
-          return { output: "{}" };
-        },
-      },
+      llm: llmDouble(async () => {
+        modelCalled = true;
+        return llmText("{}");
+      }),
     },
   });
   const directive = await agent.steps.synthesize.run({ sources: [] }, ctx);
@@ -225,16 +244,14 @@ test("synthesize reuses previously gathered sources and carries the critique for
       critique: "too thin",
     },
     sapiom: {
-      models: {
-        run: async ({ prompt }) => {
-          assert.match(prompt, /CRITIQUE/);
-          assert.match(prompt, /too thin/);
-          return {
-            output:
-              '{"title":"New","tagline":"t","summary":"s","sections":[{"heading":"H","body":"b [1]"}]}',
-          };
-        },
-      },
+      llm: llmDouble(async ({ request }) => {
+        const prompt = request.messages[0].content;
+        assert.match(prompt, /CRITIQUE/);
+        assert.match(prompt, /too thin/);
+        return llmText(
+          '{"title":"New","tagline":"t","summary":"s","sections":[{"heading":"H","body":"b [1]"}]}',
+        );
+      }),
     },
   });
   // No `sources` in the payload — the revise loop-back from `critique`.
@@ -264,12 +281,15 @@ test("critique revises when the score is below threshold and attempts remain", a
       dryRun: false,
     },
     sapiom: {
-      models: {
-        run: async () => ({ output: '{"score": 0.5, "rationale": "too thin"}' }),
-      },
+      llm: llmDouble(async () =>
+        llmText('{"score": 0.5, "rationale": "too thin"}'),
+      ),
     },
   });
-  const directive = await agent.steps.critique.run({ report: SAMPLE_REPORT }, ctx);
+  const directive = await agent.steps.critique.run(
+    { report: SAMPLE_REPORT },
+    ctx,
+  );
   assert.equal(directive.stepName, "synthesize");
   assert.equal(ctx.shared.get("iteration"), 2);
   assert.equal(ctx.shared.get("previousReport"), SAMPLE_REPORT);
@@ -286,12 +306,15 @@ test("critique proceeds to illustrate once the score clears the threshold", asyn
       dryRun: false,
     },
     sapiom: {
-      models: {
-        run: async () => ({ output: '{"score": 0.9, "rationale": "solid"}' }),
-      },
+      llm: llmDouble(async () =>
+        llmText('{"score": 0.9, "rationale": "solid"}'),
+      ),
     },
   });
-  const directive = await agent.steps.critique.run({ report: SAMPLE_REPORT }, ctx);
+  const directive = await agent.steps.critique.run(
+    { report: SAMPLE_REPORT },
+    ctx,
+  );
   assert.equal(directive.stepName, "illustrate");
   assert.equal(directive.input.reviewPassed, true);
   assert.equal(directive.input.reviewScore, 0.9);
@@ -307,12 +330,15 @@ test("critique stops revising once maxDraftAttempts is exhausted, even below thr
       dryRun: false,
     },
     sapiom: {
-      models: {
-        run: async () => ({ output: '{"score": 0.4, "rationale": "still thin"}' }),
-      },
+      llm: llmDouble(async () =>
+        llmText('{"score": 0.4, "rationale": "still thin"}'),
+      ),
     },
   });
-  const directive = await agent.steps.critique.run({ report: SAMPLE_REPORT }, ctx);
+  const directive = await agent.steps.critique.run(
+    { report: SAMPLE_REPORT },
+    ctx,
+  );
   assert.equal(directive.stepName, "illustrate");
   assert.equal(directive.input.reviewPassed, false);
   assert.equal(directive.input.reviewIterations, 2);
@@ -328,12 +354,15 @@ test("critique routes to drafted, not illustrate, when dryRun is set", async () 
       dryRun: true,
     },
     sapiom: {
-      models: {
-        run: async () => ({ output: '{"score": 0.9, "rationale": "fine"}' }),
-      },
+      llm: llmDouble(async () =>
+        llmText('{"score": 0.9, "rationale": "fine"}'),
+      ),
     },
   });
-  const directive = await agent.steps.critique.run({ report: SAMPLE_REPORT }, ctx);
+  const directive = await agent.steps.critique.run(
+    { report: SAMPLE_REPORT },
+    ctx,
+  );
   assert.equal(directive.stepName, "drafted");
   assert.equal(directive.input.reason, "dry-run");
   assert.equal(directive.input.reviewPassed, true);
@@ -354,7 +383,9 @@ const TWO_SECTION_REPORT = {
 };
 
 test("illustrate skips straight to build when illustrationCount is 0", async () => {
-  const ctx = stepContext({ seed: { illustrationCount: 0, illustrationIndex: 0 } });
+  const ctx = stepContext({
+    seed: { illustrationCount: 0, illustrationIndex: 0 },
+  });
   const directive = await agent.steps.illustrate.run(
     {
       report: TWO_SECTION_REPORT,
@@ -381,7 +412,10 @@ test("illustrate degrades honestly (to collectIllustration with no output) when 
       },
     },
   });
-  const directive = await agent.steps.illustrate.run({ report: TWO_SECTION_REPORT }, ctx);
+  const directive = await agent.steps.illustrate.run(
+    { report: TWO_SECTION_REPORT },
+    ctx,
+  );
   assert.equal(directive.stepName, "collectIllustration");
   assert.deepEqual(directive.input, { outputs: [] });
 });
@@ -395,7 +429,10 @@ test("collectIllustration continues without an image when the result carries no 
       illustrationIndex: 0,
     },
   });
-  const directive = await agent.steps.collectIllustration.run({ outputs: [] }, ctx);
+  const directive = await agent.steps.collectIllustration.run(
+    { outputs: [] },
+    ctx,
+  );
   assert.equal(directive.stepName, "illustrate");
   assert.deepEqual(ctx.shared.get("illustrations"), []);
   assert.equal(ctx.shared.get("illustrationIndex"), 1);

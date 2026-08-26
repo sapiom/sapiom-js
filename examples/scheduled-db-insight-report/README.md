@@ -8,7 +8,7 @@ numbers into charts in a sandbox, and email the finished report.
 
 ```
 snapshot  ──▶  detectAnomalies  ──▶  narrate  ──▶  followUp  ──▶  chart  ──▶  deliver
-(database)     (models.run)         (models.run)   (database)    (sandbox +   (email)
+(database)     (llm.run)         (llm.run)   (database)    (sandbox +   (email)
                                                                   fileStorage)
 ```
 
@@ -16,7 +16,7 @@ snapshot  ──▶  detectAnomalies  ──▶  narrate  ──▶  followUp  �
    (`ctx.sapiom.database`) and normalizes each result into a metric: a labeled
    series or a scalar KPI. The defaults introspect the database's own catalog
    (rows per table, table count, size), so it works on any database with no setup.
-2. **detectAnomalies** — hands the metrics to an LLM (`ctx.sapiom.models.run`) to
+2. **detectAnomalies** — hands the metrics to an LLM (`ctx.sapiom.llm.run`) to
    pick out the single most notable outlier or change, citing the actual figures. A
    deterministic fallback (the largest series point vs. the runner-up) covers an
    empty snapshot or an unusable model response.

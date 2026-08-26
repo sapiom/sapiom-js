@@ -23,9 +23,9 @@ import { z } from "zod/v4";
  *     a batch as the `errors.pushed` signal. No polling loop, no billed idle.
  *
  * Then, in one legible graph:
- *   collect ──▶ triage (models.run) ──▶ dedupe (database) ──▶ digest (email)
+ *   collect ──▶ triage (llm.run) ──▶ dedupe (database) ──▶ digest (email)
  *
- *   - **triage** hands the raw errors to an LLM (`ctx.sapiom.models.run` — the
+ *   - **triage** hands the raw errors to an LLM (`ctx.sapiom.llm.run` — the
  *     live x402-served model) to cluster them into a handful of issues, each
  *     with a stable `fingerprint`, a title, a severity, and an occurrence count.
  *   - **dedupe** looks each fingerprint up in a Postgres table the digest owns.
@@ -401,8 +401,14 @@ const triage = defineStep({
       'low","sampleMessage":string,"count":number}]}.';
     const prompt = `ERROR BATCH (${errors.length} entries):\n${rendered}`;
 
-    const res = await ctx.sapiom.models.run({ system, prompt, maxTokens: 900 });
-    const clusters = parseClusters(res.output, errors);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 900,
+      },
+    });
+    const clusters = parseClusters(ctx.sapiom.llm.textOf(res) ?? null, errors);
     ctx.logger.info("triaged batch into clusters", {
       errors: errors.length,
       clusters: clusters.length,

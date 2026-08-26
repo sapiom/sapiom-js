@@ -1,8 +1,8 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Scheduled Research Brief** — authored against `@sapiom/agent`. It has four steps: `search` (calls `web.search`) → `scrape` (calls `web.scrape`) → `curate` (calls `models.run`, the live LLM) → `deliver` (emails the brief). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.search.webSearch(...)`, `ctx.sapiom.models.run(...)`, `ctx.sapiom.email.messages.send(...)`).
+This project defines exactly one Sapiom agent in `index.ts` — **Scheduled Research Brief** — authored against `@sapiom/agent`. It has four steps: `search` (calls `web.search`) → `scrape` (calls `web.scrape`) → `curate` (calls `llm.run`, the live LLM) → `deliver` (emails the brief). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.search.webSearch(...)`, `ctx.sapiom.llm.run(...)`, `ctx.sapiom.email.messages.send(...)`).
 
-It is the scheduled, LLM-curated, delivered evolution of `web-research-digest`. That template formats a digest in-process (no LLM, no delivery); this one adds real LLM curation (`models.run`) and email delivery on a cron cadence.
+It is the scheduled, LLM-curated, delivered evolution of `web-research-digest`. That template formats a digest in-process (no LLM, no delivery); this one adds real LLM curation (`llm.run`) and email delivery on a cron cadence.
 
 ## Authoring
 
@@ -18,7 +18,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` / `web.scrape` / `models.run` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `deliver` skips the (stubbed) send and returns the preview. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` / `web.scrape` / `llm.run` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `deliver` skips the (stubbed) send and returns the preview. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed search + scrape + LLM curation, and deliver the brief. Attach the `schedule` as a cron trigger to run it on a cadence.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

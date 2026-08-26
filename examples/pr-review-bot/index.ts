@@ -21,7 +21,7 @@ import { z } from "zod/v4";
  *                  checks out the code in a sandbox and analyzes it, with a
  *                  standing instruction to flag any change that ships without
  *                  matching test coverage.
- *   2. `assess`  — an LLM (`models.run`) turns those raw findings into a short,
+ *   2. `assess`  — an LLM (`llm.run`) turns those raw findings into a short,
  *                  structured review: a verdict, a summary, and a list of the
  *                  missing tests.
  *   3. report    — posts the review through the configured channel: your own
@@ -465,8 +465,14 @@ const assess = defineStep({
       `PR #${pr.number ?? "?"}: ${pr.title ?? "(untitled)"}\n\n` +
       `Coding agent findings:\n${findings}`;
 
-    const res = await ctx.sapiom.models.run({ prompt, system, maxTokens: 600 });
-    const rev = parseReview(res.output);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 600,
+      },
+    });
+    const rev = parseReview(ctx.sapiom.llm.textOf(res) ?? null);
     ctx.shared.set("review", rev);
     ctx.logger.info("review assessed", {
       verdict: rev.verdict,

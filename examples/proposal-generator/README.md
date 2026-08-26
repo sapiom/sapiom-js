@@ -11,7 +11,7 @@ nothing would ever fire an unconfigured approval signal.
 
 ```
 draft ─▶ render ─▶ review ─┬─(pause: proposal.decision, $0 while idle)─▶ onDecision
-(models.run) (sandbox +    │ (approver set)                                 │
+(llm.run) (sandbox +    │ (approver set)                                 │
              fileStorage)  │                            approve ◀─────────┼─▶ reject
                            │                              ▼               ▼
                            │                            send          rejected
@@ -20,7 +20,7 @@ draft ─▶ render ─▶ review ─┬─(pause: proposal.decision, $0 while i
                                              (terminal)
 ```
 
-1. **draft** — an LLM (`ctx.sapiom.models.run`) turns the `request` into a
+1. **draft** — an LLM (`ctx.sapiom.llm.run`) turns the `request` into a
    structured proposal: title, summary, scope, and priced line items. Then
    deterministic code totals the line items (the money is never trusted from the
    model). Reversible. Omit `request` and it drafts against a built-in sample

@@ -20,7 +20,7 @@ import { buildJudgePrompt, parseScore } from "./judge.js";
  *   parse ─▶ draft ─▶ judge ─▶ decide ─┬─▶ draft   (score < threshold, attempts remain — loop)
  *                        (loop back)   └─▶ publish (score >= threshold, OR attempts exhausted)
  *
- * `draft` and `judge` are both ordinary `models.run` calls — the judge reads
+ * `draft` and `judge` are both ordinary `llm.run` calls — the judge reads
  * the draft `draft` just wrote, so this is chained judgment: the second
  * model's input is the first model's output, and drift can compound across a
  * revision. `decide` is pure branch logic, no model call: it either loops
@@ -90,9 +90,7 @@ const entryInputSchema = z
       .min(0)
       .max(1)
       .default(DEFAULT_THRESHOLD)
-      .describe(
-        "Pass bar in [0,1]. score >= threshold publishes immediately.",
-      ),
+      .describe("Pass bar in [0,1]. score >= threshold publishes immediately."),
     maxIterations: z
       .number()
       .int()
@@ -106,13 +104,13 @@ const entryInputSchema = z
       .string()
       .optional()
       .describe(
-        "Draft-model alias the models capability knows (default: the configured default model).",
+        "Optional routing label for the draft call. Omit it to use the platform default.",
       ),
     judgeModel: z
       .string()
       .optional()
       .describe(
-        "Judge-model alias (default: the configured judge model).",
+        "Optional routing label for the judge call. Omit it to use the platform default.",
       ),
   })
   .meta({
@@ -162,7 +160,7 @@ const parse = defineStep({
 });
 
 // ---------------------------------------------------------------------------
-// Step 2 — draft: write (or revise) the piece. One models.run call.
+// Step 2 — draft: write (or revise) the piece. One llm.run call.
 // ---------------------------------------------------------------------------
 
 const draft = defineStep({
@@ -187,12 +185,14 @@ const draft = defineStep({
     // The load-bearing seam: an ordinary metered LLM call. An empty reply
     // means the writer produced nothing real to grade, so we throw and let
     // the engine retry rather than judging a blank page.
-    const res = await ctx.sapiom.models.run({
-      prompt,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 500,
+      },
       model: ctx.shared.get("model"),
-      maxTokens: 500,
     });
-    const text = (res.output ?? "").trim();
+    const text = (ctx.sapiom.llm.textOf(res) ?? "").trim();
     if (!text) {
       throw new Error(
         "self-editing writer: draft model returned no text to grade",
@@ -203,7 +203,7 @@ const draft = defineStep({
 });
 
 // ---------------------------------------------------------------------------
-// Step 3 — judge: score the draft against the rubric. One models.run call.
+// Step 3 — judge: score the draft against the rubric. One llm.run call.
 // ---------------------------------------------------------------------------
 
 interface DraftPayload {
@@ -225,12 +225,14 @@ const judge = defineStep({
     // Chained judgment: this call's input is the `draft` step's model output,
     // not caller-supplied data — a malformed reply still throws in
     // `parseScore` and the engine retries, same contract as `draft`.
-    const res = await ctx.sapiom.models.run({
-      prompt,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 256,
+      },
       model: ctx.shared.get("judgeModel"),
-      maxTokens: 256,
     });
-    const { score, rationale } = parseScore(res.output ?? "");
+    const { score, rationale } = parseScore(ctx.sapiom.llm.textOf(res) ?? "");
     ctx.logger.info("judge: scored the draft against the rubric", { score });
     return goto("decide", { draft: input.draft, score, critique: rationale });
   },
@@ -259,7 +261,10 @@ const decide = defineStep({
   next: ["draft", "publish"],
   async run(input: DecideInput, ctx: AgentExecutionContext<WriterShared>) {
     const threshold = must(ctx.shared.get("threshold"), "threshold");
-    const maxIterations = must(ctx.shared.get("maxIterations"), "maxIterations");
+    const maxIterations = must(
+      ctx.shared.get("maxIterations"),
+      "maxIterations",
+    );
     const iteration = must(ctx.shared.get("iteration"), "iteration");
     const passed = input.score >= threshold;
     const exhausted = iteration >= maxIterations;
@@ -305,10 +310,9 @@ const publish = defineStep({
   async run(input: PublishInput, ctx: AgentExecutionContext<WriterShared>) {
     const threshold = must(ctx.shared.get("threshold"), "threshold");
     const note = ctx.shared.get("note");
-    const capNote =
-      !input.passed
-        ? `Hit the ${input.iterations}-attempt cap without clearing the rubric (score ${input.score} < ${threshold}) — this is the best draft produced, not a passing one.`
-        : undefined;
+    const capNote = !input.passed
+      ? `Hit the ${input.iterations}-attempt cap without clearing the rubric (score ${input.score} < ${threshold}) — this is the best draft produced, not a passing one.`
+      : undefined;
     ctx.logger.info(
       `publish: ${input.passed ? "cleared" : "did not clear"} the rubric after ${input.iterations} attempt(s)`,
       { score: input.score, threshold },

@@ -25,7 +25,7 @@ validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ execute ─┬─�
    with the unmodified default question (the zero-setup path), this is a fixed,
    known-safe `SELECT` written once by us — no LLM call, no dependency on it
    returning valid SQL. Any other question or database still asks an LLM
-   (`models.run`), system-prompted to emit a single read-only `SELECT`.
+   (`llm.run`), system-prompted to emit a single read-only `SELECT`.
 4. **guard** — applies the read-only guardrail to that sample SQL, whichever
    source produced it. Anything that isn't a single read-only statement →
    `rejected`.
@@ -103,7 +103,21 @@ with the stub override so `plan` returns real SQL and `guard` passes; `execute`
 then reports fixed sample rows under `dryRun` rather than opening a connection:
 
 ```json
-{ "version": 1, "steps": { "plan": { "models.run": { "output": "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC" } } } }
+{
+  "version": 1,
+  "steps": {
+    "plan": {
+      "llm.run": {
+        "content": [
+          {
+            "type": "text",
+            "text": "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC"
+          }
+        ]
+      }
+    }
+  }
+}
 ```
 
 ## Files

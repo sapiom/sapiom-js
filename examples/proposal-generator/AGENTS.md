@@ -6,12 +6,12 @@ drafts a proposal with an LLM, renders it to a PDF in a sandbox, persists the fi
 then either pauses for a human to sign off (an approver is assigned) or
 terminates honestly at the gate (none is — the zero-setup default) — only after
 a sign-off does it email the proposal to the client. Inside a step's `run`,
-Sapiom capabilities are pre-auth'd on `ctx.sapiom` (`ctx.sapiom.models.run`,
+Sapiom capabilities are pre-auth'd on `ctx.sapiom` (`ctx.sapiom.llm.run`,
 `ctx.sapiom.sandboxes`, `ctx.sapiom.fileStorage`, `ctx.sapiom.email`).
 
 ## The spine
 
-- **`draft`** calls `ctx.sapiom.models.run` for a structured proposal, then totals
+- **`draft`** calls `ctx.sapiom.llm.run` for a structured proposal, then totals
   the line items **in code** — the money is never trusted from the model. Omit
   `request` and it drafts against a built-in sample brief, so `{}` still
   produces a real, priced quote.
@@ -37,9 +37,8 @@ Sapiom capabilities are pre-auth'd on `ctx.sapiom` (`ctx.sapiom.models.run`,
 - **`send`** holds the one outward action (the client email), reached only after
   approval. A `dryRun` guard makes it a no-op.
 - `pauseUntilSignal` is a **runtime primitive, not a metered capability** — don't
-  list it in `capabilities`. The billed calls are `ctx.sapiom.models.run` (the
-  live x402 path — note `ctx.sapiom.llm` does **not** exist), the sandbox render,
-  the file upload, and `ctx.sapiom.email`.
+  list it in `capabilities`. The billed calls are `ctx.sapiom.llm.run` (the live
+  x402 path), the sandbox render, the file upload, and `ctx.sapiom.email`.
 
 ## Authoring
 
@@ -77,7 +76,11 @@ fire the signal via the MCP `signal_workflow` / `workflow_signal` tool — the
 manual stand-in:
 
 ```json
-{ "signal": "proposal.decision", "correlationId": "<executionId>", "payload": { "decision": "approve" } }
+{
+  "signal": "proposal.decision",
+  "correlationId": "<executionId>",
+  "payload": { "decision": "approve" }
+}
 ```
 
 Send `{ "decision": "reject" }` to walk the reject path. The `payload` arrives as

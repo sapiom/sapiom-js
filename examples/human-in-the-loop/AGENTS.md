@@ -6,7 +6,7 @@ commit/spend" pattern: reversible prep (`parse` → `rank` → `notifyApprover`)
 durable pause on a human approval signal, and — once approved — a ranked
 sequential-fallback loop (`offer` ⇄ `resolve`) that commits only when a candidate
 accepts and escalates when the list is exhausted. Inside a step's `run`, Sapiom
-capabilities are pre-auth'd on `ctx.sapiom` (here, `ctx.sapiom.models.run` and
+capabilities are pre-auth'd on `ctx.sapiom` (here, `ctx.sapiom.llm.run` and
 `ctx.sapiom.email`).
 
 ## The approval + fallback spine
@@ -19,7 +19,7 @@ capabilities are pre-auth'd on `ctx.sapiom` (here, `ctx.sapiom.models.run` and
   Safe default: only `{ decision: "approve" }` proceeds; anything else (including
   a `run_local` resume with no payload) routes to `revert` — nothing commits
   without a deliberate human yes.
-- **`offer`** makes a *provisional, non-committing* offer to `ranked[index]` and
+- **`offer`** makes a _provisional, non-committing_ offer to `ranked[index]` and
   pauses on `candidate.confirm`, resuming at `resolve`.
 - **`resolve`** reads the confirm payload as its input. `accept` → `commit`;
   `decline`/`timeout`/absent → `index + 1` and loop back to `offer` while
@@ -28,8 +28,8 @@ capabilities are pre-auth'd on `ctx.sapiom` (here, `ctx.sapiom.models.run` and
 - **`commit`** holds the single irreversible/expensive action, reached only after
   approval AND an accept. A `dryRun` guard makes it a no-op offline.
 - `pauseUntilSignal` is a **runtime primitive, not a metered capability** — don't
-  list it in `capabilities`. The billed calls are `ctx.sapiom.models.run` (the
-  live x402 path — note `ctx.sapiom.llm` does **not** exist) and `ctx.sapiom.email`.
+  list it in `capabilities`. The billed calls are `ctx.sapiom.llm.run` (the live
+  x402 path) and `ctx.sapiom.email`.
 
 ## Authoring
 

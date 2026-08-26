@@ -55,7 +55,7 @@ import { z } from "zod/v4";
  * ── Determinism / offline tracing ─────────────────────────────────────────────
  * Raw Postgres/Slack sockets and the raw-HTTP child launch aren't stubbable by
  * run_local, so every external side effect is gated behind `dryRun`: run_local
- * exercises the full control flow plus the real ctx.sapiom.* calls (models.run)
+ * exercises the full control flow plus the real ctx.sapiom.* calls (llm.run)
  * while skipping the raw network I/O. `observeOnly` does everything real but
  * launches nothing — the briefing shows what it WOULD launch.
  *
@@ -879,8 +879,17 @@ const assess = defineStep({
         .join("\n")}\n\n` +
       `Already launched today: ${launchedTodayIds.length ? launchedTodayIds.join(", ") : "(none)"}`;
 
-    const res = await ctx.sapiom.models.run({ prompt, system, maxTokens: 700 });
-    const { plan, briefing, needsHuman } = parsePlan(res.output, situations);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 700,
+      },
+    });
+    const { plan, briefing, needsHuman } = parsePlan(
+      ctx.sapiom.llm.textOf(res) ?? null,
+      situations,
+    );
     ctx.shared.set("plan", plan);
     ctx.shared.set("briefing", briefing);
     ctx.shared.set("needsHuman", needsHuman);

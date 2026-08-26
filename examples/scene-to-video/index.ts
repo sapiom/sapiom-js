@@ -23,9 +23,9 @@ import { z } from "zod/v4";
  * separates a Sapiom agent from a plain script:
  *
  *   decompose ─▶ keyframe ⇄ collectKeyframe ─▶ animate ⇄ collect ─▶ stitch ─▶ finalize
- *   (models.run) (images.launch)  (drain)     (video.launch) (drain) (video.create) (terminal)
+ *   (llm.run) (images.launch)  (drain)     (video.launch) (drain) (video.create) (terminal)
  *
- *   1. decompose — an LLM (`ctx.sapiom.models.run`) turns the scene into a global
+ *   1. decompose — an LLM (`ctx.sapiom.llm.run`) turns the scene into a global
  *      style/identity "bible" plus an ordered shot list.
  *   2. keyframe — one shot at a time: launch an async keyframe-image job
  *      (`images.launch`) and `pauseUntilSignal` on it; the webhook resumes
@@ -336,12 +336,14 @@ const decompose = defineStep({
     const prompt = `Scene: ${scene}\nNumber of shots: ${numShots}\nAspect ratio: ${aspectRatio}`;
 
     ctx.logger.info("decomposing scene", { numShots, aspectRatio });
-    const res = await ctx.sapiom.models.run({
-      prompt,
-      system,
-      maxTokens: 1200,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1200,
+      },
     });
-    const plan = parsePlan(res.output, scene, numShots);
+    const plan = parsePlan(ctx.sapiom.llm.textOf(res) ?? null, scene, numShots);
 
     ctx.shared.set("scene", scene);
     ctx.shared.set("aspectRatio", aspectRatio);

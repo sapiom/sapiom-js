@@ -4,7 +4,7 @@ This project defines exactly one Sapiom agent in `index.ts` — **Natural-Langua
 Query Endpoint**, authored against `@sapiom/agent`. It provisions a live HTTP
 endpoint AND proves the pipeline for real: `validate` → `resolve` (`database.get`,
 plus seeding the demo database if needed) → `plan` (a fixed query on the
-zero-setup path, else `models.run`) → `guard` (read-only check) → `execute` (runs
+zero-setup path, else `llm.run`) → `guard` (read-only check) → `execute` (runs
 the guarded SQL for real, the zero-setup artifact) → `deploy`
 (`sandboxes.deployPreview`) → terminal `deployed` / `deploy_failed` /
 `endpoint_skipped` / `query_failed` / `rejected`. Inside a step's `run`, Sapiom
@@ -30,13 +30,23 @@ every small edit.
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**. On defaults, `plan` never calls the model at all (the zero-setup path uses the fixed built-in SQL), so `guard` passes — but `database.get` is stubbed to an unreachable connection string, so `execute`'s real query fails and the run legibly reaches `query_failed`, a demo of the query-execution boundary rather than the guardrail. To trace `plan`'s LLM path (a custom `sampleQuestion`, or a custom `dbHandle`) pass a `models.run` stub override:
+- **run_local** — runs your **real** step code against **stub capabilities**. On defaults, `plan` never calls the model at all (the zero-setup path uses the fixed built-in SQL), so `guard` passes — but `database.get` is stubbed to an unreachable connection string, so `execute`'s real query fails and the run legibly reaches `query_failed`, a demo of the query-execution boundary rather than the guardrail. To trace `plan`'s LLM path (a custom `sampleQuestion`, or a custom `dbHandle`) pass a `llm.run` stub override:
 
   ```json
-  { "version": 1, "steps": { "plan": { "models.run": { "output": "SELECT count(*) FROM users" } } } }
+  {
+    "version": 1,
+    "steps": {
+      "plan": {
+        "llm.run": {
+          "content": [{ "type": "text", "text": "SELECT count(*) FROM users" }]
+        }
+      }
+    }
+  }
   ```
 
   To trace the whole graph offline with no live connection at all, pass `{ "dryRun": true }`: `execute` reports fixed sample rows instead of querying, and `deploy` assembles the env (keys only, never values) and reports the generated server without calling `deployPreview`.
+
 - **deploy**, then **run** — ship it, then a real run stands up the endpoint at a stable URL. Hit it with `POST /query { "question": "…" }`.
 
 > Write each step the way it should run in production. `run_local` adapts to your

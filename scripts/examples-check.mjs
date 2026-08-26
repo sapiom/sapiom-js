@@ -61,6 +61,11 @@ import {
   complexityBandScore,
   scoreTemplateComplexity,
 } from "./lib/template-complexity.mjs";
+import {
+  ONE_SHOT_LLM_TEMPLATE_IDS,
+  checkLlmCopySurface,
+  checkOneShotLlmTemplate,
+} from "./lib/examples-llm-surface.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXAMPLES_DIR = path.join(ROOT, "examples");
@@ -107,6 +112,55 @@ if (!validate(payload)) {
 }
 
 const templates = Array.isArray(registry.templates) ? registry.templates : [];
+const templateById = new Map(
+  templates.map((template) => [template.id, template]),
+);
+
+// No example may teach that the gateway-native one-shot surface is absent.
+// Scan every project, not just gallery-registered templates, because these
+// files are also copied or read directly by authors.
+for (const entry of readdirSync(EXAMPLES_DIR, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue;
+  for (const name of ["AGENTS.md", "README.md", "index.ts"]) {
+    const absolutePath = path.join(EXAMPLES_DIR, entry.name, name);
+    if (!existsSync(absolutePath)) continue;
+    errors.push(
+      ...checkLlmCopySurface({
+        path: path.relative(ROOT, absolutePath),
+        source: readFileSync(absolutePath, "utf8"),
+      }),
+    );
+  }
+}
+
+// Existing one-shot LLM templates must stay on the synchronous gateway surface.
+// This is intentionally explicit: `models.run` remains a valid capability for a
+// genuinely multi-turn managed loop, so a repo-wide string ban would reject
+// future examples that use that different surface correctly.
+for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
+  const dir = path.join(EXAMPLES_DIR, id);
+  const indexSource = readFileSync(path.join(dir, "index.ts"), "utf8");
+  const packageJson = JSON.parse(
+    readFileSync(path.join(dir, "package.json"), "utf8"),
+  );
+  const copySources = ["AGENTS.md", "README.md", "template.json"]
+    .map((name) => ({ path: name, absolutePath: path.join(dir, name) }))
+    .filter(({ absolutePath }) => existsSync(absolutePath))
+    .map(({ path: copyPath, absolutePath }) => ({
+      path: copyPath,
+      source: readFileSync(absolutePath, "utf8"),
+    }));
+  copySources.push({ path: "index.ts", source: indexSource });
+  errors.push(
+    ...checkOneShotLlmTemplate({
+      id,
+      indexSource,
+      copySources,
+      packageJson,
+      registryTemplate: templateById.get(id),
+    }),
+  );
+}
 
 // 2. Sorted by id ascending.
 const ids = templates.map((t) => String(t.id));

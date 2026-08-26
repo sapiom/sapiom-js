@@ -1,6 +1,6 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Error / Log Triage Digest** — authored against `@sapiom/agent`. It has four steps: `collect` (pause/pull the batch) → `triage` (calls `models.run`, the live LLM) → `dedupe` (calls `database`) → `digest` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.models.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`).
+This project defines exactly one Sapiom agent in `index.ts` — **Error / Log Triage Digest** — authored against `@sapiom/agent`. It has four steps: `collect` (pause/pull the batch) → `triage` (calls `llm.run`, the live LLM) → `dedupe` (calls `database`) → `digest` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.llm.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`).
 
 It combines two durability primitives with real fan-in: it can **pause at $0** for a pushed webhook batch (`pauseUntilSignal`) or run on a **cron** with a pulled batch, and it keeps a **Postgres dedup store** so a daily digest surfaces new issues instead of re-alerting on known ones.
 
@@ -20,7 +20,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so `models.run` / `database` / `email` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `dedupe` skips the (stubbed) DB and `digest` skips the (stubbed) send and returns the preview. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so `llm.run` / `database` / `email` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `dedupe` skips the (stubbed) DB and `digest` skips the (stubbed) send and returns the preview. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed LLM triage that writes to the dedup store and delivers the digest. Attach the `schedule` as a cron trigger, or push a batch with the `errors.pushed` signal.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

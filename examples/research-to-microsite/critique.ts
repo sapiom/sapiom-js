@@ -5,7 +5,7 @@
  * for the audience), and a tolerant score parser. Mirrors eval-gate's
  * `judge.ts` on purpose — factored out for the same reason: the judge LLM
  * call itself lives in the `critique` step in `index.ts`, via
- * `ctx.sapiom.models.run`; this file only builds the prompt string and parses
+ * `ctx.sapiom.llm.run`; this file only builds the prompt string and parses
  * the score out of the reply. No gateway call lives here.
  */
 

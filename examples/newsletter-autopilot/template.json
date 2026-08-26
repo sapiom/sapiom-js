@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Research a niche, write and self-edit the issue against a quality bar, illustrate it, and email it every week. Searches the web, dedupes and ranks the strongest sources, then drafts and grades the issue against a fixed bar, revising once if it falls short, before sending it to your list or this agent's own inbox.",
-  "longDescription": "Give it a niche and, optionally, a subscriber list. Every week it searches the web, reads the top results, dedupes near-duplicate stories, and keeps the strongest few. `write` (`models.run`) curates that week's issue with a subject line, intro, and cited sections, and `selfEdit` grades the draft against a fixed quality bar, revising once if it falls short. It illustrates a header image and emails the issue, defaulting to this agent's own demo inbox when no `subscribers` are set. `dryRun` returns a full preview without emailing.",
+  "longDescription": "Give it a niche and, optionally, a subscriber list. Every week it searches the web, reads the top results, dedupes near-duplicate stories, and keeps the strongest few. `write` (`llm.run`) curates that week's issue with a subject line, intro, and cited sections, and `selfEdit` grades the draft against a fixed quality bar, revising once if it falls short. It illustrates a header image and emails the issue, defaulting to this agent's own demo inbox when no `subscribers` are set. `dryRun` returns a full preview without emailing.",
   "useCases": [
     "Deduped, ranked sources",
     "Self-edit against a bar",

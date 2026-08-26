@@ -20,7 +20,7 @@ import { z } from "zod/v4";
  * and then sends the sequence one touch at a time — pausing at $0 between
  * touches and stopping the moment someone replies.
  *
- *   enrich (email search) ─▶ scrape (web) ─▶ personalize (models.run) ─▶ verify (email)
+ *   enrich (email search) ─▶ scrape (web) ─▶ personalize (llm.run) ─▶ verify (email)
  *      └─▶ launch (database) ─▶ send (email) ⇄ advance ─▶ done
  *
  *   - **enrich** takes a lead list — a company domain, optionally a person —
@@ -31,7 +31,7 @@ import { z } from "zod/v4";
  *   - **scrape** reads each company's site (`web.scrape`) for a few lines of
  *     context. The bodies are bounded and die here — they never enter shared
  *     state or cross the drip edges.
- *   - **personalize** hands those snippets to the live model (`models.run`) and
+ *   - **personalize** hands those snippets to the live model (`llm.run`) and
  *     gets back one concrete first line per prospect, falling back to a safe
  *     generic opener when the model returns nothing usable.
  *   - **verify** checks each address for deliverability (`verifyEmail`)
@@ -624,12 +624,14 @@ const personalize = defineStep({
 
     let lines: Record<number, string> = {};
     try {
-      const res = await ctx.sapiom.models.run({
-        system,
-        prompt,
-        maxTokens: 700,
+      const res = await ctx.sapiom.llm.run({
+        request: {
+          system,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 700,
+        },
       });
-      lines = parseLines(res.output);
+      lines = parseLines(ctx.sapiom.llm.textOf(res) ?? null);
     } catch (err) {
       // A model error is not fatal — every contact falls back to a safe opener.
       ctx.logger.warn("personalize model call failed; using fallbacks", {

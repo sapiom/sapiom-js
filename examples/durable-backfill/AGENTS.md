@@ -13,7 +13,7 @@ This project defines exactly one Sapiom agent in `index.ts` — **Durable Backfi
 - **`database.get`** resolves the dataset's connection string, which is injected into the chunk sandbox as `DATABASE_URL`.
 - **`sandboxes.create` / `exec`** run the per-chunk `command` in a fresh, short-TTL sandbox (torn down in a `finally`, so nothing lingers between chunks).
 - **`fileStorage.upload` / `getDownloadUrl` / `list` / `delete`** persist the checkpoint (rotated each chunk), the per-chunk result artifacts, and the final manifest — and read the checkpoint back when resuming.
-- **Capabilities come from the types.** What's on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. Note: `ctx.sapiom.llm` does **not** exist; the LLM path (unused here) is `models.run`.
+- **Capabilities come from the types.** What's on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. The one-shot LLM path (unused here) is `ctx.sapiom.llm.run`.
 
 ## Authoring
 

@@ -24,7 +24,7 @@ parse → rank → notifyApprover ─(pause: approval.decision, $0 while idle)�
 ```
 
 1. **parse** — parse the free-text `request` into structured intent with an LLM
-   (`ctx.sapiom.models.run`). Reversible.
+   (`ctx.sapiom.llm.run`). Reversible.
 2. **rank** — rank the `candidates` by fit (not just cost) with the LLM;
    every candidate is returned exactly once. Reversible.
 3. **notifyApprover** — email the approver the ranked recommendation

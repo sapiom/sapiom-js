@@ -21,7 +21,7 @@ kickoff  ──(pause: wait for "webhook.callback", $0 while idle)──▶  dec
    suspends here at zero cost.
 2. **(paused)** — nothing runs, nothing is billed, for as long as it takes.
 3. **decide** (resume target) — its **input IS the callback payload**. An LLM
-   (`ctx.sapiom.models.run`) summarizes the payload and branches. Everything set
+   (`ctx.sapiom.llm.run`) summarizes the payload and branches. Everything set
    before the pause is read back from `ctx.shared`.
 4. **accept | reject** — terminal branches keyed off the decision.
 

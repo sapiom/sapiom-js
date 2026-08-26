@@ -34,7 +34,7 @@ import { z } from "zod/v4";
  * Two durable pauses (`pauseUntilSignal`) suspend the run at $0: the approval
  * gate, and each turn of the confirmation loop. `pauseUntilSignal` is a runtime
  * primitive, not a metered capability. The billed calls are the model reasoning
- * (`ctx.sapiom.models.run` — the live x402 path; `ctx.sapiom.llm` does NOT exist)
+ * (`ctx.sapiom.llm.run` — the live gateway path)
  * and the notifications (`ctx.sapiom.email`).
  *
  * Offline: `run_local` stubs the capabilities and auto-resumes the pauses. A
@@ -203,12 +203,14 @@ async function parseRequest(ctx: Ctx, request: string): Promise<ParsedRequest> {
     "selecting one of several candidates. Identify what is being asked for and " +
     "the criteria that should drive the choice (weigh fit, not just cost). " +
     'Reply with ONLY minified JSON: {"summary":string,"criteria":string[]}.';
-  const res = await ctx.sapiom.models.run({
-    prompt: request,
-    system,
-    maxTokens: 300,
+  const res = await ctx.sapiom.llm.run({
+    request: {
+      system,
+      messages: [{ role: "user", content: request }],
+      max_tokens: 300,
+    },
   });
-  return coerceParsed(res.output, request);
+  return coerceParsed(ctx.sapiom.llm.textOf(res) ?? null, request);
 }
 
 /**
@@ -229,8 +231,14 @@ async function rankCandidates(
   const prompt =
     `CRITERIA:\n${parsed.criteria.map((c) => `- ${c}`).join("\n") || "- (none)"}\n\n` +
     `CANDIDATES:\n${JSON.stringify(candidates)}`;
-  const res = await ctx.sapiom.models.run({ prompt, system, maxTokens: 600 });
-  return applyRanking(res.output, candidates);
+  const res = await ctx.sapiom.llm.run({
+    request: {
+      system,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 600,
+    },
+  });
+  return applyRanking(ctx.sapiom.llm.textOf(res) ?? null, candidates);
 }
 
 /**

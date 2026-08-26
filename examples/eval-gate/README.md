@@ -17,11 +17,11 @@ parse ─▶ draft ─▶ judge ─▶ decide ─┬─▶ draft   (score < thre
    an omitted `brief`/`rubric` to a built-in sample, and seeds the loop state
    (`iteration = 1`).
 2. **draft** — writes (or, on a later attempt, revises) the piece from the
-   brief via `ctx.sapiom.models.run`. On a revision it also gets the rejected
+   brief via `ctx.sapiom.llm.run`. On a revision it also gets the rejected
    draft and the judge's critique, so it can fix the specific problem instead
    of starting over blind.
 3. **judge** — scores the draft against **your** rubric with a second
-   `ctx.sapiom.models.run` call, and parses a `[0,1]` score plus a one-line
+   `ctx.sapiom.llm.run` call, and parses a `[0,1]` score plus a one-line
    critique from the reply.
 4. **decide** — pure branch, no model call: `score >= threshold` **or**
    `iteration >= maxIterations` sends the run to `publish`. Otherwise it hands
@@ -29,7 +29,7 @@ parse ─▶ draft ─▶ judge ─▶ decide ─┬─▶ draft   (score < thre
    counter, and loops. `maxIterations` (default `2`) bounds the loop — it
    always reaches `publish`.
 5. **publish** (terminal) — returns `{ draft, passed, score, threshold,
-   iterations, rationale }`. `passed` says whether the draft actually cleared
+iterations, rationale }`. `passed` says whether the draft actually cleared
    the rubric or the run simply ran out of attempts; either way the final
    draft comes back, never a silent failure.
 
@@ -41,7 +41,7 @@ Input contract: `{ brief, rubric, threshold=0.8, maxIterations=2, model?, judgeM
 - `threshold` — the pass bar in `[0,1]` (default `0.8`).
 - `maxIterations` — the attempt cap (1 initial draft + revisions, default
   `2`). The run publishes by this attempt regardless of score.
-- `model` / `judgeModel` — optional model aliases for the draft and judge
+- `model` / `judgeModel` — optional routing labels for the draft and judge
   calls respectively.
 
 ## Run it with Claude + the Sapiom MCP
@@ -57,14 +57,14 @@ Input contract: `{ brief, rubric, threshold=0.8, maxIterations=2, model?, judgeM
    `judge` both inherit that authority to call the model.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
-   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` (both `models.run`
+   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` (both `llm.run`
    calls are stubbed, free) → `sapiom_dev_agents_link` →
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real, **billed**
    draft+judge cycle, possibly more than once per run).
 
 ### Tracing the loop offline (run_local)
 
-`run_local` resolves `ctx.sapiom.models.run` from a stub, per step. The
+`run_local` resolves `ctx.sapiom.llm.run` from a stub, per step. The
 _default_ stub returns a non-numeric placeholder; `draft` throws on an empty
 reply and `judge`'s `parseScore` throws on a reply with no number (both by
 design), so supply stub replies for **both** calls to trace the graph:
@@ -72,14 +72,14 @@ design), so supply stub replies for **both** calls to trace the graph:
 ```jsonc
 // high score → decide → publish (passed: true), one attempt
 { "version": 1, "steps": {
-  "draft": { "models.run": { "output": "A short noir opening line." } },
-  "judge": { "models.run": { "output": "{\"score\":0.9,\"rationale\":\"meets the rubric\"}" } }
+  "draft": { "llm.run": { "content": [{ "type": "text", "text": "A short noir opening line." }] } },
+  "judge": { "llm.run": { "content": [{ "type": "text", "text": "{\"score\":0.9,\"rationale\":\"meets the rubric\"}" }] } }
 } }
 
 // low score, maxIterations: 1 → decide → publish (passed: false)
 { "version": 1, "steps": {
-  "draft": { "models.run": { "output": "A short noir opening line." } },
-  "judge": { "models.run": { "output": "{\"score\":0.4,\"rationale\":\"misses the rubric\"}" } }
+  "draft": { "llm.run": { "content": [{ "type": "text", "text": "A short noir opening line." }] } },
+  "judge": { "llm.run": { "content": [{ "type": "text", "text": "{\"score\":0.4,\"rationale\":\"misses the rubric\"}" }] } }
 } }
 ```
 
@@ -99,7 +99,7 @@ into a real writer, change three things:
 - **The rubric** — the criteria the judge scores against. Pass it as the
   `rubric` input. This is where all your opinion about "quality" lives; we
   ship none. Example: `"Cites at least one source, no unsupported claims,
-  under 200 words."`
+under 200 words."`
 - **The threshold** — the pass bar in `[0,1]` (default `0.8`). Raise it to be
   stricter about what reaches `publish` unchanged; lower it to accept more on
   the first attempt.

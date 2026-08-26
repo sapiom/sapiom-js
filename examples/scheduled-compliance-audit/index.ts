@@ -14,14 +14,14 @@ import { z } from "zod/v4";
  *
  * On each tick it collects the current state of the resources you point it at
  * (config pages, status endpoints, policy docs — read with `web.scrape`), asks
- * an LLM (`ctx.sapiom.models.run` — the live x402 path) to check that state
+ * an LLM (`ctx.sapiom.llm.run` — the live x402 path) to check that state
  * against your `policy` and produce a structured finding, then **pauses for a
  * human sign-off**. Only after a person explicitly approves does it archive the
  * signed attestation as a durable file (`fileStorage.upload`) — because an
  * attestation is a record that a human reviewed and signed off, auto-archiving
  * one without a real sign-off would be a lie.
  *
- *   collect (web.scrape) → audit (models.run) ─(pause: attestation.signoff, $0)─▶ onSignoff
+ *   collect (web.scrape) → audit (llm.run) ─(pause: attestation.signoff, $0)─▶ onSignoff
  *                                                                                    │
  *                                              reject ◀───────────────────────────────┼─▶ approve
  *                                                │                                     ▼
@@ -30,7 +30,7 @@ import { z } from "zod/v4";
  * The durable pause (`pauseUntilSignal`) suspends the run at $0 until a person
  * fires the sign-off signal — it is a runtime primitive, not a metered
  * capability. The billed calls are the scrapes (`web.scrape`), the model
- * reasoning (`ctx.sapiom.models.run` — `ctx.sapiom.llm` does NOT exist), and the
+ * reasoning (`ctx.sapiom.llm.run`), and the
  * attestation upload (`fileStorage.upload`).
  *
  * Side-effect discipline (copied from `scheduled-research-brief` /
@@ -193,12 +193,16 @@ async function runPolicyCheck(
     '{"status":"compliant|non_compliant|needs_review","summary":string,' +
     '"checks":[{"id":string,"requirement":string,"status":"pass|fail|unknown",' +
     '"evidence":string,"remediation":string}]}.';
-  const res = await ctx.sapiom.models.run({
-    system,
-    prompt: `POLICY:\n${policy}\n\nSTATE:\n${evidence}`,
-    maxTokens: 900,
+  const res = await ctx.sapiom.llm.run({
+    request: {
+      system,
+      messages: [
+        { role: "user", content: `POLICY:\n${policy}\n\nSTATE:\n${evidence}` },
+      ],
+      max_tokens: 900,
+    },
   });
-  return coerceReport(res.output);
+  return coerceReport(ctx.sapiom.llm.textOf(res) ?? null);
 }
 
 /**

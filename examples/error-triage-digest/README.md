@@ -8,14 +8,14 @@ scheduled-or-pushed, deduped sibling of a plain alert forwarder.
 
 ```
 collect  ──▶  triage  ──▶  dedupe  ──▶  digest  (terminal)
-(pause/pull)   (models.run)  (database)   (email)
+(pause/pull)   (llm.run)  (database)   (email)
 ```
 
 1. **collect** — gathers the error batch. It takes one directly as `errors`, GETs
    one from a `pullUrl`, or — with `webhook: true` and no batch yet — **pauses at
    $0** via `pauseUntilSignal` until your pipeline pushes one as the
    `errors.pushed` signal. No polling loop, no billed idle.
-2. **triage** — hands the raw errors to an LLM (`ctx.sapiom.models.run` — the
+2. **triage** — hands the raw errors to an LLM (`ctx.sapiom.llm.run` — the
    live x402-served model) to cluster them into a handful of distinct issues,
    each with a **stable fingerprint** (volatile ids, timestamps, and line numbers
    stripped), a title, a severity, and an occurrence count.

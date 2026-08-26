@@ -29,9 +29,9 @@ import { z } from "zod/v4";
  * one-shot.
  *
  *   repurpose ─▶ graphics ⇄ collectGraphic ─▶ clip ⇄ collectClip ─▶ package ─▶ deliver
- *   (models.run) (images.launch)  (drain)     (video.launch) (drain) (fileStorage) (email.send × N)
+ *   (llm.run) (images.launch)  (drain)     (video.launch) (drain) (fileStorage) (email.send × N)
  *
- *   1. repurpose — an LLM (`ctx.sapiom.models.run`) rewrites the source into every
+ *   1. repurpose — an LLM (`ctx.sapiom.llm.run`) rewrites the source into every
  *      channel at once: the tweet thread, the LinkedIn post, the newsletter, the
  *      pull-quotes to render as graphics, and a short visual prompt for the teaser
  *      clip.
@@ -632,12 +632,19 @@ const repurpose = defineStep({
       chars: source.length,
       numQuotes,
     });
-    const res = await ctx.sapiom.models.run({
-      prompt,
-      system,
-      maxTokens: 1500,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1500,
+      },
     });
-    const pack = parsePack(res.output, source, title, numQuotes);
+    const pack = parsePack(
+      ctx.sapiom.llm.textOf(res) ?? null,
+      source,
+      title,
+      numQuotes,
+    );
 
     ctx.shared.set("title", title);
     ctx.shared.set("audience", audience);

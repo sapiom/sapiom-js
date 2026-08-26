@@ -8,7 +8,7 @@ durable, $0 waits between them — stopping the moment someone replies.
 
 ```
 enrich ──▶ scrape ──▶ personalize ──▶ verify ──▶ launch ──▶ send ⇄ advance ──▶ done
-(email search) (web)   (models.run)   (email verify) (database) (email)        (terminal)
+(email search) (web)   (llm.run)   (email verify) (database) (email)        (terminal)
 ```
 
 1. **enrich** — for each lead (`{ domain, company?, fullName? }`), resolve a real
@@ -19,7 +19,7 @@ enrich ──▶ scrape ──▶ personalize ──▶ verify ──▶ launch 
    few lines of context. Bodies are bounded and die at the next step — they never
    enter shared state.
 3. **personalize** — hand the snippets to the live model
-   (`ctx.sapiom.models.run`) for one concrete opener per prospect, falling back to
+   (`ctx.sapiom.llm.run`) for one concrete opener per prospect, falling back to
    a safe generic line when the model returns nothing usable.
 4. **verify** — check each address for deliverability
    (`ctx.sapiom.search.emailSearch.verifyEmail`) and drop the ones that would

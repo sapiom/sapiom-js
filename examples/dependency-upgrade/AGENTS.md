@@ -7,7 +7,7 @@ a sandbox, `verify` runs the real test suite in that sandbox, `assess` rates the
 risk, and only a green build within the risk bar reaches `publish` (which pushes).
 Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
 `ctx.sapiom.repositories.get`, `ctx.sapiom.models.coding.launch`,
-`ctx.sapiom.sandboxes.attach` + `box.exec`, `ctx.sapiom.models.run`,
+`ctx.sapiom.sandboxes.attach` + `box.exec`, `ctx.sapiom.llm.run`,
 `ctx.sapiom.fileStorage.upload`, and `repo.pushFromSandbox`).
 
 ## Authoring

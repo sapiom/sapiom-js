@@ -21,7 +21,7 @@ import { z } from "zod/v4";
  *   - coordinate (default): the parent. Splits the goal into items, launches a
  *     child run per item, waits for all of them, and reduces their outputs.
  *   - leaf: a child. Does exactly ONE unit of work (analyse its item toward the
- *     goal with `models.run`) and terminates. A leaf NEVER fans out, which is what
+ *     goal with `llm.run`) and terminates. A leaf NEVER fans out, which is what
  *     bounds the recursion to a single level — there is no runaway.
  *
  * The child it fans out to defaults to THIS agent's own slug (`ctx.agentName`), so
@@ -30,8 +30,8 @@ import { z } from "zod/v4";
  * agent's slug and it fans that out instead, one child run per item.
  *
  * The graph, one legible line per role:
- *   plan ─▶ fanOut (agents.run × N) ─▶ reduce (models.run) ─▶ done      (coordinate)
- *   plan ─▶ solve (models.run) ─▶ (terminal)                            (leaf)
+ *   plan ─▶ fanOut (agents.run × N) ─▶ reduce (llm.run) ─▶ done      (coordinate)
+ *   plan ─▶ solve (llm.run) ─▶ (terminal)                            (leaf)
  *   plan ─▶ planned (terminal)                                          (dryRun)
  *
  * Never-fail discipline:
@@ -257,16 +257,23 @@ const solve = defineStep({
   async run(input: { goal: string; item: string }, ctx: Ctx) {
     // The unit of work a child does. One model call, one focused result. A leaf
     // deliberately does NOT fan out — that is what keeps the recursion one level deep.
-    const res = await ctx.sapiom.models.run({
-      system:
-        "You are one worker in a parallel team, each analysing a different facet " +
-        "of the same goal. Analyse ONLY your assigned facet, concretely and " +
-        "self-containedly, in 3-5 sentences. Do not restate the goal or the other " +
-        "facets — another step combines everyone's work.",
-      prompt: `GOAL: ${input.goal}\n\nYOUR FACET: ${input.item}`,
-      maxTokens: LEAF_MAX_TOKENS,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system:
+          "You are one worker in a parallel team, each analysing a different facet " +
+          "of the same goal. Analyse ONLY your assigned facet, concretely and " +
+          "self-containedly, in 3-5 sentences. Do not restate the goal or the other " +
+          "facets — another step combines everyone's work.",
+        messages: [
+          {
+            role: "user",
+            content: `GOAL: ${input.goal}\n\nYOUR FACET: ${input.item}`,
+          },
+        ],
+        max_tokens: LEAF_MAX_TOKENS,
+      },
     });
-    const analysis = (res?.output ?? "").trim();
+    const analysis = (ctx.sapiom.llm.textOf(res) ?? "").trim();
     ctx.logger.info("leaf solved its facet", {
       item: input.item,
       chars: analysis.length,
@@ -360,16 +367,23 @@ const reduce = defineStep({
     // whose expensive fan-out already succeeded.
     let combined: string;
     try {
-      const res = await ctx.sapiom.models.run({
-        system:
-          "You are combining several workers' independent analyses, each covering " +
-          "a different facet of one goal, into a single coherent answer. Integrate " +
-          "them — resolve overlaps, keep the concrete detail, and note any tension " +
-          "between facets. Do not just concatenate. Output prose, no preamble.",
-        prompt: `GOAL: ${goal}\n\nFACET ANALYSES:\n${parts}`,
-        maxTokens: REDUCE_MAX_TOKENS,
+      const res = await ctx.sapiom.llm.run({
+        request: {
+          system:
+            "You are combining several workers' independent analyses, each covering " +
+            "a different facet of one goal, into a single coherent answer. Integrate " +
+            "them — resolve overlaps, keep the concrete detail, and note any tension " +
+            "between facets. Do not just concatenate. Output prose, no preamble.",
+          messages: [
+            {
+              role: "user",
+              content: `GOAL: ${goal}\n\nFACET ANALYSES:\n${parts}`,
+            },
+          ],
+          max_tokens: REDUCE_MAX_TOKENS,
+        },
       });
-      combined = (res?.output ?? "").trim();
+      combined = (ctx.sapiom.llm.textOf(res) ?? "").trim();
       if (!combined) throw new Error("empty reduce output");
     } catch (err) {
       ctx.logger.warn("reduce model call failed; returning the raw facets", {

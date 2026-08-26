@@ -9,10 +9,10 @@ creators who write once and want to publish everywhere.
 
 ```
 repurpose ──▶ graphics ⇄ collectGraphic ──▶ clip ⇄ collectClip ──▶ package ──▶ deliver
-(models.run)  (images.launch)  (drain)      (video.launch) (drain) (fileStorage) (email.send × N)
+(llm.run)  (images.launch)  (drain)      (video.launch) (drain) (fileStorage) (email.send × N)
 ```
 
-1. **repurpose** — an LLM (`ctx.sapiom.models.run`) rewrites the source into every
+1. **repurpose** — an LLM (`ctx.sapiom.llm.run`) rewrites the source into every
    channel at once: the tweet thread, the LinkedIn post, the newsletter, the
    pull-quotes to render, and a short visual prompt for the teaser clip.
    `dryRun` stops here with the copy only (no paid media).

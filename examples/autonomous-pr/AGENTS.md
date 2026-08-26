@@ -11,7 +11,7 @@ at the branch) into one end-to-end repo-lifecycle agent. Inside a step's
 `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
 `ctx.sapiom.repositories.get` / `.create`, `ctx.sapiom.models.coding.launch`,
 `ctx.sapiom.sandboxes.attach` / `.create` + `box.exec` / `.writeFile` /
-`.deployPreview`, `repo.pushFromSandbox`, and `ctx.sapiom.models.run`).
+`.deployPreview`, `repo.pushFromSandbox`, and `ctx.sapiom.llm.run`).
 
 ## Authoring
 
@@ -33,7 +33,7 @@ at the branch) into one end-to-end repo-lifecycle agent. Inside a step's
   behavior.
 - **`verify` confirms the checkout's real directory before trusting it, and
   every exec bakes that absolute path into the command instead of using
-  `exec`'s `cwd` option.** `gitRepository` is *documented* to clone into
+  `exec`'s `cwd` option.** `gitRepository` is _documented_ to clone into
   `/workspace/<slug>`, but that's the platform's word, not a guarantee this
   run kept — `verify` probes it (`test -d "<abs>/.git"`), falls back to a
   bounded `find` if it doesn't hold, and routes to a diagnostic `rejected`

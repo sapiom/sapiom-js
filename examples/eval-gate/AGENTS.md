@@ -8,15 +8,15 @@ cap is hit: `parse` → `draft` → `judge` → `decide` → (loop back to `draf
 terminate at `publish`). The only genuinely new code is `draft.ts`
 (`buildDraftPrompt`) and `judge.ts` (`buildJudgePrompt` + `parseScore`).
 
-## Two chained `models.run` calls
+## Two chained `llm.run` calls
 
-- `draft` calls `ctx.sapiom.models.run({ prompt, model?, maxTokens })` to write
+- `draft` calls `ctx.sapiom.llm.run({ request, model? })` to write
   (or revise) the piece. `judge` calls it again to score that draft against
   the rubric. The judge's input is the draft step's output — a model reading
   another model's output — so this is chained judgment: a bad draft can
   produce a bad critique, and the loop is what corrects for that, not a single
   perfect call.
-- **`ctx.sapiom.llm` does not exist** — use `models.run`. Do not read
+- **Use the typed `ctx.sapiom.llm.run` client.** Do not read
   `LLM_GATEWAY_*` env vars or POST `/v1/messages` directly; those are not
   injected on deploy.
 - Both calls ride the same step→gateway path as everything else, so the
@@ -69,24 +69,24 @@ you'd run tests in any project — reach for the local suite.
   used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation.
 - **run_local** — runs your **real** step code against **stub capabilities**.
-  The _default_ `models.run` stub returns a non-numeric placeholder, and both
+  The _default_ `llm.run` stub returns a non-numeric placeholder, and both
   `draft` (empty-reply check) and `parseScore` (unparseable-score check) throw
   on that by design, so you **must supply stub replies** to trace the graph:
   a stub draft string for the `draft` step's call, and a stub `{score,
-  rationale}` JSON for the `judge` step's call. Flip the judge's stub score to
+rationale}` JSON for the `judge` step's call. Flip the judge's stub score to
   verify both branches:
 
   ```jsonc
   // high score → decide → publish (passed: true)
   { "version": 1, "steps": {
-    "draft": { "models.run": { "output": "A short noir opening line." } },
-    "judge": { "models.run": { "output": "{\"score\":0.9,\"rationale\":\"meets the rubric\"}" } }
+    "draft": { "llm.run": { "content": [{ "type": "text", "text": "A short noir opening line." }] } },
+    "judge": { "llm.run": { "content": [{ "type": "text", "text": "{\"score\":0.9,\"rationale\":\"meets the rubric\"}" }] } }
   } }
 
   // low score, maxIterations: 1 → decide → publish (passed: false)
   { "version": 1, "steps": {
-    "draft": { "models.run": { "output": "A short noir opening line." } },
-    "judge": { "models.run": { "output": "{\"score\":0.4,\"rationale\":\"misses the rubric\"}" } }
+    "draft": { "llm.run": { "content": [{ "type": "text", "text": "A short noir opening line." }] } },
+    "judge": { "llm.run": { "content": [{ "type": "text", "text": "{\"score\":0.4,\"rationale\":\"misses the rubric\"}" }] } }
   } }
   ```
 
@@ -95,7 +95,7 @@ you'd run tests in any project — reach for the local suite.
   by supplying the same stub pair again for the second pass.
 
 - **deploy**, then **run** — ship it, then perform a real, **billed**
-  draft+judge cycle that meters two `models.run` calls per attempt.
+  draft+judge cycle that meters two `llm.run` calls per attempt.
 
 > Write each step the way it should run in production. `run_local` adapts to
 > your code (stub capabilities), not the other way around — never weaken or

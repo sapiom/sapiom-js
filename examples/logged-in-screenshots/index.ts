@@ -15,7 +15,7 @@ import { z } from "zod/v4";
  * plain list of what's broken.
  *
  * The graph, one legible line per capability:
- *   crawl (web.scrape) ─▶ render (browser.session) ─▶ audit (models.run)
+ *   crawl (web.scrape) ─▶ render (browser.session) ─▶ audit (llm.run)
  *     ─▶ linkCheck (compute) ─▶ report (terminal)
  *   crawl ─────────────────────────────────────────▶ rejected (terminal),
  *     when `siteUrl` isn't a usable URL
@@ -28,7 +28,7 @@ import { z } from "zod/v4";
  * browser session (`ctx.sapiom.browserAutomation.withSession`) and
  * screenshots every page in it, so a page that renders blank or errors shows
  * up as a row, not a silent gap. `audit` asks a model
- * (`ctx.sapiom.models.run`) to read the crawled content across every page in
+ * (`ctx.sapiom.llm.run`) to read the crawled content across every page in
  * one call and flag concrete issues — broken-looking or placeholder text,
  * thin sections, missing or duplicate titles. `linkCheck` turns the
  * already-collected data into a link-integrity verdict: which pages didn't
@@ -239,12 +239,14 @@ async function runContentAudit(
     "page url for every issue. If a page has no real problem, don't invent " +
     "one for it — an empty list is a valid answer. Reply with ONLY minified " +
     'JSON: {"issues":[{"url":string,"issue":string,"severity":"low|medium|high"}]}.';
-  const res = await ctx.sapiom.models.run({
-    system,
-    prompt: `PAGES:\n${evidence}`,
-    maxTokens: 900,
+  const res = await ctx.sapiom.llm.run({
+    request: {
+      system,
+      messages: [{ role: "user", content: `PAGES:\n${evidence}` }],
+      max_tokens: 900,
+    },
   });
-  return coerceFindings(res.output);
+  return coerceFindings(ctx.sapiom.llm.textOf(res) ?? null);
 }
 
 /** Best-effort extraction of a single JSON object from model output. */

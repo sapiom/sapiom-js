@@ -8,9 +8,9 @@
  * own agent.
  *
  * There is NO gateway call in this file. The judge LLM call lives in the `judge`
- * step in `index.ts` and goes through `ctx.sapiom.models.run` — the real,
- * deploy-injected, metered LLM path (x402 at `tools.sapiom.ai/models/v1`). This
- * file only builds the prompt string and parses the score out of the reply.
+ * step in `index.ts` and goes through `ctx.sapiom.llm.run` — the real,
+ * deploy-injected, metered LLM gateway path. This file only builds the prompt
+ * string and parses the score out of the reply.
  */
 
 export interface JudgeResult {

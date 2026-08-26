@@ -5,7 +5,7 @@ Combine** — authored against `@sapiom/agent`. It splits a goal into parts, run
 part as its own child agent run in parallel, then merges the results:
 `plan` → `fanOut` → `reduce` → `done`, with a `solve` leaf and a `planned` (dry-run)
 off-ramp. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom`
-(here: `ctx.sapiom.agents.run`, `ctx.sapiom.models.run`).
+(here: `ctx.sapiom.agents.run`, `ctx.sapiom.llm.run`).
 
 ## Authoring
 

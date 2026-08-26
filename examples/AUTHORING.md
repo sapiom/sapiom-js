@@ -114,7 +114,9 @@ async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
   if (existing.inboxes.length > 0) return existing.inboxes[0].inboxId;
   try {
-    const inbox = await ctx.sapiom.email.inboxes.create({ displayName: "My Agent" });
+    const inbox = await ctx.sapiom.email.inboxes.create({
+      displayName: "My Agent",
+    });
     return inbox.inboxId;
   } catch (err) {
     if (err instanceof EmailHttpError && err.status === 409) {
@@ -222,8 +224,9 @@ run, and secrets are read at step dispatch.
    order.
 5. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
    must be the exact `ctx.sapiom.*` ids your code actually calls — see
-   [Capability ids](#capability-ids-correctness-not-style). The LLM path is `models.run`
-   (`models.coding` for a coding agent), **not** `llm.generate`.
+   [Capability ids](#capability-ids-correctness-not-style). One-shot LLM work uses
+   `llm.run`; managed multi-turn loops use `models.run`, and coding agents use
+   `models.coding`. The runtime path is **not** `llm.generate`.
 6. **Keep the manifest runnable, not just honest.** The `examples` you list must be real
    `{ input, output }` pairs the code produces — don't invent fields. And `examples[0].input`
    must **produce a terminal run when deployed**: in particular it must not name a resource (a
@@ -314,7 +317,7 @@ result. Steps, capabilities and fan-out are a **tiebreak**, never the reason for
 To pick a band, count the template's **judgment points** — the places where something
 non-deterministic is produced:
 
-- a step with `kind: "llm"` (a model call — `models.run`, `models.coding`),
+- a step with `kind: "llm"` (a model call — `llm.run`, `models.run`, `models.coding`),
 - a generated image or video (`content.generation.*`),
 - a capability that synthesizes prose for you, e.g. `web.search`'s `answer` field. It counts
   even with no `llm` step in the graph, because the user still reads model-written output.
@@ -350,7 +353,7 @@ Set `kind` on every step:
 | `kind`       | Use when                                            |
 | ------------ | --------------------------------------------------- |
 | `capability` | It calls a priced catalog capability.               |
-| `llm`        | It calls a model (`models.run`, `models.coding`).   |
+| `llm`        | It calls a model (`llm.run`, `models.run`, `models.coding`). |
 | `compute`    | In-process logic, a branch, or a terminal.          |
 | `pause`      | It suspends the run at $0 until something wakes it. |
 
@@ -470,11 +473,11 @@ means a real run — nothing pretends.
 - **Short declarative sentences.** One idea each. Cut clauses.
 - **No pitch.** Delete "the sharpest showcase of the platform's differentiator", "seamless", "powerful", "robust", "the X pattern, done right". State what it does; the reader decides if it's impressive.
 - **Concrete over abstract.** "offer the job to your top pick, then fall down the shortlist" beats "a ranked sequential-fallback loop".
-- **You can name a capability or primitive** (`models.run`, `pauseUntilSignal`, `web.search`) — once, in passing, not as the headline.
+- **You can name a capability or primitive** (`llm.run`, `pauseUntilSignal`, `web.search`) — once, in passing, not as the headline.
 
 ### Before → after (the house style, from a real edit)
 
-> ❌ "The agent does reversible prep — parse the request (models.run), rank the candidates by
+> ❌ "The agent does reversible prep — parse the request (llm.run), rank the candidates by
 > fit, and notify the approver (email) — then blocks on a durable pauseUntilSignal so the run
 > survives the wait at $0. The sharpest showcase of the platform's durability differentiator."
 
@@ -557,8 +560,9 @@ The `capabilities` array and each `steps[].capability` **must be the real `ctx.s
 the source calls.** Mismatches make the gallery advertise a capability the deployed run never
 uses, and skew the estimated cost.
 
-- The LLM path is **`models.run`** (and `models.coding` for coding). It is **not** `llm.generate`
-  — that is a catalog id that reads `coming_soon` and is never the runtime path.
+- One-shot LLM work uses **`llm.run`**. Use `models.run` only for a managed
+  multi-turn loop, and `models.coding` for a coding agent. None of these runtime
+  paths is `llm.generate`, a catalog id that reads `coming_soon`.
 - Cross-check against `index.ts`: grep for `ctx.sapiom.<x>` and list exactly those ids.
 - Don't add a capability to the array that no step calls.
 
@@ -615,7 +619,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] `description`: one plain sentence, ≤160 chars, no internal jargon.
 - [ ] `whatItDoes`: ≤320 chars, verb-first, capability named in passing, no pitch words.
 - [ ] `steps[].description`: one plain sentence each; `name`/`next`/`terminal`/`capability` unchanged.
-- [ ] `capabilities`: exactly the `ctx.sapiom.*` ids the source calls (`models.run`, not `llm.generate`).
+- [ ] `capabilities`: exactly the `ctx.sapiom.*` ids the source calls (`llm.run`, not `llm.generate`).
 - [ ] `longDescription`: 2–4 short paragraphs; cost stated simply at the end.
 - [ ] `useCases`: exactly 3, each ≤40 chars, short noun phrases.
 - [ ] `notes`: Use-this-template first; template-specific gotcha; advanced local path last.

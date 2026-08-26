@@ -25,9 +25,9 @@ import { z } from "zod/v4";
  *     polling loop, no billed idle.
  *
  * Then, in one legible graph:
- *   intake ──▶ extract (models.run) ──▶ upsert (database) ──▶ summary (email)
+ *   intake ──▶ extract (llm.run) ──▶ upsert (database) ──▶ summary (email)
  *
- *   - **extract** hands the transcript to an LLM (`ctx.sapiom.models.run` — the
+ *   - **extract** hands the transcript to an LLM (`ctx.sapiom.llm.run` — the
  *     live x402-served model) to pull the contact it's about, the CRM fields to
  *     change (deal stage, next step), and the action items, as structured JSON.
  *   - **upsert** writes to a small Postgres CRM store the template owns. It
@@ -368,8 +368,14 @@ const extract = defineStep({
       '[{"description":string,"owner":string|null,"dueDate":string|null}]}.';
     const prompt = `MEETING TRANSCRIPT:\n${transcript}`;
 
-    const res = await ctx.sapiom.models.run({ system, prompt, maxTokens: 900 });
-    const extraction = parseExtraction(res.output);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 900,
+      },
+    });
+    const extraction = parseExtraction(ctx.sapiom.llm.textOf(res) ?? null);
     ctx.logger.info("extracted meeting notes", {
       contact: extraction.contact.name,
       actionItems: extraction.actionItems.length,

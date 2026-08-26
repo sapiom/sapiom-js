@@ -18,7 +18,7 @@ import { z } from "zod/v4";
  * (`models.coding`), then does the part a plain bump bot skips: it re-attaches
  * that sandbox, runs the real test suite there (`sandboxes.exec`), and gates
  * everything on the result. Green builds get a model risk assessment of the
- * changed dependencies (`models.run`); red builds never push. Every run — green,
+ * changed dependencies (`llm.run`); red builds never push. Every run — green,
  * held, or red — archives a triage report to file storage (`fileStorage.upload`)
  * so you have a durable record of what changed and why it was or wasn't shipped.
  *
@@ -356,8 +356,14 @@ const assess = defineStep({
       `Dependency changes (git diff --stat):\n${diffStat}\n\n` +
       `Test output (tail):\n${testTail}`;
 
-    const res = await ctx.sapiom.models.run({ prompt, system, maxTokens: 500 });
-    const assessment = parseAssessment(res.output);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 500,
+      },
+    });
+    const assessment = parseAssessment(ctx.sapiom.llm.textOf(res) ?? null);
     ctx.shared.set("assessment", assessment);
 
     const held =

@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Turn one scene description into a short stitched video. An LLM breaks the scene into a style guide and an ordered shot list, generates each keyframe, animates it into a clip, and joins the clips. Run it with no input and it shoots the built-in sample as a single real shot.",
-  "longDescription": "Give it one scene description and it produces a short, multi-shot video with a consistent look. A model (`models.run`) writes a style guide and breaks the scene into a shot list, then image and video generation turn that plan into clips. Keyframes and clips render one at a time, pausing until a webhook says each is ready, then a merge stitches them into one video. Run it with no input and it shoots the built-in sample; set `dryRun` to see the shot list without generating.",
+  "longDescription": "Give it one scene description and it produces a short, multi-shot video with a consistent look. A model (`llm.run`) writes a style guide and breaks the scene into a shot list, then image and video generation turn that plan into clips. Keyframes and clips render one at a time, pausing until a webhook says each is ready, then a merge stitches them into one video. Run it with no input and it shoots the built-in sample; set `dryRun` to see the shot list without generating.",
   "useCases": [
     "One brief, one short video",
     "Consistent style per shot",

@@ -17,7 +17,7 @@ import { z } from "zod/v4";
  * sandbox, and email the finished report.
  *
  * In one legible graph:
- *   snapshot (database) ──▶ detectAnomalies (models.run) ──▶ narrate (models.run)
+ *   snapshot (database) ──▶ detectAnomalies (llm.run) ──▶ narrate (llm.run)
  *     ──▶ followUp (database) ──▶ chart (sandbox + fileStorage) ──▶ deliver (email)
  *
  *   - **snapshot** runs a set of read-only SQL queries against a Postgres database
@@ -26,7 +26,7 @@ import { z } from "zod/v4";
  *     catalog (rows per table, table count, database size), so it produces a real
  *     snapshot on any database with zero configuration; pass your own `queries` to
  *     report on your actual data.
- *   - **detectAnomalies** hands those metrics to an LLM (`ctx.sapiom.models.run`) to
+ *   - **detectAnomalies** hands those metrics to an LLM (`ctx.sapiom.llm.run`) to
  *     pick out the single most notable outlier or change — the number most worth a
  *     human's attention — and cite the actual figures. A deterministic fallback
  *     (the largest series point vs. the runner-up) covers an empty snapshot or an
@@ -694,20 +694,28 @@ const detectAnomalies = defineStep({
     // The live, x402-served model spots the outlier — same call the dry-run path
     // takes too (a model call is the world's RESPONSE to the numbers on hand,
     // sample or real; only the DB query and the send are gated behind `dryRun`).
-    const res = await ctx.sapiom.models.run({
-      system:
-        "You are a data analyst spotting anomalies in a database snapshot. Given " +
-        "METRICS (named series of label/value points, and scalar KPIs), find the " +
-        "SINGLE most notable outlier or change — the number most worth a human's " +
-        "attention — and cite the actual figures. Respond with ONLY a JSON object: " +
-        '{"table": string|null, "metric": string, "description": string, ' +
-        '"severity": "low"|"medium"|"high"}. Set `table` to the exact label from a ' +
-        'series point when the anomaly names one (e.g. a table name from "Rows per ' +
-        'table"), else null. No preamble, no code fences.',
-      prompt: `METRICS:\n${renderMetrics(metrics)}`,
-      maxTokens: 300,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system:
+          "You are a data analyst spotting anomalies in a database snapshot. Given " +
+          "METRICS (named series of label/value points, and scalar KPIs), find the " +
+          "SINGLE most notable outlier or change — the number most worth a human's " +
+          "attention — and cite the actual figures. Respond with ONLY a JSON object: " +
+          '{"table": string|null, "metric": string, "description": string, ' +
+          '"severity": "low"|"medium"|"high"}. Set `table` to the exact label from a ' +
+          'series point when the anomaly names one (e.g. a table name from "Rows per ' +
+          'table"), else null. No preamble, no code fences.',
+        messages: [
+          { role: "user", content: `METRICS:\n${renderMetrics(metrics)}` },
+        ],
+        max_tokens: 300,
+      },
     });
-    const anomaly = coerceAnomaly(res.output ?? null, metrics, fallback);
+    const anomaly = coerceAnomaly(
+      ctx.sapiom.llm.textOf(res) ?? null,
+      metrics,
+      fallback,
+    );
     ctx.logger.info("anomaly detected", {
       table: anomaly.table,
       severity: anomaly.severity,
@@ -730,20 +738,27 @@ const narrate = defineStep({
     } else {
       // The live, x402-served model writes the narrative from the numbers,
       // leading with whatever `detectAnomalies` already flagged.
-      const res = await ctx.sapiom.models.run({
-        system:
-          "You are a data analyst writing a short insight report from a database " +
-          "snapshot. Given METRICS and a flagged ANOMALY (the one outlier already " +
-          "identified upstream), write markdown with: a 2-3 sentence executive " +
-          "summary that leads with the anomaly, then 3-5 bullet insights that each " +
-          "cite the actual numbers, then a one-line 'What to watch'. Be concrete and " +
-          "quantitative. Do not invent metrics that aren't given. Output ONLY the " +
-          "markdown report — no preamble, no code fences.",
-        prompt: `METRICS:\n${renderMetrics(metrics)}\n\nANOMALY: ${anomaly.description} (severity: ${anomaly.severity})`,
-        maxTokens: 700,
+      const res = await ctx.sapiom.llm.run({
+        request: {
+          system:
+            "You are a data analyst writing a short insight report from a database " +
+            "snapshot. Given METRICS and a flagged ANOMALY (the one outlier already " +
+            "identified upstream), write markdown with: a 2-3 sentence executive " +
+            "summary that leads with the anomaly, then 3-5 bullet insights that each " +
+            "cite the actual numbers, then a one-line 'What to watch'. Be concrete and " +
+            "quantitative. Do not invent metrics that aren't given. Output ONLY the " +
+            "markdown report — no preamble, no code fences.",
+          messages: [
+            {
+              role: "user",
+              content: `METRICS:\n${renderMetrics(metrics)}\n\nANOMALY: ${anomaly.description} (severity: ${anomaly.severity})`,
+            },
+          ],
+          max_tokens: 700,
+        },
       });
       narrative =
-        (res.output ?? "").trim() ||
+        (ctx.sapiom.llm.textOf(res) ?? "").trim() ||
         "# Database insight report\n\n_The model returned no content._";
     }
 

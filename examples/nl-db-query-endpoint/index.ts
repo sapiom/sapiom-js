@@ -14,7 +14,7 @@ import { z } from "zod/v4";
  * question into a read-only SQL query, vets it, and deploys a live HTTP endpoint
  * that executes read-only SQL against your database.
  *
- * The NL→SQL translation happens ONCE, during the run (where `models.run` has a
+ * The NL→SQL translation happens ONCE, during the run (where `llm.run` has a
  * real per-run engine token). The DEPLOYED endpoint never calls an LLM — it only
  * executes SQL it is given, so it needs no Sapiom credential at all, just
  * `DATABASE_URL`. `GET /` on the deployed endpoint shows the vetted sample
@@ -36,7 +36,7 @@ import { z } from "zod/v4";
  *      database with the unmodified default question, this is a fixed, known-safe
  *      SELECT written once by us, so the zero-setup path never depends on an LLM
  *      returning valid SQL. Any other question or database still asks an LLM
- *      (`models.run`), system-prompted to emit a single read-only SELECT.
+ *      (`llm.run`), system-prompted to emit a single read-only SELECT.
  *   4. guard    — apply the read-only guardrail to that sample SQL, whichever
  *      source produced it. Anything that isn't a single read-only statement routes
  *      to `rejected`.
@@ -48,7 +48,7 @@ import { z } from "zod/v4";
  *   6. deploy   — write a small server into a sandbox and expose it at a stable
  *      URL (`sandboxes.deployPreview`). Only `DATABASE_URL` and the vetted sample
  *      (`SEED_QUESTION`/`SEED_SQL`/`SEED_COLUMNS`/`SEED_ROWS`) are passed as env —
- *      no Sapiom credential, since the deployed server never calls `models.run`.
+ *      no Sapiom credential, since the deployed server never calls `llm.run`.
  *      After the sandbox reports a URL, this step PROBES it for real — POSTs the
  *      vetted sample SQL to `/query` and requires a 200 with rows back — before
  *      calling the run `deployed`. A URL that can't answer its own vetted query is
@@ -505,7 +505,9 @@ const entryInput = z.object({
   model: z
     .string()
     .optional()
-    .describe("LLM model / routing alias override for the translation."),
+    .describe(
+      "Optional routing label for the translation. Omit it to use the platform default.",
+    ),
   maxRows: z
     .number()
     .optional()
@@ -629,7 +631,10 @@ const plan = defineStep({
   async run(_input: unknown, ctx: Ctx) {
     const config = ctx.shared.get("config")!;
 
-    if (config.usingDemoDatabase && config.sampleQuestion === DEFAULT_QUESTION) {
+    if (
+      config.usingDemoDatabase &&
+      config.sampleQuestion === DEFAULT_QUESTION
+    ) {
       ctx.logger.info("using the built-in deterministic sample query", {
         question: config.sampleQuestion,
       });
@@ -641,14 +646,18 @@ const plan = defineStep({
       "Output ONLY the SQL: no prose, no markdown fences, no trailing semicolon.",
       "It MUST be a single SELECT (a leading WITH/CTE is fine). Never write or modify data.",
     ].join("\n");
-    const res = await ctx.sapiom.models.run({
-      system,
-      prompt: `Question: ${config.sampleQuestion}`,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [
+          { role: "user", content: `Question: ${config.sampleQuestion}` },
+        ],
+        max_tokens: 500,
+      },
       model: config.model || undefined,
-      maxTokens: 500,
     });
     ctx.logger.info("sample translated", { question: config.sampleQuestion });
-    return goto("guard", { sql: res.output ?? "" });
+    return goto("guard", { sql: ctx.sapiom.llm.textOf(res) ?? "" });
   },
 });
 
@@ -792,7 +801,8 @@ const deploy = defineStep({
     // them, since it never calls an LLM.
     const sampleColumns = ctx.shared.get("sampleColumns") ?? [];
     const sampleRows = ctx.shared.get("sampleRows") ?? [];
-    const sampleRowCount = ctx.shared.get("sampleRowCount") ?? sampleRows.length;
+    const sampleRowCount =
+      ctx.shared.get("sampleRowCount") ?? sampleRows.length;
     const sampleTruncated = ctx.shared.get("sampleTruncated") ?? false;
 
     // No Sapiom credential of any kind: the deployed server only executes SQL it

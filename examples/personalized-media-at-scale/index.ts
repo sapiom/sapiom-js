@@ -175,7 +175,7 @@ function renderAssetHtml(asset: Asset): string {
 /**
  * Build the personalized generation prompt for a row. Deterministic on purpose —
  * this template generates media, not copy, so no LLM is in the loop. Swap in
- * `ctx.sapiom.models.run` here if you want the prompt itself written per row.
+ * `ctx.sapiom.llm.run` here if you want the prompt itself written per row.
  */
 function buildPrompt(row: Recipient, medium: Medium, style: string): string {
   const look = style.trim() || "clean, modern, brand-friendly";

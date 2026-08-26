@@ -5,12 +5,12 @@ renders, audits the content and structure with a model, and verifies link
 integrity — including whether Terms and Privacy links exist and resolve —
 then compiles a QA report with screenshots and a plain list of what's broken.
 Built on `ctx.sapiom.search.scrape`, `ctx.sapiom.browserAutomation`, and
-`ctx.sapiom.models.run`.
+`ctx.sapiom.llm.run`.
 
 ## What it does
 
 ```
-crawl (web.scrape) ─▶ render (browser.session) ─▶ audit (models.run)
+crawl (web.scrape) ─▶ render (browser.session) ─▶ audit (llm.run)
   ─▶ linkCheck (compute) ─▶ report ─▶ done
 crawl ───────────────────────────────────────────▶ rejected, when `siteUrl`
   isn't a usable URL
@@ -24,7 +24,7 @@ crawl ────────────────────────�
    (`ctx.sapiom.browserAutomation.withSession`) and screenshots every crawled
    page in it. A page that fails to render becomes a failed row; the rest are
    still captured.
-3. **audit** — asks a model (`ctx.sapiom.models.run`) to read every crawled
+3. **audit** — asks a model (`ctx.sapiom.llm.run`) to read every crawled
    page's content in one call and flag concrete issues: placeholder text,
    thin sections, missing or duplicate titles.
 4. **linkCheck** — turns the already-collected data into a link-integrity

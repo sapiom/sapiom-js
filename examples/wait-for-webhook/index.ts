@@ -254,8 +254,14 @@ const decide = defineStep({
       `Original job request:\n${JSON.stringify(job)}\n\n` +
       `Callback payload:\n${JSON.stringify(payload)}`;
 
-    const res = await ctx.sapiom.models.run({ prompt, system, maxTokens: 400 });
-    const decision = parseDecision(res.output, payload);
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 400,
+      },
+    });
+    const decision = parseDecision(ctx.sapiom.llm.textOf(res) ?? null, payload);
     ctx.shared.set("decision", decision);
     ctx.logger.info("callback decided", {
       decision: decision.decision,

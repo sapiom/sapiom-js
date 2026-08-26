@@ -8,14 +8,14 @@ transcript arrives directly or by a durable webhook pause.
 
 ```
 intake  ──▶  extract  ──▶  upsert  ──▶  summary  (terminal)
-(pause/take)  (models.run)  (database)   (email)
+(pause/take)  (llm.run)  (database)   (email)
 ```
 
 1. **intake** — takes the transcript. It reads one directly as `transcript`, or —
    with `webhook: true` and no transcript yet — **pauses at $0** via
    `pauseUntilSignal` until your note-taker pushes one as the `transcript.ready`
    signal. No polling loop, no billed idle.
-2. **extract** — hands the transcript to an LLM (`ctx.sapiom.models.run` — the
+2. **extract** — hands the transcript to an LLM (`ctx.sapiom.llm.run` — the
    live x402-served model) to pull structured data: the **contact** the call was
    with, the **CRM fields** to change (deal stage, next step), and the **action
    items**, each with an owner and due date when the call named them.

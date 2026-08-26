@@ -37,7 +37,7 @@ import { buildCritiquePrompt, parseJudgment } from "./critique.js";
  *
  * The graph, one legible line per capability:
  *   plan (compute) ─▶ gather (web.search × N, dedupe, web.scrape)
- *     ─▶ synthesize (models.run) ⇄ critique (models.run, bounded revise loop)
+ *     ─▶ synthesize (llm.run) ⇄ critique (llm.run, bounded revise loop)
  *     ─▶ illustrate ⇄ collectIllustration (contentGeneration.images, bounded fan-out)
  *     ─▶ build (models.coding → a git repo) ─▶ publish (durable sandbox + deployPreview from git)
  *     ─▶ mapDomain (domains.dns) ─▶ live
@@ -663,12 +663,18 @@ const synthesize = defineStep({
 
     // The live, x402-served model turns the raw sources into a structured,
     // cited report — the content the site renders.
-    const res = await ctx.sapiom.models.run({
-      system,
-      prompt,
-      maxTokens: 1500,
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1500,
+      },
     });
-    const report = parseReport(res?.output ?? "", topic, sources);
+    const report = parseReport(
+      ctx.sapiom.llm.textOf(res) ?? "",
+      topic,
+      sources,
+    );
 
     // Slim report metadata rides shared state to the terminal; the full section
     // bodies travel to `critique`/`illustrate`/`build` via `ctx.shared.set("report", ...)`.
@@ -686,7 +692,7 @@ const synthesize = defineStep({
 });
 
 /**
- * The self-critique loop, folded in from the eval-gate idiom: one `models.run`
+ * The self-critique loop, folded in from the eval-gate idiom: one `llm.run`
  * judge call, then the bounded decide-and-branch (no separate step for that,
  * unlike eval-gate's `judge`/`decide` split — this template's graph target is
  * ~7 named phases, so the branch lives in the same step as the judge call,
@@ -721,8 +727,15 @@ const critique = defineStep({
     // Chained judgment: this call's input is `synthesize`'s model output, not
     // caller-supplied data — a malformed reply throws in `parseJudgment` and
     // the engine retries, same contract as `synthesize`'s own model call.
-    const res = await ctx.sapiom.models.run({ prompt, maxTokens: 300 });
-    const { score, rationale } = parseJudgment(res?.output ?? "");
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 300,
+      },
+    });
+    const { score, rationale } = parseJudgment(
+      ctx.sapiom.llm.textOf(res) ?? "",
+    );
     const passed = score >= reviewThreshold;
     const exhausted = iteration >= maxDraftAttempts;
     ctx.logger.info(

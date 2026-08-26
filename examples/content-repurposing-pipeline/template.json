@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Turns one blog post or transcript into a tweet thread, LinkedIn post, newsletter section, quote graphics, and a short clip, then emails the pack to everyone on your list. Runs on a schedule against your latest post, or set `dryRun` to read the copy before anything is generated.",
-  "longDescription": "Give it one blog post or transcript and it hands you a whole content pack: a tweet thread, a LinkedIn post, a newsletter section, quote graphics, and a short teaser clip. A model (`models.run`) rewrites the source into every channel at once, keeping your meaning instead of inventing claims. It makes the media one job at a time, gathers everything into a markdown pack, saves it, and emails it to each recipient on your `deliverTo` list. Set `dryRun` to stop after writing the copy.",
+  "longDescription": "Give it one blog post or transcript and it hands you a whole content pack: a tweet thread, a LinkedIn post, a newsletter section, quote graphics, and a short teaser clip. A model (`llm.run`) rewrites the source into every channel at once, keeping your meaning instead of inventing claims. It makes the media one job at a time, gathers everything into a markdown pack, saves it, and emails it to each recipient on your `deliverTo` list. Set `dryRun` to stop after writing the copy.",
   "useCases": [
     "One post, five formats",
     "Distribution-list send",
@@ -20,9 +20,7 @@
       "description": "One or more addresses to fan the pack out to. Leave it empty and the pack is returned in the run's output instead.",
       "type": "email[]",
       "default": [],
-      "example": [
-        "you@yourcompany.com"
-      ]
+      "example": ["you@yourcompany.com"]
     }
   ],
   "defaultInput": {
@@ -63,10 +61,7 @@
         "source": "Long-form blog post about why small teams ship faster...",
         "title": "Why small teams ship faster",
         "numQuotes": 2,
-        "deliverTo": [
-          "me@example.com",
-          "team@example.com"
-        ],
+        "deliverTo": ["me@example.com", "team@example.com"],
         "schedule": "0 9 * * 1"
       },
       "output": {

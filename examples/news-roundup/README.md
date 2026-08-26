@@ -7,7 +7,7 @@ A Sapiom agent, authored as code against [`@sapiom/agent`](https://www.npmjs.com
 `search` → `select` → `illustrate` → `publish` (defined in `index.ts`, backed by `lib/`):
 
 1. **search** — `ctx.sapiom.search.webSearch` for `"<companyName>" company news from the last 7 days`. If nothing comes back, the agent terminates gracefully (see "No news" below) instead of failing.
-2. **select** — `ctx.sapiom.models.run` picks 3–5 articles from the search results and returns, per article, a title/url/summary/imagePrompt.
+2. **select** — `ctx.sapiom.llm.run` picks 3–5 articles from the search results and returns, per article, a title/url/summary/imagePrompt.
 3. **illustrate** — `ctx.sapiom.contentGeneration.images.create` generates one image per selected article; each image is uploaded public to Sapiom file storage. A failed generation degrades that article to a text-only card (two attempts, then move on) rather than failing the run.
 4. **publish** — renders the dated HTML page, uploads it to file storage, then rebuilds the company's sandbox site entirely from what's in storage (see "Storage" and "Serving" below) and returns the live URLs.
 
@@ -29,7 +29,12 @@ On success (`publish` terminates with):
   "siteUrl": "https://news-roundup-polsia-<id>.sandbox.sapiom.ai",
   "pageUrl": "https://news-roundup-polsia-<id>.sandbox.sapiom.ai/pages/2026-07-22.html",
   "articles": [
-    { "title": "...", "sourceUrl": "...", "summary": "...", "imageUrl": "https://.../images/2026-07-22-1.png" }
+    {
+      "title": "...",
+      "sourceUrl": "...",
+      "summary": "...",
+      "imageUrl": "https://.../images/2026-07-22-1.png"
+    }
   ]
 }
 ```
