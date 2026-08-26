@@ -1,5 +1,13 @@
 # @sapiom/harness-desktop
 
+## 0.3.5
+
+### Patch Changes
+
+- Add browser-style session tabs and make the chat-header plus start a fresh,
+  isolated same-folder Claude Code or Codex conversation while preserving the
+  source session's provider and agent binding.
+
 ## 0.3.4
 
 ### Patch Changes
