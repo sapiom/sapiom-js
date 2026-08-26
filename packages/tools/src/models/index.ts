@@ -66,7 +66,8 @@ export interface CodingRunSpec {
    * Routing label for the coding agent's LLM calls (e.g. `"smart"`). The
    * platform resolves it against its configured label set — a raw provider
    * model id is never honored. Omit to let the platform choose (the
-   * recommended default); pass `"smart"` if you need to pin explicitly.
+   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
+   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
 }
@@ -484,7 +485,8 @@ export interface ModelRunSpec {
    * is never honored. An unrecognized value is never silently dropped: the
    * run routes via the platform default and the platform reports it in the
    * result's `warnings` (SAP-2765). Omit to let the platform choose (the
-   * recommended default); pass `"smart"` if you need to pin explicitly.
+   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
+   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
   /** Max output tokens per turn. */

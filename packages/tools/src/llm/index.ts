@@ -106,7 +106,8 @@ export interface LlmRunSpec {
    * Routing label (e.g. `"smart"`, `"small"`, `"medium"`, `"large"`). The
    * gateway resolves it against its configured label set — a raw provider
    * model id is never honored. Omit to let the gateway choose (the
-   * recommended default); pass `"smart"` if you need to pin explicitly.
+   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
+   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: RoutingLabel;
   /**
@@ -151,7 +152,8 @@ export interface LlmSubmitSpec {
    * Routing label (e.g. `"smart"`, `"small"`, `"medium"`, `"large"`). The
    * gateway resolves it against its configured label set — a raw provider
    * model id is never honored. Omit to let the gateway choose (the
-   * recommended default); pass `"smart"` if you need to pin explicitly.
+   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
+   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: RoutingLabel;
   /**

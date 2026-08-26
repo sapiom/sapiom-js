@@ -28,8 +28,9 @@ one-shot — it overthinks); dispatching a deployed agent by slug →
 \`ctx.sapiom.agents.run\`. Structured output = tool-use/schema output — read
 the \`tool_use\` block's input, never string-parse; a plain-text reply reads
 only \`type === 'text'\` blocks. **Omit \`model\` entirely** — the platform
-routes it, and pinning a label buys nothing the default doesn't already
-give you; raw provider ids are never
+routes it, and \`smart\` is already the default, so naming it changes
+nothing. Reach for \`small\`/\`medium\`/\`large\` only to choose a class
+deliberately. Raw provider ids are never
 honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented in the guide.
 Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.

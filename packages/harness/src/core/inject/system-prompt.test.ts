@@ -34,14 +34,23 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain("ctx.sapiom.llm.run");
     expect(content).toContain("ctx.sapiom.models.run");
     expect(content).toContain("ctx.sapiom.agents.run");
-    // Omit-only is the advice. This assertion used to require the OPPOSITE
-    // ("pin the `smart` label"), which pinned a no-op into the highest-authority
-    // teaching surface and made correcting it fail CI — see the eval finding in
-    // the PR body. Guard the direction the rule actually points, matching
-    // agent-core's skill-sync content guard.
+    // Omit-only is the advice, and `smart` specifically is the no-op (it IS the
+    // default) — NOT labels in general: `small`/`medium`/`large` select a billing
+    // class deliberately. This assertion used to require the OPPOSITE ("pin the
+    // `smart` label"), which pinned a no-op into the highest-authority teaching
+    // surface and made correcting it fail CI. Guard the direction the rule points,
+    // matching agent-core's skill-sync content guard.
     expect(content).toContain("Omit `model` entirely");
-    expect(content.toLowerCase()).not.toContain("pin the `smart`");
-    expect(content.toLowerCase()).not.toContain("if you must pin");
+    expect(content).toMatch(/`smart` is already the default/i);
+    // Reject a reintroduction however it is worded. A literal substring check is
+    // what let this drift in the first place, so guard two shapes:
+    //   (a) "pin" and `smart` in the same sentence, either order —
+    //       "or pin the `smart` label", "pass `smart` if you need to pin explicitly"
+    //   (b) `smart` offered as a value to supply — "use `smart`", "set model to smart"
+    expect(content).not.toMatch(/\bpin\w*\b[^.]*smart|smart[^.]*\bpin\w*\b/i);
+    expect(content).not.toMatch(
+      /\b(?:pass|use|set|specify|choose|select)\b[^.]{0,30}`?"?smart/i,
+    );
     // Structured/forced-tool output has no `text` block — the reply lives in the
     // `tool_use` block's input. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
