@@ -5,10 +5,9 @@
  *  1. LEFT RAIL — an explorer of what exists on disk: workspace folders and
  *     the agents (sapiom.json) inside them. Clicking an agent FOCUSES it. No
  *     sessions live here.
- *  2. MAIN PANEL — the workbench for the focused agent: a session tab strip
- *     (one tab per live session belonging to the agent) above the session
- *     bar, terminal, and action bar. Session switching lives in the tab
- *     strip; the session bar is the active session's identity header.
+ *  2. MAIN PANEL — the workbench for the focused agent: browser-style live
+ *     session tabs inside the shared header, then the conversation/terminal.
+ *     Session switching and same-folder session creation live in that strip.
  *  3. RIGHT PANEL — projections of the ACTIVE session's bound agent (Canvas |
  *     Steps | Code), session-keyed. The canvas stays mounted behind CSS when
  *     another tab is active so a running Visualize enrichment (and the
@@ -169,10 +168,14 @@ export const App = (): JSX.Element => {
     },
     [harness.getWorkflowInputContract],
   );
-  // The composer-first "new session" home. `composing` is explicit New-session
-  // intent (Create new / the +); the home also shows whenever nothing else
-  // claims the centre pane (first run, or every session closed).
+  // The composer-first "new session" home. `composing` is explicit rail
+  // Create-new intent; the workbench tab + starts a sibling directly instead.
+  // The home also shows whenever nothing else claims the centre pane.
   const [composing, setComposing] = useState(false);
+  // The tab + is a one-at-a-time create/bind transaction. State renders the
+  // pending affordance; the ref closes React's same-frame double-click window.
+  const [siblingSessionPending, setSiblingSessionPending] = useState(false);
+  const siblingSessionPendingRef = useRef(false);
   // The focused agent (or bare-scaffold folder) path — the rail's single
   // selection and the main panel's tab-strip subject. The active tab's
   // session is harness.activeSessionId.
@@ -866,10 +869,57 @@ export const App = (): JSX.Element => {
     sendScaffoldPrompt(session, cwd, idea);
   };
 
-  // The tab strip's + and the empty state's Start: begin ANOTHER session on the
-  // focused agent. It lands in the agent's workspace (an existing tab's cwd if
-  // one exists, else the agent's own folder), binds there, and focus stays on
-  // the agent so the new session joins its tab strip.
+  // The workbench tab + starts a fresh coding-agent process beside the active
+  // session. Folder, provider, and optional agent binding carry over; prompt,
+  // transcript, resume identity, and rehydration deliberately do not.
+  const handleStartSiblingSession = (source: HarnessSession): void => {
+    if (siblingSessionPendingRef.current) return;
+
+    siblingSessionPendingRef.current = true;
+    setSiblingSessionPending(true);
+    const focusBeforeCreate = focusedAgentPath;
+    const workflowPath = boundWorkflowPathOf(source);
+    const workflowName = workflowPath
+      ? (state.workflows.find((workflow) =>
+          samePath(workflow.path, workflowPath),
+        )?.name ?? basenameOf(workflowPath))
+      : null;
+
+    void (async () => {
+      try {
+        const session = await createSessionAt(source.cwd, source.harness);
+        if (!workflowPath) {
+          setFocusedAgentPath(source.cwd);
+          return;
+        }
+
+        try {
+          await harness.bindWorkflow(session.id, workflowPath);
+          setFocusedAgentPath(workflowPath);
+        } catch {
+          // Creation already succeeded. Keep that independent process alive
+          // and visible as an unbound folder session rather than rolling it
+          // back because the secondary binding write failed.
+          setFocusedAgentPath(source.cwd);
+          harness.showToast(
+            `Session started, but couldn't attach it to ${workflowName ?? "the agent"}.`,
+          );
+        }
+      } catch {
+        // createSessionAt focuses the requested cwd optimistically. Restore
+        // the source exactly when no new session was created.
+        setFocusedAgentPath(focusBeforeCreate ?? workflowPath ?? source.cwd);
+        harness.setActiveSessionId(source.id);
+        harness.showToast("Couldn't start the session.");
+      } finally {
+        siblingSessionPendingRef.current = false;
+        setSiblingSessionPending(false);
+      }
+    })();
+  };
+
+  // The focused-agent empty state's Start creates the first session. This is
+  // distinct from the tab + because there is no source provider to inherit.
   const handleStartSessionForAgent = (workflow: WorkflowInfo): void => {
     void (async () => {
       const owner = liveSessionsForFocus(state.sessions, workflow.path)[0];
@@ -1510,37 +1560,32 @@ export const App = (): JSX.Element => {
               onRenameSession={renameSession}
               boundWorkflowName={boundWorkflow?.name ?? null}
               sessions={showWorkbench ? focusTabs : []}
+              busySessionIds={harness.busySessionIds}
               onSelectSession={selectTab}
-              labelOf={(session) => {
-                // Sessions of the focused agent share its workspace folder, so
-                // labelling them by that folder is redundant (the rail already
-                // names the workspace). A session still on its folder default is
-                // labelled by its AGENT instead, numbering extras; a real
-                // rename/title passes through untouched.
-                const display = sessionDisplayName(session, state.sessions, sessionNames);
-                const folder = basenameOf(session.cwd);
-                // Folder-default forms ONLY: the bare basename, or "<basename> N"
-                // the dedup appends to repeats. A real rename or transcript title
-                // that merely begins with the basename (e.g. "leasing draft")
-                // must pass through — matching `startsWith("leasing ")` would have
-                // silently replaced it with the agent name.
-                const suffix = display.startsWith(`${folder} `) ? display.slice(folder.length + 1) : "";
-                const isFolderDefault = display === folder || /^\d+$/.test(suffix);
-                if (!isFolderDefault || !focusedWorkflow) return display;
-                const idx = focusTabs.findIndex((s) => s.id === session.id);
-                return idx > 0 ? `${focusedWorkflow.name} ${idx + 1}` : focusedWorkflow.name;
-              }}
-              busy={activeSession != null && harness.busySessionIds.has(activeSession.id)}
+              labelOf={(session) =>
+                sessionDisplayName(session, state.sessions, sessionNames)
+              }
+              busy={
+                activeSession != null &&
+                harness.busySessionIds.has(activeSession.id)
+              }
               onCloseSession={(id) => void harness.closeSession(id)}
               onOpenInEditor={openInEditor}
               editorLabel={editorLabel(harness.settings?.editor)}
               onToast={harness.showToast}
               onExpandRail={railCollapsed ? () => setRailCollapsed(false) : null}
               onExpandRight={rightCollapsed ? expandRightPane : null}
-              onNewSession={() => setComposing(true)}
-              /* The agent action cluster shares the one session bar — no
-                 separate tab lane or action row. Switching sessions moves to
-                 the rail / ⌘K / history. */
+              subjectName={
+                focusedWorkflow?.name ??
+                (activeSession ? basenameOf(activeSession.cwd) : null)
+              }
+              newSessionPending={siblingSessionPending}
+              onNewSession={
+                activeSession
+                  ? () => handleStartSiblingSession(activeSession)
+                  : null
+              }
+              /* The agent action cluster shares the same row as the tabs. */
               actions={
                 showWorkbench && activeSession && boundWorkflow ? (
                   <SessionStepsBar

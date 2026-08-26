@@ -1005,6 +1005,7 @@ class MockApi implements HarnessApi {
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __HARNESS_TEST__?: Record<string, unknown>;
+        __MOCK_CREATE_SESSION_FAIL_ONCE__?: boolean;
       };
       const previous =
         (win.__HARNESS_TEST__?.createSessionCalls as unknown[] | undefined) ??
@@ -1014,6 +1015,10 @@ class MockApi implements HarnessApi {
         lastCreateSession: { req },
         createSessionCalls: [...previous, { req }],
       };
+      if (win.__MOCK_CREATE_SESSION_FAIL_ONCE__) {
+        win.__MOCK_CREATE_SESSION_FAIL_ONCE__ = false;
+        throw new Error("mock: couldn't create session");
+      }
     }
     const session: HarnessSession = {
       id: `sess-mock-${this.sessions.length + 1}`,
@@ -1431,6 +1436,25 @@ class MockApi implements HarnessApi {
     workflowPath: string | null,
   ): Promise<HarnessSession> {
     await delay(150);
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+        __MOCK_BIND_WORKFLOW_FAIL_ONCE__?: boolean;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.bindWorkflowCalls as unknown[] | undefined) ??
+        [];
+      const req = { sessionId, workflowPath };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastBindWorkflow: { req },
+        bindWorkflowCalls: [...previous, { req }],
+      };
+      if (win.__MOCK_BIND_WORKFLOW_FAIL_ONCE__) {
+        win.__MOCK_BIND_WORKFLOW_FAIL_ONCE__ = false;
+        throw new Error("mock: couldn't bind session");
+      }
+    }
     const existing = this.sessions.find((session) => session.id === sessionId);
     if (!existing) throw new Error(`mock: no session to bind for ${sessionId}`);
     const bound: HarnessSession = {

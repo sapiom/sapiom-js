@@ -6,9 +6,8 @@ import { Icon } from "./Icon";
 
 /**
  * The one confirm dialog before a live session ends — ending it kills a real
- * PTY, so it never happens on a bare click. Shared by the session bar's ⋯
- * menu (the active session) and the tab strip's × (any tab), so the copy and
- * the safe-default focus never drift between the two entry points.
+ * PTY, so it never happens on a bare click. It is opened from the active
+ * session tab's options menu.
  *
  * Dismisses like every other layer: Escape and a backdrop click both
  * mean "Keep session", and Escape hands focus back to the control the flow
@@ -21,7 +20,7 @@ export function EndSessionConfirm({
 }: {
   onCancel: () => void;
   onConfirm: () => void;
-  /** Focus returns here on Escape (the ⋯ button or the tab's × that opened it). */
+  /** Focus returns here on Escape. */
   triggerRef?: RefObject<HTMLElement | null>;
 }): JSX.Element {
   const confirmRef = useRef<HTMLDivElement>(null);

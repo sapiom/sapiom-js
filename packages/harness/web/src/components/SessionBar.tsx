@@ -1,13 +1,14 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX, ReactNode } from "react";
 import type { HarnessSession } from "@shared/types";
 
-import { HARNESS_LABELS, formatRelativeTime } from "../lib/history-meta";
+import { HARNESS_LABELS } from "../lib/history-meta";
 import { basenameOf } from "../lib/paths";
 import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
+import { SessionTabs } from "./SessionTabs";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** The workspace a session belongs to is its directory's basename — the
@@ -15,6 +16,8 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 function workspaceLabelOf(path: string): string {
   return basenameOf(path);
 }
+
+const EMPTY_BUSY_SESSION_IDS: ReadonlySet<string> = new Set();
 
 interface SessionBarProps {
   /** The main panel is showing the Overview/intro, not a session. */
@@ -53,23 +56,27 @@ interface SessionBarProps {
   onToast: (message: string, tone?: ToastTone) => void;
   /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
   actions?: ReactNode;
-  /** Start a new session (the + at the end of the queue). */
+  /** Start a sibling session (the + pinned after the live-session tabs). */
   onNewSession?: (() => void) | null;
-  /** The focused agent's live sessions, for the inline switcher. */
+  /** Disables fresh-session creation until its create/bind transaction settles. */
+  newSessionPending?: boolean;
+  /** Agent name (or bare folder name) used by the new-session affordance. */
+  subjectName?: string | null;
+  /** The focused agent/folder's live sessions, rendered oldest first as tabs. */
   sessions?: HarnessSession[];
-  /** Switch the active session (clicking another session's chip). */
+  /** Live output state for every visible session, including background tabs. */
+  busySessionIds?: ReadonlySet<string>;
+  /** Switch the active session (clicking another session's tab). */
   onSelectSession?: ((id: string) => void) | null;
-  /** Display name for a session chip (rename > title > folder). */
+  /** Display name for a tab (rename > title > folder). */
   labelOf?: (session: HarnessSession) => string;
 }
 
 /**
- * The single main-panel header. It carries, on one horizontally-scrollable row:
- * the session QUEUE on the left (the current session as an options dropdown —
- * its title ⌄ opens Copy path / Rename / Open in editor / End session — then
- * the focused agent's OTHER live sessions as switch chips, then a + to add one),
- * and the agent ACTIONS on the right. No harness glyph, no separate tab lane,
- * no standalone ⋯ menu: identity, switching, and actions read as one bar.
+ * The single main-panel header. Live sessions for the focused agent/folder are
+ * browser-style tabs on the left, followed by a pinned + for a fresh sibling.
+ * The active tab owns Copy path / Rename / Open in editor / End session through
+ * its caret, while agent actions remain right-anchored on the same row.
  */
 export function SessionBar({
   overviewMode = false,
@@ -90,7 +97,10 @@ export function SessionBar({
   onToast,
   actions = null,
   onNewSession = null,
+  newSessionPending = false,
+  subjectName = null,
   sessions = [],
+  busySessionIds = EMPTY_BUSY_SESSION_IDS,
   onSelectSession = null,
   labelOf,
 }: SessionBarProps): JSX.Element {
@@ -104,10 +114,11 @@ export function SessionBar({
     if (activeSession) onRenameSession(activeSession.id, renameDraft);
     setRenaming(false);
   };
-
-  const others = activeSession ? sessions.filter((s) => s.id !== activeSession.id) : [];
-  // The switcher lists every live session of this agent, active one first.
-  const orderedSessions = activeSession ? [activeSession, ...others] : [];
+  useEffect(() => {
+    setMenuOpen(false);
+    setRenaming(false);
+    setConfirmingClose(false);
+  }, [activeSession?.id]);
 
   return (
     <div className="session-bar" {...trackingAttrs({ surface: "session_bar" })}>
@@ -185,181 +196,185 @@ export function SessionBar({
               </span>
             </button>
           ) : null
+        ) : activeSession &&
+          activeSession.status !== "exited" &&
+          sessions.length > 0 &&
+          onSelectSession &&
+          onNewSession &&
+          labelOf ? (
+          <SessionTabs
+            sessions={sessions}
+            activeSessionId={activeSession.id}
+            busySessionIds={busySessionIds}
+            labelOf={labelOf}
+            subjectName={subjectName ?? workspaceLabelOf(activeSession.cwd)}
+            onSelect={onSelectSession}
+            onNew={onNewSession}
+            newSessionPending={newSessionPending}
+            menuOpen={menuOpen}
+            onToggleMenu={() => setMenuOpen((open) => !open)}
+            menuTriggerRef={menuTriggerRef}
+            menuTooltip={`${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`}
+            renaming={renaming}
+            renameDraft={renameDraft}
+            onRenameDraftChange={setRenameDraft}
+            onCommitRename={commitRename}
+            onCancelRename={() => setRenaming(false)}
+          />
         ) : activeSession ? (
-          <>
-            {/* Current session: the options dropdown (title ⌄). */}
-            <div className="session-current-wrap">
-              {renaming ? (
-                <input
-                  className="group-name-input session-rename-input session-context-rename"
-                  data-testid="session-rename-input"
-                  value={renameDraft}
-                  autoFocus
-                  onFocus={(e) => e.currentTarget.select()}
-                  onChange={(e) => setRenameDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename();
-                    if (e.key === "Escape") setRenaming(false);
-                  }}
-                  onBlur={commitRename}
-                />
-              ) : (
-                <button
-                  ref={menuTriggerRef}
-                  className="session-current session-title-trigger"
-                  data-testid="session-menu"
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  data-tooltip={`${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`}
-                  onClick={() => setMenuOpen((v) => !v)}
-                  // The tooltip embeds the absolute cwd (OS username included).
-                  {...trackingAttrs({ object: "session" })}
-                >
-                  {busy ? (
-                    <span className="session-busy" data-testid="session-busy" aria-hidden="true" />
-                  ) : (
-                    <span className="session-dot" data-status={activeSession.status} />
-                  )}
-                  <span className="session-context-title" data-testid="session-context-title">
-                    {labelOf ? labelOf(activeSession) : (sessionName ?? activeSession.title)}
-                  </span>
-                  <Icon name="ChevronDown" size={13} />
-                </button>
-              )}
-              <AnchoredPopover
-                open={menuOpen}
-                anchorRef={menuTriggerRef}
-                onDismiss={closeMenu}
-                placement="down-start"
-                className="session-menu"
-                role="menu"
-                testid="session-menu-popover"
+          /* An exited session is historical context, not a live tab. Keep its
+             compact title/menu while still allowing a fresh sibling below. */
+          <div className="session-current-wrap">
+            {renaming ? (
+              <input
+                className="group-name-input session-rename-input session-context-rename"
+                data-testid="session-rename-input"
+                value={renameDraft}
+                autoFocus
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setRenameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") commitRename();
+                  if (event.key === "Escape") setRenaming(false);
+                }}
+                onBlur={commitRename}
+              />
+            ) : (
+              <button
+                ref={menuTriggerRef}
+                type="button"
+                className="session-current session-title-trigger"
+                data-testid="session-menu"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                data-tooltip={`${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`}
+                onClick={() => setMenuOpen((open) => !open)}
+                {...trackingAttrs({ object: "session" })}
               >
-                {/* Switcher: every live session of this agent, the active one
-                    checked. Picking a row switches; the actions below act on the
-                    current session. One place to select or act — no inline chips
-                    crowding the bar. */}
-                <div className="session-menu-section">Sessions</div>
-                {orderedSessions.map((s) => {
-                  const isActive = s.id === activeSession.id;
-                  return (
-                    <button
-                      key={s.id}
-                      role="menuitemradio"
-                      aria-checked={isActive}
-                      className={"profile-menu-item session-switch-item" + (isActive ? " is-selected" : "")}
-                      data-testid={`session-switch-${s.id}`}
-                      onClick={() => {
-                        if (!isActive) onSelectSession?.(s.id);
-                        closeMenu();
-                      }}
-                    >
-                      <span className="session-dot" data-status={s.status} />
-                      <span className="session-switch-label">{labelOf ? labelOf(s) : s.title}</span>
-                      <span className="session-switch-meta">{formatRelativeTime(s.lastActiveAt)}</span>
-                      {isActive && <Icon name="Check" size={13} />}
-                    </button>
-                  );
-                })}
-                {onNewSession && (
-                  <button
-                    role="menuitem"
-                    className="profile-menu-item session-menu-new"
-                    data-testid="session-new-menu"
-                    onClick={() => {
-                      onNewSession();
-                      closeMenu();
-                    }}
-                  >
-                    <Icon name="Plus" size={13} />
-                    New session
-                  </button>
+                {busy ? (
+                  <span
+                    className="session-busy"
+                    data-testid="session-busy"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <span
+                    className="session-dot"
+                    data-status={activeSession.status}
+                    aria-hidden="true"
+                  />
                 )}
-
-                <div className="session-menu-divider" role="separator" />
-
-                {/* Which agent's Canvas this session drives — moved off the bar
-                    into the menu, where it reads as metadata, not a session. */}
-                {boundWorkflowName && (
-                  <div className="session-menu-bound" data-testid="session-workflow-chip">
-                    Bound to <strong>{boundWorkflowName}</strong> · shown in Canvas
-                  </div>
-                )}
-
-                <button
-                  role="menuitem"
-                  className="profile-menu-item"
-                  onClick={() => {
-                    void navigator.clipboard
-                      ?.writeText(activeSession.cwd)
-                      .then(() => onToast("Path copied.", "success"))
-                      .catch(() => onToast("Couldn't copy the path."));
-                    closeMenu();
-                  }}
+                <span
+                  className="session-context-title"
+                  data-testid="session-context-title"
                 >
-                  <Icon name="Copy" size={13} />
-                  Copy path
-                </button>
-                <button
-                  role="menuitem"
-                  className="profile-menu-item"
-                  data-testid="session-rename"
-                  onClick={() => {
-                    setRenameDraft(sessionName ?? activeSession.title);
-                    setRenaming(true);
-                    closeMenu();
-                  }}
-                >
-                  <Icon name="Pencil" size={13} />
-                  Rename session
-                </button>
-                <button
-                  role="menuitem"
-                  className="profile-menu-item"
-                  data-testid="session-open-editor"
-                  onClick={() => {
-                    onOpenInEditor(activeSession.cwd);
-                    closeMenu();
-                  }}
-                >
-                  <Icon name="Code" size={13} />
-                  Open in {editorLabel}
-                </button>
-                {activeSession.status !== "exited" && (
-                  <button
-                    role="menuitem"
-                    className="profile-menu-item session-menu-danger"
-                    data-testid="session-end-btn"
-                    onClick={() => {
-                      closeMenu();
-                      setConfirmingClose(true);
-                    }}
-                  >
-                    <Icon name="X" size={13} />
-                    End session…
-                  </button>
-                )}
-              </AnchoredPopover>
-            </div>
-          </>
+                  {labelOf
+                    ? labelOf(activeSession)
+                    : (sessionName ?? activeSession.title)}
+                </span>
+                <Icon name="ChevronDown" size={13} />
+              </button>
+            )}
+          </div>
         ) : (
           <span className="session-context-none">No active session</span>
         )}
       </div>
 
-      {/* + : add a session — OUTSIDE the scrollable queue so it stays visible
-          however long the session list grows. */}
-      {/* No "new session" + while the composer IS the new-session screen — it's
-          redundant there. Only alongside a live session. */}
-      {onNewSession && activeSession && !composing && (
+      {activeSession && (
+        <AnchoredPopover
+          open={menuOpen}
+          anchorRef={menuTriggerRef}
+          onDismiss={closeMenu}
+          placement="down-start"
+          className="session-menu"
+          role="menu"
+          testid="session-menu-popover"
+        >
+          {boundWorkflowName && (
+            <div
+              className="session-menu-bound"
+              data-testid="session-workflow-chip"
+            >
+              Bound to <strong>{boundWorkflowName}</strong> · shown in Canvas
+            </div>
+          )}
+
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(activeSession.cwd)
+                .then(() => onToast("Path copied.", "success"))
+                .catch(() => onToast("Couldn't copy the path."));
+              closeMenu();
+            }}
+          >
+            <Icon name="Copy" size={13} />
+            Copy path
+          </button>
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="session-rename"
+            onClick={() => {
+              setRenameDraft(sessionName ?? activeSession.title);
+              setRenaming(true);
+              closeMenu();
+            }}
+          >
+            <Icon name="Pencil" size={13} />
+            Rename session
+          </button>
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="session-open-editor"
+            onClick={() => {
+              onOpenInEditor(activeSession.cwd);
+              closeMenu();
+            }}
+          >
+            <Icon name="Code" size={13} />
+            Open in {editorLabel}
+          </button>
+          {activeSession.status !== "exited" && (
+            <button
+              role="menuitem"
+              className="profile-menu-item session-menu-danger"
+              data-testid="session-end-btn"
+              onClick={() => {
+                closeMenu();
+                setConfirmingClose(true);
+              }}
+            >
+              <Icon name="X" size={13} />
+              End session…
+            </button>
+          )}
+        </AnchoredPopover>
+      )}
+
+      {/* Ended sessions do not join the live strip, but their + still starts a
+          fresh session from the same folder/provider/binding. Live-session +
+          is pinned inside SessionTabs, outside its scrolling list. */}
+      {onNewSession && activeSession?.status === "exited" && !composing && (
         <button
-          className="session-new"
-          data-testid="session-new"
-          aria-label="New session"
-          data-tooltip="New session"
+          type="button"
+          className="theme-toggle session-tab-new"
+          data-testid="session-tab-new"
+          aria-label={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
+          aria-busy={newSessionPending}
+          data-tooltip={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
+          disabled={newSessionPending}
           onClick={onNewSession}
         >
-          <Icon name="Plus" size={15} />
+          {newSessionPending ? (
+            <span className="session-busy" aria-hidden="true" />
+          ) : (
+            <Icon name="Plus" size={14} />
+          )}
         </button>
       )}
 
