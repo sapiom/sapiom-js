@@ -43,6 +43,26 @@ test("accepts a gateway-routed one-shot template and matching docs", () => {
   );
 });
 
+test("accepts dependency ranges exactly at the required SDK floors", () => {
+  assert.deepEqual(checkOneShotLlmTemplate(fixture()), []);
+});
+
+test("rejects a dependency range below the tools SDK floor", () => {
+  const errors = checkOneShotLlmTemplate(
+    fixture({
+      packageJson: {
+        dependencies: {
+          "@sapiom/agent": "^0.12.0",
+          "@sapiom/tools": "^0.30.0",
+        },
+      },
+    }),
+  );
+
+  assert.ok(errors.some((error) => error.includes("@sapiom/tools")));
+  assert.ok(!errors.some((error) => error.includes("@sapiom/agent")));
+});
+
 test("rejects markdown-emphasized false claims on any copied surface", () => {
   assert.deepEqual(
     checkLlmCopySurface({

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://sapiom.ai/schemas/examples-registry.json",
   "title": "Sapiom template gallery registry",
-  "description": "Thin gallery index for the onboarding template gallery (SAP-1263). The single edit point: add a template here and it appears in the UI gallery. The Sapiom backend reads this file at a pinned ref, validates it, computes estimated cost from `capabilities`, and expands `steps` into a definition graph for the inspect view.",
+  "description": "Thin gallery index for the onboarding template gallery (SAP-1263). The single edit point: add a template here and it appears in the UI gallery. The Sapiom backend reads this file at a pinned ref, validates it, relays the authored capability metadata, and expands `steps` into a definition graph for the inspect view.",
   "type": "object",
   "required": ["version", "templates"],
   "additionalProperties": true,
@@ -120,7 +120,7 @@
         "capabilities": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Declared catalog capability ids (dotted, e.g. `web.search`). Drives the estimated per-run cost without a built definition."
+          "description": "Declared authored SDK capability ids (dotted, e.g. `web.search`). Relayed as template metadata and checked against the declared step shape; it does not drive a dollar estimate."
         },
         "steps": {
           "type": "array",
