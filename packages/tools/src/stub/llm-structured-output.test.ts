@@ -186,3 +186,34 @@ describe("stub llm.run — structured output", () => {
     });
   });
 });
+
+describe("stub sandbox — handle methods templates actually call", () => {
+  // A handle method with no default returned `undefined`, and the caller
+  // dereferenced it: `deployPreview(...).status` threw "Cannot read properties
+  // of undefined" under `run_local` instead of reporting a missing stub. These
+  // are the methods `examples/` calls on a sandbox handle.
+  it("returns a dereferenceable deployPreview result", async () => {
+    const box = await createStubClient().sandboxes.create({ name: "s" });
+    const deploy = await box.deployPreview({
+      start: "node server.js",
+      port: 3000,
+    });
+
+    expect(deploy.status).toBe("deployed");
+    expect(typeof deploy.url).toBe("string");
+    expect(typeof deploy.logs).toBe("string");
+  });
+
+  it("returns a dereferenceable createPublicUrl result", async () => {
+    const box = await createStubClient().sandboxes.create({ name: "s" });
+    expect(typeof (await box.createPublicUrl({ port: 3000 })).url).toBe(
+      "string",
+    );
+  });
+
+  it("resolves the void upload methods rather than returning undefined-shaped work", async () => {
+    const box = await createStubClient().sandboxes.create({ name: "s" });
+    await expect(box.uploadFile("a.txt", "hi")).resolves.toBeUndefined();
+    await expect(box.uploadDir("./src")).resolves.toBeUndefined();
+  });
+});

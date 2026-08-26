@@ -162,3 +162,112 @@ export function checkOneShotLlmTemplate({
 
   return errors;
 }
+
+/**
+ * Steps whose `llm.run` passes a structured-output spec, keyed by step name →
+ * the tool name it forces (or `null` when the name is an unresolvable
+ * expression).
+ *
+ * Read statically from `index.ts`, the same way `checkEntrySchemaCoverage` and
+ * `checkResourceReuse` already read it. Source is sliced on `defineStep(`
+ * boundaries so the answer is PER STEP: `eval-gate` legitimately has a text
+ * reply in `draft` and a forced tool call in `judge`, and a blanket
+ * "this template uses structured output" answer would reject its `draft` stub.
+ *
+ * The match is `output: { name:` specifically, not a bare `output:` — that word
+ * is an ordinary argument name elsewhere (`buildJudgePrompt({ input, output })`).
+ */
+export function structuredOutputStepsOf(indexSource, siblingSources = []) {
+  const steps = new Map();
+  // The tool-name const does not always live in index.ts — `news-roundup`
+  // declares `SELECTION_TOOL` in `lib/select.ts` — so resolve across every
+  // source the template ships.
+  const allSources = [indexSource, ...siblingSources];
+  const resolveConst = (identifier) => {
+    for (const source of allSources) {
+      const hit = source.match(
+        new RegExp(`\\b${identifier}\\s*=\\s*"([^"]+)"`),
+      );
+      if (hit) return hit[1];
+    }
+    return null;
+  };
+
+  const chunks = indexSource.split(/defineStep\s*\(/);
+  for (const chunk of chunks.slice(1)) {
+    const name = chunk.match(/name:\s*"([A-Za-z0-9_]+)"/)?.[1];
+    if (!name) continue;
+    const spec = chunk.match(/output:\s*\{\s*name:\s*([A-Za-z0-9_]+|"[^"]+")/);
+    if (!spec) continue;
+    const raw = spec[1];
+    steps.set(name, raw.startsWith('"') ? raw.slice(1, -1) : resolveConst(raw));
+  }
+  return steps;
+}
+
+/** The `tool_use` block names present in a stubbed `llm.run` reply. */
+function toolUseNamesOf(reply) {
+  const content = reply?.content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((block) => block?.type === "tool_use")
+    .map((block) => block?.name);
+}
+
+/**
+ * A committed `run_local` stub must answer in the shape its step actually reads.
+ *
+ * SAP-2892 — converting a step to `output` + `structuredOf` silently invalidates
+ * any `llm.run` override for it: the old override returns a text block,
+ * `structuredOf` reads `undefined`, and the reader throws. That breaks the local
+ * flow the template's own README documents, and neither `examples:check` nor the
+ * template's unit tests can see it — the checks read `.ts`, and the suites only
+ * exercise the pure reader functions, never a graph.
+ *
+ * So this pairs the two files: for every step the stub overrides `llm.run` on,
+ * if that step forces a tool call, the override must carry a `tool_use` block
+ * with the matching name.
+ *
+ * @param id           template id, for the message
+ * @param indexSource  the template's `index.ts`
+ * @param stubPath     repository-relative path of the stub file, for the message
+ * @param stubFile     the parsed stub JSON
+ */
+export function checkStubStructuredOutput({
+  id,
+  indexSource,
+  siblingSources = [],
+  stubPath,
+  stubFile,
+}) {
+  const errors = [];
+  const structuredSteps = structuredOutputStepsOf(indexSource, siblingSources);
+  const steps = stubFile?.steps;
+  if (!steps || typeof steps !== "object") return errors;
+
+  for (const [stepName, overrides] of Object.entries(steps)) {
+    const reply = overrides?.["llm.run"];
+    if (reply === undefined) continue;
+    if (!structuredSteps.has(stepName)) continue;
+
+    const expected = structuredSteps.get(stepName);
+    const names = toolUseNamesOf(reply);
+    if (names.length === 0) {
+      errors.push(
+        `llm-surface: "${id}" step "${stepName}" forces a tool call, but ${stubPath} still stubs its ` +
+          `llm.run with no tool_use block. structuredOf reads nothing from that reply and the step ` +
+          `throws, so run_local can't trace the graph (SAP-2892). Stub it as ` +
+          `{ "content": [{ "type": "tool_use", "name": "${expected ?? "<tool>"}", "input": { … } }] }.`,
+      );
+      continue;
+    }
+    if (expected && !names.includes(expected)) {
+      errors.push(
+        `llm-surface: "${id}" step "${stepName}" forces the tool "${expected}", but ${stubPath} stubs a ` +
+          `tool_use block named ${names.map((n) => `"${n}"`).join(", ")}. structuredOf matches on the ` +
+          `name, so the step throws under run_local.`,
+      );
+    }
+  }
+  return errors;
+}

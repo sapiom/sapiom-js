@@ -66,6 +66,7 @@ import {
   checkLlmCopySurface,
   checkNoSliceParse,
   checkOneShotLlmTemplate,
+  checkStubStructuredOutput,
 } from "./lib/examples-llm-surface.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -215,6 +216,46 @@ for (const sourcePath of collectTemplateSources(EXAMPLES_DIR)) {
     ...checkNoSliceParse({
       path: path.relative(ROOT, sourcePath).split(path.sep).join("/"),
       source: readFileSync(sourcePath, "utf8"),
+    }),
+  );
+}
+
+// A committed `run_local` stub must answer in the shape its step reads. Neither
+// the check above nor a template's own suite can see this: the checks read
+// source files, and the suites exercise the pure reader functions without ever
+// executing a graph (SAP-2892).
+for (const entry of readdirSync(EXAMPLES_DIR, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue;
+  const stubPath = path.join(
+    EXAMPLES_DIR,
+    entry.name,
+    ".sapiom-dev",
+    "stubs.json",
+  );
+  const indexPath = path.join(EXAMPLES_DIR, entry.name, "index.ts");
+  if (!existsSync(stubPath) || !existsSync(indexPath)) continue;
+
+  let stubFile;
+  try {
+    stubFile = JSON.parse(readFileSync(stubPath, "utf8"));
+  } catch (err) {
+    errors.push(
+      `llm-surface: "${entry.name}" has an unparseable ${path.relative(ROOT, stubPath)}: ${err.message}`,
+    );
+    continue;
+  }
+  errors.push(
+    ...checkStubStructuredOutput({
+      id: entry.name,
+      indexSource: readFileSync(indexPath, "utf8"),
+      // The tool-name const can live in a sibling module (`lib/select.ts`).
+      siblingSources: collectTemplateSources(
+        path.join(EXAMPLES_DIR, entry.name),
+      )
+        .filter((p) => p !== indexPath)
+        .map((p) => readFileSync(p, "utf8")),
+      stubPath: path.relative(ROOT, stubPath).split(path.sep).join("/"),
+      stubFile,
     }),
   );
 }

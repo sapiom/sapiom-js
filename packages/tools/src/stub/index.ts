@@ -472,6 +472,20 @@ const SANDBOX_METHOD_DEFAULTS: Record<string, (args: unknown[]) => unknown> = {
   readFile: () => "",
   writeFile: () => undefined,
   destroy: () => undefined,
+  // A method with no default here returns `undefined`, and the caller
+  // dereferences it — `deployPreview(...).status` threw
+  // "Cannot read properties of undefined" under `run_local` rather than
+  // reporting a missing stub. These are the handle methods templates in
+  // `examples/` actually call, so a zero-stub local run traces the graph
+  // instead of dying on the shape of a stub that was never there.
+  deployPreview: () => ({
+    url: "https://stub-preview.local",
+    status: "deployed",
+    logs: "",
+  }),
+  createPublicUrl: () => ({ url: "https://stub-preview.local", name: "stub" }),
+  uploadFile: () => undefined,
+  uploadDir: () => undefined,
 };
 
 function stubRepository(
