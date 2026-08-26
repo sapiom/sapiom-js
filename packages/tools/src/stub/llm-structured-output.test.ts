@@ -122,6 +122,44 @@ describe("stub llm.run — structured output", () => {
     });
   });
 
+  it("picks an enum member for a nested array item, not a placeholder string", async () => {
+    // The property `human-in-the-loop` depends on: it bounds a ranking's `id` to
+    // an enum of the run's candidate ids precisely so the stub has a real id to
+    // pick. A placeholder here matches no candidate, and the reader — correctly
+    // refusing to present input order as a ranking — kills the local run.
+    const ids = ["cand-a", "cand-b", "cand-c"];
+    const res = await createStubClient().llm.run({
+      request: { messages: [] },
+      output: {
+        name: "emit_ranking",
+        schema: {
+          type: "object",
+          properties: {
+            ranking: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", enum: ids },
+                  rationale: { type: "string" },
+                },
+                required: ["id", "rationale"],
+              },
+            },
+          },
+          required: ["ranking"],
+        },
+      },
+    });
+
+    const value = structuredOf<{ ranking: { id: string }[] }>(
+      res,
+      "emit_ranking",
+    );
+    expect(ids).toContain(value?.ranking[0].id);
+  });
+
   it("still lets a step stub override the whole reply", async () => {
     const client = createStubClient({
       overrides: {

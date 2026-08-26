@@ -620,7 +620,10 @@ const personalize = defineStep({
         messages: [{ role: "user", content: prompt }],
         max_tokens: 700,
       },
-      output: { name: OPENERS_TOOL, schema: OPENERS_SCHEMA },
+      output: {
+        name: OPENERS_TOOL,
+        schema: buildOpenersSchema(contacts.length),
+      },
     });
     const lines = readOpeners(ctx.sapiom.llm.structuredOf(res, OPENERS_TOOL));
 
@@ -1049,35 +1052,45 @@ const done = defineStep({
  */
 const OPENERS_TOOL = "emit_openers";
 
-const OPENERS_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  properties: {
-    lines: {
-      type: "array",
-      minItems: 1,
-      items: {
-        type: "object",
-        properties: {
-          i: {
-            type: "integer",
-            minimum: 0,
-            description: "The prospect's index, as given in the prompt.",
+/**
+ * Built per call so `i` is bounded to THIS batch. An index past the end used to
+ * be droppable-but-silent: every contact ended up without an opener, and
+ * `launch`'s no-deliverable terminal then blamed the lead list for it. Bounding
+ * it at the wire means the model can't produce that shape in the first place.
+ */
+function buildOpenersSchema(count: number): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      lines: {
+        type: "array",
+        minItems: 1,
+        maxItems: count,
+        items: {
+          type: "object",
+          properties: {
+            i: {
+              type: "integer",
+              minimum: 0,
+              maximum: Math.max(0, count - 1),
+              description: "The prospect's index, as given in the prompt.",
+            },
+            firstLine: {
+              type: "string",
+              description:
+                "One warm, specific first line referencing something concrete about their company. Never generic flattery, ~25 words max, no greeting and no signature.",
+            },
           },
-          firstLine: {
-            type: "string",
-            description:
-              "One warm, specific first line referencing something concrete about their company. Never generic flattery, ~25 words max, no greeting and no signature.",
-          },
+          required: ["i", "firstLine"],
+          additionalProperties: false,
         },
-        required: ["i", "firstLine"],
-        additionalProperties: false,
+        description: "One entry per prospect.",
       },
-      description: "One entry per prospect.",
     },
-  },
-  required: ["lines"],
-  additionalProperties: false,
-};
+    required: ["lines"],
+    additionalProperties: false,
+  };
+}
 
 /**
  * Read the forced tool call back into `{ index: opener }`.

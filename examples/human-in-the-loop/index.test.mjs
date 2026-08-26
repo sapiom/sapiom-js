@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyRanking, readParsed } from "./index.ts";
+import { applyRanking, buildRankSchema, readParsed } from "./index.ts";
 
 const CANDIDATES = [
   { id: "a", name: "Vendor A", email: "a@a.test" },
@@ -109,4 +109,44 @@ test("readParsed throws on a missing criteria list, but allows an empty one", ()
     summary: "Need a courier",
     criteria: [],
   });
+});
+
+// ── The `rank` schema must survive `run_local` ──────────────────────────────
+//
+// `applyRanking` throwing on an unmatched ranking is correct, but a bare
+// `id: { type: "string" }` put the local stub on a collision course with it:
+// the stub builds its placeholder from the declared schema, so it yielded
+// `"(stub) id"`, which matches no candidate — the run then died at `rank`,
+// before the two pauses, contradicting what this template promises about
+// `run_local` tracing the whole graph.
+//
+// The fix is the schema, not a fallback: `id` is an `enum` of this run's
+// candidate ids, so the model can't name a candidate outside the pool and the
+// stub has a real one to pick. Pinned here as the schema property; that the
+// stub honors a nested `enum` is pinned in
+// `packages/tools/src/stub/llm-structured-output.test.ts`, which runs against
+// the workspace build (this template installs the published `@sapiom/tools`).
+
+test("buildRankSchema bounds the id to this run's candidates", () => {
+  const schema = buildRankSchema(CANDIDATES);
+  assert.deepEqual(
+    schema.properties.ranking.items.properties.id.enum,
+    CANDIDATES.map((c) => c.id),
+    "an unbounded id lets the model — and the local stub — name a candidate that isn't in the pool",
+  );
+  assert.equal(schema.properties.ranking.maxItems, CANDIDATES.length);
+});
+
+test("applyRanking accepts a ranking built from the schema's first allowed id", () => {
+  // Exactly what the stub produces from `buildRankSchema`: the first enum
+  // member. If this ever stops matching a candidate, `run_local` dies at `rank`.
+  const schema = buildRankSchema(CANDIDATES);
+  const firstAllowedId = schema.properties.ranking.items.properties.id.enum[0];
+
+  const ranked = applyRanking(
+    { ranking: [{ id: firstAllowedId, score: 0, rationale: "(stub)" }] },
+    CANDIDATES,
+  );
+  assert.equal(ranked.length, CANDIDATES.length, "every candidate comes back");
+  assert.equal(ranked[0].id, firstAllowedId);
 });

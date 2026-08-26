@@ -236,7 +236,7 @@ async function rankCandidates(
       messages: [{ role: "user", content: prompt }],
       max_tokens: 600,
     },
-    output: { name: RANK_TOOL, schema: RANK_SCHEMA },
+    output: { name: RANK_TOOL, schema: buildRankSchema(candidates) },
   });
   return applyRanking(ctx.sapiom.llm.structuredOf(res, RANK_TOOL), candidates);
 }
@@ -773,38 +773,55 @@ const PARSE_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-const RANK_TOOL = "emit_ranking";
+export const RANK_TOOL = "emit_ranking";
 
-const RANK_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  properties: {
-    ranking: {
-      type: "array",
-      minItems: 1,
-      items: {
-        type: "object",
-        properties: {
-          id: {
-            type: "string",
-            description: "The candidate's `id`, verbatim.",
+/**
+ * Built per call so `id` can be an `enum` of THIS run's candidate ids — the same
+ * bound-at-the-wire discipline as `the-brain`'s play allow-list. The model then
+ * cannot name a candidate that isn't in the pool, which is the failure
+ * {@link applyRanking} would otherwise have to reject after paying for the call.
+ *
+ * It also keeps `run_local` honest: the stub builds its placeholder from this
+ * schema, so an `enum` hands it a real candidate id instead of `"(stub) id"` —
+ * a value that matches nothing and would fail the read for a reason no
+ * production run would hit.
+ */
+export function buildRankSchema(
+  candidates: Candidate[],
+): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      ranking: {
+        type: "array",
+        minItems: 1,
+        maxItems: candidates.length,
+        items: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              enum: candidates.map((c) => c.id),
+              description: "The candidate's `id`, verbatim.",
+            },
+            score: {
+              type: "number",
+              minimum: 0,
+              maximum: 100,
+              description: "Fit score, 0-100.",
+            },
+            rationale: { type: "string", description: "One line on the fit." },
           },
-          score: {
-            type: "number",
-            minimum: 0,
-            maximum: 100,
-            description: "Fit score, 0-100.",
-          },
-          rationale: { type: "string", description: "One line on the fit." },
+          required: ["id", "score", "rationale"],
+          additionalProperties: false,
         },
-        required: ["id", "score", "rationale"],
-        additionalProperties: false,
+        description: "Every candidate exactly once, best first.",
       },
-      description: "Every candidate exactly once, best first.",
     },
-  },
-  required: ["ranking"],
-  additionalProperties: false,
-};
+    required: ["ranking"],
+    additionalProperties: false,
+  };
+}
 
 /**
  * Read the forced tool call back into a `ParsedRequest`.
