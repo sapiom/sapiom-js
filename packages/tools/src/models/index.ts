@@ -519,7 +519,17 @@ export interface ModelRunOutcome {
    */
   warnings?: string[];
   durationMs: number;
-  costUsd: number;
+  /**
+   * The run's size×lane cost ESTIMATE in USD — never a provider-priced figure, and
+   * NOT the amount you are billed. The billed amount lives on the metering rail
+   * (plan allowance + priced overage); treat this as a rough signal only.
+   *
+   * `null` means the platform declined to report an estimate rather than resurface
+   * one it can't stand behind (a narrow set of legacy rows). Guard before
+   * arithmetic — `outcome.costUsd ?? 0`, or skip the row — and never render a
+   * fabricated `0` for an undisclosed cost.
+   */
+  costUsd: number | null;
   usage: CodingRunUsage;
 }
 
@@ -609,7 +619,8 @@ interface ModelWireResult {
   /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
   warnings?: string[];
   duration_ms: number;
-  cost_usd: number;
+  /** Nullable on the wire: the platform sends `null` rather than an estimate it can't stand behind. */
+  cost_usd?: number | null;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -642,7 +653,10 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     servedClass: r.served_class ?? null,
     lane: r.lane ?? null,
     durationMs: r.duration_ms,
-    costUsd: r.cost_usd,
+    // ONE encoding of "no cost estimate": a wire `null`, a missing key, and a
+    // malformed value all land on `null` — never a fabricated `0`, which a
+    // consumer would read as "this run was free".
+    costUsd: typeof r.cost_usd === "number" ? r.cost_usd : null,
     // Passthrough via the shared guard (`normalizeWarnings`): the key is
     // absent unless at least one string warning survives — a wire `[]`, a
     // non-array, or an all-junk array maps to absent, matching the documented

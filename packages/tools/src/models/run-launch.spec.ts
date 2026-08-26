@@ -76,6 +76,34 @@ describe("agent.run — terminal result mapping", () => {
     expect(result.result?.usage.inputTokens).toBe(10);
   });
 
+  it("ONE encoding of 'no cost estimate' — null for a wire null, a missing key, or a malformed value", async () => {
+    // The platform sends `cost_usd: null` rather than resurface an estimate it
+    // can't stand behind. A fabricated `0` would read as "this run was free".
+    const wireResult = (cost?: unknown) => ({
+      success: true,
+      stop_reason: "end_turn",
+      turns: 1,
+      model_used: null,
+      duration_ms: 1200,
+      ...(cost !== undefined ? { cost_usd: cost } : {}),
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    const runWith = async (cost?: unknown) => {
+      const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ wireResult: wireResult(cost) }) });
+      return (await sapiom.models.run({ prompt: "say OK" })).result?.costUsd;
+    };
+
+    // Wire `null` — the legacy-row case the published type used to deny.
+    expect(await runWith(null)).toBeNull();
+    // Missing key → null, not `undefined` leaking into a `number | null` field.
+    expect(await runWith()).toBeNull();
+    // Not a number → null, never a string leaking through.
+    expect(await runWith("0.001")).toBeNull();
+    // A real estimate still comes through — including a genuine zero.
+    expect(await runWith(0.001)).toBe(0.001);
+    expect(await runWith(0)).toBe(0);
+  });
+
   it("maps the serving disclosure (servedClass/lane) when the server reports it", async () => {
     const sapiom = createClient({
       apiKey: "k",
