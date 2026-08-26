@@ -184,6 +184,36 @@ describe("agent.run — terminal result mapping", () => {
     expect(await runWith([1, "warn-a", null])).toEqual(["warn-a"]);
   });
 
+  it("the resume payload gets the SAME cost encoding (modelRunResultSchema normalizes)", () => {
+    // The resumed-step path doesn't go through mapModelResult, so `parse` has to
+    // land the same encoding: a `number | null` field must never hand a resumed
+    // step `undefined`.
+    const payload = (cost?: unknown) => ({
+      runId: "run-abc",
+      status: "completed",
+      output: "OK",
+      result: {
+        success: true,
+        stopReason: "end_turn",
+        turns: 1,
+        modelUsed: null,
+        durationMs: 1200,
+        ...(cost !== undefined ? { costUsd: cost } : {}),
+        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreateTokens: 0, thinkingTokens: 0 },
+      },
+      error: null,
+    });
+
+    // What the server actually sends for an unreported estimate.
+    expect(modelRunResultSchema.parse(payload(null)).result?.costUsd).toBeNull();
+    // Missing key → null, not `undefined` under a `number | null` type.
+    expect(modelRunResultSchema.parse(payload()).result?.costUsd).toBeNull();
+    expect(modelRunResultSchema.parse(payload("0.001")).result?.costUsd).toBeNull();
+    // A real estimate survives — including a genuine zero.
+    expect(modelRunResultSchema.parse(payload(0.001)).result?.costUsd).toBe(0.001);
+    expect(modelRunResultSchema.parse(payload(0)).result?.costUsd).toBe(0);
+  });
+
   it("the resume payload gets the SAME warnings encoding (modelRunResultSchema normalizes)", async () => {
     // A step resumed via pauseUntilSignal receives the server-serialized
     // payload through modelRunResultSchema.parse, not mapModelResult — the

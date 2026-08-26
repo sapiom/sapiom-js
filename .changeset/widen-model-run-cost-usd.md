@@ -2,23 +2,20 @@
 "@sapiom/tools": minor
 ---
 
-`ModelRunOutcome.costUsd` is now `number | null` — the type told a lie.
+**Breaking (type-level):** `ModelRunOutcome.costUsd` is now `number | null`.
 
-The platform already sends `cost_usd: null` on a bounded set of runs, where the
-stored estimate came from a source it will not stand behind and the honest
-figure is unrecoverable. The published type said `number`, so a strict consumer
-could do `outcome.costUsd.toFixed(2)` on a value that was `null` at runtime.
-The mapper now lands a wire `null`, a missing key, and a malformed value all on
-`null` — one encoding, never a fabricated `0` that would read as "this run was
-free".
+The platform doesn't report a cost estimate for every run, so `costUsd` could
+already arrive as `null` at runtime — the published type said `number` and left
+no room for it.
 
-**Strictness impact:** under `strictNullChecks`, code that does arithmetic on or
-formats `result.costUsd` will now fail to compile until it guards —
-`outcome.costUsd ?? 0`, or skip the row. That is the point: the runtime `null`
-was already reaching those call sites. Code that only reads or logs the value is
-unaffected.
+Under `strictNullChecks`, code that does arithmetic on or formats
+`result.costUsd` now fails to compile until it guards (`outcome.costUsd ?? 0`,
+or skip the row). Read-only and logging code is unaffected, and nothing changes
+at runtime for a run that does report an estimate.
 
-Worth guarding rather than defaulting: `costUsd` is a size×lane **estimate**,
-not the amount you are billed. Billed cost belongs to the metering rail (plan
-allowance + priced overage), and this field is deprecated as an authoritative
-dollar figure.
+Both delivery paths land the same encoding: a polled result and a step resumed
+via `pauseUntilSignal` both give you `null` — never `undefined`, never a
+fabricated `0` — when no estimate was reported.
+
+`costUsd` is an estimate, not a billed amount; don't reconcile invoices against
+it.

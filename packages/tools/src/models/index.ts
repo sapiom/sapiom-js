@@ -520,14 +520,12 @@ export interface ModelRunOutcome {
   warnings?: string[];
   durationMs: number;
   /**
-   * The run's size×lane cost ESTIMATE in USD — never a provider-priced figure, and
-   * NOT the amount you are billed. The billed amount lives on the metering rail
-   * (plan allowance + priced overage); treat this as a rough signal only.
+   * Rough cost estimate for the run, in USD — an estimate, NOT the amount you
+   * are billed. Don't reconcile invoices or gate spend against it.
    *
-   * `null` means the platform declined to report an estimate rather than resurface
-   * one it can't stand behind (a narrow set of legacy rows). Guard before
-   * arithmetic — `outcome.costUsd ?? 0`, or skip the row — and never render a
-   * fabricated `0` for an undisclosed cost.
+   * `null` when the platform doesn't report an estimate for a run. Guard before
+   * arithmetic (`outcome.costUsd ?? 0`, or skip the row): `null` means "not
+   * reported", never "this run was free".
    */
   costUsd: number | null;
   usage: CodingRunUsage;
@@ -602,6 +600,12 @@ export const modelRunResultSchema = {
       const warnings = normalizeWarnings(r.warnings);
       if (warnings) r.warnings = warnings;
       else delete r.warnings;
+      // Same cost encoding as the polled path (mapModelResult). The server
+      // feeds both paths from one projection, so this is belt-and-braces
+      // rather than a divergence today — but a `number | null` field must
+      // never hand a resumed step `undefined`, which is what a missing key
+      // would otherwise do.
+      r.costUsd = typeof r.costUsd === "number" ? r.costUsd : null;
     }
     return value as ModelRunResultPayload;
   },
@@ -619,7 +623,7 @@ interface ModelWireResult {
   /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
   warnings?: string[];
   duration_ms: number;
-  /** Nullable on the wire: the platform sends `null` rather than an estimate it can't stand behind. */
+  /** Nullable on the wire: the platform doesn't report an estimate for every run. */
   cost_usd?: number | null;
   usage?: {
     input_tokens?: number;
