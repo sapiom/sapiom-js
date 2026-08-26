@@ -28,7 +28,19 @@ function fixture(overrides = {}) {
 }
 
 test("accepts a gateway-routed one-shot template and matching docs", () => {
-  assert.deepEqual(checkOneShotLlmTemplate(fixture()), []);
+  assert.deepEqual(
+    checkOneShotLlmTemplate(
+      fixture({
+        packageJson: {
+          dependencies: {
+            "@sapiom/agent": "^0.13.0",
+            "@sapiom/tools": "^0.32.0",
+          },
+        },
+      }),
+    ),
+    [],
+  );
 });
 
 test("rejects markdown-emphasized false claims on any copied surface", () => {

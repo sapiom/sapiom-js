@@ -139,10 +139,22 @@ for (const entry of readdirSync(EXAMPLES_DIR, { withFileTypes: true })) {
 // future examples that use that different surface correctly.
 for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
   const dir = path.join(EXAMPLES_DIR, id);
-  const indexSource = readFileSync(path.join(dir, "index.ts"), "utf8");
-  const packageJson = JSON.parse(
-    readFileSync(path.join(dir, "package.json"), "utf8"),
+  const indexPath = path.join(dir, "index.ts");
+  const packagePath = path.join(dir, "package.json");
+  const missingPaths = [indexPath, packagePath].filter(
+    (requiredPath) => !existsSync(requiredPath),
   );
+  if (missingPaths.length > 0) {
+    for (const missingPath of missingPaths) {
+      errors.push(
+        `llm-surface: "${id}" is listed as a one-shot template but is missing ${path.relative(ROOT, missingPath)}.`,
+      );
+    }
+    continue;
+  }
+
+  const indexSource = readFileSync(indexPath, "utf8");
+  const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
   const copySources = ["AGENTS.md", "README.md", "template.json"]
     .map((name) => ({ path: name, absolutePath: path.join(dir, name) }))
     .filter(({ absolutePath }) => existsSync(absolutePath))

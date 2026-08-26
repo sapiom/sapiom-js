@@ -28,6 +28,21 @@ const NEW_CALL = /ctx\.sapiom\.llm\.run\s*\(/;
 const FALSE_LLM_CLAIM =
   /ctx\.sapiom\.llm[^\n]{0,100}(?:does not|doesn't) exist/i;
 
+function requiresAtLeast(range, minimum) {
+  const match = String(range ?? "")
+    .trim()
+    .match(/^(?:\^|~|>=)?(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return false;
+
+  const version = match.slice(1).map(Number);
+  const floor = minimum.split(".").map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (version[i] > floor[i]) return true;
+    if (version[i] < floor[i]) return false;
+  }
+  return true;
+}
+
 export function checkLlmCopySurface({ path, source }) {
   if (FALSE_LLM_CLAIM.test(source.replaceAll("*", ""))) {
     return [`llm-surface: ${path} falsely says ctx.sapiom.llm does not exist.`];
@@ -63,14 +78,18 @@ export function checkOneShotLlmTemplate({
     errors.push(...checkLlmCopySurface({ path: `"${id}" ${path}`, source }));
   }
 
-  if (packageJson?.dependencies?.["@sapiom/tools"] !== "^0.31.0") {
+  if (
+    !requiresAtLeast(packageJson?.dependencies?.["@sapiom/tools"], "0.31.0")
+  ) {
     errors.push(
-      `llm-surface: "${id}" must depend on @sapiom/tools ^0.31.0 for llm.run + textOf.`,
+      `llm-surface: "${id}" must require @sapiom/tools >= 0.31.0 for llm.run + textOf.`,
     );
   }
-  if (packageJson?.dependencies?.["@sapiom/agent"] !== "^0.12.0") {
+  if (
+    !requiresAtLeast(packageJson?.dependencies?.["@sapiom/agent"], "0.12.0")
+  ) {
     errors.push(
-      `llm-surface: "${id}" must depend on @sapiom/agent ^0.12.0 so ctx.sapiom exposes the matching tools surface.`,
+      `llm-surface: "${id}" must require @sapiom/agent >= 0.12.0 so ctx.sapiom exposes the matching tools surface.`,
     );
   }
 
