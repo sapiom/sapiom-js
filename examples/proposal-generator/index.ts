@@ -269,19 +269,16 @@ async function draftProposal(
     "from a request. Produce a short title, a one-paragraph summary, a scope " +
     "list of what's included, and priced line items (a clear deliverable, a " +
     `quantity, and a unit price as a plain number in ${currency}). Price the ` +
-    "work realistically for the request. Add brief terms (validity + payment). " +
-    "Reply with ONLY minified JSON: " +
-    '{"title":string,"summary":string,"scope":string[],' +
-    '"lineItems":[{"description":string,"quantity":number,"unitPrice":number}],' +
-    '"terms":string}.';
+    "work realistically for the request. Add brief terms (validity + payment).";
   const res = await ctx.sapiom.llm.run({
     request: {
       system,
       messages: [{ role: "user", content: request }],
       max_tokens: 900,
     },
+    output: { name: DRAFT_TOOL, schema: buildDraftSchema(currency) },
   });
-  return coerceDraft(ctx.sapiom.llm.textOf(res) ?? null, request);
+  return readDraft(ctx.sapiom.llm.structuredOf(res, DRAFT_TOOL));
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
@@ -808,58 +805,107 @@ function buildClientEmail(
   ].join("\n");
 }
 
-// ─────────────────────────────────────────────────────── output parsing ──
+// ────────────────────────────────────────────────────── structured output ──
 /**
- * Coerce the draft-step model output into a `ProposalDraft`, defensively. A model
- * may wrap the JSON in prose or fences, so we slice to the outermost object and
- * fall back to a minimal single-line quote when anything is off — the pipeline
- * still renders and runs end to end rather than failing on a malformed draft.
+ * The forced tool call `draft` reads the proposal out of. `llm.run`'s `output`
+ * appends this tool to the request and pins `tool_choice` to it, so the draft
+ * arrives as a typed `tool_use` block — there is no prose to slice and no JSON
+ * to hand-parse.
  */
-function coerceDraft(output: string | null, request: string): ProposalDraft {
-  const fallback: ProposalDraft = {
-    title: "Proposal",
-    summary: request.slice(0, 200) || "(no request supplied)",
-    scope: [],
-    lineItems: [
-      { description: "Professional services", quantity: 1, unitPrice: 0 },
-    ],
-    terms: "Valid for 30 days. Payment due within 30 days of acceptance.",
-  };
-  const obj = extractJson(output);
-  if (!obj) return fallback;
+const DRAFT_TOOL = "emit_proposal_draft";
 
-  const title =
-    typeof obj.title === "string" && obj.title.trim()
-      ? obj.title.trim()
-      : fallback.title;
-  const summary =
-    typeof obj.summary === "string" && obj.summary.trim()
-      ? obj.summary.trim()
-      : fallback.summary;
-  const scope = Array.isArray(obj.scope)
-    ? obj.scope
-        .filter(
-          (s): s is string => typeof s === "string" && s.trim().length > 0,
-        )
-        .slice(0, MAX_SCOPE_ITEMS)
-    : [];
-  const lineItems = Array.isArray(obj.lineItems)
-    ? obj.lineItems
-        .map(coerceLine)
-        .filter((li): li is ProposalLine => li !== null)
-        .slice(0, MAX_LINE_ITEMS)
-    : [];
-  const terms =
-    typeof obj.terms === "string" && obj.terms.trim()
-      ? obj.terms.trim()
-      : fallback.terms;
-
+function buildDraftSchema(currency: string): Record<string, unknown> {
   return {
-    title,
-    summary,
-    scope,
-    lineItems: lineItems.length > 0 ? lineItems : fallback.lineItems,
-    terms,
+    type: "object",
+    properties: {
+      title: { type: "string", description: "Short title for the proposal." },
+      summary: { type: "string", description: "One-paragraph summary." },
+      scope: {
+        type: "array",
+        maxItems: MAX_SCOPE_ITEMS,
+        items: { type: "string" },
+        description: "What is included, one line each.",
+      },
+      lineItems: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_LINE_ITEMS,
+        items: {
+          type: "object",
+          properties: {
+            description: {
+              type: "string",
+              description: "A clear deliverable.",
+            },
+            quantity: { type: "number", exclusiveMinimum: 0 },
+            unitPrice: {
+              type: "number",
+              minimum: 0,
+              description: `Unit price as a plain number in ${currency}.`,
+            },
+          },
+          required: ["description", "quantity", "unitPrice"],
+          additionalProperties: false,
+        },
+        description: "Priced line items, realistic for the request.",
+      },
+      terms: {
+        type: "string",
+        description: "Brief terms — validity and payment.",
+      },
+    },
+    required: ["title", "summary", "scope", "lineItems", "terms"],
+    additionalProperties: false,
+  };
+}
+
+/**
+ * Read the forced tool call back into a `ProposalDraft`.
+ *
+ * Throws on a missing block, a missing title/summary/terms, or no usable line
+ * item. This is a priced quote that gets rendered to a PDF and sent to a human
+ * for approval — the old fallback quoted `"Professional services", qty 1, $0`
+ * over the first 200 characters of the request and rendered *that*, so an
+ * approver could be asked to sign off a price no model ever produced.
+ *
+ * `scope` may legitimately be empty; the money cannot.
+ */
+export function readDraft(structured: unknown): ProposalDraft {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "draft: the model returned no structured proposal — refusing to quote invented work.",
+    );
+  }
+  const obj = structured as Record<string, unknown>;
+  const requireText = (value: unknown, field: string): string => {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(
+        `draft: the model returned no ${field} — refusing to invent one.`,
+      );
+    }
+    return value.trim();
+  };
+  const lineItems = (Array.isArray(obj.lineItems) ? obj.lineItems : [])
+    .map(coerceLine)
+    .filter((li): li is ProposalLine => li !== null)
+    .slice(0, MAX_LINE_ITEMS);
+  if (lineItems.length === 0) {
+    throw new Error(
+      "draft: the model returned no priced line items — refusing to invent a price.",
+    );
+  }
+  return {
+    title: requireText(obj.title, "proposal title"),
+    summary: requireText(obj.summary, "proposal summary"),
+    scope: Array.isArray(obj.scope)
+      ? obj.scope
+          .filter(
+            (s): s is string => typeof s === "string" && s.trim().length > 0,
+          )
+          .slice(0, MAX_SCOPE_ITEMS)
+      : [],
+    lineItems,
+    terms: requireText(obj.terms, "proposal terms"),
   };
 }
 
@@ -883,19 +929,6 @@ function coerceLine(raw: unknown): ProposalLine | null {
       ? e.unitPrice
       : 0;
   return { description, quantity, unitPrice };
-}
-
-/** Best-effort extraction of a single JSON object from model output. */
-function extractJson(output: string | null): Record<string, unknown> | null {
-  if (!output) return null;
-  const start = output.indexOf("{");
-  const end = output.lastIndexOf("}");
-  if (start < 0 || end < 0 || end < start) return null;
-  try {
-    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 /**

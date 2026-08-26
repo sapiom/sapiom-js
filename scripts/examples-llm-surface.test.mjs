@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   checkLlmCopySurface,
+  checkNoSliceParse,
   checkOneShotLlmTemplate,
 } from "./lib/examples-llm-surface.mjs";
 
@@ -99,4 +100,68 @@ test("rejects the old multi-turn surface and stale copy", () => {
   assert.ok(errors.some((error) => error.includes("@sapiom/tools")));
   assert.ok(errors.some((error) => error.includes("capabilities")));
   assert.ok(errors.some((error) => error.includes('step "write"')));
+});
+
+// ── SAP-2892: no template may slice a model reply out of prose ──────────────
+
+test("rejects a first-{-to-last-} slice of a model reply", () => {
+  const errors = checkNoSliceParse({
+    path: "examples/example/index.ts",
+    source: [
+      "function parseReview(output) {",
+      '  const start = output.indexOf("{");',
+      '  const end = output.lastIndexOf("}");',
+      "  return JSON.parse(output.slice(start, end + 1));",
+      "}",
+    ].join("\n"),
+  });
+
+  assert.equal(errors.length, 2);
+  assert.ok(errors[0].includes("examples/example/index.ts:2"));
+  assert.ok(errors[1].includes("examples/example/index.ts:3"));
+  for (const error of errors) {
+    assert.ok(error.includes("structuredOf"), "names the replacement");
+  }
+});
+
+test("rejects the array form of the same slice", () => {
+  const errors = checkNoSliceParse({
+    path: "examples/example/lib/select.ts",
+    source:
+      'const start = output.indexOf("[");\nconst end = output.lastIndexOf("]");',
+  });
+
+  assert.equal(errors.length, 2);
+});
+
+test("accepts the blessed structured-output pattern", () => {
+  assert.deepEqual(
+    checkNoSliceParse({
+      path: "examples/example/index.ts",
+      source: [
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages },",
+        "  output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },",
+        "});",
+        "const rev = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));",
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
+test("leaves JSON that arrived as JSON alone", () => {
+  // Parsing an HTTP body, a file, or a stub payload is fine — the defect is
+  // slicing a JSON-shaped substring out of a model's prose.
+  assert.deepEqual(
+    checkNoSliceParse({
+      path: "examples/example/index.ts",
+      source: [
+        "const data = JSON.parse(await res.text());",
+        'const sep = url.indexOf("?");',
+        'const brace = template.indexOf("{{");',
+      ].join("\n"),
+    }),
+    [],
+  );
 });

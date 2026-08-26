@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { agent } from "./index.ts";
+import { agent, readReport } from "./index.ts";
+import {
+  CRITIQUE_SCHEMA,
+  buildCritiquePrompt,
+  readJudgment,
+} from "./critique.js";
 
 // `publish` re-attaches the coding run's environment and deploys it.
 // `deployPreview` only serves from a compatible cloud sandbox; a coding run in local
@@ -47,14 +52,23 @@ function stepContext({ seed = {}, sapiom = {} } = {}) {
 function llmDouble(run) {
   return {
     run,
-    textOf(response) {
-      return response.content.find((block) => block.type === "text")?.text;
+    structuredOf(response, name) {
+      return response.content.find(
+        (block) =>
+          block.type === "tool_use" &&
+          (name === undefined || block.name === name),
+      )?.input;
     },
   };
 }
 
-function llmText(text) {
-  return { content: [{ type: "text", text }] };
+/**
+ * A forced-tool-call reply, the shape `llm.run`'s `output` produces. SAP-2892
+ * moved both of this template's model calls onto it — there is no prose reply to
+ * fake any more.
+ */
+function llmToolUse(name, input) {
+  return { content: [{ type: "tool_use", name, input }] };
 }
 
 /**
@@ -216,7 +230,7 @@ test("synthesize stops at drafted, without calling the model, when gather found 
     sapiom: {
       llm: llmDouble(async () => {
         modelCalled = true;
-        return llmText("{}");
+        return llmToolUse("emit_report", {});
       }),
     },
   });
@@ -248,9 +262,12 @@ test("synthesize reuses previously gathered sources and carries the critique for
         const prompt = request.messages[0].content;
         assert.match(prompt, /CRITIQUE/);
         assert.match(prompt, /too thin/);
-        return llmText(
-          '{"title":"New","tagline":"t","summary":"s","sections":[{"heading":"H","body":"b [1]"}]}',
-        );
+        return llmToolUse("emit_report", {
+          title: "New",
+          tagline: "t",
+          summary: "s",
+          sections: [{ heading: "H", body: "b [1]" }],
+        });
       }),
     },
   });
@@ -282,7 +299,7 @@ test("critique revises when the score is below threshold and attempts remain", a
     },
     sapiom: {
       llm: llmDouble(async () =>
-        llmText('{"score": 0.5, "rationale": "too thin"}'),
+        llmToolUse("emit_judgment", { score: 0.5, rationale: "too thin" }),
       ),
     },
   });
@@ -307,7 +324,7 @@ test("critique proceeds to illustrate once the score clears the threshold", asyn
     },
     sapiom: {
       llm: llmDouble(async () =>
-        llmText('{"score": 0.9, "rationale": "solid"}'),
+        llmToolUse("emit_judgment", { score: 0.9, rationale: "solid" }),
       ),
     },
   });
@@ -331,7 +348,7 @@ test("critique stops revising once maxDraftAttempts is exhausted, even below thr
     },
     sapiom: {
       llm: llmDouble(async () =>
-        llmText('{"score": 0.4, "rationale": "still thin"}'),
+        llmToolUse("emit_judgment", { score: 0.4, rationale: "still thin" }),
       ),
     },
   });
@@ -355,7 +372,7 @@ test("critique routes to drafted, not illustrate, when dryRun is set", async () 
     },
     sapiom: {
       llm: llmDouble(async () =>
-        llmText('{"score": 0.9, "rationale": "fine"}'),
+        llmToolUse("emit_judgment", { score: 0.9, rationale: "fine" }),
       ),
     },
   });
@@ -471,4 +488,89 @@ test("collectIllustration advances to build once the illustration budget is spen
     ctx,
   );
   assert.equal(directive.stepName, "build");
+});
+
+// ── SAP-2892: an unusable reply must never become the published site ────────
+
+const SOURCES = [{ title: "A study", url: "https://a.test/1" }];
+const REPORT = {
+  title: "Coordination cost",
+  tagline: "Why small teams outship big ones",
+  summary: "Three studies converge. [1]",
+  sections: [
+    { heading: "The evidence", body: "The study found [1] ..." },
+    { heading: "The mechanism", body: "Every extra person [1] ..." },
+    { heading: "What to do", body: "Keep teams small [1] ..." },
+  ],
+};
+
+test("readReport reads the forced tool call's report", () => {
+  const report = readReport(REPORT, SOURCES);
+  assert.equal(report.title, "Coordination cost");
+  assert.equal(report.sections.length, 3);
+});
+
+test("readReport takes sources from the scrape set, never from the model", () => {
+  const report = readReport(
+    { ...REPORT, sources: [{ title: "Invented", url: "https://nope.test" }] },
+    SOURCES,
+  );
+  assert.deepEqual(report.sources, SOURCES);
+});
+
+test("readReport throws when the response carried no structured report", () => {
+  assert.throws(() => readReport(undefined, SOURCES), /no structured report/);
+  assert.throws(() => readReport(null, SOURCES), /no structured report/);
+  assert.throws(
+    () => readReport("```json\n{ not really json\n```", SOURCES),
+    /no structured report/,
+  );
+});
+
+test("readReport throws rather than publishing an empty site", () => {
+  // The old fallback was `{ title: topic, sections: [] }`, carried on through
+  // `critique`, `illustrate` and `build` to a real, empty, public URL.
+  assert.throws(
+    () => readReport({ ...REPORT, sections: [] }, SOURCES),
+    /no report sections/,
+  );
+  assert.throws(
+    () =>
+      readReport({ ...REPORT, sections: [{ heading: "", body: "" }] }, SOURCES),
+    /no report sections/,
+  );
+  assert.throws(
+    () => readReport({ ...REPORT, title: " " }, SOURCES),
+    /no report title/,
+  );
+});
+
+// ── The judge's grade, same rule ────────────────────────────────────────────
+
+test("readJudgment reads the grade and clamps a 0-100 answer", () => {
+  assert.deepEqual(readJudgment({ score: 0.9, rationale: "Well cited." }), {
+    score: 0.9,
+    rationale: "Well cited.",
+  });
+  assert.equal(readJudgment({ score: 90, rationale: "" }).score, 0.9);
+});
+
+test("readJudgment throws rather than grading on a number found in prose", () => {
+  assert.throws(() => readJudgment(undefined), /no structured grade/);
+  assert.throws(() => readJudgment(null), /no structured grade/);
+  assert.throws(
+    () => readJudgment("Section 3 cites only 1 source, so I'd say it's close."),
+    /no structured grade/,
+  );
+  assert.throws(() => readJudgment({ rationale: "Close." }), /no usable score/);
+});
+
+test("neither prompt dictates a reply format any more — the schemas do", () => {
+  const critiquePrompt = buildCritiquePrompt({
+    report: { ...REPORT, sources: SOURCES },
+    audience: "engineering leaders",
+  });
+  assert.doesNotMatch(critiquePrompt, /ONLY a JSON object/i);
+  assert.match(critiquePrompt, /engineering leaders/);
+  assert.deepEqual(CRITIQUE_SCHEMA.required, ["score", "rationale"]);
 });

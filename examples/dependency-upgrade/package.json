@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: a scheduled dependency-upgrade triage — a coding agent bumps deps in a sandbox, the real test suite runs there, a model risk-assesses the diff, and it only pushes when the build is green. Every run archives a triage report to file storage.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

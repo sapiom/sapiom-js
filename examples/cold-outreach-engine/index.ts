@@ -256,13 +256,6 @@ function render(template: string, contact: Contact, sender: string): string {
     .replaceAll("{sender}", sender);
 }
 
-/** A benign opener used when the model gives us nothing we can use. */
-function fallbackFirstLine(c: Contact): string {
-  const who = c.firstName?.trim() || "there";
-  const org = c.company?.trim() || "your team";
-  return `Hi ${who} — I've been following what ${org} is building and wanted to reach out.`;
-}
-
 /** Normalize + bound the lead list so downstream cost stays predictable. */
 function normalizeLeads(raw: unknown): Lead[] {
   if (!Array.isArray(raw)) return [];
@@ -618,34 +611,46 @@ const personalize = defineStep({
       "name/role/company, and a snippet of their company website. Write ONE " +
       "warm, specific first line per prospect that references something concrete " +
       "about their company — never generic flattery, no more than ~25 words, no " +
-      "greeting line and no signature. Reply with ONLY minified JSON: " +
-      '{"lines":[{"i":number,"firstLine":string}]}.';
+      "greeting line and no signature.";
     const prompt = `PROSPECTS (${contacts.length}):\n${prospects}`;
 
-    let lines: Record<number, string> = {};
-    try {
-      const res = await ctx.sapiom.llm.run({
-        request: {
-          system,
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 700,
-        },
-      });
-      lines = parseLines(ctx.sapiom.llm.textOf(res) ?? null);
-    } catch (err) {
-      // A model error is not fatal — every contact falls back to a safe opener.
-      ctx.logger.warn("personalize model call failed; using fallbacks", {
-        err: String(err),
-      });
-    }
+    const res = await ctx.sapiom.llm.run({
+      request: {
+        system,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 700,
+      },
+      output: { name: OPENERS_TOOL, schema: OPENERS_SCHEMA },
+    });
+    const lines = readOpeners(ctx.sapiom.llm.structuredOf(res, OPENERS_TOOL));
 
-    const personalized = contacts.map((c, i) => ({
-      ...c,
-      firstLine: lines[i]?.trim() || fallbackFirstLine(c),
-    }));
+    // A prospect the model wrote no opener for is NOT emailed a generic one.
+    // The old fallback ("I've been following what your team is building") is
+    // exactly the generic flattery the prompt forbids, and it went out to a real
+    // address — so a missing opener now marks the contact undeliverable, which
+    // is a channel `verify`, `send`, and the run summary already understand.
+    const personalized = contacts.map((c, i) => {
+      const firstLine = lines[i]?.trim();
+      if (firstLine) return { ...c, firstLine };
+      return {
+        ...c,
+        deliverable: false,
+        verifyStatus: "no-personalized-opener",
+      };
+    });
+    const withOpener = personalized.filter((c) => c.firstLine).length;
+    if (withOpener < contacts.length) {
+      ctx.logger.warn(
+        "some prospects got no opener; they will not be emailed",
+        {
+          contacts: contacts.length,
+          withOpener,
+        },
+      );
+    }
     ctx.logger.info("wrote personalized openers", {
       contacts: personalized.length,
-      fromModel: Object.keys(lines).length,
+      fromModel: withOpener,
     });
     return goto("verify", { contacts: personalized });
   },
@@ -658,6 +663,14 @@ const verify = defineStep({
     const contacts = input.contacts ?? [];
     const checked: Contact[] = [];
     for (const c of contacts) {
+      // `personalize` already ruled this one out for having no opener the model
+      // actually wrote (SAP-2892). Don't spend a verification on it, and don't
+      // let the demo stand-in or an `unverified` fallback below flip it back to
+      // deliverable — the reason it is out has nothing to do with its address.
+      if (c.deliverable === false && c.verifyStatus) {
+        checked.push(c);
+        continue;
+      }
       if (c.demo) {
         // Same stand-in as `enrich`: email search can't verify an address at a
         // company that doesn't exist. Deterministically deliverable, so the
@@ -833,10 +846,19 @@ const send = defineStep({
       for (const c of active) {
         const subject = render(touch.subject, c, senderName);
         // The first touch leads with the personalized opener; later touches
-        // reference the thread and skip it.
+        // reference the thread and skip it. `personalize` marks a contact
+        // undeliverable rather than inventing an opener, so an active contact
+        // on touch 0 always has one — if that ever stops holding, the send is
+        // skipped instead of going out with a canned line.
+        if (touchIndex === 0 && !c.firstLine?.trim()) {
+          ctx.logger.warn("skipping first touch: no personalized opener", {
+            email: c.email,
+          });
+          continue;
+        }
         const body =
           touchIndex === 0
-            ? `${c.firstLine ?? fallbackFirstLine(c)}\n\n${render(touch.body, c, senderName)}`
+            ? `${c.firstLine}\n\n${render(touch.body, c, senderName)}`
             : render(touch.body, c, senderName);
         // Zero-setup: the fabricated demo lead is never a real inbox, so every
         // touch lands in this agent's own Sapiom-hosted demo inbox instead —
@@ -1003,28 +1025,78 @@ const done = defineStep({
   },
 });
 
-// ─────────────────────────────────────────────────────────────── parsing ──
-/** Extract `{ i, firstLine }` pairs from the model output; empty on failure. */
-function parseLines(output: string | null): Record<number, string> {
+// ────────────────────────────────────────────────────── structured output ──
+/**
+ * The forced tool call `personalize` reads the openers out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so the
+ * openers arrive as a typed `tool_use` block — there is no prose to slice and no
+ * JSON to hand-parse.
+ */
+const OPENERS_TOOL = "emit_openers";
+
+const OPENERS_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    lines: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        properties: {
+          i: {
+            type: "integer",
+            minimum: 0,
+            description: "The prospect's index, as given in the prompt.",
+          },
+          firstLine: {
+            type: "string",
+            description:
+              "One warm, specific first line referencing something concrete about their company. Never generic flattery, ~25 words max, no greeting and no signature.",
+          },
+        },
+        required: ["i", "firstLine"],
+        additionalProperties: false,
+      },
+      description: "One entry per prospect.",
+    },
+  },
+  required: ["lines"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into `{ index: opener }`.
+ *
+ * Throws when the model returned no openers at all. These lines are emailed to
+ * real prospects, so there is nothing safe to substitute — and a model error is
+ * no longer swallowed either: the whole batch quietly falling back to one canned
+ * greeting is precisely a run that says `succeeded` while sending nothing anyone
+ * wrote.
+ */
+export function readOpeners(structured: unknown): Record<number, string> {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "personalize: the model returned no structured openers — refusing to email a canned greeting.",
+    );
+  }
+  const raw = (structured as { lines?: unknown }).lines;
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      "personalize: the model returned no opener list — refusing to email a canned greeting.",
+    );
+  }
   const out: Record<number, string> = {};
-  if (!output) return out;
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return out;
-    const parsed = JSON.parse(output.slice(start, end + 1)) as {
-      lines?: unknown;
-    };
-    if (!Array.isArray(parsed.lines)) return out;
-    for (const raw of parsed.lines) {
-      if (!raw || typeof raw !== "object") continue;
-      const r = raw as Record<string, unknown>;
-      const i = Number(r.i);
-      const firstLine = String(r.firstLine ?? "").trim();
-      if (Number.isInteger(i) && i >= 0 && firstLine) out[i] = firstLine;
-    }
-  } catch {
-    // Non-JSON (e.g. the run_local stub placeholder) → every contact falls back.
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const r = entry as Record<string, unknown>;
+    const i = Number(r.i);
+    const firstLine = String(r.firstLine ?? "").trim();
+    if (Number.isInteger(i) && i >= 0 && firstLine) out[i] = firstLine;
+  }
+  if (Object.keys(out).length === 0) {
+    throw new Error(
+      "personalize: the model returned no usable openers — refusing to email a canned greeting.",
+    );
   }
   return out;
 }

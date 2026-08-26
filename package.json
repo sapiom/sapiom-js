@@ -28,6 +28,7 @@
     "publish:local": "node scripts/publish-local.mjs",
     "examples:check": "node scripts/examples-check.mjs",
     "examples:check:test": "node --test scripts/*.test.mjs",
+    "examples:test": "node scripts/examples-test.mjs",
     "terminology:check": "node scripts/agent-studio-terminology-check.mjs",
     "terminology:check:test": "node --test scripts/agent-studio-terminology-check.test.mjs",
     "provider-copy:check": "node scripts/provider-neutral-copy-check.mjs",

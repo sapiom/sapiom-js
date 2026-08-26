@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: take a meeting transcript (directly or via a webhook pause), extract the contact, CRM fields, and action items with an LLM (llm.run), write them to a Postgres CRM store, and email a summary.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

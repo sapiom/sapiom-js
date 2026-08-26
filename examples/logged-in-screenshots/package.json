@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: crawl a bounded set of a site's pages, render-check and screenshot each one, audit content with a model, and verify link integrity (broken links, Terms/Privacy present and resolving).",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

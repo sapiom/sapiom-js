@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: on a cron cadence, snapshot a database, write the narrative with an LLM (llm.run), render charts in a sandbox, host them in file storage, and email the insight report.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

@@ -396,9 +396,7 @@ const triage = defineStep({
       "the error's invariant parts (error type, module, message template) with " +
       "volatile bits — ids, timestamps, hostnames, line numbers — stripped, so " +
       "the same recurring issue always yields the same fingerprint. Rank by " +
-      'severity. Reply with ONLY minified JSON: {"clusters":[{"fingerprint":' +
-      'string,"title":string,"summary":string,"severity":"critical|high|medium|' +
-      'low","sampleMessage":string,"count":number}]}.';
+      "severity.";
     const prompt = `ERROR BATCH (${errors.length} entries):\n${rendered}`;
 
     const res = await ctx.sapiom.llm.run({
@@ -407,8 +405,11 @@ const triage = defineStep({
         messages: [{ role: "user", content: prompt }],
         max_tokens: 900,
       },
+      output: { name: TRIAGE_TOOL, schema: TRIAGE_SCHEMA },
     });
-    const clusters = parseClusters(ctx.sapiom.llm.textOf(res) ?? null, errors);
+    const clusters = readClusters(
+      ctx.sapiom.llm.structuredOf(res, TRIAGE_TOOL),
+    );
     ctx.logger.info("triaged batch into clusters", {
       errors: errors.length,
       clusters: clusters.length,
@@ -633,35 +634,103 @@ function renderDigest(
   return lines.join("\n");
 }
 
-// ─────────────────────────────────────────────────────────────── parsing ──
-/** Extract clusters from the model output; fall back to one catch-all cluster. */
-function parseClusters(output: string | null, errors: RawError[]): Cluster[] {
-  const fallback = (): Cluster[] => [
-    {
-      fingerprint: "untriaged-batch",
-      title: "Untriaged errors",
-      summary: "The model returned no usable clustering for this batch.",
-      severity: "medium",
-      sampleMessage: errors[0]?.message ?? "",
-      count: errors.length,
+// ────────────────────────────────────────────────────── structured output ──
+/**
+ * The forced tool call `triage` reads its clustering out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so
+ * the clusters arrive as a typed `tool_use` block — there is no prose to slice
+ * and no JSON to hand-parse.
+ */
+const TRIAGE_TOOL = "emit_clusters";
+
+const TRIAGE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    clusters: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        properties: {
+          fingerprint: {
+            type: "string",
+            description:
+              "STABLE short lowercase slug from the error's invariant parts (error type, module, message template), with ids, timestamps, hostnames and line numbers stripped — the same recurring issue must always yield the same value.",
+          },
+          title: { type: "string", description: "Short title for the issue." },
+          summary: {
+            type: "string",
+            description: "One or two sentences on what is failing and why.",
+          },
+          severity: {
+            type: "string",
+            enum: ["critical", "high", "medium", "low"],
+          },
+          sampleMessage: {
+            type: "string",
+            description: "A representative raw message for the issue.",
+          },
+          count: {
+            type: "integer",
+            minimum: 1,
+            description: "Occurrences of this issue in THIS batch.",
+          },
+        },
+        required: [
+          "fingerprint",
+          "title",
+          "summary",
+          "severity",
+          "sampleMessage",
+          "count",
+        ],
+        additionalProperties: false,
+      },
+      description:
+        "A small set of distinct issues, usually 1-8, ranked by severity.",
     },
-  ];
-  if (!output) return fallback();
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return fallback();
-    const parsed = JSON.parse(output.slice(start, end + 1)) as {
-      clusters?: unknown;
-    };
-    if (!Array.isArray(parsed.clusters)) return fallback();
-    const clusters = parsed.clusters
-      .map(coerceCluster)
-      .filter((c): c is Cluster => c !== null);
-    return clusters.length > 0 ? clusters : fallback();
-  } catch {
-    return fallback();
+  },
+  required: ["clusters"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into the batch's clusters.
+ *
+ * Throws when the model returned no usable clustering. The clusters ARE the
+ * digest, and their `fingerprint` is what `dedupe` writes to the database — so
+ * the old catch-all `untriaged-batch` cluster did lasting damage: it emailed
+ * "Untriaged errors / medium" as if it were a triage result, and persisted a
+ * fingerprint that every later failed batch then matched as a *recurring*
+ * issue.
+ *
+ * A cluster missing only its `severity` is defaulted to `medium` — the schema
+ * makes that field an enum, so a missing one is a shape slip rather than a
+ * judgment the model withheld, and the entry it belongs to is still real. An
+ * entry with no fingerprint or title is dropped, and if that leaves nothing,
+ * this throws.
+ */
+export function readClusters(structured: unknown): Cluster[] {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "triage: the model returned no structured clustering — refusing to invent one.",
+    );
   }
+  const raw = (structured as { clusters?: unknown }).clusters;
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      "triage: the model returned no cluster list — refusing to invent one.",
+    );
+  }
+  const clusters = raw
+    .map(coerceCluster)
+    .filter((c): c is Cluster => c !== null);
+  if (clusters.length === 0) {
+    throw new Error(
+      "triage: the model returned no usable clusters — refusing to report the batch as triaged.",
+    );
+  }
+  return clusters;
 }
 
 function coerceCluster(raw: unknown): Cluster | null {

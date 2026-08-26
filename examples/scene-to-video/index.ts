@@ -59,7 +59,7 @@ import { z } from "zod/v4";
  * after planning and skip all image/video generation.
  */
 
-/** A single planned shot, as the LLM returns it (see {@link parsePlan}). */
+/** A single planned shot, as the LLM returns it (see {@link readPlan}). */
 interface Shot {
   /** Full image prompt for the keyframe — repeats the identity bible verbatim. */
   image_prompt: string;
@@ -204,60 +204,119 @@ async function resolveFrameUrl(
 }
 
 /**
- * Parse the LLM's minified-JSON decomposition defensively. A model may wrap the
- * JSON in prose or fences, so we slice to the outermost object before parsing and
- * fall back to a single generic shot when anything is off — the pipeline still
- * runs end to end rather than failing on a malformed plan. Mirrors `create-listing`'s
- * `parseDraft`.
+ * The forced tool call `decompose` reads the shot list out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so
+ * the plan arrives as a typed `tool_use` block — there is no prose to slice
+ * and no JSON to hand-parse.
  */
-function parsePlan(
-  output: string | null,
-  scene: string,
-  numShots: number,
-): Plan {
-  const fallbackBible =
-    `Consistent cinematic style. Subject and setting from: "${scene}". ` +
-    `Cohesive color grade, lighting, and lens across every shot.`;
-  const fallback: Plan = {
-    bible: fallbackBible,
-    shots: Array.from({ length: numShots }, (_, i) => ({
-      image_prompt: `${fallbackBible} Shot ${i + 1}: ${scene}. Photographic, no text.`,
-      motion_prompt: `The scene from "${scene}"; a slow push-in; ${MAX_CLIP_SECONDS}s; natural light; cinematic.`,
-      duration: MAX_CLIP_SECONDS,
-      transition: "cut",
-    })),
+export const PLAN_TOOL = "emit_shot_plan";
+
+export function buildPlanSchema(numShots: number): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      bible: {
+        type: "string",
+        description:
+          "One paragraph fixing the look, subject identity, color, lighting, and lens for every shot.",
+      },
+      shots: {
+        type: "array",
+        minItems: 1,
+        maxItems: numShots,
+        items: {
+          type: "object",
+          properties: {
+            image_prompt: {
+              type: "string",
+              description:
+                "Full keyframe prompt, repeating the bible VERBATIM at the start so keyframes stay consistent.",
+            },
+            motion_prompt: {
+              type: "string",
+              description:
+                "Ordered subject -> action -> camera -> duration -> lighting -> style.",
+            },
+            duration: {
+              type: "number",
+              enum: [SHORT_CLIP_SECONDS, MAX_CLIP_SECONDS],
+              description: `Clip length in seconds — exactly ${SHORT_CLIP_SECONDS} or ${MAX_CLIP_SECONDS}.`,
+            },
+            transition: {
+              type: "string",
+              description: 'Transition into the next shot, e.g. "cut".',
+            },
+          },
+          required: ["image_prompt", "motion_prompt", "duration", "transition"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["bible", "shots"],
+    additionalProperties: false,
   };
-  if (!output) return fallback;
-  try {
-    const json = output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1);
-    const raw = JSON.parse(json) as Partial<Plan>;
-    const bible =
-      typeof raw.bible === "string" && raw.bible.trim()
-        ? raw.bible
-        : fallback.bible;
-    const rawShots = Array.isArray(raw.shots) ? raw.shots : [];
-    const shots: Shot[] = rawShots.slice(0, MAX_SHOTS).map((s, i): Shot => {
-      const shot = (s ?? {}) as Partial<Shot>;
-      const dflt = fallback.shots[Math.min(i, fallback.shots.length - 1)];
-      const duration = normalizeClipDuration(shot.duration);
-      return {
-        image_prompt:
-          typeof shot.image_prompt === "string" && shot.image_prompt.trim()
-            ? shot.image_prompt
-            : dflt.image_prompt,
-        motion_prompt:
-          typeof shot.motion_prompt === "string" && shot.motion_prompt.trim()
-            ? shot.motion_prompt
-            : dflt.motion_prompt,
-        duration,
-        transition:
-          typeof shot.transition === "string" ? shot.transition : "cut",
-      };
-    });
-    return shots.length > 0 ? { bible, shots } : fallback;
-  } catch {
-    return fallback;
+}
+
+/**
+ * Read the forced tool call back into a `Plan`.
+ *
+ * Throws when the model returned no such block, no bible, or no usable shot.
+ * Every field here is spent downstream: the bible and each `image_prompt` are
+ * paid image generations, each `motion_prompt` is a paid video generation. The
+ * previous fallback filled all of them from the scene string — so a failed
+ * decomposition still rendered, billed, and stitched a generic slow-push-in
+ * video on a run that reported `succeeded`.
+ *
+ * `duration` is normalized rather than rejected: the video model accepts only
+ * two lengths, and snapping a number the model did give to the nearest is
+ * reading its answer, not inventing one. `transition` defaults to `"cut"` for
+ * the same reason — it is a render detail, not the deliverable.
+ */
+export function readPlan(structured: unknown): Plan {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "decompose: the model returned no structured shot plan — refusing to render an invented one.",
+    );
   }
+  const raw = structured as Partial<Plan>;
+  if (typeof raw.bible !== "string" || raw.bible.trim() === "") {
+    throw new Error(
+      "decompose: the model returned no style bible — refusing to invent one.",
+    );
+  }
+  const bible = raw.bible;
+  const rawShots = Array.isArray(raw.shots) ? raw.shots : [];
+  const shots: Shot[] = rawShots.slice(0, MAX_SHOTS).map((s, i): Shot => {
+    const shot = (s ?? {}) as Partial<Shot>;
+    if (
+      typeof shot.image_prompt !== "string" ||
+      shot.image_prompt.trim() === ""
+    ) {
+      throw new Error(
+        `decompose: shot ${i + 1} came back with no image prompt — refusing to invent one.`,
+      );
+    }
+    if (
+      typeof shot.motion_prompt !== "string" ||
+      shot.motion_prompt.trim() === ""
+    ) {
+      throw new Error(
+        `decompose: shot ${i + 1} came back with no motion prompt — refusing to invent one.`,
+      );
+    }
+    return {
+      image_prompt: shot.image_prompt,
+      motion_prompt: shot.motion_prompt,
+      duration: normalizeClipDuration(shot.duration),
+      transition: typeof shot.transition === "string" ? shot.transition : "cut",
+    };
+  });
+  if (shots.length === 0) {
+    throw new Error(
+      "decompose: the model returned no shots — refusing to invent a shot list.",
+    );
+  }
+  return { bible, shots };
 }
 
 /**
@@ -330,9 +389,7 @@ const decompose = defineStep({
       "color, lighting, and lens) and an ordered list of shots. Repeat the bible VERBATIM at " +
       "the start of every shot's image_prompt so keyframes stay consistent. Order each " +
       "motion_prompt as subject -> action -> camera -> duration -> lighting -> style. " +
-      `Return between 1 and ${numShots} shots; duration must be exactly ${SHORT_CLIP_SECONDS} or ${MAX_CLIP_SECONDS} seconds. ` +
-      "Reply with ONLY minified JSON: " +
-      '{"bible":string,"shots":[{"image_prompt":string,"motion_prompt":string,"duration":number,"transition":string}]}.';
+      `Return between 1 and ${numShots} shots; duration must be exactly ${SHORT_CLIP_SECONDS} or ${MAX_CLIP_SECONDS} seconds.`;
     const prompt = `Scene: ${scene}\nNumber of shots: ${numShots}\nAspect ratio: ${aspectRatio}`;
 
     ctx.logger.info("decomposing scene", { numShots, aspectRatio });
@@ -342,8 +399,9 @@ const decompose = defineStep({
         messages: [{ role: "user", content: prompt }],
         max_tokens: 1200,
       },
+      output: { name: PLAN_TOOL, schema: buildPlanSchema(numShots) },
     });
-    const plan = parsePlan(ctx.sapiom.llm.textOf(res) ?? null, scene, numShots);
+    const plan = readPlan(ctx.sapiom.llm.structuredOf(res, PLAN_TOOL));
 
     ctx.shared.set("scene", scene);
     ctx.shared.set("aspectRatio", aspectRatio);

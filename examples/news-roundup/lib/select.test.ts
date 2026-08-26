@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSelectionPrompt, parseSelection } from "./select.js";
+import { buildSelectionPrompt, readSelection } from "./select.js";
 
 const articles = [
   { title: "Polsia raises funds", url: "https://a.example/1", snippet: "Polsia announced..." },
@@ -15,26 +15,44 @@ describe("buildSelectionPrompt", () => {
     expect(p).toContain("https://b.example/2");
     expect(p).toContain("imagePrompt");
   });
+
+  it("no longer asks for a bare JSON array — the tool schema carries the shape", () => {
+    const p = buildSelectionPrompt("Polsia", "2026-07-22", articles);
+    expect(p).not.toMatch(/ONLY a JSON array/i);
+  });
 });
 
-describe("parseSelection", () => {
-  const good = JSON.stringify([
-    { title: "T", url: "https://a.example/1", summary: "S.", imagePrompt: "P" },
-  ]);
-  it("parses a bare JSON array", () => {
-    expect(parseSelection(good)).toHaveLength(1);
+describe("readSelection", () => {
+  const article = {
+    title: "T",
+    url: "https://a.example/1",
+    summary: "S.",
+    imagePrompt: "P",
+  };
+
+  it("reads the tool call's articles", () => {
+    expect(readSelection({ articles: [article] })).toHaveLength(1);
   });
-  it("parses an array wrapped in prose/code fences", () => {
-    expect(parseSelection("Here you go:\n```json\n" + good + "\n```")).toHaveLength(1);
+
+  it("keeps an empty selection — 'nothing qualified' is a real answer", () => {
+    expect(readSelection({ articles: [] })).toHaveLength(0);
   });
-  it("rejects output without a JSON array", () => {
-    expect(() => parseSelection("no json here")).toThrow();
+
+  // SAP-2892: an unusable reply must never read as an empty selection, which
+  // routes the run to the `noNews` terminal as though the model had answered.
+  it("throws when the response carries no structured selection", () => {
+    expect(() => readSelection(undefined)).toThrow();
+    expect(() => readSelection(null)).toThrow();
+    expect(() => readSelection("Here you go: [...]")).toThrow();
   });
-  it("rejects items missing required keys", () => {
-    expect(() => parseSelection('[{"title":"T"}]')).toThrow();
+
+  it("throws on items missing required keys", () => {
+    expect(() => readSelection({ articles: [{ title: "T" }] })).toThrow();
   });
-  it("rejects more than 5 items", () => {
-    const six = JSON.stringify(Array.from({ length: 6 }, () => JSON.parse(good)[0]));
-    expect(() => parseSelection(six)).toThrow();
+
+  it("throws on more than 5 items", () => {
+    expect(() =>
+      readSelection({ articles: Array.from({ length: 6 }, () => article) }),
+    ).toThrow();
   });
 });

@@ -48,6 +48,7 @@ import type {
   LlmRouteResultPayload,
   LlmSession,
   LlmSessionHandle,
+  LlmStructuredOutputSpec,
 } from "../llm/index.js";
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
@@ -603,6 +604,64 @@ function stubVideoResult(input: VideoCreateInput): VideoGenerationResult {
   };
 }
 
+/**
+ * Build a placeholder value satisfying a `LlmRunSpec.output` JSON Schema, so the
+ * stubbed forced tool call answers in the shape the caller declared.
+ *
+ * Deliberately minimal — required properties only, one element per array, the
+ * first `enum` member, `minimum`/`minItems` respected — and every string is
+ * visibly a stub. The point is to let `run_local` trace a graph whose steps read
+ * structured output; a step that branches on the actual VALUE should still
+ * override `llm.run` in its stub file.
+ */
+function stubStructuredOutput(
+  schema: Record<string, unknown>,
+  label = "value",
+): unknown {
+  const type = Array.isArray(schema.type)
+    ? schema.type.find((t) => t !== "null")
+    : schema.type;
+  const asEnum = Array.isArray(schema.enum) ? schema.enum : null;
+  if (asEnum && asEnum.length > 0) return asEnum[0];
+
+  switch (type) {
+    case "object": {
+      const properties = (schema.properties ?? {}) as Record<string, unknown>;
+      const required = Array.isArray(schema.required)
+        ? schema.required.filter((k): k is string => typeof k === "string")
+        : Object.keys(properties);
+      const out: Record<string, unknown> = {};
+      for (const key of required) {
+        const child = properties[key];
+        out[key] =
+          child && typeof child === "object"
+            ? stubStructuredOutput(child as Record<string, unknown>, key)
+            : `(stub) ${key}`;
+      }
+      return out;
+    }
+    case "array": {
+      const items = schema.items;
+      const minItems =
+        typeof schema.minItems === "number" ? schema.minItems : 1;
+      const count = Math.max(1, minItems);
+      if (!items || typeof items !== "object") return [];
+      return Array.from({ length: count }, () =>
+        stubStructuredOutput(items as Record<string, unknown>, label),
+      );
+    }
+    case "number":
+    case "integer":
+      return typeof schema.minimum === "number" ? schema.minimum : 0;
+    case "boolean":
+      return false;
+    case "null":
+      return null;
+    default:
+      return `(stub) ${label}`;
+  }
+}
+
 function stubAgentResult(): ModelRunResult {
   return {
     runId: "stub-run",
@@ -967,6 +1026,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         request: Record<string, unknown>;
         model?: string;
         complexity?: number;
+        output?: LlmStructuredOutputSpec;
       }) =>
         Promise.resolve(
           r("llm.run", [spec], () => ({
@@ -974,8 +1034,22 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             type: "message",
             role: "assistant",
             model: spec.model ?? "smart",
-            content: [{ type: "text", text: "(stub) llm reply" }],
-            stop_reason: "end_turn",
+            // `output` forces a tool call on the real surface, so the stub has
+            // to answer in the same shape — otherwise `structuredOf` reads
+            // `undefined` locally for code that would get a value in
+            // production, and every caller that (rightly) refuses to invent a
+            // value fails under `run_local` for the wrong reason.
+            content: spec.output
+              ? [
+                  {
+                    type: "tool_use",
+                    id: "stub-tool-use",
+                    name: spec.output.name,
+                    input: stubStructuredOutput(spec.output.schema),
+                  },
+                ]
+              : [{ type: "text", text: "(stub) llm reply" }],
+            stop_reason: spec.output ? "tool_use" : "end_turn",
           })) as T,
         ),
       submit: (spec) => {
@@ -1165,7 +1239,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           // its own resolvedModel wins when present.
           const result: ImageGenerationResult = {
             ...resolved,
-            resolvedModel: resolved.resolvedModel ?? input.model ?? "stub-model",
+            resolvedModel:
+              resolved.resolvedModel ?? input.model ?? "stub-model",
           };
 
           const handle: ImageLaunchHandle = {
@@ -1207,7 +1282,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           // its own resolvedModel wins when present.
           const result: VideoGenerationResult = {
             ...resolved,
-            resolvedModel: resolved.resolvedModel ?? input.model ?? "stub-model",
+            resolvedModel:
+              resolved.resolvedModel ?? input.model ?? "stub-model",
           };
 
           const handle: VideoLaunchHandle = {

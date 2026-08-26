@@ -17,7 +17,12 @@ import {
 } from "@sapiom/tools";
 import { z } from "zod/v4";
 
-import { buildCritiquePrompt, parseJudgment } from "./critique.js";
+import {
+  CRITIQUE_SCHEMA,
+  CRITIQUE_TOOL,
+  buildCritiquePrompt,
+  readJudgment,
+} from "./critique.js";
 
 /**
  * Research → Micro-Site Publisher — deep multi-source research that
@@ -306,56 +311,89 @@ function dedupeCandidates(candidates: Candidate[]): Candidate[] {
 }
 
 /**
- * Parse the model's JSON report defensively. The model is asked for raw JSON, but
- * models wrap output in fences or prose often enough that a strict parse would
- * fail a real run — so strip fences, extract the outermost object, and fall back
- * to a minimal report built from the sources rather than throwing.
+ * The forced tool call `synthesize` reads the report out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so
+ * the report arrives as a typed `tool_use` block — no fences to strip, no
+ * outermost object to find, no prose to slice.
  */
-function parseReport(raw: string, topic: string, sources: Source[]): Report {
-  const fallback: Report = {
-    title: topic || "Research report",
-    tagline: "",
-    summary: "",
-    sections: [],
-    sources,
-  };
-  const text = (raw ?? "").trim();
-  if (!text) return fallback;
-  // Strip a leading ```json / ``` fence and trailing ``` if present.
-  const unfenced = text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-  const start = unfenced.indexOf("{");
-  const end = unfenced.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return fallback;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(unfenced.slice(start, end + 1));
-  } catch {
-    return fallback;
+const REPORT_TOOL = "emit_report";
+
+const REPORT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    title: { type: "string", description: "The report's title." },
+    tagline: { type: "string", description: "One line under the title." },
+    summary: {
+      type: "string",
+      description:
+        "2-4 sentences that accurately preview what the sections actually say.",
+    },
+    sections: {
+      type: "array",
+      minItems: 3,
+      maxItems: MAX_SECTIONS,
+      items: {
+        type: "object",
+        properties: {
+          heading: { type: "string" },
+          body: {
+            type: "string",
+            description:
+              "Markdown, citing the sources it draws on as [n] references.",
+          },
+        },
+        required: ["heading", "body"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["title", "tagline", "summary", "sections"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into a `Report`.
+ *
+ * Throws when the model returned no such block, or a report with no usable
+ * title or sections. The sections ARE the micro-site — this used to fall back
+ * to `{ title: topic, sections: [] }` and carry that on through `critique`,
+ * `illustrate`, and `build`, publishing an empty site at a real URL on a run
+ * that reported `succeeded`.
+ *
+ * `sources` is not read from the model at all: it comes from the scrape set,
+ * because a model echoing URLs back is a well-known way to get plausible dead
+ * links.
+ */
+export function readReport(structured: unknown, sources: Source[]): Report {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "synthesize: the model returned no structured report — refusing to publish invented content.",
+    );
   }
-  if (typeof parsed !== "object" || parsed === null) return fallback;
-  const obj = parsed as Record<string, unknown>;
-  const sections = Array.isArray(obj.sections)
-    ? obj.sections
-        .filter(
-          (s): s is Record<string, unknown> =>
-            typeof s === "object" && s !== null,
-        )
-        .slice(0, MAX_SECTIONS)
-        .map((s) => ({
-          heading: typeof s.heading === "string" ? s.heading : "",
-          body:
-            typeof s.body === "string"
-              ? s.body.slice(0, MAX_SECTION_CHARS)
-              : "",
-        }))
-        .filter((s) => s.heading || s.body)
-    : [];
+  const obj = structured as Record<string, unknown>;
+  if (typeof obj.title !== "string" || obj.title.trim() === "") {
+    throw new Error(
+      "synthesize: the model returned no report title — refusing to invent one.",
+    );
+  }
+  const sections = (Array.isArray(obj.sections) ? obj.sections : [])
+    .filter(
+      (s): s is Record<string, unknown> => typeof s === "object" && s !== null,
+    )
+    .slice(0, MAX_SECTIONS)
+    .map((s) => ({
+      heading: typeof s.heading === "string" ? s.heading : "",
+      body:
+        typeof s.body === "string" ? s.body.slice(0, MAX_SECTION_CHARS) : "",
+    }))
+    .filter((s) => s.heading || s.body);
+  if (sections.length === 0) {
+    throw new Error(
+      "synthesize: the model returned no report sections — refusing to publish an empty site.",
+    );
+  }
   return {
-    title:
-      typeof obj.title === "string" && obj.title ? obj.title : fallback.title,
+    title: obj.title,
     tagline: typeof obj.tagline === "string" ? obj.tagline : "",
     summary: typeof obj.summary === "string" ? obj.summary : "",
     sections,
@@ -642,10 +680,7 @@ const synthesize = defineStep({
     const system =
       "You are a research analyst producing a structured report for a web " +
       "micro-site. Given a TOPIC, an AUDIENCE, and numbered web SOURCES " +
-      "(each: [n] title, url, extracted text), write a report and output " +
-      "ONLY a JSON object (no prose, no code fences) with this shape: " +
-      '{ "title": string, "tagline": string (one line), "summary": string ' +
-      '(2-4 sentences), "sections": [{ "heading": string, "body": string }] }. ' +
+      "(each: [n] title, url, extracted text), write a report. " +
       `Use 3 to ${MAX_SECTIONS} sections. Each section body is markdown and ` +
       "cites the sources it draws on as [n] references. Rank by relevance and " +
       "credibility; drop thin or duplicate material. Tune the tone for the AUDIENCE.";
@@ -669,10 +704,10 @@ const synthesize = defineStep({
         messages: [{ role: "user", content: prompt }],
         max_tokens: 1500,
       },
+      output: { name: REPORT_TOOL, schema: REPORT_SCHEMA },
     });
-    const report = parseReport(
-      ctx.sapiom.llm.textOf(res) ?? "",
-      topic,
+    const report = readReport(
+      ctx.sapiom.llm.structuredOf(res, REPORT_TOOL),
       sources,
     );
 
@@ -725,16 +760,18 @@ const critique = defineStep({
       audience,
     });
     // Chained judgment: this call's input is `synthesize`'s model output, not
-    // caller-supplied data — a malformed reply throws in `parseJudgment` and
-    // the engine retries, same contract as `synthesize`'s own model call.
+    // caller-supplied data — a reply with no usable grade throws in
+    // `readJudgment` and the engine retries, same contract as `synthesize`'s
+    // own model call.
     const res = await ctx.sapiom.llm.run({
       request: {
         messages: [{ role: "user", content: prompt }],
         max_tokens: 300,
       },
+      output: { name: CRITIQUE_TOOL, schema: CRITIQUE_SCHEMA },
     });
-    const { score, rationale } = parseJudgment(
-      ctx.sapiom.llm.textOf(res) ?? "",
+    const { score, rationale } = readJudgment(
+      ctx.sapiom.llm.structuredOf(res, CRITIQUE_TOOL),
     );
     const passed = score >= reviewThreshold;
     const exhausted = iteration >= maxDraftAttempts;

@@ -350,12 +350,12 @@ and the scorer legitimately disagree — the scorer can't see a synthesizing cap
 
 Set `kind` on every step:
 
-| `kind`       | Use when                                            |
-| ------------ | --------------------------------------------------- |
-| `capability` | It calls a priced catalog capability.               |
+| `kind`       | Use when                                                     |
+| ------------ | ------------------------------------------------------------ |
+| `capability` | It calls a priced catalog capability.                        |
 | `llm`        | It calls a model (`llm.run`, `models.run`, `models.coding`). |
-| `compute`    | In-process logic, a branch, or a terminal.          |
-| `pause`      | It suspends the run at $0 until something wakes it. |
+| `compute`    | In-process logic, a branch, or a terminal.                   |
+| `pause`      | It suspends the run at $0 until something wakes it.          |
 
 A step that calls a capability _and then_ suspends is `pause` — suspending is what defines it.
 
@@ -568,6 +568,60 @@ uses, and skew the estimated cost.
 
 ---
 
+## Reading a model reply (correctness, not style)
+
+**Need data back from a model? Declare the shape. Never slice JSON out of prose.**
+
+```ts
+const REVIEW_TOOL = "emit_review";
+const REVIEW_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["approve", "request_changes"] },
+    summary: { type: "string" },
+  },
+  required: ["verdict", "summary"],
+  additionalProperties: false,
+};
+
+const res = await ctx.sapiom.llm.run({
+  request: {
+    system,
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 500,
+  },
+  output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
+});
+const review = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
+```
+
+`output` appends that tool to the request and forces `tool_choice` onto it, so the
+reply comes back as a typed `tool_use` block. `structuredOf` reads it, and returns
+`undefined` rather than guessing when there is no such block. For a plain text reply,
+`textOf` — never `content[0]`, which can be a `thinking` block.
+
+- **Don't ask for "ONLY minified JSON" and parse the reply.** The pattern this replaced
+  took `output.indexOf("{")` to `output.lastIndexOf("}")` and `JSON.parse`'d it. Any
+  reply containing a stray brace defeats that — a TypeScript import in generated code, a
+  schema quoted mid-reasoning, a `{COMPANY}` placeholder — and tightening the pattern
+  does not fix it. `pnpm examples:check` rejects the slice outright (SAP-2892).
+- **A reply you can't read is a failed step. Say so.** `throw`. Do not substitute a
+  default, and above all do not substitute _content_: a fabricated verdict, summary,
+  deliverable, or price on a run that reports `succeeded` is indistinguishable from a
+  real one, and it is worse than an error because nothing downstream can tell. One
+  template shipped `"<title>: a quick thread. 🧵"` to a paying customer this way.
+- **An empty answer is not the same as no answer.** `[]` is a fine result when the
+  prompt says so ("no issues found is a valid answer") — which is exactly why a _missing_
+  list has to throw instead of reading as an empty one.
+- **Defaulting is fine only where the field isn't the judgment.** Snapping a duration the
+  model gave to a value the video model accepts, or defaulting a transition to `"cut"`, is
+  reading its answer. Defaulting the _verdict_ is inventing one.
+- **Cover the failure path in your template's tests.** `pnpm examples:test` runs each
+  template's own suite; assert that an unreadable reply throws rather than producing a
+  plausible-looking deliverable.
+
+---
+
 ## The "easy path first" rule (applies everywhere)
 
 Across `notes`, the detail page, and the "Build & run" tab, the **one-click "Use this template"
@@ -584,7 +638,8 @@ Never present the MCP path as the only way to build and run — the webapp does 
 3. **Sort and validate** locally: `pnpm examples:sort`, then `pnpm examples:check`. Both must be
    clean — the same check runs in CI and blocks the merge if the registry is invalid, unsorted,
    points at a directory with no `template.json`, or your `template.json` doesn't match the
-   manifest schema.
+   manifest schema. If your template has a test suite, `pnpm examples:test` runs it (and every
+   other template's); CI runs that too.
 4. **Open a pull request.** CI validates the registry and builds the SDK; an automated review
    runs too. Keep the PR to one template.
 5. **On merge, it goes live.** The Sapiom backend reads `registry.json` at a pinned commit of
@@ -607,6 +662,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] No `checkpoint` auto-approves or auto-resumes; with nobody assigned it terminates at the gate.
 - [ ] Every credential is read from `process.env[KEY]` and declared in `requiredSecrets`; no config filed as a secret.
 - [ ] Nothing in the output claims an effect on the world that did not happen; a degraded branch names itself in `unmet[]` and `note`.
+- [ ] Every model reply read as data uses `output` + `structuredOf`, not a hand parse; an unreadable reply throws rather than substituting content, and a test covers that path.
 - [ ] One `category` (the outcome, not the mechanism) and one `cadence`; `tags` kept freeform.
 - [ ] One `discipline`, taken from your `category`'s row — the enum alone will not catch a wrong pair.
 - [ ] One `complexity`, picked by counting judgment points — not by counting steps.

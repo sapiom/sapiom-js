@@ -28,6 +28,23 @@ const NEW_CALL = /ctx\.sapiom\.llm\.run\s*\(/;
 const FALSE_LLM_CLAIM =
   /ctx\.sapiom\.llm[^\n]{0,100}(?:does not|doesn't) exist/i;
 
+/**
+ * The slice-parse this repo has now removed everywhere: take the first `{` (or
+ * `[`) to the last `}` (or `]`) of a model's prose reply and `JSON.parse` it.
+ *
+ * SAP-2892 — it is not salvageable by tightening the pattern. Any prose that
+ * mentions a brace defeats it, LLM prose mentions braces constantly, and on
+ * failure the templates substituted invented content (a verdict, a newsletter, a
+ * priced quote) while reporting `succeeded`. The blessed replacement is
+ * `LlmRunSpec.output` (a forced tool call) read back with
+ * `ctx.sapiom.llm.structuredOf` — there is then nothing to slice.
+ *
+ * Matched per-line so the error can name the line, and matched on `indexOf` /
+ * `lastIndexOf` rather than on `JSON.parse`: parsing JSON that arrived AS JSON
+ * (an HTTP body, a file, a stub payload) is fine and common.
+ */
+const SLICE_PARSE = /\b(?:indexOf|lastIndexOf)\s*\(\s*(["'])[{}[\]]\1\s*\)/;
+
 function requiresAtLeast(range, minimum) {
   const match = String(range ?? "")
     .trim()
@@ -48,6 +65,36 @@ export function checkLlmCopySurface({ path, source }) {
     return [`llm-surface: ${path} falsely says ctx.sapiom.llm does not exist.`];
   }
   return [];
+}
+
+/**
+ * Reject a first-`{`-to-last-`}` slice of a model reply in any template source.
+ *
+ * Unlike the `models.run` check this is NOT scoped to a known template list: the
+ * point is that a NEW template cannot reintroduce the pattern, which is how the
+ * call surface drifted back before. Applies to every `.ts` file under a
+ * template, not just `index.ts`, because the parse has lived in a `lib/` helper
+ * (`news-roundup/lib/select.ts`) and a sibling module
+ * (`research-to-microsite/critique.ts`) as well.
+ *
+ * @param path    repository-relative path, for the message
+ * @param source  the file's contents
+ * @returns string[] of problems, one per offending line
+ */
+export function checkNoSliceParse({ path, source }) {
+  const errors = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!SLICE_PARSE.test(lines[i])) continue;
+    errors.push(
+      `llm-surface: ${path}:${i + 1} slices a model reply from the first "{" to the last "}". ` +
+        "That parse fails on any reply containing a stray brace, and every failure used to become " +
+        "invented content on a run reported as succeeded (SAP-2892). Declare the shape with " +
+        "`output: { name, schema }` on the llm.run spec and read it back with " +
+        "`ctx.sapiom.llm.structuredOf(res, name)` instead.",
+    );
+  }
+  return errors;
 }
 
 export function checkOneShotLlmTemplate({

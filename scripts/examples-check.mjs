@@ -64,6 +64,7 @@ import {
 import {
   ONE_SHOT_LLM_TEMPLATE_IDS,
   checkLlmCopySurface,
+  checkNoSliceParse,
   checkOneShotLlmTemplate,
 } from "./lib/examples-llm-surface.mjs";
 
@@ -74,6 +75,21 @@ const SCHEMA_PATH = path.join(EXAMPLES_DIR, "registry.schema.json");
 const MANIFEST_SCHEMA_PATH = path.join(EXAMPLES_DIR, "template.schema.json");
 
 const errors = [];
+
+/** Every `.ts` file under `examples/`, skipping `node_modules` and build output. */
+function collectTemplateTypeScript(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    const absolutePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectTemplateTypeScript(absolutePath));
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".ts")) files.push(absolutePath);
+  }
+  return files;
+}
 
 function collectRegisteredProjectCopyAssets(sourceDir, currentDir = sourceDir) {
   const assets = [];
@@ -170,6 +186,20 @@ for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
       copySources,
       packageJson,
       registryTemplate: templateById.get(id),
+    }),
+  );
+}
+
+// No template may slice a model reply from the first "{" to the last "}".
+// Deliberately repo-wide over `examples/`, not scoped to a template list: the
+// parse used to live in `lib/` helpers and sibling modules as well as
+// `index.ts`, and the whole point is that a NEW template can't reintroduce it
+// (SAP-2892).
+for (const tsPath of collectTemplateTypeScript(EXAMPLES_DIR)) {
+  errors.push(
+    ...checkNoSliceParse({
+      path: path.relative(ROOT, tsPath).split(path.sep).join("/"),
+      source: readFileSync(tsPath, "utf8"),
     }),
   );
 }

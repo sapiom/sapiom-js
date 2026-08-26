@@ -361,11 +361,7 @@ const extract = defineStep({
       "(2) the CRM fields to update on them, and (3) the concrete action items " +
       "that came out of the call. Use null for anything the transcript does not " +
       "state — never guess an email or a company. Keep each action item to one " +
-      "clear sentence, with an owner and a due date only when explicitly said. " +
-      'Reply with ONLY minified JSON: {"contact":{"name":string,"email":string|' +
-      'null,"company":string|null,"title":string|null},"update":{"dealStage":' +
-      'string|null,"nextStep":string|null,"summary":string},"actionItems":' +
-      '[{"description":string,"owner":string|null,"dueDate":string|null}]}.';
+      "clear sentence, with an owner and a due date only when explicitly said.";
     const prompt = `MEETING TRANSCRIPT:\n${transcript}`;
 
     const res = await ctx.sapiom.llm.run({
@@ -374,8 +370,11 @@ const extract = defineStep({
         messages: [{ role: "user", content: prompt }],
         max_tokens: 900,
       },
+      output: { name: EXTRACT_TOOL, schema: EXTRACT_SCHEMA },
     });
-    const extraction = parseExtraction(ctx.sapiom.llm.textOf(res) ?? null);
+    const extraction = readExtraction(
+      ctx.sapiom.llm.structuredOf(res, EXTRACT_TOOL),
+    );
     ctx.logger.info("extracted meeting notes", {
       contact: extraction.contact.name,
       actionItems: extraction.actionItems.length,
@@ -606,8 +605,14 @@ function renderSummary(
   return lines.join("\n");
 }
 
-// ─────────────────────────────────────────────────────────────── parsing ──
-/** A minimal, valid extraction for the empty / unparseable path. */
+// ────────────────────────────────────────────────────── structured output ──
+/**
+ * The extraction for a transcript with no model call in it — an empty
+ * transcript. Reached only on that path; it is NOT a stand-in for a model that
+ * failed to answer, which is what `parseExtraction` used to return so that
+ * "the reply was unparseable" and "the meeting had no content" wrote the same
+ * row to the CRM.
+ */
 function emptyExtraction(): Extraction {
   return {
     contact: {
@@ -621,30 +626,116 @@ function emptyExtraction(): Extraction {
   };
 }
 
-/** Extract the structured update from model output; fall back to empty. */
-function parseExtraction(output: string | null): Extraction {
-  if (!output) return emptyExtraction();
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return emptyExtraction();
-    const parsed = JSON.parse(output.slice(start, end + 1)) as {
-      contact?: unknown;
-      update?: unknown;
-      actionItems?: unknown;
-    };
-    return {
-      contact: coerceContact(parsed.contact),
-      update: coerceUpdate(parsed.update),
-      actionItems: Array.isArray(parsed.actionItems)
-        ? parsed.actionItems
-            .map(coerceActionItem)
-            .filter((a): a is ExtractedActionItem => a !== null)
-        : [],
-    };
-  } catch {
-    return emptyExtraction();
+/**
+ * The forced tool call `extract` reads the meeting's data out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so the
+ * extraction arrives as a typed `tool_use` block — there is no prose to slice
+ * and no JSON to hand-parse.
+ */
+const EXTRACT_TOOL = "emit_extraction";
+
+const NULLABLE_STRING = { type: ["string", "null"] as const };
+
+const EXTRACT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    contact: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "The primary external contact the meeting was with.",
+        },
+        email: NULLABLE_STRING,
+        company: NULLABLE_STRING,
+        title: NULLABLE_STRING,
+      },
+      required: ["name", "email", "company", "title"],
+      additionalProperties: false,
+      description:
+        "Use null for anything the transcript does not state — never guess an email or a company.",
+    },
+    update: {
+      type: "object",
+      properties: {
+        dealStage: NULLABLE_STRING,
+        nextStep: NULLABLE_STRING,
+        summary: {
+          type: "string",
+          description: "A one- or two-sentence recap of the call.",
+        },
+      },
+      required: ["dealStage", "nextStep", "summary"],
+      additionalProperties: false,
+    },
+    actionItems: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          description: {
+            type: "string",
+            description: "One clear sentence.",
+          },
+          owner: NULLABLE_STRING,
+          dueDate: NULLABLE_STRING,
+        },
+        required: ["description", "owner", "dueDate"],
+        additionalProperties: false,
+      },
+      description:
+        "The concrete action items from the call. An owner or due date only when explicitly said.",
+    },
+  },
+  required: ["contact", "update", "actionItems"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into an `Extraction`.
+ *
+ * Throws when the model returned no such block, or one with no contact or
+ * `update` object. This extraction is written to the CRM and emailed as a
+ * meeting recap, so a silent empty one was not a graceful degradation: it filed
+ * `"Unknown contact"` with no action items against a real call, indistinguishable
+ * from a meeting where genuinely nothing was agreed.
+ *
+ * An empty `actionItems` list stays a real answer — plenty of calls produce
+ * none — but it has to be a list the model actually returned.
+ */
+export function readExtraction(structured: unknown): Extraction {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "extract: the model returned no structured extraction — refusing to write an invented CRM row.",
+    );
   }
+  const parsed = structured as {
+    contact?: unknown;
+    update?: unknown;
+    actionItems?: unknown;
+  };
+  if (parsed.contact === null || typeof parsed.contact !== "object") {
+    throw new Error(
+      "extract: the model returned no contact — refusing to file the call against an invented one.",
+    );
+  }
+  if (parsed.update === null || typeof parsed.update !== "object") {
+    throw new Error(
+      "extract: the model returned no CRM update — refusing to invent one.",
+    );
+  }
+  if (!Array.isArray(parsed.actionItems)) {
+    throw new Error(
+      "extract: the model returned no action-item list — refusing to report the call as having none.",
+    );
+  }
+  return {
+    contact: coerceContact(parsed.contact),
+    update: coerceUpdate(parsed.update),
+    actionItems: parsed.actionItems
+      .map(coerceActionItem)
+      .filter((a): a is ExtractedActionItem => a !== null),
+  };
 }
 
 /** null-safe string: trims and returns null for empty/absent values. */

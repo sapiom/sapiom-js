@@ -458,9 +458,7 @@ const assess = defineStep({
       "concise, structured PR review. Weigh test coverage heavily: any behavior " +
       "that changed without a matching test belongs in `missingTests`. Pick a " +
       "verdict: `request_changes` if there are missing tests or real defects, " +
-      "`comment` for minor notes, `approve` if it is clean. Reply with ONLY " +
-      'minified JSON: {"verdict":"approve|comment|request_changes","summary":string,' +
-      '"missingTests":string[],"comments":string[]}.';
+      "`comment` for minor notes, `approve` if it is clean.";
     const prompt =
       `PR #${pr.number ?? "?"}: ${pr.title ?? "(untitled)"}\n\n` +
       `Coding agent findings:\n${findings}`;
@@ -471,8 +469,9 @@ const assess = defineStep({
         messages: [{ role: "user", content: prompt }],
         max_tokens: 600,
       },
+      output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
     });
-    const rev = parseReview(ctx.sapiom.llm.textOf(res) ?? null);
+    const rev = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
     ctx.shared.set("review", rev);
     ctx.logger.info("review assessed", {
       verdict: rev.verdict,
@@ -627,39 +626,83 @@ function skip(
   };
 }
 
-/** Extract the structured review from model output; fall back to a safe default. */
-function parseReview(output: string | null): Review {
-  const fallback: Review = {
-    verdict: "comment",
-    summary: "Model summary unavailable; see the coding agent's raw findings.",
-    missingTests: [],
-    comments: [],
-  };
-  if (!output) return fallback;
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return fallback;
-    const raw = JSON.parse(output.slice(start, end + 1)) as Partial<Review>;
-    const verdict =
-      raw.verdict === "approve" ||
-      raw.verdict === "comment" ||
-      raw.verdict === "request_changes"
-        ? raw.verdict
-        : fallback.verdict;
-    const asStrings = (v: unknown): string[] =>
-      Array.isArray(v)
-        ? v.filter((x): x is string => typeof x === "string")
-        : [];
-    return {
-      verdict,
-      summary: typeof raw.summary === "string" ? raw.summary : fallback.summary,
-      missingTests: asStrings(raw.missingTests),
-      comments: asStrings(raw.comments),
-    };
-  } catch {
-    return fallback;
+/**
+ * The forced tool call `assess` reads its review out of. `llm.run`'s `output`
+ * appends this tool to the request and pins `tool_choice` to it, so the review
+ * arrives as a typed `tool_use` block — there is no prose to slice and no JSON
+ * to hand-parse, which is what used to make a review of ordinary reasoning
+ * prose come back as a fabricated verdict.
+ */
+const REVIEW_TOOL = "emit_review";
+
+const REVIEW_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["approve", "comment", "request_changes"],
+      description:
+        "`request_changes` for missing tests or real defects, `comment` for minor notes, `approve` if it is clean.",
+    },
+    summary: {
+      type: "string",
+      description: "One-paragraph summary of the review.",
+    },
+    missingTests: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Behavior that changed without a matching test, one entry each.",
+    },
+    comments: {
+      type: "array",
+      items: { type: "string" },
+      description: "Other notable findings, each a short line.",
+    },
+  },
+  required: ["verdict", "summary", "missingTests", "comments"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into a `Review`.
+ *
+ * Throws when the model returned no such block, or returned one without a
+ * usable verdict or summary. That is deliberate: a default verdict on a run
+ * reported as `succeeded` is a review this agent never actually made, and the
+ * reviewer downstream cannot tell it apart from a real one. Missing detail
+ * lists are read as "nothing to report" — that is what an empty list means
+ * under this schema, and it invents no judgment.
+ */
+export function readReview(structured: unknown): Review {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "assess: the model returned no structured review — refusing to invent a verdict.",
+    );
   }
+  const raw = structured as Partial<Review>;
+  if (
+    raw.verdict !== "approve" &&
+    raw.verdict !== "comment" &&
+    raw.verdict !== "request_changes"
+  ) {
+    throw new Error(
+      `assess: the model returned no usable verdict (${JSON.stringify(raw.verdict)}) — refusing to invent one.`,
+    );
+  }
+  if (typeof raw.summary !== "string" || raw.summary.trim() === "") {
+    throw new Error(
+      "assess: the model returned no review summary — refusing to invent one.",
+    );
+  }
+  const asStrings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  return {
+    verdict: raw.verdict,
+    summary: raw.summary,
+    missingTests: asStrings(raw.missingTests),
+    comments: asStrings(raw.comments),
+  };
 }
 
 export const agent = defineAgent<PrReviewInput, Shared>({
