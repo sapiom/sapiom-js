@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- 065c9ca: `contentGeneration.images` / `contentGeneration.video`: `ImageCreateInput` and `VideoCreateInput` gain an optional `idempotencyKey` — a caller-supplied cross-call idempotency key (arbitrary string ≤255, not a UUID) forwarded verbatim as a top-level request field. A repeat with the same key (per tenant) returns the existing generation instead of launching a new one, matching `agents.run` semantics. The SDK only forwards it — across the sync `create` and async `launch` paths, image and video; the platform validates and deduplicates (SAP-2578 / E7 phase 3).
+- 065c9ca: `contentGeneration.images` / `contentGeneration.video`: `ImageCreateInput` and `VideoCreateInput` gain an optional `idempotencyKey` — a caller-supplied string forwarded verbatim as a top-level request field across the sync `create` and async `launch` paths. On platform deployments with content-generation idempotency support, keys are limited to 255 characters and repeated requests with the same per-tenant key return the existing generation. The SDK does not validate or deduplicate the key; deployments without platform support may ignore it.
 
 ## 0.31.0
 
