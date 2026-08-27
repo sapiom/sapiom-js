@@ -192,8 +192,8 @@
     "id": "server-workflow-change-event",
     "path": "packages/harness/src/server/index.ts",
     "pattern": "^workflows\\.changed$",
-    "occurrences": 2,
-    "reason": "The internal WebSocket event name remains stable for existing clients."
+    "occurrences": 3,
+    "reason": "The internal WebSocket event name remains stable for existing clients, including explicit agent connections that refresh Project graphs."
   },
   {
     "id": "rest-session-binding-route",
