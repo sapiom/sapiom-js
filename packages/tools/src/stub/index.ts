@@ -120,6 +120,20 @@ import type {
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
 
+/**
+ * Host used in the stub Postgres DSN.
+ *
+ * `.invalid` is reserved by RFC 6761 and is guaranteed never to resolve, so a
+ * template that dials the stub DSN fails at DNS in ~20ms with a message naming
+ * the stub — rather than opening a socket to whatever real Postgres happens to
+ * be listening on the author's own `localhost:5432`.
+ *
+ * `database.get` itself still succeeds; only dialing what it returns fails.
+ * Step code holding a raw Postgres connection should gate that dial on
+ * `ctx.local` rather than rely on this DSN being reachable.
+ */
+const STUB_DB_HOST = "sapiom-run-local-stub.invalid";
+
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
   string,
@@ -1415,8 +1429,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               pgVersion: input.pgVersion ?? 17,
               duration: input.duration,
               connection: {
-                connectionString: `postgresql://stub_user:stub_pass@localhost:5432/${name}`,
-                host: "localhost",
+                connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/${name}`,
+                host: STUB_DB_HOST,
                 port: 5432,
                 username: "stub_user",
                 password: "stub_pass",
@@ -1439,8 +1453,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             pgVersion: 17,
             duration: "1h",
             connection: {
-              connectionString: `postgresql://stub_user:stub_pass@localhost:5432/stub-${idOrHandle}`,
-              host: "localhost",
+              connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/stub-${idOrHandle}`,
+              host: STUB_DB_HOST,
               port: 5432,
               username: "stub_user",
               password: "stub_pass",

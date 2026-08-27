@@ -202,10 +202,29 @@ run, and secrets are read at step dispatch.
    template's `README.md` shows it.
 
    **Be aware of what it does not check.** Every capability is stubbed, so `database.get`
-   returns a `localhost` connection string and `repositories.get` returns a plausible
-   repository — _neither ever fails_. A `run_local` pass proves your control flow, **not** that
-   the resources your template names exist. Pauses are auto-resumed locally too, so a pause
+   returns a connection string and `repositories.get` returns a plausible repository —
+   _neither call ever fails_. A `run_local` pass proves your control flow, **not** that the
+   resources your template names exist. Pauses are auto-resumed locally too, so a pause
    nothing will ever fire still looks fine.
+
+   **The stub can only reach as far as `ctx.sapiom`.** A capability call succeeding is not the
+   same as what it hands back being usable. `database.get` returns a DSN on a host that is
+   deliberately unroutable (`.invalid`, RFC 6761), so a step that opens its own Postgres
+   socket fails at DNS — fast, and with the stub named in the error. The same goes for any I/O
+   the stub never sees: raw HTTP to a third party, a client holding its own connection.
+
+   **Gate that I/O on `ctx.local`.** It is `true` under `run_local` and absent on a deployed
+   run, so the branch reads as live in production with nothing set:
+
+   ```ts
+   const dryRun = input.dryRun ?? ctx.local ?? false;
+   if (!dryRun) {
+     // raw sockets, third-party HTTP — the things run_local cannot stub
+   }
+   ```
+
+   Keep the explicit input flag as the override; `?? ctx.local` only supplies the default, so
+   passing `{ "dryRun": false }` still forces the live path when you want to test it.
 
 3. **Then run it deployed, with no input at all.** `deploy` and `run` it with `{}`. It must
    reach a terminal state and produce something real (see [§1a](#1a-make-it-runnable-with-nothing)).
