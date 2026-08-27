@@ -262,6 +262,81 @@ describe("bounded agent-project traversal", () => {
     expect(asyncBudget.envelopeDepth).toBe(syncBudget.envelopeDepth);
   });
 
+  it("does not descend into a nested repository checkout, and says which one it stopped at", async () => {
+    await mkdirs("src/agents", "vendor-repo/.git", "vendor-repo/agents/deep");
+    const rec = recorder();
+    const boundaries: [string, number][] = [];
+
+    walkAgentProjectTree(root, {
+      onDirectory: rec.onDirectory,
+      onRepositoryBoundary: (dir, depth) => boundaries.push([path.relative(root, dir), depth]),
+    });
+
+    // The checkout itself IS entered (its marker still gets inspected, so a
+    // repo that is itself an agent is registered) — nothing below it is.
+    expect(rec.visits.map(([rel]) => rel)).toContain("vendor-repo");
+    expect(rec.visits.some(([rel]) => rel.startsWith(`vendor-repo${path.sep}`))).toBe(false);
+    expect(rec.visits.map(([rel]) => rel)).toContain(`src${path.sep}agents`);
+    expect(boundaries).toEqual([["vendor-repo", 1]]);
+  });
+
+  it("treats a git WORKTREE the same as a clone — its `.git` is a file, not a directory", async () => {
+    await mkdirs("worktrees/feature-a/agents");
+    await fs.writeFile(
+      path.join(root, "worktrees", "feature-a", ".git"),
+      "gitdir: /elsewhere/.git/worktrees/feature-a\n",
+    );
+    const rec = recorder();
+
+    walkAgentProjectTree(root, rec);
+
+    // This is the six-copies case: the same agent reachable once per worktree.
+    expect(
+      rec.visits.some(([rel]) => rel.startsWith(`worktrees${path.sep}feature-a${path.sep}`)),
+    ).toBe(false);
+  });
+
+  it("never applies the boundary to the root itself — a scan of a repo covers that repo", async () => {
+    await mkdirs(".git/objects", "packages/a/agents", "packages/b/agents");
+    const rec = recorder();
+
+    walkAgentProjectTree(root, rec);
+
+    expect(rec.visits.map(([rel]) => rel)).toContain(`packages${path.sep}a${path.sep}agents`);
+    expect(rec.visits.map(([rel]) => rel)).toContain(`packages${path.sep}b${path.sep}agents`);
+  });
+
+  it("crossRepositoryBoundaries re-enables the old reach — the measurement escape hatch only", async () => {
+    await mkdirs("vendor-repo/.git", "vendor-repo/agents/deep");
+    const rec = recorder();
+
+    walkAgentProjectTree(root, rec, new AgentProjectScanBudget(), {
+      crossRepositoryBoundaries: true,
+    });
+
+    expect(rec.visits.some(([rel]) => rel.startsWith(`vendor-repo${path.sep}agents`))).toBe(true);
+  });
+
+  it("sync and async walks agree about repository boundaries too", async () => {
+    await mkdirs("keep/deep", "nested/.git", "nested/deep");
+    const syncRec = recorder();
+    const syncBoundaries: string[] = [];
+    walkAgentProjectTree(root, {
+      onDirectory: syncRec.onDirectory,
+      onRepositoryBoundary: (dir) => syncBoundaries.push(path.relative(root, dir)),
+    });
+    const asyncRec = recorder();
+    const asyncBoundaries: string[] = [];
+    await walkAgentProjectTreeAsync(root, {
+      onDirectory: asyncRec.onDirectory,
+      onRepositoryBoundary: (dir) => asyncBoundaries.push(path.relative(root, dir)),
+    });
+
+    expect(asyncRec.visits).toEqual(syncRec.visits);
+    expect(asyncBoundaries).toEqual(syncBoundaries);
+    expect(syncBoundaries).toEqual(["nested"]);
+  });
+
   it("defaults to the shipped policy: depth 8, 10k directories", () => {
     const budget = new AgentProjectScanBudget();
     expect(budget.maxDepth).toBe(AGENT_PROJECT_SCAN_MAX_DEPTH);
