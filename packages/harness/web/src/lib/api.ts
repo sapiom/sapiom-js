@@ -935,6 +935,28 @@ function mockWorkflowGraph(name: string): CanvasGraph {
   };
 }
 
+/**
+ * The fixture stand-in for the message documents the real route returns for
+ * every status but `ok` — the calm "Preparing your agent" placeholder, the
+ * "Nothing rendered yet" page, the honest error panel. They are pages, not
+ * boards, and crucially they post NO graph: that is what keeps the pane from
+ * revealing itself on setup scaffolding, so the mock must not post one either.
+ */
+function mockWorkflowMessageDocument(title: string, subtitle: string | null): string {
+  const esc = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return [
+    '<!doctype html><html lang="en"><head><meta charset="utf-8" />',
+    `<title>${esc(title)}</title>`,
+    "<style>html,body{height:100%;margin:0;display:grid;place-items:center;",
+    'font:13px/1.5 "Geist",system-ui,sans-serif;color:#54545e}',
+    "main{text-align:center;max-width:32ch}</style></head><body>",
+    `<main data-testid="mock-workflow-message"><h1>${esc(title)}</h1>`,
+    subtitle ? `<p>${esc(subtitle)}</p>` : "",
+    "</main></body></html>",
+  ].join("");
+}
+
 /** The fixture board document. Theme comes from the `data-theme` the embedding
  *  pane stamps on the frame's root (a `srcdoc` frame carries no query string,
  *  so the served document's `?theme=` reader has nothing to read). */
@@ -1432,15 +1454,23 @@ class MockApi implements HarnessApi {
       cached: false,
     };
     if (status !== "ok") {
+      const reason = override?.reason ?? null;
       return {
         ...base,
         status,
         graph: null,
-        reason: override?.reason ?? null,
-        // The real route returns a renderable document for EVERY status; the
-        // pane chooses its own chrome for the non-`ok` ones, so an empty string
-        // here would be indistinguishable from a truncated body.
-        document: mockWorkflowGraphDocument(workflow.name, mockWorkflowGraph(workflow.name)),
+        reason,
+        // The real route returns a renderable document for EVERY status — an
+        // empty board is still a page, never a hole — so an empty string here
+        // would be indistinguishable from a truncated body.
+        document: mockWorkflowMessageDocument(
+          status === "preparing"
+            ? "Preparing your agent"
+            : status === "empty"
+              ? "Nothing rendered yet"
+              : "Couldn't render this agent",
+          reason,
+        ),
       };
     }
     const graph = mockWorkflowGraph(workflow.name);

@@ -267,8 +267,11 @@ test.describe("boards for agents with no session", () => {
 
     await seed("preparing", null);
     await select(page, "gateway");
-    // A calm placeholder document, not an error panel.
-    await expect(page.frameLocator(".canvas-iframe").locator("body")).toBeVisible();
+    // A calm placeholder document, not an error panel — and it posts no graph,
+    // which is what keeps the pane from revealing itself on scaffolding.
+    await expect(
+      page.frameLocator(".canvas-iframe").getByTestId("mock-workflow-message"),
+    ).toContainText("Preparing your agent");
     await expect(page.getByTestId("canvas-empty-route-error")).toHaveCount(0);
     await expect(page.getByTestId("canvas-empty-route-empty")).toHaveCount(0);
 
