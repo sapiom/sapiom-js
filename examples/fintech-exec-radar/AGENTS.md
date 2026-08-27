@@ -32,7 +32,8 @@ compatible dedicated research-agent slug.
 - Retry only an individual capability-bearing child step and only for a
   classified transient error. Keep the two-attempt ceiling. Never add retry to
   `fanOut`, `reduce`, or `deliver`: that would replay completed children, ranking,
-  persistence, or delivery.
+  persistence, or delivery. Health denominators count logical operations; track
+  extra capability attempts separately in `retries`.
 - Attempt to append full company observations as best-effort history before the
   optional scrape steps; a failed history write must not discard sourced
   findings. A scrape failure must retain the search snippet and surface a
@@ -47,8 +48,8 @@ compatible dedicated research-agent slug.
   but it must never author claims or source URLs.
 - `dryRun` and `budgetBlocked` must branch before any capability call. A
   zero-input run is intentionally live and uses the retry-aware call ceiling.
-- Keep the public defaults anonymized: public company names are allowed; no
-  customer name, email, resume, profile, or private targeting criteria.
+- Keep defaults limited to organization-level market inputs. Never add personal
+  identifiers or contact details.
 
 ## Test it
 

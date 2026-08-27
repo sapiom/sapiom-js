@@ -59,7 +59,7 @@ const MAX_SUMMARY_ITEMS_PER_COMPANY = 5;
 const MAX_EVIDENCE_CHARS = 700;
 const DEDUPE_HALF_LIFE_DAYS = 30;
 const MAX_ATTEMPTS_PER_CAPABILITY_STEP = 2;
-const DEFAULT_MAX_CAPABILITY_CALLS = 350;
+const DEFAULT_MAX_CAPABILITY_CALLS = 500;
 const COMPANY_CONCURRENCY = 4;
 const ACKNOWLEDGEMENT_CONCURRENCY = 3;
 const MEMORY_NAMESPACE_PREFIX = "fintech-exec-radar";
@@ -105,17 +105,6 @@ const SECOND_LEVEL_PUBLIC_SUFFIXES = new Set([
   "net",
   "org",
 ]);
-const LOW_SIGNAL_SOURCE_HOSTS = new Set([
-  "comparably.com",
-  "crunchbase.com",
-  "instagram.com",
-  "pitchbook.com",
-  "simplywall.st",
-  "stocktwits.com",
-  "talnexis.com",
-  "threads.com",
-  "tracxn.com",
-]);
 
 type Signal = (typeof DEFAULT_SIGNALS)[number];
 type Mode = "coordinate" | "research";
@@ -142,14 +131,25 @@ interface CoverageFailure {
 }
 
 interface ChildHealth {
-  searches: { attempted: number; succeeded: number; failed: number };
+  searches: {
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    retries: number;
+  };
   scrapes: {
     attempted: number;
     succeeded: number;
     failed: number;
+    retries: number;
     snippetFallbacks: number;
   };
-  persistence: { attempted: number; succeeded: number; failed: number };
+  persistence: {
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    retries: number;
+  };
 }
 
 interface RunHealth {
@@ -446,12 +446,17 @@ function isCompanyOwnedUrl(company: string, raw: string): boolean {
 function isUnsupportedScrapeUrl(raw: string): boolean {
   try {
     const host = new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
-    return (
-      host === "linkedin.com" ||
-      host.endsWith(".linkedin.com") ||
-      [...LOW_SIGNAL_SOURCE_HOSTS].some(
-        (blocked) => host === blocked || host.endsWith(`.${blocked}`),
-      )
+    return host === "linkedin.com" || host.endsWith(".linkedin.com");
+  } catch {
+    return true;
+  }
+}
+
+function isStructurallyUnhelpfulSourceUrl(raw: string): boolean {
+  try {
+    const path = decodeURIComponent(new URL(raw).pathname).toLowerCase();
+    return /\/(?:careers?|companies|company|company-profile|funding-and-investors|jobs?|management|organization|quote|reel|stocks?)(?:\/|$)/u.test(
+      path,
     );
   } catch {
     return true;
@@ -579,6 +584,38 @@ function describeError(error: unknown): string {
   }
 }
 
+function capabilityBodyRecords(body: unknown): Record<string, unknown>[] {
+  if (!body || typeof body !== "object") return [];
+  const root = body as Record<string, unknown>;
+  const nested = ["cause", "error", "upstream"].flatMap((key) => {
+    const value = root[key];
+    return value && typeof value === "object"
+      ? [value as Record<string, unknown>]
+      : [];
+  });
+  return [root, ...nested];
+}
+
+function capabilityBodyStatuses(body: unknown): number[] {
+  return capabilityBodyRecords(body).flatMap((record) =>
+    ["status", "statusCode", "upstreamStatus"].flatMap((key) => {
+      const value = record[key];
+      return typeof value === "number" ? [value] : [];
+    }),
+  );
+}
+
+function capabilityBodyLabels(body: unknown): string {
+  return capabilityBodyRecords(body)
+    .flatMap((record) =>
+      ["code", "message", "reason"].flatMap((key) => {
+        const value = record[key];
+        return typeof value === "string" ? [value] : [];
+      }),
+    )
+    .join(" ");
+}
+
 function publicError(error: unknown): string {
   if (
     error instanceof SearchHttpError ||
@@ -591,13 +628,9 @@ function publicError(error: unknown): string {
         : error instanceof MemoryHttpError
           ? "memory service"
           : "email service";
-    const body = error.body;
-    const upstreamStatus =
-      body && typeof body === "object"
-        ? ["upstreamStatus", "statusCode", "status"]
-            .map((key) => (body as Record<string, unknown>)[key])
-            .find((value): value is number => typeof value === "number")
-        : undefined;
+    const upstreamStatus = capabilityBodyStatuses(error.body).find(
+      (status) => status !== error.status,
+    );
     if (upstreamStatus && upstreamStatus !== error.status) {
       return `${service} returned HTTP ${upstreamStatus} (wrapped as HTTP ${error.status})`;
     }
@@ -608,29 +641,30 @@ function publicError(error: unknown): string {
 
 function emptyChildHealth(): ChildHealth {
   return {
-    searches: { attempted: 0, succeeded: 0, failed: 0 },
+    searches: { attempted: 0, succeeded: 0, failed: 0, retries: 0 },
     scrapes: {
       attempted: 0,
       succeeded: 0,
       failed: 0,
+      retries: 0,
       snippetFallbacks: 0,
     },
-    persistence: { attempted: 0, succeeded: 0, failed: 0 },
+    persistence: { attempted: 0, succeeded: 0, failed: 0, retries: 0 },
   };
 }
 
 function isRetryableCapabilityError(error: unknown): boolean {
   if (error instanceof Error && error.name === "AbortError") return false;
   if (error instanceof SearchHttpError || error instanceof MemoryHttpError) {
-    const body = describeError(error.body);
-    if (
-      /\b(?:400|401|402|403|404)\b|forbidden|blocked|unsupported/i.test(body)
-    ) {
-      return false;
-    }
+    const terminalStatus = capabilityBodyStatuses(error.body).some((status) =>
+      new Set([400, 401, 402, 403, 404]).has(status),
+    );
+    const terminalLabel = /\b(?:forbidden|blocked|unsupported)\b/i.test(
+      capabilityBodyLabels(error.body),
+    );
+    if (terminalStatus || terminalLabel) return false;
     return new Set([408, 425, 429, 500, 502, 503, 504]).has(error.status);
   }
-  if (error instanceof TypeError) return true;
   const message = describeError(error);
   return /\b(?:ECONNRESET|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|fetch failed|network error|socket hang up)\b/i.test(
     message,
@@ -687,13 +721,16 @@ function aggregateHealth(
       health.searches.attempted += child.searches.attempted;
       health.searches.succeeded += child.searches.succeeded;
       health.searches.failed += child.searches.failed;
+      health.searches.retries += child.searches.retries;
       health.scrapes.attempted += child.scrapes.attempted;
       health.scrapes.succeeded += child.scrapes.succeeded;
       health.scrapes.failed += child.scrapes.failed;
+      health.scrapes.retries += child.scrapes.retries;
       health.scrapes.snippetFallbacks += child.scrapes.snippetFallbacks;
       health.persistence.attempted += child.persistence.attempted;
       health.persistence.succeeded += child.persistence.succeeded;
       health.persistence.failed += child.persistence.failed;
+      health.persistence.retries += child.persistence.retries;
       return health;
     },
     {
@@ -845,17 +882,20 @@ function readChildHealth(value: unknown): ChildHealth {
       attempted: safeCount(searches.attempted),
       succeeded: safeCount(searches.succeeded),
       failed: safeCount(searches.failed),
+      retries: safeCount(searches.retries),
     },
     scrapes: {
       attempted: safeCount(scrapes.attempted),
       succeeded: safeCount(scrapes.succeeded),
       failed: safeCount(scrapes.failed),
+      retries: safeCount(scrapes.retries),
       snippetFallbacks: safeCount(scrapes.snippetFallbacks),
     },
     persistence: {
       attempted: safeCount(persistence.attempted),
       succeeded: safeCount(persistence.succeeded),
       failed: safeCount(persistence.failed),
+      retries: safeCount(persistence.retries),
     },
   };
 }
@@ -1019,10 +1059,14 @@ function buildDigest(args: {
     dedupeUnavailable,
     partialFailures,
   } = args;
+  const retries =
+    health.searches.retries +
+    health.scrapes.retries +
+    health.persistence.retries;
   const lines = [
     `# Fintech Executive Opportunity Radar — ${runDate}`,
     "",
-    `> **Run health: ${outcome.replace("_", " ")}** — ${health.companies.covered}/${health.companies.requested} companies covered; ${health.searches.succeeded}/${health.searches.attempted} searches succeeded; ${health.scrapes.succeeded}/${health.scrapes.attempted} article reads succeeded; ${health.scrapes.snippetFallbacks} snippet fallback${health.scrapes.snippetFallbacks === 1 ? "" : "s"}; ${health.persistence.succeeded}/${health.persistence.attempted} observation writes succeeded.`,
+    `> **Run health: ${outcome.replace("_", " ")}** — ${health.companies.covered}/${health.companies.requested} companies covered; ${health.searches.succeeded}/${health.searches.attempted} searches succeeded; ${health.scrapes.succeeded}/${health.scrapes.attempted} article reads succeeded; ${health.scrapes.snippetFallbacks} snippet fallback${health.scrapes.snippetFallbacks === 1 ? "" : "s"}; ${health.persistence.succeeded}/${health.persistence.attempted} observation writes succeeded; ${retries} retr${retries === 1 ? "y" : "ies"}.`,
     "",
     `**New sourced items:** ${items.length}`,
     "",
@@ -1421,7 +1465,6 @@ function searchSuccess(
   results: Array<{ title: string; url: string; snippet: string }>,
 ): ResearchState {
   const candidates = results
-    .slice(0, MAX_RESULTS_PER_SIGNAL)
     .flatMap((result): RadarItem[] => {
       const url = canonicalUrl(result.url);
       if (!url) return [];
@@ -1446,7 +1489,15 @@ function searchSuccess(
           evidence: result.snippet.trim().slice(0, MAX_EVIDENCE_CHARS),
         },
       ];
-    });
+    })
+    .filter(
+      (item) =>
+        isRelevantSignalItem(item) &&
+        !isCompanyOwnedUrl(input.company, item.url) &&
+        !isUnsupportedScrapeUrl(item.url) &&
+        !isStructurallyUnhelpfulSourceUrl(item.url),
+    )
+    .slice(0, MAX_RESULTS_PER_SIGNAL);
   return {
     ...input,
     candidates: [...input.candidates, ...candidates],
@@ -1454,9 +1505,10 @@ function searchSuccess(
     health: {
       ...input.health,
       searches: {
-        attempted: input.health.searches.attempted + attempts,
+        attempted: input.health.searches.attempted + 1,
         succeeded: input.health.searches.succeeded + 1,
         failed: input.health.searches.failed,
+        retries: input.health.searches.retries + attempts - 1,
       },
     },
   };
@@ -1481,9 +1533,10 @@ function searchFailure(
     health: {
       ...input.health,
       searches: {
-        attempted: input.health.searches.attempted + attempts,
+        attempted: input.health.searches.attempted + 1,
         succeeded: input.health.searches.succeeded,
         failed: input.health.searches.failed + 1,
+        retries: input.health.searches.retries + attempts - 1,
       },
     },
   };
@@ -1598,7 +1651,8 @@ const prepare = defineStep({
       (item) =>
         isRelevantSignalItem(item) &&
         !isCompanyOwnedUrl(input.company, item.url) &&
-        !isUnsupportedScrapeUrl(item.url),
+        !isUnsupportedScrapeUrl(item.url) &&
+        !isStructurallyUnhelpfulSourceUrl(item.url),
     );
     const priorKeys = new Set(input.priorKeys);
     const baseline = input.dedupeAvailable && priorKeys.size === 0;
@@ -1675,9 +1729,10 @@ const persist = defineStep({
         health: {
           ...input.health,
           persistence: {
-            attempted: ctx.attempts + 1,
+            attempted: 1,
             succeeded: 1,
             failed: 0,
+            retries: ctx.attempts,
           },
         },
       });
@@ -1701,7 +1756,12 @@ const persist = defineStep({
         ],
         health: {
           ...input.health,
-          persistence: { attempted: attempts, succeeded: 0, failed: 1 },
+          persistence: {
+            attempted: 1,
+            succeeded: 0,
+            failed: 1,
+            retries: attempts - 1,
+          },
         },
       });
     }
@@ -1743,9 +1803,10 @@ async function scrapeAt(
           health: {
             ...input.health,
             scrapes: {
-              attempted: input.health.scrapes.attempted + attempts,
+              attempted: input.health.scrapes.attempted + 1,
               succeeded: input.health.scrapes.succeeded,
               failed: input.health.scrapes.failed + 1,
+              retries: input.health.scrapes.retries + attempts - 1,
               snippetFallbacks: input.health.scrapes.snippetFallbacks + 1,
             },
           },
@@ -1764,8 +1825,9 @@ async function scrapeAt(
           ...input.health,
           scrapes: {
             ...input.health.scrapes,
-            attempted: input.health.scrapes.attempted + ctx.attempts + 1,
+            attempted: input.health.scrapes.attempted + 1,
             succeeded: input.health.scrapes.succeeded + 1,
+            retries: input.health.scrapes.retries + ctx.attempts,
           },
         },
       },
@@ -1802,9 +1864,10 @@ async function scrapeAt(
         health: {
           ...input.health,
           scrapes: {
-            attempted: input.health.scrapes.attempted + attempts,
+            attempted: input.health.scrapes.attempted + 1,
             succeeded: input.health.scrapes.succeeded,
             failed: input.health.scrapes.failed + 1,
+            retries: input.health.scrapes.retries + attempts - 1,
             snippetFallbacks: input.health.scrapes.snippetFallbacks + 1,
           },
         },

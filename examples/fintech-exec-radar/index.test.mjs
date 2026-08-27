@@ -139,7 +139,7 @@ test("entry contract leads with delivery and has a real zero-input watchlist", (
   assert.equal(typeof schema.properties.deliverTo.pattern, "string");
   assert.equal(schema.properties.window.default, "7d");
   assert.equal(schema.properties.maxScrapesPerCompany.default, 3);
-  assert.equal(schema.properties.maxCapabilityCalls.default, 350);
+  assert.equal(schema.properties.maxCapabilityCalls.default, 500);
   assert.equal(schema.properties.dryRun.default, false);
   assert.equal(schema.properties.companies.default.length, 18);
   assert.ok(schema.properties.companies.default.includes("Robinhood"));
@@ -454,7 +454,7 @@ test("plan previews exact costs and blocks only above the configured ceiling", a
       signals: ["exec_moves", "funding", "hiring"],
       window: "7d",
       maxScrapesPerCompany: 3,
-      maxCapabilityCalls: 350,
+      maxCapabilityCalls: 500,
       childDefinition: "fintech-exec-radar-test",
       runDate: "2026-08-26",
       dryRun: false,
@@ -463,6 +463,19 @@ test("plan previews exact costs and blocks only above the configured ceiling", a
   );
   assert.equal(missingCompanies.stepName, "fanOut");
   assert.equal(missingCompanies.input.companies.length, 18);
+
+  const maximumWatchlist = await agent.steps.plan.run(
+    {
+      companies: Array.from({ length: 25 }, (_, index) => `Fintech ${index}`),
+      signals: ["exec_moves", "funding", "hiring"],
+      window: "7d",
+      maxScrapesPerCompany: 3,
+      dryRun: false,
+    },
+    context,
+  );
+  assert.equal(maximumWatchlist.stepName, "fanOut");
+  assert.equal(maximumWatchlist.input.estimate.calls.maximumTotal, 476);
 });
 
 test("plan rejects explicit empty arrays and dedupes slug-equivalent names", async () => {
@@ -1327,6 +1340,12 @@ test("research never scrapes custom-company or LinkedIn URLs", async () => {
             query: "stub",
             results: [
               {
+                title: "Example Payments Company engineering hiring profile",
+                url: "https://directory.example/organization/example-payments",
+                snippet:
+                  "A directory profile summarizes engineering hiring at Example Payments Company.",
+              },
+              {
                 title: "Example Payments Company careers",
                 url: "https://careers.examplepayments.example/openings",
                 snippet: "Example Payments Company is hiring.",
@@ -1605,6 +1624,7 @@ test("a blocked Reddit scrape completes partial and exposes its snippet fallback
   assert.equal(result.output.outcome, "partial");
   assert.equal(result.output.persisted, true);
   assert.equal(result.output.health.scrapes.attempted, 1);
+  assert.equal(result.output.health.scrapes.retries, 0);
   assert.equal(result.output.health.scrapes.failed, 1);
   assert.equal(result.output.health.scrapes.snippetFallbacks, 1);
   assert.equal(result.output.coverageFailures[0].stage, "scrape");
@@ -1621,6 +1641,7 @@ test("a transient scrape retries only its scrape step", async () => {
     agentName: "fintech-exec-radar-retry-test",
     shared: sharedStore(),
     sapiom: {
+      llm: rankingClient([0]),
       memory: {
         async recall(input) {
           recallCalls += 1;
@@ -1686,10 +1707,26 @@ test("a transient scrape retries only its scrape step", async () => {
   assert.equal(searchCalls, 1);
   assert.equal(appendCalls, 1);
   assert.equal(scrapeCalls, 2);
-  assert.equal(result.output.health.scrapes.attempted, 2);
+  assert.equal(result.output.health.scrapes.attempted, 1);
+  assert.equal(result.output.health.scrapes.retries, 1);
   assert.equal(result.output.health.scrapes.succeeded, 1);
   assert.equal(result.output.health.scrapes.failed, 0);
   assert.match(result.output.summaryItems[0].evidence, /after retry/);
+
+  const reduced = await agent.steps.reduce.run(
+    {
+      rows: [
+        {
+          ...result.output,
+          status: "completed",
+          executionId: "child-retry-test",
+        },
+      ],
+    },
+    context,
+  );
+  assert.match(reduced.input.digest, /1\/1 article reads succeeded/);
+  assert.match(reduced.input.digest, /1 retry/);
 });
 
 test("a terminal search failure is not retried and returns no coverage", async () => {
@@ -1752,4 +1789,124 @@ test("a terminal search failure is not retried and returns no coverage", async (
   assert.equal(result.output.health.searches.failed, 1);
   assert.equal(result.output.coverageFailures[0].attempts, 1);
   assert.equal(result.output.coverageFailures[0].retryable, false);
+});
+
+test("a programming TypeError is not disguised as a retryable dependency failure", async () => {
+  let searchCalls = 0;
+  const context = {
+    agentName: "fintech-exec-radar-programming-error-test",
+    shared: sharedStore(),
+    sapiom: {
+      memory: {
+        async recall(input) {
+          return {
+            results: [],
+            query: input.query,
+            topK: input.topK,
+            count: 0,
+          };
+        },
+        async append(input) {
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+      search: {
+        async webSearch() {
+          searchCalls += 1;
+          throw new TypeError("Cannot read properties of undefined");
+        },
+        async scrape() {
+          throw new Error("no result should be scraped");
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await runResearch(
+    {
+      company: "Klarna",
+      signals: ["funding"],
+      window: "7d",
+      maxScrapesPerCompany: 0,
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.equal(searchCalls, 1);
+  assert.equal(result.output.outcome, "no_coverage");
+  assert.equal(result.output.coverageFailures[0].retryable, false);
+});
+
+test("incidental numbers in a 500 body do not disable a transient retry", async () => {
+  let searchCalls = 0;
+  const context = {
+    agentName: "fintech-exec-radar-error-body-test",
+    shared: sharedStore(),
+    sapiom: {
+      memory: {
+        async recall(input) {
+          return {
+            results: [],
+            query: input.query,
+            topK: input.topK,
+            count: 0,
+          };
+        },
+        async append(input) {
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+      search: {
+        async webSearch() {
+          searchCalls += 1;
+          if (searchCalls === 1) {
+            throw new SearchHttpError("temporary provider failure", 500, {
+              message: "provider indexed 404 companies before failing",
+            });
+          }
+          return {
+            query: "stub",
+            results: [
+              {
+                title: "Klarna raises a Series F round",
+                url: "https://industry.example/klarna-series-f",
+                snippet: "Klarna raised a new financing round.",
+              },
+            ],
+          };
+        },
+        async scrape() {
+          throw new Error("scraping is disabled");
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await runResearch(
+    {
+      company: "Klarna",
+      signals: ["funding"],
+      window: "7d",
+      maxScrapesPerCompany: 0,
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.equal(searchCalls, 2);
+  assert.equal(result.output.outcome, "complete");
+  assert.equal(result.output.health.searches.attempted, 1);
+  assert.equal(result.output.health.searches.retries, 1);
+  assert.equal(result.output.health.searches.succeeded, 1);
 });

@@ -67,9 +67,8 @@ Robinhood, SoFi, Klarna, Block, Tether, Intuit, Affirm, Cloudflare, Chime,
 Nvidia, Erebor, Revolut (US), Nubank (US), Coinbase, Stripe, Kraken,
 Binance (US), and Marqeta.
 
-No person, private profile, or recipient address is embedded. Input is
-deduplicated, and a plan with more than 25 unique companies fails before fan-out
-instead of silently dropping coverage. Set `dryRun: true` for a no-spend preview.
+Input is deduplicated, and a plan with more than 25 unique companies fails before
+fan-out instead of silently dropping coverage. Set `dryRun: true` for a no-spend preview.
 `window` adds both a plain-language recency phrase and a concrete `after:` date
 to each search. Results with a parseable date in their URL are also rejected when
 that date falls outside the requested window; undated sources remain eligible
@@ -93,7 +92,8 @@ output gives that quote a precise quantity basis: child runs, searches, maximum
 scrapes, memory reads/writes, one ranking call, and up to four email API calls
 (inbox resolution plus delivery) only when configured.
 `maxCapabilityCalls` is the structural hard stop; account spending rules remain
-the dollar-denominated enforcement layer.
+the dollar-denominated enforcement layer. Its default of 500 covers the full
+25-company input limit, whose retry-aware maximum is 476 calls.
 
 Article reads enrich the evidence supplied to the ranking model; the final
 digest still contains only the source headline and URL. Set
