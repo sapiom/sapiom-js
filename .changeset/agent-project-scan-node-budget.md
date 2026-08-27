@@ -4,7 +4,7 @@
 
 Agents nested deep under a project root are discovered again: the scan now reaches 8 levels, bounded by a node budget rather than by depth alone.
 
-`AGENT_PROJECT_SCAN_MAX_DEPTH` was 3, which predated the project-rooted rail — it assumed the directory you opened was roughly the agent's own folder. Under a root you *choose*, depth is ordinary: a real agent sits at `~/polsia/backend/src/agents/ads`, four segments down, and `<root>/apps/<app>/src/features/<x>/agents/<agent>` is six. Those agents were not found at all and landed in "No workspace" (17 of one install's 40 rows).
+`AGENT_PROJECT_SCAN_MAX_DEPTH` was 3, which predated the project-rooted rail — it assumed the directory you opened was roughly the agent's own folder. Under a root you *choose*, depth is ordinary: `<root>/backend/src/agents/<agent>` is four segments down and `<root>/apps/<app>/src/features/<x>/agents/<agent>` is six. Those agents were not found at all and landed in "No workspace" — on a measured root, well over a third of the rail.
 
 Raising the depth alone would not have been affordable, and the numbers are why. Measured against real roots (macOS/APFS, warm cache, ~22-25 µs per directory entered):
 

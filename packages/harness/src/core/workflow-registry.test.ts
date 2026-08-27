@@ -551,7 +551,7 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
   });
 
   it("discovers an agent four and more segments below the opened root, under that root", async () => {
-    // The real shape from the design doc: ~/polsia/backend/src/agents/ads.
+    // The shape the design doc describes: <root>/backend/src/agents/<agent>.
     const ads = path.join(projectRoot, "backend", "src", "agents", "ads");
     const deeper = path.join(
       projectRoot,

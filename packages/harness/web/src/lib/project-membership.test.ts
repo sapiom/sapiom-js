@@ -33,7 +33,7 @@ import {
  * as coverage in every future audit. Hence the split, stated in both files.
  */
 
-const HOME = "/Users/dave";
+const HOME = "/Users/demo";
 const ACME = `${HOME}/acme-app`;
 const AGENT_IN_ACME = `${ACME}/sales-outreach`;
 

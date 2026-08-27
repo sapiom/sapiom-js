@@ -15,10 +15,10 @@ import { AGENT_PROJECT_MARKER } from "../shared/types.js";
  *
  * This was 3, which predated the project-rooted rail: it assumed the root the
  * user opened was more or less the agent's own folder. Under a chosen project
- * root, depth is normal — a real agent sits at `~/polsia/backend/src/agents/ads`,
- * four segments down, and `<root>/apps/<app>/src/features/<x>/agents/<agent>` is
- * six. At 3 those agents are not found at all and file under "No workspace"
- * (17 of one install's 40 rows).
+ * root, depth is normal — `<root>/backend/src/agents/<agent>` is four segments
+ * down and `<root>/apps/<app>/src/features/<x>/agents/<agent>` is six. At 3
+ * those agents are not found at all and file under "No workspace"; on a
+ * measured root that was well over a third of the rail.
  *
  * 8 leaves headroom above the deepest realistic layout without becoming a walk
  * of the user's home directory. It is NOT what keeps the scan cheap — see
