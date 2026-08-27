@@ -255,12 +255,24 @@ export function GroupRow({
  */
 export function GroupAgentRow({
   workflow,
+  prefix = "",
+  prefixFull = "",
   groupId,
   isFocused,
   onFocus,
   draggable = true,
 }: {
   workflow: WorkflowInfo;
+  /**
+   * The disambiguating parent chain, from `project-tree.agentPrefixes`.
+   *
+   * The Group axis has no directory rows, so an agent row here is the WHOLE
+   * answer to "which agent is this". Round 1 passed none, and two agents named
+   * `ads` in one project rendered as two identical rows inside `Ungrouped` —
+   * the same failure the unrooted section had, one axis over.
+   */
+  prefix?: string;
+  prefixFull?: string;
   /** The group this row is being dragged OUT of — a move needs to know what to
    *  leave, and one agent may sit in several groups. */
   groupId: string;
@@ -287,7 +299,14 @@ export function GroupAgentRow({
     >
       {/* Depth 1: one level under its group row, which sits at depth 0 — the
           same project/directory/agent rhythm the Project axis reads with. */}
-      <WorkflowRow workflow={workflow} isFocused={isFocused} onFocus={onFocus} depth={1} />
+      <WorkflowRow
+        workflow={workflow}
+        prefix={prefix}
+        prefixFull={prefixFull}
+        isFocused={isFocused}
+        onFocus={onFocus}
+        depth={1}
+      />
     </div>
   );
 }
@@ -318,6 +337,7 @@ export interface GroupDropRequest {
 export function GroupSections({
   sectionLabel,
   groups,
+  prefixes,
   editable,
   isDerived,
   freshLabel,
@@ -336,6 +356,11 @@ export function GroupSections({
    *  see rather than an absolute path. */
   sectionLabel: string;
   groups: GroupNode[];
+  /** Disambiguating parent chains by agent path, from
+   *  `project-tree.agentPrefixes` — the rail computes them once per project,
+   *  over ALL the project's agents, because a collision between two rows is a
+   *  fact about the project and not about the group either of them is in. */
+  prefixes?: ReadonlyMap<string, { prefix: string; prefixFull: string }>;
   /** False until this project's stored arrangement has loaded. Edit affordances
    *  are ABSENT rather than disabled while it has not: a control that silently
    *  does nothing reads as broken. */
@@ -444,6 +469,8 @@ export function GroupSections({
                 <GroupAgentRow
                   key={agent.workflow.path}
                   workflow={agent.workflow}
+                  prefix={prefixes?.get(agent.workflow.path)?.prefix ?? ""}
+                  prefixFull={prefixes?.get(agent.workflow.path)?.prefixFull ?? ""}
                   groupId={group.id}
                   isFocused={agent.workflow.path === focusedAgentPath}
                   onFocus={onFocusAgent}

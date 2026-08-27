@@ -64,7 +64,7 @@ describe("classifyFolder", () => {
       "/a": listing("/a", [{ path: "/a/b" }]),
       "/a/b": listing("/a/b", [{ path: "/a/b/x", agent: true }, { path: "/a/b/y", agent: true }, { path: "/a/b/z" }]),
     });
-    expect(await classifyFolder("/a/b", false, listDir)).toEqual({ kind: "multi", found: 2 });
+    expect(await classifyFolder("/a/b", false, listDir)).toEqual({ kind: "multi", directChildren: 2 });
   });
 
   it("reports a plain folder when nothing inside is an agent project", async () => {

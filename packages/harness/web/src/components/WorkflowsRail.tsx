@@ -19,6 +19,7 @@ import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
 import { StartDialog } from "./StartDialog";
+import type { StartMode } from "./StartDialog";
 import { PlanCard } from "./PlanCard";
 import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
@@ -26,6 +27,7 @@ import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { ProjectRow, ProjectTreeRows, dirKey, projectKey } from "./ProjectTreeRows";
 import type { RailDrag } from "./ProjectTreeRows";
 import { RemoveProjectConfirm } from "./RemoveProjectConfirm";
+import { UNROOTED_KEY, UnrootedAgents } from "./UnrootedAgents";
 import { GroupSections } from "./GroupRow";
 import type { GroupDropRequest } from "./GroupRow";
 import { useRailGroups } from "../lib/use-rail-groups";
@@ -43,7 +45,13 @@ import { planMove } from "../lib/agent-move";
 import { useAccountPlan } from "../lib/use-account-plan";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
-import { buildProjectTree, projectIsEmpty, projectRoots, unrootedAgents } from "../lib/project-tree";
+import {
+  agentPrefixes,
+  buildProjectTree,
+  projectIsEmpty,
+  projectRoots,
+  unrootedAgents,
+} from "../lib/project-tree";
 import { hiddenByClosedProject, planProjectRemoval } from "../lib/project-membership";
 import type { RailAxis, RailSort } from "../lib/project-tree";
 import { samePath } from "../lib/paths";
@@ -107,6 +115,17 @@ interface WorkflowsRailProps {
   /** Removes a project: out of `recentDirs`, out of the rail, and the live
    *  sessions rooted in it end. Nothing on disk is touched. */
   onRemoveProject: (root: string) => Promise<void>;
+  /**
+   * OPENS A FOLDER AS A PROJECT — the other half of `onRemoveProject`, and the
+   * one round 1 was missing.
+   *
+   * Distinct from `onConnect`, which registers an AGENT and only remembers its
+   * folder when nothing else already holds it. A project is a folder the user
+   * CHOSE, agents or not: you open a project in order to build the first agent
+   * in it. Round 1 routed the header `+` into agent detection, so a folder with
+   * no agent in it could not be added at all.
+   */
+  onOpenProject: (root: string) => Promise<void>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
@@ -164,6 +183,11 @@ const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
  * one: a fact the row cannot already show. Any future axis has to clear the same
  * bar.
  */
+/** The agent the user last chose in the composer, for actions that must pick one
+ *  without asking. Defaults to Claude Code, which is what a fresh install has. */
+const preferredHarness = (): HarnessKind =>
+  loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
+
 const RAIL_AXES: readonly RailAxis[] = ["project", "group"];
 const AXIS_LABELS: Record<RailAxis, string> = { project: "Project", group: "Group" };
 /** A stored value from a retired axis falls back to the default rather than
@@ -274,6 +298,7 @@ export function WorkflowsRail({
   recentDirs,
   closedProjects,
   onRemoveProject,
+  onOpenProject,
   launchDir,
   listDir,
   onCreateSession,
@@ -322,8 +347,16 @@ export function WorkflowsRail({
   // "Add existing agents" opens the detection-driven StartDialog (register a
   // folder that already holds an agent project). "Create new" goes to the
   // composer home instead. connectTriggerRef anchors Escape focus return.
-  const [startOpen, setStartOpen] = useState(false);
+  // ONE dialog, TWO questions. "Add a project" (the header `+`) and "find
+  // agents under here" (the nav row) both start from the same folder picker —
+  // that part is one question — but they differ in what they DO with the
+  // answer, so each gets its own control and its own primary action. Round 1
+  // pointed both at the detection flow, which made "add a project" mean "add a
+  // project that already contains an agent".
+  const [startMode, setStartMode] = useState<StartMode | null>(null);
+  const startOpen = startMode !== null;
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
+  const addProjectTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
@@ -437,6 +470,10 @@ export function WorkflowsRail({
   // Agents no open root contains. Rarer than the old "No workspace" bucket,
   // but dropping them would hide an agent that exists.
   const strays = unrootedAgents(visibleWorkflows, roots, sort);
+  // Every REGISTERED agent path, hidden ones included: "Open as project" counts
+  // what a folder would bring in, and a folder that would un-hide a removed
+  // project's agents is exactly the case that number has to be honest about.
+  const workflowPaths = workflows.map((workflow) => workflow.path);
   // The project whose remove confirm is open, and the row control focus
   // returns to when it closes.
   const [removing, setRemoving] = useState<{ root: string; label: string } | null>(null);
@@ -627,7 +664,7 @@ export function WorkflowsRail({
           aria-expanded={startOpen}
           onClick={() => {
             setHistoryOpen(false);
-            setStartOpen(true);
+            setStartMode("detect");
           }}
         >
           <Icon name="FolderPlus" size={14} />
@@ -651,12 +688,13 @@ export function WorkflowsRail({
           <button
             type="button"
             className="theme-toggle rail-header-btn"
+            ref={addProjectTriggerRef}
             data-testid="rail-add-project"
             aria-label="Add a project"
             data-tooltip="Add a project"
             onClick={() => {
               setHistoryOpen(false);
-              setStartOpen(true);
+              setStartMode("open");
             }}
           >
             <Icon name="FolderPlus" size={14} />
@@ -991,6 +1029,48 @@ export function WorkflowsRail({
                     </>
                   }
                 />
+                {/* AN EMPTY PROJECT SAYS SO, on its own row.
+                    `projectIsEmpty` is the one emptiness answer and it consults
+                    `rootAgent` — a merged root-agent project has nothing in
+                    `dirs` or `agents` and a naive check would print this line
+                    under an agent row. A project with no agents is now an
+                    ordinary state rather than an impossible one: you open a
+                    project in order to build the first agent in it, so the row
+                    has to be able to stand there and say what it is. `creating`
+                    already has its own spinner, and a bare project with a live
+                    session already has its Scaffold affordance, so neither
+                    reaches this. */}
+                {!collapsed && empty && !creating && bare == null && (
+                  <div className="workspace-row is-nested workspace-row-empty">
+                    <span className="row-disclosure row-disclosure-static" aria-hidden="true" />
+                    {/* A ROW YOU CAN ACT ON. An empty project stating its
+                        emptiness and offering nothing is a dead end — and the
+                        whole reason to open a folder with no agent in it is to
+                        put the first one there. This is that action, aimed at
+                        THIS folder: a session rooted here, with the scaffold
+                        prompt already sent. */}
+                    <button
+                      type="button"
+                      className="tree-row tree-row-empty-action"
+                      data-testid={`project-empty-${project.label}`}
+                      data-tooltip={`Start an agent in ${project.root}`}
+                      onClick={() => {
+                        void onScaffoldSession(project.root, preferredHarness()).catch(
+                          (err: unknown) => {
+                            onToast(
+                              err instanceof Error
+                                ? err.message
+                                : `Couldn't start an agent in ${project.label}.`,
+                            );
+                          },
+                        );
+                      }}
+                    >
+                      <Icon name="Sparkles" size={13} />
+                      <span className="tree-row-label">Create the first agent here</span>
+                    </button>
+                  </div>
+                )}
                 {!collapsed && axis === "project" && (
                   <ProjectTreeRows
                     dirs={project.dirs}
@@ -1007,6 +1087,10 @@ export function WorkflowsRail({
                   <GroupSections
                     sectionLabel={project.label}
                     groups={groupNodes}
+                    /* Computed over EVERY agent in the project, not per group:
+                       two rows collide because they are both on screen, and
+                       which group each sits in has nothing to do with it. */
+                    prefixes={agentPrefixes(groupAgents, project.root)}
                     editable={railGroups.isReady(project.root)}
                     isDerived={!isMaterialized(groupState)}
                     freshLabel={
@@ -1053,40 +1137,43 @@ export function WorkflowsRail({
                 {!collapsed &&
                   axis === "group" &&
                   !showGroups &&
-                  soloAgents.map((workflow) => (
-                    <WorkflowRow
-                      key={workflow.path}
-                      workflow={workflow}
-                      isFocused={workflow.path === focusedAgentPath}
-                      onFocus={onFocusAgent}
-                    />
-                  ))}
+                  soloAgents.map((workflow) => {
+                    const node = agentPrefixes(soloAgents, project.root).get(workflow.path);
+                    return (
+                      <WorkflowRow
+                        key={workflow.path}
+                        workflow={workflow}
+                        prefix={node?.prefix ?? ""}
+                        prefixFull={node?.prefixFull ?? ""}
+                        isFocused={workflow.path === focusedAgentPath}
+                        onFocus={onFocusAgent}
+                      />
+                    );
+                  })}
               </div>
             );
           })}
 
+          {/* LAST, ALWAYS. Every project the user chose outranks a folder they
+              never opened, and on the Group axis the groups have to be what
+              moves when the axis changes — a section that can hold 78 rows
+              cannot sit between the user and the thing they just switched to.
+              Collapsed by default, and it names its count so a closed row
+              still says how much it is holding. */}
           {strays.length > 0 && (
-            <div className="workspace-group">
-              <div className="workspace-row">
-                <div
-                  className="workspace-row-main workspace-row-static"
-                  data-tooltip="Agents that live outside every project you have open. Add the folder above them as a project to file them."
-                >
-                  <span className="project-mark project-mark-none" aria-hidden="true">
-                    <Icon name="Folder" size={13} />
-                  </span>
-                  <span className="tree-row-label">Outside your projects</span>
-                </div>
-              </div>
-              {strays.map((agent) => (
-                <WorkflowRow
-                  key={agent.workflow.path}
-                  workflow={agent.workflow}
-                  isFocused={agent.workflow.path === focusedAgentPath}
-                  onFocus={onFocusAgent}
-                />
-              ))}
-            </div>
+            <UnrootedAgents
+              agents={strays}
+              collapsed={!collapsedKeys.has(UNROOTED_KEY)}
+              onToggleCollapsed={() => toggleCollapsed(UNROOTED_KEY)}
+              focusedAgentPath={focusedAgentPath}
+              onFocusAgent={onFocusAgent}
+              agentPaths={workflowPaths}
+              onOpenAsProject={(root) => {
+                void onOpenProject(root).catch((err: unknown) => {
+                  onToast(err instanceof Error ? err.message : "Couldn't open that folder.");
+                });
+              }}
+            />
           )}
         </div>
       </div>
@@ -1130,16 +1217,18 @@ export function WorkflowsRail({
       {/* Add EXISTING agents: one detection-driven dialog that registers a
           folder holding an agent project (or a folder of them). Creating a NEW
           agent is "Create new" → the composer home (onNewSession). */}
-      {startOpen && (
+      {startMode && (
         <StartDialog
+          mode={startMode}
           recentDirs={recentDirs}
           launchDir={launchDir}
           projectRoot={projectRoot}
           listDir={listDir}
-          onClose={() => setStartOpen(false)}
+          onClose={() => setStartMode(null)}
           onConnect={onConnect}
+          onOpenProject={onOpenProject}
           onScan={onScanWorkflows}
-          triggerRef={connectTriggerRef}
+          triggerRef={startMode === "open" ? addProjectTriggerRef : connectTriggerRef}
         />
       )}
 

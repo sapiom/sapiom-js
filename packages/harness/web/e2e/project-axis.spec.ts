@@ -78,8 +78,8 @@ test.describe("compaction", () => {
     // mail…` — the chain's own ellipsis plus a CSS one — and an unreadable
     // agent name; a shrink ratio cannot fix that, because flex shrinks in
     // proportion to basis and the long path has the larger basis.
-    await expect(page.getByTestId("workflow-prefix-rollup")).toHaveText("tools");
-    await expect(page.getByTestId("workflow-name-rollup")).toHaveText("rollup");
+    await expect(page.getByTestId("workflow-prefix-/Users/demo/polsia/scripts/tools/rollup")).toHaveText("tools");
+    await expect(page.getByTestId("workflow-name-/Users/demo/polsia/scripts/tools/rollup")).toHaveText("rollup");
   });
 
   test("a 3-segment 18-character label stays WHOLE; a 5-segment 35-character one elides", async ({
@@ -185,7 +185,7 @@ test.describe("multi-root", () => {
     await expect(
       page
         .getByTestId(`workspace-group-${NESTED_LABEL}`)
-        .getByTestId("workflow-prefix-queue"),
+        .getByTestId("workflow-prefix-/Users/demo/polsia/services/workers/queue"),
     ).toHaveCount(0);
     // Under `polsia` it is reached through `services/workers`.
     await expect(page.getByTestId("dir-row-workers")).toBeVisible();

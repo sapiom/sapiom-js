@@ -15,6 +15,7 @@ import type { WorkflowInfo } from "@shared/types";
 import {
   abbreviate,
   buildProjectTree,
+  growLeftward,
   projectInitial,
   projectIsEmpty,
   projectRoots,
@@ -292,8 +293,94 @@ describe("unrootedAgents", () => {
     expect(unrootedAgents([agent(`${ROOT}/a/b/c/ads`)], [ROOT], "name")).toEqual([]);
   });
 
-  it("gives an unrooted agent no prefix — there is no chain to compact", () => {
-    expect(unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0].prefix).toBe("");
+  /* RE-POINTED IN ROUND 2. This used to assert `prefix === ""` — "there is no
+     chain to compact". On a real install that produced an "Outside your
+     projects" section of six rows all reading `ari-grade-repo`, with nothing
+     on screen telling them apart. An unrooted agent has no project to give it
+     context, which makes the parent directory MORE load-bearing here than in
+     the tree, not less. */
+  it("gives an unrooted agent its immediate parent as the prefix", () => {
+    expect(unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0].prefix).toBe("b");
+  });
+
+  it("carries the ABSOLUTE parent directory as prefixFull — there is no root to be relative to", () => {
+    expect(unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0].prefixFull).toBe(
+      "/elsewhere/a/b",
+    );
+  });
+
+  /* THE REAL INSTALL'S SHAPE: six git worktrees, one agent name, one identical
+     immediate parent. One segment cannot tell them apart, so the prefix grows
+     leftward until it can — the same rule `projectLabeller` states for two
+     roots that share a basename. */
+  it("grows the prefix leftward until same-named rows differ", () => {
+    const worktrees = [
+      "design-eng",
+      "design-eng-fix",
+      "design-eng-ij",
+      "design-eng-main",
+      "worktrees/design-agent-port-pin",
+      "worktrees/design-agent-terminology",
+    ];
+    const rows = unrootedAgents(
+      worktrees.map((w) => agent(`/Users/dev/${w}/ari/orchestration`, "ari-grade-repo")),
+      [ROOT],
+      "name",
+    );
+    expect(rows.map((row) => `${row.prefix}/${row.workflow.name}`).sort()).toEqual([
+      "design-agent-port-pin/ari/ari-grade-repo",
+      "design-agent-terminology/ari/ari-grade-repo",
+      "design-eng-fix/ari/ari-grade-repo",
+      "design-eng-ij/ari/ari-grade-repo",
+      "design-eng-main/ari/ari-grade-repo",
+      "design-eng/ari/ari-grade-repo",
+    ]);
+    expect(new Set(rows.map((row) => `${row.prefix}/${row.workflow.name}`)).size).toBe(6);
+  });
+
+  it("only the colliding rows pay: a uniquely-named neighbour keeps one segment", () => {
+    const rows = unrootedAgents(
+      [
+        agent("/Users/dev/design-eng/ari/orchestration", "ari-grade-repo"),
+        agent("/Users/dev/design-eng-fix/ari/orchestration", "ari-grade-repo"),
+        agent("/Users/dev/misc/pkg1/agent", "filler-1"),
+      ],
+      [ROOT],
+      "name",
+    );
+    expect(rows.find((row) => row.workflow.name === "filler-1")?.prefix).toBe("pkg1");
+  });
+
+  it("a name that collides only with itself at the SAME parent still differs by the grown chain", () => {
+    // Two `slack-notifier` folders under different containers: one segment is
+    // already enough, so the rule stops there.
+    const rows = unrootedAgents(
+      [
+        agent("/Users/dev/team-tools/slack-notifier", "@sapiom/example-slack-notifier"),
+        agent("/Users/dev/other-tools/slack-notifier", "@sapiom/example-slack-notifier"),
+      ],
+      [ROOT],
+      "name",
+    );
+    expect(rows.map((row) => row.prefix).sort()).toEqual(["other-tools", "team-tools"]);
+  });
+});
+
+describe("growLeftward", () => {
+  it("stops at the shortest trailing run nothing else shares", () => {
+    expect(growLeftward(["a", "b", "c"], [["x", "y", "c"]])).toEqual(["b", "c"]);
+  });
+
+  it("keeps one segment when nothing collides", () => {
+    expect(growLeftward(["a", "b", "c"], [["x", "y", "z"]])).toEqual(["c"]);
+  });
+
+  it("honours a minimum, so a caller that already proved one segment collides skips it", () => {
+    expect(growLeftward(["a", "b", "c"], [], 2)).toEqual(["b", "c"]);
+  });
+
+  it("returns the whole chain when it never becomes unique", () => {
+    expect(growLeftward(["a", "b"], [["a", "b"]])).toEqual(["a", "b"]);
   });
 });
 

@@ -10205,3 +10205,142 @@ button.rail-footer-card:hover {
 .rail-list .workflow-item[draggable="true"]:active {
   opacity: 0.65;
 }
+
+/* ── Round 2: the unrooted section, and an empty project ─────────────────────
+   Appended as its own delimited block, the convention wave 1 established so
+   parallel work stays off each other's lines. Nothing above is reordered or
+   restated.
+
+   Two things get styling here, and both exist because the round-1 rail was
+   only ever rendered against fixtures with a handful of tidy, uniquely-named
+   agents:
+
+    1. "Outside your projects" is not a footnote. It held ~78 of 88 agents on a
+       real install, which made it the largest thing in the rail and the least
+       important. It now collapses (closed by default) and names its count.
+    2. A project with NO agents is an ordinary state, not an impossible one —
+       you open a project in order to build the first agent in it — so its row
+       needs something honest to say underneath it. */
+
+/* The count on the closed header. A quiet numeral, not a pill: this is the
+   size of a section the user is being invited to ignore, and a badge would
+   make the least important row the loudest. */
+.unrooted-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding-left: 6px;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An unrooted row carries a trailing action, so its trigger has to stop short
+   of the row's right edge rather than run under the button. `.workflow-item`
+   is already `display: flex`; this only re-states the shrink. */
+.unrooted-item .workflow-item-trigger {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The row's PREFIX is doing real work here, unlike in the tree: for six rows
+   named `ari-grade-repo` it is the only thing that differs. It truncates from
+   the RIGHT (the default), which is the correct end to keep — the six worktrees
+   diverge at their LEADING characters (`design-eng-fix` / `design-eng-ij` /
+   `design-eng-main`), so a left-truncating prefix would clip away the only
+   thing being disambiguated.
+   
+   And it yields BEFORE the name does: [SEEN] rule 1's point is that the row is
+   named for the AGENT, and a grown prefix must not win the width it shares with
+   that name. `flex: 0 100 auto` (inherited from the tree prefix) already gives
+   it 100× the label's shrink; the cap is what stops it claiming most of a
+   narrow rail before shrinking begins. Measured at rail width against a real
+   85-row section: 45% keeps `ari-grade-repo` whole while
+   `design-eng-main/ari` still reads as distinct from `design-eng-ij/ari`. */
+.unrooted-item .tree-row-prefix {
+  max-width: 45%;
+}
+
+/* The folder chooser behind "Open as project". A menu of rows, each naming a
+   folder and how many registered agents it would bring in — the count is the
+   thing being chosen between, so it is part of the row, not a tooltip. */
+.unrooted-open-choice {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.unrooted-open-choice-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An empty project's own line. Nested to the depth its agents would occupy,
+   so the row reads as "this is where they would be" rather than as a second
+   header. Non-interactive: there is nothing here to click, and a hover state
+   would promise otherwise. */
+.workspace-row-empty {
+  pointer-events: none;
+}
+
+.tree-row-empty {
+  padding-left: var(--tree-pad-x);
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+/* The trailing action reveals on the ROW's hover, and an unrooted row is a
+   `.workflow-item`, not a `.workspace-row` — the shared reveal rule keys on
+   the latter, so without this the one way out of the section is invisible at
+   rest AND on hover. Focus reveals it too, so it is reachable by keyboard. */
+.unrooted-item:hover .workspace-row-action,
+.unrooted-item .workspace-row-action[aria-expanded="true"],
+.unrooted-item .workspace-row-action:focus-visible {
+  opacity: 1;
+}
+
+/* The bulk scan's reach, stated where the count is — the count answers "what is
+   directly inside?" and this answers "what will adding do?", which round 1 let
+   the button imply. Sits under the path so the block reads finding, then place,
+   then consequence. */
+.aw-result-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+/* Armed: the second press is the one that registers, so the control says so.
+   Danger tone only once it is actually about to happen — the same rule the
+   group-axis reset row follows. */
+.modal-start-actions .btn-primary.is-armed,
+.modal-start-actions .btn-ghost.is-armed {
+  background: var(--red, #b42318);
+  border-color: var(--red, #b42318);
+  color: #fff;
+}
+
+/* The separator between a prefix and an agent NAME, where the two are not a
+   path. A slash asserts "these join into one location"; that is true only when
+   the agent's folder is named for the agent, and on a real install the common
+   case was the other one (`ari-grade-repo` in `ari/orchestration`). The dot
+   takes air on both sides, because unlike a path separator it is a break
+   between two things rather than a joint inside one. */
+.tree-row-name > .tree-row-sep-loose {
+  padding: 0 3px;
+}
+
+/* The empty project's action row. It uses the shared `.tree-row` skeleton so it
+   sits on the agent rows' rhythm — this is where the first agent will appear,
+   and the row should already read as that place. */
+.tree-row-empty-action {
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+.tree-row-empty-action:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}

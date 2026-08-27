@@ -100,7 +100,18 @@ test("an agent under no known root still starts a session, in its own folder", a
   await page.goto("/?seed=0&mockFixtures=search");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  const row = page.getByTestId("workflow-daily-activity-analyst");
+  /* RE-POINTED IN ROUND 2. This addressed the row as
+     `workflow-daily-activity-analyst` and found it already open.
+     "Outside your projects" now (a) collapses by default — on a real install it
+     held ~78 of 88 agents and dominated the rail — and (b) keys each row on its
+     PATH, because six rows named `ari-grade-repo` shared one testid and neither
+     a test nor a user could say which one they had. The BEHAVIOUR this test
+     exists for is unchanged and still asserted below: an agent under no known
+     root starts its session in its own folder. */
+  await page.getByTestId("unrooted-header").click();
+  const row = page.getByTestId(
+    "unrooted-agent-/Users/demo/social-marketing/analytics-stack/daily-activity-analyst",
+  );
   await row.scrollIntoViewIfNeeded();
   await row.locator(".workflow-item-trigger").click();
   await expect(page.getByTestId("open-agent-empty")).toBeVisible();
