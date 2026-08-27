@@ -48,8 +48,9 @@ compatible dedicated research-agent slug.
   but it must never author claims or source URLs.
 - `dryRun` and `budgetBlocked` must branch before any capability call. A
   zero-input run is intentionally live and uses the retry-aware call ceiling.
-- Keep defaults limited to organization-level market inputs. Never add personal
-  identifiers or contact details.
+- Review the defaults as a coherent set for re-identification risk. Publish only
+  organization-level market inputs explicitly approved for the template; never add
+  personal identifiers or contact details.
 
 ## Test it
 

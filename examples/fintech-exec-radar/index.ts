@@ -446,7 +446,13 @@ function isCompanyOwnedUrl(company: string, raw: string): boolean {
 function isUnsupportedScrapeUrl(raw: string): boolean {
   try {
     const host = new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
-    return host === "linkedin.com" || host.endsWith(".linkedin.com");
+    return [
+      "instagram.com",
+      "linkedin.com",
+      "stocktwits.com",
+      "threads.com",
+      "threads.net",
+    ].some((domain) => host === domain || host.endsWith(`.${domain}`));
   } catch {
     return true;
   }
@@ -454,10 +460,18 @@ function isUnsupportedScrapeUrl(raw: string): boolean {
 
 function isStructurallyUnhelpfulSourceUrl(raw: string): boolean {
   try {
-    const path = decodeURIComponent(new URL(raw).pathname).toLowerCase();
-    return /\/(?:careers?|companies|company|company-profile|funding-and-investors|jobs?|management|organization|quote|reel|stocks?)(?:\/|$)/u.test(
-      path,
-    );
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    const path = decodeURIComponent(url.pathname).toLowerCase();
+    const profileDirectoryHost =
+      /(?:^|[.-])(?:directory|profiles?)(?:[.-]|$)/u.test(host);
+    const directoryProfile =
+      profileDirectoryHost &&
+      /^\/(?:companies?|management|organization)(?:\/|$)/u.test(path);
+    const explicitProfile =
+      /\/(?:company-profile|funding-and-investors)(?:\/|$)/u.test(path);
+    const marketLandingPage = /^\/(?:quote|stocks?)(?:\/|$)/u.test(path);
+    return directoryProfile || explicitProfile || marketLandingPage;
   } catch {
     return true;
   }

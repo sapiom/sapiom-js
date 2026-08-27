@@ -129,7 +129,7 @@ async function acknowledgeReportedItems(context, child) {
   );
 }
 
-test("entry contract leads with delivery and has a real zero-input watchlist", () => {
+test("entry contract leads with delivery and has a useful zero-input watchlist", () => {
   const schema = zodToJsonSchema(agent.steps.plan.inputSchema);
 
   assert.equal(Object.keys(schema.properties)[0], "deliverTo");
@@ -1311,7 +1311,7 @@ test("the parent acknowledges only findings returned across the fan-in boundary"
   );
 });
 
-test("research never scrapes custom-company or LinkedIn URLs", async () => {
+test("research skips owned, directory, and client-rendered social URLs without rejecting publisher job paths", async () => {
   const scraped = [];
   const context = {
     agentName: "fintech-exec-radar-domain-test",
@@ -1357,7 +1357,7 @@ test("research never scrapes custom-company or LinkedIn URLs", async () => {
               },
               {
                 title: "Trade press covers Example Payments Company hiring",
-                url: "https://industry.example/example-payments-hiring",
+                url: "https://industry.example/jobs/example-payments-hiring",
                 snippet:
                   "A trade publication reports Example Payments Company engineering hiring.",
               },
@@ -1373,6 +1373,24 @@ test("research never scrapes custom-company or LinkedIn URLs", async () => {
                 url: "https://www.linkedin.com/jobs/example-payments-jobs",
                 snippet:
                   "A job-board search result lists Example Payments Company roles.",
+              },
+              {
+                title: "Example Payments Company hiring post on Instagram",
+                url: "https://www.instagram.com/p/example-payments-hiring",
+                snippet:
+                  "A social post mentions Example Payments Company engineering hiring.",
+              },
+              {
+                title: "Example Payments Company hiring post on Threads",
+                url: "https://www.threads.com/@example/post/example-payments-hiring",
+                snippet:
+                  "A social post mentions Example Payments Company product hiring.",
+              },
+              {
+                title: "Example Payments Company hiring chatter",
+                url: "https://stocktwits.com/symbol/EXAMPLE",
+                snippet:
+                  "A social feed mentions Example Payments Company engineering hiring.",
               },
             ],
           };
@@ -1403,14 +1421,14 @@ test("research never scrapes custom-company or LinkedIn URLs", async () => {
   );
 
   assert.deepEqual(scraped, [
-    "https://industry.example/example-payments-hiring",
+    "https://industry.example/jobs/example-payments-hiring",
     "https://example.example/example-payments-analysis",
   ]);
   assert.equal(result.output.observedItems, 2);
   assert.equal(result.output.summaryItems.length, 2);
   assert.equal(
     result.output.summaryItems[0].url,
-    "https://industry.example/example-payments-hiring",
+    "https://industry.example/jobs/example-payments-hiring",
   );
 });
 
