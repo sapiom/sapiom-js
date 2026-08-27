@@ -20,22 +20,67 @@ import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
 import { StartDialog } from "./StartDialog";
+import type { StartMode } from "./StartDialog";
 import { PlanCard } from "./PlanCard";
 import { UpdateCard } from "./UpdateCard";
-import { MenuChoice } from "./MenuChoice";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
+import {
+  ProjectRow,
+  ProjectTreeRows,
+  dirKey,
+  projectKey,
+} from "./ProjectTreeRows";
+import type { RailDrag } from "./ProjectTreeRows";
+import { RemoveProjectConfirm } from "./RemoveProjectConfirm";
+import { UNROOTED_KEY, UnrootedAgents } from "./UnrootedAgents";
+import { GroupSections } from "./GroupRow";
+import type { GroupDropRequest } from "./GroupRow";
+import { useRailGroups } from "../lib/use-rail-groups";
+import {
+  applyGroupDrop,
+  canResetToDetected,
+  createGroup,
+  deleteGroup,
+  isMaterialized,
+  renameGroup,
+} from "../lib/agent-groups";
 import { WorkflowRow } from "./WorkflowRow";
-import { isMockMode } from "../lib/api";
+import { ApiError, createApi, isMockMode } from "../lib/api";
+import { planMove } from "../lib/agent-move";
 import { useAccountPlan } from "../lib/use-account-plan";
-import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
+import {
+  HARNESS_LABELS,
+  historyDirs,
+  historyRowMeta,
+  sessionRowState,
+} from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
-import { buildWorkspaceTree } from "../lib/workspace-tree";
-import type { RailGrouping, RailSort } from "../lib/workspace-tree";
+import {
+  agentPrefixes,
+  buildProjectTree,
+  projectIsEmpty,
+  projectRoots,
+  unrootedAgents,
+} from "../lib/project-tree";
+import {
+  hiddenByClosedProject,
+  planProjectRemoval,
+} from "../lib/project-membership";
+import type { RailAxis, RailSort } from "../lib/project-tree";
+import { samePath } from "../lib/paths";
 import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+
+/**
+ * Module-level client, matching `use-rail-groups.ts` / `use-account-plan.ts` —
+ * the rail is handed callbacks rather than a client, and the Project-axis move
+ * is a single fire-and-forget mutation whose result reaches the app the way the
+ * server announces it (`workflows.changed`), not through a return value.
+ */
+const api = createApi();
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -51,14 +96,18 @@ interface WorkflowsRailProps {
   activeSessionId: string | null;
   /** The focused agent (or bare folder) path — the single filled selection. */
   focusedAgentPath: string | null;
-  /** Opaque server-issued identities that join real workspace folders to the
-   * local system-graph endpoint. */
+  /** Opaque server-issued identities that join project roots to the local
+   * system-graph endpoint without exposing paths in URLs. */
   workspaceScopes: AppState["workspaceScopes"];
-  /** The workspace whose dependency graph currently owns the right Canvas. */
+  /** The project whose dependency graph currently owns the full main area. */
   selectedWorkspaceKey: WorkspaceKey | null;
-  /** Selects a workspace graph without changing the active session or center
-   * pane. */
-  onSelectWorkspace: (workspaceKey: WorkspaceKey) => void;
+  /** Selects an exact project graph without changing the active session or
+   * either preserved agent pane. */
+  onSelectWorkspace: (
+    workspaceKey: WorkspaceKey,
+    root: string,
+    label: string,
+  ) => void;
   /** Focuses an agent (or a bare-scaffold folder): swaps the main panel's
    *  session tab strip to that subject's sessions. */
   onFocusAgent: (path: string) => void;
@@ -85,6 +134,24 @@ interface WorkflowsRailProps {
   historyLoading: boolean;
   onOpenHistory: (cwds: string[]) => void;
   recentDirs: string[];
+  /** Project roots the user REMOVED. A closed root hides its own subtree —
+   *  itself, its agents, and the session cwds under it — minus any project
+   *  opened separately inside it. See `lib/project-membership.ts`. */
+  closedProjects: string[];
+  /** Removes a project: out of `recentDirs`, out of the rail, and the live
+   *  sessions rooted in it end. Nothing on disk is touched. */
+  onRemoveProject: (root: string) => Promise<void>;
+  /**
+   * OPENS A FOLDER AS A PROJECT — the other half of `onRemoveProject`, and the
+   * one round 1 was missing.
+   *
+   * Distinct from `onConnect`, which registers an AGENT and only remembers its
+   * folder when nothing else already holds it. A project is a folder the user
+   * CHOSE, agents or not: you open a project in order to build the first agent
+   * in it. Round 1 routed the header `+` into agent detection, so a folder with
+   * no agent in it could not be added at all.
+   */
+  onOpenProject: (root: string) => Promise<void>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
@@ -92,7 +159,11 @@ interface WorkflowsRailProps {
   listHarnesses: () => Promise<HarnessEntry[]>;
   /** Session-plus-scaffold-prompt at a folder that doesn't exist yet. `idea`
    *  is the "start from an idea" door's text, passed verbatim to the agent. */
-  onScaffoldSession: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  onScaffoldSession: (
+    cwd: string,
+    harness: HarnessKind,
+    idea?: string,
+  ) => Promise<void>;
   /** Where NEW projects are created (resolveProjectRoot in App). */
   projectRoot: string | null;
   /** Persist a changed project root as the user's default. */
@@ -128,189 +199,41 @@ interface WorkflowsRailProps {
   onSetSettingsOpen: (open: boolean) => void;
 }
 
-const IS_MAC = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
 const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
 
 /**
- * LEVEL 1 workspace folder header. Its label selects the folder's dependency
- * graph in the right Canvas; the dedicated chevron is the only control that
- * folds its agent children. A trailing hover action copies the real path.
+ * The axes the filing panel offers, and their copy.
+ *
+ * TWO entries. `workspace` accumulated a row for every directory that had ever
+ * hosted a session, and `deployment` filed on `definitionId != null` — a fact
+ * every agent row already prints as a cloud glyph, so it re-sorted the rail to
+ * tell you nothing new. Both are retired. `group` (what an agent is RELATED to,
+ * read off launch edges) took the slot, and is the only kind of axis that earns
+ * one: a fact the row cannot already show. Any future axis has to clear the same
+ * bar.
  */
-function FolderHeader({
-  label,
-  cwd,
-  isDirectory = true,
-  workspaceKey,
-  selected,
-  collapsed,
-  onSelect,
-  onToggleCollapsed,
-  onCopyPath,
-}: {
-  label: string;
-  cwd: string;
-  /** A real directory (Workspace grouping) carries a folder glyph and the
-   *  copy-path action; a deployment FACET bucket has no path behind it, so it
-   *  is a bare label + caret. */
-  isDirectory?: boolean;
-  workspaceKey: WorkspaceKey | null;
-  selected: boolean;
-  collapsed: boolean;
-  onSelect: (workspaceKey: WorkspaceKey) => void;
-  onToggleCollapsed: () => void;
-  onCopyPath: (path: string) => void;
-}): JSX.Element {
-  return (
-    <div
-      className={
-        "workspace-row" +
-        (selected ? " is-selected" : "") +
-        (collapsed ? " is-collapsed" : "")
-      }
-      data-testid={`workspace-group-${label}`}
-      {...trackingAttrs({ object: "workspace" })}
-    >
-      <button
-        className="workspace-row-main"
-        data-testid={`workspace-select-${label}`}
-        onClick={() => workspaceKey && onSelect(workspaceKey)}
-        disabled={!isDirectory || workspaceKey === null}
-        title={isDirectory ? cwd : label}
-        aria-pressed={selected}
-      >
-        {isDirectory && <Icon name={collapsed ? "Folder" : "FolderOpen"} size={13} />}
-        <span className="tree-row-label">{label}</span>
-      </button>
-      <button
-        className="workspace-row-action workspace-row-disclosure"
-        data-testid={`workspace-disclosure-${label}`}
-        aria-label={`${collapsed ? "Expand" : "Collapse"} ${label}`}
-        aria-expanded={!collapsed}
-        data-tooltip={`${collapsed ? "Expand" : "Collapse"} folder`}
-        onClick={onToggleCollapsed}
-      >
-        <span
-          className={"disclosure-caret" + (collapsed ? "" : " is-open")}
-          aria-hidden="true"
-        >
-          <Icon name="ChevronDown" size={13} />
-        </span>
-      </button>
-      {isDirectory && (
-        <button
-          className="workspace-row-action"
-          aria-label={`Copy path for ${label}`}
-          data-tooltip="Copy path"
-          onClick={() => onCopyPath(cwd)}
-        >
-          <Icon name="Copy" size={13} />
-        </button>
-      )}
-    </div>
-  );
-}
+/** The agent the user last chose in the composer, for actions that must pick one
+ *  without asking. Defaults to Claude Code, which is what a fresh install has. */
+const preferredHarness = (): HarnessKind =>
+  loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
 
-/**
- * The ONE case a folder row is itself a focus target: a folder with live
- * sessions but NO agent (a bare scaffold session). Focusing it opens its
- * sessions as tabs in the main panel; a quiet "scaffold an agent here"
- * affordance lets the folder grow its first sapiom.json.
- */
-function BareFolderRow({
-  label,
-  cwd,
-  sessionId,
-  isFocused,
-  onFocus,
-  onScaffold,
-  onCopyPath,
-}: {
-  label: string;
-  cwd: string;
-  sessionId: string;
-  isFocused: boolean;
-  onFocus: (path: string) => void;
-  onScaffold: (sessionId: string) => void;
-  onCopyPath: (path: string) => void;
-}): JSX.Element {
-  return (
-    <div
-      className={"workspace-row" + (isFocused ? " is-selected" : "")}
-      data-testid={`workspace-group-${label}`}
-      {...trackingAttrs({ object: "workspace" })}
-    >
-      <button
-        className="workspace-row-main"
-        data-testid={`workspace-focus-${label}`}
-        aria-label={`Focus ${label}`}
-        aria-pressed={isFocused}
-        data-tooltip="Folder with sessions, no agent yet. Focus to work in it."
-        onClick={() => onFocus(cwd)}
-      >
-        <Icon name="Folder" size={13} />
-        <span className="tree-row-label">{label}</span>
-      </button>
-      <button
-        className="workspace-row-action"
-        data-testid={`workspace-scaffold-${label}`}
-        aria-label={`Scaffold an agent in ${label}`}
-        data-tooltip="Scaffold an agent here"
-        onClick={() => onScaffold(sessionId)}
-      >
-        <Icon name="Sparkles" size={13} />
-      </button>
-      <button
-        className="workspace-row-action"
-        aria-label={`Copy path for ${label}`}
-        data-tooltip="Copy path"
-        onClick={() => onCopyPath(cwd)}
-      >
-        <Icon name="Copy" size={13} />
-      </button>
-    </div>
-  );
-}
+const RAIL_AXES: readonly RailAxis[] = ["project", "group"];
+const AXIS_LABELS: Record<RailAxis, string> = {
+  project: "Project",
+  group: "Group",
+};
+/** A stored value from a retired axis falls back to the default rather than
+ *  rendering a section that no longer exists. */
+const resolveAxis = (stored: unknown): RailAxis =>
+  RAIL_AXES.includes(stored as RailAxis) ? (stored as RailAxis) : "project";
 
-/**
- * Optimistic folder for an agent still being created: its session and definition
- * have not landed yet, so nothing else in the rail would show it. It reads as
- * busy (a spinner + "Creating agent…") but stays focusable, so switching away
- * mid-creation never loses the in-progress agent — clicking it returns focus to
- * the folder. The real bare-folder / agent rows replace it the moment they
- * arrive (same `cwd` key), so there is no flip or duplicate.
- */
-function PendingFolderRow({
-  label,
-  cwd,
-  isFocused,
-  onFocus,
-}: {
-  label: string;
-  cwd: string;
-  isFocused: boolean;
-  onFocus: (path: string) => void;
-}): JSX.Element {
-  return (
-    <div
-      className={"workspace-row" + (isFocused ? " is-selected" : "")}
-      data-testid={`workspace-group-${label}`}
-      {...trackingAttrs({ object: "workspace" })}
-    >
-      <button
-        className="workspace-row-main"
-        data-testid={`workspace-pending-${label}`}
-        aria-label={`Creating agent in ${label}`}
-        aria-busy="true"
-        data-tooltip="Creating agent…"
-        onClick={() => onFocus(cwd)}
-      >
-        <Icon name="Folder" size={13} />
-        <span className="tree-row-label">{label}</span>
-      </button>
-      <span className="workspace-row-spinner" aria-hidden="true" />
-    </div>
-  );
-}
+const SORT_LABELS: Record<RailSort, string> = {
+  recent: "Recent activity",
+  name: "Name",
+};
 
 /**
  * Merged past-sessions row: exited registry sessions and history entries share
@@ -354,7 +277,12 @@ function PastSessionRow({
   isSelected: boolean;
   onOpen: () => void;
 }): JSX.Element {
-  const resumableAttr = resumeMode === "agent-resume" ? "true" : resumeMode === "rehydrate" ? "false" : "unknown";
+  const resumableAttr =
+    resumeMode === "agent-resume"
+      ? "true"
+      : resumeMode === "rehydrate"
+        ? "false"
+        : "unknown";
   return (
     <button
       data-testid={testid}
@@ -379,7 +307,7 @@ function PastSessionRow({
 
 /**
  * Full-height workspace rail: brand header, a jump/search field, the explorer
- * tree (workspace folder headers > agent rows), and the account row.
+ * tree (project roots > directory branches > agent rows), and the account row.
  * Sessions are not a rail concern — they live in the main panel's tab strip,
  * keyed to the focused agent.
  */
@@ -411,6 +339,9 @@ export function WorkflowsRail({
   historyLoading,
   onOpenHistory,
   recentDirs,
+  closedProjects,
+  onRemoveProject,
+  onOpenProject,
   launchDir,
   listDir,
   onCreateSession,
@@ -448,19 +379,31 @@ export function WorkflowsRail({
   // downloaded update is waiting. The push protocol re-sends current state on
   // every page load, so subscribing at mount is the whole handshake; a browser
   // (no bridge) or an older desktop build (no subscription) never sets this.
-  const [updateReady, setUpdateReady] = useState<{ version: string } | null>(null);
+  const [updateReady, setUpdateReady] = useState<{ version: string } | null>(
+    null,
+  );
   useEffect(() => {
     const bridge = getDesktopBridge();
     if (!bridge?.onUpdateState) return;
     return bridge.onUpdateState((state) => {
-      setUpdateReady(state.kind === "downloaded" ? { version: state.version } : null);
+      setUpdateReady(
+        state.kind === "downloaded" ? { version: state.version } : null,
+      );
     });
   }, []);
   // "Add existing agents" opens the detection-driven StartDialog (register a
   // folder that already holds an agent project). "Create new" goes to the
   // composer home instead. connectTriggerRef anchors Escape focus return.
-  const [startOpen, setStartOpen] = useState(false);
+  // ONE dialog, TWO questions. "Add a project" (the header `+`) and "find
+  // agents under here" (the nav row) both start from the same folder picker —
+  // that part is one question — but they differ in what they DO with the
+  // answer, so each gets its own control and its own primary action. Round 1
+  // pointed both at the detection flow, which made "add a project" mean "add a
+  // project that already contains an agent".
+  const [startMode, setStartMode] = useState<StartMode | null>(null);
+  const startOpen = startMode !== null;
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
+  const addProjectTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
@@ -470,14 +413,19 @@ export function WorkflowsRail({
   // resumes as the user left it (docs/IA.md).
   const [historyOpen, setHistoryOpen] = useState(false);
   const [pastOpen, setPastOpen] = useState(false);
-  const [grouping, setGrouping] = useState<RailGrouping>(
-    () => loadUiPrefs().railGrouping ?? "workspace",
+  // `project` (where an agent lives) and `group` (what it is related to).
+  // `deployment` is retired — it bucketed a fact every agent row already prints
+  // as a glyph — and `workspace` is replaced by `project`.
+  const [axis, setAxis] = useState<RailAxis>(() =>
+    resolveAxis(loadUiPrefs().railAxis),
   );
-  const [sort, setSort] = useState<RailSort>(() => loadUiPrefs().railSort ?? "recent");
-  const pickGrouping = (next: RailGrouping): void => {
-    setGrouping(next);
-    saveUiPrefs({ railGrouping: next });
-    // A click that changes the section also collapses the Past-sessions
+  const [sort, setSort] = useState<RailSort>(() =>
+    loadUiPrefs().railSort === "name" ? "name" : "recent",
+  );
+  const pickAxis = (next: RailAxis): void => {
+    setAxis(next);
+    saveUiPrefs({ railAxis: next });
+    // A click that changes the filing also collapses the Past-sessions
     // sub-card, matching the hover behaviour on the fixed choices.
     setPastOpen(false);
   };
@@ -494,23 +442,28 @@ export function WorkflowsRail({
     setPastOpen(false);
   }, []);
 
-  // Per-workspace collapse, restored across reloads.
-  const [collapsedCwds, setCollapsedCwds] = useState<Set<string>>(
-    () => new Set(loadUiPrefs().collapsedCwds ?? []),
+  // Per-row collapse, restored across reloads. Keys are NAMESPACED
+  // (`project:` / `dir:`): a path is not unique across row kinds, and one
+  // shared key collapsed a nested project and the same-named subdirectory of
+  // its parent at the same time.
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(
+    () => new Set(loadUiPrefs().collapsedKeys ?? []),
   );
-  const toggleCollapsed = (cwd: string): void => {
-    setCollapsedCwds((prev) => {
+  const toggleCollapsed = useCallback((key: string): void => {
+    setCollapsedKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(cwd)) next.delete(cwd);
-      else next.add(cwd);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
-  };
+  }, []);
   useEffect(() => {
-    saveUiPrefs({ collapsedCwds: Array.from(collapsedCwds) });
-  }, [collapsedCwds]);
+    saveUiPrefs({ collapsedKeys: Array.from(collapsedKeys) });
+  }, [collapsedKeys]);
 
-  const exitedSessions = sessions.filter((session) => session.status === "exited");
+  const exitedSessions = sessions.filter(
+    (session) => session.status === "exited",
+  );
 
   const toggleHistory = (): void => {
     const next = !historyOpen;
@@ -527,16 +480,28 @@ export function WorkflowsRail({
   // entries merge, deduped, newest first.
   const registryIds = new Set(sessions.map((session) => session.id));
   const registryAgentIds = new Set(
-    sessions.map((session) => session.agentSessionId).filter((id): id is string => id != null),
+    sessions
+      .map((session) => session.agentSessionId)
+      .filter((id): id is string => id != null),
   );
   const pastSummaries = history.filter(
     (summary) =>
-      !(summary.harnessSessionId != null && registryIds.has(summary.harnessSessionId)) &&
-      !registryAgentIds.has(summary.agentSessionId),
+      !(
+        summary.harnessSessionId != null &&
+        registryIds.has(summary.harnessSessionId)
+      ) && !registryAgentIds.has(summary.agentSessionId),
   );
   const pastRows = [
-    ...exitedSessions.map((session) => ({ kind: "exited" as const, at: session.lastActiveAt, session })),
-    ...pastSummaries.map((summary) => ({ kind: "summary" as const, at: summary.lastActiveAt, summary })),
+    ...exitedSessions.map((session) => ({
+      kind: "exited" as const,
+      at: session.lastActiveAt,
+      session,
+    })),
+    ...pastSummaries.map((summary) => ({
+      kind: "summary" as const,
+      at: summary.lastActiveAt,
+      summary,
+    })),
   ].sort((a, b) => b.at.localeCompare(a.at));
 
   // Exited registry rows render from the session record (it carries live status
@@ -547,28 +512,163 @@ export function WorkflowsRail({
   // The whole summary is kept, not just `resumeMode`: the same lookup now feeds
   // the meta line's branch and turn count, which exited rows could never show
   // because a registry session carries neither field.
-  const historyByAgentId = new Map(history.map((summary) => [summary.agentSessionId, summary] as const));
-
-  const { workspaces, orphanAgents } = buildWorkspaceTree(
-    workflows,
-    sessions,
-    grouping,
-    sort,
-    recentDirs,
-    pendingWorkspaces.map((p) => p.cwd),
-    workspaceScopes ?? [],
+  const historyByAgentId = new Map(
+    history.map((summary) => [summary.agentSessionId, summary] as const),
   );
 
-  // A first-run rail (no agents, no orphans) promotes the Create-new CTA to the
-  // primary style — the one action that gets the user their first agent.
-  const isEmpty = workspaces.length === 0 && orphanAgents.length === 0;
+  // The PROJECT axis: root folders the user opened > directories that actually
+  // branch > agents. There is no migration — every recentDirs entry and every
+  // session cwd becomes a project, so nothing a user already had disappears.
+  const pendingCwds = pendingWorkspaces.map((pending) => pending.cwd);
+  // A REMOVED project takes its whole subtree with it (SAP-2932): its own row,
+  // its agents — which would otherwise reappear as strays — and the session
+  // cwds under it, which are project roots in their own right and would
+  // otherwise replace one row with a row per folder a session had run in. The
+  // exception is a project opened separately inside it, which `openRoots`
+  // (explicit choices only, never a session cwd) rescues.
+  const openRoots = [...recentDirs, ...pendingCwds];
+  const shown = (path: string): boolean =>
+    !hiddenByClosedProject(path, closedProjects, openRoots);
+  const visibleWorkflows = workflows.filter((workflow) => shown(workflow.path));
+  const roots = projectRoots({
+    recentDirs,
+    sessions,
+    pendingCwds,
+    sort,
+  }).filter(shown);
+  const projects = buildProjectTree(visibleWorkflows, roots, sort);
+  // Agents no open root contains. Rarer than the old "No workspace" bucket,
+  // but dropping them would hide an agent that exists.
+  const strays = unrootedAgents(visibleWorkflows, roots, sort);
+  // Every REGISTERED agent path, hidden ones included: "Open as project" counts
+  // what a folder would bring in, and a folder that would un-hide a removed
+  // project's agents is exactly the case that number has to be honest about.
+  const workflowPaths = workflows.map((workflow) => workflow.path);
+  // The project whose remove confirm is open, and the row control focus
+  // returns to when it closes.
+  const [removing, setRemoving] = useState<{
+    root: string;
+    label: string;
+  } | null>(null);
+  // Set imperatively from the clicked row's own control, so Escape hands focus
+  // back to the button the flow started from rather than to the document.
+  const removeTriggerRef = useRef<HTMLButtonElement | null>(null);
 
-  const copyPath = (path: string): void => {
-    void navigator.clipboard
-      ?.writeText(path)
-      .then(() => onToast("Path copied.", "success"))
-      .catch(() => onToast("Couldn't copy the path."));
+  // The directory currently under the pointer during a Project-axis drag. Held
+  // HERE rather than by each row: only one row may be the target at a time, and
+  // rows that track their own hover disagree mid-drag.
+  const [dropDir, setDropDir] = useState<string | null>(null);
+
+  /**
+   * PROJECT-AXIS DROP. A real directory move on disk — the Project axis is
+   * derived from real paths, so a drag has exactly two honest outcomes: move, or
+   * refuse. A display override would make the axis assert a location that is not
+   * true, which is the one thing it exists to be trustworthy about. (Rearranging
+   * without touching disk is the Group axis, above.)
+   *
+   * Offered ONLY on the project axis. The plan comes from `lib/agent-move.ts`;
+   * the endpoint guards itself again, so a refusal can still arrive for a plan
+   * this rail blessed — a planner is not a permission system.
+   */
+  const drag: RailDrag | undefined =
+    axis === "project"
+      ? {
+          dropDir,
+          setDropDir,
+          onDropInto: (from, targetDir) => {
+            setDropDir(null);
+            const plan = planMove(
+              from,
+              targetDir,
+              workflows.map((workflow) => workflow.path),
+            );
+            if (!plan.ok) {
+              // An EMPTY reason is the silent refusal — dropped into the folder
+              // it already occupies. The user let go somewhere harmless and
+              // deserves silence, not a complaint.
+              if (plan.reason) onToast(plan.reason);
+              return;
+            }
+            void api.moveAgent(plan.from, plan.to).catch((err: unknown) => {
+              onToast(
+                (err instanceof ApiError ? err.reason : null) ??
+                  (err instanceof Error
+                    ? err.message
+                    : `Couldn't move ${plan.name}.`),
+              );
+            });
+          },
+        }
+      : undefined;
+
+  // The GROUP axis: what an agent is RELATED to, seeded from launch edges and
+  // then owned by the user. One stored arrangement per project root, because
+  // groups are project-scoped — the file lives in the project, which is what
+  // makes the arrangement committable and shareable. Every rule about that file
+  // lives in `lib/agent-groups.ts`; this component only renders it.
+  const railGroups = useRailGroups(roots, workflows, sort, axis === "group");
+  // The group created by the last "New group" press, so its row mounts straight
+  // into the rename input. Keyed by LABEL, not id: the id is minted inside the
+  // reducer, and reading it back from there would mean calling a setter inside a
+  // state updater, which React is free to run twice. The label is what we chose
+  // before the call.
+  const [freshGroupLabel, setFreshGroupLabel] = useState<{
+    root: string;
+    label: string;
+  } | null>(null);
+
+  /** "New group", then "New group 2" — never a duplicate label, because two rows
+   *  saying one thing cannot be told apart. */
+  const nextGroupLabel = (existing: readonly { label: string }[]): string => {
+    const taken = new Set(existing.map((group) => group.label));
+    if (!taken.has("New group")) return "New group";
+    let n = 2;
+    while (taken.has(`New group ${n}`)) n++;
+    return `New group ${n}`;
   };
+
+  /**
+   * GROUP-AXIS DROP. Nothing moves on disk — a group is a label over agents, so
+   * the only thing a drop changes is membership. (The Project axis gets a real
+   * directory move; that is a different axis with a different contract.)
+   *
+   * Refused across projects: an arrangement lives in one project's `.sapiom/`,
+   * so a group holding an agent from a neighbouring project would be a group
+   * with nowhere to be stored.
+   */
+  const onGroupDrop = (root: string, request: GroupDropRequest): void => {
+    const rootAgents = railGroups.agentsIn(root);
+    if (!rootAgents.some((workflow) => workflow.path === request.path)) return;
+    setFreshGroupLabel(null);
+    railGroups.edit(root, rootAgents, (state) =>
+      applyGroupDrop(state, request),
+    );
+  };
+
+  // Live, UNBOUND sessions sitting exactly at a project root. Meaningful only
+  // for a project with no agents at all — that row becomes the focus target so
+  // its sessions can open as tabs, and can grow its first sapiom.json in place.
+  const bareSessionAt = (root: string): HarnessSession | undefined =>
+    sessions
+      .filter(
+        (session) =>
+          session.status !== "exited" &&
+          session.boundWorkflowPath == null &&
+          samePath(session.cwd, root),
+      )
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id),
+      )[0];
+
+  // `projectIsEmpty` is the ONE emptiness answer, and it consults `rootAgent`:
+  // a merged root-agent project has nothing in `dirs` or `agents`, so a naive
+  // check here would render its agent row underneath "No agents yet".
+  const hasAgents = projects.some((project) => !projectIsEmpty(project));
+  // A first-run rail (no agents anywhere) promotes the Create-new CTA to the
+  // primary style — the one action that gets the user their first agent.
+  const isEmpty = !hasAgents && strays.length === 0 && projects.length === 0;
+  const nothingToShow = !hasAgents && strays.length === 0;
 
   return (
     <aside
@@ -645,7 +745,7 @@ export function WorkflowsRail({
           aria-expanded={startOpen}
           onClick={() => {
             setHistoryOpen(false);
-            setStartOpen(true);
+            setStartMode("detect");
           }}
         >
           <Icon name="FolderPlus" size={14} />
@@ -653,18 +753,54 @@ export function WorkflowsRail({
         </button>
       </nav>
 
+      {/* A TITLE, not a control. Folding this header hid the only thing the
+          rail is for and left a header sitting on nothing — so it has no
+          disclosure of its own. Its two buttons ask two different questions:
+          `+` adds a project, the ellipsis opens the rail's settings. */}
       <div className="rail-header">
-        <Icon name="Folder" size={14} />
-        <span className="rail-header-label">Workspaces</span>
+        {/* The header names what the list is FILED BY, so it changes with the
+            axis. A header reading "Projects" over a list of relationship
+            clusters would describe the wrong thing. */}
+        {/* ADD sits at the LEADING edge, beside the thing it adds to, because
+            it is the header's primary action — opening a project is how this
+            list gets its contents. FOLDER-with-plus, because what it adds is a
+            folder. One `+` per question: this one opens a project; starting
+            another session is the tab strip's trailing `+`, and project rows
+            carry none. */}
+        <button
+          type="button"
+          className="theme-toggle rail-header-btn rail-header-btn-lead"
+          ref={addProjectTriggerRef}
+          data-testid="rail-add-project"
+          aria-label="Add a project"
+          data-tooltip="Add a project"
+          onClick={() => {
+            setHistoryOpen(false);
+            setStartMode("open");
+          }}
+        >
+          <Icon name="FolderPlus" size={14} />
+        </button>
+        <span className="rail-header-label">
+          {axis === "group" ? "Groups" : "Projects"}
+        </span>
         <div className="rail-header-actions">
+          {/* AN ELLIPSIS, deliberately reversing the design doc's "sliders, not
+              an ellipsis". That rule's reasoning was "an ellipsis has no
+              subject, so it can only mean more stuff; this panel has exactly
+              one". The panel no longer has exactly one: it carries filing
+              (Group by / Sort by) AND past sessions, i.e. the rail's settings.
+              Once a control genuinely holds more than one subject, the ellipsis
+              is the honest glyph and a sliders icon is the misleading one —
+              sliders promise filing and nothing else. */}
           <button
             ref={historyTriggerRef}
             className="theme-toggle rail-header-btn"
             data-testid="history-trigger"
-            aria-label="Workspace options"
+            aria-label="Rail settings"
             aria-haspopup="menu"
             aria-expanded={historyOpen}
-            data-tooltip="Grouping, sorting and past sessions"
+            data-tooltip="Filing, sorting and past sessions"
             onClick={toggleHistory}
           >
             <Icon name="MoreHorizontal" size={14} />
@@ -690,7 +826,7 @@ export function WorkflowsRail({
           <div className="menu-flyer-track">
             <div className="connect-card history-card">
               <div className="connect-card-header">
-                <span>Workspaces</span>
+                <span>Projects</span>
                 <button
                   className="theme-toggle connect-card-close"
                   onClick={closeHistory}
@@ -705,42 +841,51 @@ export function WorkflowsRail({
                     so moving off that row collapses its sub-card — the
                     hover-open's natural inverse. (A plain wrapper would flatten
                     the row gap; menu-choice-group re-states the column.) */}
-                <div className="menu-choice-group" onMouseEnter={() => setPastOpen(false)}>
-                  {/* Only axes the registry actually sends: a folder and a
-                      deployment state are real groupings; a repository is not
-                      (sapiom.json holds repoFullName, but the registry drops
-                      it). */}
-                  <div className="session-dropdown-section">Group by</div>
-                  <MenuChoice
-                    testid="group-workspace"
-                    icon="FolderOpen"
-                    label="Workspace"
-                    checked={grouping === "workspace"}
-                    onPick={() => pickGrouping("workspace")}
-                  />
-                  <MenuChoice
-                    testid="group-deployment"
-                    icon="Cloud"
-                    label="Deployment"
-                    checked={grouping === "deployment"}
-                    onPick={() => pickGrouping("deployment")}
-                  />
-
-                  <div className="session-dropdown-section">Sort</div>
-                  <MenuChoice
-                    testid="sort-recent"
-                    icon="History"
-                    label="Recent activity"
-                    checked={sort === "recent"}
-                    onPick={() => pickSort("recent")}
-                  />
-                  <MenuChoice
-                    testid="sort-name"
-                    icon="ArrowDown"
-                    label="Name"
-                    checked={sort === "name"}
-                    onPick={() => pickSort("name")}
-                  />
+                {/* VISIBLE dropdowns, not a menu of radio rows. Both settings
+                    state their current value on the face of the control, so
+                    "how is this list filed?" is answerable without opening
+                    anything — a radio row only says what is checked once you
+                    are already inside the menu you had to guess to open. */}
+                <div
+                  className="menu-choice-group"
+                  onMouseEnter={() => setPastOpen(false)}
+                >
+                  <label className="filing-field">
+                    <span className="filing-field-label">Group by</span>
+                    <select
+                      className="filing-field-select"
+                      data-testid="filing-group-by"
+                      value={axis}
+                      onChange={(event) =>
+                        pickAxis(resolveAxis(event.target.value))
+                      }
+                    >
+                      {RAIL_AXES.map((option) => (
+                        <option key={option} value={option}>
+                          {AXIS_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="filing-field">
+                    <span className="filing-field-label">Sort by</span>
+                    <select
+                      className="filing-field-select"
+                      data-testid="filing-sort-by"
+                      value={sort}
+                      onChange={(event) =>
+                        pickSort(
+                          event.target.value === "name" ? "name" : "recent",
+                        )
+                      }
+                    >
+                      {(["recent", "name"] as const).map((option) => (
+                        <option key={option} value={option}>
+                          {SORT_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
 
                 {/* One row that opens a sub-card beside the menu — the set is
@@ -750,7 +895,10 @@ export function WorkflowsRail({
                     Opens on hover (moving onto it) as well as click. */}
                 <button
                   type="button"
-                  className={"session-dropdown-item nested-trigger" + (pastOpen ? " is-open" : "")}
+                  className={
+                    "session-dropdown-item nested-trigger" +
+                    (pastOpen ? " is-open" : "")
+                  }
                   data-testid="past-sessions-trigger"
                   aria-haspopup="menu"
                   aria-expanded={pastOpen}
@@ -764,7 +912,10 @@ export function WorkflowsRail({
                     <span className="session-item-title">Past sessions</span>
                   </span>
                   {exitedSessions.length > 0 && (
-                    <span className="session-history-badge" data-testid="session-history-badge">
+                    <span
+                      className="session-history-badge"
+                      data-testid="session-history-badge"
+                    >
                       {exitedSessions.length}
                     </span>
                   )}
@@ -824,7 +975,10 @@ export function WorkflowsRail({
                               undefined,
                               {
                                 includeHarness: false,
-                                state: sessionRowState({ resumeMode, turnCount: summary?.turnCount }),
+                                state: sessionRowState({
+                                  resumeMode,
+                                  turnCount: summary?.turnCount,
+                                }),
                               },
                             )}
                             cwd={row.session.cwd}
@@ -857,9 +1011,13 @@ export function WorkflowsRail({
                         />
                       );
                     })}
-                    {historyLoading && <div className="session-dropdown-empty">Loading…</div>}
+                    {historyLoading && (
+                      <div className="session-dropdown-empty">Loading…</div>
+                    )}
                     {!historyLoading && pastRows.length === 0 && (
-                      <div className="session-dropdown-empty">No past sessions yet</div>
+                      <div className="session-dropdown-empty">
+                        No past sessions yet
+                      </div>
                     )}
                   </div>
                 </div>
@@ -869,99 +1027,307 @@ export function WorkflowsRail({
         </AnchoredPopover>
 
         <div className="rail-list">
-          {workspaces.length === 0 && orphanAgents.length === 0 && (
+          {nothingToShow && projects.length === 0 && (
             <EmptyState
               className="rail-empty"
               icon="Folder"
               title="No agents yet"
-              body="Open a workspace folder to start a session, or add one. Agents (sapiom.json) appear here automatically."
+              body="Add a project folder to start a session in it. Agents (sapiom.json) anywhere inside it appear here automatically."
             />
           )}
 
-          {workspaces.map((workspace) => {
-            const collapsed = collapsedCwds.has(workspace.cwd);
+          {projects.map((project) => {
+            const collapsed = collapsedKeys.has(projectKey(project.root));
+            // The browser never invents graph identities from a path. Join this
+            // exact Project-axis root to the opaque key issued by the server.
+            // Segment-aware equality matters on Windows and avoids basename
+            // collisions between neighbouring projects.
+            const workspaceScope = (workspaceScopes ?? []).find((scope) =>
+              samePath(scope.cwd, project.root),
+            );
+            const pending = pendingCwds.some((cwd) =>
+              samePath(cwd, project.root),
+            );
+            const empty = projectIsEmpty(project);
+            const bare = empty ? bareSessionAt(project.root) : undefined;
             // Being created: the folder is known but its session/agent has not
-            // landed yet. A focusable, busy placeholder so the in-progress agent
-            // is always findable — replaced by the bare/agent rows below once
-            // real content arrives at the same cwd.
-            if (workspace.pending) {
-              return (
-                <div key={workspace.cwd} className="workspace-group">
-                  <PendingFolderRow
-                    label={workspace.label}
-                    cwd={workspace.cwd}
-                    isFocused={workspace.cwd === focusedAgentPath}
-                    onFocus={onFocusAgent}
-                  />
-                </div>
-              );
-            }
-            // Bare case: no agents, a live scaffold session — the folder row
-            // itself remains a center-pane focus target rather than opening an
-            // empty dependency graph.
-            const bare = workspace.agents.length === 0 && workspace.bareSessions.length > 0;
-            if (bare) {
-              const primary = workspace.bareSessions[0];
-              return (
-                <div key={workspace.cwd} className="workspace-group">
-                  <BareFolderRow
-                    label={workspace.label}
-                    cwd={workspace.cwd}
-                    sessionId={primary.id}
-                    isFocused={workspace.cwd === focusedAgentPath}
-                    onFocus={onFocusAgent}
-                    onScaffold={onScaffoldInSession}
-                    onCopyPath={copyPath}
-                  />
-                </div>
-              );
-            }
+            // landed yet. A focusable, busy placeholder so the in-progress
+            // agent stays findable — it self-clears the moment a real agent or
+            // session arrives under the same root.
+            const creating = pending && empty && bare == null;
+            // GROUP AXIS. Every agent this root contains, filed by relationship
+            // instead of by directory.
+            //
+            // Fewer than TWO agents means there is no relationship to file — a
+            // group is a relationship, and one agent has none — so those
+            // projects keep the Project axis's own anatomy, root-agent merge
+            // included, and simply list what they hold. With two or more, the
+            // project row becomes a pure SCOPE header (`rootAgent={null}`): on
+            // this axis it is the project the arrangement is stored in, not a
+            // directory row, so merging an agent into it would put an agent row
+            // where a scope header belongs — and the root agent is often the
+            // head of the very group being shown.
+            const groupAgents =
+              axis === "group" ? railGroups.agentsIn(project.root) : [];
+            const showGroups = axis === "group" && groupAgents.length > 1;
+            const soloAgents = groupAgents.filter(
+              (workflow) => workflow.path !== project.rootAgent?.workflow.path,
+            );
+            const groupNodes = showGroups
+              ? railGroups.groupsFor(project.root, groupAgents)
+              : [];
+            const groupState = railGroups.stateFor(project.root);
             return (
-              <div key={workspace.cwd} className="workspace-group">
-                <FolderHeader
-                  label={workspace.label}
-                  cwd={workspace.cwd}
-                  isDirectory={workspace.isDirectory}
-                  workspaceKey={workspace.workspaceKey}
-                  selected={workspace.workspaceKey === selectedWorkspaceKey}
+              <div
+                key={project.root}
+                className="workspace-group"
+                data-testid={`workspace-group-${project.label}`}
+              >
+                <ProjectRow
+                  label={project.label}
+                  root={project.root}
+                  rootAgent={showGroups ? null : project.rootAgent}
                   collapsed={collapsed}
-                  onSelect={onSelectWorkspace}
-                  onToggleCollapsed={() => toggleCollapsed(workspace.cwd)}
-                  onCopyPath={copyPath}
+                  onToggleCollapsed={() =>
+                    toggleCollapsed(projectKey(project.root))
+                  }
+                  workspaceKey={workspaceScope?.workspaceKey ?? null}
+                  selected={
+                    workspaceScope?.workspaceKey === selectedWorkspaceKey
+                  }
+                  onSelectProject={onSelectWorkspace}
+                  focusedAgentPath={focusedAgentPath}
+                  onFocusAgent={onFocusAgent}
+                  focusable={creating || bare != null}
+                  disclosable={
+                    axis === "group"
+                      ? showGroups || soloAgents.length > 0
+                      : project.dirs.length > 0 || project.agents.length > 0
+                  }
+                  busy={creating}
+                  drag={drag}
+                  mainTestid={
+                    workspaceScope
+                      ? undefined
+                      : creating
+                        ? `workspace-pending-${project.label}`
+                        : bare
+                          ? `workspace-focus-${project.label}`
+                          : undefined
+                  }
+                  tooltip={
+                    creating
+                      ? "Creating agent…"
+                      : bare
+                        ? "Project with sessions, no agent yet. Focus to work in it."
+                        : undefined
+                  }
+                  trailing={
+                    <>
+                      {creating ? (
+                        <span
+                          className="workspace-row-spinner"
+                          aria-hidden="true"
+                        />
+                      ) : bare ? (
+                        <button
+                          type="button"
+                          className="workspace-row-action"
+                          data-testid={`workspace-scaffold-${project.label}`}
+                          aria-label={`Scaffold an agent in ${project.label}`}
+                          data-tooltip="Scaffold an agent here"
+                          onClick={() => onScaffoldInSession(bare.id)}
+                        >
+                          <Icon name="Sparkles" size={13} />
+                        </button>
+                      ) : null}
+                      {/* REMOVE PROJECT. An `X`, not a trash can: this closes a
+                          project and ends its sessions, and never touches a
+                          file — a bin glyph would say the opposite of the copy
+                          in the confirm. Hover-revealed like every other row
+                          action (and reachable by keyboard), because a standing
+                          destructive control on every project row would be the
+                          loudest thing in the rail. */}
+                      <button
+                        type="button"
+                        className="workspace-row-action"
+                        data-testid={`project-remove-${project.label}`}
+                        aria-label={`Remove ${project.label} from the rail`}
+                        data-tooltip="Remove project"
+                        onClick={(event) => {
+                          removeTriggerRef.current = event.currentTarget;
+                          setRemoving({
+                            root: project.root,
+                            label: project.label,
+                          });
+                        }}
+                      >
+                        <Icon name="X" size={13} />
+                      </button>
+                    </>
+                  }
                 />
-                {!collapsed &&
-                  workspace.agents.map((agent) => (
-                    <WorkflowRow
-                      key={agent.workflow.path}
-                      workflow={agent.workflow}
-                      isFocused={agent.workflow.path === focusedAgentPath}
-                      onFocus={onFocusAgent}
+                {/* AN EMPTY PROJECT SAYS SO, on its own row.
+                    `projectIsEmpty` is the one emptiness answer and it consults
+                    `rootAgent` — a merged root-agent project has nothing in
+                    `dirs` or `agents` and a naive check would print this line
+                    under an agent row. A project with no agents is now an
+                    ordinary state rather than an impossible one: you open a
+                    project in order to build the first agent in it, so the row
+                    has to be able to stand there and say what it is. `creating`
+                    already has its own spinner, and a bare project with a live
+                    session already has its Scaffold affordance, so neither
+                    reaches this. */}
+                {!collapsed && empty && !creating && bare == null && (
+                  <div className="workspace-row is-nested workspace-row-empty">
+                    <span
+                      className="row-disclosure row-disclosure-static"
+                      aria-hidden="true"
                     />
-                  ))}
+                    {/* A ROW YOU CAN ACT ON. An empty project stating its
+                        emptiness and offering nothing is a dead end — and the
+                        whole reason to open a folder with no agent in it is to
+                        put the first one there. This is that action, aimed at
+                        THIS folder: a session rooted here, with the scaffold
+                        prompt already sent. */}
+                    <button
+                      type="button"
+                      className="tree-row tree-row-empty-action"
+                      data-testid={`project-empty-${project.label}`}
+                      data-tooltip={`Start an agent in ${project.root}`}
+                      onClick={() => {
+                        void onScaffoldSession(
+                          project.root,
+                          preferredHarness(),
+                        ).catch((err: unknown) => {
+                          onToast(
+                            err instanceof Error
+                              ? err.message
+                              : `Couldn't start an agent in ${project.label}.`,
+                          );
+                        });
+                      }}
+                    >
+                      <Icon name="Sparkles" size={13} />
+                      <span className="tree-row-label">
+                        Create the first agent here
+                      </span>
+                    </button>
+                  </div>
+                )}
+                {!collapsed && axis === "project" && (
+                  <ProjectTreeRows
+                    dirs={project.dirs}
+                    agents={project.agents}
+                    depth={0}
+                    focusedAgentPath={focusedAgentPath}
+                    onFocusAgent={onFocusAgent}
+                    collapsedKeys={collapsedKeys}
+                    onToggleCollapsed={toggleCollapsed}
+                    drag={drag}
+                  />
+                )}
+                {!collapsed && showGroups && (
+                  <GroupSections
+                    sectionLabel={project.label}
+                    groups={groupNodes}
+                    /* Computed over EVERY agent in the project, not per group:
+                       two rows collide because they are both on screen, and
+                       which group each sits in has nothing to do with it. */
+                    prefixes={agentPrefixes(groupAgents, project.root)}
+                    editable={railGroups.isReady(project.root)}
+                    isDerived={!isMaterialized(groupState)}
+                    freshLabel={
+                      freshGroupLabel?.root === project.root
+                        ? freshGroupLabel.label
+                        : null
+                    }
+                    collapsedKeys={collapsedKeys}
+                    onToggleCollapsed={toggleCollapsed}
+                    focusedAgentPath={focusedAgentPath}
+                    onFocusAgent={onFocusAgent}
+                    onCreate={() => {
+                      const label = nextGroupLabel(groupNodes);
+                      railGroups.edit(project.root, groupAgents, (state) =>
+                        createGroup(state, label),
+                      );
+                      setFreshGroupLabel({ root: project.root, label });
+                    }}
+                    onRename={(groupId, label) => {
+                      setFreshGroupLabel(null);
+                      railGroups.edit(project.root, groupAgents, (state) =>
+                        renameGroup(state, groupId, label),
+                      );
+                    }}
+                    onDelete={(groupId) => {
+                      setFreshGroupLabel(null);
+                      railGroups.edit(project.root, groupAgents, (state) =>
+                        deleteGroup(state, groupId),
+                      );
+                    }}
+                    onDrop={(request) => onGroupDrop(project.root, request)}
+                    onReset={
+                      canResetToDetected(groupState)
+                        ? () => {
+                            setFreshGroupLabel(null);
+                            railGroups.reset(project.root);
+                          }
+                        : undefined
+                    }
+                    resetCount={
+                      isMaterialized(groupState) ? groupState.groups.length : 0
+                    }
+                  />
+                )}
+                {/* One agent (or none but a live session) has no relationship to
+                    file, so the group axis simply shows what the project holds
+                    rather than a group row wrapping a single name. */}
+                {!collapsed &&
+                  axis === "group" &&
+                  !showGroups &&
+                  soloAgents.map((workflow) => {
+                    const node = agentPrefixes(soloAgents, project.root).get(
+                      workflow.path,
+                    );
+                    return (
+                      <WorkflowRow
+                        key={workflow.path}
+                        workflow={workflow}
+                        prefix={node?.prefix ?? ""}
+                        prefixFull={node?.prefixFull ?? ""}
+                        isFocused={workflow.path === focusedAgentPath}
+                        onFocus={onFocusAgent}
+                      />
+                    );
+                  })}
               </div>
             );
           })}
 
-          {orphanAgents.length > 0 && (
-            <div className="workspace-group">
-              <div className="workspace-row">
-                <div
-                  className="workspace-row-main workspace-row-static"
-                  data-tooltip="Agents that live outside any session folder. Focus one to start a session in its own folder."
-                >
-                  <Icon name="Folder" size={13} />
-                  <span className="tree-row-label">No workspace</span>
-                </div>
-              </div>
-              {orphanAgents.map((agent) => (
-                <WorkflowRow
-                  key={agent.workflow.path}
-                  workflow={agent.workflow}
-                  isFocused={agent.workflow.path === focusedAgentPath}
-                  onFocus={onFocusAgent}
-                />
-              ))}
-            </div>
+          {/* LAST, ALWAYS. Every project the user chose outranks a folder they
+              never opened, and on the Group axis the groups have to be what
+              moves when the axis changes — a section that can hold 78 rows
+              cannot sit between the user and the thing they just switched to.
+              Collapsed by default, and it names its count so a closed row
+              still says how much it is holding. */}
+          {strays.length > 0 && (
+            <UnrootedAgents
+              agents={strays}
+              collapsed={!collapsedKeys.has(UNROOTED_KEY)}
+              onToggleCollapsed={() => toggleCollapsed(UNROOTED_KEY)}
+              focusedAgentPath={focusedAgentPath}
+              onFocusAgent={onFocusAgent}
+              agentPaths={workflowPaths}
+              onOpenAsProject={(root) => {
+                void onOpenProject(root).catch((err: unknown) => {
+                  onToast(
+                    err instanceof Error
+                      ? err.message
+                      : "Couldn't open that folder.",
+                  );
+                });
+              }}
+            />
           )}
         </div>
       </div>
@@ -970,12 +1336,17 @@ export function WorkflowsRail({
         {/* Update card over plan card over account row — all in the SAME
             footer block. The update card exists only while the desktop app
             holds a downloaded update (see the onUpdateState subscription). */}
-        {updateReady && (() => {
-          const bridge = getDesktopBridge();
-          return bridge ? (
-            <UpdateCard desktop={bridge} version={updateReady.version} onToast={onToast} />
-          ) : null;
-        })()}
+        {updateReady &&
+          (() => {
+            const bridge = getDesktopBridge();
+            return bridge ? (
+              <UpdateCard
+                desktop={bridge}
+                version={updateReady.version}
+                onToast={onToast}
+              />
+            ) : null;
+          })()}
         {/* The plan summary: the server's /api/account/plan relay (MockApi's
             fixture in demo); a view with nothing to state renders nothing. */}
         <PlanCard plan={accountPlan} />
@@ -1005,19 +1376,42 @@ export function WorkflowsRail({
       {/* Add EXISTING agents: one detection-driven dialog that registers a
           folder holding an agent project (or a folder of them). Creating a NEW
           agent is "Create new" → the composer home (onNewSession). */}
-      {startOpen && (
+      {startMode && (
         <StartDialog
+          mode={startMode}
           recentDirs={recentDirs}
           launchDir={launchDir}
           projectRoot={projectRoot}
           listDir={listDir}
-          onClose={() => setStartOpen(false)}
+          onClose={() => setStartMode(null)}
           onConnect={onConnect}
+          onOpenProject={onOpenProject}
           onScan={onScanWorkflows}
-          triggerRef={connectTriggerRef}
+          triggerRef={
+            startMode === "open" ? addProjectTriggerRef : connectTriggerRef
+          }
         />
       )}
 
+      {removing && (
+        <RemoveProjectConfirm
+          label={removing.label}
+          root={removing.root}
+          /* Counted from the SAME plan that does the ending, so the number the
+             dialog names and the sessions that die cannot drift apart. */
+          runningCount={
+            planProjectRemoval({ root: removing.root, recentDirs, sessions })
+              .endSessionIds.length
+          }
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            const root = removing.root;
+            setRemoving(null);
+            void onRemoveProject(root);
+          }}
+          triggerRef={removeTriggerRef}
+        />
+      )}
     </aside>
   );
 }
@@ -1077,10 +1471,15 @@ function ProfileRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState(getTheme());
   useEffect(() => subscribeTheme(setTheme), []);
-  const [authProgress, setAuthProgress] = useState<ProfileAuthProgress>({ status: "idle" });
+  const [authProgress, setAuthProgress] = useState<ProfileAuthProgress>({
+    status: "idle",
+  });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
-  const closeSettings = useCallback(() => onSetSettingsOpen(false), [onSetSettingsOpen]);
+  const closeSettings = useCallback(
+    () => onSetSettingsOpen(false),
+    [onSetSettingsOpen],
+  );
 
   const demo = isMockMode();
   const isPending = authProgress.status === "pending";
@@ -1138,7 +1537,9 @@ function ProfileRow({
       : authenticated
         ? "Sapiom account"
         : "connect to get started";
-  const initial = (demo ? "D" : (organizationName ?? "S")).charAt(0).toUpperCase();
+  const initial = (demo ? "D" : (organizationName ?? "S"))
+    .charAt(0)
+    .toUpperCase();
 
   const handleConnectFromMenu = async (): Promise<void> => {
     closeMenu();
@@ -1148,7 +1549,9 @@ function ProfileRow({
       // Server returns immediately — auth completes via auth.changed bus message.
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Could not start sign-in. Try again.";
+        err instanceof Error
+          ? err.message
+          : "Could not start sign-in. Try again.";
       setAuthProgress({ status: "error", message });
     }
   };
@@ -1161,7 +1564,11 @@ function ProfileRow({
         data-testid="brand-identity"
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        title={demo ? "Static demo. No Sapiom account, server, or agent is connected." : "Account"}
+        title={
+          demo
+            ? "Static demo. No Sapiom account, server, or agent is connected."
+            : "Account"
+        }
         onClick={() => {
           // Opening the account menu collapses the settings card so the two
           // never stack — one section of the profile is open at a time.
@@ -1226,7 +1633,9 @@ function ProfileRow({
       >
         <button
           role="menuitem"
-          className={"profile-menu-item" + (overviewSelected ? " is-selected" : "")}
+          className={
+            "profile-menu-item" + (overviewSelected ? " is-selected" : "")
+          }
           data-testid="rail-overview"
           onClick={() => {
             onSelectOverview();
@@ -1335,7 +1744,10 @@ function ProfileRow({
           </button>
         )}
         {authProgress.status === "error" && (
-          <p className="profile-menu-auth-error" data-testid="profile-auth-error">
+          <p
+            className="profile-menu-auth-error"
+            data-testid="profile-auth-error"
+          >
             {authProgress.message}
           </p>
         )}

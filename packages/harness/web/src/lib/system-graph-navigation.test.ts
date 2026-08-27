@@ -45,7 +45,7 @@ describe("mapSystemGraphNavigation", () => {
     expect(navigation.get("local:tools/reporting")).toBe(local);
   });
 
-  it("does not resolve by a display label or across a nested workspace boundary", () => {
+  it("does not resolve by a display label and includes nested project agents", () => {
     const matchingLabel = workflow("Growth", "/repo/growth", null);
     const nested = workflow("Nested", "/repo/nested/agent", "nested-agent");
     const navigation = mapSystemGraphNavigation(
@@ -56,7 +56,7 @@ describe("mapSystemGraphNavigation", () => {
     );
 
     expect(navigation.has("manifest-name")).toBe(false);
-    expect(navigation.has("nested-agent")).toBe(false);
+    expect(navigation.get("nested-agent")).toBe(nested);
   });
 
   it("leaves duplicate slugs inert while retaining unambiguous local identities", () => {

@@ -248,8 +248,7 @@ const decide = defineStep({
     const system =
       "You are reviewing the result of a slow external async job that was delivered via a webhook callback. " +
       "Summarize the result and decide whether to ACCEPT it (the job succeeded and the result looks complete " +
-      "and usable) or REJECT it (the job failed, is incomplete, or the result is problematic). " +
-      'Reply with ONLY minified JSON: {"decision":"accept|reject","summary":string,"reasons":string[]}.';
+      "and usable) or REJECT it (the job failed, is incomplete, or the result is problematic).";
     const prompt =
       `Original job request:\n${JSON.stringify(job)}\n\n` +
       `Callback payload:\n${JSON.stringify(payload)}`;
@@ -258,10 +257,13 @@ const decide = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 400,
+        max_tokens: 8000,
       },
+      output: { name: DECISION_TOOL, schema: DECISION_SCHEMA },
     });
-    const decision = parseDecision(ctx.sapiom.llm.textOf(res) ?? null, payload);
+    const decision = readDecision(
+      ctx.sapiom.llm.structuredOf(res, DECISION_TOOL),
+    );
     ctx.shared.set("decision", decision);
     ctx.logger.info("callback decided", {
       decision: decision.decision,
@@ -315,46 +317,72 @@ const reject = defineStep({
   },
 });
 
-// ---- parsing ---------------------------------------------------------------
-/** Extract the decision from the model output; fall back to the payload status. */
-function parseDecision(
-  output: string | null,
-  payload: CallbackPayload,
-): Decision {
-  const status = (payload.status ?? "").toLowerCase();
-  const looksFailed = [
-    "error",
-    "failed",
-    "fail",
-    "rejected",
-    "cancelled",
-    "canceled",
-  ].includes(status);
-  const fallback: Decision = {
-    decision: looksFailed ? "reject" : "accept",
-    summary: `Callback status "${payload.status ?? "unknown"}"; model summary unavailable (defaulted to status).`,
-    reasons: looksFailed ? [`status="${payload.status}"`] : [],
-  };
-  if (!output) return fallback;
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return fallback;
-    const raw = JSON.parse(output.slice(start, end + 1)) as Partial<Decision>;
-    const decision =
-      raw.decision === "accept" || raw.decision === "reject"
-        ? raw.decision
-        : fallback.decision;
-    return {
-      decision,
-      summary: typeof raw.summary === "string" ? raw.summary : fallback.summary,
-      reasons: Array.isArray(raw.reasons)
-        ? raw.reasons.filter((r): r is string => typeof r === "string")
-        : [],
-    };
-  } catch {
-    return fallback;
+// ---- structured output -----------------------------------------------------
+/**
+ * The forced tool call `decide` reads its verdict out of. `llm.run`'s `output`
+ * appends this tool to the request and pins `tool_choice` to it, so the
+ * decision arrives as a typed `tool_use` block — there is no prose to slice
+ * and no JSON to hand-parse.
+ */
+const DECISION_TOOL = "emit_decision";
+
+const DECISION_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    decision: {
+      type: "string",
+      enum: ["accept", "reject"],
+      description:
+        "`accept` when the job succeeded and the result looks complete and usable; `reject` when it failed, is incomplete, or is problematic.",
+    },
+    summary: {
+      type: "string",
+      description: "One-paragraph summary of the callback result.",
+    },
+    reasons: {
+      type: "array",
+      items: { type: "string" },
+      description: "What drove the decision, each a short line.",
+    },
+  },
+  required: ["decision", "summary", "reasons"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into a `Decision`.
+ *
+ * Throws when the model returned no such block, or one without a usable
+ * decision or summary. This decision routes the run — it picks the `accept` or
+ * `reject` terminal — so there is no honest way to continue without it. The
+ * previous code guessed from `payload.status` and reported the guess as the
+ * model's own decision; a run that says `succeeded` while reporting a verdict
+ * nobody made is the failure this replaced.
+ */
+export function readDecision(structured: unknown): Decision {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "decide: the model returned no structured decision — refusing to invent accept/reject.",
+    );
   }
+  const raw = structured as Partial<Decision>;
+  if (raw.decision !== "accept" && raw.decision !== "reject") {
+    throw new Error(
+      `decide: the model returned no usable decision (${JSON.stringify(raw.decision)}) — refusing to invent one.`,
+    );
+  }
+  if (typeof raw.summary !== "string" || raw.summary.trim() === "") {
+    throw new Error(
+      "decide: the model returned no decision summary — refusing to invent one.",
+    );
+  }
+  return {
+    decision: raw.decision,
+    summary: raw.summary,
+    reasons: Array.isArray(raw.reasons)
+      ? raw.reasons.filter((r): r is string => typeof r === "string")
+      : [],
+  };
 }
 
 export const agent = defineAgent<WaitForWebhookInput, Shared>({

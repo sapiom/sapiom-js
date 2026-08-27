@@ -182,7 +182,7 @@ type SeriesMetric = Extract<Metric, { kind: "series" }>;
 /**
  * What `detectAnomalies` flags as the single most notable outlier or change.
  * `table` is the seam `followUp` reads to target its drill-down query — only
- * ever a label the snapshot itself returned (see `coerceAnomaly`), so a model's
+ * ever a label the snapshot itself returned (see `readAnomaly`), so a model's
  * free text can't become an arbitrary lookup.
  */
 interface Anomaly {
@@ -274,23 +274,44 @@ function renderMetrics(metrics: Metric[]): string {
     .join("\n");
 }
 
-/** Best-effort extraction of a single JSON object from model output. */
-function extractJson(output: string | null): Record<string, unknown> | null {
-  if (!output) return null;
-  const start = output.indexOf("{");
-  const end = output.lastIndexOf("}");
-  if (start < 0 || end < 0 || end < start) return null;
-  try {
-    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
+/**
+ * The forced tool call `detectAnomalies` reads its finding out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so the
+ * anomaly arrives as a typed `tool_use` block — there is no prose to slice and
+ * no JSON to hand-parse.
+ */
+const ANOMALY_TOOL = "emit_anomaly";
+
+const ANOMALY_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    table: {
+      type: ["string", "null"],
+      description:
+        'The exact label from a series point when the anomaly names one (e.g. a table name from "Rows per table"), else null.',
+    },
+    metric: {
+      type: "string",
+      description: "The metric the anomaly was found in.",
+    },
+    description: {
+      type: "string",
+      description: "What stands out, citing the actual figures.",
+    },
+    severity: { type: "string", enum: ["low", "medium", "high"] },
+  },
+  required: ["table", "metric", "description", "severity"],
+  additionalProperties: false,
+};
 
 /**
- * Deterministic anomaly fallback: the largest point across every series metric,
- * compared to the runner-up in its own series. Covers an empty snapshot and an
- * unusable model response, so `detectAnomalies` never has nothing to say.
+ * The anomaly for a snapshot with no model call in it: the largest point across
+ * every series metric, compared to the runner-up in its own series.
+ *
+ * This is arithmetic on the collected rows, and it is reached only when there
+ * were no metrics to send a model in the first place. It is NOT a fallback for a
+ * model that failed to answer — presenting a computed top-value as the analyst
+ * model's finding is the kind of unmarked substitution this template used to do.
  */
 function deterministicAnomaly(metrics: Metric[]): Anomaly {
   const series = metrics.filter(
@@ -347,41 +368,53 @@ function deterministicAnomaly(metrics: Metric[]): Anomaly {
 }
 
 /**
- * Coerce the anomaly-step model output into an `Anomaly`, falling back field by
- * field. `table` is only ever trusted when it names a label the snapshot ACTUALLY
- * returned — the model's free text never becomes a query parameter otherwise.
+ * Read the forced tool call back into an `Anomaly`.
+ *
+ * Throws when the model returned no such block, no description, or no severity.
+ * The anomaly leads the emailed report and drives the follow-up query, so an
+ * unmarked substitution here reads as "the analyst model flagged this" for
+ * something it never saw.
+ *
+ * `table` is still only trusted when it names a label the snapshot ACTUALLY
+ * returned — the model's free text never becomes a query parameter otherwise —
+ * and falls to `null`, which is a value the schema allows the model to pick
+ * itself.
  */
-function coerceAnomaly(
-  output: string | null,
-  metrics: Metric[],
-  fallback: Anomaly,
-): Anomaly {
-  const obj = extractJson(output);
-  if (!obj) return fallback;
-  const description =
-    typeof obj.description === "string" && obj.description.trim()
-      ? obj.description.trim()
-      : fallback.description;
-  const severity: Anomaly["severity"] =
-    obj.severity === "low" ||
-    obj.severity === "medium" ||
-    obj.severity === "high"
-      ? obj.severity
-      : fallback.severity;
-  const metric =
-    typeof obj.metric === "string" && obj.metric.trim()
-      ? obj.metric.trim()
-      : fallback.metric;
+export function readAnomaly(structured: unknown, metrics: Metric[]): Anomaly {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "detectAnomalies: the model returned no structured finding — refusing to report an unexamined snapshot.",
+    );
+  }
+  const obj = structured as Record<string, unknown>;
+  if (typeof obj.description !== "string" || obj.description.trim() === "") {
+    throw new Error(
+      "detectAnomalies: the model returned no anomaly description — refusing to invent one.",
+    );
+  }
+  if (
+    obj.severity !== "low" &&
+    obj.severity !== "medium" &&
+    obj.severity !== "high"
+  ) {
+    throw new Error(
+      `detectAnomalies: the model returned no usable severity (${JSON.stringify(obj.severity)}) — refusing to invent one.`,
+    );
+  }
   const knownLabels = new Set(
     metrics.flatMap((m) =>
       m.kind === "series" ? m.points.map((p) => p.label) : [],
     ),
   );
-  const table =
-    typeof obj.table === "string" && knownLabels.has(obj.table)
-      ? obj.table
-      : fallback.table;
-  return { table, metric, description, severity };
+  return {
+    table:
+      typeof obj.table === "string" && knownLabels.has(obj.table)
+        ? obj.table
+        : null,
+    metric: typeof obj.metric === "string" ? obj.metric.trim() : "",
+    description: obj.description.trim(),
+    severity: obj.severity,
+  };
 }
 
 /** What `resolveConnectionString` connected to, so the report can say so. */
@@ -581,7 +614,7 @@ const snapshot = defineStep({
   inputSchema: entryInput,
   next: ["detectAnomalies"],
   async run(input: EntryInput, ctx: Ctx) {
-    const dryRun = truthy(input.dryRun);
+    const dryRun = truthy(input.dryRun ?? ctx.isLocalTrace);
     const handle = resolveResourceHandle(input, {
       fallback: DEFAULT_DB_HANDLE,
     });
@@ -682,13 +715,15 @@ const detectAnomalies = defineStep({
   next: ["narrate"],
   async run(input: { metrics: Metric[] }, ctx: Ctx) {
     const metrics = Array.isArray(input?.metrics) ? input.metrics : [];
-    const fallback = deterministicAnomaly(metrics);
 
     if (metrics.length === 0) {
-      ctx.logger.info(
-        "no metrics to inspect; using the deterministic fallback",
-      );
-      return goto("narrate", { metrics, anomaly: fallback });
+      // Nothing to send a model — the deterministic path says so in words
+      // rather than paying for a call over an empty snapshot.
+      ctx.logger.info("no metrics to inspect; nothing to send a model");
+      return goto("narrate", {
+        metrics,
+        anomaly: deterministicAnomaly(metrics),
+      });
     }
 
     // The live, x402-served model spots the outlier — same call the dry-run path
@@ -700,21 +735,17 @@ const detectAnomalies = defineStep({
           "You are a data analyst spotting anomalies in a database snapshot. Given " +
           "METRICS (named series of label/value points, and scalar KPIs), find the " +
           "SINGLE most notable outlier or change — the number most worth a human's " +
-          "attention — and cite the actual figures. Respond with ONLY a JSON object: " +
-          '{"table": string|null, "metric": string, "description": string, ' +
-          '"severity": "low"|"medium"|"high"}. Set `table` to the exact label from a ' +
-          'series point when the anomaly names one (e.g. a table name from "Rows per ' +
-          'table"), else null. No preamble, no code fences.',
+          "attention — and cite the actual figures.",
         messages: [
           { role: "user", content: `METRICS:\n${renderMetrics(metrics)}` },
         ],
-        max_tokens: 300,
+        max_tokens: 8000,
       },
+      output: { name: ANOMALY_TOOL, schema: ANOMALY_SCHEMA },
     });
-    const anomaly = coerceAnomaly(
-      ctx.sapiom.llm.textOf(res) ?? null,
+    const anomaly = readAnomaly(
+      ctx.sapiom.llm.structuredOf(res, ANOMALY_TOOL),
       metrics,
-      fallback,
     );
     ctx.logger.info("anomaly detected", {
       table: anomaly.table,

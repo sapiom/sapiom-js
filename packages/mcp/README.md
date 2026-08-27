@@ -2,8 +2,9 @@
 
 The **local developer** MCP server for Sapiom. It runs on your machine over
 stdio under the server name `sapiom-dev`. Today it gives a coding agent the
-tools to scaffold, test, deploy, and inspect Sapiom agents; the namespace leaves
-room for other developer tooling later.
+tools to scaffold, test, deploy, and inspect Sapiom agents, and to put a web app
+behind a live sandbox URL or a durable App Link; the namespace leaves room for
+other developer tooling later.
 
 > **Not the capability surface.** This is _not_ the remote "Sapiom" MCP (the
 > hosted connector with `sapiom_sandbox_*`, scrape, search, … capability tools).
@@ -94,9 +95,21 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_agents_schedule_inspect` | ✓                | Inspect one schedule (with fire history) or list an agent's schedules      |
 | `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a schedule (stops all future fires)                                 |
 | `sapiom_dev_agents_cron_preview`     | ✓                | Validate a cron expression and preview its next occurrences                |
+| `sapiom_dev_sandbox_configure`       | —                | Write a validated `type: "sandbox"` preview resource into `sapiom.json`    |
+| `sapiom_dev_sandbox_check`           | —                | Validate the project's sandbox resources without deploying                 |
+| `sapiom_dev_sandbox_preview`         | ✓                | Deploy the app to a sandbox for a live URL that expires with its `ttl`     |
+| `sapiom_dev_app_publish`             | ✓                | Publish the same app to a durable App Link (`apps.sapiom.ai/{org}/{slug}`) |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
+
+For a web app rather than an agent: `sandbox_configure` → `sandbox_preview`
+while iterating (a throwaway URL that dies with the sandbox) → `app_publish`
+once the link needs to be permanent or shared. `app_publish` reads the same
+`sapiom.json` sandbox resource, uploads the source as a stored text-only bundle
+(≤ 10 MiB), and returns a durable `https://apps.sapiom.ai/{org}/{slug}` URL that
+wakes the app on demand — republishing the same slug updates it in place. See
+the `sapiom-sandbox-preview` skill for the routing rules.
 
 ## How capabilities fit in
 

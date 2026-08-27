@@ -37,7 +37,6 @@ function workflow(
 function provider(
   workflows: readonly WorkflowInfo[],
   options: {
-    scopes?: { workspaceKey: string; cwd: string }[];
     inspectManifestName?: (
       sourceRoot: string,
     ) => Promise<ManifestNameInspection>;
@@ -46,8 +45,6 @@ function provider(
 ): HarnessRegistryInventoryProvider {
   return new HarnessRegistryInventoryProvider({
     listWorkflows: () => workflows,
-    listWorkspaceScopes: () =>
-      options.scopes ?? [{ workspaceKey: SCOPE.workspaceKey, cwd: SCOPE.root }],
     ...(options.inspectManifestName
       ? { inspectManifestName: options.inspectManifestName }
       : {}),
@@ -276,12 +273,8 @@ describe("HarnessRegistryInventoryProvider", () => {
     expect(started).toHaveLength(5);
   });
 
-  it("assigns each agent to its deepest known workspace", async () => {
+  it("includes nested agents in every containing selected project", async () => {
     const nestedRoot = `${WORKSPACE}/experiments`;
-    const scopes = [
-      { workspaceKey: SCOPE.workspaceKey, cwd: SCOPE.root },
-      { workspaceKey: "workspace-experiments", cwd: nestedRoot },
-    ];
     const workflows = [
       workflow("Root agent", "", "root-agent"),
       workflow("Parent agent", "research", "research"),
@@ -292,13 +285,14 @@ describe("HarnessRegistryInventoryProvider", () => {
       },
     ];
 
-    const parent = await provider(workflows, { scopes }).listAgents(SCOPE);
-    const nested = await provider(workflows, { scopes }).listAgents({
+    const parent = await provider(workflows).listAgents(SCOPE);
+    const nested = await provider(workflows).listAgents({
       workspaceKey: "workspace-experiments",
       root: nestedRoot,
     });
 
     expect(parent.agents.map((agent) => agent.agentKey)).toEqual([
+      "evaluator",
       "research",
       "root-agent",
     ]);
@@ -310,14 +304,6 @@ describe("HarnessRegistryInventoryProvider", () => {
       workspaceKey: "workspace-windows",
       root: "C:\\Users\\Demo\\project",
     };
-    const scopes = [
-      { workspaceKey: windowsScope.workspaceKey, cwd: windowsScope.root },
-      {
-        workspaceKey: "workspace-nested",
-        cwd: "C:/Users/Demo/project/experiments",
-      },
-      { workspaceKey: "workspace-other", cwd: "D:\\Other\\project" },
-    ];
     const workflows: WorkflowInfo[] = [
       {
         ...workflow("Windows parent", "unused", "windows-parent"),
@@ -338,12 +324,12 @@ describe("HarnessRegistryInventoryProvider", () => {
     ];
     const inventory = new HarnessRegistryInventoryProvider({
       listWorkflows: () => workflows,
-      listWorkspaceScopes: () => scopes,
     });
 
     const result = await inventory.listAgents(windowsScope);
 
     expect(result.agents.map((agent) => agent.agentKey)).toEqual([
+      "windows-nested",
       "windows-parent",
     ]);
   });
@@ -403,17 +389,14 @@ describe("HarnessRegistryInventoryProvider", () => {
     ]);
   });
 
-  it("falls back to the selected scope if the read-only scope catalog is unavailable", async () => {
+  it("needs only the selected scope to build a cacheable inventory", async () => {
     const inventory = new HarnessRegistryInventoryProvider({
       listWorkflows: () => [workflow("Research", "research", "research")],
-      listWorkspaceScopes: async () => {
-        throw new Error("settings unavailable");
-      },
     });
 
     await expect(inventory.listAgents(SCOPE)).resolves.toMatchObject({
       agents: [{ agentKey: "research" }],
-      cacheable: false,
+      cacheable: true,
       warnings: [],
     });
   });
@@ -423,7 +406,6 @@ describe("HarnessRegistryInventoryProvider", () => {
       listWorkflows: async () => {
         throw new Error("registry unavailable");
       },
-      listWorkspaceScopes: () => [],
     });
 
     await expect(inventory.listAgents(SCOPE)).rejects.toThrow(

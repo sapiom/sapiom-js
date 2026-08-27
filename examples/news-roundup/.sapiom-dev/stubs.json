@@ -35,11 +35,34 @@
         "role": "assistant",
         "content": [
           {
-            "type": "text",
-            "text": "[{\"title\":\"Polsia raises Series A\",\"url\":\"https://news.example/polsia-a\",\"summary\":\"Polsia raised new funding. This gives the company money to grow.\",\"imagePrompt\":\"A friendly illustration of a growing plant in a pot of coins\"},{\"title\":\"Polsia launches product\",\"url\":\"https://news.example/polsia-b\",\"summary\":\"Polsia released a new product. Customers can use it today.\",\"imagePrompt\":\"A gift box opening with light rays\"},{\"title\":\"Polsia hires CTO\",\"url\":\"https://news.example/polsia-c\",\"summary\":\"Polsia hired a new technology chief. They will lead the engineering team.\",\"imagePrompt\":\"A person joining a team around a table, flat illustration\"}]"
+            "type": "tool_use",
+            "id": "stub-tool-use",
+            "name": "emit_selection",
+            "input": {
+              "articles": [
+                {
+                  "title": "Polsia raises Series A",
+                  "url": "https://news.example/polsia-a",
+                  "summary": "Polsia raised new funding. This gives the company money to grow.",
+                  "imagePrompt": "A friendly illustration of a growing plant in a pot of coins"
+                },
+                {
+                  "title": "Polsia launches product",
+                  "url": "https://news.example/polsia-b",
+                  "summary": "Polsia released a new product. Customers can use it today.",
+                  "imagePrompt": "A gift box opening with light rays"
+                },
+                {
+                  "title": "Polsia hires CTO",
+                  "url": "https://news.example/polsia-c",
+                  "summary": "Polsia hired a new technology chief. They will lead the engineering team.",
+                  "imagePrompt": "A person joining a team around a table, flat illustration"
+                }
+              ]
+            }
           }
         ],
-        "stop_reason": "end_turn"
+        "stop_reason": "tool_use"
       }
     },
     "illustrate": {
@@ -54,7 +77,9 @@
         "fileId": "img-stub",
         "uploadUrl": "http://127.0.0.1:4599/put",
         "expiresAt": "2099-01-01T00:00:00Z",
-        "requiredHeaders": { "content-type": "image/png" }
+        "requiredHeaders": {
+          "content-type": "image/png"
+        }
       }
     },
     "publish": {
@@ -62,7 +87,9 @@
         "fileId": "page-stub",
         "uploadUrl": "http://127.0.0.1:4599/put",
         "expiresAt": "2099-01-01T00:00:00Z",
-        "requiredHeaders": { "content-type": "text/html" }
+        "requiredHeaders": {
+          "content-type": "text/html"
+        }
       },
       "fileStorage.list": {
         "files": [

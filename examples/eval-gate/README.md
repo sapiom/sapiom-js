@@ -66,7 +66,7 @@ Input contract: `{ brief, rubric, threshold=0.8, maxIterations=2, model?, judgeM
 
 `run_local` resolves `ctx.sapiom.llm.run` from a stub, per step. The
 _default_ stub returns a non-numeric placeholder; `draft` throws on an empty
-reply and `judge`'s `parseScore` throws on a reply with no number (both by
+reply and `judge`'s `readScore` throws on a reply with no grade (both by
 design), so supply stub replies for **both** calls to trace the graph:
 
 ```jsonc
@@ -104,18 +104,20 @@ under 200 words."`
   stricter about what reaches `publish` unchanged; lower it to accept more on
   the first attempt.
 
-The draft prompt lives in `draft.ts` (`buildDraftPrompt`); the judge prompt
-and score parser live in `judge.ts` (`buildJudgePrompt` + `parseScore`) — the
-only genuinely new code. `parseScore` prefers a JSON `{score, rationale}`,
-falls back to a bare number, clamps to `[0,1]`, and tolerates a model that
-answered on a 0–100 scale.
+The draft prompt lives in `draft.ts` (`buildDraftPrompt`); the judge prompt,
+its forced-tool schema, and its reader live in `judge.ts` (`buildJudgePrompt` +
+`JUDGE_SCHEMA` + `readScore`) — the only genuinely new code. The judge's reply
+shape is pinned by the schema, not asked for in the prompt: `judge` passes
+`output: { name: JUDGE_TOOL, schema: JUDGE_SCHEMA }` and reads the grade with
+`ctx.sapiom.llm.structuredOf`. `readScore` clamps to `[0,1]` and reads a 0–100
+answer as a fraction; it throws when the judge gave no number at all.
 
 ## Files
 
 - `index.ts` — the agent (edit this).
 - `draft.ts` — `buildDraftPrompt`, the writer's prompt (including the revision
   path).
-- `judge.ts` — `buildJudgePrompt` + `parseScore`, the judge's prompt and score
-  parser.
+- `judge.ts` — `buildJudgePrompt` + `JUDGE_SCHEMA` + `readScore`, the judge's
+  prompt, its structured-output schema, and its reader.
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
 - `AGENTS.md` — the authoring loop and the loop-bound contract.

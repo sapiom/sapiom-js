@@ -254,53 +254,85 @@ function dedupeAndRank(sources: ScrapedSource[]): ScrapedSource[] {
 }
 
 /**
- * Parse the LLM's minified-JSON issue defensively. A model may wrap the JSON in
- * prose or fences, so we slice to the outermost object before parsing and fall
- * back to a plain issue built from the sources when anything is off — the
- * newsletter still goes out rather than failing on a malformed reply. Mirrors
- * `scene-to-video`'s `parsePlan`.
+ * The issue this template writes itself when `research` found nothing at all.
+ *
+ * This is NOT a fallback for a model that failed to answer — no model is called
+ * on this path. It is the honest issue for an empty week, and it says so in the
+ * body rather than dressing the absence up as content.
  */
-function parseIssue(
-  output: string | null,
+export function buildNoSourcesIssue(
   niche: string,
   newsletterName: string,
-  sources: Source[],
 ): Issue {
-  const fallbackSubject = `${newsletterName}: ${niche || "this week"}`;
-  const fallbackBody =
-    `# ${fallbackSubject}\n\n` +
-    (sources.length > 0
-      ? `This week in ${niche}:\n\n` +
-        sources.map((s) => `- [${s.title}](${s.url})`).join("\n")
-      : `_No sources were found for this topic this week._`);
-  const fallback: Issue = {
-    subject: fallbackSubject,
-    body: fallbackBody,
+  const subject = `${newsletterName}: ${niche || "this week"}`;
+  return {
+    subject,
+    body:
+      `# ${subject}\n\n` + `_No sources were found for this topic this week._`,
     imagePrompt:
       `Editorial header illustration for a newsletter about ${niche || newsletterName}. ` +
       `Clean, modern, magazine cover style. No text.`,
   };
-  if (!output) return fallback;
-  try {
-    const json = output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1);
-    const raw = JSON.parse(json) as Partial<Issue>;
-    return {
-      subject:
-        typeof raw.subject === "string" && raw.subject.trim()
-          ? raw.subject.trim()
-          : fallback.subject,
-      body:
-        typeof raw.body === "string" && raw.body.trim()
-          ? raw.body
-          : fallback.body,
-      imagePrompt:
-        typeof raw.imagePrompt === "string" && raw.imagePrompt.trim()
-          ? raw.imagePrompt
-          : fallback.imagePrompt,
-    };
-  } catch {
-    return fallback;
+}
+
+/**
+ * The forced tool call `write` reads the issue out of, and the one `selfEdit`
+ * reads its grade out of. `llm.run`'s `output` appends the tool to the request
+ * and pins `tool_choice` to it, so each reply arrives as a typed `tool_use`
+ * block — there is no prose to slice and no JSON to hand-parse.
+ */
+const ISSUE_TOOL = "emit_issue";
+
+const ISSUE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    subject: {
+      type: "string",
+      description:
+        "The issue's subject line — a real headline about the story, never the niche name restated.",
+    },
+    body: {
+      type: "string",
+      description:
+        "The issue in markdown: a '# ' headline, a 2-3 sentence intro, 3-5 short sections each linking a story as its [n] reference, then a '## Sources' list mapping each [n] to its title and url.",
+    },
+    imagePrompt: {
+      type: "string",
+      description: "A vivid header-image prompt. No text in the image.",
+    },
+  },
+  required: ["subject", "body", "imagePrompt"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into an `Issue`.
+ *
+ * Throws on a missing block or an empty field. The subject and body ARE the
+ * deliverable — the fallback this replaced substituted `"<name>: <niche>"` over
+ * a bare link list and sent it, on a run that reports `succeeded`, which puts a
+ * newsletter no model wrote in front of every subscriber.
+ */
+export function readIssue(structured: unknown): Issue {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "write: the model returned no structured issue — refusing to send invented copy.",
+    );
   }
+  const raw = structured as Partial<Issue>;
+  const requireText = (value: unknown, field: string): string => {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(
+        `write: the model returned no ${field} — refusing to invent one.`,
+      );
+    }
+    return value.trim();
+  };
+  return {
+    subject: requireText(raw.subject, "subject line"),
+    body: requireText(raw.body, "issue body"),
+    imagePrompt: requireText(raw.imagePrompt, "header-image prompt"),
+  };
 }
 
 /**
@@ -330,8 +362,7 @@ function buildJudgePrompt(
   return [
     "You are an impartial newsletter editor. Score the ISSUE below from 0.0 to",
     "1.0 against the QUALITY BAR — 1.0 fully clears it, 0.0 does not clear it",
-    'at all. Respond with ONLY a JSON object: {"score": <0..1>, "critique": ' +
-      '"<one or two sentences>"}.',
+    "at all, and say in one or two sentences why.",
     "",
     "QUALITY BAR:",
     QUALITY_BAR,
@@ -353,34 +384,60 @@ interface JudgeResult {
   critique: string;
 }
 
+/** The forced tool call `selfEdit` reads the judge's grade out of. */
+const JUDGE_TOOL = "emit_grade";
+
+const JUDGE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    score: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description:
+        "How fully the issue clears the quality bar: 1.0 fully clears it, 0.0 does not clear it at all.",
+    },
+    critique: {
+      type: "string",
+      description: "One or two sentences on why it scored that way.",
+    },
+  },
+  required: ["score", "critique"],
+  additionalProperties: false,
+};
+
 /**
- * Parse a [0,1] score (and a best-effort critique) out of the judge's text
- * reply. A malformed reply scores 0 rather than throwing — `selfEdit` is
- * bounded by `MAX_SELF_EDIT_ITERATIONS`, so failing closed still reaches
- * `illustrate` within that cap instead of retrying the step indefinitely.
+ * Read the forced tool call back into a `JudgeResult`.
+ *
+ * Throws when the judge returned no usable score. A substituted `0` used to
+ * read as "the judge rejected this draft" and drove a real revision loop — a
+ * grade nobody gave, spending a second model call to answer a critique that
+ * said only "the judge model returned no reply". A score outside [0,1] is
+ * clamped: that is reading a number the judge did give, not inventing one.
  */
-function parseJudgeReply(output: string | null): JudgeResult {
-  const fallback: JudgeResult = {
-    score: 0,
-    critique: "The judge model returned no reply to grade.",
-  };
-  if (!output) return fallback;
-  try {
-    const json = output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1);
-    const raw = JSON.parse(json) as { score?: unknown; critique?: unknown };
-    const n = Number(raw.score);
-    if (!Number.isFinite(n)) return fallback;
-    const score = Math.max(0, Math.min(1, n > 1 && n <= 100 ? n / 100 : n));
-    return {
-      score,
-      critique:
-        typeof raw.critique === "string" && raw.critique.trim()
-          ? raw.critique.trim()
-          : "",
-    };
-  } catch {
-    return fallback;
+export function readJudgeReply(structured: unknown): JudgeResult {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "selfEdit: the judge returned no structured grade — refusing to invent a score.",
+    );
   }
+  const raw = structured as { score?: unknown; critique?: unknown };
+  // `typeof`, not `Number(...)`: `Number(null)`, `Number("")`, `Number([])` and
+  // `Number(false)` are all a finite `0`, so coercing would turn "the judge gave
+  // no score" back into the substituted 0.0 this refuses.
+  if (typeof raw.score !== "number" || !Number.isFinite(raw.score)) {
+    throw new Error(
+      `selfEdit: the judge returned no usable score (${JSON.stringify(raw.score)}) — refusing to invent one.`,
+    );
+  }
+  const n = raw.score;
+  return {
+    score: Math.max(0, Math.min(1, n > 1 && n <= 100 ? n / 100 : n)),
+    critique:
+      typeof raw.critique === "string" && raw.critique.trim()
+        ? raw.critique.trim()
+        : "",
+  };
 }
 
 /** Escape the small set of characters that would break out of HTML text. */
@@ -555,7 +612,7 @@ const write = defineStep({
 
     let issue: Issue;
     if (sources.length === 0) {
-      issue = parseIssue(null, niche, newsletterName, slimSources);
+      issue = buildNoSourcesIssue(niche, newsletterName);
     } else {
       const research = sources
         .map(
@@ -588,23 +645,18 @@ const write = defineStep({
             "intro, then 3-5 short sections that each summarize a story and link it " +
             "as a [n] reference, then a '## Sources' list mapping each [n] to its " +
             "title and url. Also write a vivid header-image prompt (no text in " +
-            "the image). Reply with ONLY minified JSON: " +
-            '{"subject":string,"body":string,"imagePrompt":string}.',
+            "the image).",
           messages: [
             {
               role: "user",
               content: `NICHE: ${niche}\n\nSOURCES:\n${research}${revision}`,
             },
           ],
-          max_tokens: 1200,
+          max_tokens: 8000,
         },
+        output: { name: ISSUE_TOOL, schema: ISSUE_SCHEMA },
       });
-      issue = parseIssue(
-        ctx.sapiom.llm.textOf(res) ?? null,
-        niche,
-        newsletterName,
-        slimSources,
-      );
+      issue = readIssue(ctx.sapiom.llm.structuredOf(res, ISSUE_TOOL));
     }
 
     ctx.shared.set("subject", issue.subject);
@@ -646,11 +698,12 @@ const selfEdit = defineStep({
             content: buildJudgePrompt(niche, slimSources, input.issue),
           },
         ],
-        max_tokens: 300,
+        max_tokens: 8000,
       },
+      output: { name: JUDGE_TOOL, schema: JUDGE_SCHEMA },
     });
-    const { score, critique } = parseJudgeReply(
-      ctx.sapiom.llm.textOf(res) ?? null,
+    const { score, critique } = readJudgeReply(
+      ctx.sapiom.llm.structuredOf(res, JUDGE_TOOL),
     );
     const passed = score >= SELF_EDIT_THRESHOLD;
     const exhausted = iteration >= MAX_SELF_EDIT_ITERATIONS;

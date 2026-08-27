@@ -21,7 +21,9 @@ system prompt, in whatever project directory you choose.
   Agent Studio only configures it. Multiple sessions, resumable chat history.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
-  open-in-Sapiom actions.
+  open-in-Sapiom actions. How that discovery is rooted and bounded, how a
+  newly-created agent gets registered, and how a stale entry leaves:
+  [docs/agent-discovery.md](docs/agent-discovery.md).
 - **Canvas** — a live pane that renders static HTML your agent writes to
   `.sapiom/canvas/` (visualize your agent, your docs, anything), plus a
   preview mode for dev servers the agent starts.
@@ -48,6 +50,12 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+HTTP contracts that need more than a type to use are written up under `docs/`:
+
+- [`docs/agent-canvas-graph.md`](docs/agent-canvas-graph.md) — `GET
+  /api/workflows/:path/graph`, the session-free canvas route keyed by an agent's
+  path.
 
 ## Testing
 

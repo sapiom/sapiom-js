@@ -15,7 +15,7 @@ This project defines exactly one Sapiom agent in `index.ts` — **Cold Outreach 
 - **Keep the edges slim.** The scraped company bodies are bounded (truncated) before the model sees them and are handed only to `personalize` keyed by domain — they never enter `ctx.shared`. Large shared state stalls transitions on the cloud engine.
 - **Gate real side effects behind `dryRun`.** `launch` returns the plan and terminates when `dryRun` is set — no send, no DB, no drip. Keep new external side effects behind the same guard.
 - **Degrade, don't abort.** Enrichment, scraping, verification, and sends are all wrapped per-item: a failure skips that lead/domain/contact and logs a warning rather than throwing the whole run. Verification failures keep the contact flagged `unverified` rather than silently dropping a lead.
-- **The opener parse must tolerate junk.** `personalize` parses a JSON array from the model but falls back to a safe generic opener per contact when parsing fails — so the `run_local` stub's non-JSON placeholder still traces end to end.
+- **The opener is structured output, and never invented.** `personalize` sets `output: { name: OPENERS_TOOL, schema: OPENERS_SCHEMA }` on the `llm.run` spec and reads the openers back with `ctx.sapiom.llm.structuredOf` — there is no JSON to parse. A reply carrying no usable openers throws; a prospect the model wrote no opener for is marked undeliverable rather than emailed one. The generic opener this replaced ("I've been following what your team is building") is exactly the flattery the prompt forbids, and a per-contact fallback here does not stay in the run output — it goes out to the prospect's address, on a run that reports `succeeded` (SAP-2892). Don't reintroduce one: these lines get emailed.
 
 ## Validating
 

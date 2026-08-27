@@ -240,6 +240,11 @@ interface Shared extends Record<string, unknown> {
   previewStatus: string | null;
   previewLogs: string | null;
   review: Review | null;
+  /**
+   * Why the self-review is absent, when it is. Never a stand-in verdict — the
+   * point is that a reader can tell an unanswered review from an approval.
+   */
+  reviewUnavailable: string | null;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -297,6 +302,7 @@ const plan = defineStep({
     ctx.shared.set("previewStatus", null);
     ctx.shared.set("previewLogs", null);
     ctx.shared.set("review", null);
+    ctx.shared.set("reviewUnavailable", null);
 
     // Read the target handle through the canonical injection seam so a
     // deploy-time reuse picker can repoint this at a repo you already own —
@@ -701,24 +707,40 @@ const review = defineStep({
       "You are reviewing your own pull request before a human sees it. The " +
       "checks already passed. Judge whether the change actually does the " +
       "stated task, is scoped tightly to it, and reads like something you'd " +
-      'approve. Reply with ONLY minified JSON: {"verdict":"approve|comment|' +
-      'request_changes","summary":string,"notes":string[]}.';
+      "approve.";
     const prompt =
       `Task:\n${task}\n\n` +
       `Coding agent's own summary:\n${codingSummary}\n\n` +
       `Diff (stat):\n${diffStat}\n\n` +
       `Check output (tail):\n${checkTail}`;
 
-    const res = await ctx.sapiom.llm.run({
-      request: {
-        system,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 500,
-      },
-    });
-    const rev = parseReview(ctx.sapiom.llm.textOf(res) ?? null);
-    ctx.shared.set("review", rev);
-    ctx.logger.info("self-review complete", { verdict: rev.verdict });
+    // The branch is already pushed, so — exactly as with the preview above —
+    // this advisory step never fails the run. The `llm.run` call is inside the
+    // try for that reason: a transport error is no more worth failing a pushed
+    // branch over than an unreadable reply. What the step must never do is
+    // invent a verdict — an unavailable self-review is reported as
+    // `review: null` plus a reason, so a reader can tell "the model didn't
+    // answer" from "the model approved it".
+    try {
+      const res = await ctx.sapiom.llm.run({
+        request: {
+          system,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 8000,
+        },
+        output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
+      });
+      const rev = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
+      ctx.shared.set("review", rev);
+      ctx.shared.set("reviewUnavailable", null);
+      ctx.logger.info("self-review complete", { verdict: rev.verdict });
+    } catch (err) {
+      ctx.shared.set("review", null);
+      ctx.shared.set("reviewUnavailable", String(err));
+      ctx.logger.warn("self-review unavailable — reporting no verdict", {
+        err: String(err),
+      });
+    }
     return goto("summary", {});
   },
 });
@@ -744,7 +766,8 @@ const summary = defineStep({
       previewStatus: ctx.shared.get("previewStatus") ?? null,
       task: ctx.shared.get("task") ?? DEFAULT_TASK,
       codingSummary: ctx.shared.get("codingSummary") ?? null,
-      review: ctx.shared.get("review"),
+      review: ctx.shared.get("review") ?? null,
+      reviewUnavailable: ctx.shared.get("reviewUnavailable") ?? null,
       note:
         (mode === "demo"
           ? "Ran against Sapiom's persistent demo repo for this template " +
@@ -886,35 +909,75 @@ function tail(stdout: string, stderr: string, max = 2000): string {
   return combined.length > max ? combined.slice(-max) : combined;
 }
 
-/** Extract the self-review from model output; fall back to a safe default. */
-function parseReview(output: string | null): Review {
-  const fallback: Review = {
-    verdict: "comment",
-    summary: "Self-review unavailable; see the coding agent's own summary.",
-    notes: [],
-  };
-  if (!output) return fallback;
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return fallback;
-    const raw = JSON.parse(output.slice(start, end + 1)) as Partial<Review>;
-    const verdict =
-      raw.verdict === "approve" ||
-      raw.verdict === "comment" ||
-      raw.verdict === "request_changes"
-        ? raw.verdict
-        : fallback.verdict;
-    return {
-      verdict,
-      summary: typeof raw.summary === "string" ? raw.summary : fallback.summary,
-      notes: Array.isArray(raw.notes)
-        ? raw.notes.filter((n): n is string => typeof n === "string")
-        : [],
-    };
-  } catch {
-    return fallback;
+/**
+ * The forced tool call `review` reads its self-review out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so
+ * the review arrives as a typed `tool_use` block — there is no prose to slice
+ * and no JSON to hand-parse.
+ */
+const REVIEW_TOOL = "emit_self_review";
+
+const REVIEW_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["approve", "comment", "request_changes"],
+      description:
+        "Your call on the change: `approve` if you'd merge it, `comment` for minor notes, `request_changes` for real defects.",
+    },
+    summary: {
+      type: "string",
+      description: "One-paragraph summary of the self-review.",
+    },
+    notes: {
+      type: "array",
+      items: { type: "string" },
+      description: "What you would flag, each a short line.",
+    },
+  },
+  required: ["verdict", "summary", "notes"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into a `Review`.
+ *
+ * Throws when the model returned no such block, or returned one without a
+ * usable verdict or summary. The self-review is informational and never blocks
+ * the push — but a *fabricated* verdict is worse than no verdict, because the
+ * human reading the run output cannot tell it apart from one the model
+ * actually made. An empty `notes` list is a real answer ("nothing to flag");
+ * an absent verdict is not.
+ */
+export function readReview(structured: unknown): Review {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "review: the model returned no structured self-review — refusing to invent a verdict.",
+    );
   }
+  const raw = structured as Partial<Review>;
+  if (
+    raw.verdict !== "approve" &&
+    raw.verdict !== "comment" &&
+    raw.verdict !== "request_changes"
+  ) {
+    throw new Error(
+      `review: the model returned no usable verdict (${JSON.stringify(raw.verdict)}) — refusing to invent one.`,
+    );
+  }
+  if (typeof raw.summary !== "string" || raw.summary.trim() === "") {
+    throw new Error(
+      "review: the model returned no self-review summary — refusing to invent one.",
+    );
+  }
+  return {
+    verdict: raw.verdict,
+    summary: raw.summary,
+    notes: Array.isArray(raw.notes)
+      ? raw.notes.filter((n): n is string => typeof n === "string")
+      : [],
+  };
 }
 
 export const agent = defineAgent<AutonomousPrInput, Shared>({

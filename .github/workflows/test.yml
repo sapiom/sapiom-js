@@ -87,6 +87,15 @@ jobs:
       - name: Test repository content checks
         run: pnpm examples:check:test
 
+      # Each template's own suite. `examples/` is outside the pnpm workspace, so
+      # these can't ride the matrix job's `pnpm test` — the runner installs each
+      # template from the published ranges its package.json pins, exactly as a
+      # customer's project would, and then runs its tests. This is where the
+      # per-template "an unparseable model reply must not produce a
+      # plausible-looking deliverable" coverage lives (SAP-2892).
+      - name: Test templates
+        run: pnpm examples:test
+
       - name: Test pull request classification
         run: pnpm pr-labeler:check
 

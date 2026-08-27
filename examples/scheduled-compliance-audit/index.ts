@@ -188,21 +188,18 @@ async function runPolicyCheck(
     "requirement, cite the evidence you relied on, and suggest a remediation for " +
     "each failure. A requirement you cannot evaluate from the evidence is " +
     '"unknown", not "pass". Set the overall status to "compliant" only if every ' +
-    'check passes, "non_compliant" if any check fails, else "needs_review". ' +
-    "Reply with ONLY minified JSON: " +
-    '{"status":"compliant|non_compliant|needs_review","summary":string,' +
-    '"checks":[{"id":string,"requirement":string,"status":"pass|fail|unknown",' +
-    '"evidence":string,"remediation":string}]}.';
+    'check passes, "non_compliant" if any check fails, else "needs_review".';
   const res = await ctx.sapiom.llm.run({
     request: {
       system,
       messages: [
         { role: "user", content: `POLICY:\n${policy}\n\nSTATE:\n${evidence}` },
       ],
-      max_tokens: 900,
+      max_tokens: 8000,
     },
+    output: { name: AUDIT_TOOL, schema: AUDIT_SCHEMA },
   });
-  return coerceReport(ctx.sapiom.llm.textOf(res) ?? null);
+  return readReport(ctx.sapiom.llm.structuredOf(res, AUDIT_TOOL));
 }
 
 /**
@@ -641,32 +638,117 @@ function buildAttestation(a: {
   ].join("\n");
 }
 
-// ─────────────────────────────────────────────────────── output parsing ──
-/** Coerce the audit-step model output into a `ComplianceReport`, with fallbacks. */
-function coerceReport(output: string | null): ComplianceReport {
-  const fallback: ComplianceReport = {
-    status: "needs_review",
-    summary: "The auditor returned no usable report; a human should review.",
-    checks: [],
-  };
-  const obj = extractJson(output);
-  if (!obj) return fallback;
+// ────────────────────────────────────────────────────── structured output ──
+/**
+ * The forced tool call `audit` reads its report out of. `llm.run`'s `output`
+ * appends this tool to the request and pins `tool_choice` to it, so the report
+ * arrives as a typed `tool_use` block — there is no prose to slice and no JSON
+ * to hand-parse.
+ */
+const AUDIT_TOOL = "emit_compliance_report";
 
+const AUDIT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    status: {
+      type: "string",
+      enum: ["compliant", "non_compliant", "needs_review"],
+      description:
+        '"compliant" only if every check passes, "non_compliant" if any check fails, else "needs_review".',
+    },
+    summary: {
+      type: "string",
+      description: "One-paragraph summary of the audit.",
+    },
+    checks: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description:
+              "The resource id this check concerns, or a policy-level id.",
+          },
+          requirement: {
+            type: "string",
+            description: "The requirement being checked, in plain words.",
+          },
+          status: {
+            type: "string",
+            enum: ["pass", "fail", "unknown"],
+            description:
+              'A requirement you cannot evaluate from the evidence is "unknown", never "pass".',
+          },
+          evidence: {
+            type: "string",
+            description: "What in the collected state supports the verdict.",
+          },
+          remediation: {
+            type: "string",
+            description: "Suggested fix — required when the verdict is `fail`.",
+          },
+        },
+        required: ["id", "requirement", "status", "evidence"],
+        additionalProperties: false,
+      },
+      description: "One check per distinct requirement.",
+    },
+  },
+  required: ["status", "summary", "checks"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into a `ComplianceReport`.
+ *
+ * Throws when the model returned no such block, no overall status, no summary,
+ * or no checks. `needs_review` looks like a safe default and is not one: it is a
+ * compliance verdict, it goes to a human for signature, and it gets archived as
+ * an attestation. "The auditor returned no usable report" used to be filed
+ * under the same status as a genuine borderline finding, with an empty check
+ * list, on a run that reported `succeeded`.
+ */
+export function readReport(structured: unknown): ComplianceReport {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "audit: the model returned no structured report — refusing to attest to an invented verdict.",
+    );
+  }
+  const obj = structured as Record<string, unknown>;
   const status = coerceStatus(obj.status);
-  const summary =
-    typeof obj.summary === "string" && obj.summary.trim()
-      ? obj.summary.trim()
-      : fallback.summary;
-  const checks = Array.isArray(obj.checks)
-    ? obj.checks.map(coerceCheck).filter((c): c is CheckFinding => c !== null)
-    : [];
-  return { status, summary, checks };
+  if (!status) {
+    throw new Error(
+      `audit: the model returned no usable overall status (${JSON.stringify(obj.status)}) — refusing to invent one.`,
+    );
+  }
+  if (typeof obj.summary !== "string" || obj.summary.trim() === "") {
+    throw new Error(
+      "audit: the model returned no audit summary — refusing to invent one.",
+    );
+  }
+  const checks = (Array.isArray(obj.checks) ? obj.checks : [])
+    .map(coerceCheck)
+    .filter((c): c is CheckFinding => c !== null);
+  if (checks.length === 0) {
+    throw new Error(
+      "audit: the model returned no checks — refusing to report the policy as audited.",
+    );
+  }
+  return { status, summary: obj.summary.trim(), checks };
 }
 
-function coerceStatus(value: unknown): AuditStatus {
-  return value === "compliant" || value === "non_compliant"
+/**
+ * The overall verdict, or `null` when the model named none. Deliberately NOT
+ * defaulted to `needs_review`: that is itself a verdict a human signs.
+ */
+function coerceStatus(value: unknown): AuditStatus | null {
+  return value === "compliant" ||
+    value === "non_compliant" ||
+    value === "needs_review"
     ? value
-    : "needs_review";
+    : null;
 }
 
 function coerceCheck(entry: unknown): CheckFinding | null {
@@ -688,19 +770,6 @@ function coerceCheck(entry: unknown): CheckFinding | null {
     check.remediation = e.remediation;
   }
   return check;
-}
-
-/** Best-effort extraction of a single JSON object from model output. */
-function extractJson(output: string | null): Record<string, unknown> | null {
-  if (!output) return null;
-  const start = output.indexOf("{");
-  const end = output.lastIndexOf("}");
-  if (start < 0 || end < 0 || end < start) return null;
-  try {
-    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 export const agent = defineAgent<EntryInput, Shared>({

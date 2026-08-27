@@ -7,7 +7,9 @@
  * - `sapiom_dev_sandbox_check` validates those resources without deploying.
  * - `sapiom_dev_sandbox_preview` reads the project's `sapiom.json` (`type: "sandbox"`),
  *   provisions the sandbox if needed, uploads the local code, and calls the
- *   server-side deploy op for a live URL.
+ *   server-side deploy op for a live URL — which lives and dies with the
+ *   sandbox's `ttl`. For a durable address, `sapiom_dev_app_publish`
+ *   (app-publish.ts) publishes the same resource as an App Link.
  *
  * Results are returned as JSON text so the calling agent can parse them.
  */
@@ -97,7 +99,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     "Deploy a web-app preview from the current project to a Sapiom sandbox and get a live URL. " +
       "Reads sapiom.json (a `type: \"sandbox\"` resource), provisions the sandbox if needed, uploads " +
       "the local code, builds, starts, and exposes a public URL. Returns { name, url, status, logs }. " +
-      "A `failed` status carries build/start logs (not an error) so you can fix and retry.",
+      "A `failed` status carries build/start logs (not an error) so you can fix and retry. " +
+      "The URL is TEMPORARY — it expires with the sandbox's `ttl`. For a link that is permanent, " +
+      "shareable, or meant for a teammate, use sapiom_dev_app_publish instead.",
     {
       dir: z.string().optional().describe("Project directory (defaults to the current working directory)."),
       name: z.string().optional().describe("Which sandbox to deploy, when the project defines more than one."),
@@ -107,7 +111,14 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       if (!creds) return NOT_AUTHED;
       try {
         const result = await previewSandbox({ dir: dir ?? process.cwd(), name, apiKey: creds.apiKey });
-        return ok(result);
+        // Say it on the result, not only in the description: the agent reads this
+        // at the moment it is about to hand the URL to the user (SAP-2922).
+        return ok({
+          ...result,
+          note:
+            "This URL expires with the sandbox (its `ttl`) — sapiom_dev_app_publish gives the same app a " +
+            "durable address at https://apps.sapiom.ai/{org}/{slug}.",
+        });
       } catch (err) {
         return fail(err);
       }

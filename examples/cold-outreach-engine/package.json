@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: enrich a lead list, scrape each company site, write personalized first lines (llm.run), verify deliverability, then drip touches with durable waits between them.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

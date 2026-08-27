@@ -16,7 +16,12 @@ import {
   roundupDatesFromFileNames,
   SERVER_JS,
 } from "./lib/html.js";
-import { buildSelectionPrompt, parseSelection } from "./lib/select.js";
+import {
+  SELECTION_SCHEMA,
+  SELECTION_TOOL,
+  buildSelectionPrompt,
+  readSelection,
+} from "./lib/select.js";
 import {
   downloadFileBytes,
   listFilesByPrefix,
@@ -99,12 +104,13 @@ const select = defineStep({
               ),
             },
           ],
-          max_tokens: 2000,
+          max_tokens: 8000,
         },
+        output: { name: SELECTION_TOOL, schema: SELECTION_SCHEMA },
       });
-      const output = ctx.sapiom.llm.textOf(res);
-      if (!output) throw new Error("LLM call returned no text");
-      const selected = parseSelection(output);
+      const selected = readSelection(
+        ctx.sapiom.llm.structuredOf(res, SELECTION_TOOL),
+      );
       // An empty selection means the hits were all off-topic — degrade honestly to
       // the no-news terminal rather than publishing an empty roundup page.
       if (selected.length === 0) {

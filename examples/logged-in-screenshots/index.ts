@@ -237,34 +237,76 @@ async function runContentAudit(
     "text (e.g. lorem ipsum), thin or empty sections, inconsistent heading " +
     "structure, or anything a visitor would consider unfinished. Cite the " +
     "page url for every issue. If a page has no real problem, don't invent " +
-    "one for it — an empty list is a valid answer. Reply with ONLY minified " +
-    'JSON: {"issues":[{"url":string,"issue":string,"severity":"low|medium|high"}]}.';
+    "one for it — an empty list is a valid answer.";
   const res = await ctx.sapiom.llm.run({
     request: {
       system,
       messages: [{ role: "user", content: `PAGES:\n${evidence}` }],
-      max_tokens: 900,
+      max_tokens: 8000,
     },
+    output: { name: AUDIT_TOOL, schema: AUDIT_SCHEMA },
   });
-  return coerceFindings(ctx.sapiom.llm.textOf(res) ?? null);
+  return readFindings(ctx.sapiom.llm.structuredOf(res, AUDIT_TOOL));
 }
 
-/** Best-effort extraction of a single JSON object from model output. */
-function extractJson(output: string | null): Record<string, unknown> | null {
-  if (!output) return null;
-  const start = output.indexOf("{");
-  const end = output.lastIndexOf("}");
-  if (start < 0 || end < 0 || end < start) return null;
-  try {
-    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
+/**
+ * The forced tool call `audit` reads its findings out of. `llm.run`'s `output`
+ * appends this tool to the request and pins `tool_choice` to it, so the
+ * findings arrive as a typed `tool_use` block — there is no prose to slice and
+ * no JSON to hand-parse.
+ */
+const AUDIT_TOOL = "emit_content_findings";
+
+const AUDIT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "The page url the issue is on.",
+          },
+          issue: {
+            type: "string",
+            description: "The concrete content or structure problem.",
+          },
+          severity: { type: "string", enum: ["low", "medium", "high"] },
+        },
+        required: ["url", "issue", "severity"],
+        additionalProperties: false,
+      },
+      description:
+        "Every real problem found, one entry each. An empty list is a valid answer.",
+    },
+  },
+  required: ["issues"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into the audit's findings.
+ *
+ * An empty `issues` list is a real answer here — the prompt says so, and a
+ * clean site should produce one. Which is exactly why a missing list has to
+ * throw: `[]` from a failed read is indistinguishable from a clean bill of
+ * health, and this template's whole output is "here is what's wrong with your
+ * site".
+ */
+export function readFindings(structured: unknown): ContentFinding[] {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "audit: the model returned no structured findings — refusing to report the site as clean.",
+    );
   }
-}
-
-function coerceFindings(output: string | null): ContentFinding[] {
-  const obj = extractJson(output);
-  const issues = obj && Array.isArray(obj.issues) ? obj.issues : [];
+  const issues = (structured as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) {
+    throw new Error(
+      "audit: the model returned no issue list — refusing to report the site as clean.",
+    );
+  }
   return issues
     .map(coerceFinding)
     .filter((f): f is ContentFinding => f !== null);

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AgentProjectScanBudget } from "./agent-project-discovery.js";
 import { WorkspaceWatcherManager, snapshotWorkspaceWorkflows, snapshotWorkspaceWorkflowsAsync } from "./workspace-watcher.js";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -281,4 +282,107 @@ describe("snapshotWorkspaceWorkflowsAsync", () => {
     const async_ = await snapshotWorkspaceWorkflowsAsync(dir);
     expect(async_).not.toContain("nested-should-not-appear");
   });
+});
+
+/**
+ * The fingerprint's side of the raised bound. A depth-3 walk could not see a
+ * deep agent appear at all; a node-bounded one can, and must stay STILL when it
+ * has to truncate — a fingerprint that shifts between two passes over an
+ * unchanged tree rescans the workspace forever.
+ */
+describe("snapshotWorkspaceWorkflows bounds", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-workspace-bounds-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("notices a workflow four segments down, which the old depth-3 cap could not", async () => {
+    const before = snapshotWorkspaceWorkflows(dir);
+    await scaffoldWorkflow(path.join(dir, "backend", "src", "agents"), "ads");
+
+    const after = snapshotWorkspaceWorkflows(dir);
+    expect(after).not.toBe(before);
+    expect(after).toContain(path.join("backend", "src", "agents", "ads"));
+    expect(await snapshotWorkspaceWorkflowsAsync(dir)).toBe(after);
+  });
+
+  it("reaches the full depth allowance and stops one level past it", async () => {
+    await scaffoldWorkflow(path.join(dir, "a", "b", "c", "d", "e", "f", "g"), "at-8");
+    await scaffoldWorkflow(
+      path.join(dir, "x", "b", "c", "d", "e", "f", "g", "h"),
+      "at-9",
+    );
+
+    const snapshot = snapshotWorkspaceWorkflows(dir);
+    expect(snapshot).toContain("at-8");
+    expect(snapshot).not.toContain("at-9");
+  });
+
+  it("records a truncated walk as one stable sentinel, identical across passes and between sync and async", async () => {
+    for (const top of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
+      await scaffoldWorkflow(path.join(dir, top, "deep"), "agent");
+    }
+
+    const limits = { maxNodes: 5 };
+    const first = snapshotWorkspaceWorkflows(dir, new AgentProjectScanBudget(limits));
+    const second = snapshotWorkspaceWorkflows(dir, new AgentProjectScanBudget(limits));
+    const asyncSnapshot = await snapshotWorkspaceWorkflowsAsync(
+      dir,
+      new AgentProjectScanBudget(limits),
+    );
+
+    expect(first).toContain("<truncated>@");
+    // Byte-identical, or the watcher fires onChange on every debounced check.
+    expect(second).toBe(first);
+    expect(asyncSnapshot).toBe(first);
+    // Exactly one sentinel, not one per unvisited directory.
+    expect(first.split("<truncated>").length - 1).toBe(1);
+  });
+
+  it("encodes the cut depth, so widening the reach reads as a change rather than as nothing", async () => {
+    for (const top of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
+      await scaffoldWorkflow(path.join(dir, top, "deep"), "agent");
+    }
+
+    // Root only: level 1 never enumerated.
+    const atOne = snapshotWorkspaceWorkflows(dir, new AgentProjectScanBudget({ maxNodes: 1 }));
+    // Root + all 8 children: level 1 complete, the cut moves to level 2.
+    const atTwo = snapshotWorkspaceWorkflows(dir, new AgentProjectScanBudget({ maxNodes: 9 }));
+
+    expect(atOne).toContain("<truncated>@1");
+    expect(atTwo).toContain("<truncated>@2");
+    expect(atOne).not.toBe(atTwo);
+  });
+
+  it("spends no more than its budget allows", async () => {
+    for (let i = 0; i < 40; i++) {
+      await fs.mkdir(path.join(dir, `top-${i}`, "mid", "leaf"), { recursive: true });
+    }
+    const budget = new AgentProjectScanBudget({ maxNodes: 25 });
+    snapshotWorkspaceWorkflows(dir, budget);
+    expect(budget.visited).toBe(25);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates on a symlink cycle rather than walking it to the budget",
+    async () => {
+      await scaffoldWorkflow(path.join(dir, "pkg", "agents"), "one");
+      await fs.symlink(dir, path.join(dir, "pkg", "loop"), "dir");
+
+      const budget = new AgentProjectScanBudget();
+      const started = performance.now();
+      const snapshot = snapshotWorkspaceWorkflows(dir, budget);
+      const elapsed = performance.now() - started;
+
+      expect(snapshot).toContain(path.join("pkg", "agents", "one"));
+      expect(budget.truncated).toBe(false);
+      expect(budget.visited).toBeLessThan(10);
+      expect(elapsed).toBeLessThan(1_000);
+    },
+  );
 });

@@ -1,0 +1,90 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Monitor executive moves, investment events, and functional hiring signals across a useful built-in fintech watchlist. Companies and capability calls fail independently, while every run returns a sourced digest and an honest coverage ledger.",
+  "longDescription": "Run with no input to launch one research child for each of 18 public companies through a four-worker pool. Recall, each signal search, persistence, and each article read have separate step boundaries, so transient retries never replay another company or successful capability. Searches use a concrete date boundary and signal-specific event gate. Evidence persists before page enrichment, while a blocked page keeps its snippet as structured partial coverage. The parent ranks supplied source indexes and always returns deterministic markdown inline; set `deliverTo` to email it.",
+  "useCases": [
+    "Executive-move radar",
+    "Funding watchlist",
+    "Hiring-signal brief"
+  ],
+  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nStart with **Deliver to**: enter an email for delivery, or leave it empty to receive the digest only in the run result. A built-in company watchlist is already configured; companies, signals, recency, article reads, the call ceiling, and preview mode are optional advanced overrides. Runs are live by default. Set `dryRun: true` for a no-spend preview of the retry-aware maximum call envelope. Email delivery reuses the account's first existing sender inbox, or creates a Fintech Executive Opportunity Radar inbox when none exists.\n\nAttach a weekly cron trigger for a standing radar. Precise headcount, LinkedIn scraping, paywall bypassing, CRM write-back, and silent company discovery are deliberately outside v1.",
+  "settings": [
+    {
+      "path": "deliverTo",
+      "label": "Deliver to",
+      "description": "Leave empty to return the digest inline only.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    }
+  ],
+  "defaultInput": {
+    "companies": [
+      "Robinhood",
+      "SoFi",
+      "Klarna",
+      "Block",
+      "Tether",
+      "Intuit",
+      "Affirm",
+      "Cloudflare",
+      "Chime",
+      "Nvidia",
+      "Erebor",
+      "Revolut (US)",
+      "Nubank (US)",
+      "Coinbase",
+      "Stripe",
+      "Kraken",
+      "Binance (US)",
+      "Marqeta"
+    ],
+    "dryRun": false
+  },
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "digest", "assert": "nonEmptyString" },
+      { "path": "children", "assert": "minLength", "value": 18 },
+      {
+        "path": "outcome",
+        "assert": "matches",
+        "value": "^(complete|partial|no_evidence|no_coverage)$"
+      }
+    ],
+    "narrative": "Runs the public default watchlist live and returns a sourced digest with explicit partial coverage when a company, source, persistence write, ranking pass, or delivery step degrades."
+  },
+  "examples": [
+    {
+      "title": "Preview the default opportunity radar without spending",
+      "input": {
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "dispatched": false,
+        "estimate": {
+          "companies": 18,
+          "signalsPerCompany": 3,
+          "maxScrapesPerCompany": 3,
+          "calls": {
+            "childRuns": 18,
+            "searches": 108,
+            "scrapes": 108,
+            "memoryReads": 36,
+            "memoryWrites": 72,
+            "reduceLlmCalls": 1,
+            "emails": 0,
+            "maximumTotal": 343
+          },
+          "pricing": "quoted-by-platform-catalog-at-run-time"
+        }
+      }
+    }
+  ]
+}

@@ -16,11 +16,17 @@ out on the injected `SLACK_BOT_TOKEN` via a raw `fetch`.
   defined by `@sapiom/tools` — read the types / use autocomplete rather than
   guessing. A wrong capability or method name fails typecheck.
 - **The model only chooses; code constrains.** `assess` may return only a play
-  from `ALLOWED_PLAYS`; `parsePlan()` re-validates every play and target and falls
-  back to a deterministic plan on bad/empty JSON. Any human/request text is
-  untrusted data to _classify_ into a play, never instructions to follow. Don't
-  weaken the allow-list or `validTargets` re-check — they are the prompt-injection
-  boundary.
+  from `ALLOWED_PLAYS`, declared as the `output` schema's `enum` so the choice is
+  bounded at the wire; `readPlan()` re-validates every play and target anyway.
+  Any human/request text is untrusted data to _classify_ into a play, never
+  instructions to follow. Don't weaken the allow-list or `validTargets`
+  re-check — they are the prompt-injection boundary.
+- **A plan this template can't read is a failed sweep.** `readPlan()` throws; it
+  never synthesizes a plan from the situation kinds. The plan launches child
+  agents and escalates to people — both metered, both outward-facing — so an
+  invented one spends real money and reports the sweep as coordinated
+  (SAP-2892). The guardrails bound the damage; they do not make the plan the
+  model's.
 - **Keep the six actuate guardrails.** allow-list re-check, drop `no_action`,
   escalate-only (no launch), only-surfaced-targets, per-day cooldown, single-open,
   and the fan-out cap (`MAX_LAUNCHES_PER_RUN`). Each launch uses the idempotency

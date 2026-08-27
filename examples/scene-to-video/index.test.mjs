@@ -3,7 +3,13 @@ import test from "node:test";
 
 import { fileStorage } from "@sapiom/tools";
 
-import { agent, normalizeClipDuration, resolveClipInputs } from "./index.ts";
+import {
+  agent,
+  buildPlanSchema,
+  normalizeClipDuration,
+  readPlan,
+  resolveClipInputs,
+} from "./index.ts";
 
 function stitchContext(clips, { create } = {}) {
   const shared = new Map([
@@ -158,4 +164,79 @@ test("stitch prefers a durable public permalink over the merge provider's own UR
       downloadUrl: fileStorage.getPublicUrl("merged-file"),
     },
   ]);
+});
+
+// ── SAP-2892: an unusable reply must never become a shot plan ───────────────
+//
+// Every field here is spent downstream: the bible and each `image_prompt` are
+// paid image generations, each `motion_prompt` a paid video generation. The old
+// fallback filled all of them from the scene string, so a failed decomposition
+// still rendered, billed, and stitched a generic slow-push-in video on a run
+// reported as `succeeded`.
+
+const SHOT = {
+  image_prompt: "BIBLE. Wide shot of a paper boat on a puddle.",
+  motion_prompt: "The boat drifts; slow dolly in; 10s; overcast; cinematic.",
+  duration: 10,
+  transition: "cut",
+};
+const PLAN = { bible: "Overcast, 35mm, muted palette.", shots: [SHOT] };
+
+test("readPlan reads the forced tool call's plan", () => {
+  assert.deepEqual(readPlan(PLAN), PLAN);
+});
+
+test("readPlan snaps a duration the model did give to the nearest clip length", () => {
+  // The video model accepts only 5 or 10 — this reads its answer, not invents one.
+  assert.equal(
+    readPlan({ ...PLAN, shots: [{ ...SHOT, duration: 6 }] }).shots[0].duration,
+    5,
+  );
+  assert.equal(
+    readPlan({ ...PLAN, shots: [{ ...SHOT, duration: 9 }] }).shots[0].duration,
+    10,
+  );
+});
+
+test("readPlan defaults only the transition — a render detail, not the deliverable", () => {
+  const plan = readPlan({
+    ...PLAN,
+    shots: [{ ...SHOT, transition: undefined }],
+  });
+  assert.equal(plan.shots[0].transition, "cut");
+});
+
+test("readPlan throws when the response carried no structured plan", () => {
+  assert.throws(() => readPlan(undefined), /no structured shot plan/);
+  assert.throws(() => readPlan(null), /no structured shot plan/);
+  assert.throws(
+    () => readPlan("Let me break this scene into three shots..."),
+    /no structured shot plan/,
+  );
+});
+
+test("readPlan throws rather than writing a bible from the scene string", () => {
+  assert.throws(() => readPlan({ shots: [SHOT] }), /no style bible/);
+  assert.throws(() => readPlan({ ...PLAN, bible: "   " }), /no style bible/);
+});
+
+test("readPlan throws rather than inventing a shot's prompts", () => {
+  assert.throws(() => readPlan({ ...PLAN, shots: [] }), /no shots/);
+  assert.throws(
+    () => readPlan({ ...PLAN, shots: [{ ...SHOT, image_prompt: "" }] }),
+    /shot 1 came back with no image prompt/,
+  );
+  assert.throws(
+    () => readPlan({ ...PLAN, shots: [{ ...SHOT, motion_prompt: " " }] }),
+    /shot 1 came back with no motion prompt/,
+  );
+});
+
+test("buildPlanSchema caps the shots at what the run asked for", () => {
+  const schema = buildPlanSchema(3);
+  assert.equal(schema.properties.shots.maxItems, 3);
+  assert.deepEqual(
+    schema.properties.shots.items.properties.duration.enum,
+    [5, 10],
+  );
 });

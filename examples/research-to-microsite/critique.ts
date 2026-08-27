@@ -2,11 +2,11 @@
  * critique.ts — the eval-gate-style self-critique this template folds in
  * (see the Self-Editing Writer, `examples/eval-gate`): a judge prompt scoped to
  * a cited RESEARCH REPORT specifically (citation coverage, redundancy, tone
- * for the audience), and a tolerant score parser. Mirrors eval-gate's
- * `judge.ts` on purpose — factored out for the same reason: the judge LLM
- * call itself lives in the `critique` step in `index.ts`, via
- * `ctx.sapiom.llm.run`; this file only builds the prompt string and parses
- * the score out of the reply. No gateway call lives here.
+ * for the audience), plus the forced-tool schema its grade comes back in.
+ * Mirrors eval-gate's `judge.ts` on purpose — factored out for the same reason:
+ * the judge LLM call itself lives in the `critique` step in `index.ts`, via
+ * `ctx.sapiom.llm.run`; this file only builds the prompt string and reads the
+ * grade back off the reply. No gateway call lives here.
  */
 
 /** The report shape the judge grades — structural, so this file never needs
@@ -32,7 +32,7 @@ export function buildCritiquePrompt(args: {
   return [
     "You are an exacting editor reviewing a cited research report before it is",
     "published as a web micro-site. Score the REPORT from 0.0 to 1.0 against the",
-    'CRITERIA below. Respond with ONLY a JSON object: {"score": <number 0..1>, "rationale": "<one sentence>"}.',
+    "CRITERIA below, and say in one sentence why.",
     "",
     "CRITERIA:",
     "- Every section supports its claims with at least one [n] citation to a source listed below.",
@@ -59,37 +59,58 @@ function clamp01(n: number): number {
 }
 
 /**
- * Parse a [0,1] score (and best-effort rationale) out of the judge's text
- * reply. Prefers the JSON object the prompt asked for; falls back to the
- * first bare number in the text. Throws when no number can be found at all —
- * a malformed reply is treated as transient, so the engine retries the step
- * rather than the run silently treating gibberish as a passing (or failing)
- * score.
+ * The forced tool call the `critique` step reads the judge's grade out of.
+ * `llm.run`'s `output` appends this tool to the request and pins `tool_choice`
+ * to it, so the grade arrives as a typed `tool_use` block — there is no prose
+ * to search for a number in.
  */
-export function parseJudgment(reply: string): Judgment {
-  const json = reply.match(/\{[\s\S]*\}/);
-  if (json) {
-    try {
-      const obj = JSON.parse(json[0]) as {
-        score?: unknown;
-        rationale?: unknown;
-      };
-      const n = Number(obj.score);
-      if (Number.isFinite(n)) {
-        return {
-          score: clamp01(n),
-          rationale: typeof obj.rationale === "string" ? obj.rationale : "",
-        };
-      }
-    } catch {
-      // Not valid JSON — fall through to the bare-number path.
-    }
-  }
-  const m = reply.match(/-?\d+(?:\.\d+)?/);
-  if (!m) {
+export const CRITIQUE_TOOL = "emit_judgment";
+
+export const CRITIQUE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    score: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description:
+        "How fully the report satisfies the criteria: 1.0 fully, 0.0 not at all.",
+    },
+    rationale: {
+      type: "string",
+      description: "One sentence on why it scored that way.",
+    },
+  },
+  required: ["score", "rationale"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into a `Judgment`.
+ *
+ * Throws when the grade carries no usable number. This replaced a regex that
+ * fell back to the first bare number anywhere in the reply — which could pick a
+ * figure out of the model's prose and treat it as the score. A score the judge
+ * did give but outside [0,1] is clamped; a score it did not give is an error.
+ */
+export function readJudgment(structured: unknown): Judgment {
+  if (structured === null || typeof structured !== "object") {
     throw new Error(
-      `research-to-microsite critique: could not parse a score from reply: ${reply.slice(0, 200)}`,
+      "research-to-microsite critique: the judge returned no structured grade",
     );
   }
-  return { score: clamp01(Number(m[0])), rationale: "" };
+  const obj = structured as { score?: unknown; rationale?: unknown };
+  // `typeof`, not `Number(...)`: `Number(null)`, `Number("")`, `Number([])` and
+  // `Number(false)` are all a finite `0`, so coercing would turn "the judge gave
+  // no score" back into a grade of 0.0 — a rejection nobody issued, which then
+  // spends another model call on a revision.
+  if (typeof obj.score !== "number" || !Number.isFinite(obj.score)) {
+    throw new Error(
+      `research-to-microsite critique: the judge returned no usable score (${JSON.stringify(obj.score)})`,
+    );
+  }
+  return {
+    score: clamp01(obj.score),
+    rationale: typeof obj.rationale === "string" ? obj.rationale : "",
+  };
 }

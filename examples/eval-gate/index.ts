@@ -8,7 +8,12 @@ import {
 import { z } from "zod/v4";
 
 import { buildDraftPrompt } from "./draft.js";
-import { buildJudgePrompt, parseScore } from "./judge.js";
+import {
+  JUDGE_SCHEMA,
+  JUDGE_TOOL,
+  buildJudgePrompt,
+  readScore,
+} from "./judge.js";
 
 /**
  * Self-Editing Writer
@@ -223,16 +228,19 @@ const judge = defineStep({
       rubric,
     });
     // Chained judgment: this call's input is the `draft` step's model output,
-    // not caller-supplied data — a malformed reply still throws in
-    // `parseScore` and the engine retries, same contract as `draft`.
+    // not caller-supplied data — a reply with no usable grade still throws in
+    // `readScore` and the engine retries, same contract as `draft`.
     const res = await ctx.sapiom.llm.run({
       request: {
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 256,
+        max_tokens: 8000,
       },
       model: ctx.shared.get("judgeModel"),
+      output: { name: JUDGE_TOOL, schema: JUDGE_SCHEMA },
     });
-    const { score, rationale } = parseScore(ctx.sapiom.llm.textOf(res) ?? "");
+    const { score, rationale } = readScore(
+      ctx.sapiom.llm.structuredOf(res, JUDGE_TOOL),
+    );
     ctx.logger.info("judge: scored the draft against the rubric", { score });
     return goto("decide", { draft: input.draft, score, critique: rationale });
   },

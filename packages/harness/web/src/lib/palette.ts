@@ -27,10 +27,12 @@ import type { FsDirEntry } from "./api";
 import { DOC_LINKS, DOCS_SITE } from "./docs";
 import { fuzzyMatch } from "./fuzzy";
 // Separator-aware basename: a Windows path ("C:\\a\\b") must yield "b", not the
-// whole string. One implementation, shared with the rest of the SPA.
-import { basenameOf } from "./paths";
+// whole string. One implementation, shared with the rest of the SPA — and
+// `isWithinDir` is that same module's ONE containment answer, reached directly
+// now that `workspace-tree.ts` (which re-exported it as `isUnder`, arguments
+// reversed) is retired.
+import { basenameOf, isWithinDir } from "./paths";
 import { sessionDisplayName, type SessionNameOverrides } from "./session-name";
-import { isUnder } from "./workspace-tree";
 
 export type PaletteKind = "command" | "session" | "past" | "agent" | "recent" | "path" | "doc" | "template";
 
@@ -251,12 +253,15 @@ export function buildPaletteItems(src: PaletteSources): PaletteItem[] {
   const agentRecency = (workflow: WorkflowInfo): number => {
     let latest = 0;
     for (const session of sessions) {
-      if (session.boundWorkflowPath !== workflow.path && !isUnder(session.cwd, workflow.path)) continue;
+      if (session.boundWorkflowPath !== workflow.path && !isWithinDir(workflow.path, session.cwd))
+        continue;
       const at = parseTime(session.lastActiveAt);
       if (at > latest) latest = at;
     }
     if (latest > 0) return latest;
-    const mru = recentDirs.findIndex((dir) => isUnder(workflow.path, dir) || isUnder(dir, workflow.path));
+    const mru = recentDirs.findIndex(
+      (dir) => isWithinDir(dir, workflow.path) || isWithinDir(workflow.path, dir),
+    );
     return mru === -1 ? 0 : recentDirs.length - mru;
   };
   const agentItems: PaletteItem[] = workflows.map((workflow) => ({

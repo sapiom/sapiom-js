@@ -202,10 +202,42 @@ run, and secrets are read at step dispatch.
    template's `README.md` shows it.
 
    **Be aware of what it does not check.** Every capability is stubbed, so `database.get`
-   returns a `localhost` connection string and `repositories.get` returns a plausible
-   repository — _neither ever fails_. A `run_local` pass proves your control flow, **not** that
-   the resources your template names exist. Pauses are auto-resumed locally too, so a pause
+   returns a connection string and `repositories.get` returns a plausible repository —
+   _neither call ever fails_. A `run_local` pass proves your control flow, **not** that the
+   resources your template names exist. Pauses are auto-resumed locally too, so a pause
    nothing will ever fire still looks fine.
+
+   **The stub can only reach as far as `ctx.sapiom`.** A capability call succeeding is not the
+   same as what it hands back being usable. `database.get` returns a DSN whose host is in the
+   reserved `.invalid` TLD (RFC 6761), which does not resolve on a conforming resolver — so a
+   step that opens its own Postgres socket fails at name resolution, with the stub named in
+   the error. Treat that as a backstop, not a guard: a resolver that hijacks NXDOMAIN can
+   still hand back an address. The same goes for any I/O the stub never sees — raw HTTP to a
+   third party, a client holding its own connection.
+
+   **Gate that I/O on `ctx.isLocalTrace`.** It is `true` under `run_local` and absent on a
+   deployed run, so the branch reads as live in production with nothing set:
+
+   ```ts
+   // entry step — `input` here is the execution's entry input
+   const dryRun = input.dryRun ?? ctx.isLocalTrace ?? false;
+   ctx.shared.set("dryRun", dryRun);
+   if (!dryRun) {
+     // raw sockets, third-party HTTP — the things run_local cannot stub
+   }
+   ```
+
+   **Resolve it once, in the entry step, and carry it in `ctx.shared`.** Downstream, `input`
+   is the previous step's output, so `input.dryRun` is always `undefined` there — a step that
+   re-derives the gate would read live on a deployed run the caller asked to be dry:
+
+   ```ts
+   // any later step
+   const dryRun = ctx.shared.get("dryRun") ?? false;
+   ```
+
+   Keep the explicit input flag as the override; `?? ctx.isLocalTrace` only supplies the
+   default, so passing `{ "dryRun": false }` still forces the live path when you want it.
 
 3. **Then run it deployed, with no input at all.** `deploy` and `run` it with `{}`. It must
    reach a terminal state and produce something real (see [§1a](#1a-make-it-runnable-with-nothing)).
@@ -350,12 +382,12 @@ and the scorer legitimately disagree — the scorer can't see a synthesizing cap
 
 Set `kind` on every step:
 
-| `kind`       | Use when                                            |
-| ------------ | --------------------------------------------------- |
-| `capability` | It calls a priced catalog capability.               |
+| `kind`       | Use when                                                     |
+| ------------ | ------------------------------------------------------------ |
+| `capability` | It calls a priced catalog capability.                        |
 | `llm`        | It calls a model (`llm.run`, `models.run`, `models.coding`). |
-| `compute`    | In-process logic, a branch, or a terminal.          |
-| `pause`      | It suspends the run at $0 until something wakes it. |
+| `compute`    | In-process logic, a branch, or a terminal.                   |
+| `pause`      | It suspends the run at $0 until something wakes it.          |
 
 A step that calls a capability _and then_ suspends is `pause` — suspending is what defines it.
 
@@ -568,6 +600,62 @@ uses, and skew the estimated cost.
 
 ---
 
+## Reading a model reply (correctness, not style)
+
+**Need data back from a model? Declare the shape. Never slice JSON out of prose.**
+
+```ts
+const REVIEW_TOOL = "emit_review";
+const REVIEW_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["approve", "request_changes"] },
+    summary: { type: "string" },
+  },
+  required: ["verdict", "summary"],
+  additionalProperties: false,
+};
+
+const res = await ctx.sapiom.llm.run({
+  request: {
+    system,
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 500,
+  },
+  output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
+});
+const review = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
+```
+
+`output` appends that tool to the request and forces `tool_choice` onto it, so the
+reply comes back as a typed `tool_use` block. `structuredOf` reads it, and returns
+`undefined` rather than guessing when there is no such block. For a plain text reply,
+`textOf` — never `content[0]`, which can be a `thinking` block.
+
+- **Don't ask for "ONLY minified JSON" and parse the reply.** The pattern this replaced
+  took `output.indexOf("{")` to `output.lastIndexOf("}")` and `JSON.parse`'d it. Any
+  reply containing a stray brace defeats that — a TypeScript import in generated code, a
+  schema quoted mid-reasoning, a `{COMPANY}` placeholder — and tightening the pattern
+  does not fix it. `pnpm examples:check` rejects the slice outright (SAP-2892).
+- **A reply you can't read is a failed step. Say so.** `throw`. Do not substitute a
+  default, and above all do not substitute _content_: a fabricated verdict, summary,
+  deliverable, or price on a run that reports `succeeded` is indistinguishable from a
+  real one, and it is worse than an error because nothing downstream can tell. A
+  fallback that composes a tweet thread out of the first 240 characters of the source
+  is not a graceful degradation — it is a deliverable nobody wrote, and it leaves by
+  the same door as a real one.
+- **An empty answer is not the same as no answer.** `[]` is a fine result when the
+  prompt says so ("no issues found is a valid answer") — which is exactly why a _missing_
+  list has to throw instead of reading as an empty one.
+- **Defaulting is fine only where the field isn't the judgment.** Snapping a duration the
+  model gave to a value the video model accepts, or defaulting a transition to `"cut"`, is
+  reading its answer. Defaulting the _verdict_ is inventing one.
+- **Cover the failure path in your template's tests.** `pnpm examples:test` runs each
+  template's own suite; assert that an unreadable reply throws rather than producing a
+  plausible-looking deliverable.
+
+---
+
 ## The "easy path first" rule (applies everywhere)
 
 Across `notes`, the detail page, and the "Build & run" tab, the **one-click "Use this template"
@@ -584,7 +672,8 @@ Never present the MCP path as the only way to build and run — the webapp does 
 3. **Sort and validate** locally: `pnpm examples:sort`, then `pnpm examples:check`. Both must be
    clean — the same check runs in CI and blocks the merge if the registry is invalid, unsorted,
    points at a directory with no `template.json`, or your `template.json` doesn't match the
-   manifest schema.
+   manifest schema. If your template has a test suite, `pnpm examples:test` runs it (and every
+   other template's); CI runs that too.
 4. **Open a pull request.** CI validates the registry and builds the SDK; an automated review
    runs too. Keep the PR to one template.
 5. **On merge, it goes live.** The Sapiom backend reads `registry.json` at a pinned commit of
@@ -607,6 +696,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] No `checkpoint` auto-approves or auto-resumes; with nobody assigned it terminates at the gate.
 - [ ] Every credential is read from `process.env[KEY]` and declared in `requiredSecrets`; no config filed as a secret.
 - [ ] Nothing in the output claims an effect on the world that did not happen; a degraded branch names itself in `unmet[]` and `note`.
+- [ ] Every model reply read as data uses `output` + `structuredOf`, not a hand parse; an unreadable reply throws rather than substituting content, and a test covers that path.
 - [ ] One `category` (the outcome, not the mechanism) and one `cadence`; `tags` kept freeform.
 - [ ] One `discipline`, taken from your `category`'s row — the enum alone will not catch a wrong pair.
 - [ ] One `complexity`, picked by counting judgment points — not by counting steps.

@@ -171,6 +171,10 @@ export class LocalStubDispatcher implements StepDispatcher {
       attempts: request.attempt,
       logger: makeLogger(logs),
       sapiom,
+      // Lets step code skip the raw-socket I/O run_local cannot stub (a real
+      // Postgres dial, raw HTTP). Absent on a deployed run, so the intended
+      // read `input.dryRun ?? ctx.isLocalTrace` defaults to live in production.
+      isLocalTrace: true,
     } as unknown as AgentExecutionContext;
 
     // Match the production step runner: the manifest's JSON Schema is a cheap

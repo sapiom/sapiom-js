@@ -168,6 +168,20 @@
     "reason": "The Studio localhost deploy route remains stable for existing clients."
   },
   {
+    "id": "workflow-graph-local-route",
+    "path": "packages/harness/src/server/workflow-graph.ts",
+    "pattern": "^/api/workflows/:path/graph$",
+    "occurrences": 1,
+    "reason": "The agent-keyed canvas route is a shipped localhost API surface and its path stays stable for existing clients."
+  },
+  {
+    "id": "readme-canvas-graph-route",
+    "path": "packages/harness/README.md",
+    "pattern": "/api/workflows/:path/graph",
+    "occurrences": 1,
+    "reason": "The README quotes the shipped route path verbatim; the prose around it says agent."
+  },
+  {
     "id": "actions-input-contract-route",
     "path": "packages/harness/src/server/actions.ts",
     "pattern": "^/api/workflows/:id/input-contract$",
@@ -213,7 +227,7 @@
     "id": "canvas-pane-icon-identifier",
     "path": "packages/harness/web/src/components/CanvasPane.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 4,
+    "occurrences": 5,
     "reason": "The design-system Workflow icon identifier is private and remains unchanged."
   },
   {
@@ -242,7 +256,7 @@
     "path": "packages/harness/web/src/lib/docs.ts",
     "pattern": "Workflows quick start|/workflows/",
     "occurrences": 2,
-    "reason": "Docs-site page title and its URL, quoted verbatim — the platform SDK concept keeps its own name."
+    "reason": "Docs-site page title and its URL, quoted verbatim \u2014 the platform SDK concept keeps its own name."
   },
   {
     "id": "palette-model-icon-identifier",
@@ -275,8 +289,8 @@
   {
     "id": "workflow-row-private-css-and-test-ids",
     "path": "packages/harness/web/src/components/WorkflowRow.tsx",
-    "pattern": "(?:workflow-(?:item(?:-trigger)?|status-?)|^workflow-$)",
-    "occurrences": 5,
+    "pattern": "(?:workflow-(?:item(?:-trigger)?|status-?|prefix-|name-)|^workflow-$)",
+    "occurrences": 7,
     "reason": "Private CSS classes and test IDs remain stable."
   },
   {
@@ -290,13 +304,13 @@
     "id": "web-api-local-workflow-routes",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^/api/workflows(?:/(?:connect|scan)?)?$",
-    "occurrences": 5,
+    "occurrences": 6,
     "reason": "Studio localhost API routes remain stable for existing clients."
   },
   {
     "id": "web-api-input-contract-mock-error",
     "path": "packages/harness/web/src/lib/api.ts",
-    "pattern": "^GET /api/workflows/:id/input-contract → 500 \\(mock\\)$",
+    "pattern": "^GET /api/workflows/:id/input-contract \u2192 500 \\(mock\\)$",
     "occurrences": 1,
     "reason": "The test-only mock error names the compatibility-sensitive localhost endpoint it simulates."
   },
@@ -346,7 +360,7 @@
     "id": "styles-workflow-item-selector",
     "path": "packages/harness/web/src/styles.css",
     "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
-    "occurrences": 10,
+    "occurrences": 11,
     "reason": "The private CSS selector remains stable with its React class name."
   },
   {
@@ -367,7 +381,7 @@
     "id": "styles-workflow-item-trigger-selector",
     "path": "packages/harness/web/src/styles.css",
     "pattern": "(?<![a-z0-9_-])workflow-item-trigger(?![a-z0-9_-])",
-    "occurrences": 1,
+    "occurrences": 2,
     "reason": "The private CSS selector remains stable with its React class name."
   },
   {
@@ -467,5 +481,40 @@
     "pattern": "(?<![a-z0-9_-])workflow-dot(?![a-z0-9_-])",
     "occurrences": 1,
     "reason": "The private refinement-layer CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "project-tree-rows-private-css-and-test-ids",
+    "path": "packages/harness/web/src/components/ProjectTreeRows.tsx",
+    "pattern": "(?:workflow-item(?:-trigger)?|^workflow-$)",
+    "occurrences": 3,
+    "reason": "Private CSS classes and test-ID prefixes shared with WorkflowRow; renaming them would break every rail selector at once."
+  },
+  {
+    "id": "unrooted-agents-private-css-and-test-ids",
+    "path": "packages/harness/web/src/components/UnrootedAgents.tsx",
+    "pattern": "workflow-(?:item(?:-trigger)?|status)",
+    "occurrences": 3,
+    "reason": "The stray-agent row reuses the rail row's private CSS classes so the two stay visually identical."
+  },
+  {
+    "id": "group-row-icon-identifier",
+    "path": "packages/harness/web/src/components/GroupRow.tsx",
+    "pattern": "^Workflow$",
+    "occurrences": 1,
+    "reason": "The design-system Workflow icon identifier is private and remains unchanged."
+  },
+  {
+    "id": "web-api-mock-board-test-ids",
+    "path": "packages/harness/web/src/lib/api.ts",
+    "pattern": "mock-workflow-(?:board|message)",
+    "occurrences": 2,
+    "reason": "Test IDs inside the mock canvas document; the e2e suite selects on them."
+  },
+  {
+    "id": "web-api-workflow-change-event",
+    "path": "packages/harness/web/src/lib/api.ts",
+    "pattern": "^workflows\\.changed$",
+    "occurrences": 1,
+    "reason": "The internal WebSocket event name remains stable for existing clients."
   }
 ]

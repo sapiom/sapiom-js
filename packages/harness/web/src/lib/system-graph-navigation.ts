@@ -36,22 +36,6 @@ function relativeWithin(root: string, candidate: string): string[] | null {
   return candidateSegments.slice(rootSegments.length);
 }
 
-function ownerScope(
-  workflowPath: string,
-  scopes: readonly WorkspaceScopeSummary[],
-): WorkspaceScopeSummary | null {
-  return (
-    scopes
-      .filter((scope) => relativeWithin(scope.cwd, workflowPath) !== null)
-      .sort(
-        (left, right) =>
-          canonicalSegments(right.cwd).length -
-            canonicalSegments(left.cwd).length ||
-          left.workspaceKey.localeCompare(right.workspaceKey),
-      )[0] ?? null
-  );
-}
-
 function localAgentKey(root: string, workflowPath: string): AgentKey | null {
   const relative = relativeWithin(root, workflowPath);
   if (relative === null) return null;
@@ -84,8 +68,10 @@ export function mapSystemGraphNavigation(
     candidates.set(key, matches);
   };
   for (const workflow of workflows) {
-    if (ownerScope(workflow.path, scopes)?.workspaceKey !== workspaceKey)
-      continue;
+    // Match the same selected-root containment used by the Project rail and
+    // backend inventory. A nested agent is navigable from both its own project
+    // graph and any containing parent project graph.
+    if (relativeWithin(selected.cwd, workflow.path) === null) continue;
     register(workflow.definitionSlug?.trim() || null, workflow);
     register(localAgentKey(selected.cwd, workflow.path), workflow);
   }

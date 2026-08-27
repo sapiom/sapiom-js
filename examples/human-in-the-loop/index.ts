@@ -201,16 +201,16 @@ async function parseRequest(ctx: Ctx, request: string): Promise<ParsedRequest> {
   const system =
     "You extract structured intent from a request that will be fulfilled by " +
     "selecting one of several candidates. Identify what is being asked for and " +
-    "the criteria that should drive the choice (weigh fit, not just cost). " +
-    'Reply with ONLY minified JSON: {"summary":string,"criteria":string[]}.';
+    "the criteria that should drive the choice (weigh fit, not just cost).";
   const res = await ctx.sapiom.llm.run({
     request: {
       system,
       messages: [{ role: "user", content: request }],
-      max_tokens: 300,
+      max_tokens: 8000,
     },
+    output: { name: PARSE_TOOL, schema: PARSE_SCHEMA },
   });
-  return coerceParsed(ctx.sapiom.llm.textOf(res) ?? null, request);
+  return readParsed(ctx.sapiom.llm.structuredOf(res, PARSE_TOOL));
 }
 
 /**
@@ -226,8 +226,7 @@ async function rankCandidates(
   const system =
     "You rank candidates by how well they FIT the criteria — not by cost alone. " +
     "Return every candidate exactly once, best first, each with a 0-100 fit " +
-    "score and a one-line rationale. Use the candidate `id` values verbatim. " +
-    'Reply with ONLY minified JSON: {"ranking":[{"id":string,"score":number,"rationale":string}]}.';
+    "score and a one-line rationale. Use the candidate `id` values verbatim.";
   const prompt =
     `CRITERIA:\n${parsed.criteria.map((c) => `- ${c}`).join("\n") || "- (none)"}\n\n` +
     `CANDIDATES:\n${JSON.stringify(candidates)}`;
@@ -235,10 +234,11 @@ async function rankCandidates(
     request: {
       system,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 600,
+      max_tokens: 8000,
     },
+    output: { name: RANK_TOOL, schema: buildRankSchema(candidates) },
   });
-  return applyRanking(ctx.sapiom.llm.textOf(res) ?? null, candidates);
+  return applyRanking(ctx.sapiom.llm.structuredOf(res, RANK_TOOL), candidates);
 }
 
 /**
@@ -746,37 +746,148 @@ function buildEscalationEmail(
   ].join("\n");
 }
 
-// ─────────────────────────────────────────────────────── output parsing ──
-/** Coerce the parse-step model output into a `ParsedRequest`, with a fallback. */
-function coerceParsed(output: string | null, request: string): ParsedRequest {
-  const fallback: ParsedRequest = {
-    summary: request.slice(0, 120) || "(empty request)",
-    criteria: [],
+// ────────────────────────────────────────────────────── structured output ──
+/**
+ * The two forced tool calls this template reads its model replies out of.
+ * `llm.run`'s `output` appends the tool to the request and pins `tool_choice`
+ * to it, so each reply arrives as a typed `tool_use` block — there is no prose
+ * to slice and no JSON to hand-parse.
+ */
+const PARSE_TOOL = "emit_intent";
+
+const PARSE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    summary: {
+      type: "string",
+      description: "What is being asked for, in one line.",
+    },
+    criteria: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "The criteria that should drive the choice, weighing fit and not just cost.",
+    },
+  },
+  required: ["summary", "criteria"],
+  additionalProperties: false,
+};
+
+export const RANK_TOOL = "emit_ranking";
+
+/**
+ * Built per call so `id` can be an `enum` of THIS run's candidate ids — the same
+ * bound-at-the-wire discipline as `the-brain`'s play allow-list. The model then
+ * cannot name a candidate that isn't in the pool, which is the failure
+ * {@link applyRanking} would otherwise have to reject after paying for the call.
+ *
+ * It also keeps `run_local` honest: the stub builds its placeholder from this
+ * schema, so an `enum` hands it a real candidate id instead of `"(stub) id"` —
+ * a value that matches nothing and would fail the read for a reason no
+ * production run would hit.
+ */
+export function buildRankSchema(
+  candidates: Candidate[],
+): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      ranking: {
+        type: "array",
+        minItems: 1,
+        maxItems: candidates.length,
+        items: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              enum: candidates.map((c) => c.id),
+              description: "The candidate's `id`, verbatim.",
+            },
+            score: {
+              type: "number",
+              minimum: 0,
+              maximum: 100,
+              description: "Fit score, 0-100.",
+            },
+            rationale: { type: "string", description: "One line on the fit." },
+          },
+          required: ["id", "score", "rationale"],
+          additionalProperties: false,
+        },
+        description: "Every candidate exactly once, best first.",
+      },
+    },
+    required: ["ranking"],
+    additionalProperties: false,
   };
-  const obj = extractJson(output);
-  if (!obj) return fallback;
-  const summary =
-    typeof obj.summary === "string" && obj.summary.trim()
-      ? obj.summary.trim()
-      : fallback.summary;
-  const criteria = Array.isArray(obj.criteria)
-    ? obj.criteria.filter((c): c is string => typeof c === "string")
-    : [];
-  return { summary, criteria };
+}
+
+/**
+ * Read the forced tool call back into a `ParsedRequest`.
+ *
+ * Throws when the model returned no such block, no summary, or no criteria
+ * list. The criteria are what `rank` then scores every candidate against, so a
+ * silent `{ summary: <first 120 chars of the request>, criteria: [] }` did not
+ * degrade gracefully — it made the ranking step grade against nothing and
+ * report the result as a considered shortlist. An *empty* criteria list is a
+ * real answer (a request may name none); a missing one is not, which is why
+ * only the array's presence is required here.
+ */
+export function readParsed(structured: unknown): ParsedRequest {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "parse: the model returned no structured intent — refusing to rank against invented criteria.",
+    );
+  }
+  const obj = structured as Record<string, unknown>;
+  if (typeof obj.summary !== "string" || obj.summary.trim() === "") {
+    throw new Error(
+      "parse: the model returned no request summary — refusing to invent one.",
+    );
+  }
+  if (!Array.isArray(obj.criteria)) {
+    throw new Error(
+      "parse: the model returned no criteria list — refusing to rank against nothing.",
+    );
+  }
+  return {
+    summary: obj.summary.trim(),
+    criteria: obj.criteria.filter((c): c is string => typeof c === "string"),
+  };
 }
 
 /**
  * Apply the ranking-model output to the candidate pool: reorder by the model's
  * ranking, attach score + rationale, and guarantee every candidate appears
  * exactly once (falling back to input order for anything the model dropped).
+ *
+ * Throws when the model ranked nothing this code can match to a candidate —
+ * whether the `ranking` key was absent, an empty list, or full of ids from
+ * nowhere. All three used to leave every candidate at
+ * `score: 0, rationale: "(unranked)"` in input order: an offer sent to whoever
+ * happened to be listed first, presented to the approving human as a ranked
+ * shortlist. A container with nothing usable in it is not a ranking.
+ *
+ * Individual candidates the model dropped, once it ranked at least one, are
+ * still appended as `(unranked)`: that is visible in the output the approver
+ * reads, and the alternative is silently shortening their pool.
  */
-function applyRanking(
-  output: string | null,
+export function applyRanking(
+  structured: unknown,
   candidates: Candidate[],
 ): RankedCandidate[] {
   const byId = new Map(candidates.map((c) => [c.id, c]));
-  const obj = extractJson(output);
-  const rawRanking = obj && Array.isArray(obj.ranking) ? obj.ranking : [];
+  const obj =
+    structured !== null && typeof structured === "object"
+      ? (structured as Record<string, unknown>)
+      : null;
+  const rawRanking = obj && Array.isArray(obj.ranking) ? obj.ranking : null;
+  if (!rawRanking) {
+    throw new Error(
+      "rank: the model returned no ranking — refusing to present the input order as a ranked shortlist.",
+    );
+  }
 
   const ranked: RankedCandidate[] = [];
   const seen = new Set<string>();
@@ -796,25 +907,21 @@ function applyRanking(
     });
   }
 
+  // Nothing in the list matched a candidate — an empty `ranking`, or ids from
+  // nowhere. Falling through here would append every candidate as `(unranked)`
+  // in input order and hand that to the approver as the ranking.
+  if (ranked.length === 0) {
+    throw new Error(
+      "rank: the model ranked none of the candidates — refusing to present the input order as a ranked shortlist.",
+    );
+  }
+
   // Append any candidate the model omitted, preserving input order.
   for (const candidate of candidates) {
     if (seen.has(candidate.id)) continue;
     ranked.push({ ...candidate, score: 0, rationale: "(unranked)" });
   }
   return ranked;
-}
-
-/** Best-effort extraction of a single JSON object from model output. */
-function extractJson(output: string | null): Record<string, unknown> | null {
-  if (!output) return null;
-  const start = output.indexOf("{");
-  const end = output.lastIndexOf("}");
-  if (start < 0 || end < 0 || end < start) return null;
-  try {
-    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 export const agent = defineAgent<EntryInput, Shared>({

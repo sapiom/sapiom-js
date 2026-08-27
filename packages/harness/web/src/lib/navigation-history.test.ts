@@ -19,12 +19,23 @@ import {
   type NavigationVisit,
 } from "./navigation-history";
 
-const session = (sessionId: string, agentPath: string | null = null): NavigationVisit => ({
+const session = (
+  sessionId: string,
+  agentPath: string | null = null,
+): NavigationVisit => ({
   kind: "session",
   sessionId,
   agentPath,
 });
-const agent = (agentPath: string): NavigationVisit => ({ kind: "agent", agentPath });
+const agent = (agentPath: string): NavigationVisit => ({
+  kind: "agent",
+  agentPath,
+});
+const project = (
+  workspaceKey: string,
+  root = "/repo",
+  label = "repo",
+): NavigationVisit => ({ kind: "project", workspaceKey, root, label });
 const review = (agentSessionId: string): NavigationVisit => ({
   kind: "review",
   // The reducer only reads summary.agentSessionId; a minimal cast keeps the
@@ -35,7 +46,10 @@ const composer: NavigationVisit = { kind: "composer" };
 const templates: NavigationVisit = { kind: "templates" };
 
 /** Build a state from a list of visits, index defaulting to the tip. */
-const stateOf = (entries: NavigationVisit[], index = entries.length - 1): NavigationHistoryState => ({
+const stateOf = (
+  entries: NavigationVisit[],
+  index = entries.length - 1,
+): NavigationHistoryState => ({
   entries,
   index,
 });
@@ -46,12 +60,27 @@ describe("sameNavigationVisit", () => {
     expect(sameNavigationVisit(composer, templates)).toBe(false);
   });
   it("compares sessions by sessionId, ignoring agentPath", () => {
-    expect(sameNavigationVisit(session("s1", "/a"), session("s1", "/b"))).toBe(true);
-    expect(sameNavigationVisit(session("s1", "/a"), session("s2", "/a"))).toBe(false);
+    expect(sameNavigationVisit(session("s1", "/a"), session("s1", "/b"))).toBe(
+      true,
+    );
+    expect(sameNavigationVisit(session("s1", "/a"), session("s2", "/a"))).toBe(
+      false,
+    );
   });
   it("compares agents by agentPath", () => {
     expect(sameNavigationVisit(agent("/a"), agent("/a"))).toBe(true);
     expect(sameNavigationVisit(agent("/a"), agent("/b"))).toBe(false);
+  });
+  it("compares projects by their opaque server identity", () => {
+    expect(
+      sameNavigationVisit(
+        project("workspace-a"),
+        project("workspace-a", "/moved", "moved"),
+      ),
+    ).toBe(true);
+    expect(
+      sameNavigationVisit(project("workspace-a"), project("workspace-b")),
+    ).toBe(false);
   });
   it("compares reviews by summary.agentSessionId", () => {
     expect(sameNavigationVisit(review("as1"), review("as1"))).toBe(true);
@@ -151,8 +180,9 @@ describe("moveNavigation", () => {
     expect(moved.visit).toEqual(agent("/b"));
   });
   it("round-trips back then forward to the same tip", () => {
-    const s = stateOf([agent("/a"), agent("/b"), agent("/c")], 2);
+    const s = stateOf([agent("/a"), project("workspace-b"), agent("/c")], 2);
     const back = moveNavigation(s, "back");
+    expect(back.visit).toEqual(project("workspace-b"));
     const fwd = moveNavigation(back.state, "forward");
     expect(fwd.state.index).toBe(2);
     expect(fwd.visit).toEqual(agent("/c"));

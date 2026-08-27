@@ -38,9 +38,11 @@ report   post a briefing to a low-noise channel, append a brain.briefing row,
    - `stale_no_result` — a launch never reported a result and aged past
      `staleHours`.
 2. **assess** — hands the situations to `ctx.sapiom.llm.run` with a system
-   prompt that permits **only** a fixed allow-list of plays: `launch_member`,
-   `escalate_to_human`, `no_action`. `parsePlan()` re-validates every play/target
-   against the allow-list and falls back to a deterministic plan on bad JSON.
+   prompt and a structured-output schema that between them permit **only** a
+   fixed allow-list of plays: `launch_member`, `escalate_to_human`, `no_action`.
+   `readPlan()` re-validates every play/target against the allow-list, and throws
+   rather than inventing a plan when the model returned none — this plan launches
+   agents, so there is nothing safe to substitute.
 3. **actuate** — executes the plan deterministically behind **six guardrails**
    (allow-list re-check, drop `no_action`, escalate-only, only-surfaced-targets,
    per-day cooldown, single-open, fan-out cap). Each launch carries an idempotency

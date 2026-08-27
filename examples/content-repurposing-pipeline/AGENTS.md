@@ -17,8 +17,9 @@ repurpose ─▶ graphics ⇄ collectGraphic ─▶ clip ⇄ collectClip ─▶ 
 (llm.run) (images.launch) (drain)      (video.launch) (drain) (fileStorage) (email.send × N)
 ```
 
-- **repurpose** — an LLM rewrites the source into every channel at once and returns
-  minified JSON. A `dryRun` input terminates here with the copy only (no paid media).
+- **repurpose** — an LLM rewrites the source into every channel at once, returned as
+  structured output (`llm.run`'s `output`, read with `structuredOf`). A `dryRun` input
+  terminates here with the copy only (no paid media).
 - **graphics ⇄ collectGraphic** — one quote graphic at a time, launched async
   (`images.launch`) and paused on (`pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep:
 'collectGraphic' }`); `collectGraphic` records it and loops back for the next quote or
@@ -73,9 +74,16 @@ that wall no longer applies.
   the edge: `pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep }` (or
   `VIDEO_RESULT_SIGNAL`). The resumed step receives an `ImageResultPayload` /
   `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl? }] }`).
-- **Defensive parsing.** The model returns minified JSON; `parsePack` slices to the
-  outermost object and falls back to a usable pack built from the source, so a
-  malformed reply never aborts the run.
+- **Structured output, never a hand parse.** `repurpose` sets `output: { name, schema }`
+  on the `llm.run` spec — which appends that tool and forces `tool_choice` onto it — and
+  reads the pack back with `ctx.sapiom.llm.structuredOf(res, name)`. There is no prose to
+  slice and no JSON to parse.
+- **A pack this template can't read is a failed run.** `readPack` throws; it never
+  substitutes anything. Every field is the deliverable — the thread, the post, the
+  newsletter, the quotes that get rendered and emailed — and the fallback this replaced
+  composed `"<title>: a quick thread. 🧵"` over the first 240 characters of the source
+  and emailed that, on a run that reports `succeeded` (SAP-2892). Copy the shape, not
+  the old one: if you cannot say what a missing field should be, throw.
 
 ## Validating
 

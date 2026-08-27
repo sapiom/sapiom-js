@@ -6,7 +6,7 @@ against **your** brief, grades the draft against **your** rubric with an LLM
 judge, and revises in a bounded loop until it clears the bar or the attempt
 cap is hit: `parse` → `draft` → `judge` → `decide` → (loop back to `draft`, or
 terminate at `publish`). The only genuinely new code is `draft.ts`
-(`buildDraftPrompt`) and `judge.ts` (`buildJudgePrompt` + `parseScore`).
+(`buildDraftPrompt`) and `judge.ts` (`buildJudgePrompt` + `readScore`).
 
 ## Two chained `llm.run` calls
 
@@ -25,13 +25,19 @@ terminate at `publish`). The only genuinely new code is `draft.ts`
 ## The brief and rubric are yours; the harness is ours
 
 - We ship one default judge prompt (`buildJudgePrompt`) and one default draft
-  prompt (`buildDraftPrompt`), plus a tolerant score parser (`parseScore`).
-  Override the **brief** and **rubric** (the run inputs), not this scaffolding.
-- `parseScore` prefers a JSON `{score, rationale}`, falls back to the first
-  bare number, clamps to `[0,1]`, and tolerates a 0–100 answer. It **throws**
-  when no number can be parsed — a malformed reply is transient, so the engine
-  retries. `draft` throws on an empty reply for the same reason: there's
-  nothing real to grade otherwise.
+  prompt (`buildDraftPrompt`), plus the judge's forced-tool schema
+  (`JUDGE_SCHEMA`) and its reader (`readScore`). Override the **brief** and
+  **rubric** (the run inputs), not this scaffolding.
+- The judge's reply shape is not asked for in words: `judge` passes
+  `output: { name: JUDGE_TOOL, schema: JUDGE_SCHEMA }` on the `llm.run` spec,
+  which appends that tool and forces `tool_choice` onto it, and reads the grade
+  back with `ctx.sapiom.llm.structuredOf`.
+- `readScore` clamps to `[0,1]` and reads a 0–100 answer as a fraction — that is
+  reading a number the judge did give. It **throws** when the judge gave no
+  number at all: a reply with no grade is transient, so the engine retries, and
+  a substituted score would gate the draft on a judgment nobody made (SAP-2892).
+  `draft` throws on an empty reply for the same reason: there's nothing real to
+  grade otherwise.
 - Building your own eval-writer = editing three inputs: the **brief**, the
   **rubric**, and the **threshold** (default `0.8`). See `README.md`.
 
@@ -69,24 +75,25 @@ you'd run tests in any project — reach for the local suite.
   used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation.
 - **run_local** — runs your **real** step code against **stub capabilities**.
-  The _default_ `llm.run` stub returns a non-numeric placeholder, and both
-  `draft` (empty-reply check) and `parseScore` (unparseable-score check) throw
-  on that by design, so you **must supply stub replies** to trace the graph:
-  a stub draft string for the `draft` step's call, and a stub `{score,
-rationale}` JSON for the `judge` step's call. Flip the judge's stub score to
-  verify both branches:
+  The default `llm.run` stub answers a `output`-bearing spec with a forced tool
+  call in the declared shape, so the graph traces end to end with no stubs — but
+  the judge's stub score is a placeholder, so **supply stub replies** to steer
+  the branch you want. Flip the judge's stub score to verify both:
+
+  `draft` reads a text reply; `judge` reads a forced tool call, so its stub is a
+  `tool_use` block named `emit_score`, not JSON in a text block:
 
   ```jsonc
   // high score → decide → publish (passed: true)
   { "version": 1, "steps": {
     "draft": { "llm.run": { "content": [{ "type": "text", "text": "A short noir opening line." }] } },
-    "judge": { "llm.run": { "content": [{ "type": "text", "text": "{\"score\":0.9,\"rationale\":\"meets the rubric\"}" }] } }
+    "judge": { "llm.run": { "content": [{ "type": "tool_use", "name": "emit_score", "input": { "score": 0.9, "rationale": "meets the rubric" } }] } }
   } }
 
   // low score, maxIterations: 1 → decide → publish (passed: false)
   { "version": 1, "steps": {
     "draft": { "llm.run": { "content": [{ "type": "text", "text": "A short noir opening line." }] } },
-    "judge": { "llm.run": { "content": [{ "type": "text", "text": "{\"score\":0.4,\"rationale\":\"misses the rubric\"}" }] } }
+    "judge": { "llm.run": { "content": [{ "type": "tool_use", "name": "emit_score", "input": { "score": 0.4, "rationale": "misses the rubric" } }] } }
   } }
   ```
 

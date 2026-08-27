@@ -48,6 +48,7 @@ import type {
   LlmRouteResultPayload,
   LlmSession,
   LlmSessionHandle,
+  LlmStructuredOutputSpec,
 } from "../llm/index.js";
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
@@ -118,6 +119,21 @@ import type {
   ActiveSession,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
+
+/**
+ * Host used in the stub Postgres DSN.
+ *
+ * `.invalid` is reserved by RFC 6761 and does not resolve on any conforming
+ * resolver, so a template that dials the stub DSN fails at name resolution
+ * rather than opening a socket to whatever real Postgres happens to be
+ * listening on the author's own `localhost:5432`. A resolver that hijacks
+ * NXDOMAIN can still hand back an address, which is why this is a backstop and
+ * not the guard: step code holding a raw Postgres connection should gate the
+ * dial on `ctx.isLocalTrace` rather than rely on the DSN being unreachable.
+ *
+ * `database.get` itself still succeeds; only dialing what it returns fails.
+ */
+const STUB_DB_HOST = "sapiom-run-local-stub.invalid";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -471,6 +487,20 @@ const SANDBOX_METHOD_DEFAULTS: Record<string, (args: unknown[]) => unknown> = {
   readFile: () => "",
   writeFile: () => undefined,
   destroy: () => undefined,
+  // A method with no default here returns `undefined`, and the caller
+  // dereferences it — `deployPreview(...).status` threw
+  // "Cannot read properties of undefined" under `run_local` rather than
+  // reporting a missing stub. These are the handle methods templates in
+  // `examples/` actually call, so a zero-stub local run traces the graph
+  // instead of dying on the shape of a stub that was never there.
+  deployPreview: () => ({
+    url: "https://stub-preview.local",
+    status: "deployed",
+    logs: "",
+  }),
+  createPublicUrl: () => ({ url: "https://stub-preview.local", name: "stub" }),
+  uploadFile: () => undefined,
+  uploadDir: () => undefined,
 };
 
 function stubRepository(
@@ -601,6 +631,64 @@ function stubVideoResult(input: VideoCreateInput): VideoGenerationResult {
     },
     resolvedModel: input.model ?? "stub-model",
   };
+}
+
+/**
+ * Build a placeholder value satisfying a `LlmRunSpec.output` JSON Schema, so the
+ * stubbed forced tool call answers in the shape the caller declared.
+ *
+ * Deliberately minimal — required properties only, one element per array, the
+ * first `enum` member, `minimum`/`minItems` respected — and every string is
+ * visibly a stub. The point is to let `run_local` trace a graph whose steps read
+ * structured output; a step that branches on the actual VALUE should still
+ * override `llm.run` in its stub file.
+ */
+function stubStructuredOutput(
+  schema: Record<string, unknown>,
+  label = "value",
+): unknown {
+  const type = Array.isArray(schema.type)
+    ? schema.type.find((t) => t !== "null")
+    : schema.type;
+  const asEnum = Array.isArray(schema.enum) ? schema.enum : null;
+  if (asEnum && asEnum.length > 0) return asEnum[0];
+
+  switch (type) {
+    case "object": {
+      const properties = (schema.properties ?? {}) as Record<string, unknown>;
+      const required = Array.isArray(schema.required)
+        ? schema.required.filter((k): k is string => typeof k === "string")
+        : Object.keys(properties);
+      const out: Record<string, unknown> = {};
+      for (const key of required) {
+        const child = properties[key];
+        out[key] =
+          child && typeof child === "object"
+            ? stubStructuredOutput(child as Record<string, unknown>, key)
+            : `(stub) ${key}`;
+      }
+      return out;
+    }
+    case "array": {
+      const items = schema.items;
+      const minItems =
+        typeof schema.minItems === "number" ? schema.minItems : 1;
+      const count = Math.max(1, minItems);
+      if (!items || typeof items !== "object") return [];
+      return Array.from({ length: count }, () =>
+        stubStructuredOutput(items as Record<string, unknown>, label),
+      );
+    }
+    case "number":
+    case "integer":
+      return typeof schema.minimum === "number" ? schema.minimum : 0;
+    case "boolean":
+      return false;
+    case "null":
+      return null;
+    default:
+      return `(stub) ${label}`;
+  }
 }
 
 function stubAgentResult(): ModelRunResult {
@@ -967,6 +1055,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         request: Record<string, unknown>;
         model?: string;
         complexity?: number;
+        output?: LlmStructuredOutputSpec;
       }) =>
         Promise.resolve(
           r("llm.run", [spec], () => ({
@@ -974,8 +1063,22 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             type: "message",
             role: "assistant",
             model: spec.model ?? "smart",
-            content: [{ type: "text", text: "(stub) llm reply" }],
-            stop_reason: "end_turn",
+            // `output` forces a tool call on the real surface, so the stub has
+            // to answer in the same shape — otherwise `structuredOf` reads
+            // `undefined` locally for code that would get a value in
+            // production, and every caller that (rightly) refuses to invent a
+            // value fails under `run_local` for the wrong reason.
+            content: spec.output
+              ? [
+                  {
+                    type: "tool_use",
+                    id: "stub-tool-use",
+                    name: spec.output.name,
+                    input: stubStructuredOutput(spec.output.schema),
+                  },
+                ]
+              : [{ type: "text", text: "(stub) llm reply" }],
+            stop_reason: spec.output ? "tool_use" : "end_turn",
           })) as T,
         ),
       submit: (spec) => {
@@ -1165,7 +1268,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           // its own resolvedModel wins when present.
           const result: ImageGenerationResult = {
             ...resolved,
-            resolvedModel: resolved.resolvedModel ?? input.model ?? "stub-model",
+            resolvedModel:
+              resolved.resolvedModel ?? input.model ?? "stub-model",
           };
 
           const handle: ImageLaunchHandle = {
@@ -1207,7 +1311,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           // its own resolvedModel wins when present.
           const result: VideoGenerationResult = {
             ...resolved,
-            resolvedModel: resolved.resolvedModel ?? input.model ?? "stub-model",
+            resolvedModel:
+              resolved.resolvedModel ?? input.model ?? "stub-model",
           };
 
           const handle: VideoLaunchHandle = {
@@ -1325,8 +1430,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               pgVersion: input.pgVersion ?? 17,
               duration: input.duration,
               connection: {
-                connectionString: `postgresql://stub_user:stub_pass@localhost:5432/${name}`,
-                host: "localhost",
+                connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/${name}`,
+                host: STUB_DB_HOST,
                 port: 5432,
                 username: "stub_user",
                 password: "stub_pass",
@@ -1349,8 +1454,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             pgVersion: 17,
             duration: "1h",
             connection: {
-              connectionString: `postgresql://stub_user:stub_pass@localhost:5432/stub-${idOrHandle}`,
-              host: "localhost",
+              connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/stub-${idOrHandle}`,
+              host: STUB_DB_HOST,
               port: 5432,
               username: "stub_user",
               password: "stub_pass",

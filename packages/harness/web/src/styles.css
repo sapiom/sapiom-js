@@ -1010,6 +1010,13 @@ input {
   min-width: 0;
 }
 
+/* ADD, at the leading edge. Sits tight to the label it acts on rather than
+   drifting to the trailing group, and gives up the -sp2 of gap so the pair
+   reads as one unit ("+ Projects") instead of two controls. */
+.rail-header-btn-lead {
+  margin-right: calc(var(--sp2) * -1 + 2px);
+}
+
 .rail-header-actions {
   margin-left: auto;
   display: flex;
@@ -10109,4 +10116,517 @@ button.system-graph-node.is-navigable:focus-visible {
   .overview-modal-card {
     animation: none;
   }
+}
+
+/* ── Project axis: row anatomy ─────────────────────────────────────────────
+   Added with the rail's Project axis (SAP-2928). The pixel system above is
+   unchanged: every row is --tree-row-h tall, a level's leading glyph sits at
+   `level × --tree-indent`, and trailing indicators keep the same right axis. */
+
+/* The left icon IS the disclosure control.
+   The chevron used to sit in its own trailing column, reserving width on EVERY
+   row to say something a row only needs to say at the moment you act on it.
+   Here the glyph you already look at becomes a chevron in place: zero extra
+   width, and the affordance appears where the pointer already is. There is no
+   trailing chevron anywhere in the tree. */
+.row-disclosure {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-areas: "glyph";
+  place-items: center;
+  height: 100%;
+  padding: 0 0 0 var(--tree-pad-x);
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--radius);
+}
+
+/* Both children stay MOUNTED and swap by opacity in one grid cell, so the slot
+   never changes size and the row cannot reflow under the cursor. */
+.row-disclosure-mark,
+.row-disclosure-chevron {
+  grid-area: glyph;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  transition: opacity var(--transition-fast);
+}
+
+.row-disclosure-chevron {
+  opacity: 0;
+}
+
+.workspace-row:hover .row-disclosure-mark,
+.row-disclosure:focus-visible .row-disclosure-mark,
+/* A COLLAPSED row keeps its chevron unhovered: "there is more here" must
+   never be invisible. */
+.workspace-row.is-collapsed .row-disclosure-mark {
+  opacity: 0;
+}
+
+.workspace-row:hover .row-disclosure-chevron,
+.row-disclosure:focus-visible .row-disclosure-chevron,
+.workspace-row.is-collapsed .row-disclosure-chevron {
+  opacity: 1;
+}
+
+.row-disclosure:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-disclosure-mark,
+  .row-disclosure-chevron {
+    transition: none;
+  }
+}
+
+/* A project with nothing under it keeps its mark and loses the control: a
+   chevron that folds an empty subtree is an affordance for nothing. */
+.row-disclosure-static {
+  cursor: default;
+  pointer-events: none;
+}
+
+.workspace-row:hover .row-disclosure-static .row-disclosure-mark {
+  opacity: 1;
+}
+
+/* A project takes a MARK, not a folder glyph: it is what the tree is about,
+   not a folder in it. The letter is derived from the folder name, never
+   fetched — a remote avatar is an auto-generated identicon as often as a logo,
+   and a wrong logo is worse than an honest initial. */
+.project-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Same 13px slot every other leading glyph occupies, so the pixel system
+     holds — but filled, because a mark is an identity and a folder glyph is a
+     category. */
+  width: 13px;
+  height: 13px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-line);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+/* The brand fill says "this row IS a project". A row carrying
+   `project-mark-none` has no project behind it — the stray-agents header is a
+   section title, not a project — so it must be excluded. Without the :not() the
+   hover rule (0,3,0) outranks `.project-mark-none`'s `background: transparent`
+   (0,1,0) whatever the source order, and the section header lit up solid brand
+   green on hover. */
+.workspace-row:hover .project-mark:not(.project-mark-none),
+.workspace-row.is-focused .project-mark:not(.project-mark-none),
+.workspace-row.is-selected .project-mark:not(.project-mark-none) {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+/* The stray-agents header has no project behind it, so it carries the folder
+   glyph rather than a mark that would imply one. */
+.project-mark-none {
+  background: transparent;
+  color: var(--text-faint);
+}
+
+/* Prefix and name are ONE flex child.
+   Sitting as two children of the row, the row's 6px gap opened a space inside
+   a path — `scripts/tools/ rollup` read as two separate things rather than one
+   location. */
+.tree-row-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* The prefix loses width first, by a wide margin. Flex distributes shrink in
+   proportion to (shrink factor × basis), so a plain 1:1 ratio hands the
+   shrinkage to whichever string is LONGER — which is how a deep path clipped
+   the agent's own name. A 100:1 factor inverts that: the context gives way and
+   the identity survives. */
+.tree-row-name > .tree-row-prefix {
+  flex: 0 100 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+
+/* The `/` sits OUTSIDE the truncating span so it survives a clip. Inside it,
+   `components/mailer` rendered as `componen…mailer` — one word where there
+   were two things. */
+.tree-row-name > .tree-row-sep {
+  flex: 0 0 auto;
+  padding: 0 1px 0 0;
+  color: var(--text-faint);
+}
+
+.tree-row-name > .tree-row-label {
+  flex: 0 1 auto;
+}
+
+/* Depth rides as a custom property so the indent step stays a token rather
+   than arithmetic scattered through the markup. Level n's leading glyph (or,
+   on an agent row, its first character) sits at n × --tree-indent, which is
+   exactly where its parent's label text starts. */
+.rail-list .tree-row {
+  padding-left: calc((var(--tree-depth, 0) + 1) * var(--tree-indent));
+}
+
+.rail-list .workspace-row.is-nested .row-disclosure {
+  padding-left: calc((var(--tree-depth, 0) + 1) * var(--tree-indent));
+}
+
+/* A nested directory group is a row inside a container, not a container of its
+   own: indent alone carries its nesting, and the project's single hairline
+   guide already runs the full height of the subtree. */
+.rail-list .workspace-subgroup {
+  margin-bottom: 0;
+}
+
+.rail-list .workspace-subgroup::before {
+  content: none;
+}
+
+/* A project whose rows are all directories still gets the guide — without
+   this, the line appeared only on projects that happened to hold a direct
+   agent row, which nothing on screen explained. */
+.rail-list .workspace-group:has(> .workspace-subgroup)::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tree-pad-x) + 6px);
+  top: calc(var(--tree-row-h) + var(--tree-row-gap));
+  bottom: 0;
+  width: 1px;
+  background: var(--ui-line);
+  pointer-events: none;
+}
+
+.rail-list .workspace-group > .workspace-subgroup {
+  position: relative;
+}
+
+/* The filing panel: VISIBLE dropdowns, not a menu of radio rows. Each states
+   its current value on the face of the control, so "how is this list filed?"
+   is answerable without opening anything. */
+.filing-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  min-height: var(--tree-row-h);
+  padding: 0 var(--tree-pad-x);
+  font-size: var(--type-label);
+  color: var(--text-dim);
+}
+
+.filing-field-label {
+  flex: 0 0 auto;
+}
+
+.filing-field-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--type-label);
+}
+
+.filing-field-select:hover {
+  border-color: var(--ui-line-strong);
+}
+
+.filing-field-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ── Group axis: group rows, the drag host, and the two list-end actions ────
+   Added with the rail's Group axis (SAP-2929), appended as its own block for
+   the same reason the Project-axis block above was: it keeps parallel work off
+   each other's lines. Nothing above is reordered or restated except where a
+   `:has()` selector cannot see this axis's markup, which is noted where it
+   happens. The pixel system is unchanged. */
+
+/* The group-axis agent row is WRAPPED in a drag host (components/GroupRow.tsx:
+   GroupAgentRow) so `draggable` and the dataTransfer payload have somewhere to
+   live without a second copy of the agent-row anatomy. One rule above gives
+   `.workspace-group > .workflow-item` its stacking context and cannot see
+   through the wrapper, so it is re-stated for it here rather than edited in
+   place. The project's single hairline guide needs nothing: a group section is a
+   `.workspace-subgroup`, which the Project-axis block already draws the guide
+   for at the PROJECT level and deliberately suppresses per-subgroup. */
+.group-agent-drag {
+  position: relative;
+}
+
+/* A row being dragged reads as picked up rather than gone: the source stays in
+   place (the drop may be a copy, and on a refused drop nothing happened at
+   all), it simply steps back. */
+.group-agent-drag:active {
+  opacity: 0.65;
+}
+
+/* THE DROP TARGET.
+   A wash plus a leading rule, not a border: a border on a 24px row changes the
+   row's height and shoves every row under it by a pixel mid-drag, which reads
+   as the list rearranging before the drop has happened. */
+.workspace-row.is-drop-target {
+  /* A WASH, which is what the comment above always claimed. `var(--accent)` is
+     `var(--brand)` — a saturated green — so this painted the whole row solid
+     brand and read as an error state rather than a target. The leading rule
+     stays full-strength: that is the part doing the pointing. */
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
+.workspace-row.is-drop-target .tree-row-label {
+  color: var(--text);
+}
+
+/* CREATE and RESET, at the END of the list they act on.
+   Both were menu items in the prototype and neither was found — someone went
+   looking for a way to make a group and concluded the feature did not exist. A
+   row at the end of the list is where the eye already is after reading it, and
+   it is visible AT REST rather than on hover, because a list you cannot add to
+   reads as a fixed list. Built from the row metrics so it sits in the same
+   rhythm as the group rows above it, and dimmed so it never competes with a
+   real group for attention. */
+.rail-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  min-height: var(--tree-row-h);
+  /* Its glyph lands on the same axis as a group row's, which `is-nested`
+     resolves to (depth 0 + 1) × --tree-indent. Stated the same way rather than
+     as a magic number, so an indent-token change moves both. */
+  padding: 0 var(--tree-pad-x) 0 var(--tree-indent);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--type-label);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.rail-add-row:hover {
+  background: var(--accent);
+  color: var(--text);
+}
+
+.rail-add-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* The cost of a reset, stated in the copy rather than paid for by hiding the
+   control: "Discards 3 groups". Pushed to the row's right so the label reads
+   first and the consequence second. */
+.rail-add-row-cost {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+/* Armed: the second click performs the reset, so the row says so. Danger tone
+   only once it is actually about to happen — a permanently red row in the tree
+   would read as a warning about the list rather than about one action. */
+.rail-reset-row.is-armed {
+  background: var(--accent);
+  color: var(--red-text, var(--red));
+}
+
+.rail-reset-row.is-armed .rail-add-row-cost {
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-add-row {
+    transition: none;
+  }
+}
+
+/* ── Project axis: the move drag ─────────────────────────────────────────────
+   Added with the Project-axis move (SAP-2930), appended as its own block for
+   the same reason the two blocks above were: it keeps parallel work off each
+   other's lines. Nothing above is reordered or restated, and nothing new is
+   needed for the drop target itself — a directory row and a project row are
+   both `.workspace-row`, so both light up from the single
+   `.workspace-row.is-drop-target` rule the Group axis already states.
+
+   Nothing is needed for the drag SOURCE's layout either, and deliberately: the
+   project-axis agent row carries `draggable` on the row element itself rather
+   than inside a wrapper host, so the hairline guide's `:has(> .workflow-item)`
+   and the stacking-context rule above still see it, and the row order the axis
+   is asserted on is unchanged. */
+
+/* A row being dragged reads as picked up rather than gone: the source stays in
+   place — on a refused drop nothing happened at all — it simply steps back. */
+.rail-list .workflow-item[draggable="true"]:active {
+  opacity: 0.65;
+}
+
+/* ── Round 2: the unrooted section, and an empty project ─────────────────────
+   Appended as its own delimited block, the convention wave 1 established so
+   parallel work stays off each other's lines. Nothing above is reordered or
+   restated.
+
+   Two things get styling here, and both exist because the round-1 rail was
+   only ever rendered against fixtures with a handful of tidy, uniquely-named
+   agents:
+
+    1. "Outside your projects" is not a footnote. It held ~78 of 88 agents on a
+       real install, which made it the largest thing in the rail and the least
+       important. It now collapses (closed by default) and names its count.
+    2. A project with NO agents is an ordinary state, not an impossible one —
+       you open a project in order to build the first agent in it — so its row
+       needs something honest to say underneath it. */
+
+/* The count on the closed header. A quiet numeral, not a pill: this is the
+   size of a section the user is being invited to ignore, and a badge would
+   make the least important row the loudest. */
+.unrooted-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding-left: 6px;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An unrooted row carries a trailing action, so its trigger has to stop short
+   of the row's right edge rather than run under the button. `.workflow-item`
+   is already `display: flex`; this only re-states the shrink. */
+.unrooted-item .workflow-item-trigger {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The row's PREFIX is doing real work here, unlike in the tree: for six rows
+   named `ari-grade-repo` it is the only thing that differs. It truncates from
+   the RIGHT (the default), which is the correct end to keep — the six worktrees
+   diverge at their LEADING characters (`design-eng-fix` / `design-eng-ij` /
+   `design-eng-main`), so a left-truncating prefix would clip away the only
+   thing being disambiguated.
+
+   And it yields BEFORE the name does: [SEEN] rule 1's point is that the row is
+   named for the AGENT, and a grown prefix must not win the width it shares with
+   that name. `flex: 0 100 auto` (inherited from the tree prefix) already gives
+   it 100× the label's shrink; the cap is what stops it claiming most of a
+   narrow rail before shrinking begins. Measured at rail width against a real
+   85-row section: 45% keeps `ari-grade-repo` whole while
+   `design-eng-main/ari` still reads as distinct from `design-eng-ij/ari`. */
+.unrooted-item .tree-row-prefix {
+  max-width: 45%;
+}
+
+/* The folder chooser behind "Open as project". A menu of rows, each naming a
+   folder and how many registered agents it would bring in — the count is the
+   thing being chosen between, so it is part of the row, not a tooltip. */
+.unrooted-open-choice {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.unrooted-open-choice-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An empty project's own line. Nested to the depth its agents would occupy,
+   so the row reads as "this is where they would be" rather than as a second
+   header. Non-interactive: there is nothing here to click, and a hover state
+   would promise otherwise. */
+.workspace-row-empty {
+  pointer-events: none;
+}
+
+.tree-row-empty {
+  padding-left: var(--tree-pad-x);
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+/* The trailing action reveals on the ROW's hover, and an unrooted row is a
+   `.workflow-item`, not a `.workspace-row` — the shared reveal rule keys on
+   the latter, so without this the one way out of the section is invisible at
+   rest AND on hover. Focus reveals it too, so it is reachable by keyboard. */
+.unrooted-item:hover .workspace-row-action,
+.unrooted-item .workspace-row-action[aria-expanded="true"],
+.unrooted-item .workspace-row-action:focus-visible {
+  opacity: 1;
+}
+
+/* The bulk scan's reach, stated where the count is — the count answers "what is
+   directly inside?" and this answers "what will adding do?", which round 1 let
+   the button imply. Sits under the path so the block reads finding, then place,
+   then consequence. */
+.aw-result-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+/* Armed: the second press is the one that registers, so the control says so.
+   Danger tone only once it is actually about to happen — the same rule the
+   group-axis reset row follows. */
+.modal-start-actions .btn-primary.is-armed,
+.modal-start-actions .btn-ghost.is-armed {
+  background: var(--red, #b42318);
+  border-color: var(--red, #b42318);
+  color: #fff;
+}
+
+/* The separator between a prefix and an agent NAME, where the two are not a
+   path. A slash asserts "these join into one location"; that is true only when
+   the agent's folder is named for the agent, and on a real install the common
+   case was the other one (`ari-grade-repo` in `ari/orchestration`). The dot
+   takes air on both sides, because unlike a path separator it is a break
+   between two things rather than a joint inside one. */
+.tree-row-name > .tree-row-sep-loose {
+  padding: 0 3px;
+}
+
+/* The empty project's action row. It uses the shared `.tree-row` skeleton so it
+   sits on the agent rows' rhythm — this is where the first agent will appear,
+   and the row should already read as that place. */
+.tree-row-empty-action {
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+.tree-row-empty-action:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }

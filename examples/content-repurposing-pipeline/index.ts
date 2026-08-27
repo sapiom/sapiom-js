@@ -292,11 +292,82 @@ export function buildRepurposeSystem(
     "You do not know the author's name, company, or the reader's name, and " +
     "nothing is filled in later — so no greetings or sign-offs that need one, " +
     "and no bracketed fill-ins anywhere in the pack. End the newsletter on its " +
-    "takeaway line. " +
-    "Reply with ONLY minified JSON: " +
-    '{"tweetThread":string[],"linkedInPost":string,"newsletter":string,' +
-    '"quoteGraphics":[{"quote":string,"imagePrompt":string}],"videoScript":string}.'
+    "takeaway line."
   );
+}
+
+/**
+ * The forced tool call `repurpose` reads the pack out of. `llm.run`'s `output`
+ * appends this tool to the request and pins `tool_choice` to it, so the pack
+ * arrives as a typed `tool_use` block.
+ *
+ * This replaced a "reply with ONLY minified JSON" prompt plus a
+ * first-`{`-to-last-`}` slice. Ask a model to echo a schema and it will
+ * sometimes echo it mid-reasoning, which is what that slice then caught instead
+ * of the answer; `JSON.parse` threw, and the canned pack — a tweet thread
+ * reading `"<title>: a quick thread. 🧵"` over the first 240 characters of the
+ * source — was packaged and emailed on a run that reports `succeeded`. There is
+ * now no prose to slice.
+ */
+export const REPURPOSE_TOOL = "emit_content_pack";
+
+export function buildRepurposeSchema(
+  numQuotes: number,
+): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      tweetThread: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Ordered tweets, each <= 280 characters, each standing alone but reading as a thread.",
+      },
+      linkedInPost: {
+        type: "string",
+        description: "A single LinkedIn post — longer, first-person.",
+      },
+      newsletter: {
+        type: "string",
+        description:
+          "A short newsletter section in markdown, ending on its takeaway line.",
+      },
+      quoteGraphics: {
+        type: "array",
+        minItems: numQuotes,
+        maxItems: numQuotes,
+        items: {
+          type: "object",
+          properties: {
+            quote: {
+              type: "string",
+              description: "A short, punchy pull-quote.",
+            },
+            imagePrompt: {
+              type: "string",
+              description:
+                "ART DIRECTION ONLY for this quote's graphic (palette, background, typography style) — never ask for empty space or a text-free image.",
+            },
+          },
+          required: ["quote", "imagePrompt"],
+          additionalProperties: false,
+        },
+        description: `Exactly ${numQuotes} pull-quote(s) to render as graphics.`,
+      },
+      videoScript: {
+        type: "string",
+        description: `Short single-shot VISUAL prompt (under 300 characters) for a ${CLIP_SECONDS}-second silent teaser clip — decorative motion, NO on-screen text, never a narrated timeline.`,
+      },
+    },
+    required: [
+      "tweetThread",
+      "linkedInPost",
+      "newsletter",
+      "quoteGraphics",
+      "videoScript",
+    ],
+    additionalProperties: false,
+  };
 }
 
 /**
@@ -342,91 +413,85 @@ export function buildClipPrompt(pack: Pack): string {
   );
 }
 
+/** Non-blank strings only — a blank tweet is not a tweet. */
+function nonBlankStrings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string" && v.trim() !== "")
+    : [];
+}
+
 /**
- * Parse the LLM's minified-JSON pack defensively. A model may wrap the JSON in prose
- * or fences, so we slice to the outermost object before parsing and fall back to a
- * usable pack built from the source when anything is off — the pipeline still runs
- * end to end rather than failing on a malformed reply. Mirrors `scene-to-video`'s
- * `parsePlan`.
+ * Read the forced tool call back into a `Pack`.
+ *
+ * Every field here IS the deliverable — the tweet thread, the post, the
+ * newsletter, the quotes that get rendered into graphics and emailed. So this
+ * throws rather than substituting anything: an incomplete pack is a failed run,
+ * and the run has to say so. The `numQuotes` check is part of that — a pack
+ * short of the quotes the caller paid for is not a pack with a default in it,
+ * it is a short pack.
+ *
+ * `videoScript` is still passed through {@link buildClipPrompt}, which replaces
+ * a narration-shaped script with a purpose-written visual prompt. That is not a
+ * fallback for a missing answer: it is a guard on an answer the model did give,
+ * for a downstream model that renders text illegibly.
  */
-function parsePack(
-  output: string | null,
-  source: string,
-  title: string,
-  numQuotes: number,
-): Pack {
-  const lead = source.trim().slice(0, 240);
-  const fallbackQuote = lead.slice(0, 120);
-  const fallback: Pack = {
-    tweetThread: [
-      `${title}: a quick thread. 🧵`,
-      lead,
-      "More in the full post.",
-    ],
-    linkedInPost: `${title}\n\n${lead}`,
-    newsletter: `## ${title}\n\n${lead}`,
-    quoteGraphics: Array.from({ length: numQuotes }, () => ({
-      quote: fallbackQuote || title,
-      // Art direction only — the quote text itself is composed in by buildGraphicPrompt.
-      imagePrompt:
-        "Clean, modern, solid deep-navy background, large legible sans-serif type, generous margins, no watermark.",
-    })),
-    // Decorative and text-free, like buildClipPrompt's fallback — video models
-    // render on-screen text illegibly.
-    videoScript: `Upbeat ${CLIP_SECONDS}-second social teaser: slow push-in over a bright, clean gradient, a single continuous shot, no text, no watermark.`,
-  };
-  if (!output) return fallback;
-  try {
-    const json = output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1);
-    const raw = JSON.parse(json) as Partial<Pack>;
-
-    const tweetThread =
-      Array.isArray(raw.tweetThread) &&
-      raw.tweetThread.every((t) => typeof t === "string")
-        ? raw.tweetThread.filter((t) => t.trim()).slice(0, 10)
-        : fallback.tweetThread;
-
-    const rawQuotes = Array.isArray(raw.quoteGraphics) ? raw.quoteGraphics : [];
-    const quoteGraphics: QuoteGraphicSpec[] = rawQuotes
-      .slice(0, numQuotes)
-      .map((q, i): QuoteGraphicSpec => {
-        const spec = (q ?? {}) as Partial<QuoteGraphicSpec>;
-        const dflt =
-          fallback.quoteGraphics[
-            Math.min(i, fallback.quoteGraphics.length - 1)
-          ];
-        return {
-          quote:
-            typeof spec.quote === "string" && spec.quote.trim()
-              ? spec.quote
-              : dflt.quote,
-          imagePrompt:
-            typeof spec.imagePrompt === "string" && spec.imagePrompt.trim()
-              ? spec.imagePrompt
-              : dflt.imagePrompt,
-        };
-      });
-
-    return {
-      tweetThread: tweetThread.length > 0 ? tweetThread : fallback.tweetThread,
-      linkedInPost:
-        typeof raw.linkedInPost === "string" && raw.linkedInPost.trim()
-          ? raw.linkedInPost
-          : fallback.linkedInPost,
-      newsletter:
-        typeof raw.newsletter === "string" && raw.newsletter.trim()
-          ? raw.newsletter
-          : fallback.newsletter,
-      quoteGraphics:
-        quoteGraphics.length > 0 ? quoteGraphics : fallback.quoteGraphics,
-      videoScript:
-        typeof raw.videoScript === "string" && raw.videoScript.trim()
-          ? raw.videoScript
-          : fallback.videoScript,
-    };
-  } catch {
-    return fallback;
+export function readPack(structured: unknown, numQuotes: number): Pack {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "repurpose: the model returned no structured content pack — refusing to ship invented content.",
+    );
   }
+  const raw = structured as Partial<Pack>;
+
+  const tweetThread = nonBlankStrings(raw.tweetThread).slice(0, 10);
+  if (tweetThread.length === 0) {
+    throw new Error(
+      "repurpose: the model returned no tweet thread — refusing to ship an invented one.",
+    );
+  }
+
+  const requireText = (value: unknown, field: string): string => {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(
+        `repurpose: the model returned no ${field} — refusing to ship invented copy.`,
+      );
+    }
+    return value;
+  };
+
+  const rawQuotes = Array.isArray(raw.quoteGraphics) ? raw.quoteGraphics : [];
+  const quoteGraphics: QuoteGraphicSpec[] = rawQuotes
+    .slice(0, numQuotes)
+    .map((q, i): QuoteGraphicSpec => {
+      const spec = (q ?? {}) as Partial<QuoteGraphicSpec>;
+      if (typeof spec.quote !== "string" || spec.quote.trim() === "") {
+        throw new Error(
+          `repurpose: pull-quote ${i + 1} came back empty — refusing to invent a quote from the source.`,
+        );
+      }
+      if (
+        typeof spec.imagePrompt !== "string" ||
+        spec.imagePrompt.trim() === ""
+      ) {
+        throw new Error(
+          `repurpose: pull-quote ${i + 1} came back with no art direction.`,
+        );
+      }
+      return { quote: spec.quote, imagePrompt: spec.imagePrompt };
+    });
+  if (quoteGraphics.length < numQuotes) {
+    throw new Error(
+      `repurpose: asked for ${numQuotes} pull-quote(s), got ${quoteGraphics.length}.`,
+    );
+  }
+
+  return {
+    tweetThread,
+    linkedInPost: requireText(raw.linkedInPost, "LinkedIn post"),
+    newsletter: requireText(raw.newsletter, "newsletter section"),
+    quoteGraphics,
+    videoScript: requireText(raw.videoScript, "teaser clip prompt"),
+  };
 }
 
 /** Render the whole pack as one markdown document for storage + email. */
@@ -636,13 +701,15 @@ const repurpose = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 1500,
+        max_tokens: 8000,
+      },
+      output: {
+        name: REPURPOSE_TOOL,
+        schema: buildRepurposeSchema(numQuotes),
       },
     });
-    const pack = parsePack(
-      ctx.sapiom.llm.textOf(res) ?? null,
-      source,
-      title,
+    const pack = readPack(
+      ctx.sapiom.llm.structuredOf(res, REPURPOSE_TOOL),
       numQuotes,
     );
 

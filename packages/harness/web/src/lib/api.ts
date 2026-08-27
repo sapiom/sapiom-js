@@ -23,6 +23,9 @@ import type {
   RunMacroRequest,
   SessionRecord,
   SessionSummary,
+  StudioRailFileResponse,
+  StudioRailLaunchEdge,
+  StudioRailLaunchEdgesResponse,
   TemplateDetailView,
   TemplateListResponse,
   RunView,
@@ -41,7 +44,10 @@ import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
 import { parseSystemGraphSnapshot } from "./system-graph";
+import { refuseMove, remapUnder } from "./agent-move";
+import { basenameOf, isWithinDir, samePath } from "./paths";
 
+import type { CanvasGraph, CanvasGraphNode } from "./canvas-graph";
 import {
   MOCK_ACCOUNT_PLAN,
   MOCK_FS_TREE,
@@ -238,6 +244,40 @@ export function getBootToken(): string {
 }
 
 /** Response from GET /api/auth/status — live auth state from the server. */
+/** Why a workflow-keyed board is not a graph. `ok` is the only status carrying one. */
+export type WorkflowGraphStatus = "ok" | "empty" | "preparing" | "error";
+
+/**
+ * `GET /api/workflows/:path/graph` — the SESSION-FREE canvas entry point
+ * (IA-01; contract in `packages/harness/docs/workflow-canvas-graph.md`).
+ *
+ * Declared here rather than imported from `src/server/workflow-graph.ts`: that
+ * module reaches for `node:path` and `express`, so the browser cannot see it.
+ * `enrichment` stays `unknown` because nothing client-side reads it yet — the
+ * pane draws `document` and inspects `graph`.
+ *
+ * The route returns JSON and CANNOT be an `<iframe src>`: it sits behind the
+ * `X-Harness-Token` middleware and a bare `src` carries no header. `document`
+ * is byte-identical to what a bound session's `/canvas/:sessionId/` serves for
+ * the same workflow, and is present for EVERY status — an empty board is still
+ * a renderable page, never a hole — so a consumer renders it via `srcdoc`.
+ */
+export interface WorkflowGraphResponse {
+  /** The resolved absolute agent directory the board was derived from. */
+  path: string;
+  /** The registry's display name — the board's panel title. */
+  name: string;
+  status: WorkflowGraphStatus;
+  /** The extracted graph; null for every status but "ok". */
+  graph: CanvasGraph | null;
+  enrichment: unknown | null;
+  /** Human-readable explanation for "empty"/"error"; null otherwise. */
+  reason: string | null;
+  /** True when the graph came from the extraction cache — no child process ran. */
+  cached: boolean;
+  document: string;
+}
+
 export interface AuthStatusResponse {
   authenticated: boolean;
   organizationName: string | null;
@@ -301,12 +341,57 @@ export interface HarnessApi {
   getWorkflowInputContract(
     workflowPath: string,
   ): Promise<WorkflowInputContractResponse>;
+  /**
+   * The workflow-keyed canvas board (IA-01) — the only way to read agent F's
+   * board while the active session is bound to agent B, and the only board an
+   * agent that has never hosted a session has at all.
+   *
+   * Rejects with `ApiError(404)` when the path is not a registered workflow and
+   * `ApiError(400)` for a rejected path shape. A registered agent with no
+   * usable `sapiom.json` resolves `200` with `status: "empty"` — absent means
+   * empty, never missing — so a consumer must tell a real board from an empty
+   * one by `status`, never by the status code.
+   */
+  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   scanWorkflows(root: string): Promise<WorkflowInfo[]>;
+  /**
+   * Moves an agent's DIRECTORY on disk — the Project axis's drag (SAP-2930).
+   *
+   * The Project axis is derived from real paths, so a drag has two honest
+   * outcomes: move, or refuse. Rejects with an `ApiError` carrying the server's
+   * reason when the destination is occupied or the move is impossible; the
+   * server guards independently of the rail's `planMove`, so a refusal can
+   * arrive even for a plan the rail blessed. On success the server broadcasts
+   * `workflows.changed` and the rail re-derives the tree from the new path.
+   */
+  moveAgent(from: string, to: string): Promise<void>;
   /** Adapter registry (GET /api/harnesses): every known harness with its
    *  mode/installed/experimental flags plus per-agent Sapiom MCP install
    *  instructions — the new-session picker and MCP setup block feed on it. */
   listHarnesses(): Promise<HarnessEntry[]>;
+  /**
+   * The Group axis's stored arrangement for one project root — the exact text of
+   * `<root>/.sapiom/studio-rail.json`, or null when there is no file.
+   *
+   * TEXT, not a decoded object, and deliberately so: the file distinguishes
+   * `groups: null` ("nothing stored, detection owns this") from `groups: []`
+   * ("the user materialized groups and then deleted them all"), and a second
+   * decoder anywhere on this path is a second place for those to collapse into
+   * each other. `lib/agent-groups.ts` is the only decoder.
+   */
+  getRailState(projectRoot: string): Promise<string | null>;
+  /** Write a MATERIALIZED arrangement. An un-materialized one is
+   *  `clearRailState`, never `{ groups: [] }`. */
+  saveRailState(projectRoot: string, raw: string): Promise<void>;
+  /** Remove the file: how an un-materialized arrangement — including the one
+   *  `Reset to detected` produces — is persisted. Removing rather than skipping
+   *  the write is what stops the old arrangement outliving the reset. */
+  clearRailState(projectRoot: string): Promise<void>;
+  /** Every detected launch edge across the registered agents, from the existing
+   *  grep in `core/canvas-interconnections.ts`. The Group axis seeds its groups
+   *  from the connected components over these. */
+  listLaunchEdges(): Promise<StudioRailLaunchEdge[]>;
   listMacros(): Promise<MacroDef[]>;
   runMacro(id: string, req: RunMacroRequest): Promise<void>;
   getSettings(): Promise<HarnessSettings>;
@@ -426,8 +511,7 @@ class RealApi implements HarnessApi {
     workspaceKey: WorkspaceKey,
     options: { refresh?: boolean } = {},
   ): Promise<SystemGraphSnapshot> {
-    const route =
-      `/api/workspaces/${encodeURIComponent(workspaceKey)}/system-graph`;
+    const route = `/api/workspaces/${encodeURIComponent(workspaceKey)}/system-graph`;
     const response = await this.response(
       options.refresh ? `${route}/refresh` : route,
       options.refresh ? { method: "POST" } : undefined,
@@ -528,6 +612,15 @@ class RealApi implements HarnessApi {
     );
   }
 
+  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+    // Same encoding as `input-contract` and `deploy` beside it: the agent's
+    // absolute path URI-encoded into ONE segment. Express matches on the raw
+    // path and decodes the param, so an encoded `/` never splits the route.
+    return this.request<WorkflowGraphResponse>(
+      `/api/workflows/${encodeURIComponent(workflowPath)}/graph`,
+    );
+  }
+
   connectWorkflow(path: string): Promise<WorkflowInfo> {
     return this.request<WorkflowInfo>("/api/workflows/connect", {
       method: "POST",
@@ -542,8 +635,43 @@ class RealApi implements HarnessApi {
     });
   }
 
+  async moveAgent(from: string, to: string): Promise<void> {
+    await this.request<{ ok: true }>("/api/agents/move", {
+      method: "POST",
+      body: JSON.stringify({ from, to }),
+    });
+  }
+
   listHarnesses(): Promise<HarnessEntry[]> {
     return this.request<HarnessEntry[]>("/api/harnesses");
+  }
+
+  async getRailState(projectRoot: string): Promise<string | null> {
+    const res = await this.request<StudioRailFileResponse>(
+      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
+    );
+    return res.raw;
+  }
+
+  async saveRailState(projectRoot: string, raw: string): Promise<void> {
+    await this.request<{ ok: true }>(
+      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
+      { method: "PUT", body: JSON.stringify({ raw }) },
+    );
+  }
+
+  async clearRailState(projectRoot: string): Promise<void> {
+    await this.request<{ ok: true }>(
+      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async listLaunchEdges(): Promise<StudioRailLaunchEdge[]> {
+    const res = await this.request<StudioRailLaunchEdgesResponse>(
+      "/api/studio-rail/launch-edges",
+    );
+    return res.edges;
   }
 
   listMacros(): Promise<MacroDef[]> {
@@ -853,10 +981,18 @@ const LEASING_RUN_STEPS: { id: string; name: string; latencyMs: number }[] = [
 // passes; nothing carries cost. Used exclusively for `run()`-minted
 // `exec-mock-prod-*` ids, never the terminal default other ids rely on.
 export const PROGRESSIVE_STEP_MS = 900;
-export function progressiveLeasingRun(executionId: string, elapsedMs: number): RunView {
+export function progressiveLeasingRun(
+  executionId: string,
+  elapsedMs: number,
+): RunView {
   const steps: StepView[] = LEASING_RUN_STEPS.map((step, i) => {
     if (elapsedMs >= (i + 1) * PROGRESSIVE_STEP_MS) {
-      return { id: step.id, name: step.name, status: "passed", latencyMs: step.latencyMs };
+      return {
+        id: step.id,
+        name: step.name,
+        status: "passed",
+        latencyMs: step.latencyMs,
+      };
     }
     if (elapsedMs >= i * PROGRESSIVE_STEP_MS) {
       return { id: step.id, name: step.name, status: "running" };
@@ -867,7 +1003,227 @@ export function progressiveLeasingRun(executionId: string, elapsedMs: number): R
   return { executionId, status: done ? "completed" : "running", steps };
 }
 
+/**
+ * Launch edges for mock mode — what `core/canvas-interconnections.ts`'s grep
+ * would find across the fixture agents, without a filesystem to grep.
+ *
+ * Shaped to produce every case the Group axis has to render, against
+ * `?mockFixtures=deep` (see MOCK_DEEP_WORKFLOWS):
+ *
+ *  - `gateway` reaches `queue` and `ads-worker` — a three-member component,
+ *    named for the head nothing launches.
+ *  - `mailer` reaches `sender` — a second, smaller component, so group ordering
+ *    (biggest first) is observable.
+ *  - `outreach` reaches `ghost-agent`, which this install does NOT have. An edge
+ *    to a missing agent forms NO group, so `outreach` stays in `Ungrouped`.
+ *  - `ads` and `rollup` are reached by nothing at all, which is the ordinary
+ *    case in a real repo and why `Ungrouped` has to be named rather than hidden.
+ *
+ * Lives here rather than in `mock-data.ts` because it is a fixture for a route
+ * this client owns, and `mock-data.ts` holds no route fixtures.
+ */
+const MOCK_LAUNCH_EDGES: StudioRailLaunchEdge[] = [
+  { parent: "gateway", child: "queue" },
+  { parent: "gateway", child: "ads-worker" },
+  { parent: "mailer", child: "sender" },
+  { parent: "outreach", child: "ghost-agent" },
+];
+
+/** One key per project root, mirroring one file per project root. */
+const MOCK_RAIL_STATE_PREFIX = "sapiom-mock-studio-rail:";
+
+/**
+ * Every rail-state write the mock has served this page load, newest last, for
+ * Playwright to read back.
+ *
+ * MockApi has no other observable effect (same reason `runMacro` records
+ * `lastMacroRun`), and the assertion that matters most in this area is a
+ * NEGATIVE one: loading the page twice must write nothing at all. A spec that
+ * only counted rows would pass while a mount effect quietly stored
+ * `groups: []` — which is exactly how the regression shipped.
+ */
+function recordRailStateWrite(entry: {
+  root: string;
+  raw: string | null;
+}): void {
+  if (typeof window === "undefined") return;
+  const win = window as unknown as {
+    __HARNESS_TEST__?: Record<string, unknown>;
+  };
+  const previous =
+    (win.__HARNESS_TEST__?.railStateWrites as Array<{
+      root: string;
+      raw: string | null;
+    }>) ?? [];
+  win.__HARNESS_TEST__ = {
+    ...(win.__HARNESS_TEST__ ?? {}),
+    railStateWrites: [...previous, entry],
+  };
+}
+
+/**
+ * Mock mode's stand-in for THE DISK, for the one mutation that is a filesystem
+ * change: the Project-axis move (SAP-2930).
+ *
+ * Module-level, not per-instance, and that is the whole reason it exists.
+ * `createApi()` is called from several modules (`use-harness-state`,
+ * `use-rail-groups`, `use-account-plan`), and each mock instance holds its OWN
+ * copy of the fixtures — so a move dispatched through one instance would be
+ * invisible to the list the app renders from another. There is only one disk, so
+ * there is one log, and every instance's reads fold it in (see the `workflows`
+ * and `sessions` accessors below). Reset on reload, like every other mock
+ * mutation.
+ */
+const mockMoves: Array<{ from: string; to: string }> = [];
+
+/** Every move so far, applied in order. Identity-preserving and free when
+ *  nothing has moved, which is every spec but this ticket's own. */
+function replayMockMoves(p: string): string {
+  let at = p;
+  for (const move of mockMoves) at = remapUnder(at, move.from, move.to);
+  return at;
+}
+
+/** Test-only escape hatch, mock mode only: what the rail actually dispatched.
+ *  A count-only drag assertion passes when nothing happened at all, so the spec
+ *  reads this to prove the drop reached the mover — and that a GROUP-axis drag
+ *  never does. */
+function recordAgentMove(entry: { from: string; to: string }): void {
+  if (typeof window === "undefined") return;
+  const win = window as unknown as {
+    __HARNESS_TEST__?: Record<string, unknown>;
+  };
+  const previous =
+    (win.__HARNESS_TEST__?.agentMoves as Array<{ from: string; to: string }>) ??
+    [];
+  win.__HARNESS_TEST__ = {
+    ...(win.__HARNESS_TEST__ ?? {}),
+    agentMoves: [...previous, entry],
+  };
+}
+
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
+/**
+ * Mock mode's stand-in for the workflow-keyed board (IA-01).
+ *
+ * `VITE_MOCK=1` has no harness server, so `GET /api/workflows/:path/graph`
+ * cannot answer — and the e2e suite runs entirely in mock mode. This builds the
+ * same SHAPE the real route returns for `status: "ok"`: a small three-step graph
+ * plus a document that posts `sapiom-canvas:graph` and `sapiom-canvas:size`,
+ * which is what the pane's reveal gate actually waits for. It is a fixture, not
+ * a renderer — the real route derives from the agent's `sapiom.json` through
+ * `deriveWorkflowCanvas` and this cannot.
+ *
+ * It deliberately does NOT live in `mock-data.ts`: the fixture is keyed by
+ * workflow, generated per call, and belongs to this route's mock rather than to
+ * the shared seed data.
+ */
+function mockWorkflowGraph(name: string): CanvasGraph {
+  const node = (
+    id: string,
+    kind: CanvasGraphNode["kind"],
+    role: string,
+  ): CanvasGraphNode => ({
+    id,
+    kind,
+    label: id,
+    role,
+    description: "",
+    timeoutMs: null,
+    inputSchema: null,
+    capabilities: [],
+  });
+  return {
+    name,
+    entry: "intake",
+    nodes: [
+      node("intake", "entry", "entry"),
+      node("work", "step", "step"),
+      node("done", "terminal-success", "terminal · success"),
+    ],
+    edges: [
+      { from: "intake", to: "work", kind: "sequential", label: "" },
+      { from: "work", to: "done", kind: "sequential", label: "" },
+    ],
+    groups: [],
+    warnings: [],
+  };
+}
+
+/**
+ * The fixture stand-in for the message documents the real route returns for
+ * every status but `ok` — the calm "Preparing your agent" placeholder, the
+ * "Nothing rendered yet" page, the honest error panel. They are pages, not
+ * boards, and crucially they post NO graph: that is what keeps the pane from
+ * revealing itself on setup scaffolding, so the mock must not post one either.
+ */
+function mockWorkflowMessageDocument(
+  title: string,
+  subtitle: string | null,
+): string {
+  const esc = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return [
+    '<!doctype html><html lang="en"><head><meta charset="utf-8" />',
+    `<title>${esc(title)}</title>`,
+    "<style>html,body{height:100%;margin:0;display:grid;place-items:center;",
+    'font:13px/1.5 "Geist",system-ui,sans-serif;color:#54545e}',
+    "main{text-align:center;max-width:32ch}</style></head><body>",
+    `<main data-testid="mock-workflow-message"><h1>${esc(title)}</h1>`,
+    subtitle ? `<p>${esc(subtitle)}</p>` : "",
+    "</main></body></html>",
+  ].join("");
+}
+
+/** The fixture board document. Theme comes from the `data-theme` the embedding
+ *  pane stamps on the frame's root (a `srcdoc` frame carries no query string,
+ *  so the served document's `?theme=` reader has nothing to read). */
+function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
+  // Escaped even though every value here is fixture-authored: this builds an
+  // HTML document by concatenation, and the next person to key it off a real
+  // registry name (which is a directory basename) should not have to notice.
+  const esc = (value: string): string =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  const nodes = graph.nodes
+    .map(
+      (n) =>
+        `<div class="node" data-kind="${esc(n.kind)}" data-step-name="${esc(n.label)}">` +
+        `<strong>${esc(n.label)}</strong><small>${esc(n.role)}</small></div>`,
+    )
+    .join('<div class="edge" aria-hidden="true"></div>');
+  return [
+    '<!doctype html><html lang="en"><head><meta charset="utf-8" />',
+    `<title>${esc(name)} — mock agent board</title>`,
+    "<style>",
+    ":root{--bg:#fff;--ink:#141417;--dim:#54545e;--line:rgba(17,17,20,.12);--node:#f2f2f3}",
+    '[data-theme="dark"]{--bg:#12161d;--ink:#f4f4f5;--dim:#a7a7b0;--line:rgba(255,255,255,.14);--node:#17171b}',
+    "html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);",
+    'font:13px/1.5 "Geist",system-ui,sans-serif}',
+    ".board{padding:40px 20px 72px;display:flex;flex-direction:column;align-items:center;gap:0}",
+    ".node{border:1px solid var(--line);background:var(--node);border-radius:8px;padding:10px 16px;",
+    "min-width:180px;text-align:center;display:flex;flex-direction:column;gap:2px}",
+    ".node small{color:var(--dim)}",
+    ".edge{width:1px;height:24px;background:var(--line)}",
+    "</style></head><body>",
+    `<main class="board" id="board" data-testid="mock-workflow-board">${nodes}</main>`,
+    '<script id="sapiom-graph" type="application/json">',
+    JSON.stringify(graph),
+    "</script><script>",
+    "(function(){",
+    'var el=document.getElementById("sapiom-graph");',
+    'try{parent.postMessage({type:"sapiom-canvas:graph",graph:JSON.parse(el.textContent||"{}")},"*")}catch(e){}',
+    'var b=document.getElementById("board");',
+    'try{parent.postMessage({type:"sapiom-canvas:size",width:b.offsetWidth,height:b.offsetHeight,',
+    'insetTop:40,insetBottom:72,insetX:20},"*")}catch(e){}',
+    "})();",
+    "</script></body></html>",
+  ].join("");
+}
+
 class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
@@ -946,15 +1302,54 @@ class MockApi implements HarnessApi {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("mockNoLiveSessions") ===
       "1";
-  private sessions = this.fresh || this.noLiveSessions
-    ? []
-    : MOCK_SESSIONS.map((session) => ({ ...session }));
-  private workflows = this.fresh
+  private sessionsStore: HarnessSession[] =
+    this.fresh || this.noLiveSessions
+      ? []
+      : MOCK_SESSIONS.map((session) => ({ ...session }));
+  private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
         ...MOCK_WORKFLOWS,
         ...(isSearchFixturesEnabled() ? MOCK_SEARCH_WORKFLOWS : []),
       ].map((workflow) => ({ ...workflow }));
+
+  /*
+   * Every read of the fixtures goes through the move log (`mockMoves`), so a
+   * moved agent reads at its NEW path from every instance and every call site —
+   * rather than only from the one method that happened to remember. With no
+   * move recorded these return the backing array untouched, so nothing else in
+   * the mock changes shape.
+   */
+  private get workflows(): WorkflowInfo[] {
+    if (mockMoves.length === 0) return this.workflowsStore;
+    return this.workflowsStore.map((workflow) => ({
+      ...workflow,
+      path: replayMockMoves(workflow.path),
+    }));
+  }
+
+  private set workflows(next: WorkflowInfo[]) {
+    this.workflowsStore = next;
+  }
+
+  /** A session whose cwd sat inside a moved directory follows it — on disk it
+   *  has no choice, and a session pointing at a directory that no longer exists
+   *  is the bug this remap prevents. Its binding travels the same way. */
+  private get sessions(): HarnessSession[] {
+    if (mockMoves.length === 0) return this.sessionsStore;
+    return this.sessionsStore.map((session) => ({
+      ...session,
+      cwd: replayMockMoves(session.cwd),
+      boundWorkflowPath:
+        session.boundWorkflowPath == null
+          ? session.boundWorkflowPath
+          : replayMockMoves(session.boundWorkflowPath),
+    }));
+  }
+
+  private set sessions(next: HarnessSession[]) {
+    this.sessionsStore = next;
+  }
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
     : {
@@ -1070,7 +1465,10 @@ class MockApi implements HarnessApi {
     _options: { refresh?: boolean } = {},
   ): Promise<SystemGraphSnapshot> {
     await delay(180);
-    if (!this.workspaceScopes().some((scope) => scope.workspaceKey === workspaceKey)) {
+    const selectedScope = this.workspaceScopes().find(
+      (scope) => scope.workspaceKey === workspaceKey,
+    );
+    if (!selectedScope) {
       throw new ApiError(404, "Workspace not found", "Workspace not found");
     }
     let state: SystemGraphSnapshot["state"] = "ready";
@@ -1084,8 +1482,9 @@ class MockApi implements HarnessApi {
         __MOCK_SYSTEM_GRAPH_REVISION__?: number;
       };
       const previous =
-        (win.__HARNESS_TEST__?.systemGraphRequests as WorkspaceKey[] | undefined) ??
-        [];
+        (win.__HARNESS_TEST__?.systemGraphRequests as
+          | WorkspaceKey[]
+          | undefined) ?? [];
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         systemGraphRequests: [...previous, workspaceKey],
@@ -1107,7 +1506,7 @@ class MockApi implements HarnessApi {
       state = win.__MOCK_SYSTEM_GRAPH_STATE__ ?? state;
       revision = win.__MOCK_SYSTEM_GRAPH_REVISION__ ?? revision;
     }
-    const graph: SystemGraph = {
+    const fixtureGraph: SystemGraph = {
       kind: "system",
       scope: { kind: "working-tree", workspaceKey },
       nodes: [
@@ -1168,6 +1567,39 @@ class MockApi implements HarnessApi {
       ],
       warnings: [],
     };
+    // Keep the original relationship-rich graph for acme-app's graph behavior
+    // specs. Every other mock project is an honest inventory projection of the
+    // agents beneath that exact root, which lets Project-axis tests prove parent
+    // and nested projects expose the same membership as the rail.
+    const graph = samePath(selectedScope.cwd, "/Users/demo/acme-app")
+      ? fixtureGraph
+      : {
+          kind: "system" as const,
+          scope: { kind: "working-tree" as const, workspaceKey },
+          nodes: this.workflows
+            .filter((workflow) => isWithinDir(selectedScope.cwd, workflow.path))
+            .map((workflow) => {
+              const normalizedRoot = selectedScope.cwd
+                .replace(/\\/g, "/")
+                .replace(/\/+$/, "");
+              const normalizedPath = workflow.path
+                .replace(/\\/g, "/")
+                .replace(/\/+$/, "");
+              const relative = samePath(selectedScope.cwd, workflow.path)
+                ? basenameOf(workflow.path)
+                : normalizedPath.slice(normalizedRoot.length + 1);
+              const agentKey =
+                workflow.definitionSlug?.trim() || `local:${relative}`;
+              return {
+                id: `agent:${agentKey}`,
+                agentKey,
+                label: workflow.name,
+              };
+            })
+            .sort((left, right) => left.agentKey.localeCompare(right.agentKey)),
+          edges: [],
+          warnings: [],
+        };
     return { workspaceKey, revision, state, graph };
   }
 
@@ -1309,7 +1741,9 @@ class MockApi implements HarnessApi {
 
   async sessionHistory(cwd: string): Promise<SessionSummary[]> {
     await delay();
-    const searchExtras = isSearchFixturesEnabled() ? (MOCK_SEARCH_HISTORY[cwd] ?? []) : [];
+    const searchExtras = isSearchFixturesEnabled()
+      ? (MOCK_SEARCH_HISTORY[cwd] ?? [])
+      : [];
     return [...(MOCK_HISTORY[cwd] ?? []), ...searchExtras];
   }
 
@@ -1427,18 +1861,80 @@ class MockApi implements HarnessApi {
     return this.workflows;
   }
 
+  async getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+    await delay(80);
+    const workflow = this.workflows.find((item) => item.path === workflowPath);
+    // 404 means "not a registered workflow" and NOTHING else — an agent whose
+    // board is empty still answers 200. The mock keeps that distinction because
+    // it is the one a consumer can get wrong invisibly.
+    if (!workflow)
+      throw new ApiError(404, "agent not found", "Agent not found");
+    // e2e seam: drive the non-`ok` statuses the pane must render as DISTINCT
+    // honest states. `preparing` is not a failure (a fresh scaffold with no
+    // deps installed) and `empty` is not an error (absent ⇒ empty), so a test
+    // has to be able to reach each one.
+    const override =
+      typeof window !== "undefined"
+        ? (
+            window as unknown as {
+              __MOCK_WORKFLOW_GRAPH__?: Record<
+                string,
+                { status: WorkflowGraphStatus; reason?: string | null }
+              >;
+            }
+          ).__MOCK_WORKFLOW_GRAPH__?.[workflowPath]
+        : undefined;
+    const status = override?.status ?? "ok";
+    const base = {
+      path: workflow.path,
+      name: workflow.name,
+      enrichment: null,
+      cached: false,
+    };
+    if (status !== "ok") {
+      const reason = override?.reason ?? null;
+      return {
+        ...base,
+        status,
+        graph: null,
+        reason,
+        // The real route returns a renderable document for EVERY status — an
+        // empty board is still a page, never a hole — so an empty string here
+        // would be indistinguishable from a truncated body.
+        document: mockWorkflowMessageDocument(
+          status === "preparing"
+            ? "Preparing your agent"
+            : status === "empty"
+              ? "Nothing rendered yet"
+              : "Couldn't render this agent",
+          reason,
+        ),
+      };
+    }
+    const graph = mockWorkflowGraph(workflow.name);
+    return {
+      ...base,
+      status: "ok",
+      graph,
+      reason: null,
+      document: mockWorkflowGraphDocument(workflow.name, graph),
+    };
+  }
+
   async getWorkflowInputContract(
     workflowPath: string,
   ): Promise<WorkflowInputContractResponse> {
     await delay(120);
     const workflow = this.workflows.find((item) => item.path === workflowPath);
-    if (!workflow) throw new ApiError(404, "Agent not found", "Agent not found");
+    if (!workflow)
+      throw new ApiError(404, "Agent not found", "Agent not found");
     if (typeof window !== "undefined") {
       const testWindow = window as unknown as {
         __MOCK_INPUT_CONTRACT_MODE__?: "throw" | "unavailable";
         __MOCK_INPUT_CONTRACT__?: WorkflowInputContractResponse;
       };
-      if (testWindow.__MOCK_INPUT_CONTRACT__) return testWindow.__MOCK_INPUT_CONTRACT__;
+      if (testWindow.__MOCK_INPUT_CONTRACT__)
+        return testWindow.__MOCK_INPUT_CONTRACT__;
       const mode = testWindow.__MOCK_INPUT_CONTRACT_MODE__;
       if (mode === "throw") {
         throw new ApiError(
@@ -1488,6 +1984,42 @@ class MockApi implements HarnessApi {
     return info;
   }
 
+  /**
+   * The mock's stand-in for `POST /api/agents/move`.
+   *
+   * A SECOND GUARD, deliberately: the rail asks `planMove` before dispatching,
+   * but the mover must not be the only thing between a bad destination and a
+   * clobbered agent — and in the reference prototype it was, so anything
+   * reaching the registry another way clobbered silently. The real server stats
+   * the destination (`src/server/agent-move.ts`); the mock has no disk, so it
+   * checks what the registry can see, which is the same guard minus the `stat`.
+   *
+   * The move is recorded rather than applied to this instance's fixtures — see
+   * `mockMoves` for why there is exactly one log — and then announced as
+   * `workflows.changed`, the same signal the real server broadcasts, so the rail
+   * re-derives the tree from the new path through its normal refresh path.
+   */
+  async moveAgent(from: string, to: string): Promise<void> {
+    recordAgentMove({ from, to });
+    await delay(120);
+    const refusal = refuseMove(
+      this.workflows.map((workflow) => workflow.path),
+      from,
+      to,
+    );
+    if (refusal)
+      throw new ApiError(
+        409,
+        "POST /api/agents/move \u2192 409 (mock)",
+        refusal,
+      );
+    if (samePath(from, to)) return;
+    mockMoves.push({ from, to });
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "workflows.changed" });
+    });
+  }
+
   async scanWorkflows(root: string): Promise<WorkflowInfo[]> {
     await delay(250);
     // Honest mock: "found" means the fixture workflow actually lives under
@@ -1501,6 +2033,60 @@ class MockApi implements HarnessApi {
   async listHarnesses(): Promise<HarnessEntry[]> {
     await delay(120);
     return MOCK_HARNESSES;
+  }
+
+  /**
+   * The mock's stand-in for `<root>/.sapiom/studio-rail.json`.
+   *
+   * `localStorage`, keyed per project root, because the one thing this file has
+   * to be tested for is what it looks like ACROSS a page load — and the bug it
+   * exists to prevent lived in a mount effect, not in the serializer. A
+   * per-instance Map would be wiped by every reload and could never see it.
+   * Contents are the same text the server stores, so a spec asserting the
+   * written shape is asserting the real shape.
+   */
+  private railStateKey(projectRoot: string): string {
+    return `${MOCK_RAIL_STATE_PREFIX}${projectRoot.replace(/\/+$/, "")}`;
+  }
+
+  async getRailState(projectRoot: string): Promise<string | null> {
+    await delay(60);
+    try {
+      return window.localStorage.getItem(this.railStateKey(projectRoot));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The store is written BEFORE the simulated latency, not after: two edits in
+   * quick succession have to land in the order they were made, and awaiting
+   * first let an earlier, slower write finish last — a reset that erased the
+   * file followed by a pending save that put it straight back.
+   */
+  async saveRailState(projectRoot: string, raw: string): Promise<void> {
+    recordRailStateWrite({ root: projectRoot, raw });
+    try {
+      window.localStorage.setItem(this.railStateKey(projectRoot), raw);
+    } catch {
+      // Private mode / quota: persistence is best-effort, the live state wins.
+    }
+    await delay(60);
+  }
+
+  async clearRailState(projectRoot: string): Promise<void> {
+    recordRailStateWrite({ root: projectRoot, raw: null });
+    try {
+      window.localStorage.removeItem(this.railStateKey(projectRoot));
+    } catch {
+      // Same: nothing stored is the goal state either way.
+    }
+    await delay(60);
+  }
+
+  async listLaunchEdges(): Promise<StudioRailLaunchEdge[]> {
+    await delay(120);
+    return MOCK_LAUNCH_EDGES;
   }
 
   async listMacros(): Promise<MacroDef[]> {

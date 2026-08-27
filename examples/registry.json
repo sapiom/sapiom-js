@@ -300,6 +300,141 @@
       "rank": 11
     },
     {
+      "id": "fintech-exec-radar",
+      "name": "Fintech Opportunity Radar",
+      "description": "Monitor executive moves, funding, and hiring across a useful fintech watchlist, with isolated retries and honest partial coverage.",
+      "tags": ["research", "fintech", "watchlist", "fan-out"],
+      "category": "data-knowledge",
+      "discipline": "Research",
+      "cadence": "scheduled",
+      "complexity": "advanced",
+      "sourcePath": "examples/fintech-exec-radar",
+      "capabilities": [
+        "agents.run",
+        "web.search",
+        "web.scrape",
+        "memory.recall",
+        "memory.append",
+        "llm.run",
+        "email.send"
+      ],
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Resolve the built-in watchlist or override, signals, delivery, and retry-aware maximum call envelope; previews and oversized plans terminate unspent.",
+          "kind": "compute",
+          "next": ["recall", "fanOut", "planned", "budgetBlocked"]
+        },
+        {
+          "name": "recall",
+          "description": "Recall recent reported source keys for one company; retry only a transient memory failure, then continue explicitly without dedupe if unavailable.",
+          "kind": "capability",
+          "capability": "memory.recall",
+          "next": ["searchExecMoves"]
+        },
+        {
+          "name": "searchExecMoves",
+          "description": "Search executive arrivals and departures for one company with a concrete date boundary; retry only this signal step once on a transient failure.",
+          "kind": "capability",
+          "capability": "web.search",
+          "next": ["searchFunding"]
+        },
+        {
+          "name": "searchFunding",
+          "description": "Search funding, investment, acquisition, and private-equity signals independently from the other searches.",
+          "kind": "capability",
+          "capability": "web.search",
+          "next": ["searchHiring"]
+        },
+        {
+          "name": "searchHiring",
+          "description": "Search concrete functional hiring signals independently and preserve a structured failure when coverage is unavailable.",
+          "kind": "capability",
+          "capability": "web.search",
+          "next": ["prepare"]
+        },
+        {
+          "name": "prepare",
+          "description": "Require signal-specific event language, filter unsupported and company-owned URLs, apply reported-key dedupe, and select bounded findings and article reads across signals.",
+          "kind": "compute",
+          "next": ["persist"]
+        },
+        {
+          "name": "persist",
+          "description": "Append search-derived observations before optional page enrichment; a failed write remains visible without discarding evidence.",
+          "kind": "capability",
+          "capability": "memory.append",
+          "next": ["scrape1"]
+        },
+        {
+          "name": "scrape1",
+          "description": "Read the first selected article in its own retry boundary, or retain the search snippet with a structured fallback row.",
+          "kind": "capability",
+          "capability": "web.scrape",
+          "next": ["scrape2"]
+        },
+        {
+          "name": "scrape2",
+          "description": "Read the second selected article independently from prior searches, persistence, and page reads.",
+          "kind": "capability",
+          "capability": "web.scrape",
+          "next": ["scrape3"]
+        },
+        {
+          "name": "scrape3",
+          "description": "Read the third selected article independently and preserve snippet evidence after a blocked or exhausted read.",
+          "kind": "capability",
+          "capability": "web.scrape",
+          "next": ["finishResearch"]
+        },
+        {
+          "name": "finishResearch",
+          "description": "Return one bounded company row with semantic outcome, source failures, health counters, and sourced findings.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "fanOut",
+          "description": "Launch one independently metered research child per company through a bounded worker pool, converting every child failure into a coverage row instead of sinking the batch.",
+          "kind": "capability",
+          "capability": "agents.run",
+          "next": ["reduce"]
+        },
+        {
+          "name": "reduce",
+          "description": "Rank only the bounded, sourced child items, compute explicit coverage, and assemble a deterministic markdown digest without conflating multiple reports with separate events.",
+          "kind": "llm",
+          "capability": "llm.run",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Return the digest in the terminal result and email the same text only when a recipient is configured; delivery failure never hides the digest.",
+          "kind": "capability",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "planned",
+          "description": "Dry-run terminal with the resolved plan and exact maximum capability-call counts; nothing is dispatched.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "budgetBlocked",
+          "description": "Unspent terminal when the plan exceeds maxCapabilityCalls, explaining which inputs to reduce or which ceiling to raise.",
+          "kind": "compute",
+          "terminal": true
+        }
+      ],
+      "setup": {
+        "runsWithNoSetup": true,
+        "connectionCount": 0,
+        "settingCount": 1,
+        "degradedWithoutSetup": "Runs the public default watchlist live and returns a sourced digest with explicit partial coverage when a company, source, persistence write, ranking pass, or delivery step degrades."
+      }
+    },
+    {
       "id": "logged-in-screenshots",
       "name": "Website QA Crawler",
       "description": "Crawl a site's pages, screenshot each one, audit content with a model, and check that Terms and Privacy links resolve.",

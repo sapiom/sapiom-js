@@ -27,6 +27,68 @@ function manifestFor(def: AgentDefinition): AgentManifest {
   ) as AgentManifest;
 }
 
+describe("runLocal — ctx.isLocalTrace", () => {
+  /**
+   * Step code holding a raw socket (a `pg` client, third-party HTTP) had no way
+   * to tell a local trace from a deployed run, so it dialed for real and died on
+   * a network error (SAP-2909). `ctx.isLocalTrace` is that signal.
+   */
+  async function gateFor(
+    entryInput: unknown,
+  ): Promise<{ seen: boolean | undefined; gate: boolean | undefined }> {
+    let seen: boolean | undefined;
+    let gate: boolean | undefined;
+
+    const entry = defineStep({
+      name: "entry",
+      next: [],
+      terminal: true,
+      // `input` is the step's own run() argument — the value the documented
+      // `input.dryRun ?? ctx.isLocalTrace` expression actually reads. Asserting
+      // through ctx.input instead would not exercise what authors are told to
+      // write.
+      async run(input: { dryRun?: boolean }, ctx) {
+        seen = ctx.isLocalTrace;
+        gate = input.dryRun ?? ctx.isLocalTrace ?? false;
+        return terminate({ ok: true });
+      },
+    });
+    const def = defineAgent({
+      name: "local-flag",
+      entry: "entry",
+      steps: { entry },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: entryInput,
+    });
+
+    // Guards the assertions below: a step that never ran would otherwise leave
+    // them checking an untouched variable.
+    expect(result.outcome).toBe("completed");
+    return { seen, gate };
+  }
+
+  it("is true in a step running under runLocal", async () => {
+    expect((await gateFor({})).seen).toBe(true);
+  });
+
+  it("makes `input.dryRun ?? ctx.isLocalTrace` skip un-stubbable I/O by default", async () => {
+    expect((await gateFor({})).gate).toBe(true);
+  });
+
+  it("lets an explicit dryRun:false still force the live path", async () => {
+    // The escape hatch templates rely on to exercise real I/O on purpose.
+    expect((await gateFor({ dryRun: false })).gate).toBe(false);
+  });
+
+  it("leaves an explicit dryRun:true dry", async () => {
+    expect((await gateFor({ dryRun: true })).gate).toBe(true);
+  });
+});
+
 describe("runLocal", () => {
   it("streams start and settled evidence with timing, directive, and shared state", async () => {
     const entry = defineStep({

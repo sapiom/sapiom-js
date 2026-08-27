@@ -1,16 +1,24 @@
 import { useCallback, useRef, useState } from "react";
 
 import type { SessionSummary } from "@shared/types";
+import type { WorkspaceKey } from "@shared/system-graph";
 
 /**
  * One place the user was working. Distinct from past-session "history" (ended
  * CLIs on disk): this is the visit stack behind the header's back/forward
  * chrome, and it covers every screen the shell can show — a session, a focused
- * agent, a past-session review, the composer home, and the template catalog.
+ * agent, a project graph, a past-session review, the composer home, and the
+ * template catalog.
  */
 export type NavigationVisit =
   | { kind: "session"; sessionId: string; agentPath: string | null }
   | { kind: "agent"; agentPath: string }
+  | {
+      kind: "project";
+      workspaceKey: WorkspaceKey;
+      root: string;
+      label: string;
+    }
   | { kind: "review"; summary: SessionSummary }
   | { kind: "composer" }
   | { kind: "templates" };
@@ -20,14 +28,25 @@ export interface NavigationHistoryState {
   index: number;
 }
 
-export const EMPTY_NAVIGATION_HISTORY: NavigationHistoryState = { entries: [], index: -1 };
+export const EMPTY_NAVIGATION_HISTORY: NavigationHistoryState = {
+  entries: [],
+  index: -1,
+};
 
 const MAX_ENTRIES = 50;
 
-export function sameNavigationVisit(a: NavigationVisit, b: NavigationVisit): boolean {
+export function sameNavigationVisit(
+  a: NavigationVisit,
+  b: NavigationVisit,
+): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "session" && b.kind === "session") return a.sessionId === b.sessionId;
-  if (a.kind === "agent" && b.kind === "agent") return a.agentPath === b.agentPath;
+  if (a.kind === "session" && b.kind === "session")
+    return a.sessionId === b.sessionId;
+  if (a.kind === "agent" && b.kind === "agent")
+    return a.agentPath === b.agentPath;
+  if (a.kind === "project" && b.kind === "project") {
+    return a.workspaceKey === b.workspaceKey;
+  }
   if (a.kind === "review" && b.kind === "review") {
     return a.summary.agentSessionId === b.summary.agentSessionId;
   }
@@ -87,7 +106,9 @@ export interface NavigationHistory {
 
 /** The visit stack behind the header's back/forward chrome. */
 export function useNavigationHistory(): NavigationHistory {
-  const [state, setState] = useState<NavigationHistoryState>(EMPTY_NAVIGATION_HISTORY);
+  const [state, setState] = useState<NavigationHistoryState>(
+    EMPTY_NAVIGATION_HISTORY,
+  );
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -98,13 +119,16 @@ export function useNavigationHistory(): NavigationHistory {
     setState(next);
   }, []);
 
-  const move = useCallback((direction: "back" | "forward"): NavigationVisit | null => {
-    const next = moveNavigation(stateRef.current, direction);
-    if (!next.visit) return null;
-    stateRef.current = next.state;
-    setState(next.state);
-    return next.visit;
-  }, []);
+  const move = useCallback(
+    (direction: "back" | "forward"): NavigationVisit | null => {
+      const next = moveNavigation(stateRef.current, direction);
+      if (!next.visit) return null;
+      stateRef.current = next.state;
+      setState(next.state);
+      return next.visit;
+    },
+    [],
+  );
 
   return {
     canGoBack: canGoBack(state),

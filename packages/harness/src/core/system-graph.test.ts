@@ -108,9 +108,6 @@ describe("StaticSystemGraphBuilder", () => {
         workflow("Research", "research", "research"),
         workflow("Growth", "growth", "growth"),
       ],
-      listWorkspaceScopes: () => [
-        { workspaceKey: scope.workspaceKey, cwd: scope.root },
-      ],
     });
 
     const graph = await buildGraph(
@@ -275,9 +272,6 @@ describe("StaticSystemGraphBuilder", () => {
         workflow("Caller", "caller", "caller"),
         workflow("First copy", "growth", "shared"),
         workflow("Second copy", "research", "shared"),
-      ],
-      listWorkspaceScopes: () => [
-        { workspaceKey: scope.workspaceKey, cwd: scope.root },
       ],
     });
     const relationships = relationshipProvider(async (root) =>
@@ -449,9 +443,6 @@ describe("StaticSystemGraphBuilder", () => {
           definitionId: null,
         },
       ],
-      listWorkspaceScopes: () => [
-        { workspaceKey: scope.workspaceKey, cwd: scope.root },
-      ],
       inspectManifestName: vi.fn(async () => ({
         status: "found" as const,
         name: FIXTURE,
@@ -592,16 +583,16 @@ describe("StaticSystemGraphBuilder", () => {
     await builder.build(scope);
     await builder.build(secondScope);
     expect(
-      retainCallers.mock.calls.at(-1)?.[0].map(
-        (caller: { agentKey: string }) => caller.agentKey,
-      ),
+      retainCallers.mock.calls
+        .at(-1)?.[0]
+        .map((caller: { agentKey: string }) => caller.agentKey),
     ).toEqual(["first", "second"]);
 
     builder.retainWorkspaces(new Set([secondScope.workspaceKey]));
     expect(
-      retainCallers.mock.calls.at(-1)?.[0].map(
-        (caller: { agentKey: string }) => caller.agentKey,
-      ),
+      retainCallers.mock.calls
+        .at(-1)?.[0]
+        .map((caller: { agentKey: string }) => caller.agentKey),
     ).toEqual(["second"]);
   });
 });

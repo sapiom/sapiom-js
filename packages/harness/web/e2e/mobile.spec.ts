@@ -12,7 +12,9 @@ test.use({ viewport: { width: 375, height: 812 } });
 /** Geometry assertions must not race the 300ms drawer/sheet entrance —
  *  boundingBox() reads mid-flight transforms otherwise. */
 async function settled(el: Locator): Promise<void> {
-  await el.evaluate((node) => Promise.all(node.getAnimations().map((a) => a.finished)));
+  await el.evaluate((node) =>
+    Promise.all(node.getAnimations().map((a) => a.finished)),
+  );
 }
 
 test.beforeEach(async ({ page }) => {
@@ -20,7 +22,9 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".session-bar")).toBeVisible();
 });
 
-test("folds to one column: both side panes start collapsed and nothing overflows sideways", async ({ page }) => {
+test("folds to one column: both side panes start collapsed and nothing overflows sideways", async ({
+  page,
+}) => {
   // Collapsed panes surface their expand affordances in the session bar.
   await expect(page.getByTestId("rail-expand")).toBeVisible();
   await expect(page.getByTestId("right-expand")).toBeVisible();
@@ -43,7 +47,9 @@ test("folds to one column: both side panes start collapsed and nothing overflows
   await page.screenshot({ path: "web/e2e/screenshots/mobile-shell.png" });
 });
 
-test("rail opens as a drawer and closes on opening a workflow or a scrim tap", async ({ page }) => {
+test("rail opens as a drawer and closes on opening a workflow or a scrim tap", async ({
+  page,
+}) => {
   await page.getByTestId("rail-expand").click();
   const rail = page.locator(".rail-workflows");
   await expect(rail).toBeVisible();
@@ -58,18 +64,27 @@ test("rail opens as a drawer and closes on opening a workflow or a scrim tap", a
   // Opening a workflow is a destination pick — it changes what the main panel
   // shows (here, rfq's honest "start a session" state), so it closes the
   // drawer it overlays. One verb, one gesture.
-  await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+  await page
+    .getByTestId("workflow-rfq")
+    .locator(".workflow-item-trigger")
+    .click();
   await expect(rail).toHaveCount(0);
-  await expect(page.getByTestId("open-agent-empty")).toContainText("No running session for rfq");
+  await expect(page.getByTestId("open-agent-empty")).toContainText(
+    "No running session for rfq",
+  );
 
   // The scrim's exposed sliver (right of the drawer) dismisses on tap.
   await page.getByTestId("rail-expand").click();
   await expect(rail).toBeVisible();
-  await page.getByTestId("rail-drawer-scrim").click({ position: { x: 360, y: 400 } });
+  await page
+    .getByTestId("rail-drawer-scrim")
+    .click({ position: { x: 360, y: 400 } });
   await expect(rail).toHaveCount(0);
 });
 
-test("right pane opens as a bottom sheet and dismisses from its own collapse control", async ({ page }) => {
+test("right pane opens as a bottom sheet and dismisses from its own collapse control", async ({
+  page,
+}) => {
   await page.getByTestId("right-expand").click();
   const pane = page.locator(".right-pane");
   await expect(pane).toBeVisible();
@@ -92,7 +107,7 @@ test("a workspace graph is the main destination, never the right bottom sheet", 
   page,
 }) => {
   await page.getByTestId("rail-expand").click();
-  await page.getByTestId("workspace-select-acme-app").click();
+  await page.getByTestId("project-select-acme-app").click();
 
   const graph = page.getByTestId("workspace-graph-view");
   await expect(graph).toBeVisible();
@@ -108,9 +123,13 @@ test("a workspace graph is the main destination, never the right bottom sheet", 
   expect(bounds?.width).toBe(375);
   expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBe(812);
 
-  const controls = await page.getByTestId("system-graph-controls").boundingBox();
+  const controls = await page
+    .getByTestId("system-graph-controls")
+    .boundingBox();
   expect((controls?.x ?? -1) + (controls?.width ?? 0)).toBeLessThanOrEqual(375);
-  expect((controls?.y ?? -1) + (controls?.height ?? 0)).toBeLessThanOrEqual(812);
+  expect((controls?.y ?? -1) + (controls?.height ?? 0)).toBeLessThanOrEqual(
+    812,
+  );
   const overflow = await page.evaluate(() => {
     const element = document.scrollingElement as HTMLElement;
     return element.scrollWidth - element.clientWidth;

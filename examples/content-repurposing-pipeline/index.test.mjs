@@ -5,9 +5,11 @@ import {
   agent,
   buildClipPrompt,
   buildGraphicPrompt,
+  buildRepurposeSchema,
   buildRepurposeSystem,
   isNarrationScript,
   isReservedAddress,
+  readPack,
   resolveRenderClip,
 } from "./index.ts";
 
@@ -418,4 +420,94 @@ test("buildRepurposeSystem bans placeholders and keeps the load-bearing rules", 
   assert.match(system, /ART DIRECTION ONLY/);
   assert.match(system, /NO on-screen text/);
   assert.match(system, /<= 280/);
+});
+
+// ── SAP-2892: an unusable reply must never become a content pack ────────────
+//
+// The shape this guards against: the model echoes the JSON schema back to
+// itself mid-reasoning, the first-`{`-to-last-`}` slice catches that instead of
+// the answer, `JSON.parse` throws, and the canned fallback — a tweet thread of
+// `"<title>: a quick thread. 🧵"` over the first 240 characters of the source —
+// is packaged and emailed on a run that reports `succeeded`.
+
+const PACK = {
+  tweetThread: ["Small teams ship faster.", "Here's why. 🧵"],
+  linkedInPost: "A longer take on team size.",
+  newsletter: "## Team size\n\nCoordination cost is the tax.",
+  quoteGraphics: [
+    {
+      quote: "Small teams ship faster.",
+      imagePrompt: "Deep-navy, modern sans.",
+    },
+  ],
+  videoScript: "Slow push-in over a navy gradient. No text.",
+};
+
+test("readPack reads the forced tool call's pack", () => {
+  assert.deepEqual(readPack(PACK, 1), PACK);
+});
+
+test("readPack throws when the response carried no structured pack", () => {
+  assert.throws(() => readPack(undefined, 1), /no structured content pack/);
+  assert.throws(() => readPack(null, 1), /no structured content pack/);
+  assert.throws(
+    () => readPack("The user wants me to create a content pack...", 1),
+    /no structured content pack/,
+  );
+});
+
+test("readPack throws rather than inventing a tweet thread from the source", () => {
+  assert.throws(
+    () => readPack({ ...PACK, tweetThread: [] }, 1),
+    /no tweet thread/,
+  );
+  assert.throws(
+    () => readPack({ ...PACK, tweetThread: ["  "] }, 1),
+    /no tweet thread/,
+  );
+});
+
+test("readPack throws rather than inventing the long-form copy", () => {
+  assert.throws(
+    () => readPack({ ...PACK, linkedInPost: "" }, 1),
+    /no LinkedIn post/,
+  );
+  assert.throws(
+    () => readPack({ ...PACK, newsletter: "   " }, 1),
+    /no newsletter section/,
+  );
+  assert.throws(
+    () => readPack({ ...PACK, videoScript: "" }, 1),
+    /no teaser clip prompt/,
+  );
+});
+
+test("readPack throws rather than quoting the source back as a pull-quote", () => {
+  assert.throws(
+    () => readPack({ ...PACK, quoteGraphics: [{ imagePrompt: "Navy." }] }, 1),
+    /pull-quote 1 came back empty/,
+  );
+});
+
+test("readPack throws when the pack is short of the quotes that were asked for", () => {
+  assert.throws(() => readPack(PACK, 3), /asked for 3 pull-quote\(s\), got 1/);
+});
+
+test("buildRepurposeSystem no longer asks for minified JSON — the schema carries the shape", () => {
+  const system = buildRepurposeSystem("payments operators", 3);
+  assert.doesNotMatch(system, /ONLY minified JSON/i);
+  assert.doesNotMatch(system, /tweetThread/);
+});
+
+test("buildRepurposeSchema pins the quote count the caller paid for", () => {
+  const schema = buildRepurposeSchema(3);
+  assert.equal(schema.properties.quoteGraphics.minItems, 3);
+  assert.equal(schema.properties.quoteGraphics.maxItems, 3);
+  assert.deepEqual(schema.required, [
+    "tweetThread",
+    "linkedInPost",
+    "newsletter",
+    "quoteGraphics",
+    "videoScript",
+  ]);
 });

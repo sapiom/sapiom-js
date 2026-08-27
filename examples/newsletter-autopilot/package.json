@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: on a weekly cron, search a niche, dedupe + rank the sources, curate and write a newsletter issue with an LLM (llm.run), self-edit it against a quality bar with a second chained llm.run call, generate a header image, and email it to your subscriber list (or the agent's own demo inbox with none set).",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

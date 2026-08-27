@@ -306,13 +306,26 @@ test("long tab sets scroll internally while + and actions remain reachable", asy
     "data-session-id",
     /^sess-mock-/,
   );
-  const activeTabIsContained = await page
-    .locator(".session-tab.is-active")
-    .evaluate((tab) => {
-      const tabRect = tab.getBoundingClientRect();
-      const listRect = tab.parentElement!.getBoundingClientRect();
-      return tabRect.left >= listRect.left && tabRect.right <= listRect.right;
-    });
-  expect(activeTabIsContained).toBe(true);
+  // Wait for the STRIP to settle, not just for the session to become active.
+  // Creating a sibling lands in two commits — the session appears unbound, then
+  // its binding does — and since SAP-2931 the strip is keyed to the active
+  // session's own agent, so the second commit is what puts the eleventh tab
+  // back and re-runs the scroll-into-view. Measuring geometry off the
+  // `data-session-id` attribute alone read the strip mid-flip.
+  await expect(
+    page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
+  ).toHaveCount(11);
+  // Polled, not sampled: the containment is produced by a scroll-into-view
+  // effect, so a single read races the commit that scrolls. The claim is that
+  // the tab ENDS UP reachable inside the scrolling list.
+  await expect
+    .poll(() =>
+      page.locator(".session-tab.is-active").evaluate((tab) => {
+        const tabRect = tab.getBoundingClientRect();
+        const listRect = tab.parentElement!.getBoundingClientRect();
+        return tabRect.left >= listRect.left && tabRect.right <= listRect.right;
+      }),
+    )
+    .toBe(true);
   await expect(page.getByTestId("session-tab-new")).toBeInViewport();
 });

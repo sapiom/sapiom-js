@@ -64,7 +64,9 @@ import {
 import {
   ONE_SHOT_LLM_TEMPLATE_IDS,
   checkLlmCopySurface,
+  checkNoSliceParse,
   checkOneShotLlmTemplate,
+  checkStubStructuredOutput,
 } from "./lib/examples-llm-surface.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,6 +76,36 @@ const SCHEMA_PATH = path.join(EXAMPLES_DIR, "registry.schema.json");
 const MANIFEST_SCHEMA_PATH = path.join(EXAMPLES_DIR, "template.schema.json");
 
 const errors = [];
+
+/**
+ * Every source file under `examples/`, skipping `node_modules` and build output.
+ *
+ * `.mjs` and `.js` are in scope alongside `.ts`: templates ship helper scripts
+ * and test suites in plain JS, and a slice-parse hidden in one of those is the
+ * same defect. `.d.ts` is excluded — a declaration file has no parse in it, and
+ * a generated one shouldn't fail an author's check.
+ */
+const TEMPLATE_SOURCE_EXTENSIONS = [".ts", ".mjs", ".cjs", ".js"];
+
+function collectTemplateSources(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    const absolutePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectTemplateSources(absolutePath));
+      continue;
+    }
+    if (
+      entry.isFile() &&
+      !entry.name.endsWith(".d.ts") &&
+      TEMPLATE_SOURCE_EXTENSIONS.some((ext) => entry.name.endsWith(ext))
+    ) {
+      files.push(absolutePath);
+    }
+  }
+  return files;
+}
 
 function collectRegisteredProjectCopyAssets(sourceDir, currentDir = sourceDir) {
   const assets = [];
@@ -170,6 +202,60 @@ for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
       copySources,
       packageJson,
       registryTemplate: templateById.get(id),
+    }),
+  );
+}
+
+// No template may slice a model reply from the first "{" to the last "}".
+// Deliberately repo-wide over `examples/`, not scoped to a template list: the
+// parse used to live in `lib/` helpers and sibling modules as well as
+// `index.ts`, and the whole point is that a NEW template can't reintroduce it
+// (SAP-2892).
+for (const sourcePath of collectTemplateSources(EXAMPLES_DIR)) {
+  errors.push(
+    ...checkNoSliceParse({
+      path: path.relative(ROOT, sourcePath).split(path.sep).join("/"),
+      source: readFileSync(sourcePath, "utf8"),
+    }),
+  );
+}
+
+// A committed `run_local` stub must answer in the shape its step reads. Neither
+// the check above nor a template's own suite can see this: the checks read
+// source files, and the suites exercise the pure reader functions without ever
+// executing a graph (SAP-2892).
+for (const entry of readdirSync(EXAMPLES_DIR, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue;
+  const stubPath = path.join(
+    EXAMPLES_DIR,
+    entry.name,
+    ".sapiom-dev",
+    "stubs.json",
+  );
+  const indexPath = path.join(EXAMPLES_DIR, entry.name, "index.ts");
+  if (!existsSync(stubPath) || !existsSync(indexPath)) continue;
+
+  let stubFile;
+  try {
+    stubFile = JSON.parse(readFileSync(stubPath, "utf8"));
+  } catch (err) {
+    errors.push(
+      `llm-surface: "${entry.name}" has an unparseable ${path.relative(ROOT, stubPath)}: ${err.message}`,
+    );
+    continue;
+  }
+  errors.push(
+    ...checkStubStructuredOutput({
+      id: entry.name,
+      indexSource: readFileSync(indexPath, "utf8"),
+      // The tool-name const can live in a sibling module (`lib/select.ts`).
+      siblingSources: collectTemplateSources(
+        path.join(EXAMPLES_DIR, entry.name),
+      )
+        .filter((p) => p !== indexPath)
+        .map((p) => readFileSync(p, "utf8")),
+      stubPath: path.relative(ROOT, stubPath).split(path.sep).join("/"),
+      stubFile,
     }),
   );
 }

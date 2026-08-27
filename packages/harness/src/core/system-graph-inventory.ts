@@ -5,7 +5,6 @@ import type {
   AgentKey,
   GraphWarning,
   WorkspaceKey,
-  WorkspaceScopeSummary,
 } from "../shared/system-graph.js";
 import type { WorkflowInfo } from "../shared/types.js";
 import type { ManifestNameInspection } from "./definition-name.js";
@@ -55,9 +54,6 @@ export interface HarnessRegistryInventoryProviderOptions {
   listWorkflows: () =>
     | readonly WorkflowInfo[]
     | Promise<readonly WorkflowInfo[]>;
-  listWorkspaceScopes: () =>
-    | readonly WorkspaceScopeSummary[]
-    | Promise<readonly WorkspaceScopeSummary[]>;
   inspectManifestName?: ManifestNameInspector;
   /** Test seam; production keeps the default first-open latency budget. */
   manifestInspectionBudgetMs?: number;
@@ -212,15 +208,6 @@ export function dirtyGraphSourceRoots(
   return [...dirty].sort();
 }
 
-function graphPathIdentity(input: string): string {
-  const canonical = canonicalGraphPath(input).replace(/\\/g, "/");
-  return isWindowsAbsolute(input) ? canonical.toLowerCase() : canonical;
-}
-
-function pathDepth(input: string): number {
-  return input.split(/[\\/]/).filter(Boolean).length;
-}
-
 export function workspaceRelativeLocalKey(
   scopeRoot: string,
   sourceRoot: string,
@@ -266,12 +253,6 @@ function uniqueAliases(values: Array<string | null>): string[] {
   return [
     ...new Set(values.filter((value): value is string => value !== null)),
   ];
-}
-
-interface KnownScope {
-  depth: number;
-  workspaceKey: WorkspaceKey;
-  root: string;
 }
 
 interface PreparedAgent {
@@ -323,33 +304,35 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
       workspaceKey: scope.workspaceKey,
       root: canonicalGraphPath(scope.root),
     };
-    const knownScopes = await this.knownScopes(selectedScope);
-
-    const owned = workflows
+    // Project-axis membership is containment in the SELECTED root. An agent can
+    // therefore appear in both a parent project's graph and a separately-opened
+    // nested project's graph, exactly as it appears under both project rows in
+    // the rail. Deepest-scope ownership made the parent row visibly list agents
+    // that disappeared when its graph opened.
+    const contained = workflows
       .map((workflow) => ({
         workflow,
         sourceRoot: canonicalGraphPath(workflow.path),
       }))
-      .filter(({ sourceRoot }) => {
-        const owner = this.ownerOf(sourceRoot, knownScopes.scopes);
-        return owner?.workspaceKey === selectedScope.workspaceKey;
-      });
+      .filter(({ sourceRoot }) =>
+        isWithinGraphPath(selectedScope.root, sourceRoot),
+      );
 
     const inspections = await mapWithDeadline(
-      owned,
+      contained,
       MANIFEST_INSPECTION_CONCURRENCY,
       this.options.manifestInspectionBudgetMs ?? MANIFEST_INSPECTION_BUDGET_MS,
       ({ workflow, sourceRoot }) =>
         this.prepareAgent(selectedScope, workflow, sourceRoot),
     );
     const prepared = Array.from(
-      { length: owned.length },
+      { length: contained.length },
       (_, index) =>
         inspections[index] ??
         this.prepareFallbackAgent(
           selectedScope,
-          owned[index]!.workflow,
-          owned[index]!.sourceRoot,
+          contained[index]!.workflow,
+          contained[index]!.sourceRoot,
         ),
     ).sort(preparedOrder);
 
@@ -414,58 +397,9 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
     warnings.sort(warningOrder);
     return {
       agents,
-      cacheable:
-        knownScopes.cacheable &&
-        prepared.every((agent) => !agent.extractionFailed),
+      cacheable: prepared.every((agent) => !agent.extractionFailed),
       warnings,
     };
-  }
-
-  private async knownScopes(
-    scope: WorkspaceScope,
-  ): Promise<{ cacheable: boolean; scopes: KnownScope[] }> {
-    let summaries: readonly WorkspaceScopeSummary[] = [];
-    let cacheable = true;
-    try {
-      summaries = await this.options.listWorkspaceScopes();
-    } catch {
-      cacheable = false;
-      // The selected scope is sufficient for a usable partial inventory. A
-      // later uncached graph request can recover once settings are readable.
-    }
-
-    const byRoot = new Map<string, KnownScope>();
-    for (const summary of summaries) {
-      const root = canonicalGraphPath(summary.cwd);
-      byRoot.set(graphPathIdentity(root), {
-        depth: pathDepth(root),
-        workspaceKey: summary.workspaceKey,
-        root,
-      });
-    }
-    // The resolved endpoint scope is authoritative when a catalog snapshot
-    // happens to contain an equivalent raw path with a stale key.
-    byRoot.set(graphPathIdentity(scope.root), {
-      ...scope,
-      depth: pathDepth(scope.root),
-    });
-    return { cacheable, scopes: [...byRoot.values()] };
-  }
-
-  private ownerOf(
-    sourceRoot: string,
-    scopes: readonly KnownScope[],
-  ): KnownScope | null {
-    return (
-      scopes
-        .filter((scope) => isWithinGraphPath(scope.root, sourceRoot))
-        .sort(
-          (left, right) =>
-            right.depth - left.depth ||
-            right.root.length - left.root.length ||
-            left.workspaceKey.localeCompare(right.workspaceKey),
-        )[0] ?? null
-    );
   }
 
   private async prepareAgent(

@@ -66,7 +66,8 @@ export interface CodingRunSpec {
    * Routing label for the coding agent's LLM calls (e.g. `"smart"`). The
    * platform resolves it against its configured label set — a raw provider
    * model id is never honored. Omit to let the platform choose (the
-   * recommended default); pass `"smart"` if you need to pin explicitly.
+   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
+   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
 }
@@ -484,7 +485,8 @@ export interface ModelRunSpec {
    * is never honored. An unrecognized value is never silently dropped: the
    * run routes via the platform default and the platform reports it in the
    * result's `warnings` (SAP-2765). Omit to let the platform choose (the
-   * recommended default); pass `"smart"` if you need to pin explicitly.
+   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
+   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
   /** Max output tokens per turn. */
@@ -519,7 +521,15 @@ export interface ModelRunOutcome {
    */
   warnings?: string[];
   durationMs: number;
-  costUsd: number;
+  /**
+   * Rough cost estimate for the run, in USD — an estimate, NOT the amount you
+   * are billed. Don't reconcile invoices or gate spend against it.
+   *
+   * `null` when the platform doesn't report an estimate for a run. Guard before
+   * arithmetic (`outcome.costUsd ?? 0`, or skip the row): `null` means "not
+   * reported", never "this run was free".
+   */
+  costUsd: number | null;
   usage: CodingRunUsage;
 }
 
@@ -592,6 +602,12 @@ export const modelRunResultSchema = {
       const warnings = normalizeWarnings(r.warnings);
       if (warnings) r.warnings = warnings;
       else delete r.warnings;
+      // Same cost encoding as the polled path (mapModelResult). The server
+      // feeds both paths from one projection, so this is belt-and-braces
+      // rather than a divergence today — but a `number | null` field must
+      // never hand a resumed step `undefined`, which is what a missing key
+      // would otherwise do.
+      r.costUsd = typeof r.costUsd === "number" ? r.costUsd : null;
     }
     return value as ModelRunResultPayload;
   },
@@ -609,7 +625,8 @@ interface ModelWireResult {
   /** Present only when the run has warnings (e.g. an unhonored `model` pin); guarded at map time. */
   warnings?: string[];
   duration_ms: number;
-  cost_usd: number;
+  /** Nullable on the wire: the platform doesn't report an estimate for every run. */
+  cost_usd?: number | null;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -642,7 +659,10 @@ function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome 
     servedClass: r.served_class ?? null,
     lane: r.lane ?? null,
     durationMs: r.duration_ms,
-    costUsd: r.cost_usd,
+    // ONE encoding of "no cost estimate": a wire `null`, a missing key, and a
+    // malformed value all land on `null` — never a fabricated `0`, which a
+    // consumer would read as "this run was free".
+    costUsd: typeof r.cost_usd === "number" ? r.cost_usd : null,
     // Passthrough via the shared guard (`normalizeWarnings`): the key is
     // absent unless at least one string warning survives — a wire `[]`, a
     // non-array, or an all-junk array maps to absent, matching the documented

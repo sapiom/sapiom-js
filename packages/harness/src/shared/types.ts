@@ -998,6 +998,10 @@ export interface SessionRecord {
 // GET    /api/templates/:id             → TemplateDetailView
 // GET    /api/account/plan              → AccountPlanView (relays core's plan + usage readout)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
+// GET    /api/studio-rail?root=         → StudioRailFileResponse (the rail's stored groups)
+// PUT    /api/studio-rail?root=         { raw } → { ok: true }
+// DELETE /api/studio-rail?root=         → { ok: true }   (un-materialized = no file)
+// GET    /api/studio-rail/launch-edges  → StudioRailLaunchEdgesResponse
 // POST   /api/track                     UiTrackRequest → { ok: true }  (UI-interaction analytics)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
 
@@ -1596,4 +1600,43 @@ export interface RunMacroRequest {
   workflowPath?: string;
   /** Free-text subject for the visualize macro. */
   subject?: string;
+}
+
+/**
+ * `GET|PUT|DELETE /api/studio-rail?root=<abs>` — the Group axis's stored
+ * arrangement for one project root (`<root>/.sapiom/studio-rail.json`).
+ *
+ * `raw` is the file's EXACT text, never a decoded object. The file distinguishes
+ * `groups: null` ("nothing stored, detection owns this") from `groups: []` ("the
+ * user materialized groups and then deleted them all"), and in the reference
+ * prototype a second serializer on the write path collapsed the two: every
+ * agent fell into `Ungrouped` from the second page load on, permanently. One
+ * decoder, in `web/src/lib/agent-groups.ts` — the wire carries text so the
+ * server cannot become a second one.
+ *
+ * `raw: null` = no file. An un-materialized arrangement is written as DELETE,
+ * never as a body, so a reset erases the old arrangement instead of letting it
+ * outlive the reset.
+ */
+export interface StudioRailFileResponse {
+  /** The resolved absolute project root the blob belongs to. */
+  root: string;
+  raw: string | null;
+}
+
+/** One detected launch edge: `parent` launches `child`. Names as written — the
+ *  parent's registry name, the child's `definition` slug at the call site. */
+export interface StudioRailLaunchEdge {
+  parent: string;
+  child: string;
+}
+
+/**
+ * `GET /api/studio-rail/launch-edges` — every launch edge across the registered
+ * agents, from the existing grep in `core/canvas-interconnections.ts` (the same
+ * detector the canvas draws its dashed launched-workflow nodes from). The Group
+ * axis seeds its groups from the connected components over these.
+ */
+export interface StudioRailLaunchEdgesResponse {
+  edges: StudioRailLaunchEdge[];
 }

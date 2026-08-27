@@ -349,8 +349,7 @@ const assess = defineStep({
     const system =
       "You are a release-risk reviewer for a dependency upgrade whose test suite ALREADY PASSED. " +
       "Judge the risk of merging it from the changed dependencies and the coding agent's summary — " +
-      "weigh major-version bumps, historically breaking packages, and how broad the change is. " +
-      'Reply with ONLY minified JSON: {"risk":"low|medium|high","summary":string,"notes":string[]}.';
+      "weigh major-version bumps, historically breaking packages, and how broad the change is.";
     const prompt =
       `Coding agent summary:\n${codingSummary}\n\n` +
       `Dependency changes (git diff --stat):\n${diffStat}\n\n` +
@@ -360,10 +359,13 @@ const assess = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 500,
+        max_tokens: 8000,
       },
+      output: { name: ASSESSMENT_TOOL, schema: ASSESSMENT_SCHEMA },
     });
-    const assessment = parseAssessment(ctx.sapiom.llm.textOf(res) ?? null);
+    const assessment = readAssessment(
+      ctx.sapiom.llm.structuredOf(res, ASSESSMENT_TOOL),
+    );
     ctx.shared.set("assessment", assessment);
 
     const held =
@@ -528,30 +530,71 @@ function tail(stdout: string, stderr: string, max = 2000): string {
   return combined.length > max ? combined.slice(-max) : combined;
 }
 
-/** Extract the risk assessment from the model output; default to medium on any miss. */
-function parseAssessment(output: string | null): Assessment {
-  const fallback: Assessment = {
-    risk: "medium",
-    summary: "Risk assessment unavailable; defaulted to medium.",
-    notes: [],
-  };
-  if (!output) return fallback;
-  try {
-    const start = output.indexOf("{");
-    const end = output.lastIndexOf("}");
-    if (start < 0 || end < 0) return fallback;
-    const raw = JSON.parse(output.slice(start, end + 1)) as Partial<Assessment>;
-    const risk = normalizeRisk(raw.risk) ?? fallback.risk;
-    return {
-      risk,
-      summary: typeof raw.summary === "string" ? raw.summary : fallback.summary,
-      notes: Array.isArray(raw.notes)
-        ? raw.notes.filter((n): n is string => typeof n === "string")
-        : [],
-    };
-  } catch {
-    return fallback;
+/**
+ * The forced tool call `assess` reads its risk verdict out of. `llm.run`'s
+ * `output` appends this tool to the request and pins `tool_choice` to it, so
+ * the assessment arrives as a typed `tool_use` block — there is no prose to
+ * slice and no JSON to hand-parse.
+ */
+const ASSESSMENT_TOOL = "emit_risk_assessment";
+
+const ASSESSMENT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    risk: {
+      type: "string",
+      enum: ["low", "medium", "high"],
+      description:
+        "Risk of merging this upgrade, weighing major-version bumps, historically breaking packages, and blast radius.",
+    },
+    summary: {
+      type: "string",
+      description: "One-paragraph summary of the risk assessment.",
+    },
+    notes: {
+      type: "array",
+      items: { type: "string" },
+      description: "What drove the rating, each a short line.",
+    },
+  },
+  required: ["risk", "summary", "notes"],
+  additionalProperties: false,
+};
+
+/**
+ * Read the forced tool call back into an `Assessment`.
+ *
+ * Throws when the model returned no such block, or one without a usable risk
+ * rating or summary. This rating decides whether the upgrade auto-publishes or
+ * is held for a human, so a default is not a neutral choice: `medium` silently
+ * published every upgrade under a `medium` auto-merge bar on the strength of an
+ * assessment nobody made.
+ */
+export function readAssessment(structured: unknown): Assessment {
+  if (structured === null || typeof structured !== "object") {
+    throw new Error(
+      "assess: the model returned no structured risk assessment — refusing to invent a rating.",
+    );
   }
+  const raw = structured as Partial<Assessment>;
+  const risk = normalizeRisk(raw.risk);
+  if (!risk) {
+    throw new Error(
+      `assess: the model returned no usable risk rating (${JSON.stringify(raw.risk)}) — refusing to invent one.`,
+    );
+  }
+  if (typeof raw.summary !== "string" || raw.summary.trim() === "") {
+    throw new Error(
+      "assess: the model returned no risk summary — refusing to invent one.",
+    );
+  }
+  return {
+    risk,
+    summary: raw.summary,
+    notes: Array.isArray(raw.notes)
+      ? raw.notes.filter((n): n is string => typeof n === "string")
+      : [],
+  };
 }
 
 /** Render the triage report as markdown from the run's shared state. */

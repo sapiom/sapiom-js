@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: on a PR webhook, a coding agent reviews the code and flags missing tests, then posts feedback via email or a Vault-backed Slack integration.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

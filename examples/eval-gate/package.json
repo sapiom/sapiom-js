@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: a self-editing writer — draft against your brief with llm.run, judge the draft against your rubric with a second chained llm.run call, and revise in a bounded loop until it clears the bar or the attempt cap is hit.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

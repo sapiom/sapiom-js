@@ -444,10 +444,72 @@ export const MOCK_SESSIONS: HarnessSession[] = [
 export const MOCK_ACTIVITY_SESSION_ID = "sess-leasing-2";
 
 /** Fake filesystem for the new-session directory picker (GET /api/fs/list). Keys are absolute paths. */
+/* The flood fixture's own two constants live up here, above `MOCK_FS_TREE`,
+   because that object's initializer reads them at module load. See
+   MOCK_FLOOD_WORKFLOWS below for what the fixture is and why it exists. */
+const FLOOD_WORKTREES = [
+  "design-eng",
+  "design-eng-fix",
+  "design-eng-ij",
+  "design-eng-main",
+  "worktrees/design-agent-port-pin",
+  "worktrees/design-agent-terminology",
+] as const;
+
+/**
+ * Whether the unrooted-flood fixture is seeded. Read at module load, like
+ * `isDeepRailFixture` — Playwright navigates with the parameter before the
+ * bundle runs.
+ */
+export function isFloodRailFixture(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("mockFixtures") === "flood";
+}
+
+/**
+ * The flood fixture's folders, so the directory picker can reach them.
+ *
+ * Gated the same way the workflows are: the default tree must keep listing
+ * exactly what every picker spec already asserts. Only the containers are
+ * listed — the picker's job here is to reach `design-eng`, which is what a
+ * removed project has to be re-openable BY.
+ */
+const floodFsTree = (): Record<string, string[]> =>
+  Object.fromEntries([
+    ...FLOOD_WORKTREES.flatMap((tree) => {
+      const segments = tree.split("/");
+      const base = `/Users/demo/${tree}`;
+      return [
+        ...(segments.length > 1 ? [[`/Users/demo/${segments[0]}`, [segments[1]!]] as const] : []),
+        [base, ["ari"]] as const,
+        [`${base}/ari`, ["orchestration", "brain"]] as const,
+        [`${base}/ari/orchestration`, []] as const,
+        [`${base}/ari/brain`, []] as const,
+      ];
+    }),
+    ["/Users/demo/team-tools", ["slack-notifier"]] as const,
+    ["/Users/demo/other-tools", ["slack-notifier"]] as const,
+    ["/Users/demo/misc", Array.from({ length: 10 }, (_, i) => `pkg${i + 1}`)] as const,
+    ...Array.from(
+      { length: 10 },
+      (_, i) => [`/Users/demo/misc/pkg${i + 1}`, ["agent"]] as const,
+    ),
+  ]);
+
 export const MOCK_FS_TREE: Record<string, string[]> = {
   "/": ["Users"],
   "/Users": ["demo"],
-  "/Users/demo": ["acme-app", "rfq-agent", "onboarding-flow", "scratch"],
+  "/Users/demo": [
+    "acme-app",
+    "rfq-agent",
+    "onboarding-flow",
+    "scratch",
+    "blank-slate",
+    ...(isFloodRailFixture()
+      ? ["design-eng", "design-eng-fix", "design-eng-ij", "design-eng-main", "worktrees", "misc", "team-tools", "other-tools"]
+      : []),
+  ],
+  ...(isFloodRailFixture() ? floodFsTree() : {}),
   "/Users/demo/acme-app": ["projects", "leasing", "src", "docs"],
   // The project root (`<launchDir>/projects`, mirroring the Electron host — see
   // MockApi.state's defaultProjectRoot). Present so the "Add existing agents"
@@ -464,6 +526,13 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
   "/Users/demo/rfq-agent/tests": [],
   "/Users/demo/onboarding-flow": [],
   "/Users/demo/scratch": [],
+  /* An EMPTY folder with no agent, no session and no recentDirs entry — the
+     only thing in the fixture tree that is purely a folder. `scratch` cannot
+     play this part: it is the bare-session project (see MOCK_SESSIONS), so it
+     is already a row before anything is opened. Round 2 needs a folder that is
+     nothing yet, because "add a project that has no agents in it" is the case
+     round 1 could not do at all. */
+  "/Users/demo/blank-slate": [],
 };
 
 /**
@@ -863,6 +932,142 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
   },
 };
 
+/**
+ * `?mockFixtures=deep` only — the rail shapes the Project axis exists for.
+ *
+ * NO default fixture here has a multi-segment directory, an agent path prefix,
+ * or a container holding both an agent and a subdirectory, so three acceptance
+ * criteria for compaction could not be asserted in a browser AT ALL. That is
+ * exactly how they shipped broken in the reference prototype: the code existed
+ * and had never been rendered against anything deep enough to exercise it.
+ *
+ * Gated rather than default so the 84 e2e specs and every fixture-count
+ * assertion elsewhere hold verbatim, and read from THIS module (rather than
+ * api.ts, where the `search` gate lives) because the fixture and the gate that
+ * selects it are one thing.
+ *
+ * `/Users/demo/polsia` produces, simultaneously:
+ *
+ *  - `backend/src/agents` — a compacted 3-segment label, 18 chars, which stays
+ *    WHOLE: elision needs >2 segments AND >22 characters, both.
+ *  - `packages/harness/web/src/components` — 5 segments, 35 chars, so it
+ *    elides to `packages/…/components`.
+ *  - `scripts/tools/rollup` — a lone agent whose unbranched chain compacts
+ *    onto its own row as the prefix `tools`, with no directory rows at all.
+ *  - `services` — a MIXED container: the `gateway` agent row AND the `workers`
+ *    subdirectory, which is what proves agents-render-before-directories at a
+ *    second depth.
+ *  - `sender` — an agent whose name starts with `s`. A matcher accident once
+ *    dropped exactly those silently.
+ *  - `ads` twice — `backend/src/agents/ads` and `services/workers/ads` share a
+ *    directory basename in two places, which is the only way to reach a move's
+ *    name-collision branch through the UI.
+ *
+ * `/Users/demo/polsia/services/workers` is opened as its own project as well,
+ * so its agents file under BOTH roots (two roots are two contexts) and its
+ * `project:` collapse key collides with the `dir:` key of the same-named
+ * subdirectory inside `polsia` — the case namespacing exists for.
+ *
+ * `/Users/demo/dashboard-keeper` is a root that IS an agent: one row, never a
+ * header plus an identically-named child.
+ */
+const DEEP_ROOT = "/Users/demo/polsia";
+
+const deepAgent = (
+  path: string,
+  name: string,
+  extra: Partial<WorkflowInfo> = {},
+): WorkflowInfo => ({
+  name,
+  path,
+  definitionId: null,
+  definitionSlug: name,
+  activeBuildRunId: null,
+  activeBuildRunStatus: null,
+  source: "scan",
+  ...extra,
+});
+
+export const MOCK_DEEP_WORKFLOWS: WorkflowInfo[] = [
+  deepAgent(`${DEEP_ROOT}/backend/src/agents/ads`, "ads"),
+  deepAgent(`${DEEP_ROOT}/backend/src/agents/outreach`, "outreach"),
+  deepAgent(`${DEEP_ROOT}/scripts/tools/rollup`, "rollup"),
+  deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/mailer`, "mailer", {
+    definitionId: 7701,
+    activeBuildRunId: "build-mailer-ready",
+    activeBuildRunStatus: "ready",
+  }),
+  deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/sender`, "sender"),
+  deepAgent(`${DEEP_ROOT}/services/gateway`, "gateway"),
+  deepAgent(`${DEEP_ROOT}/services/workers/ads`, "ads-worker"),
+  deepAgent(`${DEEP_ROOT}/services/workers/queue`, "queue"),
+  deepAgent("/Users/demo/dashboard-keeper", "dashboard-keeper"),
+];
+
+/**
+ * `?mockFixtures=flood` only — the shape a REAL install has and no fixture did.
+ *
+ * Round 1 shipped three defects behind 402 green e2e specs, and every one of
+ * them was invisible for the same structural reason: every fixture had
+ * globally unique agent names, a handful of agents, and no meaningful "outside
+ * your projects" section. The user's machine had 88 registered agents, ~78 of
+ * them outside every open project, `ari-grade-repo` and `brain-agent` six times
+ * each across git worktrees, and `@sapiom/example-slack-notifier` twice.
+ *
+ * So this fixture reproduces exactly that, at the smallest size that still
+ * exercises each rule:
+ *
+ *  - SIX agents named `ari-grade-repo`, at six sibling roots, all with the same
+ *    immediate parent (`ari`). One segment cannot tell them apart, so it is the
+ *    grow-leftward case — and two of the six sit under `worktrees/`, so the
+ *    grown chains are not all the same length either.
+ *  - TWO agents named `@sapiom/example-slack-notifier`, one segment apart, which
+ *    is the case that must NOT grow past one segment.
+ *  - Ten uniquely-named fillers, so the section is bounded rather than merely
+ *    disambiguated: 24 unrooted rows is more than a viewport holds, which is
+ *    the condition under which "the Group axis does nothing" gets reported.
+ *
+ * NONE of these paths sit under `MOCK_SETTINGS.recentDirs`, which is what makes
+ * them unrooted, and the fixture is gated so every existing count assertion
+ * holds verbatim.
+ */
+export const MOCK_FLOOD_WORKFLOWS: WorkflowInfo[] = [
+  /* TWO AGENTS SHARING A NAME INSIDE ONE PROJECT — the collision the GROUP axis
+     could not survive. That axis has no directory rows (a group is a
+     relationship, not a place), so its agent rows are the whole answer to
+     "which agent is this"; round 1 passed them no prefix at all and both of
+     these rendered as an identical `ingest` inside `Ungrouped`. Under
+     `polsia`, so they are ROOTED and file into that project's groups rather
+     than into the unrooted section. */
+  deepAgent(`${DEEP_ROOT}/backend/src/pipelines/ingest`, "ingest"),
+  deepAgent(`${DEEP_ROOT}/services/etl/ingest`, "ingest"),
+  ...FLOOD_WORKTREES.flatMap((tree) => [
+    deepAgent(`/Users/demo/${tree}/ari/orchestration`, "ari-grade-repo"),
+    deepAgent(`/Users/demo/${tree}/ari/brain`, "brain-agent"),
+  ]),
+  deepAgent("/Users/demo/team-tools/slack-notifier", "@sapiom/example-slack-notifier"),
+  deepAgent("/Users/demo/other-tools/slack-notifier", "@sapiom/example-slack-notifier"),
+  ...Array.from({ length: 10 }, (_, i) =>
+    deepAgent(`/Users/demo/misc/pkg${i + 1}/agent`, `filler-${i + 1}`),
+  ),
+];
+
+/** Roots the deep fixture opens, appended to `recentDirs`. */
+export const MOCK_DEEP_ROOTS: string[] = [
+  DEEP_ROOT,
+  `${DEEP_ROOT}/services/workers`,
+  "/Users/demo/dashboard-keeper",
+];
+
+/**
+ * Whether the deep rail fixture is seeded. Read at module load, which is all
+ * Playwright needs — it navigates with the parameter before the bundle runs.
+ */
+export function isDeepRailFixture(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("mockFixtures") === "deep";
+}
+
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
   {
     name: "leasing",
@@ -900,6 +1105,13 @@ export const MOCK_WORKFLOWS: WorkflowInfo[] = [
     starterId: "coding-pause",
     source: "connect",
   },
+  // The flood fixture SUBSUMES the deep one: the real install that produced
+  // this round's defects had both at once — a project deep enough to hold
+  // groups, and a flood of agents outside every project. Separating them is
+  // what let "switching the Group axis does nothing" go unnoticed, because no
+  // fixture ever had the groups and the flood on screen together.
+  ...(isDeepRailFixture() || isFloodRailFixture() ? MOCK_DEEP_WORKFLOWS : []),
+  ...(isFloodRailFixture() ? MOCK_FLOOD_WORKFLOWS : []),
 ];
 
 /**
@@ -1084,7 +1296,12 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
 
 export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
-  recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-agent", "/Users/demo/onboarding-flow"],
+  recentDirs: [
+    "/Users/demo/acme-app",
+    "/Users/demo/rfq-agent",
+    "/Users/demo/onboarding-flow",
+    ...(isDeepRailFixture() || isFloodRailFixture() ? MOCK_DEEP_ROOTS : []),
+  ],
   // Matches the real default: opt-in, because it spends tokens on a background
   // LLM call the user never asked for.
   rollingSummary: false,
