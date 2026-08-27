@@ -1,10 +1,112 @@
-import type { CSSProperties, JSX, ReactNode } from "react";
+import type {
+  CSSProperties,
+  DOMAttributes,
+  DragEvent as ReactDragEvent,
+  JSX,
+  ReactNode,
+} from "react";
 
 import { Icon } from "./Icon";
 import { WorkflowRow } from "./WorkflowRow";
 import { projectInitial } from "../lib/project-tree";
 import type { AgentNode, DirNode } from "../lib/project-tree";
+import { DRAG_MOVE_TYPE } from "../lib/agent-move";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+
+/**
+ * Everything a row needs to take part in a MOVE, threaded down the recursion the
+ * same way collapse state already is (SAP-2930).
+ *
+ * Absent = this axis does not offer a move, and no row grows a drag handle or a
+ * drop target. Only the Project axis passes it: that axis is derived from real
+ * paths, so a drag there has to change the filesystem or refuse. The Group axis
+ * rearranges meaning, not files, and has its own drag in `GroupRow.tsx`.
+ *
+ * `dropDir` is the directory currently under the pointer, held by the RAIL
+ * rather than by each row, because only one row may be the target at a time and
+ * rows that own their own hover state disagree mid-drag.
+ */
+export interface RailDrag {
+  dropDir: string | null;
+  setDropDir: (dir: string | null) => void;
+  /** What a drop MEANS lives with the rail, which owns the plan and the toast. */
+  onDropInto: (agentPath: string, targetDir: string) => void;
+}
+
+/**
+ * A drop target only lights up for OUR payload, and only for the payload that
+ * offers a move: without the type check any dragged file — or a Group-axis drag,
+ * which carries different types — would highlight the tree and imply a move the
+ * row must not perform.
+ *
+ * `types` is readable during `dragover` (the spec's protected mode) and `getData`
+ * is not, so the highlight keys on "an agent is being dragged for a move" and
+ * only the drop reads which one.
+ */
+function dropHandlersFor(
+  targetDir: string,
+  drag: RailDrag | undefined,
+): DOMAttributes<HTMLDivElement> {
+  if (!drag) return {};
+  return {
+    onDragOver: (event) => {
+      if (!event.dataTransfer.types.includes(DRAG_MOVE_TYPE)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      if (drag.dropDir !== targetDir) drag.setDropDir(targetDir);
+    },
+    onDragLeave: (event) => {
+      // A directory's own children fire dragleave too; only a pointer that has
+      // actually left the row clears the highlight.
+      if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+      if (drag.dropDir === targetDir) drag.setDropDir(null);
+    },
+    onDrop: (event) => {
+      if (!event.dataTransfer.types.includes(DRAG_MOVE_TYPE)) return;
+      event.preventDefault();
+      drag.setDropDir(null);
+      const agentPath = event.dataTransfer.getData(DRAG_MOVE_TYPE);
+      if (agentPath) drag.onDropInto(agentPath, targetDir);
+    },
+  };
+}
+
+/**
+ * What makes an agent row a DRAG SOURCE, or nothing when this axis offers no
+ * move.
+ *
+ * The handlers go on the row itself rather than on a wrapper host: this row's
+ * ORDER among its siblings is asserted structurally (`e2e/project-axis.spec.ts`
+ * walks `element.children` to prove agents render before directories at every
+ * level), and an extra element changed that walk — a rendered rule the rail was
+ * corrected to obey, broken by a node that exists only to hold two attributes.
+ *
+ * `effectAllowed` is "move", not the Group axis's "copyMove": there is no such
+ * thing as copying a directory on the Project axis. The axis shows where files
+ * ARE, and a source offering a copy cursor would promise a duplicate it cannot
+ * make.
+ */
+function dragSourceProps(
+  agent: AgentNode,
+  drag: RailDrag | undefined,
+): {
+  draggable?: boolean;
+  onDragStart?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
+} {
+  if (!drag) return {};
+  return {
+    draggable: true,
+    onDragStart: (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      // THE PAYLOAD RIDES HERE, not in component state: `dragstart` and `drop`
+      // can land in the same tick, and a state setter has not re-rendered by
+      // then, so a state-held path reads as null exactly when the drop needs it.
+      event.dataTransfer.setData(DRAG_MOVE_TYPE, agent.workflow.path);
+    },
+    onDragEnd: () => drag.setDropDir(null),
+  };
+}
 
 /**
  * Collapse keys are NAMESPACED because a path is not unique across row kinds.
@@ -108,6 +210,7 @@ export function ProjectTreeRows({
   onFocusAgent,
   collapsedKeys,
   onToggleCollapsed,
+  drag,
 }: {
   dirs: DirNode[];
   agents: AgentNode[];
@@ -117,6 +220,8 @@ export function ProjectTreeRows({
   onFocusAgent: (path: string) => void;
   collapsedKeys: ReadonlySet<string>;
   onToggleCollapsed: (key: string) => void;
+  /** Absent = no move is offered here. See `RailDrag`. */
+  drag?: RailDrag;
 }): JSX.Element {
   return (
     <>
@@ -129,6 +234,7 @@ export function ProjectTreeRows({
           prefix={agent.prefix}
           prefixFull={agent.prefixFull}
           depth={depth}
+          {...dragSourceProps(agent, drag)}
         />
       ))}
       {dirs.map((dir) => {
@@ -136,9 +242,14 @@ export function ProjectTreeRows({
         return (
           <div key={dir.path} className="workspace-group workspace-subgroup">
             <div
-              className={"workspace-row is-nested" + (collapsed ? " is-collapsed" : "")}
+              className={
+                "workspace-row is-nested" +
+                (collapsed ? " is-collapsed" : "") +
+                (drag?.dropDir === dir.path ? " is-drop-target" : "")
+              }
               data-testid={`dir-row-${dir.labelFull}`}
               style={{ "--tree-depth": depth } as CSSProperties}
+              {...dropHandlersFor(dir.path, drag)}
               {...trackingAttrs({ object: "workspace" })}
             >
               <RowDisclosure
@@ -171,6 +282,7 @@ export function ProjectTreeRows({
                 onFocusAgent={onFocusAgent}
                 collapsedKeys={collapsedKeys}
                 onToggleCollapsed={onToggleCollapsed}
+                drag={drag}
               />
             )}
           </div>
@@ -208,6 +320,7 @@ export function ProjectRow({
   mainTestid,
   tooltip,
   busy = false,
+  drag,
 }: {
   label: string;
   root: string;
@@ -231,6 +344,10 @@ export function ProjectRow({
   mainTestid?: string;
   tooltip?: string;
   busy?: boolean;
+  /** The project row is a DROP TARGET (the root is a directory like any other),
+   *  never a drag source: moving the folder the project IS would move the
+   *  project, which is what removing and adding one is for. */
+  drag?: RailDrag;
 }): JSX.Element {
   const agentPath = rootAgent?.workflow.path ?? null;
   // A merged root-agent row IS that agent's row, so it takes the agent's
@@ -245,9 +362,11 @@ export function ProjectRow({
         "workspace-row" +
         (rootAgent ? " workflow-item" : "") +
         (isFocused ? (rootAgent ? " is-focused" : " is-selected") : "") +
-        (disclosable && collapsed ? " is-collapsed" : "")
+        (disclosable && collapsed ? " is-collapsed" : "") +
+        (drag?.dropDir === root ? " is-drop-target" : "")
       }
       data-testid={rootAgent ? `workflow-${rootAgent.workflow.name}` : `project-row-${label}`}
+      {...dropHandlersFor(root, drag)}
       {...trackingAttrs({ object: rootAgent ? "agent" : "workspace" })}
     >
       {disclosable ? (

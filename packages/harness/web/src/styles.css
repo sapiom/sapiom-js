@@ -10185,3 +10185,23 @@ button.rail-footer-card:hover {
     transition: none;
   }
 }
+
+/* ── Project axis: the move drag ─────────────────────────────────────────────
+   Added with the Project-axis move (SAP-2930), appended as its own block for
+   the same reason the two blocks above were: it keeps parallel work off each
+   other's lines. Nothing above is reordered or restated, and nothing new is
+   needed for the drop target itself — a directory row and a project row are
+   both `.workspace-row`, so both light up from the single
+   `.workspace-row.is-drop-target` rule the Group axis already states.
+
+   Nothing is needed for the drag SOURCE's layout either, and deliberately: the
+   project-axis agent row carries `draggable` on the row element itself rather
+   than inside a wrapper host, so the hairline guide's `:has(> .workflow-item)`
+   and the stacking-context rule above still see it, and the row order the axis
+   is asserted on is unchanged. */
+
+/* A row being dragged reads as picked up rather than gone: the source stays in
+   place — on a refused drop nothing happened at all — it simply steps back. */
+.rail-list .workflow-item[draggable="true"]:active {
+  opacity: 0.65;
+}

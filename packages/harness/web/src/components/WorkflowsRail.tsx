@@ -24,6 +24,7 @@ import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { ProjectRow, ProjectTreeRows, dirKey, projectKey } from "./ProjectTreeRows";
+import type { RailDrag } from "./ProjectTreeRows";
 import { GroupSections } from "./GroupRow";
 import type { GroupDropRequest } from "./GroupRow";
 import { useRailGroups } from "../lib/use-rail-groups";
@@ -36,7 +37,8 @@ import {
   renameGroup,
 } from "../lib/agent-groups";
 import { WorkflowRow } from "./WorkflowRow";
-import { isMockMode } from "../lib/api";
+import { ApiError, createApi, isMockMode } from "../lib/api";
+import { planMove } from "../lib/agent-move";
 import { useAccountPlan } from "../lib/use-account-plan";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
@@ -47,6 +49,14 @@ import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+
+/**
+ * Module-level client, matching `use-rail-groups.ts` / `use-account-plan.ts` —
+ * the rail is handed callbacks rather than a client, and the Project-axis move
+ * is a single fire-and-forget mutation whose result reaches the app the way the
+ * server announces it (`workflows.changed`), not through a return value.
+ */
+const api = createApi();
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -406,6 +416,51 @@ export function WorkflowsRail({
   // Agents no open root contains. Rarer than the old "No workspace" bucket,
   // but dropping them would hide an agent that exists.
   const strays = unrootedAgents(workflows, roots, sort);
+
+  // The directory currently under the pointer during a Project-axis drag. Held
+  // HERE rather than by each row: only one row may be the target at a time, and
+  // rows that track their own hover disagree mid-drag.
+  const [dropDir, setDropDir] = useState<string | null>(null);
+
+  /**
+   * PROJECT-AXIS DROP. A real directory move on disk — the Project axis is
+   * derived from real paths, so a drag has exactly two honest outcomes: move, or
+   * refuse. A display override would make the axis assert a location that is not
+   * true, which is the one thing it exists to be trustworthy about. (Rearranging
+   * without touching disk is the Group axis, above.)
+   *
+   * Offered ONLY on the project axis. The plan comes from `lib/agent-move.ts`;
+   * the endpoint guards itself again, so a refusal can still arrive for a plan
+   * this rail blessed — a planner is not a permission system.
+   */
+  const drag: RailDrag | undefined =
+    axis === "project"
+      ? {
+          dropDir,
+          setDropDir,
+          onDropInto: (from, targetDir) => {
+            setDropDir(null);
+            const plan = planMove(
+              from,
+              targetDir,
+              workflows.map((workflow) => workflow.path),
+            );
+            if (!plan.ok) {
+              // An EMPTY reason is the silent refusal — dropped into the folder
+              // it already occupies. The user let go somewhere harmless and
+              // deserves silence, not a complaint.
+              if (plan.reason) onToast(plan.reason);
+              return;
+            }
+            void api.moveAgent(plan.from, plan.to).catch((err: unknown) => {
+              onToast(
+                (err instanceof ApiError ? err.reason : null) ??
+                  (err instanceof Error ? err.message : `Couldn't move ${plan.name}.`),
+              );
+            });
+          },
+        }
+      : undefined;
 
   // The GROUP axis: what an agent is RELATED to, seeded from launch edges and
   // then owned by the user. One stored arrangement per project root, because
@@ -855,6 +910,7 @@ export function WorkflowsRail({
                       : project.dirs.length > 0 || project.agents.length > 0
                   }
                   busy={creating}
+                  drag={drag}
                   mainTestid={
                     creating
                       ? `workspace-pending-${project.label}`
@@ -895,6 +951,7 @@ export function WorkflowsRail({
                     onFocusAgent={onFocusAgent}
                     collapsedKeys={collapsedKeys}
                     onToggleCollapsed={toggleCollapsed}
+                    drag={drag}
                   />
                 )}
                 {!collapsed && showGroups && (
