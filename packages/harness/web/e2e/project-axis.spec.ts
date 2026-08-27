@@ -374,16 +374,25 @@ test.describe("row chrome", () => {
     // AN ELLIPSIS, reversing the design doc's "sliders, not an ellipsis". That
     // rule held while the panel had exactly one subject; it now carries filing
     // AND past sessions, so sliders would promise filing and nothing else.
-    // lucide ships MoreHorizontal under the class `lucide-ellipsis` — verified
-    // against the rendered DOM, not guessed from the component name.
+    //
+    // VERTICAL, and it is the app's only overflow glyph — the horizontal one is
+    // unregistered, because a horizontal ellipsis is what every truncated name
+    // in this rail already renders. Asserted on the class lucide actually emits
+    // (`lucide-ellipsis-vertical`), not on the component name: the earlier
+    // version of this spec asserted `lucide-more-horizontal` and was wrong,
+    // because a deprecated alias does not name its own output.
     await expect(
-      page.getByTestId("history-trigger").locator("svg.lucide-ellipsis"),
+      page
+        .getByTestId("history-trigger")
+        .locator("svg.lucide-ellipsis-vertical"),
     ).toHaveCount(1);
     await expect(
       page
         .getByTestId("history-trigger")
         .locator("svg.lucide-sliders-horizontal"),
     ).toHaveCount(0);
+    // No HORIZONTAL ellipsis anywhere in the rail.
+    await expect(page.locator(".rail-shell svg.lucide-ellipsis")).toHaveCount(0);
     await expect(page.getByTestId("history-trigger")).toHaveAttribute(
       "aria-label",
       "Rail settings",

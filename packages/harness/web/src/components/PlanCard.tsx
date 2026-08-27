@@ -75,7 +75,7 @@ export function PlanCard({ plan }: { plan: AccountPlanView | null }): JSX.Elemen
           aria-label="Plan options"
           onClick={() => setMenuOpen((open) => !open)}
         >
-          <Icon name="MoreVertical" size={13} />
+          <Icon name="EllipsisVertical" size={13} />
         </button>
         <AnchoredPopover
           open={menuOpen}
