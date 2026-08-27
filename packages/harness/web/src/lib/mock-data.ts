@@ -406,7 +406,9 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     // its tab carries the busy pulse shortly after load — the pulse only means
     // anything on a tab you are not already looking at.
     boundWorkflowPath: "/Users/demo/acme-app/leasing",
-    harness: "claude-code",
+    // Mixed-provider siblings prove the tab + inherits the selected session's
+    // adapter rather than defaulting every new conversation to Claude Code.
+    harness: "codex",
     cwd: MOCK_LAUNCH_DIR,
     title: "acme-app",
     status: "running",
@@ -1087,4 +1089,3 @@ export const MOCK_SETTINGS: HarnessSettings = {
   // LLM call the user never asked for.
   rollingSummary: false,
 };
-

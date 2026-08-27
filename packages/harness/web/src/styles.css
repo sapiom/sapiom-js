@@ -680,7 +680,6 @@ input {
    -------------------------------------------------------------------------- */
 .theme-toggle,
 .macro-icon-btn,
-.session-new,
 .dir-picker-up,
 .composer-attach,
 .composer-send {
@@ -701,7 +700,6 @@ input {
    flex row must never stretch or squeeze a glyph button — it is a square or
    it is nothing. */
 .workspace-row-action,
-.session-tab-close,
 .deploy-status-dismiss,
 .plan-card-menu-btn,
 .toast-dismiss {
@@ -2515,24 +2513,16 @@ button.rail-footer-card:hover {
   }
 }
 
-/* The session queue: a horizontally-scrollable row of the current session (an
-   options dropdown), the agent's other live sessions (switch chips), and a + to
-   add one. It grows to fill the bar and scrolls under pressure, so every session
-   stays reachable without a second lane. */
+/* The session queue owns the header's flexible left side. Live-session
+   overflow is handled inside .session-tabs-list, keeping the trailing + fixed
+   and the action cluster reachable without a second header row. */
 .session-queue {
   display: flex;
   align-items: center;
   gap: var(--sp1);
   flex: 1;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  /* A right-edge fade signals there is more of the queue to scroll to when it
-     overflows; over a queue that fits, it fades only empty space. */
-  mask-image: linear-gradient(to right, #000 calc(100% - var(--sp4)), transparent);
-}
-.session-queue::-webkit-scrollbar {
-  display: none;
+  overflow: hidden;
 }
 
 .session-current-wrap {
@@ -2540,10 +2530,8 @@ button.rail-footer-card:hover {
   flex: 0 0 auto;
 }
 
-/* Each session in the queue is a compact chip. The current one carries the ⌄
-   options dropdown and a selected wash; the others switch on click. */
-.session-current,
-.session-switch {
+/* Static/ended session identity when a live tab strip does not apply. */
+.session-current {
   display: inline-flex;
   align-items: center;
   gap: var(--sp2);
@@ -2591,48 +2579,9 @@ button.rail-footer-card:hover {
   cursor: default;
 }
 
-.session-switch {
-  color: var(--text-dim);
-  cursor: pointer;
-}
-.session-switch:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.session-switch-label {
-  max-width: 16ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-title-trigger:focus-visible,
-.session-switch:focus-visible,
-.session-new:focus-visible {
+.session-title-trigger:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
-}
-
-/* + at the end of the queue: a quiet ghost icon button. */
-.session-new {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: var(--control-h-xs);
-  height: var(--control-h-xs);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast);
-}
-.session-new:hover {
-  background: var(--surface-hover);
-  color: var(--text);
 }
 
 /* The title is the primary claim: it never shrinks below its content until
@@ -2679,49 +2628,6 @@ button.rail-footer-card:hover {
 .session-menu-danger:hover:not(:disabled) {
   color: var(--red-text);
   background: color-mix(in srgb, var(--red) 12%, transparent);
-}
-
-/* Session switcher inside the current-session menu ------------------------
-   The ⌄ on the current session opens a titled list of the agent's live
-   sessions (active one checked) plus this session's actions — one place to
-   pick a session or act on it, so the bar itself stays a single clean pill. */
-.session-menu-section {
-  padding: var(--sp2) var(--sp2) var(--sp1);
-  font-size: var(--type-micro);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-
-/* Rows reuse .profile-menu-item; the active one carries the app's standard
-   "you are here" selected wash. The label grows; time trails, right-aligned. */
-.session-switch-item .session-switch-label {
-  flex: 1 1 auto;
-  max-width: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text);
-}
-
-.session-switch-item.is-selected {
-  background: var(--active-shade);
-  color: var(--text);
-}
-
-.session-switch-meta {
-  margin-left: auto;
-  padding-left: var(--sp2);
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--type-meta);
-  color: var(--text-faint);
-}
-
-.session-menu-divider {
-  height: 1px;
-  margin: var(--sp1) 0;
-  background: var(--ui-line);
 }
 
 /* Bound-agent line: which agent's Canvas this session drives. Quiet metadata,
@@ -2810,68 +2716,70 @@ button.rail-footer-card:hover {
 
 /* Session tab strip -------------------------------------------------------
 
-   One tab per live session belonging to the FOCUSED agent. Sits
-   directly under the session bar; session switching lives here. The strip
-   scrolls horizontally under pressure so the panes never widen past their
-   grid track. */
+   Browser-style tabs live INSIDE .session-bar. Only the list scrolls; the +
+   stays pinned beside it and the action cluster remains outside this flex
+   item. Ending a session stays in the active tab's options menu. */
 .session-tabs {
   display: flex;
   align-items: center;
   gap: var(--sp1);
-  flex: 0 0 auto;
+  flex: 1;
   min-width: 0;
-  padding: var(--sp1) var(--pane-pad-x);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-1);
+}
+
+.session-tabs-list {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
-.session-tabs::-webkit-scrollbar {
+.session-tabs-list::-webkit-scrollbar {
   display: none;
 }
 
-/* One tab: a main select button + a trailing × close. The tab reads selected
-   with a filled surface and a hairline; the resting tab is quiet. */
+/* One tab: a main select button plus the active tab's options caret. */
 .session-tab {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  max-width: 220px;
-  height: 28px;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  color: var(--text-dim);
+  max-width: 24ch;
+  height: var(--control-h-xs);
+  border-radius: var(--radius);
+  color: var(--text-faint);
   transition:
     background-color var(--transition-fast),
-    border-color var(--transition-fast),
     color var(--transition-fast);
 }
 
 .session-tab:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--surface-hover);
+  color: var(--text-dim);
 }
 
 .session-tab.is-active {
   background: var(--active-shade);
-  border-color: var(--ui-line);
   color: var(--text);
 }
 
 .session-tab-main {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp2);
+  flex: 1 1 auto;
   min-width: 0;
   height: 100%;
   padding: 0 var(--sp1) 0 var(--sp2);
-  border: none;
+  border: 0;
   background: transparent;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  border-radius: var(--radius) 0 0 var(--radius);
   color: inherit;
   font-size: var(--type-label);
   text-align: left;
+  cursor: pointer;
 }
 
 .session-tab-main:focus-visible {
@@ -2879,13 +2787,8 @@ button.rail-footer-card:hover {
   outline-offset: -2px;
 }
 
-.session-tab-main > svg {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-}
-
-.session-tab.is-active .session-tab-main > svg {
-  color: var(--brand);
+.session-tab.is-active .session-tab-main {
+  padding-right: 0;
 }
 
 .session-tab-label {
@@ -2895,107 +2798,38 @@ button.rail-footer-card:hover {
   white-space: nowrap;
 }
 
-/* Live/starting/exited dot — same 7px trailing mark the session bar uses. */
-.session-tab-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+/* The caret belongs to the selected tab, and rotates while its menu is open. */
+.session-tab-menu {
   flex: 0 0 auto;
-  background: var(--text-faint);
+  color: inherit;
 }
 
-.session-tab-dot[data-status="running"] {
-  background: var(--green);
+.session-tab-menu[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 
-.session-tab-dot[data-status="starting"] {
-  background: var(--amber);
+.session-tab-rename {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  margin: 0 var(--sp1);
+  padding: 0 var(--sp1);
 }
 
-/* Busy pulse (output in the last ~3s) — replaces the dot on a background tab
-   so activity you are not looking at still reads. */
-.session-tab-busy {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  background: var(--accent);
-  animation: session-tab-busy-pulse 1.2s ease-in-out infinite;
-}
-
-.session-tab-close {
-  margin-right: 4px;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
+.session-tab-new:disabled {
   color: var(--text-faint);
-  opacity: 0;
-  transition:
-    opacity var(--transition-fast),
-    background-color var(--transition-fast),
-    color var(--transition-fast);
+  cursor: wait;
 }
 
-/* The × reveals on tab hover/focus and stays visible on the active tab so the
-   current session is always closable without a hunt. */
-.session-tab:hover .session-tab-close,
-.session-tab.is-active .session-tab-close,
-.session-tab-close:focus-visible {
-  opacity: 1;
-}
-
-.session-tab-close:hover {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
-  color: var(--red-text);
-}
-
-.session-tab-close:active {
-  background: color-mix(in srgb, var(--red) 22%, transparent);
-}
-
-.session-tab-close:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
-}
-
-/* Trailing + : open another session on the focused agent. */
-.session-tab-new {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border: none;
+.session-tab-new:disabled:hover {
   background: transparent;
-  border-radius: var(--radius-md);
-  color: var(--text-faint);
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.session-tab-new:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.session-tab-new:active {
-  background: var(--surface-inset);
-}
-
-.session-tab-new:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-tab,
-  .session-tab-close,
-  .session-tab-new {
+  .session-tab {
     transition: none;
   }
-  .session-tab-busy {
+  .session-busy {
     animation: none;
   }
 }

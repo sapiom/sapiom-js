@@ -135,13 +135,9 @@ test("auto-selects the running boot session on initial load", async ({ page }) =
   await expect(page.locator(".terminal-empty")).toHaveCount(0);
   const header = page.getByTestId("session-context");
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
-  // The active session is the options dropdown (session-menu); its dot carries
-  // the status. (A background session's switch chip has its own dot, so scope
-  // to the active menu.)
-  await expect(header.getByTestId("session-menu").locator(".session-dot")).toHaveAttribute(
-    "data-status",
-    "running",
-  );
+  await expect(
+    page.getByTestId("session-tab-sess-boot").locator(".session-dot"),
+  ).toHaveAttribute("data-status", "running");
 });
 
 test("session header: compact identity (name only; path in the tooltip); New session opens from the rail's history menu", async ({
@@ -149,9 +145,9 @@ test("session header: compact identity (name only; path in the tooltip); New ses
 }) => {
   const header = page.getByTestId("session-context");
   const title = header.getByTestId("session-context-title");
-  // A folder-default session is labelled by its bound AGENT (leasing), not the
-  // workspace folder — the rail already names the workspace.
-  await expect(title).toContainText("leasing");
+  // Browser-style sessions use the established session-name contract rather
+  // than replacing the folder default with the bound agent's name.
+  await expect(title).toHaveText("acme-app");
   // The full path never renders inline (it would bleed) — it lives in the
   // session menu's hover tooltip alongside the workspace label.
   await expect(header).not.toContainText("/Users/demo/acme-app");
@@ -192,7 +188,7 @@ test("the active session shows a busy pulse that clears once output goes quiet",
       harnessSessionId: "sess-boot",
     });
   });
-  const busy = page.getByTestId("session-busy");
+  const busy = page.getByTestId("session-tab-busy-sess-boot");
   await expect(busy).toBeVisible({ timeout: 5_000 });
   await page.screenshot({ path: "web/e2e/screenshots/session-tab-busy.png" });
 
@@ -232,7 +228,7 @@ test("Overview opens the introduction, and Escape returns to the session behind 
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
-test("creation IA: Add existing agents opens the detection dialog; the tab strip + opens the composer", async ({
+test("creation IA: Add existing agents opens detection; the tab + starts a sibling directly", async ({
   page,
 }) => {
   // Adding what already exists is ONE detection-driven dialog — no doors, no
@@ -246,13 +242,15 @@ test("creation IA: Add existing agents opens the detection dialog; the tab strip
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
 
-  // Creating something NEW lives in the composer: the session bar's + opens it,
-  // not a dialog and not a silent direct add.
-  const newBtn = page.getByTestId("session-new");
-  await expect(newBtn).toHaveAttribute("aria-label", "New session");
+  // The workbench + means another conversation in this folder. The rail's
+  // Create new remains the composer entry for a new project/agent.
+  const newBtn = page.getByTestId("session-tab-new");
+  await expect(newBtn).toHaveAttribute("aria-label", "New session on leasing");
   await newBtn.click();
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-input")).toBeVisible();
+  await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
+    3,
+  );
+  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.locator(".modal-start")).toHaveCount(0);
 });
 
@@ -330,21 +328,24 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await page.screenshot({ path: "web/e2e/screenshots/rail-explorer.png", fullPage: true });
   });
 
-  test("focusing an agent with sessions shows the active session and a switcher menu", async ({ page }) => {
-    // Leasing is focused on load and carries two live sessions. The bar shows a
-    // single selector (sess-boot); switching lives in its ⌄ menu, which lists
-    // both sessions with the active one checked.
+  test("focusing an agent with sessions shows visible browser-style tabs", async ({
+    page,
+  }) => {
+    // Leasing is focused on load and carries two live sessions, oldest first.
     const header = page.getByTestId("session-context");
     await expect(header).toHaveAttribute("data-session-id", "sess-boot");
+    const tabs = page.getByTestId("session-tabs").getByRole("tab");
+    await expect(tabs).toHaveCount(2);
+    await expect(tabs.nth(0)).toHaveText("acme-app");
+    await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
+    await expect(tabs.nth(1)).toHaveText("acme-app 2");
+    await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "false");
     await expect(page.getByTestId("session-menu")).toBeVisible();
-    await page.getByTestId("session-menu").click();
-    await expect(page.locator(".session-switch-item")).toHaveCount(2);
-    await expect(page.getByTestId("session-switch-sess-leasing-2")).toBeVisible();
-    await expect(page.getByTestId("session-switch-sess-boot")).toHaveAttribute("aria-checked", "true");
-    await page.keyboard.press("Escape");
-    // A + to add another session is always available.
-    await expect(page.getByTestId("session-new")).toBeVisible();
-    await page.screenshot({ path: "web/e2e/screenshots/session-tab-strip.png", fullPage: true });
+    await expect(page.getByTestId("session-tab-new")).toBeVisible();
+    await page.screenshot({
+      path: "web/e2e/screenshots/session-tab-strip.png",
+      fullPage: true,
+    });
   });
 
   test("switching sessions makes the canvas follow the new session's content", async ({ page }) => {
@@ -357,27 +358,34 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
 
     // Switch to the empty session — nothing to show, so the canvas hides.
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-switch-sess-leasing-2").click();
-    await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-leasing-2");
+    await page.getByTestId("session-tab-main-sess-leasing-2").click();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-leasing-2",
+    );
     await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
 
     // Switch back to the populated session — the canvas opens again.
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-switch-sess-boot").click();
-    await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
+    await page.getByTestId("session-tab-main-sess-boot").click();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-boot",
+    );
     await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
     await expect(page.locator(".canvas-iframe")).toBeVisible();
   });
 
-  test("the + opens the composer to start a new session", async ({ page }) => {
-    // The + is the New-session entry: it opens the composer-first home rather
-    // than silently spawning a session, so a new agent starts from an outcome.
-    await page.getByTestId("session-new").click();
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
-    // Leasing stays the focused agent behind the composer.
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+  test("the + starts a fresh same-folder session without opening the composer", async ({
+    page,
+  }) => {
+    await page.getByTestId("session-tab-new").click();
+    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
+      3,
+    );
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
+      /is-focused/,
+    );
   });
 
   test("ending the active session confirms, then falls back to another session", async ({ page }) => {
@@ -390,22 +398,25 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(confirm).toBeVisible();
     await expect(confirm).toContainText("kills the live terminal");
 
-    // Keep cancels — nothing dies, both sessions remain in the switcher.
+    // Keep cancels — nothing dies, both live tabs remain.
     await page.getByRole("button", { name: "Keep session" }).click();
     await expect(confirm).toHaveCount(0);
-    await page.getByTestId("session-menu").click();
-    await expect(page.locator(".session-switch-item")).toHaveCount(2);
-    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
+      2,
+    );
 
     // Confirming ends the active session; the workbench falls back to the other
-    // leasing session, now active and the only one left in the switcher.
+    // leasing session, now active and the only live tab left.
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-end-btn").click();
     await page.getByTestId("end-session-confirm-btn").click();
-    await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-leasing-2");
-    await page.getByTestId("session-menu").click();
-    await expect(page.locator(".session-switch-item")).toHaveCount(1);
-    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-leasing-2",
+    );
+    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
+      1,
+    );
     // Leasing stays focused throughout — ending a session never moves the rail.
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
   });
@@ -418,7 +429,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
     // No session controls render for an agent with no live session.
     await expect(page.getByTestId("session-menu")).toHaveCount(0);
-    await expect(page.getByTestId("session-new")).toHaveCount(0);
+    await expect(page.getByTestId("session-tab-new")).toHaveCount(0);
 
     const start = page.getByTestId("open-agent-empty");
     await expect(start).toContainText("No running session for rfq");
@@ -438,12 +449,15 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
 
     // Start runs the create+bind path in rfq's OWN folder (never borrowing the
     // acme-app session), and the workbench goes live with the terminal. The
-    // bound agent (rfq) labels the active session.
+    // The session uses its folder-derived default label.
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-context-title")).toHaveText("rfq");
+    await expect(page.getByTestId("session-context-title")).toHaveText(
+      "rfq-agent",
+    );
     await expect(page.locator(".harness-terminal")).toBeVisible();
-    // The new session is the only one on this agent — no switch chips.
-    await expect(page.locator(".session-switch")).toHaveCount(0);
+    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
+      1,
+    );
   });
 
   test("the mapping invariant: focused agent == active tab's agent == right-panel subject", async ({
@@ -451,16 +465,24 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   }) => {
     // On load: rail focuses leasing, the active tab is bound to leasing, and
     // the right pane renders leasing's board.
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
-    await expect(page.getByTestId("session-context-title")).toContainText("leasing");
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
+      /is-focused/,
+    );
+    await expect(page.getByTestId("session-context-title")).toHaveText(
+      "acme-app",
+    );
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
     // Focus rfq and start its session: all four move together to rfq.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
-    await expect(page.getByTestId("workflow-leasing")).not.toHaveClass(/is-focused/);
-    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
+    await expect(page.getByTestId("workflow-leasing")).not.toHaveClass(
+      /is-focused/,
+    );
+    await expect(page.getByTestId("session-context-title")).toHaveText(
+      "rfq-agent",
+    );
     // Still exactly one filled row.
     await expect(
       page.locator(".rail-list .workflow-item.is-focused, .rail-list .workspace-row.is-selected"),
@@ -484,18 +506,20 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("session-context-title")).toHaveText("Leasing revamp");
   });
 
-  test("the boot session's default binding surfaces as its agent label on load", async ({ page }) => {
-    // Fixture: sess-boot is pre-bound to leasing, so the active session reads
-    // "leasing" (its agent) without any interaction — useful for anyone
-    // eyeballing mock mode, not just tests.
+  test("the boot session keeps its folder-derived session label on load", async ({
+    page,
+  }) => {
     const title = page.getByTestId("session-context-title");
     await expect(title).toBeVisible();
-    await expect(title).toHaveText("leasing");
+    await expect(title).toHaveText("acme-app");
   });
 
-  test("the binding is per-session: an exited session under review keeps its own title, not the agent binding", async ({ page }) => {
-    // The live boot session is bound to leasing, so the header reads the agent.
-    await expect(page.getByTestId("session-context-title")).toHaveText("leasing");
+  test("the binding is per-session: an exited session under review keeps its own title, not the agent binding", async ({
+    page,
+  }) => {
+    await expect(page.getByTestId("session-context-title")).toHaveText(
+      "acme-app",
+    );
 
     // Select an exited session that never had anything bound (from the merged
     // past-sessions list) — it opens as a dead session reviewed under its own
@@ -598,7 +622,9 @@ test("a past-session row opens the dead-session pane first; Resume is the explic
   // The resumed session is unbound and now lives as the active session in the
   // workbench; sessions are not a rail concern, so no session rows in the rail.
   await expect(page.locator("[data-testid^='rail-session-']")).toHaveCount(0);
-  await expect(header.getByTestId("session-menu")).toContainText("Build the leasing pipeline");
+  await expect(header.getByTestId("session-context-title")).toContainText(
+    "Build the leasing pipeline",
+  );
 });
 
 test("the sessions menu is ONE merged past-sessions list with status tags and rich meta", async ({ page }) => {

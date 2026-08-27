@@ -183,6 +183,9 @@ Shared:
 - `model` (optional) — a semantic alias (e.g. `"flux-fast"`, `"veo3-fast"`);
   defaults to a fast model. Most callers omit it.
 - `storage` (optional) — persist outputs; `{ visibility: "private" | "public" }`.
+- `idempotencyKey` (optional) — cross-call idempotency key; a repeat with the same
+  key (per tenant) returns the existing generation instead of a new one, like
+  `agents.run`. Arbitrary string ≤255 (not a UUID).
 - `passthrough` (optional) — escape hatch for a raw provider knob the neutral
   vocabulary doesn't cover; merged last, so it overrides the neutral fields.
 - `numImages` / `params` — **deprecated**, still honored; superseded by `count` /

@@ -1,5 +1,11 @@
 # @sapiom/tools
 
+## 0.32.0
+
+### Minor Changes
+
+- 065c9ca: `contentGeneration.images` / `contentGeneration.video`: `ImageCreateInput` and `VideoCreateInput` gain an optional `idempotencyKey` — a caller-supplied string forwarded verbatim as a top-level request field across the sync `create` and async `launch` paths. On platform deployments with content-generation idempotency support, keys are limited to 255 characters and repeated requests with the same per-tenant key return the existing generation. The SDK does not validate or deduplicate the key; deployments without platform support may ignore it.
+
 ## 0.31.0
 
 ### Minor Changes

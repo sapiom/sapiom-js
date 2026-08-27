@@ -81,9 +81,9 @@ test("continuing it opens a NEW session rather than resuming the old one", async
   // A real fresh id is present — `/.+/` proves the attribute EXISTS and is
   // non-empty (a bare not-"" also passes when the attribute is absent).
   await expect(context).toHaveAttribute("data-session-id", /.+/);
-  // The old session is not what came back — it never appears as a live session
-  // (no active context on it, no switch chip for it).
-  await expect(page.getByTestId("session-switch-sess-pricing")).toHaveCount(0);
+  // The old session is not what came back — exited sessions never appear in
+  // the live tab strip.
+  await expect(page.getByTestId("session-tab-sess-pricing")).toHaveCount(0);
   // And no failure toast: this path never attempts the resume that would 409.
   await expect(page.getByTestId("toast")).toHaveCount(0);
 });

@@ -1,5 +1,13 @@
 # @sapiom/harness
 
+## 0.8.8
+
+### Patch Changes
+
+- 672550f: Start fresh same-folder Claude Code or Codex conversations from browser-style session tabs in Agent Studio.
+  - @sapiom/agent@0.12.1
+  - @sapiom/agent-core@0.13.1
+
 ## 0.8.7
 
 ### Patch Changes

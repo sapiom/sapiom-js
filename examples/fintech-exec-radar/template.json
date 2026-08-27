@@ -1,0 +1,60 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Track executive moves, investment events, and hiring clusters across a fintech watchlist. Each company runs independently, findings persist as they land, and the terminal result is a sourced digest with honest coverage gaps.",
+  "longDescription": "Give it a company watchlist and it launches one bounded research child per company, searches third-party sources for executive moves, funding, and hiring signals, persists every company's findings, and suppresses source URLs found in up to 50 recent per-company snapshots. The parent ranks only sourced items, assembles a markdown digest deterministically, and returns it inline even when some companies fail; set `deliverTo` to email the same digest. `dryRun` resolves the exact maximum capability-call envelope without spending, while `maxCapabilityCalls` blocks an oversized plan before fan-out.",
+  "useCases": [
+    "Executive-move radar",
+    "Funding watchlist",
+    "Hiring-signal brief"
+  ],
+  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nStart with **Deliver to**: enter an email for delivery, or leave it empty to receive the digest in the run result. Then enter the companies you actually track. Signals, recency, article reads, the call ceiling, and preview mode are optional and have safe defaults. The first run previews the exact maximum call counts without invoking a capability. Set `dryRun: false` only after reviewing that plan. Email delivery reuses the account's first existing sender inbox, or creates a Fintech Exec Radar inbox when none exists. Current dollar pricing comes from Sapiom's signed-in capability catalog rather than copied constants; account spending rules enforce dollar limits, while `maxCapabilityCalls` is this agent's structural hard stop.\n\nAttach a weekly cron trigger to the deployed agent for a standing radar. Precise headcount, LinkedIn scraping, paywall bypassing, CRM write-back, and a custom watchlist UI are deliberately outside v1.",
+  "settings": [
+    {
+      "path": "deliverTo",
+      "label": "Deliver to",
+      "description": "Leave empty to return the digest inline only.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    }
+  ],
+  "defaultInput": {},
+  "examples": [
+    {
+      "title": "Preview a three-company radar without spending",
+      "input": {
+        "companies": ["Example Bank", "Sample Payments", "Demo Capital"],
+        "signals": ["exec_moves", "funding", "hiring"],
+        "window": "7d",
+        "maxScrapesPerCompany": 3,
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "dispatched": false,
+        "companies": ["Example Bank", "Sample Payments", "Demo Capital"],
+        "estimate": {
+          "companies": 3,
+          "signalsPerCompany": 3,
+          "maxScrapesPerCompany": 3,
+          "calls": {
+            "childRuns": 3,
+            "searches": 9,
+            "scrapes": 9,
+            "memoryReads": 3,
+            "memoryWrites": 6,
+            "reduceLlmCalls": 1,
+            "emails": 0,
+            "maximumTotal": 31
+          },
+          "pricing": "quoted-by-platform-catalog-at-run-time"
+        }
+      }
+    }
+  ]
+}
