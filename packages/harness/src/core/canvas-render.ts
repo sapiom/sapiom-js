@@ -173,6 +173,77 @@ export async function renderCanvasForSession(
 }
 
 /**
+ * Everything the deterministic render pipeline computes for ONE workflow,
+ * WITHOUT touching the filesystem's render file: the extracted graph, its
+ * derived enrichment, and the finished canvas document. Shared by the write
+ * path ({@link renderWorkflowRenderFile}) and the session-free workflow-keyed
+ * graph route (server/workflow-graph.ts), so a board read by agent path can
+ * never disagree with the one a bound session sees.
+ */
+export interface WorkflowCanvasDerivation {
+  /** "ok": extracted and rendered. "preparing": dependencies aren't installed
+   *  yet, so extraction was skipped and the calm placeholder was built
+   *  instead. "error": extraction ran and failed — the honest error panel. */
+  status: "ok" | "preparing" | "error";
+  graph: CanvasGraph | null;
+  enrichment: CanvasEnrichment | null;
+  /** The extraction failure reason ("error" only); null otherwise. */
+  reason: string | null;
+  /** True when the graph came from the extraction cache — no child process ran. */
+  cached: boolean;
+  /** The canvas document — byte-identical to what the render file would hold. */
+  document: string;
+}
+
+/**
+ * Extracts `workflow`'s graph and builds its canvas document. Pure with
+ * respect to the render file: nothing is written and no render path is
+ * consulted, so this is safe to call for a workflow no session is bound to.
+ * Never throws — extraction failure comes back as `status: "error"` with the
+ * reason, exactly as the write path renders it.
+ */
+export async function deriveWorkflowCanvas(
+  workflow: RenderableWorkflow,
+  options: RenderCanvasOptions = {},
+): Promise<WorkflowCanvasDerivation> {
+  // A freshly scaffolded project — between `scaffold` and the coding agent's
+  // `npm install` — has no installed SDK, so extraction (an esbuild bundle of
+  // the project's own index.ts) is guaranteed to fail with "Could not resolve
+  // @sapiom/agent / zod/v4". That's not an error the user caused or can act on;
+  // it self-resolves when install finishes. So skip extraction entirely and
+  // build a calm "preparing" placeholder. A bundle failure WITH deps installed
+  // stays a genuine error (below).
+  if (!options.surfaceErrorOnMissingDeps && !(await agentDepsInstalled(workflow.path))) {
+    return {
+      status: "preparing",
+      graph: null,
+      enrichment: null,
+      reason: null,
+      cached: false,
+      document: renderCanvasDocument(buildPreparingPanelHtml(workflow.name)),
+    };
+  }
+
+  const { result, cached } = await extractWorkflowGraphCached(workflow.path);
+
+  // Enrichment only decorates a successful extraction — deriving annotations
+  // for an error panel whose steps we can't even show would be noise. Derived
+  // deterministically from the freshly extracted graph, so it's always in sync
+  // with the diagram and can never go stale.
+  const enrichment = result.ok ? deriveEnrichment(result.graph) : null;
+  const body = buildSingleBody(workflow, result.ok ? result.graph : null, result.ok ? null : result.reason, enrichment);
+
+  return {
+    status: result.ok ? "ok" : "error",
+    graph: result.ok ? result.graph : null,
+    enrichment,
+    reason: result.ok ? null : result.reason,
+    cached,
+    document: renderCanvasDocument(body),
+  };
+}
+
+/**
  * Renders ONE workflow to its render file under `cwd`, merging in the
  * deterministic enrichment derived from the freshly extracted graph
  * (core/canvas-derive.ts). This is the write path shared by every render
@@ -186,64 +257,29 @@ export async function renderWorkflowRenderFile(
   options: RenderCanvasOptions = {},
 ): Promise<CanvasRenderOutcome> {
   const renderPath = renderFileFor(cwd, bound.path);
-
-  // A freshly scaffolded project — between `scaffold` and the coding agent's
-  // `npm install` — has no installed SDK, so extraction (an esbuild bundle of
-  // the project's own index.ts) is guaranteed to fail with "Could not resolve
-  // @sapiom/agent / zod/v4". That's not an error the user caused or can act on;
-  // it self-resolves when install finishes. So skip extraction entirely and
-  // write a calm "preparing" placeholder, flagging `depsMissing` so the server
-  // arms an install watcher that re-renders once dependencies land. A bundle
-  // failure WITH deps installed stays a genuine error (below).
-  if (!options.surfaceErrorOnMissingDeps && !(await agentDepsInstalled(bound.path))) {
-    const outcome: CanvasRenderOutcome = {
-      mode: "single",
-      workflowPath: bound.path,
-      renderPath,
-      extractionFailed: [],
-      depsMissing: true,
-    };
-    // Preserve semantics: an unprompted render must not replace an existing
-    // (possibly good) diagram just because deps went missing — but still flag
-    // depsMissing so the watcher re-renders when they return.
-    if (options.preserveExistingOnFailure && (await pathExists(renderPath))) {
-      outcome.preservedExisting = true;
-      return outcome;
-    }
-    await writeRenderFile(renderPath, buildPreparingPanelHtml(bound.name), outcome);
-    return outcome;
-  }
-
-  const { result, cached } = await extractWorkflowGraphCached(bound.path);
-  const failed = !result.ok;
-
-  // Enrichment only decorates a successful extraction — deriving annotations
-  // for an error panel whose steps we can't even show would be noise. Derived
-  // deterministically from the freshly extracted graph, so it's always in sync
-  // with the diagram and can never go stale.
-  const enrichment = result.ok ? deriveEnrichment(result.graph) : null;
-
-  const body = buildSingleBody(bound, result.ok ? result.graph : null, result.ok ? null : result.reason, enrichment);
+  const derived = await deriveWorkflowCanvas(bound, options);
 
   const outcome: CanvasRenderOutcome = {
     mode: "single",
     workflowPath: bound.path,
     renderPath,
-    extractionFailed: failed ? [bound.name] : [],
-    cachedExtraction: cached,
-    ...(enrichment ? { enrichmentApplied: true } : {}),
+    extractionFailed: derived.status === "error" ? [bound.name] : [],
+    ...(derived.status === "preparing"
+      ? { depsMissing: true }
+      : { cachedExtraction: derived.cached }),
+    ...(derived.enrichment ? { enrichmentApplied: true } : {}),
   };
 
-  // An unprompted render that failed to extract must not destroy an existing
-  // (possibly good) diagram for this workflow — e.g. an agent mid-edit whose
-  // sources are transiently un-buildable. (The deps-not-installed case is
-  // handled above; this is a genuine extraction failure with deps present.)
-  if (options.preserveExistingOnFailure && failed && (await pathExists(renderPath))) {
+  // An unprompted render that failed must not destroy an existing (possibly
+  // good) diagram for this workflow — an agent mid-edit whose sources are
+  // transiently un-buildable, or deps that went missing. `depsMissing` is still
+  // flagged above so the server's install watcher re-renders when they return.
+  if (options.preserveExistingOnFailure && derived.status !== "ok" && (await pathExists(renderPath))) {
     outcome.preservedExisting = true;
     return outcome;
   }
 
-  await writeRenderFile(renderPath, body, outcome);
+  await writeRenderFile(renderPath, derived.document, outcome);
   return outcome;
 }
 
@@ -262,11 +298,10 @@ async function pathExists(p: string): Promise<boolean> {
  *  extraction success/failure is unaffected. */
 async function writeRenderFile(
   renderPath: string,
-  body: string,
+  document: string,
   outcome: CanvasRenderOutcome,
 ): Promise<void> {
   try {
-    const document = renderCanvasDocument(body);
     const existing = await fs.readFile(renderPath, "utf8").catch(() => null);
     if (existing !== document) {
       await fs.mkdir(path.dirname(renderPath), { recursive: true });

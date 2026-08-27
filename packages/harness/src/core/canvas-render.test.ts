@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { CANVAS_DIR } from "../shared/types.js";
 import { clearExtractionCache } from "./canvas-cache.js";
 import {
+  deriveWorkflowCanvas,
   renderCanvasForSession,
   renderFileFor,
   slugForWorkflowPath,
@@ -222,6 +223,42 @@ describe("renderCanvasForSession", () => {
       expect(outcome.preservedExisting).toBeUndefined();
       expect(await readRender(cwd, NO_DEFINITION)).toContain("render failed");
     });
+  });
+});
+
+describe("deriveWorkflowCanvas (the session-free entry point behind IA-01)", () => {
+  const ORDER: RenderableWorkflow = { path: ORDER_TRIAGE, name: "order-triage", definitionId: null };
+
+  it("produces the byte-identical document the session-bound render writes to disk", async () => {
+    // The proof that the workflow-keyed route (server/workflow-graph.ts) and
+    // the session-keyed canvas route (server/canvas.ts) can never disagree:
+    // both sides come out of this one derivation, so a board read by agent path
+    // IS the board a bound session sees.
+    const cwd = await tmpCwd();
+    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, [ORDER]);
+    const written = await readRender(cwd, ORDER_TRIAGE);
+
+    const derived = await deriveWorkflowCanvas(ORDER);
+
+    expect(derived.status).toBe("ok");
+    expect(derived.document).toBe(written);
+    expect(derived.graph?.manifestName).toBeTruthy();
+    expect(derived.enrichment).not.toBeNull();
+  });
+
+  it("writes nothing — no render file, no canvas dir", async () => {
+    const cwd = await tmpCwd();
+    await deriveWorkflowCanvas(ORDER);
+    await expect(fs.stat(path.join(cwd, CANVAS_DIR))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports an extraction failure as status 'error' with the reason, never a throw", async () => {
+    const derived = await deriveWorkflowCanvas({ path: NO_DEFINITION, name: "broken-flow", definitionId: null });
+
+    expect(derived.status).toBe("error");
+    expect(derived.graph).toBeNull();
+    expect(derived.reason).toBeTruthy();
+    expect(derived.document).toContain("render failed");
   });
 });
 
