@@ -21,16 +21,17 @@ import { Icon } from "./Icon";
 import { StartDialog } from "./StartDialog";
 import { PlanCard } from "./PlanCard";
 import { UpdateCard } from "./UpdateCard";
-import { MenuChoice } from "./MenuChoice";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
+import { ProjectRow, ProjectTreeRows, dirKey, projectKey } from "./ProjectTreeRows";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
 import { useAccountPlan } from "../lib/use-account-plan";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
-import { buildWorkspaceTree } from "../lib/workspace-tree";
-import type { RailGrouping, RailSort } from "../lib/workspace-tree";
+import { buildProjectTree, projectIsEmpty, projectRoots, unrootedAgents } from "../lib/project-tree";
+import type { RailAxis, RailSort } from "../lib/project-tree";
+import { samePath } from "../lib/paths";
 import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
@@ -123,162 +124,26 @@ const IS_MAC = typeof navigator !== "undefined" && navigator.platform.toUpperCas
 const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
 
 /**
- * LEVEL 1 workspace folder header: a quiet, non-interactive-to-open label
- * that only groups the agents beneath it. The main button toggles collapse;
- * a trailing hover action (copy path) acts on the folder. It never focuses an
- * agent — that is the agent rows' job.
+ * The axes the filing panel offers, and their copy.
+ *
+ * ONE entry today. `workspace` accumulated a row for every directory that had
+ * ever hosted a session, and `deployment` filed on `definitionId != null` — a
+ * fact every agent row already prints as a cloud glyph, so it re-sorted the
+ * rail to tell you nothing new. Both are retired. The Group axis (what an
+ * agent is RELATED to, read off launch edges) is the next entry, and the only
+ * kind that earns one: a fact the row cannot already show.
  */
-function FolderHeader({
-  label,
-  cwd,
-  isDirectory = true,
-  collapsed,
-  onToggleCollapsed,
-  onCopyPath,
-}: {
-  label: string;
-  cwd: string;
-  /** A real directory (Workspace grouping) carries a folder glyph and the
-   *  copy-path action; a deployment FACET bucket has no path behind it, so it
-   *  is a bare label + caret. */
-  isDirectory?: boolean;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
-  onCopyPath: (path: string) => void;
-}): JSX.Element {
-  return (
-    <div
-      className="workspace-row"
-      data-testid={`workspace-group-${label}`}
-      {...trackingAttrs({ object: "workspace" })}
-    >
-      <button
-        className="workspace-row-main"
-        onClick={onToggleCollapsed}
-        title={isDirectory ? cwd : label}
-        aria-expanded={!collapsed}
-      >
-        {isDirectory && <Icon name={collapsed ? "Folder" : "FolderOpen"} size={13} />}
-        <span className="tree-row-label">{label}</span>
-        <span className={"workspace-caret" + (collapsed ? "" : " is-open")} aria-hidden="true">
-          <Icon name="ChevronDown" size={13} />
-        </span>
-      </button>
-      {isDirectory && (
-        <button
-          className="workspace-row-action"
-          aria-label={`Copy path for ${label}`}
-          data-tooltip="Copy path"
-          onClick={() => onCopyPath(cwd)}
-        >
-          <Icon name="Copy" size={13} />
-        </button>
-      )}
-    </div>
-  );
-}
+const RAIL_AXES: readonly RailAxis[] = ["project"];
+const AXIS_LABELS: Record<RailAxis, string> = { project: "Project" };
+/** A stored value from a retired axis falls back to the default rather than
+ *  rendering a section that no longer exists. */
+const resolveAxis = (stored: unknown): RailAxis =>
+  RAIL_AXES.includes(stored as RailAxis) ? (stored as RailAxis) : "project";
 
-/**
- * The ONE case a folder row is itself a focus target: a folder with live
- * sessions but NO agent (a bare scaffold session). Focusing it opens its
- * sessions as tabs in the main panel; a quiet "scaffold an agent here"
- * affordance lets the folder grow its first sapiom.json.
- */
-function BareFolderRow({
-  label,
-  cwd,
-  sessionId,
-  isFocused,
-  onFocus,
-  onScaffold,
-  onCopyPath,
-}: {
-  label: string;
-  cwd: string;
-  sessionId: string;
-  isFocused: boolean;
-  onFocus: (path: string) => void;
-  onScaffold: (sessionId: string) => void;
-  onCopyPath: (path: string) => void;
-}): JSX.Element {
-  return (
-    <div
-      className={"workspace-row" + (isFocused ? " is-selected" : "")}
-      data-testid={`workspace-group-${label}`}
-      {...trackingAttrs({ object: "workspace" })}
-    >
-      <button
-        className="workspace-row-main"
-        data-testid={`workspace-focus-${label}`}
-        aria-label={`Focus ${label}`}
-        aria-pressed={isFocused}
-        data-tooltip="Folder with sessions, no agent yet. Focus to work in it."
-        onClick={() => onFocus(cwd)}
-      >
-        <Icon name="Folder" size={13} />
-        <span className="tree-row-label">{label}</span>
-      </button>
-      <button
-        className="workspace-row-action"
-        data-testid={`workspace-scaffold-${label}`}
-        aria-label={`Scaffold an agent in ${label}`}
-        data-tooltip="Scaffold an agent here"
-        onClick={() => onScaffold(sessionId)}
-      >
-        <Icon name="Sparkles" size={13} />
-      </button>
-      <button
-        className="workspace-row-action"
-        aria-label={`Copy path for ${label}`}
-        data-tooltip="Copy path"
-        onClick={() => onCopyPath(cwd)}
-      >
-        <Icon name="Copy" size={13} />
-      </button>
-    </div>
-  );
-}
-
-/**
- * Optimistic folder for an agent still being created: its session and definition
- * have not landed yet, so nothing else in the rail would show it. It reads as
- * busy (a spinner + "Creating agent…") but stays focusable, so switching away
- * mid-creation never loses the in-progress agent — clicking it returns focus to
- * the folder. The real bare-folder / agent rows replace it the moment they
- * arrive (same `cwd` key), so there is no flip or duplicate.
- */
-function PendingFolderRow({
-  label,
-  cwd,
-  isFocused,
-  onFocus,
-}: {
-  label: string;
-  cwd: string;
-  isFocused: boolean;
-  onFocus: (path: string) => void;
-}): JSX.Element {
-  return (
-    <div
-      className={"workspace-row" + (isFocused ? " is-selected" : "")}
-      data-testid={`workspace-group-${label}`}
-      {...trackingAttrs({ object: "workspace" })}
-    >
-      <button
-        className="workspace-row-main"
-        data-testid={`workspace-pending-${label}`}
-        aria-label={`Creating agent in ${label}`}
-        aria-busy="true"
-        data-tooltip="Creating agent…"
-        onClick={() => onFocus(cwd)}
-      >
-        <Icon name="Folder" size={13} />
-        <span className="tree-row-label">{label}</span>
-      </button>
-      <span className="workspace-row-spinner" aria-hidden="true" />
-    </div>
-  );
-}
+const SORT_LABELS: Record<RailSort, string> = {
+  recent: "Recent activity",
+  name: "Name",
+};
 
 /**
  * Merged past-sessions row: exited registry sessions and history entries share
@@ -435,14 +300,17 @@ export function WorkflowsRail({
   // resumes as the user left it (docs/IA.md).
   const [historyOpen, setHistoryOpen] = useState(false);
   const [pastOpen, setPastOpen] = useState(false);
-  const [grouping, setGrouping] = useState<RailGrouping>(
-    () => loadUiPrefs().railGrouping ?? "workspace",
+  // Only `project` today. `deployment` is retired — it bucketed a fact every
+  // agent row already prints as a glyph — and the Group axis (what an agent is
+  // RELATED to, from launch edges) is the next entry in this dropdown.
+  const [axis, setAxis] = useState<RailAxis>(() => resolveAxis(loadUiPrefs().railAxis));
+  const [sort, setSort] = useState<RailSort>(() =>
+    loadUiPrefs().railSort === "name" ? "name" : "recent",
   );
-  const [sort, setSort] = useState<RailSort>(() => loadUiPrefs().railSort ?? "recent");
-  const pickGrouping = (next: RailGrouping): void => {
-    setGrouping(next);
-    saveUiPrefs({ railGrouping: next });
-    // A click that changes the section also collapses the Past-sessions
+  const pickAxis = (next: RailAxis): void => {
+    setAxis(next);
+    saveUiPrefs({ railAxis: next });
+    // A click that changes the filing also collapses the Past-sessions
     // sub-card, matching the hover behaviour on the fixed choices.
     setPastOpen(false);
   };
@@ -459,21 +327,24 @@ export function WorkflowsRail({
     setPastOpen(false);
   }, []);
 
-  // Per-workspace collapse, restored across reloads.
-  const [collapsedCwds, setCollapsedCwds] = useState<Set<string>>(
-    () => new Set(loadUiPrefs().collapsedCwds ?? []),
+  // Per-row collapse, restored across reloads. Keys are NAMESPACED
+  // (`project:` / `dir:`): a path is not unique across row kinds, and one
+  // shared key collapsed a nested project and the same-named subdirectory of
+  // its parent at the same time.
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(
+    () => new Set(loadUiPrefs().collapsedKeys ?? []),
   );
-  const toggleCollapsed = (cwd: string): void => {
-    setCollapsedCwds((prev) => {
+  const toggleCollapsed = useCallback((key: string): void => {
+    setCollapsedKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(cwd)) next.delete(cwd);
-      else next.add(cwd);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
-  };
+  }, []);
   useEffect(() => {
-    saveUiPrefs({ collapsedCwds: Array.from(collapsedCwds) });
-  }, [collapsedCwds]);
+    saveUiPrefs({ collapsedKeys: Array.from(collapsedKeys) });
+  }, [collapsedKeys]);
 
   const exitedSessions = sessions.filter((session) => session.status === "exited");
 
@@ -514,25 +385,37 @@ export function WorkflowsRail({
   // because a registry session carries neither field.
   const historyByAgentId = new Map(history.map((summary) => [summary.agentSessionId, summary] as const));
 
-  const { workspaces, orphanAgents } = buildWorkspaceTree(
-    workflows,
-    sessions,
-    grouping,
-    sort,
-    recentDirs,
-    pendingWorkspaces.map((p) => p.cwd),
-  );
+  // The PROJECT axis: root folders the user opened > directories that actually
+  // branch > agents. There is no migration — every recentDirs entry and every
+  // session cwd becomes a project, so nothing a user already had disappears.
+  const pendingCwds = pendingWorkspaces.map((pending) => pending.cwd);
+  const roots = projectRoots({ recentDirs, sessions, pendingCwds, sort });
+  const projects = buildProjectTree(workflows, roots, sort);
+  // Agents no open root contains. Rarer than the old "No workspace" bucket,
+  // but dropping them would hide an agent that exists.
+  const strays = unrootedAgents(workflows, roots, sort);
 
-  // A first-run rail (no agents, no orphans) promotes the Create-new CTA to the
+  // Live, UNBOUND sessions sitting exactly at a project root. Meaningful only
+  // for a project with no agents at all — that row becomes the focus target so
+  // its sessions can open as tabs, and can grow its first sapiom.json in place.
+  const bareSessionAt = (root: string): HarnessSession | undefined =>
+    sessions
+      .filter(
+        (session) =>
+          session.status !== "exited" &&
+          session.boundWorkflowPath == null &&
+          samePath(session.cwd, root),
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))[0];
+
+  // `projectIsEmpty` is the ONE emptiness answer, and it consults `rootAgent`:
+  // a merged root-agent project has nothing in `dirs` or `agents`, so a naive
+  // check here would render its agent row underneath "No agents yet".
+  const hasAgents = projects.some((project) => !projectIsEmpty(project));
+  // A first-run rail (no agents anywhere) promotes the Create-new CTA to the
   // primary style — the one action that gets the user their first agent.
-  const isEmpty = workspaces.length === 0 && orphanAgents.length === 0;
-
-  const copyPath = (path: string): void => {
-    void navigator.clipboard
-      ?.writeText(path)
-      .then(() => onToast("Path copied.", "success"))
-      .catch(() => onToast("Couldn't copy the path."));
-  };
+  const isEmpty = !hasAgents && strays.length === 0 && projects.length === 0;
+  const nothingToShow = !hasAgents && strays.length === 0;
 
   return (
     <aside
@@ -617,21 +500,43 @@ export function WorkflowsRail({
         </button>
       </nav>
 
+      {/* A TITLE, not a control. Folding this header hid the only thing the
+          rail is for and left a header sitting on nothing — so it has no
+          disclosure of its own. Its two buttons ask two different questions:
+          `+` adds a project, sliders change how the list is filed. */}
       <div className="rail-header">
-        <Icon name="Folder" size={14} />
-        <span className="rail-header-label">Workspaces</span>
+        <span className="rail-header-label">Projects</span>
         <div className="rail-header-actions">
+          {/* FOLDER-with-plus, because what it adds is a folder. One `+` per
+              question: this one opens a project; starting another session is
+              the tab strip's trailing `+`, and project rows carry none. */}
+          <button
+            type="button"
+            className="theme-toggle rail-header-btn"
+            data-testid="rail-add-project"
+            aria-label="Add a project"
+            data-tooltip="Add a project"
+            onClick={() => {
+              setHistoryOpen(false);
+              setStartOpen(true);
+            }}
+          >
+            <Icon name="FolderPlus" size={14} />
+          </button>
+          {/* SLIDERS, not an ellipsis. An ellipsis has no subject, so it can
+              only mean "more stuff"; this panel has exactly one — how the list
+              is filed. */}
           <button
             ref={historyTriggerRef}
             className="theme-toggle rail-header-btn"
             data-testid="history-trigger"
-            aria-label="Workspace options"
+            aria-label="Filing and past sessions"
             aria-haspopup="menu"
             aria-expanded={historyOpen}
-            data-tooltip="Grouping, sorting and past sessions"
+            data-tooltip="Group, sort and past sessions"
             onClick={toggleHistory}
           >
-            <Icon name="MoreHorizontal" size={14} />
+            <Icon name="SlidersHorizontal" size={14} />
           </button>
         </div>
       </div>
@@ -654,7 +559,7 @@ export function WorkflowsRail({
           <div className="menu-flyer-track">
             <div className="connect-card history-card">
               <div className="connect-card-header">
-                <span>Workspaces</span>
+                <span>Projects</span>
                 <button
                   className="theme-toggle connect-card-close"
                   onClick={closeHistory}
@@ -669,42 +574,44 @@ export function WorkflowsRail({
                     so moving off that row collapses its sub-card — the
                     hover-open's natural inverse. (A plain wrapper would flatten
                     the row gap; menu-choice-group re-states the column.) */}
+                {/* VISIBLE dropdowns, not a menu of radio rows. Both settings
+                    state their current value on the face of the control, so
+                    "how is this list filed?" is answerable without opening
+                    anything — a radio row only says what is checked once you
+                    are already inside the menu you had to guess to open. */}
                 <div className="menu-choice-group" onMouseEnter={() => setPastOpen(false)}>
-                  {/* Only axes the registry actually sends: a folder and a
-                      deployment state are real groupings; a repository is not
-                      (sapiom.json holds repoFullName, but the registry drops
-                      it). */}
-                  <div className="session-dropdown-section">Group by</div>
-                  <MenuChoice
-                    testid="group-workspace"
-                    icon="FolderOpen"
-                    label="Workspace"
-                    checked={grouping === "workspace"}
-                    onPick={() => pickGrouping("workspace")}
-                  />
-                  <MenuChoice
-                    testid="group-deployment"
-                    icon="Cloud"
-                    label="Deployment"
-                    checked={grouping === "deployment"}
-                    onPick={() => pickGrouping("deployment")}
-                  />
-
-                  <div className="session-dropdown-section">Sort</div>
-                  <MenuChoice
-                    testid="sort-recent"
-                    icon="History"
-                    label="Recent activity"
-                    checked={sort === "recent"}
-                    onPick={() => pickSort("recent")}
-                  />
-                  <MenuChoice
-                    testid="sort-name"
-                    icon="ArrowDown"
-                    label="Name"
-                    checked={sort === "name"}
-                    onPick={() => pickSort("name")}
-                  />
+                  <label className="filing-field">
+                    <span className="filing-field-label">Group by</span>
+                    <select
+                      className="filing-field-select"
+                      data-testid="filing-group-by"
+                      value={axis}
+                      onChange={(event) => pickAxis(resolveAxis(event.target.value))}
+                    >
+                      {RAIL_AXES.map((option) => (
+                        <option key={option} value={option}>
+                          {AXIS_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="filing-field">
+                    <span className="filing-field-label">Sort by</span>
+                    <select
+                      className="filing-field-select"
+                      data-testid="filing-sort-by"
+                      value={sort}
+                      onChange={(event) =>
+                        pickSort(event.target.value === "name" ? "name" : "recent")
+                      }
+                    >
+                      {(["recent", "name"] as const).map((option) => (
+                        <option key={option} value={option}>
+                          {SORT_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
 
                 {/* One row that opens a sub-card beside the menu — the set is
@@ -833,87 +740,102 @@ export function WorkflowsRail({
         </AnchoredPopover>
 
         <div className="rail-list">
-          {workspaces.length === 0 && orphanAgents.length === 0 && (
+          {nothingToShow && projects.length === 0 && (
             <EmptyState
               className="rail-empty"
               icon="Folder"
               title="No agents yet"
-              body="Open a workspace folder to start a session, or add one. Agents (sapiom.json) appear here automatically."
+              body="Add a project folder to start a session in it. Agents (sapiom.json) anywhere inside it appear here automatically."
             />
           )}
 
-          {workspaces.map((workspace) => {
-            const collapsed = collapsedCwds.has(workspace.cwd);
+          {projects.map((project) => {
+            const collapsed = collapsedKeys.has(projectKey(project.root));
+            const pending = pendingCwds.some((cwd) => samePath(cwd, project.root));
+            const empty = projectIsEmpty(project);
+            const bare = empty ? bareSessionAt(project.root) : undefined;
             // Being created: the folder is known but its session/agent has not
-            // landed yet. A focusable, busy placeholder so the in-progress agent
-            // is always findable — replaced by the bare/agent rows below once
-            // real content arrives at the same cwd.
-            if (workspace.pending) {
-              return (
-                <div key={workspace.cwd} className="workspace-group">
-                  <PendingFolderRow
-                    label={workspace.label}
-                    cwd={workspace.cwd}
-                    isFocused={workspace.cwd === focusedAgentPath}
-                    onFocus={onFocusAgent}
-                  />
-                </div>
-              );
-            }
-            // Bare case: no agents, a live scaffold session — the folder row
-            // itself is the focus target (the only clickable folder row).
-            const bare = workspace.agents.length === 0 && workspace.bareSessions.length > 0;
-            if (bare) {
-              const primary = workspace.bareSessions[0];
-              return (
-                <div key={workspace.cwd} className="workspace-group">
-                  <BareFolderRow
-                    label={workspace.label}
-                    cwd={workspace.cwd}
-                    sessionId={primary.id}
-                    isFocused={workspace.cwd === focusedAgentPath}
-                    onFocus={onFocusAgent}
-                    onScaffold={onScaffoldInSession}
-                    onCopyPath={copyPath}
-                  />
-                </div>
-              );
-            }
+            // landed yet. A focusable, busy placeholder so the in-progress
+            // agent stays findable — it self-clears the moment a real agent or
+            // session arrives under the same root.
+            const creating = pending && empty && bare == null;
             return (
-              <div key={workspace.cwd} className="workspace-group">
-                <FolderHeader
-                  label={workspace.label}
-                  cwd={workspace.cwd}
-                  isDirectory={workspace.isDirectory}
+              <div
+                key={project.root}
+                className="workspace-group"
+                data-testid={`workspace-group-${project.label}`}
+              >
+                <ProjectRow
+                  label={project.label}
+                  root={project.root}
+                  rootAgent={project.rootAgent}
                   collapsed={collapsed}
-                  onToggleCollapsed={() => toggleCollapsed(workspace.cwd)}
-                  onCopyPath={copyPath}
+                  onToggleCollapsed={() => toggleCollapsed(projectKey(project.root))}
+                  focusedAgentPath={focusedAgentPath}
+                  onFocusAgent={onFocusAgent}
+                  focusable={creating || bare != null}
+                  disclosable={project.dirs.length > 0 || project.agents.length > 0}
+                  busy={creating}
+                  mainTestid={
+                    creating
+                      ? `workspace-pending-${project.label}`
+                      : bare
+                        ? `workspace-focus-${project.label}`
+                        : undefined
+                  }
+                  tooltip={
+                    creating
+                      ? "Creating agent…"
+                      : bare
+                        ? "Project with sessions, no agent yet. Focus to work in it."
+                        : undefined
+                  }
+                  trailing={
+                    creating ? (
+                      <span className="workspace-row-spinner" aria-hidden="true" />
+                    ) : bare ? (
+                      <button
+                        type="button"
+                        className="workspace-row-action"
+                        data-testid={`workspace-scaffold-${project.label}`}
+                        aria-label={`Scaffold an agent in ${project.label}`}
+                        data-tooltip="Scaffold an agent here"
+                        onClick={() => onScaffoldInSession(bare.id)}
+                      >
+                        <Icon name="Sparkles" size={13} />
+                      </button>
+                    ) : undefined
+                  }
                 />
-                {!collapsed &&
-                  workspace.agents.map((agent) => (
-                    <WorkflowRow
-                      key={agent.workflow.path}
-                      workflow={agent.workflow}
-                      isFocused={agent.workflow.path === focusedAgentPath}
-                      onFocus={onFocusAgent}
-                    />
-                  ))}
+                {!collapsed && (
+                  <ProjectTreeRows
+                    dirs={project.dirs}
+                    agents={project.agents}
+                    depth={0}
+                    focusedAgentPath={focusedAgentPath}
+                    onFocusAgent={onFocusAgent}
+                    collapsedKeys={collapsedKeys}
+                    onToggleCollapsed={toggleCollapsed}
+                  />
+                )}
               </div>
             );
           })}
 
-          {orphanAgents.length > 0 && (
+          {strays.length > 0 && (
             <div className="workspace-group">
               <div className="workspace-row">
                 <div
                   className="workspace-row-main workspace-row-static"
-                  data-tooltip="Agents that live outside any session folder. Focus one to start a session in its own folder."
+                  data-tooltip="Agents that live outside every project you have open. Add the folder above them as a project to file them."
                 >
-                  <Icon name="Folder" size={13} />
-                  <span className="tree-row-label">No workspace</span>
+                  <span className="project-mark project-mark-none" aria-hidden="true">
+                    <Icon name="Folder" size={13} />
+                  </span>
+                  <span className="tree-row-label">Outside your projects</span>
                 </div>
               </div>
-              {orphanAgents.map((agent) => (
+              {strays.map((agent) => (
                 <WorkflowRow
                   key={agent.workflow.path}
                   workflow={agent.workflow}
