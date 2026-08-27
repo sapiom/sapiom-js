@@ -368,7 +368,7 @@ const extract = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 900,
+        max_tokens: 8000,
       },
       output: { name: EXTRACT_TOOL, schema: EXTRACT_SCHEMA },
     });

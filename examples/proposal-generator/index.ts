@@ -274,7 +274,7 @@ async function draftProposal(
     request: {
       system,
       messages: [{ role: "user", content: request }],
-      max_tokens: 900,
+      max_tokens: 8000,
     },
     output: { name: DRAFT_TOOL, schema: buildDraftSchema(currency) },
   });

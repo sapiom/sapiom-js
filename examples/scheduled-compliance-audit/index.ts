@@ -195,7 +195,7 @@ async function runPolicyCheck(
       messages: [
         { role: "user", content: `POLICY:\n${policy}\n\nSTATE:\n${evidence}` },
       ],
-      max_tokens: 900,
+      max_tokens: 8000,
     },
     output: { name: AUDIT_TOOL, schema: AUDIT_SCHEMA },
   });

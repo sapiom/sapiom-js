@@ -618,7 +618,7 @@ const personalize = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 700,
+        max_tokens: 8000,
       },
       output: {
         name: OPENERS_TOOL,

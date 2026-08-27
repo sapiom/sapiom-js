@@ -652,7 +652,7 @@ const write = defineStep({
               content: `NICHE: ${niche}\n\nSOURCES:\n${research}${revision}`,
             },
           ],
-          max_tokens: 1200,
+          max_tokens: 8000,
         },
         output: { name: ISSUE_TOOL, schema: ISSUE_SCHEMA },
       });
@@ -698,7 +698,7 @@ const selfEdit = defineStep({
             content: buildJudgePrompt(niche, slimSources, input.issue),
           },
         ],
-        max_tokens: 300,
+        max_tokens: 8000,
       },
       output: { name: JUDGE_TOOL, schema: JUDGE_SCHEMA },
     });

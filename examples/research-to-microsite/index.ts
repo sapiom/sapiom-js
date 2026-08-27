@@ -702,7 +702,7 @@ const synthesize = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 1500,
+        max_tokens: 8000,
       },
       output: { name: REPORT_TOOL, schema: REPORT_SCHEMA },
     });
@@ -766,7 +766,7 @@ const critique = defineStep({
     const res = await ctx.sapiom.llm.run({
       request: {
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 300,
+        max_tokens: 8000,
       },
       output: { name: CRITIQUE_TOOL, schema: CRITIQUE_SCHEMA },
     });

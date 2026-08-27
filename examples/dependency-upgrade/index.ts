@@ -359,7 +359,7 @@ const assess = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 500,
+        max_tokens: 8000,
       },
       output: { name: ASSESSMENT_TOOL, schema: ASSESSMENT_SCHEMA },
     });

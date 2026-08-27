@@ -233,7 +233,7 @@ const judge = defineStep({
     const res = await ctx.sapiom.llm.run({
       request: {
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 256,
+        max_tokens: 8000,
       },
       model: ctx.shared.get("judgeModel"),
       output: { name: JUDGE_TOOL, schema: JUDGE_SCHEMA },

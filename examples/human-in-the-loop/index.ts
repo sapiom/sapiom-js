@@ -206,7 +206,7 @@ async function parseRequest(ctx: Ctx, request: string): Promise<ParsedRequest> {
     request: {
       system,
       messages: [{ role: "user", content: request }],
-      max_tokens: 300,
+      max_tokens: 8000,
     },
     output: { name: PARSE_TOOL, schema: PARSE_SCHEMA },
   });
@@ -234,7 +234,7 @@ async function rankCandidates(
     request: {
       system,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 600,
+      max_tokens: 8000,
     },
     output: { name: RANK_TOOL, schema: buildRankSchema(candidates) },
   });

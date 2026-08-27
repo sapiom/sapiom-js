@@ -257,7 +257,7 @@ const decide = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 400,
+        max_tokens: 8000,
       },
       output: { name: DECISION_TOOL, schema: DECISION_SCHEMA },
     });

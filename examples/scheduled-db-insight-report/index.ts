@@ -739,7 +739,7 @@ const detectAnomalies = defineStep({
         messages: [
           { role: "user", content: `METRICS:\n${renderMetrics(metrics)}` },
         ],
-        max_tokens: 300,
+        max_tokens: 8000,
       },
       output: { name: ANOMALY_TOOL, schema: ANOMALY_SCHEMA },
     });

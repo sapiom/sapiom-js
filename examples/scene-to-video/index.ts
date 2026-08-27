@@ -397,7 +397,7 @@ const decompose = defineStep({
       request: {
         system,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 1200,
+        max_tokens: 8000,
       },
       output: { name: PLAN_TOOL, schema: buildPlanSchema(numShots) },
     });

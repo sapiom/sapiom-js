@@ -242,7 +242,7 @@ async function runContentAudit(
     request: {
       system,
       messages: [{ role: "user", content: `PAGES:\n${evidence}` }],
-      max_tokens: 900,
+      max_tokens: 8000,
     },
     output: { name: AUDIT_TOOL, schema: AUDIT_SCHEMA },
   });
