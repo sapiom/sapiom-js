@@ -315,6 +315,16 @@ export class AgentProjectScanBudget implements AgentProjectScanLimits {
   visited = 0;
   /** The depth at which `maxNodes` stopped the walk, or null if it never did. */
   truncatedAtDepth: number | null = null;
+  /**
+   * Foreign repository roots the walk stopped at rather than entering.
+   *
+   * Rides on the budget for the same reason `visited` does: a caller holding the
+   * budget can read what the walk actually did without every intermediate
+   * signature having to forward it. Load-bearing for the UI — a scan of a
+   * non-repo folder full of clones finds nothing, and only this list can tell
+   * "there is nothing here" apart from "I did not look in there".
+   */
+  repositoryBoundaries: string[] = [];
 
   constructor(limits: Partial<AgentProjectScanLimits> = {}) {
     this.maxDepth = limits.maxDepth ?? AGENT_PROJECT_SCAN_MAX_DEPTH;

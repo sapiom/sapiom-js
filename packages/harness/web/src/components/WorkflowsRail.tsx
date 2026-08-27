@@ -138,6 +138,8 @@ interface WorkflowsRailProps {
    *  itself, its agents, and the session cwds under it — minus any project
    *  opened separately inside it. See `lib/project-membership.ts`. */
   closedProjects: string[];
+  /** Checkouts a scan of each root declined to enter — see the empty-project row. */
+  unsearchedCheckouts: Record<string, string[]>;
   /** Removes a project: out of `recentDirs`, out of the rail, and the live
    *  sessions rooted in it end. Nothing on disk is touched. */
   onRemoveProject: (root: string) => Promise<void>;
@@ -340,6 +342,7 @@ export function WorkflowsRail({
   onOpenHistory,
   recentDirs,
   closedProjects,
+  unsearchedCheckouts,
   onRemoveProject,
   onOpenProject,
   launchDir,
@@ -761,30 +764,31 @@ export function WorkflowsRail({
         {/* The header names what the list is FILED BY, so it changes with the
             axis. A header reading "Projects" over a list of relationship
             clusters would describe the wrong thing. */}
-        {/* ADD sits at the LEADING edge, beside the thing it adds to, because
-            it is the header's primary action — opening a project is how this
-            list gets its contents. FOLDER-with-plus, because what it adds is a
-            folder. One `+` per question: this one opens a project; starting
-            another session is the tab strip's trailing `+`, and project rows
-            carry none. */}
-        <button
-          type="button"
-          className="theme-toggle rail-header-btn rail-header-btn-lead"
-          ref={addProjectTriggerRef}
-          data-testid="rail-add-project"
-          aria-label="Add a project"
-          data-tooltip="Add a project"
-          onClick={() => {
-            setHistoryOpen(false);
-            setStartMode("open");
-          }}
-        >
-          <Icon name="FolderPlus" size={14} />
-        </button>
         <span className="rail-header-label">
           {axis === "group" ? "Groups" : "Projects"}
         </span>
         <div className="rail-header-actions">
+          {/* ADD sits to the LEFT OF THE ELLIPSIS, both in the trailing group.
+              The label owns the leading edge: putting a control there made the
+              header read as one more nav button in the stack above it — same
+              icon slot, same indent — rather than as the title of the tree
+              below. FOLDER-with-plus, because what it adds is a folder. One `+`
+              per question: this one opens a project; starting another session
+              is the tab strip's trailing `+`, and project rows carry none. */}
+          <button
+            type="button"
+            className="theme-toggle rail-header-btn"
+            ref={addProjectTriggerRef}
+            data-testid="rail-add-project"
+            aria-label="Add a project"
+            data-tooltip="Add a project"
+            onClick={() => {
+              setHistoryOpen(false);
+              setStartMode("open");
+            }}
+          >
+            <Icon name="FolderPlus" size={14} />
+          </button>
           {/* AN ELLIPSIS, deliberately reversing the design doc's "sliders, not
               an ellipsis". That rule's reasoning was "an ellipsis has no
               subject, so it can only mean more stuff; this panel has exactly
@@ -1179,6 +1183,7 @@ export function WorkflowsRail({
                     session already has its Scaffold affordance, so neither
                     reaches this. */}
                 {!collapsed && empty && !creating && bare == null && (
+                  <>
                   <div className="workspace-row is-nested workspace-row-empty">
                     <span
                       className="row-disclosure row-disclosure-static"
@@ -1210,10 +1215,45 @@ export function WorkflowsRail({
                     >
                       <Icon name="Sparkles" size={13} />
                       <span className="tree-row-label">
-                        Create the first agent here
+                        {(unsearchedCheckouts[project.root]?.length ?? 0) > 0
+                          ? "Create an agent here"
+                          : "Create the first agent here"}
                       </span>
                     </button>
                   </div>
+                    {/* THE BOUNDARY'S OWN ANSWER, when there is one.
+                        A scan stops at every separate checkout, so a folder that
+                        is not itself a repo but holds several clones finds
+                        NOTHING while the agents are right there. Rendering only
+                        "Create the FIRST agent here" over that folder states
+                        something false, and falsely in the worst direction: it
+                        tells the user the agents they can see on disk do not
+                        exist. The count is the difference between "there is
+                        nothing here" and "I did not look in there". */}
+                    {(unsearchedCheckouts[project.root]?.length ?? 0) > 0 && (
+                      <div className="workspace-row is-nested">
+                        <span className="row-disclosure row-disclosure-static" aria-hidden="true" />
+                        <div
+                          className="tree-row tree-row-note"
+                          data-testid={`project-unsearched-${project.label}`}
+                          /* The ROW states the fact; the tooltip carries the
+                             remedy and the paths. A 320px rail cannot hold both
+                             in one line, and truncating the remedy would leave
+                             the fact looking like a dead end. */
+                          title={`Open one as its own project to see its agents:\n${unsearchedCheckouts[
+                            project.root
+                          ]!.join("\n")}`}
+                        >
+                          <Icon name="GitBranch" size={13} />
+                          <span className="tree-row-label">
+                            {unsearchedCheckouts[project.root]!.length === 1
+                              ? "1 checkout not searched"
+                              : `${unsearchedCheckouts[project.root]!.length} checkouts not searched`}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
                 {!collapsed && axis === "project" && (
                   <ProjectTreeRows

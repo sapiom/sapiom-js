@@ -1597,6 +1597,14 @@ export const startServer = async (
       bus.publish({ type: "workflows.changed" });
       return workflow;
     },
+    scanWithBoundaries: async (root: string) => {
+      const budget = new AgentProjectScanBudget();
+      const found = await workflowRegistry.scan(root, budget);
+      logAgentScan("requested", root, found.length, budget);
+      // The boundaries the walk stopped at travel with the result so the rail
+      // can explain an empty project instead of misdescribing one.
+      return { found, repositoryBoundaries: budget.repositoryBoundaries };
+    },
   };
   app.use(
     createRunsRouter({

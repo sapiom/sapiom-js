@@ -20,6 +20,7 @@ import {
   ExternalLink,
   FlaskConical,
   Folder,
+  GitBranch,
   FolderOpen,
   FolderPlus,
   Frame,
@@ -101,6 +102,7 @@ const ICONS: Record<string, LucideIcon> = {
   ExternalLink,
   FlaskConical,
   Folder,
+  GitBranch,
   FolderOpen,
   FolderPlus,
   Frame,
@@ -118,6 +120,22 @@ const ICONS: Record<string, LucideIcon> = {
   Menu,
   MessageSquare,
   Minimize2,
+  /* OVERFLOW MENUS — the rule, because there wasn't one.
+     Both glyphs were in use with no written convention: MoreHorizontal in the
+     rail header and the canvas action bar, MoreVertical on the plan card. The
+     split was accidental, but it matches the common platform convention, so it
+     is now the rule rather than a coincidence:
+
+       MoreHorizontal (…)  a menu belonging to a BAR or a SECTION HEADER — it
+                           acts on the thing named beside it (rail settings,
+                           "more actions for <step>").
+       MoreVertical   (⋮)  a menu belonging to ONE ROW or CARD in a stack — it
+                           acts on that row. Vertical because it stacks with the
+                           row, and because a horizontal ellipsis at the end of a
+                           row of text reads as truncation.
+
+     Both current uses already conform. Pick by what the menu acts on, not by
+     which looks better in the slot. */
   MoreHorizontal,
   MoreVertical,
   Moon,

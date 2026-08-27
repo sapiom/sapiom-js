@@ -418,10 +418,17 @@ export function agentPrefixes(
   root: string,
 ): Map<string, AgentNode> {
   const chains = workflows.map((workflow) => segmentsBetween(root, workflow.path).slice(0, -1));
+  // COMPARE WHAT THE ROW PRINTS, not the registry's raw name. The row renders
+  // `displayAgentName`, which strips an npm scope and a leading `example-` — so
+  // keying the collision on `workflow.name` let `@sapiom/example-ads` and
+  // `@acme/ads` past the check as "different names" and then drew them both as
+  // a bare `ads`. Two identical rows, produced by the very function added to
+  // prevent them.
+  const shown = workflows.map((workflow) => displayAgentName(workflow.name));
   const out = new Map<string, AgentNode>();
   workflows.forEach((workflow, index) => {
     const others = workflows.flatMap((other, j) =>
-      j !== index && other.name === workflow.name ? [chains[j]!] : [],
+      j !== index && shown[j] === shown[index] ? [chains[j]!] : [],
     );
     out.set(workflow.path, {
       workflow,
@@ -457,6 +464,9 @@ export function unrootedAgents(
   const chains = outside.map((workflow) =>
     canonical(workflow.path).split("/").filter(Boolean).slice(0, -1),
   );
+  // Same rule as `agentPrefixes`: the comparison is on the DISPLAYED name,
+  // because that is what the reader has to tell apart.
+  const shown = outside.map((workflow) => displayAgentName(workflow.name));
   return outside
     .map((workflow, index) => {
       // TWO ROWS COLLIDE WHEN THEIR NAME AND THEIR PREFIX BOTH MATCH, so the
@@ -465,7 +475,7 @@ export function unrootedAgents(
       // times across git worktrees; `filler-1` next to them was never ambiguous
       // and keeps its single parent segment.
       const others = outside.flatMap((other, j) =>
-        j !== index && other.name === workflow.name ? [chains[j]!] : [],
+        j !== index && shown[j] === shown[index] ? [chains[j]!] : [],
       );
       return {
         workflow,
