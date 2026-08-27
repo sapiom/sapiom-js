@@ -51,6 +51,8 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
+import { selectMockSessionFromPalette } from "./mock-navigation";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -300,7 +302,7 @@ test.describe("cost-removed guard", () => {
   // -------------------------------------------------------------------------
   test("steps tab has no cost affordances (empty state)", async ({ page }) => {
     // Scratch session has no board — clean empty state on the Steps tab
-    await page.getByTestId("workspace-focus-scratch").click();
+    await selectMockSessionFromPalette(page, "scratch");
     // Focusing scratch (no canvas board) auto-collapses the right pane — reopen it first.
     await page.getByTestId("right-expand").click();
     await page.getByTestId("right-tab-steps").click();

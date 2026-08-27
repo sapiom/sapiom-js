@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { selectMockSessionFromPalette } from "./mock-navigation";
+
 interface SessionTestState {
   createSessionCalls?: Array<{
     req?: Record<string, unknown> & { cwd?: string; harness?: string };
@@ -132,7 +134,7 @@ test("guards rapid same-frame clicks with one create request", async ({
 test("creates an unbound sibling without issuing a bind request", async ({
   page,
 }) => {
-  await page.getByTestId("workspace-focus-scratch").click();
+  await selectMockSessionFromPalette(page, "scratch");
   await expect(page.getByTestId("session-context")).toHaveAttribute(
     "data-session-id",
     "sess-bg",
