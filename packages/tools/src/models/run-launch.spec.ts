@@ -77,8 +77,8 @@ describe("agent.run — terminal result mapping", () => {
   });
 
   it("ONE encoding of 'no cost estimate' — null for a wire null, a missing key, or a malformed value", async () => {
-    // The platform sends `cost_usd: null` rather than resurface an estimate it
-    // can't stand behind. A fabricated `0` would read as "this run was free".
+    // A fabricated `0` for an omitted estimate would read as "this run was
+    // free", so every unreported or invalid encoding lands on `null`.
     const wireResult = (cost?: unknown) => ({
       success: true,
       stop_reason: "end_turn",
