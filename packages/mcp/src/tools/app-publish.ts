@@ -29,7 +29,13 @@
  * that has to fix its input should never have paid for an upload, or left a
  * half-finished link behind, to learn that.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -226,8 +232,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         });
         // The id addresses the next two calls, so a body that is not the link
         // we asked for (a proxy's HTML error page answering 200, say) has to
-        // stop here rather than become `/v1/app-links/undefined/bundle`.
-        const link = asAppLink(created);
+        // stop here.
+        const link = requireAppLink(created);
 
         const bundle = (await api(
           "bundle",
@@ -245,14 +251,17 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         // last uploaded to this link, which is normally the one the PUT above
         // just stored. Normally: another publisher can upload to the same slug
         // between our two calls, in which case the active bundle is theirs.
-        const published = asAppLink(
-          await api(
-            "publish",
-            "POST",
-            `/v1/app-links/${encodeURIComponent(link.id)}/publish`,
-            {},
-          ),
+        const activated = await api(
+          "publish",
+          "POST",
+          `/v1/app-links/${encodeURIComponent(link.id)}/publish`,
+          {},
         );
+        // Read through when it echoes the link, fall back to step 1 when it does
+        // not. Unlike step 1, nothing downstream NEEDS this body — a 204 or a
+        // bare `{ok:true}` is a publish that worked, and must not be reported as
+        // a failure that "may or may not have taken effect".
+        const published = asAppLink(activated) ?? link;
         // Report what the backend says is live, and say so when that is not
         // what we uploaded — `manifest` describes OUR bundle, so pairing a
         // foreign sha with it silently would misdescribe the running app.
@@ -301,27 +310,32 @@ function summarize(
   );
 }
 
-/**
- * Narrow a wire body to an app link, or fail loudly. A 200/201 whose body is
- * not JSON (`safeParse` hands back the raw string) or lacks an `id` cannot be
- * used to address the next call.
- */
-function asAppLink(data: unknown): AppLinkWire {
+/** A wire body that is usable as an app link, or `null`. */
+function asAppLink(data: unknown): AppLinkWire | null {
   const link = data as AppLinkWire | undefined;
-  if (
-    typeof link?.id !== "string" ||
-    link.id === "" ||
-    typeof link.url !== "string"
-  ) {
-    throw new PreviewOperationError({
-      code: "UNEXPECTED_RESPONSE",
-      message:
-        "The App Links API answered with a success status but not an app link. " +
-        "The publish may or may not have taken effect.",
-      hint: "Check the SAPIOM_ENVIRONMENT / api URL this MCP is pointed at, then retry.",
-    });
-  }
-  return link;
+  const usable =
+    typeof link?.id === "string" &&
+    link.id !== "" &&
+    typeof link.url === "string";
+  return usable ? (link as AppLinkWire) : null;
+}
+
+/**
+ * The step-1 body, which MUST be a link: its `id` addresses the next two calls,
+ * so a 201 that is not JSON (`safeParse` hands back the raw string) or has no
+ * `id` has to stop here rather than become `/v1/app-links/undefined/bundle`.
+ */
+function requireAppLink(data: unknown): AppLinkWire {
+  const link = asAppLink(data);
+  if (link) return link;
+  throw new PreviewOperationError({
+    code: "UNEXPECTED_RESPONSE",
+    message:
+      "The App Links API answered with a success status but not an app link. " +
+      "Nothing was created or published.",
+    step: STEP_ROUTE.create,
+    hint: "Check the SAPIOM_ENVIRONMENT / api URL this MCP is pointed at, then retry.",
+  });
 }
 
 // ─── Bundle collection ───────────────────────────────────────────────────────
@@ -333,17 +347,20 @@ function asAppLink(data: unknown): AppLinkWire {
  * Not `collectDirFiles` from `@sapiom/tools`: that reads with a lossy `utf8`
  * decode, which turns a binary into U+FFFD soup instead of an error — exactly
  * the corruption `BUNDLE_BINARY_FILE` exists to prevent. Skips (like it does)
- * `node_modules`, `.git`, and dotfiles/dot-dirs, plus the project's own
- * `sapiom.json` AT THE BUNDLE ROOT — that file is project config, not app
- * source, and its `env` block holds the app's own secrets, which a static
- * `start` command would serve to every visitor of a public link. A nested
- * `sapiom.json` deeper in the tree is ordinary app content and is kept.
+ * `node_modules`, `.git`, and dotfiles/dot-dirs, plus THE PROJECT'S OWN
+ * `sapiom.json` — matched by absolute path, not by name or depth, because it is
+ * only config at `<projectDir>/sapiom.json`. That file's `env` block holds the
+ * app's own secrets, which a static `start` command would serve to every visitor
+ * of a public link. Any other `sapiom.json` in the tree — a nested one, or
+ * `web/sapiom.json` under a `source.path` of `web` — is ordinary app content.
  *
- * Symlinks are skipped rather than followed. `collectDirFiles` follows them,
- * but its destination is a private sandbox; here the bundle can end up behind a
- * public URL, and a link out of the tree (`report.txt -> ../../secrets`) would
- * publish whatever it points at. A self-referential link would also recurse
- * forever.
+ * Symlinks INSIDE the tree are skipped rather than followed. `collectDirFiles`
+ * follows them, but its destination is a private sandbox; here the bundle can
+ * end up behind a public URL, and a link out of the tree
+ * (`report.txt -> ../../secrets`) would publish whatever it points at. A
+ * self-referential link would also recurse forever. The source root itself is
+ * resolved (`statSync`): it is the path the user explicitly pointed at, and a
+ * symlinked source directory is ordinary in a workspace.
  *
  * A `git`-source resource is read from the same local working tree: the bundle
  * store takes a file map, so there is nothing for a server-side checkout to do.
@@ -354,32 +371,35 @@ export function collectBundleFiles(
 ): Record<string, string> {
   const sub = cfg.source.path ?? ".";
   const root = path.resolve(projectDir, sub);
-  if (!existsSync(root) || !lstatSync(root).isDirectory()) {
+  // `statSync`, not `lstatSync`: the root is the path the user named, and a
+  // symlinked source directory must not be reported as a missing one.
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
     throw new PreviewOperationError({
       code: "NO_SOURCE_DIR",
       message: `Source directory not found: ${root}`,
       hint: `Fix \`source.path\` on the "${cfg.name}" resource in ${CONFIG_FILE}.`,
     });
   }
+  const projectConfig = path.resolve(projectDir, CONFIG_FILE);
 
   const files: Record<string, string> = {};
-  const walk = (abs: string, depth: number): void => {
+  const walk = (abs: string): void => {
     for (const entry of readdirSync(abs).sort()) {
       if (ALWAYS_SKIP.has(entry) || entry.startsWith(".")) continue;
-      if (depth === 0 && entry === CONFIG_FILE) continue;
       const childAbs = path.join(abs, entry);
+      if (childAbs === projectConfig) continue;
       const stat = lstatSync(childAbs);
       if (stat.isSymbolicLink()) continue;
       const rel = path.relative(root, childAbs).split(path.sep).join("/");
       if (stat.isDirectory()) {
-        walk(childAbs, depth + 1);
+        walk(childAbs);
         continue;
       }
       if (!stat.isFile()) continue;
       files[rel] = decodeTextFile(childAbs, rel);
     }
   };
-  walk(root, 0);
+  walk(root);
 
   if (Object.keys(files).length === 0) {
     throw new PreviewOperationError({

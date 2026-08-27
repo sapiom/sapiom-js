@@ -350,6 +350,72 @@ describe("sapiom_dev_app_publish tool", () => {
     rmSync(path.join(dir, "..", "app-publish-secret.txt"), { force: true });
   });
 
+  it("accepts a symlinked source directory — the root is the path the user named", async () => {
+    const fetchMock = mockHappyBackend();
+    const dir = project(
+      { "index.html": "<h1>hi</h1>" },
+      { ...SANDBOX, source: { kind: "upload", path: "web" } },
+    );
+    // `web` is a symlink to the real source dir, as in a workspace layout.
+    mkdirSync(path.join(dir, "real-web"), { recursive: true });
+    writeFileSync(path.join(dir, "real-web", "index.html"), "<h1>linked</h1>");
+    symlinkSync(path.join(dir, "real-web"), path.join(dir, "web"));
+
+    const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(res.isError).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).files).toEqual({
+      "index.html": "<h1>linked</h1>",
+    });
+  });
+
+  it("keeps web/sapiom.json when source.path is web — only <project>/sapiom.json is config", async () => {
+    const fetchMock = mockHappyBackend();
+    const dir = project(
+      {
+        "web/index.html": "<h1>hi</h1>",
+        // Under `source.path: "web"` the project config was never in the tree,
+        // so this file is app content and must survive.
+        "web/sapiom.json": '{"appConfig":true}',
+      },
+      { ...SANDBOX, source: { kind: "upload", path: "web" } },
+    );
+
+    await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).files).toEqual({
+      "index.html": "<h1>hi</h1>",
+      "sapiom.json": '{"appConfig":true}',
+    });
+  });
+
+  it("treats a publish body that is not a link as success, not UNEXPECTED_RESPONSE", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(APP_LINK, 201))
+      .mockResolvedValueOnce(jsonRes(BUNDLE))
+      // A 204 / bare ack: nothing downstream needs this body.
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        statusText: "",
+        text: () => Promise.resolve(""),
+      }) as unknown as typeof globalThis.fetch;
+
+    const res = await setup().handler({
+      dir: project(),
+      slug: "dash",
+      name: "Dash",
+    });
+
+    expect(res.isError).toBeUndefined();
+    const payload = parse(res);
+    expect(payload.url).toBe(APP_LINK.url);
+    expect(payload.appLinkId).toBe(APP_LINK.id);
+    expect(payload.bundleSha256).toBe("abc123");
+    expect(payload.warning).toBeUndefined();
+  });
+
   it("keeps a nested sapiom.json — only the project's own is config", async () => {
     const fetchMock = mockHappyBackend();
     const dir = project({
@@ -678,7 +744,10 @@ describe("sapiom_dev_app_publish tool", () => {
       });
 
       expect(res.isError).toBe(true);
-      expect(parse(res).error.code).toBe("UNEXPECTED_RESPONSE");
+      const { error } = parse(res);
+      expect(error.code).toBe("UNEXPECTED_RESPONSE");
+      expect(error.step).toBe("POST /v1/app-links");
+      expect(error.message).toContain("Nothing was created or published.");
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
