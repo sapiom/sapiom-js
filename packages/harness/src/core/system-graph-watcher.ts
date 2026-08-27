@@ -6,10 +6,7 @@ import type { WorkspaceKey } from "../shared/system-graph.js";
 import { isAgentProjectScanIgnoredDir } from "./agent-project-discovery.js";
 import { normalizeWatchPath } from "./canvas-watcher.js";
 import type { WorkspaceScope } from "./system-graph.js";
-import {
-  snapshotWorkspaceWorkflows,
-  snapshotWorkspaceWorkflowsAsync,
-} from "./workspace-watcher.js";
+import { snapshotWorkspaceWorkflowsAsync } from "./workspace-watcher.js";
 
 const SOURCE_DEBOUNCE_MS = 150;
 const INVENTORY_DEBOUNCE_MS = 250;
@@ -176,16 +173,38 @@ class WorkspaceSystemGraphWatcher {
   private lastInventorySnapshot: string;
   private failedInventorySnapshot: string | null = null;
   private inventoryGeneration = 0;
+  private inventoryCheckInFlight = false;
+  private inventoryCheckPending = false;
   private pollInFlight = false;
   private callbackQueue: Promise<void> = Promise.resolve();
 
-  constructor(
+  private constructor(
     readonly scope: WorkspaceScope,
     private readonly callbacks: SystemGraphWatcherCallbacks,
     private readonly options: SystemGraphWatcherOptions,
+    initialInventorySnapshot: string,
   ) {
-    this.lastInventorySnapshot = snapshotWorkspaceWorkflows(scope.root);
+    this.lastInventorySnapshot = initialInventorySnapshot;
     this.arm();
+  }
+
+  static async create(
+    scope: WorkspaceScope,
+    callbacks: SystemGraphWatcherCallbacks,
+    options: SystemGraphWatcherOptions,
+  ): Promise<WorkspaceSystemGraphWatcher> {
+    // Establish the native/polling watcher from an async baseline. The graph
+    // route awaits this factory, so no synchronous workspace walk runs on the
+    // server loop before the watcher starts.
+    const initialInventorySnapshot = await snapshotWorkspaceWorkflowsAsync(
+      scope.root,
+    );
+    return new WorkspaceSystemGraphWatcher(
+      scope,
+      callbacks,
+      options,
+      initialInventorySnapshot,
+    );
   }
 
   private enqueue(
@@ -308,15 +327,41 @@ class WorkspaceSystemGraphWatcher {
     if (this.inventoryTimer) clearTimeout(this.inventoryTimer);
     this.inventoryTimer = setTimeout(() => {
       this.inventoryTimer = null;
-      const snapshot = snapshotWorkspaceWorkflows(this.scope.root);
-      if (
-        snapshot === this.lastInventorySnapshot &&
-        snapshot !== this.failedInventorySnapshot
-      ) {
-        return;
-      }
-      this.dispatchInventoryChange(snapshot);
+      this.checkInventoryAsync();
     }, delay);
+  }
+
+  private checkInventoryAsync(): void {
+    if (this.closed) return;
+    if (this.inventoryCheckInFlight) {
+      // One more async pass after the current walk is enough to cover any
+      // number of native events that arrive while it yields between dirs.
+      this.inventoryCheckPending = true;
+      return;
+    }
+    this.inventoryCheckInFlight = true;
+    this.inventoryCheckPending = false;
+    void snapshotWorkspaceWorkflowsAsync(this.scope.root)
+      .then((snapshot) => {
+        if (this.closed) return;
+        if (
+          snapshot === this.lastInventorySnapshot &&
+          snapshot !== this.failedInventorySnapshot
+        ) {
+          return;
+        }
+        this.dispatchInventoryChange(snapshot);
+      })
+      .catch(() => {
+        // A later native event retries an unreadable workspace. Watch hints
+        // must never surface as an unhandled rejection or tear down Studio.
+      })
+      .finally(() => {
+        this.inventoryCheckInFlight = false;
+        if (this.closed || !this.inventoryCheckPending) return;
+        this.inventoryCheckPending = false;
+        this.checkInventoryAsync();
+      });
   }
 
   private arm(): void {
@@ -439,35 +484,71 @@ export class SystemGraphWatcherManager {
     WorkspaceKey,
     WorkspaceSystemGraphWatcher
   >();
+  private readonly pendingStarts = new Map<
+    WorkspaceKey,
+    { root: string; token: object; promise: Promise<void> }
+  >();
 
   constructor(
     private readonly callbacks: SystemGraphWatcherCallbacks,
     private readonly options: SystemGraphWatcherOptions = {},
   ) {}
 
-  start(scope: WorkspaceScope): void {
+  start(scope: WorkspaceScope): Promise<void> {
     const existing = this.watchers.get(scope.workspaceKey);
-    if (existing?.scope.root === scope.root) return;
+    if (existing?.scope.root === scope.root) return Promise.resolve();
+    const pending = this.pendingStarts.get(scope.workspaceKey);
+    if (pending?.root === scope.root) return pending.promise;
     this.stop(scope.workspaceKey);
-    this.watchers.set(
-      scope.workspaceKey,
-      new WorkspaceSystemGraphWatcher(scope, this.callbacks, this.options),
-    );
+    const token = {};
+    const promise = WorkspaceSystemGraphWatcher.create(
+      scope,
+      this.callbacks,
+      this.options,
+    )
+      .then((watcher) => {
+        const current = this.pendingStarts.get(scope.workspaceKey);
+        if (current?.token !== token) {
+          watcher.close();
+          return;
+        }
+        this.watchers.set(scope.workspaceKey, watcher);
+      })
+      .finally(() => {
+        if (this.pendingStarts.get(scope.workspaceKey)?.token === token) {
+          this.pendingStarts.delete(scope.workspaceKey);
+        }
+      });
+    this.pendingStarts.set(scope.workspaceKey, {
+      root: scope.root,
+      token,
+      promise,
+    });
+    return promise;
   }
 
   retain(workspaceKeys: ReadonlySet<WorkspaceKey>): void {
-    for (const workspaceKey of [...this.watchers.keys()]) {
+    const tracked = new Set([
+      ...this.watchers.keys(),
+      ...this.pendingStarts.keys(),
+    ]);
+    for (const workspaceKey of tracked) {
       if (!workspaceKeys.has(workspaceKey)) this.stop(workspaceKey);
     }
   }
 
   stop(workspaceKey: WorkspaceKey): void {
+    this.pendingStarts.delete(workspaceKey);
     this.watchers.get(workspaceKey)?.close();
     this.watchers.delete(workspaceKey);
   }
 
   stopAll(): void {
-    for (const workspaceKey of [...this.watchers.keys()]) {
+    const tracked = new Set([
+      ...this.watchers.keys(),
+      ...this.pendingStarts.keys(),
+    ]);
+    for (const workspaceKey of tracked) {
       this.stop(workspaceKey);
     }
   }

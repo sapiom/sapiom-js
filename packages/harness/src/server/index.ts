@@ -1554,7 +1554,7 @@ export const startServer = async (
       store: systemGraphStore,
       onScopeAccess: (scope) => {
         activeSystemGraphScopes.set(scope.workspaceKey, scope);
-        systemGraphWatcher.start(scope);
+        return systemGraphWatcher.start(scope);
       },
       onScopeRefresh: async (scope) => {
         try {

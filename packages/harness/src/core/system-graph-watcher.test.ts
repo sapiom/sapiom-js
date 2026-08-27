@@ -64,7 +64,7 @@ describe("SystemGraphWatcherManager", () => {
   it("refreshes source relationships without reporting inventory churn", async () => {
     const agentRoot = await scaffoldAgent("research");
     await scaffoldAgent("growth");
-    manager.start(scope);
+    await manager.start(scope);
     await sleep(100);
     onInventoryChange.mockClear();
 
@@ -112,7 +112,7 @@ describe("SystemGraphWatcherManager", () => {
       },
     );
     const agentRoot = await scaffoldAgent("research");
-    manager.start(scope);
+    await manager.start(scope);
 
     watchListener("change", "research/index.ts");
     await vi.waitFor(() => expect(onSourceChange).toHaveBeenCalled(), {
@@ -144,7 +144,7 @@ describe("SystemGraphWatcherManager", () => {
   });
 
   it("reports agent inventory additions and removals", async () => {
-    manager.start(scope);
+    await manager.start(scope);
     await sleep(100);
     const agentRoot = await scaffoldAgent("growth");
     await vi.waitFor(
@@ -165,7 +165,7 @@ describe("SystemGraphWatcherManager", () => {
     onInventoryChange
       .mockRejectedValueOnce(new Error("registry unavailable"))
       .mockResolvedValue(undefined);
-    manager.start(scope);
+    await manager.start(scope);
     await scaffoldAgent("growth");
 
     await vi.waitFor(() => expect(onInventoryChange).toHaveBeenCalledTimes(2), {
@@ -176,7 +176,7 @@ describe("SystemGraphWatcherManager", () => {
 
   it("bounds inventory retries until a later filesystem change", async () => {
     onInventoryChange.mockRejectedValue(new Error("registry unavailable"));
-    manager.start(scope);
+    await manager.start(scope);
     await scaffoldAgent("growth");
 
     await vi.waitFor(() => expect(onInventoryChange).toHaveBeenCalledTimes(3), {
@@ -203,7 +203,7 @@ describe("SystemGraphWatcherManager", () => {
         ),
       ),
     );
-    manager.start(scope);
+    await manager.start(scope);
     await sleep(200);
     onSourceChange.mockClear();
 
@@ -219,7 +219,7 @@ describe("SystemGraphWatcherManager", () => {
   });
 
   it("ignores non-source and generated-tree churn", async () => {
-    manager.start(scope);
+    await manager.start(scope);
     await fs.writeFile(path.join(root, "README.md"), "notes\n");
     await fs.mkdir(path.join(root, "node_modules", "pkg"), {
       recursive: true,
@@ -239,14 +239,13 @@ describe("SystemGraphWatcherManager", () => {
     expect(onInventoryChange).not.toHaveBeenCalled();
   });
 
-  it("does not re-baseline an existing workspace on repeated opens", () => {
-    manager.start(scope);
-    manager.start(scope);
+  it("does not re-baseline an existing workspace on repeated opens", async () => {
+    await Promise.all([manager.start(scope), manager.start(scope)]);
     expect(manager.size).toBe(1);
   });
 
-  it("retires watchers for scopes no longer exposed by Studio", () => {
-    manager.start(scope);
+  it("retires watchers for scopes no longer exposed by Studio", async () => {
+    await manager.start(scope);
     manager.retain(new Set());
     expect(manager.size).toBe(0);
   });

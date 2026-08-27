@@ -1,5 +1,41 @@
 # @sapiom/orchestration-core
 
+## 0.13.2
+
+### Patch Changes
+
+- db81e32: Step code can now tell a local trace from a deployed run, and the stub Postgres DSN no longer points at a host that might answer.
+
+  `AgentExecutionContext` gains `isLocalTrace?: boolean` — `true` under `run_local`, and set by nothing else. The deployed step runner does not set it, so `input.dryRun ?? ctx.isLocalTrace` reads as live in production; the name is qualified precisely because that absence is load-bearing.
+
+  Use it for the I/O `run_local` cannot stub — a raw Postgres socket, third-party HTTP, any client holding its own connection. Resolve it once in the entry step and carry it in `ctx.shared`, since `input` downstream is the previous step's output:
+
+  ```ts
+  // entry step
+  const dryRun = input.dryRun ?? ctx.isLocalTrace ?? false;
+  ctx.shared.set("dryRun", dryRun);
+  ```
+
+  An explicit `{ "dryRun": false }` still forces the live path. Capability calls (`ctx.sapiom.*`) are already stubbed locally and need no guard.
+
+  Separately, the stub `database.get` / `database.create` DSN now uses a host in the reserved `.invalid` TLD (RFC 6761) instead of `localhost`. A template that dialed the old DSN reached whatever Postgres happened to be listening on the author's own machine and failed with an opaque TLS error; it now fails at name resolution on any conforming resolver. Treat this as a backstop rather than a guard — a resolver that hijacks NXDOMAIN can still return an address — and gate the dial on `ctx.isLocalTrace`.
+
+- 054f749: `sapiom-sandbox-preview` skill now teaches App Links. It says plainly that a
+  sandbox preview URL is temporary (it dies with the resource's `ttl`, along with
+  any bookmark or Slack message it was pasted into), and adds a "Make it durable /
+  share it" section that routes "share this", "send this to my team", "a permanent
+  link", "keep it alive", "my link died" to `sapiom_dev_app_publish` — with the
+  five facts an agent otherwise gets wrong: wake-on-demand cold start, org-scoped
+  by default (public needs `confirmPublic` + `dailySpendCapUsd`, so ask first),
+  republish-in-place on the same slug, text-only bundles, and the ~10 MiB cap. The
+  frontmatter `description` picks up the durability triggers so the skill fires on
+  a "link that won't die" ask.
+- Updated dependencies [db81e32]
+- Updated dependencies [9165f18]
+- Updated dependencies [6fb3273]
+  - @sapiom/agent@0.12.2
+  - @sapiom/tools@0.33.0
+
 ## 0.13.1
 
 ### Patch Changes

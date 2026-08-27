@@ -1,5 +1,43 @@
 # @sapiom/tools
 
+## 0.33.0
+
+### Minor Changes
+
+- 6fb3273: **Breaking (type-level):** `ModelRunOutcome.costUsd` is now `number | null`.
+
+  The platform doesn't report a cost estimate for every run, so `costUsd` could
+  already arrive as `null` at runtime — the published type said `number` and left
+  no room for it.
+
+  Under `strictNullChecks`, code that does arithmetic on or formats
+  `result.costUsd` now fails to compile until it guards (`outcome.costUsd ?? 0`,
+  or skip the row). Read-only and logging code is unaffected, and nothing changes
+  at runtime for a run that does report an estimate.
+
+  `costUsd` is an estimate, not a billed amount; don't reconcile invoices against
+  it.
+
+### Patch Changes
+
+- db81e32: Step code can now tell a local trace from a deployed run, and the stub Postgres DSN no longer points at a host that might answer.
+
+  `AgentExecutionContext` gains `isLocalTrace?: boolean` — `true` under `run_local`, and set by nothing else. The deployed step runner does not set it, so `input.dryRun ?? ctx.isLocalTrace` reads as live in production; the name is qualified precisely because that absence is load-bearing.
+
+  Use it for the I/O `run_local` cannot stub — a raw Postgres socket, third-party HTTP, any client holding its own connection. Resolve it once in the entry step and carry it in `ctx.shared`, since `input` downstream is the previous step's output:
+
+  ```ts
+  // entry step
+  const dryRun = input.dryRun ?? ctx.isLocalTrace ?? false;
+  ctx.shared.set("dryRun", dryRun);
+  ```
+
+  An explicit `{ "dryRun": false }` still forces the live path. Capability calls (`ctx.sapiom.*`) are already stubbed locally and need no guard.
+
+  Separately, the stub `database.get` / `database.create` DSN now uses a host in the reserved `.invalid` TLD (RFC 6761) instead of `localhost`. A template that dialed the old DSN reached whatever Postgres happened to be listening on the author's own machine and failed with an opaque TLS error; it now fails at name resolution on any conforming resolver. Treat this as a backstop rather than a guard — a resolver that hijacks NXDOMAIN can still return an address — and gate the dial on `ctx.isLocalTrace`.
+
+- 9165f18: `model` JSDoc on the llm and models specs no longer suggests pinning `smart` — it is the default, so pinning it does nothing. The hover text now says to omit `model`, and to pass a size label only when picking a class deliberately.
+
 ## 0.32.1
 
 ### Patch Changes

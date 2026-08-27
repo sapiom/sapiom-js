@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/harness",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "description": "Agent Studio — a CLI-launched local web app that runs your coding agent (Claude Code or Codex) in a Sapiom-configured environment: MCP pre-wired, agents tracked, one-click deploy/run, and a live canvas for previews.",
   "keywords": [
     "sapiom",
@@ -72,7 +72,7 @@
     "express-rate-limit": "^7.4.0",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
-    "typescript": "^5.4.2",
+    "typescript": "~5.9.3",
     "ws": "^8.18.0",
     "zod": "^3.25.0"
   },
