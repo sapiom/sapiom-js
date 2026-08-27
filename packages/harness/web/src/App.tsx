@@ -45,7 +45,7 @@ import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { boundWorkflowPathOf } from "./lib/api";
+import { boundWorkflowPathOf, createApi } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
 import {
@@ -56,8 +56,18 @@ import {
   slugifyIdea,
 } from "./lib/project-dir";
 import { basenameOf, isWithinDir, samePath } from "./lib/paths";
-import { projectRootForAgent } from "./lib/session-scope";
-import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
+import {
+  canvasSourceFor,
+  canvasSubject,
+  liveSessionsForFocus,
+  mergeSubjectRuns,
+  projectRootForAgent,
+  runsForSubject,
+  selectedRunForSubject,
+  sessionForFocus,
+  sessionStripSubject,
+  shownRunForSubject,
+} from "./lib/session-scope";
 import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
 import { getDesktopBridge, type DeepLinkAgentTarget, type DeepLinkTarget } from "./lib/desktop";
@@ -120,27 +130,15 @@ interface CreateSessionAtOptions {
 }
 
 /**
- * Live sessions belonging to the focused subject, in tab order (oldest first,
- * the order Cmd/Ctrl+1..9 selects). A session belongs to an agent when it is
- * bound to it, OR its cwd is the agent's folder and it is unbound; for a bare
- * folder (no agent) only the unbound-cwd clause can match. Pure, so it reads
- * the same way in the keyboard handler and in render.
+ * The one API client the shell reaches for directly.
+ *
+ * `use-harness-state` exposes every other call as a prop; the workflow-keyed
+ * canvas board (IA-01) is read here instead because that hook is owned by
+ * another slice of the rail rebuild this week. It belongs beside
+ * `getWorkflowInputContract` in the store and should move there — module-level
+ * like `use-account-plan`'s, so mock mode still holds ONE fixture instance.
  */
-function liveSessionsForFocus(sessions: HarnessSession[], focusPath: string | null): HarnessSession[] {
-  if (!focusPath) return [];
-  return sessions
-    .filter(
-      (s) =>
-        s.status !== "exited" &&
-        // samePath, not ===: the server resolve()s the cwd it stores while
-        // this focus string is whatever the user typed / recentDirs kept, so
-        // a "C:/…" spelling or a trailing separator would hide the session
-        // the user just created.
-        (samePath(s.boundWorkflowPath ?? "", focusPath) ||
-          (s.boundWorkflowPath == null && samePath(s.cwd, focusPath))),
-    )
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-}
+const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
@@ -434,7 +432,17 @@ export const App = (): JSX.Element => {
         return;
       }
       if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
-        const tabs = liveSessionsForFocus(harness.state?.sessions ?? [], focusedAgentPath);
+        // The same subject the strip renders, resolved the same way: the ACTIVE
+        // session's own agent, not the rail selection. Keyed to the selection,
+        // Cmd+1 would address tabs that are not on screen the moment the
+        // selection and the session diverge (SAP-2931).
+        const tabs = liveSessionsForFocus(
+          harness.state?.sessions ?? [],
+          sessionStripSubject(
+            harness.state?.sessions.find((s) => s.id === harness.activeSessionId) ?? null,
+            focusedAgentPath,
+          ),
+        );
         const target = tabs[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
@@ -723,17 +731,23 @@ export const App = (): JSX.Element => {
   const boundWorkflow = state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
   const focusedWorkflow = state.workflows.find((w) => w.path === focusedAgentPath) ?? null;
 
-  // The focused subject's tabs, and which surface the main panel shows.
-  const focusTabs = liveSessionsForFocus(state.sessions, focusedAgentPath);
+  // Whose tabs the strip shows: the ACTIVE session's own agent, NOT the rail
+  // selection (SAP-2931). Selecting a sibling no longer moves the session, so a
+  // strip keyed to the selection emptied itself while the session it belongs to
+  // kept running in the pane below it.
+  const stripSubjectPath = sessionStripSubject(activeSession, focusedAgentPath);
+  const focusTabs = liveSessionsForFocus(state.sessions, stripSubjectPath);
   const showReview = reviewSummary != null;
   const showDead = !showReview && activeSession?.status === "exited";
-  // An agent focused with no live session: honest absence, the reason opening
-  // one lands on the "start a session" state rather than a board (the canvas
-  // is served per session). `composing` (explicit New-session intent) forces
-  // the composer over this and the workbench.
+  // An agent selected with NO live session to work in: honest absence, and
+  // opening one lands on the "start a session" state. Keyed to the ACTIVE
+  // session rather than to the selection's own tabs, because a same-project
+  // selection deliberately keeps a session that is bound elsewhere — under the
+  // old test the terminal vanished the moment you looked at a sibling.
+  // `composing` (explicit New-session intent) forces the composer over this.
   const showAgentEmpty =
-    !showReview && !showDead && !composing && focusedWorkflow != null && focusTabs.length === 0;
-  // The workbench: an active live session in the focused subject's tabs.
+    !showReview && !showDead && !composing && focusedWorkflow != null && activeSession == null;
+  // The workbench: a live active session.
   const showWorkbench =
     !showReview &&
     !showDead &&
@@ -750,15 +764,32 @@ export const App = (): JSX.Element => {
   const composerCanCancel =
     composing && activeSession != null && activeSession.status !== "exited";
 
-  // The right pane projects the ACTIVE session's bound agent — but nothing
-  // (null) while a focused agent has no session, so it never shows a
-  // different agent's board behind the "no session" state.
-  const rightPaneWorkflow = showAgentEmpty ? null : boundWorkflow;
-  const noSessionAgentName = showAgentEmpty
-    ? (focusedWorkflow?.name ?? null)
-    : null;
+  /**
+   * THE subject (SAP-2931). Canvas, Steps, the Code tab, the lifecycle verbs
+   * and the run evidence are all projections of this ONE value — the rail
+   * selection, pure UI state, with no session relationship. Binding stopped
+   * being how the board is chosen. If two of those surfaces can disagree about
+   * what they are about, that is a bug by contract, so they read one name.
+   *
+   * An agent with no session is no longer a hole: IA-01's workflow-keyed route
+   * serves its board (see `canvasSource` below), so `showAgentEmpty` speaks
+   * only for the main panel now, not for the right pane.
+   */
+  const rightPaneWorkflow = canvasSubject({
+    selection: focusedWorkflow,
+    // Nothing to project: the create-new draft or a past-session review owns
+    // the centre, and an absence must not have another agent's board behind it.
+    suppressed: showComposer || showReview,
+  });
+  /** Which of the two canvas entry points can serve that subject's board. */
+  const canvasSource = canvasSourceFor({
+    subjectPath: rightPaneWorkflow?.path ?? null,
+    bindingPath: boundWorkflowPath,
+    sessionId: harness.activeSessionId,
+  });
   // Identity of the board the auto-collapse reasons about (see
-  // emptyCollapsedKeyRef).
+  // emptyCollapsedKeyRef). Carries the subject, so selecting another agent is a
+  // new board to reason about rather than a redundant probe for the old one.
   const emptyBoardKey = `${harness.activeSessionId ?? ""}::${rightPaneWorkflow?.path ?? ""}`;
   const expandRightPane = (): void => {
     manualExpandSessionRef.current = harness.activeSessionId ?? null;
@@ -772,24 +803,51 @@ export const App = (): JSX.Element => {
       )
     : null;
 
-  // Run inspection for the active session.
-  const selectedObservedRun = harness.activeSessionId
-    ? (harness.runsBySession.get(harness.activeSessionId) ?? null)
-    : null;
-  const activeObservedRun = observedRunMatchesWorkflow(
-    selectedObservedRun,
-    boundWorkflowPath,
-  )
-    ? selectedObservedRun
-    : null;
-  const activeSessionRuns: ObservedRun[] = harness.activeSessionId
+  /**
+   * Run evidence for the SUBJECT, not for the session (SAP-2931).
+   *
+   * Runs are announced to the session BOUND to a workflow, so once the
+   * selection and the session diverge a run addressed to the binding never
+   * lands on the visible pane — the surface whose whole job is saying what ran
+   * goes quiet. So the evidence is attributed to the subject, and it comes from
+   * two places: what the ACTIVE session announced, plus what any OTHER live
+   * session announced for this same agent and this one never heard.
+   *
+   * The merge is what needs the bound. In the prototype a second source folded
+   * its whole history in beside the trimmed observed ids and the run picker
+   * offered 309 runs in a client that retains 200 and can reopen none of the
+   * rest, so both sides pass through `mergeSubjectRuns` and its window.
+   */
+  const subjectPath = rightPaneWorkflow?.path ?? null;
+  const activeRunIds = harness.activeSessionId
     ? (harness.runIdsBySession.get(harness.activeSessionId) ?? [])
-        .map((executionId) => harness.runsByExecution.get(executionId))
-        .filter((observed): observed is ObservedRun => observed !== undefined)
-        .filter((observed) =>
-          observedRunMatchesWorkflow(observed, boundWorkflowPath),
-        )
     : [];
+  const activeSessionAnnounced: ObservedRun[] = activeRunIds
+    .map((executionId) => harness.runsByExecution.get(executionId))
+    .filter((observed): observed is ObservedRun => observed !== undefined);
+  // Everything any other session announced, oldest first by observation time —
+  // the same tail-is-newest convention the per-session lists use, so the
+  // window keeps the same end whichever source a run came from.
+  const announcedElsewhere: ObservedRun[] = [...harness.runsByExecution.values()]
+    .filter((observed) => !activeRunIds.includes(observed.run.executionId))
+    .sort((a, b) => a.observedAt - b.observedAt);
+  const activeSessionRuns: ObservedRun[] = mergeSubjectRuns(
+    runsForSubject(activeSessionAnnounced, subjectPath),
+    runsForSubject(announcedElsewhere, subjectPath),
+  );
+  // The shown run: the active session's own pick while it still belongs to this
+  // subject (a stale pick heals itself when the selection changes rather than
+  // pinning one agent's run onto another's board), else the subject's newest.
+  const activeObservedRun = shownRunForSubject(
+    activeSessionRuns,
+    selectedRunForSubject(
+      activeSessionRuns,
+      harness.activeSessionId
+        ? (harness.runsBySession.get(harness.activeSessionId) ?? null)
+        : null,
+      subjectPath,
+    ),
+  );
   // The action button's honest "running" signal: tied to the SHOWN run's real
   // status, not the brief `directActionSettleSeq` pending ring (which clears at
   // hand-off). null unless the visible run is still running.
@@ -1159,10 +1217,22 @@ export const App = (): JSX.Element => {
     window.location.href = editorUrl(editor, path);
   };
 
-  // The rail verb: FOCUS an agent (or a bare folder). Focusing swaps the main
-  // panel's tab strip to that subject's sessions and sets the active tab to
-  // its most-recent session (or none -> the "start a session" empty state).
-  // Opening agent A never disturbs another agent's binding.
+  /**
+   * The rail verb: SELECT an agent (or a bare folder).
+   *
+   * Selecting changes what every right-hand surface is about — board, steps,
+   * run evidence, lifecycle verbs — and, deliberately, usually leaves the
+   * active session exactly where it is. Same-project selection is how you read
+   * F's board while still talking to B: one session has context on every agent
+   * in its project, so there is nothing to swap for. It used to take the
+   * selection's own most-recent tab unconditionally, which is why looking at a
+   * sibling emptied the terminal you were mid-sentence in.
+   *
+   * Across projects the same rule is a bug — a session rooted elsewhere cannot
+   * see the agent now on screen — so `sessionForFocus` hands over to that
+   * project's own session, or to none. Its overlapping-roots answer is
+   * deliberate and asymmetric; the reasoning lives with the function.
+   */
   const handleFocusAgent = (path: string): void => {
     setComposing(false);
     setReviewSummary(null);
@@ -1170,16 +1240,19 @@ export const App = (): JSX.Element => {
     setOverviewOpen(false);
     setFocusedAgentPath(path);
     closeMobileDrawer();
-    const tabs = liveSessionsForFocus(state.sessions, path);
-    // Keep the active session if it already belongs; otherwise take the
-    // most-recent (last in the oldest-first tab order), or none.
-    const nextActiveId = tabs.some((s) => s.id === harness.activeSessionId)
-      ? harness.activeSessionId
-      : (tabs[tabs.length - 1]?.id ?? null);
-    if (nextActiveId !== harness.activeSessionId) harness.setActiveSessionId(nextActiveId);
-    // The canvas follows the focus target automatically (onCanvasState): a
-    // populated session shows its board, an empty one or an agent with no
-    // session at all reports no content and the pane stays closed.
+    const decision = sessionForFocus({
+      focusPath: path,
+      active: activeSession,
+      sessions: state.sessions,
+      roots: knownProjectRoots(),
+    });
+    if (decision.kind === "switch" && (decision.to?.id ?? null) !== harness.activeSessionId) {
+      harness.setActiveSessionId(decision.to?.id ?? null);
+    }
+    // The canvas follows the selection automatically (onCanvasState): the
+    // session-keyed board when the session is bound to it, IA-01's
+    // workflow-keyed route otherwise — including for an agent that has never
+    // hosted a session at all.
   };
 
   // Focus a deep-linked / just-cloned agent if the user has it locally; returns
@@ -1609,7 +1682,7 @@ export const App = (): JSX.Element => {
 
           <div className="center-pane">
             <SessionBar
-              openedAgentName={noSessionAgentName}
+              openedAgentName={showAgentEmpty ? (focusedWorkflow?.name ?? null) : null}
               reviewTitle={reviewSummary ? reviewSummary.title : null}
               composing={showComposer}
               onBack={composerCanCancel ? () => setComposing(false) : null}
@@ -1645,20 +1718,29 @@ export const App = (): JSX.Element => {
                   ? () => handleStartSiblingSession(activeSession)
                   : null
               }
-              /* The agent action cluster shares the same row as the tabs. */
+              /* The agent action cluster shares the same row as the tabs.
+                 Its subject AND its gating are `rightPaneWorkflow` — the same
+                 one value the board draws (SAP-2931). Passing the binding here
+                 is the trap this ticket exists for: the handlers were rewired
+                 in the prototype and the buttons stayed enabled off the BOUND
+                 agent's deployment state, so selecting the undeployed `rfq`
+                 left Prod and Run live against `leasing`. */
               actions={
-                showWorkbench && activeSession && boundWorkflow ? (
+                showWorkbench && activeSession && rightPaneWorkflow ? (
                   <SessionStepsBar
-                    workflow={boundWorkflow}
+                    workflow={rightPaneWorkflow}
                     activeSessionId={harness.activeSessionId}
                     sessionReady={activeSession.ready === true && activeSession.status !== "exited"}
                     macros={state.macros}
-                    onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+                    onRunMacro={(macro) => handleRunMacroForWorkflow(rightPaneWorkflow, macro)}
                     onRequestRun={(target, returnFocus) =>
-                      setRunRequest({ workflow: boundWorkflow, target, returnFocus })
+                      setRunRequest({ workflow: rightPaneWorkflow, target, returnFocus })
                     }
                     preview={harness.previewBySession.get(activeSession.id) ?? null}
-                    lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
+                    /* By the SUBJECT's path: a stale failure belonging to the
+                       agent the session happens to be bound to would otherwise
+                       disable a verb on a perfectly healthy one. */
+                    lastDeployError={harness.lastDeployErrorFor(rightPaneWorkflow.path)}
                     authenticated={state.authenticated}
                     directActionSettleSeq={harness.directActionSettleSeq}
                     runningTarget={runningTarget}
@@ -1888,8 +1970,9 @@ export const App = (): JSX.Element => {
               <CanvasPane
                 sessionId={harness.activeSessionId}
                 lastMessage={harness.lastMessage}
-                boundWorkflow={rightPaneWorkflow}
-                noSessionAgent={noSessionAgentName}
+                subjectWorkflow={rightPaneWorkflow}
+                source={canvasSource}
+                loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
                 overviewActive={showComposer}
                 sessionExited={showDead}
                 onCanvasState={(hasContent) => {
@@ -1962,7 +2045,10 @@ export const App = (): JSX.Element => {
                 }}
                 workflows={state.workflows}
                 onOpenWorkflow={(path) => void handleBindWorkflow(path)}
-                onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+                /* The pane's own CTAs (Visualize, a failed task's Retry) act on
+                   what the pane is DRAWING, not on what the session is bound
+                   to — otherwise the empty state for F renders F's board. */
+                onRunMacro={(macro) => handleRunMacroForWorkflow(rightPaneWorkflow, macro)}
                 onInjectPrompt={(text) => {
                   if (harness.activeSessionId) void harness.injectInput(harness.activeSessionId, text);
                 }}
@@ -1976,8 +2062,11 @@ export const App = (): JSX.Element => {
                 data-testid="right-panel-code"
               >
                 <CodePanel
+                  /* Same subject as the board: how you trigger an agent from
+                     code has nothing to do with which session is live, so the
+                     Code tab follows the selection too. */
                   boundWorkflow={rightPaneWorkflow}
-                  noSessionAgent={noSessionAgentName}
+                  noSessionAgent={null}
                   agentsBaseUrl={state.agentsBaseUrl}
                   lastDeployError={
                     rightPaneWorkflow
