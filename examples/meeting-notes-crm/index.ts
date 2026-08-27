@@ -307,7 +307,7 @@ const intake = defineStep({
       resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE }),
     );
     ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);
-    ctx.shared.set("dryRun", truthy(input.dryRun));
+    ctx.shared.set("dryRun", truthy(input.dryRun ?? ctx.isLocalTrace));
     ctx.shared.set("meetingDate", input.meetingDate?.trim() || null);
 
     let transcript = normalizeTranscript(input.transcript);

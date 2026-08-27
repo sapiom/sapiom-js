@@ -614,7 +614,7 @@ const snapshot = defineStep({
   inputSchema: entryInput,
   next: ["detectAnomalies"],
   async run(input: EntryInput, ctx: Ctx) {
-    const dryRun = truthy(input.dryRun);
+    const dryRun = truthy(input.dryRun ?? ctx.isLocalTrace);
     const handle = resolveResourceHandle(input, {
       fallback: DEFAULT_DB_HANDLE,
     });

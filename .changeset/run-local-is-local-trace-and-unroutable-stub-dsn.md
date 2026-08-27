@@ -1,5 +1,5 @@
 ---
-"@sapiom/agent": minor
+"@sapiom/agent": patch
 "@sapiom/agent-core": patch
 "@sapiom/tools": patch
 ---

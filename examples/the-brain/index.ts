@@ -838,7 +838,7 @@ const scan = defineStep({
   inputSchema: entryInput,
   next: ["assess"],
   async run(input: EntryInput, ctx: Ctx) {
-    const dryRun = input.dryRun ?? false;
+    const dryRun = input.dryRun ?? ctx.isLocalTrace ?? false;
     const observeOnly = input.observeOnly ?? false;
     const nowIso = input.now ?? new Date().toISOString();
     const briefingChannelId = input.briefingChannelId ?? "";

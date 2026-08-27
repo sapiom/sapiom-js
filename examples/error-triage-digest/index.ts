@@ -317,14 +317,15 @@ const collect = defineStep({
       resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE }),
     );
     ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);
-    ctx.shared.set("dryRun", truthy(input.dryRun));
+    const dryRun = truthy(input.dryRun ?? ctx.isLocalTrace);
+    ctx.shared.set("dryRun", dryRun);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
 
     let errors = normalizeErrors(input.errors);
 
     // Nothing passed in, but a pull URL is configured: fetch the batch now
     // (the "scheduled pull" path a cron trigger would take).
-    if (errors.length === 0 && input.pullUrl && !truthy(input.dryRun)) {
+    if (errors.length === 0 && input.pullUrl && !dryRun) {
       try {
         errors = await pullErrors(input.pullUrl.trim());
         ctx.logger.info("pulled error batch", { count: errors.length });
