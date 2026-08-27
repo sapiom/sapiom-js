@@ -1,5 +1,19 @@
 # @sapiom/cli
 
+## 8.0.0
+
+### Patch Changes
+
+- Updated dependencies [37ab85b]
+- Updated dependencies [b66ff0e]
+- Updated dependencies [b66ff0e]
+- Updated dependencies [37ab85b]
+- Updated dependencies [37ab85b]
+- Updated dependencies [b66ff0e]
+- Updated dependencies [b66ff0e]
+- Updated dependencies [b66ff0e]
+  - @sapiom/harness@0.9.0
+
 ## 7.0.4
 
 ### Patch Changes

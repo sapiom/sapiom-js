@@ -1,5 +1,68 @@
 # @sapiom/harness
 
+## 0.9.0
+
+### Minor Changes
+
+- 37ab85b: Agents nested deep under a project root are discovered again: the scan now reaches 8 levels, bounded by a node budget rather than by depth alone.
+
+  `AGENT_PROJECT_SCAN_MAX_DEPTH` was 3, which predated the project-rooted rail — it assumed the directory you opened was roughly the agent's own folder. Under a root you _choose_, depth is ordinary: `<root>/backend/src/agents/<agent>` is four segments down and `<root>/apps/<app>/src/features/<x>/agents/<agent>` is six. Those agents were not found at all and landed in "No workspace" — on a measured root, well over a third of the rail.
+
+  Raising the depth alone would not have been affordable, and the numbers are why. Measured against real roots (macOS/APFS, warm cache, ~22-25 µs per directory entered):
+
+  | root                            | depth 3    | depth 8              | unbounded   |
+  | ------------------------------- | ---------- | -------------------- | ----------- |
+  | a single repo                   | 119 dirs   | 242 dirs · 7 ms      | 242 dirs    |
+  | a monorepo                      | 758 dirs   | 9,016 dirs · 196 ms  | 9,195 dirs  |
+  | a monorepo with worktree copies | 1,298 dirs | 35,489 dirs · 847 ms | 47,544 dirs |
+
+  So cost is linear and predictable in _directories entered_, and that is now what is bounded: `AGENT_PROJECT_SCAN_MAX_NODES` (10,000) for the registry scan, and a tighter `AGENT_PROJECT_WATCH_MAX_NODES` (2,500) for the workspace watcher's fingerprint, which is synchronous and re-runs on a debounce after every save. Pruning harder was the other candidate and does not pay — extending the ignored-directory list with the usual suspects removed 0.5–11% of the directories on those roots.
+
+  The registry and the watcher now share one traversal in `core/agent-project-discovery.ts`, and it is **breadth-first**, which is what makes the budget safe: every level shallower than the cut is complete, so a truncated scan degrades by depth exactly as the fixed cap did — just at a depth the tree's real width chooses instead of one guessed in advance. A scan reports how far it got (`AgentProjectScanBudget.envelopeDepth`) and the registry reconciles only within that, so a bounded scan never mistakes "I did not look there" for "it is gone".
+
+  Termination on a pathological tree does not depend on the cap: subdirectories are filtered on raw dirent type, so a symlink — including one closing a cycle — is never descended into. That is now asserted directly, and `src/core/agent-project-scan.perf.test.ts` measures the cost of both bounds on a deep monorepo fixture next to the depth-3 baseline.
+
+- b66ff0e: Show every registry-known agent contained by an Agent Studio Project in that Project's graph, including local-only and disconnected agents, while preserving partial inventory with path-free warnings.
+- b66ff0e: Detect literal direct agent `run` and `launch` relationships in Agent Studio Project graphs, distinguish blocking and asynchronous modes, and report dynamic targets without drawing misleading connectors.
+
+  The syntax-only detector recognizes the exact `ctx.sapiom.agents` form plus proven named `agents` aliases and legacy `orchestrations.launch` imports from `@sapiom/tools`. Unlike the previous text match, unrelated local objects, custom context names, destructured namespaces, namespace imports, and optional chains are not inferred. The existing per-agent Canvas remains launch-only, so blocking `agents.run` calls retain their existing capability chip there until that Canvas supports blocking relationship nodes.
+
+  TypeScript is now a Harness runtime dependency, constrained to the tested 5.9 compiler-API band, because published Harness and desktop servers execute the syntax parser locally.
+
+- 37ab85b: Agent Studio's left rail is rebuilt around where an agent **is** and what it is **related to**, and it can now move an agent's directory on disk.
+
+  **Two axes, chosen from the rail's own `Group by` control.** _Project_ files every agent under the project roots that contain it — the folder you opened, a folder you have a session in — with the branching directories between them as rows. An agent inside two roots you both opened appears under both; they are two contexts, and the old longest-prefix rule made the shallower project silently lose agents it plainly contained. _Group_ is the arrangement you make yourself: named groups per project root, seeded from the launch edges between agents and then yours to edit. The **Deployment axis is retired** — an agent's deploy state is a badge on its row, not a place it lives.
+
+  **`Remove project`** takes a root off the rail without touching anything on disk.
+
+  **`POST /api/agents/move` renames a directory in your working tree.** This is the Project axis's drag, and it is a real filesystem move, not a display preference: dropping an agent on a folder relocates that agent's directory there — `git mv` when the directory is tracked in a git repo, a plain rename otherwise. Nothing inside `sapiom.json` is rewritten, live sessions whose cwd sat inside the moved tree follow it, and the endpoint refuses on its own findings (a destination that exists, a destination inside the source, a `from` that is not a registered agent, or a destination outside the folders the rail shows) rather than trusting the caller.
+
+  **New local REST surfaces** on the same `127.0.0.1` boot-token-gated `/api` mount as the rest:
+
+  - `GET`/`PUT`/`DELETE /api/studio-rail` — the stored Group-axis arrangement, one `.sapiom/studio-rail.json` per project root. It is a committable file, so a team can share an arrangement. Writable roots are exactly the roots the rail can show.
+  - `GET /api/studio-rail/launch-edges` — which agents launch which, across every registered agent, used to seed groups.
+  - `POST /api/agents/move` — above.
+
+  **Stored UI state resets once on upgrade, deliberately.** The rail's preferences moved to keys that can name a project, a directory or a group rather than only a cwd: `collapsedCwds` → `collapsedKeys` (namespaced `project:` / `dir:` / `group:`) and `railGrouping` → `railAxis`. The old values are not migrated — they describe a rail that no longer exists — so after upgrading, every fold is open and the axis is back to _Project_. Set them again once and they stick.
+
+  There is no migration for project roots either: every directory already in your recents, and every live session's cwd, becomes a project row. Nothing is discarded, and `Remove project` is how the list gets shorter.
+
+- 37ab85b: A canvas board can now be read by agent path, with no session involved: `GET /api/workflows/:path/graph`.
+
+  The canvas was reachable only at `/canvas/:harnessSessionId/`, resolved by the session's current binding — so an agent that had never hosted a session had no board, and you could not look at agent F's board while working in agent B's session.
+
+  This adds a second, session-free entry point onto the _same_ derivation. `deriveWorkflowCanvas` is extracted out of the render-file write path and shared by both, so the document this route returns is byte-identical to the render a bound session's canvas serves for the same workflow. Nothing is written to disk.
+
+  `:path` is the agent's absolute directory, URI-encoded into one segment (`encodeURIComponent(agentPath)`), matching `/api/workflows/:id/input-contract`. It sits behind the usual `/api` boot-token middleware, so it is a `fetch` target rather than an `<iframe src>`.
+
+  Failure modes are deliberately distinct: `400` for a blank, relative or `..`-carrying path (and for a `sapiom.json` symlinked out of the project), `404` only for a path that is not a registered workflow, and `200` with `status: "empty" | "preparing" | "error" | "ok"` for everything else — a missing `sapiom.json` is an empty board, never a missing route.
+
+  Full contract: `packages/harness/docs/agent-canvas-graph.md`.
+
+- b66ff0e: Keep Agent Studio Project dependency graphs current with revisioned lifecycle snapshots, per-agent relationship caching, and last-good stale or degraded presentation during refresh failures. Opening a Project graph arms one additional session-independent recursive watcher for that Project; inventory fingerprints and the polling fallback run asynchronously so wide Projects do not block the Studio server loop.
+- b66ff0e: Render Project dependency graphs as full-main Agent Studio destinations with deterministic non-linear layout, routed invocation modes, stable per-Project pan and zoom controls, and exact agent-card navigation from both rail axes.
+- b66ff0e: Add a cached local Project dependency graph to Agent Studio. Project labels on both the Project and Group axes open the graph; use the dedicated chevron to expand or collapse the Project's agents.
+
 ## 0.8.9
 
 ### Patch Changes
