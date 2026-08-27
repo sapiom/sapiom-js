@@ -1919,12 +1919,28 @@ test("steps tab drills into a step's real transitions and slides back", async ({
 test("canvas repair sends the coding agent an Agent-terminology prompt", async ({ page }) => {
   const canvasBody = page.frameLocator(".canvas-iframe").locator("body");
   await expect(canvasBody).toBeVisible();
-  await canvasBody.evaluate(() => {
-    window.parent.postMessage(
-      { type: "sapiom-canvas:error", title: "leasing", reason: "TypeScript extraction failed" },
-      "*",
-    );
-  });
+  // POST UNTIL IT LANDS. The board is an srcdoc iframe the shell re-renders, so
+  // a single postMessage can be aimed at a document that is replaced before it
+  // is delivered — the message is simply lost and the assertion below then
+  // blames the error pane. Visible-then-evaluate is not a guarantee that the
+  // document surviving the evaluate is the one the shell is listening to.
+  // Re-posting is safe: the handler renders the same error state each time.
+  await expect
+    .poll(
+      async () => {
+        await canvasBody
+          .evaluate(() => {
+            window.parent.postMessage(
+              { type: "sapiom-canvas:error", title: "leasing", reason: "TypeScript extraction failed" },
+              "*",
+            );
+          })
+          .catch(() => {});
+        return page.getByTestId("canvas-render-error").isVisible().catch(() => false);
+      },
+      { timeout: 10_000, intervals: [100, 200, 300, 500] },
+    )
+    .toBe(true);
   await expect(page.getByTestId("canvas-render-error")).toBeVisible();
   await page.getByTestId("canvas-error-fix").click();
 

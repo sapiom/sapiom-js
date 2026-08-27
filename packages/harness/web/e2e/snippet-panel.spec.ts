@@ -53,7 +53,24 @@ test.describe("the Code tab follows the BOUND workflow's deploy state", () => {
     // Opening leasing again switches back to a leasing (deployed) session. It
     // lands on the most-recent leasing tab, which has an empty board and so
     // collapses the pane — reopen it to see the deployed agent's snippet panel.
+    //
+    // The reopen has to be sequenced, not fired blind. `right-expand` renders
+    // ONLY while the pane is collapsed (App.tsx: `rightCollapsed ?
+    // expandRightPane : null`), and rfq already left it collapsed — so a blind
+    // click expands the pane BEFORE leasing's empty board has collapsed it, and
+    // that collapse then undoes the expand. The panel is invisible and the
+    // failure names the panel rather than the ordering. Locally the collapse
+    // wins the race and this passed 3/3; CI is slower and lost it.
+    //
+    // So: force the pane OPEN first, so the next collapse is unambiguously
+    // leasing's, wait for that collapse, and only then reopen.
+    if (await page.getByTestId("right-expand").isVisible()) {
+      await page.getByTestId("right-expand").click();
+    }
+    await expect(page.getByTestId("right-expand")).toHaveCount(0);
+
     await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
+    await expect(page.getByTestId("right-expand")).toBeVisible();
     await page.getByTestId("right-expand").click();
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
   });
