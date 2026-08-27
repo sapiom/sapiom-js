@@ -863,6 +863,94 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
   },
 };
 
+/**
+ * `?mockFixtures=deep` only — the rail shapes the Project axis exists for.
+ *
+ * NO default fixture here has a multi-segment directory, an agent path prefix,
+ * or a container holding both an agent and a subdirectory, so three acceptance
+ * criteria for compaction could not be asserted in a browser AT ALL. That is
+ * exactly how they shipped broken in the reference prototype: the code existed
+ * and had never been rendered against anything deep enough to exercise it.
+ *
+ * Gated rather than default so the 84 e2e specs and every fixture-count
+ * assertion elsewhere hold verbatim, and read from THIS module (rather than
+ * api.ts, where the `search` gate lives) because the fixture and the gate that
+ * selects it are one thing.
+ *
+ * `/Users/demo/polsia` produces, simultaneously:
+ *
+ *  - `backend/src/agents` — a compacted 3-segment label, 18 chars, which stays
+ *    WHOLE: elision needs >2 segments AND >22 characters, both.
+ *  - `packages/harness/web/src/components` — 5 segments, 35 chars, so it
+ *    elides to `packages/…/components`.
+ *  - `scripts/tools/rollup` — a lone agent whose unbranched chain compacts
+ *    onto its own row as the prefix `tools`, with no directory rows at all.
+ *  - `services` — a MIXED container: the `gateway` agent row AND the `workers`
+ *    subdirectory, which is what proves agents-render-before-directories at a
+ *    second depth.
+ *  - `sender` — an agent whose name starts with `s`. A matcher accident once
+ *    dropped exactly those silently.
+ *  - `ads` twice — `backend/src/agents/ads` and `services/workers/ads` share a
+ *    directory basename in two places, which is the only way to reach a move's
+ *    name-collision branch through the UI.
+ *
+ * `/Users/demo/polsia/services/workers` is opened as its own project as well,
+ * so its agents file under BOTH roots (two roots are two contexts) and its
+ * `project:` collapse key collides with the `dir:` key of the same-named
+ * subdirectory inside `polsia` — the case namespacing exists for.
+ *
+ * `/Users/demo/dashboard-keeper` is a root that IS an agent: one row, never a
+ * header plus an identically-named child.
+ */
+const DEEP_ROOT = "/Users/demo/polsia";
+
+const deepAgent = (
+  path: string,
+  name: string,
+  extra: Partial<WorkflowInfo> = {},
+): WorkflowInfo => ({
+  name,
+  path,
+  definitionId: null,
+  definitionSlug: name,
+  activeBuildRunId: null,
+  activeBuildRunStatus: null,
+  source: "scan",
+  ...extra,
+});
+
+export const MOCK_DEEP_WORKFLOWS: WorkflowInfo[] = [
+  deepAgent(`${DEEP_ROOT}/backend/src/agents/ads`, "ads"),
+  deepAgent(`${DEEP_ROOT}/backend/src/agents/outreach`, "outreach"),
+  deepAgent(`${DEEP_ROOT}/scripts/tools/rollup`, "rollup"),
+  deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/mailer`, "mailer", {
+    definitionId: 7701,
+    activeBuildRunId: "build-mailer-ready",
+    activeBuildRunStatus: "ready",
+  }),
+  deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/sender`, "sender"),
+  deepAgent(`${DEEP_ROOT}/services/gateway`, "gateway"),
+  deepAgent(`${DEEP_ROOT}/services/workers/ads`, "ads-worker"),
+  deepAgent(`${DEEP_ROOT}/services/workers/queue`, "queue"),
+  deepAgent("/Users/demo/dashboard-keeper", "dashboard-keeper"),
+];
+
+/** Roots the deep fixture opens, appended to `recentDirs`. */
+export const MOCK_DEEP_ROOTS: string[] = [
+  DEEP_ROOT,
+  `${DEEP_ROOT}/services/workers`,
+  "/Users/demo/dashboard-keeper",
+];
+
+/**
+ * Whether the deep rail fixture is seeded. Read at module load, which is all
+ * Playwright needs — it navigates with the parameter before the bundle runs.
+ */
+export function isDeepRailFixture(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("mockFixtures") === "deep";
+}
+
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
   {
     name: "leasing",
@@ -900,6 +988,7 @@ export const MOCK_WORKFLOWS: WorkflowInfo[] = [
     starterId: "coding-pause",
     source: "connect",
   },
+  ...(isDeepRailFixture() ? MOCK_DEEP_WORKFLOWS : []),
 ];
 
 /**
@@ -1084,7 +1173,12 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
 
 export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
-  recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-agent", "/Users/demo/onboarding-flow"],
+  recentDirs: [
+    "/Users/demo/acme-app",
+    "/Users/demo/rfq-agent",
+    "/Users/demo/onboarding-flow",
+    ...(isDeepRailFixture() ? MOCK_DEEP_ROOTS : []),
+  ],
   // Matches the real default: opt-in, because it spends tokens on a background
   // LLM call the user never asked for.
   rollingSummary: false,

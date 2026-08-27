@@ -1,3 +1,5 @@
+import type { RailAxis, RailSort } from "./project-tree";
+
 /**
  * Persisted information-architecture state ("the Studio holds context
  * on my IA as I resume") — workspace-folder collapse, rail/right-pane
@@ -12,15 +14,30 @@ export interface UiPrefs {
   railCollapsed?: boolean;
   rightCollapsed?: boolean;
   rightTab?: "canvas" | "steps" | "code";
-  /** Workspace cwds the user collapsed in the rail tree. */
-  collapsedCwds?: string[];
-  /** How the rail's ⋯ menu files the tree: by workspace folder (default) or
-   *  by deployment state. Persisted so the explorer resumes as the user left
-   *  it. */
-  railGrouping?: "workspace" | "deployment";
-  /** Row/group order in the rail tree: newest activity first (default) or
+  /**
+   * Rows the user collapsed in the rail tree, as NAMESPACED keys
+   * (`project:<abs path>`, `dir:<abs path>`) — see ProjectTreeRows' `dirKey` /
+   * `projectKey`.
+   *
+   * The namespace is load-bearing, not decoration. A path is not unique across
+   * row kinds: `~/x/agents` opened as a project is the exact string the
+   * `agents` subdirectory inside `~/x` already uses, and the old bare-path key
+   * collapsed both rows at once. It replaces `collapsedCwds`, whose stored
+   * bare paths simply stop matching — a fold nobody can explain is worse than
+   * a fold that resets once.
+   */
+  collapsedKeys?: string[];
+  /**
+   * How the rail files agents. Only `project` today; `deployment` is retired
+   * (it bucketed a fact every agent row already prints as a glyph) and
+   * `workspace` is replaced by it. Persisted so the explorer resumes as the
+   * user left it — an unknown stored value falls back to the default rather
+   * than rendering an axis that no longer exists.
+   */
+  railAxis?: RailAxis;
+  /** Row/project order in the rail tree: newest activity first (default) or
    *  A–Z by name. */
-  railSort?: "recent" | "name";
+  railSort?: RailSort;
   /** The agent NEW sessions default to — set from the composer's provider
    *  dropdown (a session's own agent is pinned at launch, so the switch is
    *  honestly scoped to the next session) and read by the new-session

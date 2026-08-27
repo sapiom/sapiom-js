@@ -9841,3 +9841,237 @@ button.rail-footer-card:hover {
     animation: none;
   }
 }
+
+/* ── Project axis: row anatomy ─────────────────────────────────────────────
+   Added with the rail's Project axis (SAP-2928). The pixel system above is
+   unchanged: every row is --tree-row-h tall, a level's leading glyph sits at
+   `level × --tree-indent`, and trailing indicators keep the same right axis. */
+
+/* The left icon IS the disclosure control.
+   The chevron used to sit in its own trailing column, reserving width on EVERY
+   row to say something a row only needs to say at the moment you act on it.
+   Here the glyph you already look at becomes a chevron in place: zero extra
+   width, and the affordance appears where the pointer already is. There is no
+   trailing chevron anywhere in the tree. */
+.row-disclosure {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-areas: "glyph";
+  place-items: center;
+  height: 100%;
+  padding: 0 0 0 var(--tree-pad-x);
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--radius);
+}
+
+/* Both children stay MOUNTED and swap by opacity in one grid cell, so the slot
+   never changes size and the row cannot reflow under the cursor. */
+.row-disclosure-mark,
+.row-disclosure-chevron {
+  grid-area: glyph;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  transition: opacity var(--transition-fast);
+}
+
+.row-disclosure-chevron {
+  opacity: 0;
+}
+
+.workspace-row:hover .row-disclosure-mark,
+.row-disclosure:focus-visible .row-disclosure-mark,
+/* A COLLAPSED row keeps its chevron unhovered: "there is more here" must
+   never be invisible. */
+.workspace-row.is-collapsed .row-disclosure-mark {
+  opacity: 0;
+}
+
+.workspace-row:hover .row-disclosure-chevron,
+.row-disclosure:focus-visible .row-disclosure-chevron,
+.workspace-row.is-collapsed .row-disclosure-chevron {
+  opacity: 1;
+}
+
+.row-disclosure:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-disclosure-mark,
+  .row-disclosure-chevron {
+    transition: none;
+  }
+}
+
+/* A project with nothing under it keeps its mark and loses the control: a
+   chevron that folds an empty subtree is an affordance for nothing. */
+.row-disclosure-static {
+  cursor: default;
+  pointer-events: none;
+}
+
+.workspace-row:hover .row-disclosure-static .row-disclosure-mark {
+  opacity: 1;
+}
+
+/* A project takes a MARK, not a folder glyph: it is what the tree is about,
+   not a folder in it. The letter is derived from the folder name, never
+   fetched — a remote avatar is an auto-generated identicon as often as a logo,
+   and a wrong logo is worse than an honest initial. */
+.project-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Same 13px slot every other leading glyph occupies, so the pixel system
+     holds — but filled, because a mark is an identity and a folder glyph is a
+     category. */
+  width: 13px;
+  height: 13px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-line);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.workspace-row:hover .project-mark,
+.workspace-row.is-focused .project-mark,
+.workspace-row.is-selected .project-mark {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+/* The stray-agents header has no project behind it, so it carries the folder
+   glyph rather than a mark that would imply one. */
+.project-mark-none {
+  background: transparent;
+  color: var(--text-faint);
+}
+
+/* Prefix and name are ONE flex child.
+   Sitting as two children of the row, the row's 6px gap opened a space inside
+   a path — `scripts/tools/ rollup` read as two separate things rather than one
+   location. */
+.tree-row-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* The prefix loses width first, by a wide margin. Flex distributes shrink in
+   proportion to (shrink factor × basis), so a plain 1:1 ratio hands the
+   shrinkage to whichever string is LONGER — which is how a deep path clipped
+   the agent's own name. A 100:1 factor inverts that: the context gives way and
+   the identity survives. */
+.tree-row-name > .tree-row-prefix {
+  flex: 0 100 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+
+/* The `/` sits OUTSIDE the truncating span so it survives a clip. Inside it,
+   `components/mailer` rendered as `componen…mailer` — one word where there
+   were two things. */
+.tree-row-name > .tree-row-sep {
+  flex: 0 0 auto;
+  padding: 0 1px 0 0;
+  color: var(--text-faint);
+}
+
+.tree-row-name > .tree-row-label {
+  flex: 0 1 auto;
+}
+
+/* Depth rides as a custom property so the indent step stays a token rather
+   than arithmetic scattered through the markup. Level n's leading glyph (or,
+   on an agent row, its first character) sits at n × --tree-indent, which is
+   exactly where its parent's label text starts. */
+.rail-list .tree-row {
+  padding-left: calc((var(--tree-depth, 0) + 1) * var(--tree-indent));
+}
+
+.rail-list .workspace-row.is-nested .row-disclosure {
+  padding-left: calc((var(--tree-depth, 0) + 1) * var(--tree-indent));
+}
+
+/* A nested directory group is a row inside a container, not a container of its
+   own: indent alone carries its nesting, and the project's single hairline
+   guide already runs the full height of the subtree. */
+.rail-list .workspace-subgroup {
+  margin-bottom: 0;
+}
+
+.rail-list .workspace-subgroup::before {
+  content: none;
+}
+
+/* A project whose rows are all directories still gets the guide — without
+   this, the line appeared only on projects that happened to hold a direct
+   agent row, which nothing on screen explained. */
+.rail-list .workspace-group:has(> .workspace-subgroup)::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tree-pad-x) + 6px);
+  top: calc(var(--tree-row-h) + var(--tree-row-gap));
+  bottom: 0;
+  width: 1px;
+  background: var(--ui-line);
+  pointer-events: none;
+}
+
+.rail-list .workspace-group > .workspace-subgroup {
+  position: relative;
+}
+
+/* The filing panel: VISIBLE dropdowns, not a menu of radio rows. Each states
+   its current value on the face of the control, so "how is this list filed?"
+   is answerable without opening anything. */
+.filing-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  min-height: var(--tree-row-h);
+  padding: 0 var(--tree-pad-x);
+  font-size: var(--type-label);
+  color: var(--text-dim);
+}
+
+.filing-field-label {
+  flex: 0 0 auto;
+}
+
+.filing-field-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--type-label);
+}
+
+.filing-field-select:hover {
+  border-color: var(--ui-line-strong);
+}
+
+.filing-field-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}

@@ -3,6 +3,20 @@ import type { HarnessSession, WorkflowInfo } from "@shared/types";
 import { basenameOf, isWithinDir } from "./paths";
 
 /**
+ * RETIRED (SAP-2928). `buildWorkspaceTree` is replaced by `project-tree.ts`'s
+ * `buildProjectTree` and nothing renders it any more: the Workspace axis
+ * accumulated a row for every directory that had ever hosted a session, and the
+ * Deployment axis filed on a fact every agent row already prints as a glyph.
+ *
+ * The module survives only because two files outside this slice's ownership
+ * still import it — `palette.ts` for `isUnder` (which is just
+ * `paths.isWithinDir` under another name) and `workspace-logic.test.ts` for
+ * `buildWorkspaceTree`. Deleting it means pointing `palette.ts` at
+ * `paths.isWithinDir` and retiring those two describe blocks, which is a
+ * separate, mechanical change. Do NOT add new callers.
+ */
+
+/**
  * One agent (workflow) node in the rail. The rail is an EXPLORER of what
  * exists on disk: workspace folders and the agents (sapiom.json) inside them.
  * Sessions are NOT a rail concern — they live in the main panel's tab strip,
