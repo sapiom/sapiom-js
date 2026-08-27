@@ -120,7 +120,7 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createWorkflowGraphRouter } from "./workflow-graph.js";
 import { createStudioRailRouter } from "./studio-rail.js";
-import { createAgentMoveRouter, remapUnder } from "./agent-move.js";
+import { createAgentMoveRouter, remapSessions } from "./agent-move.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -1400,13 +1400,7 @@ export const startServer = async (
       // broadcasts `workflows.changed`: the rail re-derives the tree from the
       // NEW path rather than from a stale registry row.
       onMoved: async (from, to) => {
-        for (const session of sessionManager.list()) {
-          const moved = remapUnder(session.cwd, from, to);
-          if (moved !== session.cwd) session.cwd = moved;
-          if (session.boundWorkflowPath != null) {
-            session.boundWorkflowPath = remapUnder(session.boundWorkflowPath, from, to);
-          }
-        }
+        remapSessions(sessionManager.list(), from, to);
         await workflowRegistry.prune();
         await scanWorkflowsAndBroadcast(dirname(to));
       },

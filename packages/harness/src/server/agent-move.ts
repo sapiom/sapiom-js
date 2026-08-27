@@ -87,6 +87,44 @@ export function remapUnder(p: string, from: string, to: string): string {
   return rel === "" ? path.resolve(to) : path.join(path.resolve(to), rel);
 }
 
+/**
+ * Rewrites every live session that sat inside the moved tree, IN PLACE, and
+ * returns how many changed.
+ *
+ * A function rather than a loop at the wiring site because this is the criterion
+ * "sessions whose cwd sat inside the moved directory follow it", and a rule that
+ * lives inside a route's callback cannot be tested. On disk the session's own
+ * process cwd follows the directory automatically (a cwd is an inode, not a
+ * string), so what has to be corrected is the RECORD — the path the studio shows,
+ * files under, and reboots the session at. Left stale, the session's project row
+ * points at a directory that no longer exists.
+ *
+ * `boundWorkflowPath` travels the same way: the binding names the agent's
+ * directory, and the agent just moved.
+ *
+ * In place, because the session manager owns these objects and hands out live
+ * references — `setBoundWorkflowPath` mutates them the same way.
+ */
+export function remapSessions(
+  sessions: Array<{ cwd: string; boundWorkflowPath?: string | null }>,
+  from: string,
+  to: string,
+): number {
+  let changed = 0;
+  for (const session of sessions) {
+    const cwd = remapUnder(session.cwd, from, to);
+    const bound =
+      session.boundWorkflowPath == null
+        ? session.boundWorkflowPath
+        : remapUnder(session.boundWorkflowPath, from, to);
+    if (cwd === session.cwd && bound === session.boundWorkflowPath) continue;
+    session.cwd = cwd;
+    session.boundWorkflowPath = bound;
+    changed += 1;
+  }
+  return changed;
+}
+
 /** `git`, with a bounded timeout — a hung git must not hold a request open. */
 function git(args: string[]): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {

@@ -24,6 +24,7 @@ import {
   isWithinDir,
   performMove,
   refuseMoveOnDisk,
+  remapSessions,
   remapUnder,
   type AgentMoveResponse,
 } from "./agent-move.js";
@@ -125,6 +126,41 @@ describe("remapUnder", () => {
     expect(remapUnder("/a/ads/sub/creative", "/a/ads", "/b/ads")).toBe("/b/ads/sub/creative");
     expect(remapUnder("/a/ads-v2", "/a/ads", "/b/ads")).toBe("/a/ads-v2");
     expect(remapUnder("/elsewhere", "/a/ads", "/b/ads")).toBe("/elsewhere");
+  });
+});
+
+describe("remapSessions", () => {
+  it("follows the sessions that sat inside the moved tree, and only those", () => {
+    // The exact composition `server/index.ts` wires into `onMoved`. A session
+    // left pointing at a directory that no longer exists is the bug.
+    const sessions = [
+      { cwd: "/a/ads", boundWorkflowPath: "/a/ads" },
+      { cwd: "/a/ads/.worktrees/wip", boundWorkflowPath: "/a/ads/sub/creative" },
+      { cwd: "/a/ads-v2", boundWorkflowPath: null },
+      { cwd: "/elsewhere", boundWorkflowPath: "/elsewhere" },
+    ];
+    expect(remapSessions(sessions, "/a/ads", "/b/ads")).toBe(2);
+    expect(sessions).toEqual([
+      { cwd: "/b/ads", boundWorkflowPath: "/b/ads" },
+      { cwd: "/b/ads/.worktrees/wip", boundWorkflowPath: "/b/ads/sub/creative" },
+      // A mere name-prefix sibling is untouched, and so is an unrelated session.
+      { cwd: "/a/ads-v2", boundWorkflowPath: null },
+      { cwd: "/elsewhere", boundWorkflowPath: "/elsewhere" },
+    ]);
+  });
+
+  it("leaves a binding OUTSIDE the moved tree alone while following the cwd", () => {
+    // A session rooted at the project but bound to the agent that moved, and one
+    // rooted inside the agent but bound to a neighbour: each half is decided on
+    // its own path, never on the other's.
+    const sessions = [{ cwd: "/a/ads/deep", boundWorkflowPath: "/a/outreach" }];
+    expect(remapSessions(sessions, "/a/ads", "/b/ads")).toBe(1);
+    expect(sessions[0]).toEqual({ cwd: "/b/ads/deep", boundWorkflowPath: "/a/outreach" });
+  });
+
+  it("reports nothing changed when no session was inside", () => {
+    const sessions = [{ cwd: "/elsewhere", boundWorkflowPath: null }];
+    expect(remapSessions(sessions, "/a/ads", "/b/ads")).toBe(0);
   });
 });
 
