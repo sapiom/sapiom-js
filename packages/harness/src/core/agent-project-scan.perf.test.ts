@@ -18,11 +18,24 @@
  *   ~/sapiom/sapiom-js        758 dirs    9,016 dirs  9,195 dirs
  *   ~/sapiom/Sapiom         1,298 dirs   35,489 dirs 47,544 dirs
  *
- * The fixture below reproduces the shape of that middle case — a monorepo with
- * ~75 agents scattered from 2 to 7 segments below the root, real per-level
- * width, and a `node_modules` big enough that walking it would show up
- * immediately. Wall clock is machine-dependent, so the timing bars are loose
- * regression tripwires; the assertions that decide correctness are counts.
+ * Round 2 added the third bound — the repository boundary — and it moves these
+ * numbers more than either of the first two, so it is re-measured here rather
+ * than left to the docblock. Same install, same day, at the shipped
+ * 10,000-node budget; cells are agents / distinct names / dirs / ms:
+ *
+ *   root                      today                          with the boundary
+ *   ~/sapiom/wf-demo-testing   10 / 10,     17 dirs,   0 ms   10 / 10,    17 dirs,   0 ms
+ *   ~/sapiom                   88 / 65, 10,000 dirs, 239 ms   68 / 64,   408 dirs,   8 ms
+ *   ~/sapiom/sapiom-js         25 /  2,  9,016 dirs, 233 ms    2 /  2,   444 dirs,   8 ms
+ *   ~/sapiom/Sapiom             0 /  0, 10,000 dirs, 200 ms    0 /  0, 5,408 dirs, 107 ms
+ *
+ * The fixture below reproduces the shape of the `sapiom-js` case — a monorepo
+ * with ~75 agents scattered from 2 to 7 segments below the root, real per-level
+ * width, a `node_modules` big enough that walking it would show up immediately,
+ * and (new) a `.trees/` full of worktree checkouts of the same repo, which is
+ * where 23 of that install's 25 "agents" actually came from. Wall clock is
+ * machine-dependent, so the timing bars are loose regression tripwires; the
+ * assertions that decide correctness are counts.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -51,6 +64,12 @@ const AGENTS_PER_DEPTH: Record<number, number> = { 2: 5, 3: 10, 4: 20, 5: 20, 6:
 const AGENT_TOTAL = Object.values(AGENTS_PER_DEPTH).reduce((a, b) => a + b, 0);
 /** Ignored-subtree noise: 150 packages x 3 build dirs = 600 dirs that must cost nothing. */
 const NODE_MODULES_PACKAGES = 150;
+/**
+ * Worktree checkouts of the fixture's own repo, under `.trees/` — the shape
+ * that made one real monorepo report 25 agents when it has 2. Each carries a
+ * `.git` FILE (that is what a worktree has) and one copy of the same agent.
+ */
+const WORKTREE_CHECKOUTS = 20;
 
 /** Loose wall-clock bars — they catch "the bound stopped working", not a slow disk. */
 const SCAN_BUDGET_MS = 10_000;
@@ -63,6 +82,8 @@ interface Fixture {
   byDepth: string[][];
   /** Absolute paths of the directories carrying a marker. */
   agents: string[];
+  /** The same agent, once per worktree checkout under `.trees/`. */
+  worktreeAgents: string[];
   /** Directories a full walk should enter (non-ignored, above no marker). */
   reachable: number;
 }
@@ -110,10 +131,30 @@ async function buildFixture(root: string): Promise<Fixture> {
   );
   await fs.mkdir(path.join(root, ".git", "objects", "ab"), { recursive: true });
 
+  // Sibling checkouts of this same repo. Every one holds a directory called
+  // `duplicated-agent`, so a walk that crosses the boundary reports the same
+  // agent WORKTREE_CHECKOUTS extra times.
+  const worktreeAgents: string[] = [];
+  byDepth[1].push(path.join(root, ".trees"));
+  for (let i = 0; i < WORKTREE_CHECKOUTS; i += 1) {
+    const checkout = path.join(root, ".trees", `wt-${i}`);
+    const agent = path.join(checkout, "src", "agents", "duplicated-agent");
+    await fs.mkdir(agent, { recursive: true });
+    await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${root}/.git/worktrees/wt-${i}\n`);
+    await fs.writeFile(path.join(agent, "sapiom.json"), JSON.stringify({ name: "duplicated-agent" }));
+    worktreeAgents.push(agent);
+    // A checkout IS entered — its own marker is inspected before the boundary
+    // is considered — so it counts toward what a bounded walk visits. Nothing
+    // BELOW it is entered, so nothing below it is recorded here. That
+    // asymmetry is the boundary, expressed as an expected directory count.
+    byDepth[2].push(checkout);
+  }
+
   return {
     root,
     byDepth,
     agents,
+    worktreeAgents,
     reachable: byDepth.flat().length,
   };
 }
@@ -226,6 +267,51 @@ describe("agent project scan cost by bound (deep monorepo fixture)", () => {
       const depth = path.relative(fixture.root, agent).split(path.sep).length;
       if (depth <= budget.envelopeDepth) expect(snapshot).toContain(agent);
     }
+  }, 300_000);
+
+  it("the repository boundary is what stops duplicate registrations, and it is nearly free", async () => {
+    // Both readings run the real scanner; the only difference is the boundary.
+    await scanAgentProjects(fixture.root); // warm
+
+    const crossingBudget = new AgentProjectScanBudget();
+    const crossingStart = performance.now();
+    const crossing = await scanAgentProjects(fixture.root, crossingBudget, {
+      crossRepositoryBoundaries: true,
+    });
+    const crossingMs = performance.now() - crossingStart;
+
+    const boundedBudget = new AgentProjectScanBudget();
+    const boundedStart = performance.now();
+    const bounded = await scanAgentProjects(fixture.root, boundedBudget);
+    const boundedMs = performance.now() - boundedStart;
+
+    const distinct = (result: { found: { path: string }[] }): number =>
+      new Set(result.found.map((workflow) => path.basename(workflow.path))).size;
+
+    console.info(
+      `[perf] repository boundary · crossing: ${crossing.found.length} agents ` +
+        `(${distinct(crossing)} distinct), ${crossingBudget.visited} dirs, ${crossingMs.toFixed(0)}ms · ` +
+        `bounded: ${bounded.found.length} agents (${distinct(bounded)} distinct), ` +
+        `${boundedBudget.visited} dirs, ${boundedMs.toFixed(0)}ms, ` +
+        `${bounded.repositoryBoundaries.length} checkouts not entered`,
+    );
+
+    // Crossing the boundary registers the same agent once per checkout...
+    expect(crossing.found.length).toBe(AGENT_TOTAL + WORKTREE_CHECKOUTS);
+    expect(
+      crossing.found.filter((w) => path.basename(w.path) === "duplicated-agent"),
+    ).toHaveLength(WORKTREE_CHECKOUTS);
+    // ...and staying inside it registers none of them, while losing nothing
+    // that belongs to the repo the caller actually asked about.
+    expect(bounded.found.length).toBe(AGENT_TOTAL);
+    expect(new Set(bounded.found.map((w) => w.path))).toEqual(new Set(fixture.agents));
+    expect(bounded.repositoryBoundaries.sort()).toEqual(
+      fixture.worktreeAgents
+        .map((agent) => path.resolve(agent, "..", "..", ".."))
+        .sort(),
+    );
+    // The saving is directories not entered, which is why it is also faster.
+    expect(boundedBudget.visited).toBeLessThan(crossingBudget.visited);
   }, 300_000);
 
   it("spends nothing on a large ignored subtree", () => {

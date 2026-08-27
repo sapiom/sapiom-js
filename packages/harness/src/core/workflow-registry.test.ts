@@ -394,6 +394,147 @@ describe("WorkflowRegistry", () => {
  * both halves of what replaced it: the reach, and the reconciliation rule that
  * keeps a *bounded* scan from mistaking "I didn't look there" for "it's gone".
  */
+describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {
+  let tmpRoot: string;
+  let registry: WorkflowRegistry;
+
+  /** The measured shape of the anomaly: a launch dir with its own agents, and
+   *  sibling checkouts of one repo, each carrying the SAME four agents. */
+  async function buildSiblingCheckouts(): Promise<void> {
+    await writeMarker(path.join(tmpRoot, "wf-demo-testing", "agents", "mine"), 1);
+    await writeMarker(path.join(tmpRoot, "wf-demo-testing", "demo", "also-mine"), 2);
+    for (const checkout of ["design-eng", "design-eng-fix", "worktrees/port-pin"]) {
+      await fs.mkdir(path.join(tmpRoot, checkout, ".git"), { recursive: true });
+      for (const agent of ["ari/orchestration", "brain/agent"]) {
+        await writeMarker(path.join(tmpRoot, checkout, agent), null);
+      }
+    }
+  }
+
+  beforeEach(async () => {
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-scan-rooted-"));
+    registry = new WorkflowRegistry(path.join(tmpRoot, ".state", "workflows.json"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("a scan of the launch dir registers exactly the launch dir's agents", async () => {
+    await buildSiblingCheckouts();
+
+    const found = await registry.scan(path.join(tmpRoot, "wf-demo-testing"));
+
+    expect(found.map((workflow) => path.relative(tmpRoot, workflow.path)).sort()).toEqual(
+      [
+        path.join("wf-demo-testing", "agents", "mine"),
+        path.join("wf-demo-testing", "demo", "also-mine"),
+      ].sort(),
+    );
+  });
+
+  it("a scan rooted a level too high does not wander into sibling checkouts", async () => {
+    await buildSiblingCheckouts();
+
+    // Before the repository boundary this returned 8: the launch dir's 2 plus
+    // two agents from each of three checkouts of the same repo — the "six
+    // copies of one agent" the rail was showing.
+    const found = await registry.scan(tmpRoot);
+
+    expect(found.map((workflow) => path.relative(tmpRoot, workflow.path)).sort()).toEqual(
+      [
+        path.join("wf-demo-testing", "agents", "mine"),
+        path.join("wf-demo-testing", "demo", "also-mine"),
+      ].sort(),
+    );
+    expect(found.some((workflow) => workflow.path.includes("design-eng"))).toBe(false);
+  });
+
+  it("a checkout that IS an agent is still registered — the marker outranks the boundary", async () => {
+    const soloAgent = path.join(tmpRoot, "solo-agent");
+    await writeMarker(soloAgent, 7);
+    await fs.mkdir(path.join(soloAgent, ".git"), { recursive: true });
+
+    const found = await registry.scan(tmpRoot);
+
+    expect(found.map((workflow) => workflow.path)).toEqual([soloAgent]);
+  });
+
+  it("a scan of a parent does not DELETE agents inside a checkout the user opened separately", async () => {
+    // The reconciliation trap the boundary introduces: the parent scan stops at
+    // the checkout, finds no marker below it, and the depth envelope alone
+    // would call every row under it gone.
+    const inner = path.join(tmpRoot, "opened-repo", "agents", "worker");
+    await fs.mkdir(path.join(tmpRoot, "opened-repo", ".git"), { recursive: true });
+    await writeMarker(inner, 5);
+    await registry.scan(path.join(tmpRoot, "opened-repo"));
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([inner]);
+
+    await registry.scan(tmpRoot);
+
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([inner]);
+  });
+});
+
+describe("WorkflowRegistry stale entries", () => {
+  let tmpRoot: string;
+  let registryPath: string;
+  let registry: WorkflowRegistry;
+
+  beforeEach(async () => {
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-stale-"));
+    registryPath = path.join(tmpRoot, ".state", "workflows.json");
+    registry = new WorkflowRegistry(registryPath);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("list() prunes a deleted agent without waiting for a boot or a rescan", async () => {
+    const gone = path.join(tmpRoot, "gone");
+    const stays = path.join(tmpRoot, "stays");
+    await writeMarker(gone, 1);
+    await writeMarker(stays, 2);
+    await registry.scan(tmpRoot);
+    await fs.rm(gone, { recursive: true, force: true });
+
+    // A fresh instance, so the throttle window has not been consumed — this is
+    // the shape of "the SPA asks /api/workflows again".
+    const reader = new WorkflowRegistry(registryPath);
+    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([stays]);
+
+    // And it is persisted, not merely filtered on the way out.
+    expect(JSON.parse(await fs.readFile(registryPath, "utf8"))).toHaveLength(1);
+  });
+
+  it("a scan drops a dead entry rooted somewhere the scan never looks", async () => {
+    const here = path.join(tmpRoot, "here", "agent");
+    const elsewhere = path.join(tmpRoot, "elsewhere", "agent");
+    await writeMarker(here, 1);
+    await writeMarker(elsewhere, 2);
+    await registry.scan(tmpRoot);
+    await fs.rm(path.join(tmpRoot, "elsewhere"), { recursive: true, force: true });
+
+    await registry.scan(path.join(tmpRoot, "here"));
+
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([here]);
+  });
+
+  it("keeps an unreadable-but-present directory: only a confirmed-missing path leaves", async () => {
+    const unbuilt = path.join(tmpRoot, "unbuilt");
+    await writeMarker(unbuilt, 1);
+    await registry.scan(tmpRoot);
+    await fs.rm(path.join(unbuilt, "sapiom.json"));
+
+    // Marker gone but directory present: reconciled out of the scan envelope,
+    // never touched by the missing-path sweep. (Here the scan removes it; the
+    // point is that the sweep is not what did.)
+    const reader = new WorkflowRegistry(registryPath);
+    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([unbuilt]);
+  });
+});
+
 describe("WorkflowRegistry deep discovery under a chosen project root", () => {
   let projectRoot: string;
   let registryPath: string;

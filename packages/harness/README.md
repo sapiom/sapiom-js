@@ -21,7 +21,9 @@ system prompt, in whatever project directory you choose.
   Agent Studio only configures it. Multiple sessions, resumable chat history.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
-  open-in-Sapiom actions.
+  open-in-Sapiom actions. How that discovery is rooted and bounded, how a
+  newly-created agent gets registered, and how a stale entry leaves:
+  [docs/agent-discovery.md](docs/agent-discovery.md).
 - **Canvas** — a live pane that renders static HTML your agent writes to
   `.sapiom/canvas/` (visualize your agent, your docs, anything), plus a
   preview mode for dev servers the agent starts.

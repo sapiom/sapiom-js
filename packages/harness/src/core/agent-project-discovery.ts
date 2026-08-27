@@ -47,12 +47,18 @@ export const AGENT_PROJECT_SCAN_MAX_DEPTH = 8;
  * a debounce. Cost is linear and predictable in directories entered, so that
  * is what we bound.
  *
- * Pruning harder was the other candidate and does not pay: extending the
- * ignored-directory list with the usual suspects (`.venv`, `target`, `vendor`,
- * `coverage`, `.turbo`, `__pycache__`, `out`, ...) removed 0.5-11% of the dirs
- * on the roots above. What is actually there is source directories and, on the
- * biggest root, 42,163 of 47,544 dirs in git worktree copies of the repo
- * itself — neither of which a name-based ignore list can reach.
+ * Pruning harder by NAME was the other candidate and does not pay: extending
+ * the ignored-directory list with the usual suspects (`.venv`, `target`,
+ * `vendor`, `coverage`, `.turbo`, `__pycache__`, `out`, ...) removed 0.5-11% of
+ * the dirs on the roots above. What is actually there is source directories
+ * and, on the biggest root, 42,163 of 47,544 dirs in git worktree copies of the
+ * repo itself.
+ *
+ * That second half IS now reachable, and not by name: see
+ * {@link isForeignRepositoryRoot}. A walk that stops at a foreign checkout does
+ * not enter those 42,163 directories at all, which is why the node budget is no
+ * longer what ends a scan of a real root — the repository is. The budget stays
+ * as the backstop for a tree that is genuinely one enormous checkout.
  *
  * **The tradeoff, stated plainly:** past the budget a scan is incomplete, and
  * an agent below the cut is not discovered on that pass. The walk is therefore
@@ -82,6 +88,68 @@ export const AGENT_PROJECT_SCAN_MAX_NODES = 10_000;
  * itself is the registry scan's budget, not this one.
  */
 export const AGENT_PROJECT_WATCH_MAX_NODES = 2_500;
+
+/**
+ * The entry name that marks a directory as its own repository checkout: a
+ * `.git` DIRECTORY in an ordinary clone, a `.git` FILE in a git worktree or a
+ * submodule. Both forms are one entry called `.git`, which is all this policy
+ * needs to know.
+ */
+export const REPOSITORY_MARKER = ".git";
+
+/**
+ * Whether a directory we just listed is the root of a repository other than
+ * the one the scan started in — the boundary a walk does not cross.
+ *
+ * **Why breadth, not depth, was the real bound.** The scan that produced this
+ * install's 88-row registry was rooted one level too high, at `~/sapiom`. From
+ * there the walk crossed into twelve sibling checkouts nobody had opened, and
+ * kept going until the node budget cut it off:
+ *
+ * Measured on that install (macOS/APFS, warm cache) at the shipped 10,000-node
+ * budget. Each cell is agents registered / distinct names among them /
+ * directories entered / wall clock:
+ *
+ *   root                      today                          with the boundary
+ *   ~/sapiom/wf-demo-testing   10 / 10,     17 dirs,   0 ms   10 / 10,    17 dirs,   0 ms
+ *   ~/sapiom                   88 / 65, 10,000 dirs, 239 ms   68 / 64,   408 dirs,   8 ms
+ *                              TRUNCATED at depth 5           complete
+ *   ~/sapiom/sapiom-js         25 /  2,  9,016 dirs, 233 ms    2 /  2,   444 dirs,   8 ms
+ *   ~/sapiom/Sapiom             0 /  0, 10,000 dirs, 200 ms    0 /  0, 5,408 dirs, 107 ms
+ *                              TRUNCATED at depth 5           complete
+ *
+ * The `sapiom-js` row is the whole argument in one line. Of the 25 agents a
+ * scan of that repo used to register, 24 were the SAME agent — one e2e fixture
+ * — reachable once per git worktree under `.trees/`. Two were real. Read the
+ * name counts down the column: the rule barely changes how many *distinct*
+ * agents a scan finds, and collapses how many *rows* it writes.
+ *
+ * Letting the node budget off its leash widens the gap rather than closing it:
+ * uncapped, `~/sapiom` is 141 agents across 83,969 directories in 6.8 s — and
+ * still only 73 distinct names. Depth was never what was wrong.
+ *
+ * **The cost, stated plainly.** Across that pair, 5 distinct agents are lost at
+ * `~/sapiom` (73 names uncapped vs 68 bounded), and `~/sapiom/Sapiom` loses the
+ * single agent it has. Every one of them lives inside a checkout below the scan
+ * root, and every one is registered the moment that checkout is itself the root
+ * — opened as a project, hosting a session, or named to
+ * `POST /api/workflows/scan`. That is the trade the user asked for in as many
+ * words: "It's okay if we don't fully scan."
+ *
+ * It also costs nothing to evaluate: the walk has already listed the directory
+ * to find its subdirectories, so the check reads a `Dirent[]` already in hand —
+ * no extra syscall.
+ *
+ * **What it deliberately does NOT do.** A nested checkout that IS an agent (its
+ * own `sapiom.json` at the top) is still registered: the marker is inspected
+ * before the boundary is considered, and a marker stops the walk anyway. Only
+ * a checkout that merely *contains* agents is left alone. So `~/agents/foo`
+ * (one repo per agent) is found; `~/src/some-other-monorepo/**` is not, unless
+ * the user points a scan at that monorepo.
+ */
+export function isForeignRepositoryRoot(entries: fs.Dirent[]): boolean {
+  return entries.some((entry) => entry.name === REPOSITORY_MARKER);
+}
 
 const IGNORED_DIR_NAMES = new Set([
   "node_modules",
@@ -295,6 +363,24 @@ export interface AgentProjectWalkVisitor<
   onDirectory(dir: string, depth: number): Action;
   /** `dir`'s entries could not be listed, and not because it is gone. */
   onUnreadable?(dir: string, depth: number): void;
+  /**
+   * `dir` is a repository checkout of its own and was not descended into — see
+   * {@link isForeignRepositoryRoot}. Reported so a caller can say what it
+   * declined to look inside rather than silently returning a short list.
+   */
+  onRepositoryBoundary?(dir: string, depth: number): void;
+}
+
+/** Traversal policy a caller may vary; the defaults are what ships. */
+export interface AgentProjectWalkOptions {
+  /**
+   * Descend into nested repository checkouts as if they were ordinary
+   * directories — the pre-boundary behaviour. Off by default, and only ever
+   * turned on to MEASURE the difference (see agent-project-scan.perf.test.ts).
+   * Turning it on in a product path re-opens the accumulation this boundary
+   * exists to stop.
+   */
+  crossRepositoryBoundaries?: boolean;
 }
 
 /**
@@ -324,6 +410,27 @@ function isConfirmedMissingDir(error: unknown): boolean {
 }
 
 /**
+ * The boundary decision, shared by the sync and async walks so they cannot
+ * disagree about which directories a scan of a given root covers.
+ *
+ * Depth 0 is exempt: the root is the tree the user asked for, and a scan of a
+ * repository must of course cover that repository. Everything below it is only
+ * entered while it belongs to the same checkout.
+ */
+function stopsAtRepositoryBoundary(
+  visitor: AgentProjectWalkVisitor<AgentProjectWalkAction | Promise<AgentProjectWalkAction>>,
+  entries: fs.Dirent[],
+  dir: string,
+  depth: number,
+  options: AgentProjectWalkOptions,
+): boolean {
+  if (options.crossRepositoryBoundaries) return false;
+  if (depth === 0 || !isForeignRepositoryRoot(entries)) return false;
+  visitor.onRepositoryBoundary?.(dir, depth);
+  return true;
+}
+
+/**
  * Breadth-first, depth- and node-bounded traversal beneath `root` — the one
  * traversal policy the registry and the workspace watcher both run, so they
  * cannot disagree about which directories a scan of a given root covers.
@@ -340,6 +447,7 @@ export function walkAgentProjectTree(
   root: string,
   visitor: AgentProjectWalkVisitor<AgentProjectWalkAction>,
   budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
+  options: AgentProjectWalkOptions = {},
 ): AgentProjectScanBudget {
   let frontier = [path.resolve(root)];
   for (let depth = 0; depth <= budget.maxDepth && frontier.length > 0; depth += 1) {
@@ -354,6 +462,7 @@ export function walkAgentProjectTree(
         if (!isConfirmedMissingDir(error)) visitor.onUnreadable?.(dir, depth);
         continue;
       }
+      if (stopsAtRepositoryBoundary(visitor, entries, dir, depth, options)) continue;
       for (const name of scanSubdirNames(entries)) next.push(path.join(dir, name));
     }
     frontier = next;
@@ -371,6 +480,7 @@ export async function walkAgentProjectTreeAsync(
   root: string,
   visitor: AgentProjectWalkVisitor<AgentProjectWalkAction | Promise<AgentProjectWalkAction>>,
   budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
+  options: AgentProjectWalkOptions = {},
 ): Promise<AgentProjectScanBudget> {
   let frontier = [path.resolve(root)];
   for (let depth = 0; depth <= budget.maxDepth && frontier.length > 0; depth += 1) {
@@ -385,6 +495,7 @@ export async function walkAgentProjectTreeAsync(
         if (!isConfirmedMissingDir(error)) visitor.onUnreadable?.(dir, depth);
         continue;
       }
+      if (stopsAtRepositoryBoundary(visitor, entries, dir, depth, options)) continue;
       for (const name of scanSubdirNames(entries)) next.push(path.join(dir, name));
     }
     frontier = next;
