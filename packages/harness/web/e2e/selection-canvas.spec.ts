@@ -37,6 +37,11 @@ import type { Page } from "@playwright/test";
  *  as well as nested, so its agents have two rows each. */
 const select = async (page: Page, name: string): Promise<void> => {
   await page.getByTestId(`workflow-${name}`).locator(".workflow-item-trigger").click();
+  // A root-agent row belongs to the Project axis first: its label opens the
+  // Project graph, and the graph card is the separate agent-selection door.
+  if (await page.getByTestId("workspace-graph-view").isVisible()) {
+    await page.getByRole("button", { name: `Open ${name}`, exact: true }).click();
+  }
   await expect(page.getByTestId(`workflow-${name}`)).toHaveClass(/is-focused/);
 };
 
