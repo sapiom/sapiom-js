@@ -61,14 +61,15 @@ test("rail opens as a drawer and closes on opening a workflow or a scrim tap", a
   expect(box?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(375);
   await page.screenshot({ path: "web/e2e/screenshots/mobile-drawer.png" });
 
-  // Opening a workflow is a destination pick — it changes what the main panel
-  // shows (here, rfq's honest "start a session" state), so it closes the
-  // drawer it overlays. One verb, one gesture.
+  // This row is both a Project root and an agent. Its Project action opens the
+  // graph and closes the drawer; the graph card is the separate agent door.
   await page
     .getByTestId("workflow-rfq")
     .locator(".workflow-item-trigger")
     .click();
   await expect(rail).toHaveCount(0);
+  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  await page.getByTestId("system-graph-node-local:rfq-agent").click();
   await expect(page.getByTestId("open-agent-empty")).toContainText(
     "No running session for rfq",
   );

@@ -40,6 +40,8 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { focusRfqAgentThroughProjectGraph } from "./mock-navigation";
+
 // ---------------------------------------------------------------------------
 // Suite 1: 401 boot → ConnectivityScreen(auth) → Retry → no lockout
 // ---------------------------------------------------------------------------
@@ -226,7 +228,7 @@ test.describe("offline mid-session → graceful degrade", () => {
     await expect(page.getByTestId("connectivity-banner")).toBeVisible({ timeout: 3_000 });
 
     // Shell interactions still work against last-known state — focus rfq agent.
-    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+    await focusRfqAgentThroughProjectGraph(page);
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
 
     // Session context shows the honest "no session" state — offline doesn't

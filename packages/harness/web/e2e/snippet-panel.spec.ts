@@ -12,6 +12,8 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { focusRfqAgentThroughProjectGraph } from "./mock-navigation";
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
@@ -40,38 +42,22 @@ test.describe("the Code tab follows the BOUND workflow's deploy state", () => {
     // say "no running session for rfq", which described the session rather than
     // the question the tab answers. Selecting it reveals a real board, so the
     // pane is already open.
-    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+    await focusRfqAgentThroughProjectGraph(page);
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
     await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");
 
-    // Starting the session binds rfq and changes nothing here — the tab was
-    // already about rfq.
-    await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
-    await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");
-
-    // Opening leasing again switches back to a leasing (deployed) session. It
-    // lands on the most-recent leasing tab, which has an empty board and so
-    // collapses the pane — reopen it to see the deployed agent's snippet panel.
-    //
-    // The reopen has to be sequenced, not fired blind. `right-expand` renders
-    // ONLY while the pane is collapsed (App.tsx: `rightCollapsed ?
-    // expandRightPane : null`), and rfq already left it collapsed — so a blind
-    // click expands the pane BEFORE leasing's empty board has collapsed it, and
-    // that collapse then undoes the expand. The panel is invisible and the
-    // failure names the panel rather than the ordering. Locally the collapse
-    // wins the race and this passed 3/3; CI is slower and lost it.
-    //
-    // So: force the pane OPEN first, so the next collapse is unambiguously
-    // leasing's, wait for that collapse, and only then reopen.
+    // Opening leasing again switches back to its most-recent deployed session.
+    // Wait for that session transition before inspecting the pane: its board
+    // may collapse the pane, while a preserved Code tab may leave it open.
+    await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-leasing-2",
+    );
     if (await page.getByTestId("right-expand").isVisible()) {
       await page.getByTestId("right-expand").click();
     }
-    await expect(page.getByTestId("right-expand")).toHaveCount(0);
-
-    await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
-    await expect(page.getByTestId("right-expand")).toBeVisible();
-    await page.getByTestId("right-expand").click();
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
   });
 

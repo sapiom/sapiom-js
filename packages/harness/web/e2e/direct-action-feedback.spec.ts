@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { focusRfqAgentThroughProjectGraph } from "./mock-navigation";
+
 async function load(page: Page, query = "?seed=0"): Promise<void> {
   await page.goto(`/${query}`);
   await expect(page.getByTestId("session-steps")).toBeVisible();
@@ -36,7 +38,7 @@ test("Deploy pending feedback clears on both success and failure", async ({ page
 
 test("a failed draft deploy keeps Cloud unavailable with a specific reason", async ({ page }) => {
   await load(page, "?seed=0&mockError=deploy");
-  await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+  await focusRfqAgentThroughProjectGraph(page);
   await page.getByTestId("open-agent-start-session").click();
 
   let cloud = await cloudTarget(page);

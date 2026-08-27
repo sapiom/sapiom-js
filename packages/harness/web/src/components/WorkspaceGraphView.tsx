@@ -45,12 +45,14 @@ export function WorkspaceGraphView({
     revision: number;
     state: SystemGraphLifecycleState;
   } | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [refreshSeq, setRefreshSeq] = useState(0);
 
   useEffect(() => {
     let active = true;
     setError(false);
+    setLoading(true);
     void systemGraphLoader.load(api, workspaceKey).then(
       (next) => {
         if (!active) return;
@@ -60,11 +62,13 @@ export function WorkspaceGraphView({
         setAnnouncement((current) =>
           current && current.revision > next.revision ? current : null,
         );
+        setLoading(false);
       },
       () => {
         if (!active) return;
         setAnnouncement(null);
         setError(true);
+        setLoading(false);
       },
     );
     return () => {
@@ -110,7 +114,10 @@ export function WorkspaceGraphView({
   }
   if (error) lifecycle = snapshot?.graph ? "stale" : "degraded";
   const refreshing =
-    announcementIsNewer && announcement?.state !== "degraded" && !error;
+    !error &&
+    graph !== null &&
+    (loading ||
+      (announcementIsNewer && announcement?.state !== "degraded"));
 
   const retry = (): void => {
     systemGraphLoader.invalidate(workspaceKey);

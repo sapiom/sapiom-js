@@ -11,6 +11,11 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import {
+  focusRfqAgentThroughProjectGraph,
+  selectMockSessionFromPalette,
+} from "./mock-navigation";
+
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
 // they opt out with ?seed=0 — the seeded end-state has its own coverage.
@@ -313,10 +318,7 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   // Focusing "rfq" (no live session) does NOT rebind the boot session or start
   // one silently — the main panel shows the honest "start a session" state, so
   // there is no action bar to gate yet.
-  await page
-    .getByTestId("workflow-rfq")
-    .locator(".workflow-item-trigger")
-    .click();
+  await focusRfqAgentThroughProjectGraph(page);
   await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
   await expect(page.getByTestId("open-agent-empty")).toContainText(
     "No running session for rfq",
@@ -388,9 +390,12 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
       page.getByTestId("workflow-status-/Users/demo/rfq-agent"),
     ).toHaveCount(0);
 
-    // A project with live sessions but no agent (scratch) is the one focusable
-    // project row — its sessions live in the tab strip, not the rail.
-    await expect(page.getByTestId("workspace-focus-scratch")).toBeVisible();
+    // A graphable Project with live sessions but no agent still uses the
+    // Project destination. Its existing session stays globally reachable,
+    // while the trailing action can scaffold an agent into it.
+    await expect(page.getByTestId("project-select-scratch")).toBeVisible();
+    await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
+    await expect(page.getByTestId("workspace-focus-scratch")).toHaveCount(0);
 
     // Exactly one filled selection: the focused agent (leasing on load).
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(
@@ -899,10 +904,14 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
       const win = window as unknown as {
         __MOCK_SYSTEM_GRAPH_REVISION__?: number;
         __MOCK_SYSTEM_GRAPH_STATE__?: string;
+        __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number;
         __HARNESS_TEST__?: { publish?: (message: unknown) => void };
       };
       win.__MOCK_SYSTEM_GRAPH_REVISION__ = 3;
       win.__MOCK_SYSTEM_GRAPH_STATE__ = "ready";
+      // Keep the refresh in flight long enough to observe the stale-data
+      // indicator under both local and loaded parallel CI scheduling.
+      win.__MOCK_SYSTEM_GRAPH_DELAY_MS__ = 3_000;
       win.__HARNESS_TEST__?.publish?.({
         type: "system-graph.changed",
         workspaceKey: key,
@@ -914,6 +923,10 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await page.getByTestId("project-select-acme-app").click();
     await expect(page.getByTestId("system-graph-canvas")).toBeVisible();
     await expect(page.getByTestId("system-graph-refreshing")).toBeVisible();
+    await page.evaluate(() => {
+      delete (window as unknown as { __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number })
+        .__MOCK_SYSTEM_GRAPH_DELAY_MS__;
+    });
     await expect.poll(requestCount).toBe(2);
     await expect(page.getByTestId("system-graph-refreshing")).toHaveCount(0);
 
@@ -1077,10 +1090,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // rfq-agent has no live session in the fixtures, so focusing rfq cannot
     // render a board (the canvas is served per session). The workbench names
     // the absence and offers the one move; no tab strip renders.
-    await page
-      .getByTestId("workflow-rfq")
-      .locator(".workflow-item-trigger")
-      .click();
+    await focusRfqAgentThroughProjectGraph(page);
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
     // No session controls render for an agent with no live session.
     await expect(page.getByTestId("session-menu")).toHaveCount(0);
@@ -1141,10 +1151,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
     // Focus rfq and start its session: all four move together to rfq.
-    await page
-      .getByTestId("workflow-rfq")
-      .locator(".workflow-item-trigger")
-      .click();
+    await focusRfqAgentThroughProjectGraph(page);
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
     await expect(page.getByTestId("workflow-leasing")).not.toHaveClass(
@@ -1678,7 +1685,7 @@ test("canvas pane shows its empty state for a session with nothing generated yet
 }) => {
   // The boot session opens on its bundled board (first paint), so switch to
   // the scratch session — no bundled doc — to see the honest empty state.
-  await page.getByTestId("workspace-focus-scratch").click();
+  await selectMockSessionFromPalette(page, "scratch");
   await expect(page.locator(".canvas-empty")).toContainText(
     "Nothing generated yet",
   );
@@ -1802,7 +1809,7 @@ test("canvas empty state explains itself — no manual render action", async ({
 }) => {
   // The scratch session has no bundled doc, so its Canvas is the empty state
   // (the boot session opens on its board).
-  await page.getByTestId("workspace-focus-scratch").click();
+  await selectMockSessionFromPalette(page, "scratch");
   await expect(page.locator(".canvas-empty")).toContainText(
     "Nothing generated yet",
   );
@@ -1826,7 +1833,7 @@ test("steps tab shows its own empty state (not canvas copy) before anything is r
   // The scratch session has no generated canvas content, so the Steps tab hits
   // the same early-return state as the board — but must talk about steps. (The
   // boot session opens on its board, which does post a step graph.)
-  await page.getByTestId("workspace-focus-scratch").click();
+  await selectMockSessionFromPalette(page, "scratch");
   // Focusing the empty-board scratch session auto-collapses the right pane; reopen it to inspect the Steps tab.
   await page.getByTestId("right-expand").click();
   await page.getByTestId("right-tab-steps").click();
@@ -2015,10 +2022,7 @@ test("a mock session without a bundled canvas doc shows the empty state and neve
 
   // Open rfq and start a session: same-workspace, so it starts in
   // rfq-agent — a session with NO bundled demo document.
-  await page
-    .getByTestId("workflow-rfq")
-    .locator(".workflow-item-trigger")
-    .click();
+  await focusRfqAgentThroughProjectGraph(page);
   await page.getByTestId("open-agent-start-session").click();
   await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
@@ -2169,10 +2173,7 @@ test.describe("background-task canvas states", () => {
     // ...and switching the subject mid-run (open rfq, then start its session)
     // hides it again: the rfq session's pane must not show leasing's
     // enrichment progress.
-    await page
-      .getByTestId("workflow-rfq")
-      .locator(".workflow-item-trigger")
-      .click();
+    await focusRfqAgentThroughProjectGraph(page);
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toContainText(
       "rfq",
@@ -2386,10 +2387,7 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
   test("undeployed workflow: no deployed pill, Deploy is primary, and Run is gated with the deploy reason", async ({
     page,
   }) => {
-    await page
-      .getByTestId("workflow-rfq")
-      .locator(".workflow-item-trigger")
-      .click();
+    await focusRfqAgentThroughProjectGraph(page);
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toContainText(
       "rfq",
@@ -3103,7 +3101,7 @@ test("an observed run renders its real steps even before anything is visualized"
   // truth in the Steps tab instead of "No steps yet". (The boot
   // session opens on its board, which already posts a graph — the fallback is
   // exactly this no-graph path.)
-  await page.getByTestId("workspace-focus-scratch").click();
+  await selectMockSessionFromPalette(page, "scratch");
   // Focusing the empty-board scratch session auto-collapses the right pane; reopen it before reading the Steps tab.
   await page.getByTestId("right-expand").click();
   await page.evaluate(() => {

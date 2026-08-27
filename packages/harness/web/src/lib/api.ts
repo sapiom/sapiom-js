@@ -1490,7 +1490,12 @@ class MockApi implements HarnessApi {
     workspaceKey: WorkspaceKey,
     _options: { refresh?: boolean } = {},
   ): Promise<SystemGraphSnapshot> {
-    await delay(180);
+    const graphDelay =
+      typeof window === "undefined"
+        ? 180
+        : ((window as unknown as { __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number })
+            .__MOCK_SYSTEM_GRAPH_DELAY_MS__ ?? 180);
+    await delay(graphDelay);
     const selectedScope = this.workspaceScopes().find(
       (scope) => scope.workspaceKey === workspaceKey,
     );

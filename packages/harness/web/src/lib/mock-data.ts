@@ -424,10 +424,11 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     agentSessionId: "2c3d4e5f-6a7b-4c81-9d2e-3f4a5b6c7d8e",
     boundWorkflowPath: null,
     harness: "claude-code",
-    // A live session in a folder with NO agent (a bare scaffold session) — the
-    // rail's one focusable folder row. cwd is deliberately "scratch" so it
-    // keeps its own bare-folder group and never moves "onboarding-flow" out of
-    // "No workspace" (see smoke.spec.ts's workspace-tree test).
+    // A live session in a folder with NO agent (a bare scaffold session).
+    // Its Project label opens the empty dependency graph; the global finder
+    // remains the session door. cwd is deliberately "scratch" so it keeps its
+    // own bare-folder group and never moves "onboarding-flow" out of the
+    // unrooted section.
     cwd: "/Users/demo/scratch",
     title: "scratch",
     status: "running",
