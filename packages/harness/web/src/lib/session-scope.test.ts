@@ -29,7 +29,7 @@ import {
  * these exist so a regression fails in a second, in the file that caused it.
  */
 
-const HOME = "/Users/dave";
+const HOME = "/Users/demo";
 const POLSIA = `${HOME}/polsia`;
 const ADS = `${POLSIA}/backend/src/agents/ads`;
 
@@ -97,12 +97,12 @@ describe("projectRootForAgent: a session boots at the project root", () => {
     // The server hands the SPA native paths and the SPA holds whatever
     // recentDirs recorded, so the two spellings of one directory must resolve
     // to the same project (paths.ts's mixed-form contract).
-    expect(projectRootForAgent("C:\\Users\\dave\\polsia\\agents\\ads", ["C:\\Users\\dave\\polsia"]))
-      .toBe("C:\\Users\\dave\\polsia");
-    expect(projectRootForAgent("C:\\Users\\dave\\polsia\\agents\\ads", ["C:/Users/dave/polsia"]))
-      .toBe("C:/Users/dave/polsia");
-    expect(projectRootForAgent("C:\\Users\\dave\\polsia-old\\ads", ["C:\\Users\\dave\\polsia"]))
-      .toBe("C:\\Users\\dave\\polsia-old\\ads");
+    expect(projectRootForAgent("C:\\Users\\demo\\polsia\\agents\\ads", ["C:\\Users\\demo\\polsia"]))
+      .toBe("C:\\Users\\demo\\polsia");
+    expect(projectRootForAgent("C:\\Users\\demo\\polsia\\agents\\ads", ["C:/Users/demo/polsia"]))
+      .toBe("C:/Users/demo/polsia");
+    expect(projectRootForAgent("C:\\Users\\demo\\polsia-old\\ads", ["C:\\Users\\demo\\polsia"]))
+      .toBe("C:\\Users\\demo\\polsia-old\\ads");
   });
 });
 
@@ -146,7 +146,7 @@ describe("rootContains", () => {
  * visual: a unit test on a pure function cannot show that `App.tsx` calls it.
  */
 
-const TROPEE = `${HOME}/tropee`;
+const SIDEQUEST = `${HOME}/sidequest`;
 const OUTREACH = `${POLSIA}/backend/src/agents/outreach`;
 
 const session = (over: Partial<ScopedSession> = {}): ScopedSession => ({
@@ -227,8 +227,8 @@ describe("sessionStripSubject: the strip follows the ACTIVE session", () => {
 describe("sessionForFocus: selection moves the session across projects, never within one", () => {
   const at = (over: Partial<ScopedSession>): ScopedSession => session(over);
   const polsiaSession = at({ id: "p", cwd: POLSIA, lastActiveAt: "2026-08-02T10:00:00.000Z" });
-  const otherSession = at({ id: "o", cwd: TROPEE, lastActiveAt: "2026-08-02T09:00:00.000Z" });
-  const roots = [POLSIA, TROPEE];
+  const otherSession = at({ id: "o", cwd: SIDEQUEST, lastActiveAt: "2026-08-02T09:00:00.000Z" });
+  const roots = [POLSIA, SIDEQUEST];
 
   it("keeps the session when the selected agent is in its project", () => {
     // The whole point of the decoupling: read F's board while still talking to
@@ -280,7 +280,7 @@ describe("sessionForFocus: selection moves the session across projects, never wi
     expect(
       sessionForFocus({
         focusPath: ADS,
-        active: at({ id: "x", cwd: TROPEE, status: "exited" }),
+        active: at({ id: "x", cwd: SIDEQUEST, status: "exited" }),
         sessions: [polsiaSession],
         roots,
       }),
@@ -460,7 +460,7 @@ describe("canvasSourceFor: which entry point serves the subject's board", () => 
     // /canvas/:sessionId/ resolves by the BINDING, so it would serve the wrong
     // agent's board — this is the mis-draw the route exists to prevent.
     expect(canvasSourceFor({ subjectPath: ADS, bindingPath: OUTREACH, sessionId: "s1" })).toEqual({
-      kind: "workflow",
+      kind: "agent",
       path: ADS,
     });
   });
@@ -469,12 +469,12 @@ describe("canvasSourceFor: which entry point serves the subject's board", () => 
     // The criterion IA-01 landed for: an agent that has never hosted a session
     // still has a board.
     expect(canvasSourceFor({ subjectPath: ADS, bindingPath: null, sessionId: null })).toEqual({
-      kind: "workflow",
+      kind: "agent",
       path: ADS,
     });
     // A live but unbound session is the same case.
     expect(canvasSourceFor({ subjectPath: ADS, bindingPath: null, sessionId: "s1" })).toEqual({
-      kind: "workflow",
+      kind: "agent",
       path: ADS,
     });
   });
@@ -730,7 +730,7 @@ describe("sessionReachesFocus: one containment answer, two callers", () => {
     // tab in a project falls back to whatever else is running, and the
     // workbench then pointed at a project that does not contain the agent on
     // screen.
-    expect(sessionReachesFocus(at({ cwd: TROPEE }), ADS, [POLSIA, TROPEE])).toBe(false);
+    expect(sessionReachesFocus(at({ cwd: SIDEQUEST }), ADS, [POLSIA, SIDEQUEST])).toBe(false);
   });
 
   it("is false with nothing active, an exited session, or no selection", () => {
@@ -742,16 +742,16 @@ describe("sessionReachesFocus: one containment answer, two callers", () => {
   it("agrees with sessionForFocus, which is the point of having one answer", () => {
     for (const [cwd, focus] of [
       [POLSIA, ADS],
-      [TROPEE, ADS],
+      [SIDEQUEST, ADS],
       [ADS, OUTREACH],
     ] as const) {
       const active = at({ id: "a", cwd });
-      const reaches = sessionReachesFocus(active, focus, [POLSIA, TROPEE]);
+      const reaches = sessionReachesFocus(active, focus, [POLSIA, SIDEQUEST]);
       const decision = sessionForFocus({
         focusPath: focus,
         active,
         sessions: [active],
-        roots: [POLSIA, TROPEE],
+        roots: [POLSIA, SIDEQUEST],
       });
       expect(decision.kind === "keep").toBe(reaches);
     }

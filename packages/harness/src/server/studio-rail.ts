@@ -65,7 +65,7 @@ export interface StudioRailDeps {
   listWorkflows: () => Array<{ name: string; path: string }>;
 }
 
-/** Trailing separators are spelling, not identity — `~/polsia/` and `~/polsia`
+/** Trailing separators are spelling, not identity — `<root>/` and `<root>`
  *  are one directory, and the client stores whichever the user typed. */
 const canonical = (p: string): string => {
   const resolved = path.resolve(p);

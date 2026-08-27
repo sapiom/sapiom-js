@@ -61,7 +61,7 @@ interface WorkflowBoard {
 }
 
 /**
- * The app's theme, handed to a `srcdoc` frame.
+ * The two theme scripts, WRITTEN OUT RATHER THAN BUILT.
  *
  * A served document reads `?theme=` off its own URL; a `srcdoc` frame has no
  * URL and no query string, so it would fall back to `prefers-color-scheme` and
@@ -69,9 +69,22 @@ interface WorkflowBoard {
  * hoists a trailing script into the body and it runs before first paint of the
  * board's own content. Both attribute names are set because the server template
  * keys on `data-canvas-theme` and the bundled demo document on `data-theme`.
+ *
+ * The value used to be interpolated with `JSON.stringify`, which is the classic
+ * near-miss: JSON escaping is not SCRIPT escaping, and a value containing
+ * `</script` or `<!--` closes the element early no matter how valid the JSON
+ * is. So there is nothing to escape — the theme selects one of two constant
+ * strings and never becomes part of one.
  */
+const FRAME_THEME_SCRIPTS = {
+  light:
+    '<script>(function(){var r=window.document.documentElement;r.setAttribute("data-canvas-theme","light");r.setAttribute("data-theme","light");})();</script>',
+  dark: '<script>(function(){var r=window.document.documentElement;r.setAttribute("data-canvas-theme","dark");r.setAttribute("data-theme","dark");})();</script>',
+} as const;
+
+/** The app's theme, handed to a `srcdoc` frame — see {@link FRAME_THEME_SCRIPTS}. */
 function withFrameTheme(document: string, theme: string): string {
-  return `${document}<script>(function(){var r=window.document.documentElement;r.setAttribute("data-canvas-theme",${JSON.stringify(theme)});r.setAttribute("data-theme",${JSON.stringify(theme)});})();</script>`;
+  return `${document}${theme === "dark" ? FRAME_THEME_SCRIPTS.dark : FRAME_THEME_SCRIPTS.light}`;
 }
 
 interface CanvasPaneProps {
@@ -231,7 +244,7 @@ export function CanvasPane({
    * turned the run-state bridge into a postMessage on each one. These two
    * primitives are what the effects and callbacks below key on instead.
    */
-  const workflowSourcePath = source.kind === "workflow" ? source.path : null;
+  const workflowSourcePath = source.kind === "agent" ? source.path : null;
   const sessionSourceId = source.kind === "session" ? source.sessionId : null;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
@@ -953,7 +966,7 @@ export function CanvasPane({
       ? boardFromRoute.document
       : null;
   const showsContent =
-    source.kind === "workflow"
+    source.kind === "agent"
       ? routeFrameDocument != null
       : hasGeneratedContent && sessionHasServableDoc;
 

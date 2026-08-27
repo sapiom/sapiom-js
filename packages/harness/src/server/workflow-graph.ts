@@ -19,13 +19,19 @@
  * use (web/src/lib/api.ts). Express matches on the raw path and decodes the
  * param, so an encoded `/` never splits the route.
  *
- * Containment: registry resolution happens BEFORE any disk read, so a caller
- * cannot turn this into an arbitrary-path manifest reader — the same barrier
- * server/actions.ts relies on. The lexical guards below (`..` segment,
- * absolute-only) reject the escape shapes outright rather than let
- * normalization quietly land them on some other registered path, and the
- * marker's realpath is confined to the agent directory so a symlinked
- * `sapiom.json` cannot read a file outside the project.
+ * Containment: the request string is a LOOKUP KEY AND NOTHING ELSE. It is
+ * matched against the live registry and then dropped; every filesystem call
+ * below runs on `workflow.path` — the path the registry itself authored when
+ * it scanned the disk. So the barrier is not "we checked the client's string
+ * carefully", it is "the client's string never reaches `fs`", which survives a
+ * future edit that reorders the checks and is a barrier static analysis can
+ * see rather than one it has to be told about.
+ *
+ * The lexical guards below (`..` segment, absolute-only) stay: they reject the
+ * escape shapes outright rather than let normalization quietly land them on
+ * some other registered path. Defence in depth, not the barrier. The marker's
+ * realpath is likewise confined to the agent directory, so a symlinked
+ * `sapiom.json` cannot turn this into a file reader.
  *
  * Failure modes are deliberately distinct, and every one of them is
  * distinguishable from "no such route":
@@ -38,6 +44,14 @@
  *   200  `status: "preparing"`— dependencies not installed yet
  *   200  `status: "error"`    — extraction ran and failed; `reason` says why
  *   200  `status: "ok"`       — graph + document
+ *
+ * EVERY failure below the registry lookup lands in that `error` shape. The
+ * derivation spawns a child process, parses a manifest this process did not
+ * write, and walks user directories that can EACCES — so it throws, and
+ * Express 4 does not catch a rejected async handler. Unhandled, Node's default
+ * `--unhandled-rejections=throw` takes the harness process down and the
+ * request is never answered: the canvas spins forever and then the studio
+ * dies. A board that cannot be derived is a board with a reason on it.
  *
  * Mounted under the same `/api` boot-token middleware as the rest of the REST
  * surface (server/index.ts).
@@ -118,6 +132,35 @@ function emptyResponse(agentPath: string, name: string, reason: string): Workflo
   };
 }
 
+/**
+ * The board a failed derivation gets: the declared `error` status, the reason
+ * that was thrown, and a renderable page rather than a hole.
+ *
+ * 200, not 500. `status` already distinguishes every outcome this route has,
+ * the pane renders `document` for all of them, and a 5xx would be read by the
+ * SPA's `ApiError` path as "this route is broken" rather than "this one
+ * agent's graph could not be extracted" — the same distinction
+ * `server/actions.ts` preserves when its input-contract extraction fails.
+ */
+function errorResponse(agentPath: string, name: string, reason: string): WorkflowGraphResponse {
+  return {
+    path: agentPath,
+    name,
+    status: "error",
+    graph: null,
+    enrichment: null,
+    reason,
+    cached: false,
+    document: renderCanvasMessageDocument("Couldn't render this board", reason),
+  };
+}
+
+/** The thrown value as one line a person can read in the pane. */
+function failureReason(err: unknown): string {
+  const detail = (err instanceof Error ? err.message : String(err)).trim();
+  return `Studio couldn't read this agent's graph: ${detail || "the derivation failed."}`;
+}
+
 export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): ExpressRouter {
   const inspectMarker = deps.inspectMarker ?? inspectAgentProjectMarker;
   const deriveCanvas = deps.deriveCanvas ?? deriveWorkflowCanvas;
@@ -143,14 +186,16 @@ export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): Expres
       return;
     }
 
-    const agentPath = path.resolve(raw);
-    // The containment barrier: only a path the registry already knows is ever
-    // read. Everything below this line operates on a registered directory.
-    const workflow = deps.resolveWorkflow(agentPath);
+    // The lookup, and the LAST use of the request string. `workflow` is the
+    // registry's own row, so `workflow.path` is a path this server wrote when
+    // it scanned the disk — and that is the value every `fs` call below runs
+    // on. The request never reaches the filesystem, resolved or otherwise.
+    const workflow = deps.resolveWorkflow(path.resolve(raw));
     if (!workflow) {
       res.status(404).json({ error: "agent not found" });
       return;
     }
+    const agentPath = path.resolve(workflow.path);
     const name = workflow.name || path.basename(agentPath);
 
     let realDir: string;
@@ -174,29 +219,37 @@ export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): Expres
       return;
     }
 
-    const inspection = await inspectMarker(realDir);
-    if (inspection.status !== "valid") {
-      res.json(emptyResponse(agentPath, name, EMPTY_REASONS[inspection.status]));
-      return;
+    // From here on the work is a child process, a manifest this process did
+    // not write, and a walk of user directories. All three throw, and an
+    // uncaught rejection in an Express 4 async handler kills the harness
+    // instead of answering the request.
+    try {
+      const inspection = await inspectMarker(realDir);
+      if (inspection.status !== "valid") {
+        res.json(emptyResponse(agentPath, name, EMPTY_REASONS[inspection.status]));
+        return;
+      }
+
+      const derived = await deriveCanvas({
+        path: workflow.path,
+        name,
+        definitionId: workflow.definitionId ?? null,
+        activeBuildRunStatus: workflow.activeBuildRunStatus ?? null,
+      });
+
+      res.json({
+        path: agentPath,
+        name,
+        status: derived.status,
+        graph: derived.graph,
+        enrichment: derived.enrichment,
+        reason: derived.reason,
+        cached: derived.cached,
+        document: derived.document,
+      } satisfies WorkflowGraphResponse);
+    } catch (err) {
+      res.json(errorResponse(agentPath, name, failureReason(err)));
     }
-
-    const derived = await deriveCanvas({
-      path: workflow.path,
-      name,
-      definitionId: workflow.definitionId ?? null,
-      activeBuildRunStatus: workflow.activeBuildRunStatus ?? null,
-    });
-
-    res.json({
-      path: agentPath,
-      name,
-      status: derived.status,
-      graph: derived.graph,
-      enrichment: derived.enrichment,
-      reason: derived.reason,
-      cached: derived.cached,
-      document: derived.document,
-    } satisfies WorkflowGraphResponse);
   });
 
   return router;

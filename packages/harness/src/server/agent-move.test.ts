@@ -22,6 +22,7 @@ import {
   createAgentMoveRouter,
   isGitTracked,
   isWithinDir,
+  moveTargetDirs,
   performMove,
   refuseMoveOnDisk,
   remapSessions,
@@ -79,10 +80,28 @@ async function initRepo(): Promise<void> {
   );
 }
 
+/**
+ * Every directory under `tmp`, as the studio's drop-target list.
+ *
+ * The route will only move into a directory the rail can show, and in the app
+ * that list is derived from the project roots and the registered agents. A
+ * temp tree has neither, so the default here is "every folder that exists" —
+ * permissive enough that the disk guards below are what each test is actually
+ * proving, while the barrier itself gets its own tests with an explicit list.
+ */
+async function dirsUnder(root: string): Promise<string[]> {
+  const out = [root];
+  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) out.push(...(await dirsUnder(path.join(root, entry.name))));
+  }
+  return out;
+}
+
 /** A live express app over the router, so the route is exercised as a route. */
 async function serve(
   agents: string[],
   onMoved: (from: string, to: string) => Promise<void> = async () => {},
+  targetDirs?: string[],
 ): Promise<{ post: (body: unknown) => Promise<{ status: number; body: any }>; close: () => Promise<void> }> {
   const app = express();
   app.use(express.json());
@@ -90,6 +109,7 @@ async function serve(
     createAgentMoveRouter({
       resolveAgent: (agentPath) =>
         agents.includes(agentPath) ? { name: path.basename(agentPath), path: agentPath } : null,
+      listMoveTargetDirs: () => targetDirs ?? dirsUnder(tmp),
       onMoved,
     }),
   );
@@ -117,6 +137,42 @@ describe("isWithinDir", () => {
     // The prefix trap: `ads-v2` is not inside `ads`.
     expect(isWithinDir("/a/ads", "/a/ads-v2")).toBe(false);
     expect(isWithinDir("/a/ads", "/a")).toBe(false);
+  });
+});
+
+describe("moveTargetDirs", () => {
+  const ROOT = path.resolve("/p");
+
+  it("offers the root and every directory between it and an agent", () => {
+    const dirs = moveTargetDirs([ROOT], [path.join(ROOT, "backend", "src", "agents", "ads")]);
+    expect(new Set(dirs)).toEqual(
+      new Set([
+        ROOT,
+        path.join(ROOT, "backend"),
+        path.join(ROOT, "backend", "src"),
+        path.join(ROOT, "backend", "src", "agents"),
+      ]),
+    );
+  });
+
+  it("does NOT offer the agent's own directory — an agent row is not a drop target", () => {
+    const agent = path.join(ROOT, "agents", "ads");
+    expect(moveTargetDirs([ROOT], [agent])).not.toContain(agent);
+  });
+
+  it("ignores an agent that sits outside every known root", () => {
+    expect(moveTargetDirs([ROOT], [path.resolve("/elsewhere/agents/ads")])).toEqual([ROOT]);
+  });
+
+  it("files a directory under every root that contains it, and dedupes", () => {
+    const nested = path.join(ROOT, "services");
+    const dirs = moveTargetDirs([ROOT, nested], [path.join(nested, "workers", "queue")]);
+    expect(new Set(dirs)).toEqual(new Set([ROOT, nested, path.join(nested, "workers")]));
+  });
+
+  it("survives a root that is the filesystem root without spinning", () => {
+    const root = path.parse(process.cwd()).root;
+    expect(moveTargetDirs([root], [path.join(root, "ads")])).toEqual([root]);
   });
 });
 
@@ -348,6 +404,102 @@ describe("POST /api/agents/move", () => {
       expect(await fs.readdir(stranger)).toContain("sapiom.json");
     } finally {
       await api.close();
+    }
+  });
+
+  it("REFUSES a destination the studio does not show, and touches nothing", async () => {
+    // The structural barrier, not a stat: `stash` exists, is empty, and would
+    // happily accept a rename — but it is not a directory the rail draws, so
+    // the route will not rename user code into it.
+    const from = await makeAgent("backend/agents/ads");
+    const stash = path.join(tmp, "stash");
+    await fs.mkdir(stash, { recursive: true });
+    const moved: Array<[string, string]> = [];
+    const api = await serve([from], async (a, b) => {
+      moved.push([a, b]);
+    }, [
+      path.join(tmp, "backend", "agents"),
+    ]);
+    try {
+      const res = await api.post({ from, to: path.join(stash, "ads") });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain("doesn't show that folder");
+      expect(await fs.readdir(from)).toContain("sapiom.json");
+      expect(await fs.readdir(stash)).toEqual([]);
+      expect(moved).toEqual([]);
+    } finally {
+      await api.close();
+    }
+  });
+
+  it("moves into a listed directory even when the request spells it differently", async () => {
+    // The request is a LOOKUP KEY: the directory that gets used is the one from
+    // the server's own list, so a trailing separator (or any other spelling the
+    // client happens to hold) changes nothing about where the agent lands.
+    const from = await makeAgent("backend/agents/ads");
+    const services = path.join(tmp, "services");
+    await fs.mkdir(services, { recursive: true });
+    const api = await serve([from], async () => {}, [services]);
+    try {
+      const res = await api.post({ from, to: path.join(`${services}${path.sep}`, "ads") });
+      expect(res.status).toBe(200);
+      expect(res.body.to).toBe(path.join(services, "ads"));
+      expect(await fs.readdir(path.join(services, "ads"))).toContain("sapiom.json");
+    } finally {
+      await api.close();
+    }
+  });
+
+  it("refuses a `to` that would RENAME the agent rather than move it", async () => {
+    const from = await makeAgent("backend/agents/ads");
+    const services = path.join(tmp, "services");
+    await fs.mkdir(services, { recursive: true });
+    const api = await serve([from], async () => {}, [services]);
+    try {
+      const res = await api.post({ from, to: path.join(services, "ads-v2") });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("rename");
+      await expect(fs.stat(path.join(services, "ads-v2"))).rejects.toThrow();
+      expect(await fs.readdir(from)).toContain("sapiom.json");
+    } finally {
+      await api.close();
+    }
+  });
+
+  it("moves the agent the REGISTRY names, not the path the request spelled", async () => {
+    // `from` is a lookup key too. The registry hands back the real directory,
+    // and that is what moves — a request that resolves to a registered agent
+    // can never redirect the `mv` at some other place on disk.
+    const real = await makeAgent("backend/agents/ads");
+    const services = path.join(tmp, "services");
+    await fs.mkdir(services, { recursive: true });
+    const decoy = path.join(tmp, "decoy");
+    const app = express();
+    app.use(express.json());
+    app.use(
+      createAgentMoveRouter({
+        // Whatever is asked for, the registry answers with the real agent.
+        resolveAgent: () => ({ name: "ads", path: real }),
+        listMoveTargetDirs: () => [services],
+        onMoved: async () => {},
+      }),
+    );
+    const server = app.listen(0);
+    await new Promise((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/agents/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: decoy, to: path.join(services, "ads") }),
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as AgentMoveResponse).from).toBe(real);
+      expect(await fs.readdir(path.join(services, "ads"))).toContain("sapiom.json");
+      await expect(fs.stat(real)).rejects.toThrow();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 

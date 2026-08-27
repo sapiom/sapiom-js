@@ -304,6 +304,88 @@ describe("GET /api/workflows/:path/graph", () => {
     expect(body.reason).toBe("This agent's directory is no longer on disk.");
   });
 
+  // -------------------------------------------------------------------------
+  // A THROWN derivation must not take the process with it
+  // -------------------------------------------------------------------------
+
+  it("answers a THROWING derivation with a JSON error board, not an unhandled rejection", async () => {
+    // `deriveWorkflowCanvas` spawns a child, parses a manifest this process did
+    // not write, and walks user directories that can EACCES. Express 4 does not
+    // catch a rejected async handler, and there is no `unhandledRejection`
+    // handler in this package — so before the try/catch this request was never
+    // answered and the harness died under Node's default throw behaviour.
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    start({
+      resolveWorkflow: () => ({ path: "/registered/agent", name: "order-triage", definitionId: null }),
+      inspectMarker: () => Promise.resolve({ status: "valid", marker: {} }),
+      realpath: (p) => Promise.resolve(p),
+      deriveCanvas: () => Promise.reject(new Error("esbuild exited with code 1")),
+    });
+
+    try {
+      const res = await get("/registered/agent");
+      const body = (await res.json()) as WorkflowGraphResponse;
+
+      expect(res.status).toBe(200);
+      expect(body.status).toBe("error");
+      expect(body.graph).toBeNull();
+      expect(body.enrichment).toBeNull();
+      expect(body.reason).toContain("esbuild exited with code 1");
+      // Still a renderable page: the pane shows the reason, it does not spin.
+      expect(body.document).toContain("Couldn't render this board");
+      // The request was answered, so nothing was left to reject.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
+  it("answers a throwing MARKER INSPECTION the same way", async () => {
+    // The other unguarded await: reading `sapiom.json` off a directory that
+    // EACCESes mid-read throws just as readily as the extraction does.
+    start({
+      resolveWorkflow: () => ({ path: "/registered/agent", name: "order-triage", definitionId: null }),
+      inspectMarker: () => Promise.reject(new Error("EACCES: permission denied")),
+      realpath: (p) => Promise.resolve(p),
+      deriveCanvas: () => Promise.resolve(okDerivation()),
+    });
+
+    const body = (await (await get("/registered/agent")).json()) as WorkflowGraphResponse;
+
+    expect(body.status).toBe("error");
+    expect(body.reason).toContain("EACCES");
+  });
+
+  // -------------------------------------------------------------------------
+  // The registry's path, not the request's, is what reaches the disk
+  // -------------------------------------------------------------------------
+
+  it("reads the REGISTRY's path, not the string the request spelled", async () => {
+    // The request is a lookup key and nothing else. A registry that answers
+    // with a different directory than the one asked for is what proves it:
+    // every disk call, and the reported path, follow the registry.
+    const realpath = vi.fn((p: string) => Promise.resolve(p));
+    const inspectMarker = vi.fn(() => Promise.resolve({ status: "valid" as const, marker: {} }));
+    start({
+      resolveWorkflow: () => ({ path: "/registry/says/here", name: "order-triage", definitionId: null }),
+      inspectMarker,
+      realpath,
+      deriveCanvas: () => Promise.resolve(okDerivation()),
+    });
+
+    const body = (await (await get("/request/says/there")).json()) as WorkflowGraphResponse;
+
+    expect(realpath).toHaveBeenCalledWith("/registry/says/here");
+    expect(realpath).not.toHaveBeenCalledWith("/request/says/there");
+    expect(inspectMarker).toHaveBeenCalledWith("/registry/says/here");
+    expect(body.path).toBe("/registry/says/here");
+  });
+
   it.each([
     { derived: { status: "error" as const, reason: "Could not resolve @sapiom/agent" }, expectReason: "Could not resolve @sapiom/agent" },
     { derived: { status: "preparing" as const, reason: null }, expectReason: null },

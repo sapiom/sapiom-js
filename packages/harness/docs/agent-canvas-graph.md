@@ -1,4 +1,4 @@
-# `GET /api/workflows/:path/graph` — the workflow-keyed canvas route
+# `GET /api/workflows/:path/graph` — the agent-keyed canvas route
 
 **Status:** shipped (IA-01, epic SAP-2926 § Server gaps).
 **Implementation:** `src/server/workflow-graph.ts`, derivation in `src/core/canvas-render.ts`.

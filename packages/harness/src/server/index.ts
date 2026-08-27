@@ -121,7 +121,7 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createWorkflowGraphRouter } from "./workflow-graph.js";
 import { createStudioRailRouter } from "./studio-rail.js";
-import { createAgentMoveRouter, remapSessions } from "./agent-move.js";
+import { createAgentMoveRouter, moveTargetDirs, remapSessions } from "./agent-move.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -1451,11 +1451,26 @@ export const startServer = async (
   // SAP-2930: the Project axis's drag, performed on disk. Its own guards live
   // in the module — a planner is not a permission system, so the route stats
   // the destination itself. Only a REGISTERED agent may be moved, resolved
-  // through the same live cache the canvas and action routes use.
+  // through the same live cache the canvas and action routes use, and it may
+  // only be moved INTO a directory the rail can show: the roots studio-rail
+  // already treats as writable, plus the branching directories the Project
+  // axis draws between a root and an agent. Both sides of the move are
+  // therefore server-authored paths, not strings off the request.
   app.use(
     createAgentMoveRouter({
       resolveAgent: (agentPath) =>
         workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
+      listMoveTargetDirs: async () => {
+        const stored = await loadSettings(statePaths.settings);
+        return moveTargetDirs(
+          [
+            ...stored.recentDirs,
+            ...(stored.projectRoot ? [stored.projectRoot] : []),
+            ...sessionManager.list().map((session) => session.cwd),
+          ],
+          workflowsCache.map((w) => w.path),
+        );
+      },
       // Everything under the moved directory travelled with it, so every live
       // session whose cwd sat inside follows — a session left pointing at a
       // directory that no longer exists is the whole reason this remap exists.
