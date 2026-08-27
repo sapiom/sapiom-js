@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom agent template: track executive moves, funding, and hiring across a bounded company list with durable per-company findings.",
+  "description": "Sapiom agent template: monitor fintech executive opportunities with durable findings and honest partial coverage.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",

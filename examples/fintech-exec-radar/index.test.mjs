@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { zodToJsonSchema } from "@sapiom/agent";
-import { EmailHttpError } from "@sapiom/tools";
+import {
+  EmailHttpError,
+  MemoryHttpError,
+  SearchHttpError,
+} from "@sapiom/tools";
 
 import { agent } from "./index.ts";
 
@@ -65,6 +69,40 @@ function item(company) {
   };
 }
 
+async function runResearch(input, context) {
+  const startContext = { ...context, attempts: 0 };
+  const planned = await agent.steps.plan.run(
+    {
+      ...input,
+      companies: [input.company],
+      mode: "research",
+      dryRun: false,
+    },
+    startContext,
+  );
+  if (planned.kind === "fail" || planned.kind === "terminate") return planned;
+  let stepName = planned.stepName;
+  let stepInput = planned.input;
+  let attempts = 0;
+  for (let transitions = 0; transitions < 30; transitions += 1) {
+    const directive = await agent.steps[stepName].run(stepInput, {
+      ...context,
+      attempts,
+    });
+    if (directive.kind === "terminate" || directive.kind === "fail") {
+      return directive;
+    }
+    if (directive.kind === "retry") {
+      attempts += 1;
+      continue;
+    }
+    attempts = 0;
+    stepName = directive.stepName;
+    stepInput = directive.input;
+  }
+  throw new Error("research graph did not reach a terminal step");
+}
+
 async function acknowledgeReportedItems(context, child) {
   return agent.steps.deliver.run(
     {
@@ -91,7 +129,7 @@ async function acknowledgeReportedItems(context, child) {
   );
 }
 
-test("entry contract leads with delivery and only requires a watchlist", () => {
+test("entry contract leads with delivery and has a real zero-input watchlist", () => {
   const schema = zodToJsonSchema(agent.steps.plan.inputSchema);
 
   assert.equal(Object.keys(schema.properties)[0], "deliverTo");
@@ -101,9 +139,16 @@ test("entry contract leads with delivery and only requires a watchlist", () => {
   assert.equal(typeof schema.properties.deliverTo.pattern, "string");
   assert.equal(schema.properties.window.default, "7d");
   assert.equal(schema.properties.maxScrapesPerCompany.default, 3);
-  assert.equal(schema.properties.maxCapabilityCalls.default, 160);
-  assert.equal(schema.properties.dryRun.default, true);
-  assert.deepEqual(schema.required, ["companies"]);
+  assert.equal(schema.properties.maxCapabilityCalls.default, 350);
+  assert.equal(schema.properties.dryRun.default, false);
+  assert.equal(schema.properties.companies.default.length, 18);
+  assert.ok(schema.properties.companies.default.includes("Robinhood"));
+  assert.ok(schema.properties.companies.default.includes("Marqeta"));
+  assert.equal(schema.properties.mode, undefined);
+  assert.equal(schema.properties.company, undefined);
+  assert.equal(schema.properties.runDate, undefined);
+  assert.equal(schema.properties.childDefinition, undefined);
+  assert.deepEqual(schema.required, undefined);
 });
 
 test("three failed children still produce a 12-of-15 sourced digest", async () => {
@@ -249,7 +294,7 @@ test("digest includes only requested signals and excludes uncovered findings", a
 
   assert.match(reduced.input.digest, /## Investment events/);
   assert.doesNotMatch(reduced.input.digest, /## Executive moves/);
-  assert.doesNotMatch(reduced.input.digest, /## Hiring clusters/);
+  assert.doesNotMatch(reduced.input.digest, /## Hiring signals/);
   assert.match(reduced.input.digest, /findings were not persisted/);
   assert.doesNotMatch(reduced.input.digest, /news\.example\/failed-co/);
   assert.equal(reduced.input.newItems, 0);
@@ -366,17 +411,17 @@ test("plan previews exact costs and blocks only above the configured ceiling", a
     context,
   );
   assert.equal(preview.stepName, "planned");
-  assert.equal(preview.input.estimate.calls.memoryWrites, 6);
-  assert.equal(preview.input.estimate.calls.maximumTotal, 31);
+  assert.equal(preview.input.estimate.calls.memoryWrites, 12);
+  assert.equal(preview.input.estimate.calls.maximumTotal, 58);
 
   const omittedDryRun = await agent.steps.plan.run(
-    { ...baseInput, maxCapabilityCalls: 31 },
+    { ...baseInput, maxCapabilityCalls: 58 },
     context,
   );
   assert.equal(
     omittedDryRun.stepName,
-    "planned",
-    "omitting dryRun must remain a no-spend preview without schema coercion",
+    "fanOut",
+    "omitting dryRun must execute the bounded live plan",
   );
 
   const previewWithEmail = await agent.steps.plan.run(
@@ -389,17 +434,17 @@ test("plan previews exact costs and blocks only above the configured ceiling", a
     context,
   );
   assert.equal(previewWithEmail.input.estimate.calls.emails, 4);
-  assert.equal(previewWithEmail.input.estimate.calls.maximumTotal, 35);
+  assert.equal(previewWithEmail.input.estimate.calls.maximumTotal, 62);
 
   const blocked = await agent.steps.plan.run(
-    { ...baseInput, maxCapabilityCalls: 30, dryRun: false },
+    { ...baseInput, maxCapabilityCalls: 57, dryRun: false },
     context,
   );
   assert.equal(blocked.stepName, "budgetBlocked");
-  assert.equal(blocked.input.estimate.calls.maximumTotal, 31);
+  assert.equal(blocked.input.estimate.calls.maximumTotal, 58);
 
   const allowed = await agent.steps.plan.run(
-    { ...baseInput, maxCapabilityCalls: 31, dryRun: false },
+    { ...baseInput, maxCapabilityCalls: 58, dryRun: false },
     context,
   );
   assert.equal(allowed.stepName, "fanOut");
@@ -409,15 +454,15 @@ test("plan previews exact costs and blocks only above the configured ceiling", a
       signals: ["exec_moves", "funding", "hiring"],
       window: "7d",
       maxScrapesPerCompany: 3,
-      maxCapabilityCalls: 160,
+      maxCapabilityCalls: 350,
       childDefinition: "fintech-exec-radar-test",
       runDate: "2026-08-26",
       dryRun: false,
     },
     context,
   );
-  assert.equal(missingCompanies.kind, "fail");
-  assert.match(missingCompanies.reason, /companies must contain/);
+  assert.equal(missingCompanies.stepName, "fanOut");
+  assert.equal(missingCompanies.input.companies.length, 18);
 });
 
 test("plan rejects explicit empty arrays and dedupes slug-equivalent names", async () => {
@@ -464,14 +509,14 @@ test("plan rejects explicit empty arrays and dedupes slug-equivalent names", asy
       ...baseInput,
       maxCapabilityCalls: 160,
       companies: [
-        ...Array.from({ length: 15 }, (_, index) => `Company ${index}`),
+        ...Array.from({ length: 25 }, (_, index) => `Company ${index}`),
         "company-0",
       ],
     },
     context,
   );
   assert.equal(rawOverLimitButUniqueWithinLimit.stepName, "planned");
-  assert.equal(rawOverLimitButUniqueWithinLimit.input.companies.length, 15);
+  assert.equal(rawOverLimitButUniqueWithinLimit.input.companies.length, 25);
 
   const internationalNames = await agent.steps.plan.run(
     {
@@ -490,12 +535,12 @@ test("plan rejects explicit empty arrays and dedupes slug-equivalent names", asy
   const tooMany = await agent.steps.plan.run(
     {
       ...baseInput,
-      companies: Array.from({ length: 16 }, (_, index) => `Company ${index}`),
+      companies: Array.from({ length: 26 }, (_, index) => `Company ${index}`),
     },
     context,
   );
   assert.equal(tooMany.kind, "fail");
-  assert.match(tooMany.reason, /at most 15 unique names; received 16/);
+  assert.match(tooMany.reason, /at most 25 unique names; received 26/);
 
   const excessiveScrapes = await agent.steps.plan.run(
     {
@@ -588,6 +633,73 @@ test("fan-out drops unsupported URLs and non-requested child signals", async () 
   );
 });
 
+test("fan-out isolates companies while bounding concurrent child runs", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const companies = Array.from({ length: 9 }, (_, index) => `Fintech ${index}`);
+  const context = {
+    executionId: "parent-concurrency",
+    sapiom: {
+      agents: {
+        async run(spec) {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await new Promise((resolve) => setImmediate(resolve));
+          active -= 1;
+          const company = spec.input.company;
+          return {
+            status: "completed",
+            executionId: `child-${company}`,
+            output: {
+              ok: true,
+              outcome: "complete",
+              company,
+              baseline: false,
+              dedupeAvailable: true,
+              dedupeNamespace: `fintech-exec-radar-${company.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+              persisted: true,
+              observedItems: 1,
+              newItems: 1,
+              summaryItems: [item(company)],
+              failures: [],
+              coverageFailures: [],
+              health: {
+                searches: { attempted: 1, succeeded: 1, failed: 0 },
+                scrapes: {
+                  attempted: 0,
+                  succeeded: 0,
+                  failed: 0,
+                  snippetFallbacks: 0,
+                },
+                persistence: { attempted: 1, succeeded: 1, failed: 0 },
+              },
+            },
+          };
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await agent.steps.fanOut.run(
+    {
+      companies,
+      signals: ["exec_moves"],
+      window: "7d",
+      maxScrapesPerCompany: 0,
+      childDefinition: "fintech-exec-radar-test",
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.equal(maximumActive, 4);
+  assert.deepEqual(
+    result.input.rows.map((row) => row.company),
+    companies,
+  );
+});
+
 test("email delivery auto-generates a sender and recovers from a create race", async () => {
   let listCalls = 0;
   let createInput;
@@ -657,7 +769,9 @@ test("email delivery auto-generates a sender and recovers from a create race", a
     context,
   );
 
-  assert.deepEqual(createInput, { displayName: "Fintech Exec Radar" });
+  assert.deepEqual(createInput, {
+    displayName: "Fintech Executive Opportunity Radar",
+  });
   assert.equal(listCalls, 2);
   assert.equal(delivered.output.delivered, true);
   assert.equal(delivered.output.messageId, "message-1");
@@ -734,7 +848,9 @@ test("post-send acknowledgement failures stay in structured output", async () =>
     sapiom: {
       memory: {
         async append() {
-          throw new Error("temporary memory failure");
+          throw new MemoryHttpError("temporary memory failure", 502, {
+            requestId: "internal-request-id",
+          });
         },
       },
       email: {
@@ -782,7 +898,56 @@ test("post-send acknowledgement failures stay in structured output", async () =>
   assert.deepEqual(delivered.output.dedupeCommitFailures, [
     "Example Fintech A",
   ]);
+  assert.equal(delivered.output.unmet.at(-1).attempts, 2);
+  assert.equal(delivered.output.unmet.at(-1).retryable, true);
+  assert.match(
+    delivered.output.unmet.at(-1).reason,
+    /memory service.*HTTP 502/,
+  );
+  assert.doesNotMatch(
+    delivered.output.unmet.at(-1).reason,
+    /internal-request-id/,
+  );
   assert.equal(delivered.output.dedupeCommitSkipped, false);
+});
+
+test("reported-key acknowledgements retry a transient memory failure in isolation", async () => {
+  let appendCalls = 0;
+  const child = {
+    ok: true,
+    company: "Example Fintech A",
+    persisted: true,
+    dedupeNamespace: "fintech-exec-radar-test-example-fintech-a",
+    observedItems: 1,
+    newItems: 1,
+    summaryItems: [item("Example Fintech A")],
+    failures: [],
+  };
+  const context = {
+    shared: sharedStore({ deliverTo: null }),
+    sapiom: {
+      memory: {
+        async append(input) {
+          appendCalls += 1;
+          if (appendCalls === 1) {
+            throw new MemoryHttpError("temporary memory outage", 502, {});
+          }
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const delivered = await acknowledgeReportedItems(context, child);
+
+  assert.equal(appendCalls, 2);
+  assert.deepEqual(delivered.output.dedupeCommitFailures, []);
+  assert.equal(delivered.output.outcome, "partial");
 });
 
 test("only a parent acknowledgement suppresses a later company run", async () => {
@@ -862,10 +1027,10 @@ test("only a parent acknowledgement suppresses a later company run", async () =>
     invalid: false,
   };
 
-  const first = await agent.steps.research.run(input, context);
-  const unacknowledgedRetry = await agent.steps.research.run(input, context);
+  const first = await runResearch(input, context);
+  const unacknowledgedRetry = await runResearch(input, context);
   await acknowledgeReportedItems(context, first.output);
-  const acknowledgedRetry = await agent.steps.research.run(input, context);
+  const acknowledgedRetry = await runResearch(input, context);
 
   assert.equal(first.output.baseline, true);
   assert.equal(first.output.newItems, 1);
@@ -947,7 +1112,7 @@ test("an observation-history write failure keeps sourced findings deliverable", 
     logger: logger(),
   };
 
-  const researched = await agent.steps.research.run(
+  const researched = await runResearch(
     {
       company: "Example Fintech A",
       signals: ["funding"],
@@ -1013,14 +1178,14 @@ test("long company names with the same prefix use distinct memory namespaces", a
     invalid: false,
   };
 
-  await agent.steps.research.run(
+  await runResearch(
     {
       ...baseInput,
       company: "Example Financial Technology Holdings North America",
     },
     context,
   );
-  await agent.steps.research.run(
+  await runResearch(
     {
       ...baseInput,
       company: "Example Financial Technology Holdings Europe",
@@ -1074,12 +1239,17 @@ test("the parent acknowledges only findings returned across the fan-in boundary"
       search: {
         async webSearch() {
           const batch = searchCall++ % 3;
+          const titles = [
+            `Example Fintech A appoints a new CFO ${batch}`,
+            `Example Fintech A raises a Series B round ${batch}`,
+            `Example Fintech A expands engineering hiring ${batch}`,
+          ];
           return {
             query: "stub",
             results: Array.from({ length: 4 }, (_, index) => ({
-              title: `Independent finding ${batch}-${index}`,
+              title: `${titles[batch]}-${index}`,
               url: `https://industry.example/finding-${batch}-${index}`,
-              snippet: "Independent sourced report.",
+              snippet: "An independent publication reports the event.",
             })),
           };
         },
@@ -1099,7 +1269,7 @@ test("the parent acknowledges only findings returned across the fan-in boundary"
     invalid: false,
   };
 
-  const first = await agent.steps.research.run(input, context);
+  const first = await runResearch(input, context);
   const firstSnapshot = JSON.parse(stored[0].content);
   assert.equal(first.output.newItems, 12);
   assert.equal(first.output.summaryItems.length, 5);
@@ -1117,7 +1287,7 @@ test("the parent acknowledges only findings returned across the fan-in boundary"
     first.output.summaryItems.map((row) => row.key),
   );
 
-  const second = await agent.steps.research.run(input, context);
+  const second = await runResearch(input, context);
   assert.equal(second.output.newItems, 7);
   assert.equal(second.output.summaryItems.length, 5);
   assert.equal(
@@ -1170,13 +1340,14 @@ test("research never scrapes custom-company or LinkedIn URLs", async () => {
                 title: "Trade press covers Example Payments Company hiring",
                 url: "https://industry.example/example-payments-hiring",
                 snippet:
-                  "A trade publication reports Example Payments Company hiring.",
+                  "A trade publication reports Example Payments Company engineering hiring.",
               },
               {
-                title: "Independent analysis of Example Payments Company",
+                title:
+                  "Independent analysis of Example Payments Company product hiring",
                 url: "https://example.example/example-payments-analysis",
                 snippet:
-                  "An independent publication analyzes Example Payments Company.",
+                  "An independent publication analyzes product hiring at Example Payments Company.",
               },
               {
                 title: "Example Payments Company jobs on LinkedIn",
@@ -1200,7 +1371,7 @@ test("research never scrapes custom-company or LinkedIn URLs", async () => {
     logger: logger(),
   };
 
-  const result = await agent.steps.research.run(
+  const result = await runResearch(
     {
       company: "Example Payments Company",
       signals: ["hiring"],
@@ -1258,7 +1429,12 @@ test("research spreads article reads across requested signals", async () => {
             query: input.query,
             results: [
               {
-                title: `Independent ${signal} finding`,
+                title:
+                  signal === "exec"
+                    ? "Example Fintech A appoints a CFO"
+                    : signal === "funding"
+                      ? "Example Fintech A raises a Series B round"
+                      : "Example Fintech A expands engineering hiring",
                 url: `https://industry.example/${signal}`,
                 snippet: "Independent sourced report.",
               },
@@ -1278,7 +1454,7 @@ test("research spreads article reads across requested signals", async () => {
     logger: logger(),
   };
 
-  await agent.steps.research.run(
+  await runResearch(
     {
       company: "Example Fintech A",
       signals: ["exec_moves", "funding", "hiring"],
@@ -1295,4 +1471,285 @@ test("research spreads article reads across requested signals", async () => {
     "https://industry.example/funding",
     "https://industry.example/hiring",
   ]);
+});
+
+test("research requests a hard date boundary and drops obviously stale dated URLs", async () => {
+  let query;
+  const context = {
+    agentName: "fintech-exec-radar-recency-test",
+    shared: sharedStore(),
+    sapiom: {
+      memory: {
+        async recall(input) {
+          return {
+            results: [],
+            query: input.query,
+            topK: input.topK,
+            count: 0,
+          };
+        },
+        async append(input) {
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+      search: {
+        async webSearch(input) {
+          query = input.query;
+          return {
+            query,
+            results: [
+              {
+                title: "Current CFO appointment",
+                url: "https://industry.example/2026/08/24/current-move",
+                snippet: "A current appointment was announced.",
+              },
+              {
+                title: "Old CFO appointment",
+                url: "https://industry.example/2024/08/24/old-move",
+                snippet: "An old appointment was announced.",
+              },
+              {
+                title: "Robinhood CFO discusses quarterly earnings",
+                url: "https://markets.example/robinhood-cfo-earnings",
+                snippet: "The CFO comments on the company's stock movement.",
+              },
+            ],
+          };
+        },
+        async scrape() {
+          throw new Error("maxScrapesPerCompany is zero");
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await runResearch(
+    {
+      company: "Robinhood",
+      signals: ["exec_moves"],
+      window: "7d",
+      maxScrapesPerCompany: 0,
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.match(query, /after:2026-08-19/);
+  assert.equal(result.output.summaryItems.length, 1);
+  assert.equal(result.output.summaryItems[0].date, "2026-08-24");
+});
+
+test("a blocked Reddit scrape completes partial and exposes its snippet fallback", async () => {
+  const context = {
+    agentName: "fintech-exec-radar-reddit-test",
+    shared: sharedStore(),
+    sapiom: {
+      memory: {
+        async recall(input) {
+          return {
+            results: [],
+            query: input.query,
+            topK: input.topK,
+            count: 0,
+          };
+        },
+        async append(input) {
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+      search: {
+        async webSearch() {
+          return {
+            query: "stub",
+            results: [
+              {
+                title: "Operators discuss Robinhood CFO steps down",
+                url: "https://www.reddit.com/r/fintech/comments/example",
+                snippet:
+                  "A search snippet describes a sourced leadership discussion.",
+              },
+            ],
+          };
+        },
+        async scrape() {
+          throw new SearchHttpError("Reddit rejected the page fetch", 403, {
+            code: "forbidden",
+          });
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await runResearch(
+    {
+      company: "Robinhood",
+      signals: ["exec_moves"],
+      window: "7d",
+      maxScrapesPerCompany: 1,
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.equal(result.output.ok, true);
+  assert.equal(result.output.outcome, "partial");
+  assert.equal(result.output.persisted, true);
+  assert.equal(result.output.health.scrapes.attempted, 1);
+  assert.equal(result.output.health.scrapes.failed, 1);
+  assert.equal(result.output.health.scrapes.snippetFallbacks, 1);
+  assert.equal(result.output.coverageFailures[0].stage, "scrape");
+  assert.equal(result.output.coverageFailures[0].fallback, "search_snippet");
+  assert.match(result.output.summaryItems[0].evidence, /search snippet/);
+});
+
+test("a transient scrape retries only its scrape step", async () => {
+  let recallCalls = 0;
+  let searchCalls = 0;
+  let appendCalls = 0;
+  let scrapeCalls = 0;
+  const context = {
+    agentName: "fintech-exec-radar-retry-test",
+    shared: sharedStore(),
+    sapiom: {
+      memory: {
+        async recall(input) {
+          recallCalls += 1;
+          return {
+            results: [],
+            query: input.query,
+            topK: input.topK,
+            count: 0,
+          };
+        },
+        async append(input) {
+          appendCalls += 1;
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+      search: {
+        async webSearch() {
+          searchCalls += 1;
+          return {
+            query: "stub",
+            results: [
+              {
+                title: "Marqeta raises a new funding round",
+                url: "https://industry.example/marqeta-funding",
+                snippet: "Search evidence.",
+              },
+            ],
+          };
+        },
+        async scrape(input) {
+          scrapeCalls += 1;
+          if (scrapeCalls === 1) {
+            throw new SearchHttpError("temporary upstream outage", 503, {});
+          }
+          return {
+            url: input.url,
+            markdown: "Full article evidence after retry.",
+            metadata: {},
+          };
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await runResearch(
+    {
+      company: "Marqeta",
+      signals: ["funding"],
+      window: "7d",
+      maxScrapesPerCompany: 1,
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.equal(result.output.outcome, "complete");
+  assert.equal(recallCalls, 1);
+  assert.equal(searchCalls, 1);
+  assert.equal(appendCalls, 1);
+  assert.equal(scrapeCalls, 2);
+  assert.equal(result.output.health.scrapes.attempted, 2);
+  assert.equal(result.output.health.scrapes.succeeded, 1);
+  assert.equal(result.output.health.scrapes.failed, 0);
+  assert.match(result.output.summaryItems[0].evidence, /after retry/);
+});
+
+test("a terminal search failure is not retried and returns no coverage", async () => {
+  let searchCalls = 0;
+  const context = {
+    agentName: "fintech-exec-radar-terminal-search-test",
+    shared: sharedStore(),
+    sapiom: {
+      memory: {
+        async recall(input) {
+          return {
+            results: [],
+            query: input.query,
+            topK: input.topK,
+            count: 0,
+          };
+        },
+        async append(input) {
+          return {
+            id: "memory-1",
+            content: input.content,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          };
+        },
+      },
+      search: {
+        async webSearch() {
+          searchCalls += 1;
+          throw new SearchHttpError(
+            "provider wrapped the source failure",
+            500,
+            {
+              upstreamStatus: 403,
+              code: "forbidden",
+            },
+          );
+        },
+        async scrape() {
+          throw new Error("no result should be scraped");
+        },
+      },
+    },
+    logger: logger(),
+  };
+
+  const result = await runResearch(
+    {
+      company: "Klarna",
+      signals: ["funding"],
+      window: "7d",
+      maxScrapesPerCompany: 1,
+      runDate: "2026-08-26",
+    },
+    context,
+  );
+
+  assert.equal(searchCalls, 1);
+  assert.equal(result.output.ok, false);
+  assert.equal(result.output.outcome, "no_coverage");
+  assert.equal(result.output.health.searches.failed, 1);
+  assert.equal(result.output.coverageFailures[0].attempts, 1);
+  assert.equal(result.output.coverageFailures[0].retryable, false);
 });
