@@ -454,7 +454,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("canvas-empty-no-session")).toHaveCount(0);
     await expect(page.locator(".canvas-iframe")).toHaveAttribute(
       "srcdoc",
-      /rfq — mock workflow board/,
+      /rfq — mock agent board/,
     );
 
     // Focusing rfq never touched the boot session's binding.

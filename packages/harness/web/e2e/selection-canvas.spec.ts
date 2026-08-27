@@ -156,7 +156,7 @@ test.describe("the board follows the selection; the session does not", () => {
     // The board is `outreach`'s, served by the workflow-keyed route — which is
     // reached ONLY when the subject and the session's binding differ, so this
     // attribute is itself the proof that they have.
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock workflow board/);
+    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock agent board/);
     // …while the session below it is untouched. Both halves matter: either one
     // alone is satisfied by the old coupled behaviour.
     expect(await activeSessionId(page)).toBe(sessionId);
@@ -173,7 +173,7 @@ test.describe("the board follows the selection; the session does not", () => {
     await select(page, "outreach");
     await boardMounted(page);
     // Canvas: the document on screen is outreach's.
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock workflow board/);
+    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock agent board/);
     // Steps: the same agent, read from the other projection.
     await openSteps(page);
     await expect(paneSubject(page)).toHaveText("outreach");
@@ -223,7 +223,7 @@ test.describe("verb gating", () => {
     // underneath a session that is still bound to the deployed agent.
     const sessionId = await activeSessionId(page);
     await select(page, "sender");
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /sender — mock workflow board/);
+    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /sender — mock agent board/);
     // The session did not move, so the binding is still the DEPLOYED agent.
     expect(await activeSessionId(page)).toBe(sessionId);
 
@@ -275,7 +275,7 @@ test.describe("boards for agents with no session", () => {
     await expect(
       page.frameLocator(".canvas-iframe").getByTestId("mock-workflow-board"),
     ).toBeVisible();
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /gateway — mock workflow board/);
+    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /gateway — mock agent board/);
     // The theme bridge: a `srcdoc` frame has no URL, so the served document's
     // `?theme=` reader has nothing to read and the app hands it the theme in an
     // appended script instead. Without it the board paints by

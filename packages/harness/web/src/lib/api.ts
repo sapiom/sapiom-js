@@ -1135,7 +1135,7 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
     .join('<div class="edge" aria-hidden="true"></div>');
   return [
     "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" />",
-    `<title>${esc(name)} — mock workflow board</title>`,
+    `<title>${esc(name)} — mock agent board</title>`,
     "<style>",
     ":root{--bg:#fff;--ink:#141417;--dim:#54545e;--line:rgba(17,17,20,.12);--node:#f2f2f3}",
     '[data-theme="dark"]{--bg:#12161d;--ink:#f4f4f5;--dim:#a7a7b0;--line:rgba(255,255,255,.14);--node:#17171b}',
