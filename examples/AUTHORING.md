@@ -208,23 +208,36 @@ run, and secrets are read at step dispatch.
    nothing will ever fire still looks fine.
 
    **The stub can only reach as far as `ctx.sapiom`.** A capability call succeeding is not the
-   same as what it hands back being usable. `database.get` returns a DSN on a host that is
-   deliberately unroutable (`.invalid`, RFC 6761), so a step that opens its own Postgres
-   socket fails at DNS — fast, and with the stub named in the error. The same goes for any I/O
-   the stub never sees: raw HTTP to a third party, a client holding its own connection.
+   same as what it hands back being usable. `database.get` returns a DSN whose host is in the
+   reserved `.invalid` TLD (RFC 6761), which does not resolve on a conforming resolver — so a
+   step that opens its own Postgres socket fails at name resolution, with the stub named in
+   the error. Treat that as a backstop, not a guard: a resolver that hijacks NXDOMAIN can
+   still hand back an address. The same goes for any I/O the stub never sees — raw HTTP to a
+   third party, a client holding its own connection.
 
-   **Gate that I/O on `ctx.local`.** It is `true` under `run_local` and absent on a deployed
-   run, so the branch reads as live in production with nothing set:
+   **Gate that I/O on `ctx.isLocalTrace`.** It is `true` under `run_local` and absent on a
+   deployed run, so the branch reads as live in production with nothing set:
 
    ```ts
-   const dryRun = input.dryRun ?? ctx.local ?? false;
+   // entry step — `input` here is the execution's entry input
+   const dryRun = input.dryRun ?? ctx.isLocalTrace ?? false;
+   ctx.shared.set("dryRun", dryRun);
    if (!dryRun) {
      // raw sockets, third-party HTTP — the things run_local cannot stub
    }
    ```
 
-   Keep the explicit input flag as the override; `?? ctx.local` only supplies the default, so
-   passing `{ "dryRun": false }` still forces the live path when you want to test it.
+   **Resolve it once, in the entry step, and carry it in `ctx.shared`.** Downstream, `input`
+   is the previous step's output, so `input.dryRun` is always `undefined` there — a step that
+   re-derives the gate would read live on a deployed run the caller asked to be dry:
+
+   ```ts
+   // any later step
+   const dryRun = ctx.shared.get("dryRun") ?? false;
+   ```
+
+   Keep the explicit input flag as the override; `?? ctx.isLocalTrace` only supplies the
+   default, so passing `{ "dryRun": false }` still forces the live path when you want it.
 
 3. **Then run it deployed, with no input at all.** `deploy` and `run` it with `{}`. It must
    reach a terminal state and produce something real (see [§1a](#1a-make-it-runnable-with-nothing)).

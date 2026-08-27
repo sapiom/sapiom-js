@@ -123,14 +123,15 @@ import type { ScopedKey } from "../keys/index.js";
 /**
  * Host used in the stub Postgres DSN.
  *
- * `.invalid` is reserved by RFC 6761 and is guaranteed never to resolve, so a
- * template that dials the stub DSN fails at DNS in ~20ms with a message naming
- * the stub — rather than opening a socket to whatever real Postgres happens to
- * be listening on the author's own `localhost:5432`.
+ * `.invalid` is reserved by RFC 6761 and does not resolve on any conforming
+ * resolver, so a template that dials the stub DSN fails at name resolution
+ * rather than opening a socket to whatever real Postgres happens to be
+ * listening on the author's own `localhost:5432`. A resolver that hijacks
+ * NXDOMAIN can still hand back an address, which is why this is a backstop and
+ * not the guard: step code holding a raw Postgres connection should gate the
+ * dial on `ctx.isLocalTrace` rather than rely on the DSN being unreachable.
  *
  * `database.get` itself still succeeds; only dialing what it returns fails.
- * Step code holding a raw Postgres connection should gate that dial on
- * `ctx.local` rather than rely on this DSN being reachable.
  */
 const STUB_DB_HOST = "sapiom-run-local-stub.invalid";
 

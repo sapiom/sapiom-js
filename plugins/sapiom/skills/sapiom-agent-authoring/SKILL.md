@@ -271,6 +271,7 @@ reference instead.
 | `ctx.attempts`       | `number`                         | How many times this step has run (0-indexed)                                                                                                              |
 | `ctx.logger`         | `StepLogger`                     | `info / warn / error / debug(msg, meta?)`                                                                                                                 |
 | `ctx.sapiom`         | `Sapiom`                         | The typed capability client — the `Sapiom` interface from `@sapiom/tools`, installed in your `node_modules` (see "Capabilities" below)                    |
+| `ctx.isLocalTrace`   | `boolean \| undefined`           | `true` under `run_local`; **absent** on a deployed run. Gate raw I/O `run_local` cannot stub (see "Testing with `run_local`")                              |
 | `ctx.organizationId` | `string \| null`                 | Tenant org                                                                                                                                                |
 | `ctx.tenantId`       | `string \| null`                 | Tenant id                                                                                                                                                 |
 
@@ -597,6 +598,32 @@ retry. Capture non-deterministic values (timestamps, random ids) once and carry 
 via `goto` input or `ctx.shared`.
 
 ## Testing with `run_local` and Stubs
+
+### Gate I/O the stub cannot see
+
+`run_local` stubs `ctx.sapiom.*` and nothing else. Anything holding its own connection — a
+`postgres` client, raw HTTP to a third party — still runs for real. `database.get` succeeds
+and hands back a DSN, but that DSN's host is in the reserved `.invalid` TLD and does not
+resolve, so dialing it fails.
+
+Resolve a `dryRun` gate **once, in the entry step**, and carry it in `ctx.shared`:
+
+```ts
+// entry step — `input` is the execution's entry input
+const dryRun = input.dryRun ?? ctx.isLocalTrace ?? false;
+ctx.shared.set("dryRun", dryRun);
+if (!dryRun) {
+  // raw sockets, third-party HTTP — the things run_local cannot stub
+}
+
+// any later step: `input` is the previous step's output, so re-deriving it here
+// would read live on a deployed run the caller asked to be dry.
+const dryRun = ctx.shared.get("dryRun") ?? false;
+```
+
+`ctx.isLocalTrace` is absent on a deployed run, so `?? ctx.isLocalTrace` supplies the default
+without changing production behaviour — and an explicit `{ "dryRun": false }` still forces the
+live path when you want to exercise it.
 
 `run_local` works with **no stubs** — capabilities return sensible defaults. Add
 `.sapiom-dev/stubs.json` overrides only when a step branches on a specific result:

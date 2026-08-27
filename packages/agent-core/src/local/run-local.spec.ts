@@ -27,21 +27,29 @@ function manifestFor(def: AgentDefinition): AgentManifest {
   ) as AgentManifest;
 }
 
-describe("runLocal — ctx.local", () => {
+describe("runLocal — ctx.isLocalTrace", () => {
   /**
    * Step code holding a raw socket (a `pg` client, third-party HTTP) had no way
    * to tell a local trace from a deployed run, so it dialed for real and died on
-   * a network error (SAP-2909). `ctx.local` is that signal.
+   * a network error (SAP-2909). `ctx.isLocalTrace` is that signal.
    */
-  async function withLocalCtx(
-    inspect: (ctx: AgentExecutionContext) => void,
-  ): Promise<void> {
+  async function gateFor(
+    entryInput: unknown,
+  ): Promise<{ seen: boolean | undefined; gate: boolean | undefined }> {
+    let seen: boolean | undefined;
+    let gate: boolean | undefined;
+
     const entry = defineStep({
       name: "entry",
       next: [],
       terminal: true,
-      async run(_input: unknown, ctx) {
-        inspect(ctx as unknown as AgentExecutionContext);
+      // `input` is the step's own run() argument — the value the documented
+      // `input.dryRun ?? ctx.isLocalTrace` expression actually reads. Asserting
+      // through ctx.input instead would not exercise what authors are told to
+      // write.
+      async run(input: { dryRun?: boolean }, ctx) {
+        seen = ctx.isLocalTrace;
+        gate = input.dryRun ?? ctx.isLocalTrace ?? false;
         return terminate({ ok: true });
       },
     });
@@ -54,31 +62,30 @@ describe("runLocal — ctx.local", () => {
     const result = await runLocal({
       definition: def,
       manifest: manifestFor(def),
-      input: {},
+      input: entryInput,
     });
 
-    // Guards the assertions below: an inspect() that never ran would otherwise
-    // leave them checking an untouched variable.
+    // Guards the assertions below: a step that never ran would otherwise leave
+    // them checking an untouched variable.
     expect(result.outcome).toBe("completed");
+    return { seen, gate };
   }
 
   it("is true in a step running under runLocal", async () => {
-    let seen: boolean | undefined;
-    await withLocalCtx((ctx) => {
-      seen = ctx.local;
-    });
-
-    expect(seen).toBe(true);
+    expect((await gateFor({})).seen).toBe(true);
   });
 
-  it("makes `input.dryRun ?? ctx.local` default to skipping un-stubbable I/O", async () => {
-    let dryRun: boolean | undefined;
-    await withLocalCtx((ctx) => {
-      // The read templates are expected to use, with no dryRun supplied.
-      dryRun = (ctx.input as { dryRun?: boolean }).dryRun ?? ctx.local ?? false;
-    });
+  it("makes `input.dryRun ?? ctx.isLocalTrace` skip un-stubbable I/O by default", async () => {
+    expect((await gateFor({})).gate).toBe(true);
+  });
 
-    expect(dryRun).toBe(true);
+  it("lets an explicit dryRun:false still force the live path", async () => {
+    // The escape hatch templates rely on to exercise real I/O on purpose.
+    expect((await gateFor({ dryRun: false })).gate).toBe(false);
+  });
+
+  it("leaves an explicit dryRun:true dry", async () => {
+    expect((await gateFor({ dryRun: true })).gate).toBe(true);
   });
 });
 

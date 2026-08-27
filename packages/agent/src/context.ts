@@ -117,14 +117,14 @@ export interface AgentExecutionContext<TShared extends Record<string, unknown> =
    * a stub capability client, with no real resources behind it.
    *
    * Deliberately optional and *absent* on a deployed run, so the intended read
-   * `input.dryRun ?? ctx.local` evaluates to live in production without the
+   * `input.dryRun ?? ctx.isLocalTrace` evaluates to live in production without the
    * production runner having to set anything.
    *
    * Branch on this for the I/O `run_local` cannot stub — a raw Postgres socket,
    * raw HTTP to a third party, anything holding its own connection. Capability
    * calls (`ctx.sapiom.*`) are already stubbed locally and need no guard.
    */
-  readonly local?: boolean;
+  readonly isLocalTrace?: boolean;
 }
 
 export interface TypedContextStore<TShared extends Record<string, unknown>> {
