@@ -83,10 +83,11 @@ It reads the **same** `sapiom.json` sandbox resource (source dir, `start`, `port
   slug for v2.
 - **Text-only bundles.** UTF-8 files only — no images, fonts, or archives. A binary is
   rejected **by name** before anything is uploaded; drop it, or use inline SVG, a data URL,
-  or a CDN reference. `node_modules`, `.git`, dotfiles and `sapiom.json` are never uploaded,
-  so install dependencies at wake with the resource's `build` command.
-- **~10 MiB** per bundle over this path. Drop generated output (`dist`, build artifacts,
-  vendored assets) rather than shipping it.
+  or a CDN reference. `node_modules`, `.git`, dotfiles, symlinks and the project's own
+  `sapiom.json` are never uploaded, so install dependencies at wake with the resource's
+  `build` command.
+- **~10 MiB** per bundle over this path, checked locally before the upload. Drop generated
+  output (`dist`, build artifacts, vendored assets) rather than shipping it.
 - Pass `resource` only when the project defines more than one sandbox resource. `slug`
   (`[a-z0-9-]{1,63}`) is the app's identity; `name` is what the "Starting…" page shows.
 

@@ -3,11 +3,17 @@
  *
  * The backend is mocked at `fetch` (this is the only tool that speaks to the
  * App Links REST API directly), so the assertions that matter are the ones a
- * consumer depends on: the interfaces §3 call ORDER, the durability wording the
+ * consumer depends on: the three-call ORDER, the durability wording the
  * routing decision hangs on, the wire-code → actionable-error mapping, and that
  * a binary file is rejected by name with no HTTP call at all.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -139,13 +145,26 @@ function mockHappyBackend(): ReturnType<typeof vi.fn> {
   return fetchMock;
 }
 
-/** Every fetch fails with one wire error body. */
-function mockBackendError(body: unknown, status: number): void {
-  globalThis.fetch = vi
-    .fn()
-    .mockResolvedValue(
-      jsonRes(body, status),
-    ) as unknown as typeof globalThis.fetch;
+/**
+ * Play the happy responses up to `step`, then fail it. Fire-on-every-call
+ * mocking would land every case on call #1 and never exercise the
+ * link-already-created path that the error copy has to be honest about.
+ */
+const STEP_INDEX = { create: 0, bundle: 1, publish: 2 } as const;
+
+function mockBackendErrorAt(
+  step: keyof typeof STEP_INDEX,
+  body: unknown,
+  status: number,
+): ReturnType<typeof vi.fn> {
+  const happy = [jsonRes(APP_LINK, 201), jsonRes(BUNDLE), jsonRes(APP_LINK)];
+  const fetchMock = vi.fn();
+  for (const res of happy.slice(0, STEP_INDEX[step])) {
+    fetchMock.mockResolvedValueOnce(res);
+  }
+  fetchMock.mockResolvedValue(jsonRes(body, status));
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+  return fetchMock;
 }
 
 describe("sapiom_dev_app_publish tool", () => {
@@ -209,7 +228,7 @@ describe("sapiom_dev_app_publish tool", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("calls upsert → bundle → publish in interfaces §3 order, authed with x-api-key", async () => {
+  it("calls upsert → bundle → publish in order, authed with x-api-key", async () => {
     const fetchMock = mockHappyBackend();
     const dir = project({ "index.html": "<h1>hi</h1>", "src/app.js": "1;" });
 
@@ -266,7 +285,7 @@ describe("sapiom_dev_app_publish tool", () => {
     );
   });
 
-  it("reports the sha the backend says is active, not the one we uploaded", async () => {
+  it("reports the sha the backend says is active, and flags it when that is not ours", async () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(APP_LINK, 201))
@@ -281,7 +300,83 @@ describe("sapiom_dev_app_publish tool", () => {
       name: "Dash",
     });
 
-    expect(parse(res).bundleSha256).toBe("raced99");
+    const payload = parse(res);
+    expect(payload.bundleSha256).toBe("raced99");
+    // `manifest` describes OUR upload, so a foreign live sha cannot be reported
+    // beside it as if it matched.
+    expect(payload.warning).toContain("abc123");
+    expect(payload.warning).toContain("raced99");
+    expect(payload.summary).toContain("see `warning`");
+  });
+
+  it("says nothing about a race when the active sha is the one we uploaded", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(APP_LINK, 201))
+      .mockResolvedValueOnce(jsonRes(BUNDLE))
+      .mockResolvedValueOnce(
+        jsonRes({ ...APP_LINK, bundleSha256: "abc123" }),
+      ) as unknown as typeof globalThis.fetch;
+
+    const res = await setup().handler({
+      dir: project(),
+      slug: "dash",
+      name: "Dash",
+    });
+
+    const payload = parse(res);
+    expect(payload.warning).toBeUndefined();
+    expect(payload.summary).toContain("1 files");
+  });
+
+  it("skips a symlink rather than publishing what it points at", async () => {
+    const fetchMock = mockHappyBackend();
+    const dir = project({ "index.html": "<h1>hi</h1>" });
+    // The hazard: a bundle can end up behind a public URL, so following a link
+    // out of the source tree would publish whatever is on the other end.
+    writeFileSync(path.join(dir, "..", "app-publish-secret.txt"), "SECRET");
+    symlinkSync(
+      path.join(dir, "..", "app-publish-secret.txt"),
+      path.join(dir, "leak.txt"),
+    );
+    symlinkSync(dir, path.join(dir, "loop"));
+
+    const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(res.isError).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).files).toEqual({
+      "index.html": "<h1>hi</h1>",
+    });
+    rmSync(path.join(dir, "..", "app-publish-secret.txt"), { force: true });
+  });
+
+  it("keeps a nested sapiom.json — only the project's own is config", async () => {
+    const fetchMock = mockHappyBackend();
+    const dir = project({
+      "index.html": "<h1>hi</h1>",
+      "fixtures/sapiom.json": '{"sample":true}',
+    });
+
+    await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).files).toEqual({
+      "index.html": "<h1>hi</h1>",
+      "fixtures/sapiom.json": '{"sample":true}',
+    });
+  });
+
+  it("refuses an over-cap bundle locally, before any HTTP call", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    const dir = project({ "big.txt": "x".repeat(10 * 1024 * 1024 + 1) });
+
+    const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(res.isError).toBe(true);
+    const { error } = parse(res);
+    expect(error.code).toBe("BUNDLE_TOO_LARGE");
+    expect(error.message).toContain("Nothing was created or published.");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns the durable url, ids and manifest plus a one-line summary", async () => {
@@ -404,9 +499,10 @@ describe("sapiom_dev_app_publish tool", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  describe("wire error mapping (interfaces §3)", () => {
+  describe("wire error mapping", () => {
     const cases: Array<{
       label: string;
+      step: keyof typeof STEP_INDEX;
       body: Record<string, unknown>;
       status: number;
       code: string;
@@ -414,6 +510,7 @@ describe("sapiom_dev_app_publish tool", () => {
     }> = [
       {
         label: "BUNDLE_BINARY_FILE names the file",
+        step: "bundle",
         body: {
           code: "BUNDLE_BINARY_FILE",
           message: "nope",
@@ -425,6 +522,7 @@ describe("sapiom_dev_app_publish tool", () => {
       },
       {
         label: "BUNDLE_TOO_LARGE quotes both sizes",
+        step: "bundle",
         body: {
           code: "BUNDLE_TOO_LARGE",
           message: "too big",
@@ -437,6 +535,7 @@ describe("sapiom_dev_app_publish tool", () => {
       },
       {
         label: "PUBLIC_CONFIRM_REQUIRED asks for the acknowledgement",
+        step: "create",
         body: { code: "PUBLIC_CONFIRM_REQUIRED", message: "confirm" },
         status: 409,
         code: "PUBLIC_CONFIRM_REQUIRED",
@@ -444,6 +543,7 @@ describe("sapiom_dev_app_publish tool", () => {
       },
       {
         label: "PUBLIC_SPEND_CAP_REQUIRED asks for the cap",
+        step: "create",
         body: { code: "PUBLIC_SPEND_CAP_REQUIRED", message: "cap" },
         status: 400,
         code: "PUBLIC_SPEND_CAP_REQUIRED",
@@ -451,6 +551,7 @@ describe("sapiom_dev_app_publish tool", () => {
       },
       {
         label: "a management-permission 403 says to drop the management fields",
+        step: "create",
         body: {
           code: "APP_LINK_MANAGEMENT_PERMISSION_REQUIRED",
           message:
@@ -462,6 +563,7 @@ describe("sapiom_dev_app_publish tool", () => {
       },
       {
         label: "401 points at re-authentication",
+        step: "create",
         body: { message: "Unauthorized" },
         status: 401,
         code: "NOT_AUTHENTICATED",
@@ -469,6 +571,7 @@ describe("sapiom_dev_app_publish tool", () => {
       },
       {
         label: "403 names the missing permission",
+        step: "create",
         body: { message: "Missing required permission" },
         status: 403,
         code: "FORBIDDEN",
@@ -478,7 +581,7 @@ describe("sapiom_dev_app_publish tool", () => {
 
     for (const c of cases) {
       it(c.label, async () => {
-        mockBackendError(c.body, c.status);
+        mockBackendErrorAt(c.step, c.body, c.status);
         const res = await setup().handler({
           dir: project(),
           slug: "dash",
@@ -489,11 +592,19 @@ describe("sapiom_dev_app_publish tool", () => {
         const { error } = parse(res);
         expect(error.code).toBe(c.code);
         expect(`${error.message} ${error.hint ?? ""}`).toMatch(c.expect);
+        // The state the agent is left in, per step. Claiming "nothing was
+        // created" after the upsert already created the link is the one thing
+        // this copy must never do.
+        if (c.step === "create") {
+          expect(error.message).toContain("Nothing was created or published.");
+        } else {
+          expect(error.message).toContain('The "dash" app link EXISTS');
+        }
       });
     }
 
     it("403 hint names org.app_links.publish", async () => {
-      mockBackendError({ message: "no" }, 403);
+      mockBackendErrorAt("create", { message: "no" }, 403);
       const res = await setup().handler({
         dir: project(),
         slug: "dash",
@@ -503,13 +614,72 @@ describe("sapiom_dev_app_publish tool", () => {
     });
 
     it("falls back to HTTP_<status> for an unmapped failure", async () => {
-      mockBackendError({ message: "boom" }, 500);
+      mockBackendErrorAt("create", { message: "boom" }, 500);
       const res = await setup().handler({
         dir: project(),
         slug: "dash",
         name: "Dash",
       });
       expect(parse(res).error.code).toBe("HTTP_500");
+    });
+
+    it("a failure at activate still says the link exists and needs finishing", async () => {
+      const fetchMock = mockBackendErrorAt(
+        "publish",
+        { code: "NO_BUNDLE", message: "no bundle" },
+        409,
+      );
+      const res = await setup().handler({
+        dir: project(),
+        slug: "dash",
+        name: "Dash",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const { error } = parse(res);
+      expect(error.code).toBe("NO_BUNDLE");
+      expect(error.message).toContain('The "dash" app link EXISTS');
+      expect(error.message).toContain("publish the same slug again");
+      expect(error.message).not.toContain("Nothing was");
+      expect(error.step).toBe("POST /v1/app-links/{id}/publish");
+    });
+
+    it("an unreachable backend mid-flow does not claim nothing was created", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(APP_LINK, 201))
+        .mockRejectedValue(new Error("ECONNRESET"));
+      globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+      const res = await setup().handler({
+        dir: project(),
+        slug: "dash",
+        name: "Dash",
+      });
+
+      const { error } = parse(res);
+      expect(error.code).toBe("NETWORK");
+      expect(error.message).toContain('The "dash" app link EXISTS');
+    });
+
+    it("refuses a 2xx body that is not an app link instead of addressing /undefined/", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "",
+        text: () => Promise.resolve("<html>gateway</html>"),
+      });
+      globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+      const res = await setup().handler({
+        dir: project(),
+        slug: "dash",
+        name: "Dash",
+      });
+
+      expect(res.isError).toBe(true);
+      expect(parse(res).error.code).toBe("UNEXPECTED_RESPONSE");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("maps an unreachable backend to NETWORK", async () => {
@@ -526,6 +696,7 @@ describe("sapiom_dev_app_publish tool", () => {
       const { error } = parse(res);
       expect(error.code).toBe("NETWORK");
       expect(error.hint).toContain("ECONNREFUSED");
+      expect(error.message).toContain("Nothing was created or published.");
     });
   });
 
