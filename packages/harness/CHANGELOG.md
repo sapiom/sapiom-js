@@ -1,5 +1,17 @@
 # @sapiom/harness
 
+## 0.8.9
+
+### Patch Changes
+
+- 9165f18: Studio's coding-agent system prompt now says to omit `model`, states that `smart` is a no-op, and keeps size labels as the deliberate choice — matching the authoring skill, the MCP instructions, and the call-surface guide.
+- Updated dependencies [054f749]
+- Updated dependencies [db81e32]
+- Updated dependencies [054f749]
+  - @sapiom/mcp@0.13.0
+  - @sapiom/agent@0.12.2
+  - @sapiom/agent-core@0.13.2
+
 ## 0.8.8
 
 ### Patch Changes
