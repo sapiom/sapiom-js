@@ -10,7 +10,78 @@ import * as path from "node:path";
 
 import { AGENT_PROJECT_MARKER } from "../shared/types.js";
 
-export const AGENT_PROJECT_SCAN_MAX_DEPTH = 3;
+/**
+ * How deep a scan looks for agent projects beneath a chosen root.
+ *
+ * This was 3, which predated the project-rooted rail: it assumed the root the
+ * user opened was more or less the agent's own folder. Under a chosen project
+ * root, depth is normal — a real agent sits at `~/polsia/backend/src/agents/ads`,
+ * four segments down, and `<root>/apps/<app>/src/features/<x>/agents/<agent>` is
+ * six. At 3 those agents are not found at all and file under "No workspace"
+ * (17 of one install's 40 rows).
+ *
+ * 8 leaves headroom above the deepest realistic layout without becoming a walk
+ * of the user's home directory. It is NOT what keeps the scan cheap — see
+ * AGENT_PROJECT_SCAN_MAX_NODES. What depth still buys is (a) a pathological
+ * deep chain terminating in 8 steps rather than by exhausting a node budget,
+ * and (b) a *deterministic* outer envelope, which reconciliation needs: the
+ * registry may only forget a project it can prove it would have looked for.
+ */
+export const AGENT_PROJECT_SCAN_MAX_DEPTH = 8;
+
+/**
+ * The bound that actually governs scan cost: how many directories one walk may
+ * enter. Depth alone cannot do this job, and the numbers are why.
+ *
+ * Measured on this machine (macOS/APFS) against real roots on a real install,
+ * per directory entered = one marker `lstat` + one `readdir`, warm cache
+ * ~22-25 us/dir at every depth:
+ *
+ *   root                    depth 3         depth 8            unbounded
+ *   a single repo             119 dirs         242 dirs   7 ms    242 dirs
+ *   ~/sapiom/sapiom-js        758 dirs       9,016 dirs 196 ms  9,195 dirs
+ *   ~/sapiom/Sapiom         1,298 dirs      35,489 dirs 847 ms 47,544 dirs
+ *
+ * So raising the depth cap alone makes a 32 ms scan an 847 ms one on a root a
+ * user would plausibly open, and the watcher below pays that synchronously on
+ * a debounce. Cost is linear and predictable in directories entered, so that
+ * is what we bound.
+ *
+ * Pruning harder was the other candidate and does not pay: extending the
+ * ignored-directory list with the usual suspects (`.venv`, `target`, `vendor`,
+ * `coverage`, `.turbo`, `__pycache__`, `out`, ...) removed 0.5-11% of the dirs
+ * on the roots above. What is actually there is source directories and, on the
+ * biggest root, 42,163 of 47,544 dirs in git worktree copies of the repo
+ * itself — neither of which a name-based ignore list can reach.
+ *
+ * **The tradeoff, stated plainly:** past the budget a scan is incomplete, and
+ * an agent below the cut is not discovered on that pass. The walk is therefore
+ * breadth-first, so the budget degrades by *depth* — every level below the cut
+ * is complete, which is exactly the guarantee the old fixed cap gave, just at a
+ * depth chosen by the tree's real width instead of guessed in advance. Callers
+ * learn how far they may trust the result from
+ * {@link AgentProjectScanBudget.envelopeDepth}; nothing beyond it is reconciled
+ * away as missing.
+ *
+ * 10,000 dirs ~= 240 ms warm for the async registry scan, which runs when a
+ * session is created or the user asks — and covers a real monorepo project root
+ * outright (sapiom-js: 9,016).
+ */
+export const AGENT_PROJECT_SCAN_MAX_NODES = 10_000;
+
+/**
+ * The watcher fingerprint's budget, deliberately tighter than the scan's.
+ *
+ * `snapshotWorkspaceWorkflows` is synchronous and re-runs on a 250 ms debounce
+ * after any file change under the session's cwd, so its cost lands on the event
+ * loop while the user is typing. 2,500 dirs ~= 60 ms warm, which is the same
+ * order as what depth-3 cost on the widest real root measured (1,298 dirs /
+ * 32 ms): the watcher gets the full depth on an ordinary project and gets no
+ * slower on a huge one. A truncated fingerprint means a *deep* structural
+ * change may not arm a rescan until some shallower event does; discovery depth
+ * itself is the registry scan's budget, not this one.
+ */
+export const AGENT_PROJECT_WATCH_MAX_NODES = 2_500;
 
 const IGNORED_DIR_NAMES = new Set([
   "node_modules",
@@ -152,4 +223,171 @@ export async function inspectAgentProjectMarker(
   } catch (error) {
     return { status: markerReadErrorStatus(error) };
   }
+}
+
+/** Overridable halves of the traversal policy — tests and benchmarks vary these. */
+export interface AgentProjectScanLimits {
+  maxDepth: number;
+  maxNodes: number;
+}
+
+/**
+ * One walk's traversal allowance, and its report on what it managed to cover.
+ *
+ * A budget is single-use: it accumulates `visited` as the walk runs, so pass a
+ * fresh one per walk (the walkers below default to one). Callers that care
+ * about cost or completeness construct it themselves and read it afterwards —
+ * that is also how the perf benchmark measures nodes visited without the
+ * scanner growing a second, parallel counting path.
+ */
+export class AgentProjectScanBudget implements AgentProjectScanLimits {
+  readonly maxDepth: number;
+  readonly maxNodes: number;
+  /** Directories entered (marker inspected), root included. */
+  visited = 0;
+  /** The depth at which `maxNodes` stopped the walk, or null if it never did. */
+  truncatedAtDepth: number | null = null;
+
+  constructor(limits: Partial<AgentProjectScanLimits> = {}) {
+    this.maxDepth = limits.maxDepth ?? AGENT_PROJECT_SCAN_MAX_DEPTH;
+    this.maxNodes = limits.maxNodes ?? AGENT_PROJECT_SCAN_MAX_NODES;
+  }
+
+  get truncated(): boolean {
+    return this.truncatedAtDepth !== null;
+  }
+
+  /**
+   * The deepest level this walk enumerated *in full* — how deep its results may
+   * be trusted as complete, and therefore how deep a caller may reconcile a
+   * previously-known project away as gone. `maxDepth` for a walk that finished;
+   * one level above the cut for a walk the node budget stopped, because that
+   * level is the only incomplete one (the walk is breadth-first).
+   */
+  get envelopeDepth(): number {
+    return this.truncatedAtDepth === null
+      ? this.maxDepth
+      : this.truncatedAtDepth - 1;
+  }
+
+  /** Charges one directory. False (and records the cut) once spent. */
+  admit(depth: number): boolean {
+    if (this.visited >= this.maxNodes) {
+      if (this.truncatedAtDepth === null) this.truncatedAtDepth = depth;
+      return false;
+    }
+    this.visited += 1;
+    return true;
+  }
+}
+
+/** What the walk should do with a directory it just entered. */
+export type AgentProjectWalkAction =
+  /** Record it and go no deeper — it is a project, or an opaque subtree. */
+  | "stop"
+  /** Not a project: enumerate its subdirectories and keep going. */
+  | "descend";
+
+export interface AgentProjectWalkVisitor<
+  Action = AgentProjectWalkAction | Promise<AgentProjectWalkAction>,
+> {
+  /** Every directory entered, root first, shallowest level first. */
+  onDirectory(dir: string, depth: number): Action;
+  /** `dir`'s entries could not be listed, and not because it is gone. */
+  onUnreadable?(dir: string, depth: number): void;
+}
+
+/**
+ * Subdirectories worth descending into, in a stable order.
+ *
+ * Two properties matter beyond the ignore filter:
+ *
+ *   - `entry.isDirectory()` reads the raw dirent type, so a symlink — even one
+ *     pointing at a directory — reports false and is never descended into.
+ *     That, not the depth cap, is what makes a symlink *cycle* terminate; the
+ *     cap only ever hid the fact. It is asserted directly in the tests.
+ *   - Sorted, so a walk the node budget truncates truncates at the same place
+ *     twice. `readdir` order is filesystem-dependent, and the watcher compares
+ *     one fingerprint against the next: an order-dependent cut would read as a
+ *     structural change on every check and rescan the workspace forever.
+ */
+function scanSubdirNames(entries: fs.Dirent[]): string[] {
+  return entries
+    .filter((entry) => entry.isDirectory() && !isAgentProjectScanIgnoredDir(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function isConfirmedMissingDir(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
+ * Breadth-first, depth- and node-bounded traversal beneath `root` — the one
+ * traversal policy the registry and the workspace watcher both run, so they
+ * cannot disagree about which directories a scan of a given root covers.
+ *
+ * Breadth-first is load-bearing rather than incidental: it is what makes the
+ * node budget degrade by depth (see AGENT_PROJECT_SCAN_MAX_NODES). Every level
+ * shallower than `budget.envelopeDepth` is complete no matter where the budget
+ * ran out, which keeps the generalized bound a superset of the fixed depth cap
+ * it replaces.
+ *
+ * Returns the budget so a caller can read `visited` / `envelopeDepth` off it.
+ */
+export function walkAgentProjectTree(
+  root: string,
+  visitor: AgentProjectWalkVisitor<AgentProjectWalkAction>,
+  budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
+): AgentProjectScanBudget {
+  let frontier = [path.resolve(root)];
+  for (let depth = 0; depth <= budget.maxDepth && frontier.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const dir of frontier) {
+      if (!budget.admit(depth)) return budget;
+      if (visitor.onDirectory(dir, depth) === "stop") continue;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (error) {
+        if (!isConfirmedMissingDir(error)) visitor.onUnreadable?.(dir, depth);
+        continue;
+      }
+      for (const name of scanSubdirNames(entries)) next.push(path.join(dir, name));
+    }
+    frontier = next;
+  }
+  return budget;
+}
+
+/**
+ * Async twin of {@link walkAgentProjectTree}, for callers that must not block
+ * the event loop on a wide tree. Same order, same bounds, same decisions — so
+ * the two produce identical results on the same tree with the same budget,
+ * which the watcher's sync/async fingerprint pair depends on.
+ */
+export async function walkAgentProjectTreeAsync(
+  root: string,
+  visitor: AgentProjectWalkVisitor<AgentProjectWalkAction | Promise<AgentProjectWalkAction>>,
+  budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
+): Promise<AgentProjectScanBudget> {
+  let frontier = [path.resolve(root)];
+  for (let depth = 0; depth <= budget.maxDepth && frontier.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const dir of frontier) {
+      if (!budget.admit(depth)) return budget;
+      if ((await visitor.onDirectory(dir, depth)) === "stop") continue;
+      let entries: fs.Dirent[];
+      try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+      } catch (error) {
+        if (!isConfirmedMissingDir(error)) visitor.onUnreadable?.(dir, depth);
+        continue;
+      }
+      for (const name of scanSubdirNames(entries)) next.push(path.join(dir, name));
+    }
+    frontier = next;
+  }
+  return budget;
 }

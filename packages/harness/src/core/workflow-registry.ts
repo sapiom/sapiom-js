@@ -1,9 +1,10 @@
 /**
  * Workflow registry (workstream W2's backend slice).
  *
- * Discovers orchestration projects by scanning a directory tree (bounded
- * depth) for `sapiom.json` marker files, tracks manually-connected paths,
- * and persists the combined list to HARNESS_PATHS.workflows. Exposes an
+ * Discovers orchestration projects by scanning a directory tree (bounded by
+ * depth and by directories visited) for `sapiom.json` marker files, tracks
+ * manually-connected paths, and persists the combined list to
+ * HARNESS_PATHS.workflows. Exposes an
  * Express router implementing the /api/workflows surface from
  * src/shared/types.ts; the integrator mounts it (and express.json()) on the
  * shared app.
@@ -16,12 +17,14 @@ import { Router, type Router as ExpressRouter } from "express";
 
 import { HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
 import {
-  AGENT_PROJECT_SCAN_MAX_DEPTH,
   type AgentProjectMarker,
   type AgentProjectMarkerInspection,
+  AgentProjectScanBudget,
+  type AgentProjectWalkAction,
   inspectAgentProjectMarker,
   isAgentProjectScanIgnoredDir,
   readAgentProjectMarker,
+  walkAgentProjectTreeAsync,
 } from "./agent-project-discovery.js";
 import { hasTraversalSegment, resolveWithinRoot } from "./path-safety.js";
 
@@ -32,7 +35,8 @@ function expandHome(inputPath: string): string {
 }
 
 // `dir` reaching these sinks is always a resolved absolute path (from
-// path.resolve in scan/connectPath, or a confined descent in scanDir), so a
+// path.resolve in scan/connectPath, or a confined descent in the scan walk),
+// so a
 // `..` segment can never survive. Asserting it anyway keeps the no-traversal
 // guarantee explicit and local to each fs read, and covers the arbitrary
 // path connectPath accepts (which has no scan root to confine it to).
@@ -49,11 +53,6 @@ async function inspectMarker(
   return inspectAgentProjectMarker(dir);
 }
 
-function isConfirmedMissingPath(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "ENOENT" || code === "ENOTDIR";
-}
-
 async function nameFor(dir: string): Promise<string> {
   if (hasTraversalSegment(dir)) return path.basename(dir);
   try {
@@ -66,68 +65,75 @@ async function nameFor(dir: string): Promise<string> {
   return path.basename(dir);
 }
 
+/** What one scan of a root turned up, and how far it can be trusted. */
+export interface AgentProjectScanResult {
+  /** Projects discovered on this pass. */
+  found: WorkflowInfo[];
+  /** Subtrees left opaque by a transient filesystem error. */
+  unreconciledRoots: string[];
+  /** The traversal allowance this scan spent — `visited`, `envelopeDepth`. */
+  budget: AgentProjectScanBudget;
+}
+
 /**
- * Depth-first scan; a directory carrying a marker is registered and not
- * descended into. Every directory touched is confined to `root` (the tree the
- * caller asked to scan): the initial call is `root` itself, and recursion only
- * ever descends into a direct child, so no crafted entry name can walk the
- * scan outside `root`. Symlinked entries report `isDirectory() === false`
- * (withFileTypes uses raw dirent info, not a followed stat) and so are never
- * descended into either.
+ * Scans `root` for agent projects, bounded by depth AND by directories visited
+ * (core/agent-project-discovery.ts owns that policy and the numbers behind it).
+ * A directory carrying a marker is registered and not descended into.
+ *
+ * Every directory touched is confined to `root` (the tree the caller asked to
+ * scan): the walk starts at `root` itself and only ever descends into a direct
+ * child, so no crafted entry name can walk the scan outside `root` — and
+ * `resolveWithinRoot` re-asserts that at the sink, local to each fs read.
+ * Symlinked entries report `isDirectory() === false` (withFileTypes uses raw
+ * dirent info, not a followed stat) and so are never descended into either,
+ * which is what makes a symlink cycle terminate.
+ *
+ * Exported so the perf benchmark can measure the real scanner against an
+ * explicit budget rather than a copy of its traversal.
  */
-async function scanDir(
+export async function scanAgentProjects(
   root: string,
-  dir: string,
-  depth: number,
-  found: WorkflowInfo[],
-  unreconciledRoots: string[],
-): Promise<void> {
-  if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
+  budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
+): Promise<AgentProjectScanResult> {
+  const absoluteRoot = path.resolve(root);
+  const found: WorkflowInfo[] = [];
+  const unreconciledRoots: string[] = [];
 
-  const safeDir = resolveWithinRoot(root, dir);
-  if (!safeDir) return;
+  const onDirectory = async (dir: string): Promise<AgentProjectWalkAction> => {
+    const safeDir = resolveWithinRoot(absoluteRoot, dir);
+    if (!safeDir) return "stop";
 
-  const markerResult = await inspectMarker(safeDir);
-  if (markerResult.status === "valid") {
-    const marker = markerResult.marker;
-    found.push({
-      name: await nameFor(safeDir),
-      path: safeDir,
-      definitionId: marker.definitionId ?? null,
-      definitionSlug: marker.name ?? null,
-      templateId: marker.templateId ?? null,
-      forkId: marker.forkId ?? null,
-      starterId: marker.starterId ?? null,
-      source: "scan",
-    });
-    return;
-  }
-  if (markerResult.status === "unreadable") {
-    // The directory may still be a valid project. Treat the whole subtree as
-    // opaque for this pass so a transient filesystem error neither removes an
-    // existing entry nor discovers children that should be hidden beneath it.
-    unreconciledRoots.push(safeDir);
-    return;
-  }
+    const markerResult = await inspectMarker(safeDir);
+    if (markerResult.status === "valid") {
+      const marker = markerResult.marker;
+      found.push({
+        name: await nameFor(safeDir),
+        path: safeDir,
+        definitionId: marker.definitionId ?? null,
+        definitionSlug: marker.name ?? null,
+        templateId: marker.templateId ?? null,
+        forkId: marker.forkId ?? null,
+        starterId: marker.starterId ?? null,
+        source: "scan",
+      });
+      return "stop";
+    }
+    if (markerResult.status === "unreadable") {
+      // The directory may still be a valid project. Treat the whole subtree as
+      // opaque for this pass so a transient filesystem error neither removes an
+      // existing entry nor discovers children that should be hidden beneath it.
+      unreconciledRoots.push(safeDir);
+      return "stop";
+    }
+    return "descend";
+  };
 
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await fs.readdir(safeDir, { withFileTypes: true });
-  } catch (error) {
-    if (!isConfirmedMissingPath(error)) unreconciledRoots.push(safeDir);
-    return;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
-    await scanDir(
-      root,
-      path.join(safeDir, entry.name),
-      depth + 1,
-      found,
-      unreconciledRoots,
-    );
-  }
+  await walkAgentProjectTreeAsync(
+    absoluteRoot,
+    { onDirectory, onUnreadable: (dir) => unreconciledRoots.push(dir) },
+    budget,
+  );
+  return { found, unreconciledRoots, budget };
 }
 
 /**
@@ -135,8 +141,18 @@ async function scanDir(
  * a new scan. Only those entries may be reconciled away when their marker is no
  * longer found; a narrow scan must never delete projects discovered from a
  * different root.
+ *
+ * `envelopeDepth` is the scan's own report of how deep it got, not the static
+ * cap: a scan the node budget cut short covered fewer levels than it was
+ * allowed to, and reconciling at the allowance would delete rows it simply
+ * never looked for. The walk is breadth-first, so every level at or above
+ * `envelopeDepth` is complete and safe to reconcile.
  */
-function isCoveredByScan(root: string, candidate: string): boolean {
+function isCoveredByScan(
+  root: string,
+  candidate: string,
+  envelopeDepth: number,
+): boolean {
   const relative = path.relative(root, candidate);
   if (relative === "") return true;
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
@@ -144,7 +160,7 @@ function isCoveredByScan(root: string, candidate: string): boolean {
   }
   const segments = relative.split(path.sep).filter(Boolean);
   return (
-    segments.length <= AGENT_PROJECT_SCAN_MAX_DEPTH &&
+    segments.length <= envelopeDepth &&
     !segments.some((segment) => isAgentProjectScanIgnoredDir(segment))
   );
 }
@@ -240,18 +256,28 @@ export class WorkflowRegistry {
   }
 
   /**
+   * `budget` is overridable so a caller (and the tests that pin this rule) can
+   * scan with a narrower allowance than the shipped default; the reconciliation
+   * envelope follows whatever the scan actually managed to cover.
+   *
    * Scans `root`, refreshes discovered projects, and removes scan-sourced rows
    * in this scan's traversal envelope when their marker is confirmed gone or
-   * invalid. Rows beneath a temporarily unreadable directory survive this pass;
-   * manually connected rows remain until their path itself is pruned.
+   * invalid. Rows beneath a temporarily unreadable directory survive this pass,
+   * as do rows below the depth the scan actually completed when the node budget
+   * cut it short; manually connected rows remain until their path itself is
+   * pruned.
    */
-  async scan(root: string): Promise<WorkflowInfo[]> {
+  async scan(
+    root: string,
+    budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
+  ): Promise<WorkflowInfo[]> {
     return this.enqueue(async () => {
       await this.ensureLoaded();
       const absoluteRoot = path.resolve(expandHome(root));
-      const found: WorkflowInfo[] = [];
-      const unreconciledRoots: string[] = [];
-      await scanDir(absoluteRoot, absoluteRoot, 0, found, unreconciledRoots);
+      const { found, unreconciledRoots } = await scanAgentProjects(
+        absoluteRoot,
+        budget,
+      );
 
       const foundPaths = new Set(found.map((workflow) => workflow.path));
       const byPath = new Map(
@@ -259,7 +285,7 @@ export class WorkflowRegistry {
           .filter(
             (workflow) =>
               workflow.source !== "scan" ||
-              !isCoveredByScan(absoluteRoot, workflow.path) ||
+              !isCoveredByScan(absoluteRoot, workflow.path, budget.envelopeDepth) ||
               foundPaths.has(workflow.path) ||
               isProtectedByIncompleteScan(workflow.path, unreconciledRoots),
           )
