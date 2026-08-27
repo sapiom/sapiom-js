@@ -25,24 +25,6 @@ import { z } from "zod/v4";
  */
 
 // ------------------------------------------------------------------- config
-const DEFAULT_COMPANIES = [
-  "Example Fintech A",
-  "Example Fintech B",
-  "Example Fintech C",
-  "Example Fintech D",
-  "Example Fintech E",
-  "Example Fintech F",
-  "Example Fintech G",
-  "Example Fintech H",
-  "Example Fintech I",
-  "Example Fintech J",
-  "Example Fintech K",
-  "Example Fintech L",
-  "Example Fintech M",
-  "Example Fintech N",
-  "Example Fintech O",
-] as const;
-
 const DEFAULT_SIGNALS = ["exec_moves", "funding", "hiring"] as const;
 const MAX_COMPANIES = 15;
 const MAX_SCRAPES_PER_COMPANY = 3;
@@ -55,6 +37,7 @@ const MEMORY_NAMESPACE_PREFIX = "fintech-exec-radar";
 const MEMORY_RECORD_MARKER = "reported_source_url_keys";
 const OBSERVATION_RECORD_MARKER = "fintech_radar_observation_snapshot";
 const RANK_OUTPUT_NAME = "rank_fintech_radar_items";
+const EMAIL_OR_EMPTY_PATTERN = new RegExp(`(?:^$|${z.regexes.email.source})`);
 const RANK_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -192,7 +175,6 @@ type Ctx = AgentExecutionContext<Shared>;
 
 // ------------------------------------------------------------------ helpers
 function normalizeCompanies(input: unknown): string[] {
-  if (input === undefined) return [...DEFAULT_COMPANIES];
   const values = Array.isArray(input) ? input : [];
   const bySlug = new Map<string, string>();
   for (const value of values) {
@@ -218,14 +200,6 @@ function normalizeSignals(input: unknown): Signal[] {
     ),
   ];
   return cleaned;
-}
-
-function isDefaultCompanyList(companies: string[]): boolean {
-  if (companies.length !== DEFAULT_COMPANIES.length) return false;
-  const supplied = new Set(companies.map(companyKey));
-  return DEFAULT_COMPANIES.every((company) =>
-    supplied.has(companyKey(company)),
-  );
 }
 
 function clampInteger(
@@ -768,19 +742,25 @@ async function commitReportedKeys(
 
 // ------------------------------------------------------------------- schema
 const entryInput = z.object({
+  deliverTo: z
+    .stringFormat("email-or-empty", EMAIL_OR_EMPTY_PATTERN)
+    .default("")
+    .optional()
+    .describe("Recipient email. Leave empty to return the digest inline only."),
   companies: z
     .array(z.string())
-    .default([...DEFAULT_COMPANIES])
     .describe(
       `Companies to track; deduped, with at most ${MAX_COMPANIES} unique names.`,
     ),
   signals: z
     .array(z.enum(DEFAULT_SIGNALS))
     .default([...DEFAULT_SIGNALS])
+    .optional()
     .describe("Signals to track: executive moves, funding, and hiring."),
   window: z
     .enum(["1d", "7d", "30d"])
     .default("7d")
+    .optional()
     .describe(
       "Recency hint included in every search query; the provider may return older results.",
     ),
@@ -790,22 +770,21 @@ const entryInput = z.object({
     .min(0)
     .max(MAX_SCRAPES_PER_COMPANY)
     .default(MAX_SCRAPES_PER_COMPANY)
+    .optional()
     .describe("Maximum article pages read per company across all signals."),
   maxCapabilityCalls: z
     .number()
     .int()
     .min(1)
     .default(DEFAULT_MAX_CAPABILITY_CALLS)
+    .optional()
     .describe(
       "Hard structural ceiling; the run blocks before fan-out if its maximum call envelope exceeds this number.",
     ),
-  deliverTo: z
-    .union([z.literal(""), z.email()])
-    .default("")
-    .describe("Recipient email. Leave empty to return the digest inline only."),
   dryRun: z
     .boolean()
     .default(true)
+    .optional()
     .describe(
       "Preview the resolved plan and maximum call envelope without spending. Set false to run live.",
     ),
@@ -816,6 +795,7 @@ const entryInput = z.object({
   mode: z
     .enum(["coordinate", "research"])
     .default("coordinate")
+    .optional()
     .describe(
       "Internal role. Coordinators dispatch one research child per company.",
     ),
@@ -922,12 +902,6 @@ const plan = defineStep({
         runDate,
         invalid: false,
       });
-    }
-
-    if (!dryRun && isDefaultCompanyList(companies)) {
-      return fail(
-        "replace the fictional default companies before starting a live run",
-      );
     }
 
     const estimate = costEnvelope(

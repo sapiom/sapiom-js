@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { zodToJsonSchema } from "@sapiom/agent";
 import { EmailHttpError } from "@sapiom/tools";
 
 import { agent } from "./index.ts";
@@ -89,6 +90,21 @@ async function acknowledgeReportedItems(context, child) {
     context,
   );
 }
+
+test("entry contract leads with delivery and only requires a watchlist", () => {
+  const schema = zodToJsonSchema(agent.steps.plan.inputSchema);
+
+  assert.equal(Object.keys(schema.properties)[0], "deliverTo");
+  assert.equal(schema.properties.deliverTo.type, "string");
+  assert.equal(schema.properties.deliverTo.default, "");
+  assert.equal(schema.properties.deliverTo.format, "email-or-empty");
+  assert.equal(typeof schema.properties.deliverTo.pattern, "string");
+  assert.equal(schema.properties.window.default, "7d");
+  assert.equal(schema.properties.maxScrapesPerCompany.default, 3);
+  assert.equal(schema.properties.maxCapabilityCalls.default, 160);
+  assert.equal(schema.properties.dryRun.default, true);
+  assert.deepEqual(schema.required, ["companies"]);
+});
 
 test("three failed children still produce a 12-of-15 sourced digest", async () => {
   const companies = Array.from(
@@ -388,23 +404,20 @@ test("plan previews exact costs and blocks only above the configured ceiling", a
   );
   assert.equal(allowed.stepName, "fanOut");
 
-  const fictionalLiveRun = await agent.steps.plan.run(
+  const missingCompanies = await agent.steps.plan.run(
     {
-      ...baseInput,
-      companies: Array.from(
-        { length: 15 },
-        (_, index) => `Example Fintech ${String.fromCharCode(65 + index)}`,
-      ).reverse(),
+      signals: ["exec_moves", "funding", "hiring"],
+      window: "7d",
+      maxScrapesPerCompany: 3,
       maxCapabilityCalls: 160,
+      childDefinition: "fintech-exec-radar-test",
+      runDate: "2026-08-26",
       dryRun: false,
     },
     context,
   );
-  assert.equal(fictionalLiveRun.kind, "fail");
-  assert.match(
-    fictionalLiveRun.reason,
-    /replace the fictional default companies/,
-  );
+  assert.equal(missingCompanies.kind, "fail");
+  assert.match(missingCompanies.reason, /companies must contain/);
 });
 
 test("plan rejects explicit empty arrays and dedupes slug-equivalent names", async () => {
@@ -445,6 +458,20 @@ test("plan rejects explicit empty arrays and dedupes slug-equivalent names", asy
   assert.equal(deduped.stepName, "planned");
   assert.deepEqual(deduped.input.companies, ["Example Bank"]);
   assert.equal(deduped.input.estimate.companies, 1);
+
+  const rawOverLimitButUniqueWithinLimit = await agent.steps.plan.run(
+    {
+      ...baseInput,
+      maxCapabilityCalls: 160,
+      companies: [
+        ...Array.from({ length: 15 }, (_, index) => `Company ${index}`),
+        "company-0",
+      ],
+    },
+    context,
+  );
+  assert.equal(rawOverLimitButUniqueWithinLimit.stepName, "planned");
+  assert.equal(rawOverLimitButUniqueWithinLimit.input.companies.length, 15);
 
   const internationalNames = await agent.steps.plan.run(
     {

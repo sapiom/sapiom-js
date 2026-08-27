@@ -367,10 +367,9 @@
         }
       ],
       "setup": {
-        "runsWithNoSetup": true,
+        "runsWithNoSetup": false,
         "connectionCount": 0,
-        "settingCount": 7,
-        "degradedWithoutSetup": "Previews an exact call envelope for 15 fictional company placeholders without spending; replace them with the companies you track and disable dryRun for a live sourced digest."
+        "settingCount": 1
       }
     },
     {

@@ -50,21 +50,21 @@ plan ──▶ budgetBlocked                                (call ceiling)
 
 ```json
 {
-  "companies": ["Example Fintech A", "Example Fintech B", "Example Fintech C"],
+  "deliverTo": "you@example.com",
+  "companies": ["Example Bank", "Sample Payments", "Demo Capital"],
   "signals": ["exec_moves", "funding", "hiring"],
   "window": "7d",
   "maxScrapesPerCompany": 3,
   "maxCapabilityCalls": 160,
-  "deliverTo": "you@example.com",
   "dryRun": true
 }
 ```
 
-The built-in watchlist contains 15 fictional placeholders and previews without
-spending. Replace it with the companies you track, then set `dryRun: false` for a
-live run. Input is deduplicated, and a plan with more than 15 unique companies
-fails before fan-out instead of silently dropping coverage. A live run using the
-unchanged fictional defaults is also rejected before any capability call. `window` adds a
+The run form puts optional email delivery first, requires the companies you
+actually track, and keeps tuning controls under optional fields. The first run
+previews without spending; set `dryRun: false` only after reviewing its call
+envelope. Input is deduplicated, and a plan with more than 15 unique companies
+fails before fan-out instead of silently dropping coverage. `window` adds a
 recency phrase to each search query; it is a provider hint, not an enforced date
 filter, so older results can still appear. The three signals are:
 
