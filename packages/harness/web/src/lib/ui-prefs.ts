@@ -28,11 +28,17 @@ export interface UiPrefs {
    */
   collapsedKeys?: string[];
   /**
-   * How the rail files agents. Only `project` today; `deployment` is retired
-   * (it bucketed a fact every agent row already prints as a glyph) and
-   * `workspace` is replaced by it. Persisted so the explorer resumes as the
-   * user left it — an unknown stored value falls back to the default rather
-   * than rendering an axis that no longer exists.
+   * How the rail files agents: `project` (where an agent lives) or `group`
+   * (what it is related to). `deployment` is retired — it bucketed a fact every
+   * agent row already prints as a glyph — and `workspace` is replaced by
+   * `project`. Persisted so the explorer resumes as the user left it; an unknown
+   * stored value falls back to the default rather than rendering an axis that no
+   * longer exists.
+   *
+   * The GROUP ARRANGEMENT itself is not here. It lives in each project's
+   * `.sapiom/studio-rail.json` (see `agent-groups.ts`), because it is the
+   * project's shape rather than this browser's preference — committable, and it
+   * travels with the repo.
    */
   railAxis?: RailAxis;
   /** Row/project order in the rail tree: newest activity first (default) or

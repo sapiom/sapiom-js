@@ -24,6 +24,17 @@ import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { ProjectRow, ProjectTreeRows, dirKey, projectKey } from "./ProjectTreeRows";
+import { GroupSections } from "./GroupRow";
+import type { GroupDropRequest } from "./GroupRow";
+import { useRailGroups } from "../lib/use-rail-groups";
+import {
+  applyGroupDrop,
+  canResetToDetected,
+  createGroup,
+  deleteGroup,
+  isMaterialized,
+  renameGroup,
+} from "../lib/agent-groups";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
 import { useAccountPlan } from "../lib/use-account-plan";
@@ -126,15 +137,16 @@ const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
 /**
  * The axes the filing panel offers, and their copy.
  *
- * ONE entry today. `workspace` accumulated a row for every directory that had
- * ever hosted a session, and `deployment` filed on `definitionId != null` — a
- * fact every agent row already prints as a cloud glyph, so it re-sorted the
- * rail to tell you nothing new. Both are retired. The Group axis (what an
- * agent is RELATED to, read off launch edges) is the next entry, and the only
- * kind that earns one: a fact the row cannot already show.
+ * TWO entries. `workspace` accumulated a row for every directory that had ever
+ * hosted a session, and `deployment` filed on `definitionId != null` — a fact
+ * every agent row already prints as a cloud glyph, so it re-sorted the rail to
+ * tell you nothing new. Both are retired. `group` (what an agent is RELATED to,
+ * read off launch edges) took the slot, and is the only kind of axis that earns
+ * one: a fact the row cannot already show. Any future axis has to clear the same
+ * bar.
  */
-const RAIL_AXES: readonly RailAxis[] = ["project"];
-const AXIS_LABELS: Record<RailAxis, string> = { project: "Project" };
+const RAIL_AXES: readonly RailAxis[] = ["project", "group"];
+const AXIS_LABELS: Record<RailAxis, string> = { project: "Project", group: "Group" };
 /** A stored value from a retired axis falls back to the default rather than
  *  rendering a section that no longer exists. */
 const resolveAxis = (stored: unknown): RailAxis =>
@@ -300,9 +312,9 @@ export function WorkflowsRail({
   // resumes as the user left it (docs/IA.md).
   const [historyOpen, setHistoryOpen] = useState(false);
   const [pastOpen, setPastOpen] = useState(false);
-  // Only `project` today. `deployment` is retired — it bucketed a fact every
-  // agent row already prints as a glyph — and the Group axis (what an agent is
-  // RELATED to, from launch edges) is the next entry in this dropdown.
+  // `project` (where an agent lives) and `group` (what it is related to).
+  // `deployment` is retired — it bucketed a fact every agent row already prints
+  // as a glyph — and `workspace` is replaced by `project`.
   const [axis, setAxis] = useState<RailAxis>(() => resolveAxis(loadUiPrefs().railAxis));
   const [sort, setSort] = useState<RailSort>(() =>
     loadUiPrefs().railSort === "name" ? "name" : "recent",
@@ -394,6 +406,47 @@ export function WorkflowsRail({
   // Agents no open root contains. Rarer than the old "No workspace" bucket,
   // but dropping them would hide an agent that exists.
   const strays = unrootedAgents(workflows, roots, sort);
+
+  // The GROUP axis: what an agent is RELATED to, seeded from launch edges and
+  // then owned by the user. One stored arrangement per project root, because
+  // groups are project-scoped — the file lives in the project, which is what
+  // makes the arrangement committable and shareable. Every rule about that file
+  // lives in `lib/agent-groups.ts`; this component only renders it.
+  const railGroups = useRailGroups(roots, workflows, sort, axis === "group");
+  // The group created by the last "New group" press, so its row mounts straight
+  // into the rename input. Keyed by LABEL, not id: the id is minted inside the
+  // reducer, and reading it back from there would mean calling a setter inside a
+  // state updater, which React is free to run twice. The label is what we chose
+  // before the call.
+  const [freshGroupLabel, setFreshGroupLabel] = useState<{ root: string; label: string } | null>(
+    null,
+  );
+
+  /** "New group", then "New group 2" — never a duplicate label, because two rows
+   *  saying one thing cannot be told apart. */
+  const nextGroupLabel = (existing: readonly { label: string }[]): string => {
+    const taken = new Set(existing.map((group) => group.label));
+    if (!taken.has("New group")) return "New group";
+    let n = 2;
+    while (taken.has(`New group ${n}`)) n++;
+    return `New group ${n}`;
+  };
+
+  /**
+   * GROUP-AXIS DROP. Nothing moves on disk — a group is a label over agents, so
+   * the only thing a drop changes is membership. (The Project axis gets a real
+   * directory move; that is a different axis with a different contract.)
+   *
+   * Refused across projects: an arrangement lives in one project's `.sapiom/`,
+   * so a group holding an agent from a neighbouring project would be a group
+   * with nowhere to be stored.
+   */
+  const onGroupDrop = (root: string, request: GroupDropRequest): void => {
+    const rootAgents = railGroups.agentsIn(root);
+    if (!rootAgents.some((workflow) => workflow.path === request.path)) return;
+    setFreshGroupLabel(null);
+    railGroups.edit(root, rootAgents, (state) => applyGroupDrop(state, request));
+  };
 
   // Live, UNBOUND sessions sitting exactly at a project root. Meaningful only
   // for a project with no agents at all — that row becomes the focus target so
@@ -505,7 +558,10 @@ export function WorkflowsRail({
           disclosure of its own. Its two buttons ask two different questions:
           `+` adds a project, sliders change how the list is filed. */}
       <div className="rail-header">
-        <span className="rail-header-label">Projects</span>
+        {/* The header names what the list is FILED BY, so it changes with the
+            axis. A header reading "Projects" over a list of relationship
+            clusters would describe the wrong thing. */}
+        <span className="rail-header-label">{axis === "group" ? "Groups" : "Projects"}</span>
         <div className="rail-header-actions">
           {/* FOLDER-with-plus, because what it adds is a folder. One `+` per
               question: this one opens a project; starting another session is
@@ -759,6 +815,25 @@ export function WorkflowsRail({
             // agent stays findable — it self-clears the moment a real agent or
             // session arrives under the same root.
             const creating = pending && empty && bare == null;
+            // GROUP AXIS. Every agent this root contains, filed by relationship
+            // instead of by directory.
+            //
+            // Fewer than TWO agents means there is no relationship to file — a
+            // group is a relationship, and one agent has none — so those
+            // projects keep the Project axis's own anatomy, root-agent merge
+            // included, and simply list what they hold. With two or more, the
+            // project row becomes a pure SCOPE header (`rootAgent={null}`): on
+            // this axis it is the project the arrangement is stored in, not a
+            // directory row, so merging an agent into it would put an agent row
+            // where a scope header belongs — and the root agent is often the
+            // head of the very group being shown.
+            const groupAgents = axis === "group" ? railGroups.agentsIn(project.root) : [];
+            const showGroups = axis === "group" && groupAgents.length > 1;
+            const soloAgents = groupAgents.filter(
+              (workflow) => workflow.path !== project.rootAgent?.workflow.path,
+            );
+            const groupNodes = showGroups ? railGroups.groupsFor(project.root, groupAgents) : [];
+            const groupState = railGroups.stateFor(project.root);
             return (
               <div
                 key={project.root}
@@ -768,13 +843,17 @@ export function WorkflowsRail({
                 <ProjectRow
                   label={project.label}
                   root={project.root}
-                  rootAgent={project.rootAgent}
+                  rootAgent={showGroups ? null : project.rootAgent}
                   collapsed={collapsed}
                   onToggleCollapsed={() => toggleCollapsed(projectKey(project.root))}
                   focusedAgentPath={focusedAgentPath}
                   onFocusAgent={onFocusAgent}
                   focusable={creating || bare != null}
-                  disclosable={project.dirs.length > 0 || project.agents.length > 0}
+                  disclosable={
+                    axis === "group"
+                      ? showGroups || soloAgents.length > 0
+                      : project.dirs.length > 0 || project.agents.length > 0
+                  }
                   busy={creating}
                   mainTestid={
                     creating
@@ -807,7 +886,7 @@ export function WorkflowsRail({
                     ) : undefined
                   }
                 />
-                {!collapsed && (
+                {!collapsed && axis === "project" && (
                   <ProjectTreeRows
                     dirs={project.dirs}
                     agents={project.agents}
@@ -818,6 +897,64 @@ export function WorkflowsRail({
                     onToggleCollapsed={toggleCollapsed}
                   />
                 )}
+                {!collapsed && showGroups && (
+                  <GroupSections
+                    sectionLabel={project.label}
+                    groups={groupNodes}
+                    editable={railGroups.isReady(project.root)}
+                    isDerived={!isMaterialized(groupState)}
+                    freshLabel={
+                      freshGroupLabel?.root === project.root ? freshGroupLabel.label : null
+                    }
+                    collapsedKeys={collapsedKeys}
+                    onToggleCollapsed={toggleCollapsed}
+                    focusedAgentPath={focusedAgentPath}
+                    onFocusAgent={onFocusAgent}
+                    onCreate={() => {
+                      const label = nextGroupLabel(groupNodes);
+                      railGroups.edit(project.root, groupAgents, (state) =>
+                        createGroup(state, label),
+                      );
+                      setFreshGroupLabel({ root: project.root, label });
+                    }}
+                    onRename={(groupId, label) => {
+                      setFreshGroupLabel(null);
+                      railGroups.edit(project.root, groupAgents, (state) =>
+                        renameGroup(state, groupId, label),
+                      );
+                    }}
+                    onDelete={(groupId) => {
+                      setFreshGroupLabel(null);
+                      railGroups.edit(project.root, groupAgents, (state) =>
+                        deleteGroup(state, groupId),
+                      );
+                    }}
+                    onDrop={(request) => onGroupDrop(project.root, request)}
+                    onReset={
+                      canResetToDetected(groupState)
+                        ? () => {
+                            setFreshGroupLabel(null);
+                            railGroups.reset(project.root);
+                          }
+                        : undefined
+                    }
+                    resetCount={isMaterialized(groupState) ? groupState.groups.length : 0}
+                  />
+                )}
+                {/* One agent (or none but a live session) has no relationship to
+                    file, so the group axis simply shows what the project holds
+                    rather than a group row wrapping a single name. */}
+                {!collapsed &&
+                  axis === "group" &&
+                  !showGroups &&
+                  soloAgents.map((workflow) => (
+                    <WorkflowRow
+                      key={workflow.path}
+                      workflow={workflow}
+                      isFocused={workflow.path === focusedAgentPath}
+                      onFocus={onFocusAgent}
+                    />
+                  ))}
               </div>
             );
           })}
