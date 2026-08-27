@@ -125,10 +125,10 @@ function firstSegmentIgnored(relPath: string): boolean {
  * renamed, or crosses one of those boundaries — not when unrelated readable
  * files are edited. Exported for direct testing.
  *
- * The synchronous form is retained for callers that need an immediate
- * baseline at construction time (before async I/O is possible). The
- * polling fallback uses the async form to avoid blocking the event loop on
- * a wide directory tree.
+ * The synchronous form remains for the session watcher, whose constructor
+ * requires an immediate baseline. Project-graph watchers use the async form
+ * for startup, native-event checks, and polling so a wide Project never walks
+ * synchronously on the server loop.
  *
  * `budget` is injectable so a benchmark can read the directories visited off
  * the same object the walk spends, and so a test can force truncation. Pass the
@@ -155,10 +155,10 @@ export function snapshotWorkspaceWorkflows(
 }
 
 /**
- * Async variant used by the polling fallback — yields between directories so
- * a wide workspace can't stutter the event loop on platforms without recursive
- * fs.watch. Produces the same fingerprint as the sync version. Exported for
- * direct testing.
+ * Async variant for graph watcher baselines/event checks and polling
+ * fallbacks — yields between directories so a wide workspace cannot stutter
+ * the event loop. Produces the same fingerprint as the sync version. Exported
+ * for direct testing.
  */
 export async function snapshotWorkspaceWorkflowsAsync(
   root: string,
