@@ -12,7 +12,7 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { readFileSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
@@ -118,6 +118,7 @@ import {
 } from "./ingest.js";
 import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
+import { createWorkflowGraphRouter } from "./workflow-graph.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -1351,6 +1352,17 @@ export const startServer = async (
       onLinked: async (workflow) => {
         await scanWorkflowsAndBroadcast(workflow.path);
       },
+    }),
+  );
+  // IA-01: the session-free, workflow-keyed canvas route. Same derivation the
+  // session-bound render uses, keyed by the agent's absolute path instead of a
+  // session id — so a board can be read for an agent that has never hosted a
+  // session. Resolution goes through the same live cache actions.ts uses, so
+  // only registered agents are ever read from disk.
+  app.use(
+    createWorkflowGraphRouter({
+      resolveWorkflow: (agentPath) =>
+        workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
     }),
   );
   app.use(
