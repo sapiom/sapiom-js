@@ -140,4 +140,30 @@ describe("sapiom-sandbox-preview skill sync", () => {
       readFileSync(canonicalPreview, "utf8"),
     );
   });
+
+  // Content guards (SAP-2922). Byte-identity cannot stop two identically wrong
+  // copies: the whole point of this skill is that a durability ask must land on
+  // sapiom_dev_app_publish and not on a preview URL that expires.
+  describe("teaches App Links", () => {
+    const content = readFileSync(canonicalPreview, "utf8");
+
+    it("routes durability asks to sapiom_dev_app_publish, from the frontmatter down", () => {
+      const frontmatter = content.split("---")[1] ?? "";
+      expect(frontmatter).toMatch(/permanent|durable/i);
+      expect(frontmatter).toMatch(/share/i);
+      expect(content).toContain("sapiom_dev_app_publish");
+      expect(content).toContain("https://apps.sapiom.ai/{org}/{slug}");
+    });
+
+    it("says plainly that the preview URL expires with the sandbox ttl", () => {
+      expect(content).toMatch(/preview URL is temporary/i);
+      expect(content).toMatch(/ttl/);
+    });
+
+    it("warns about the cold start and the public-visibility cost", () => {
+      expect(content).toMatch(/cold-start/i);
+      expect(content).toMatch(/confirmPublic/);
+      expect(content).toMatch(/dailySpendCapUsd/);
+    });
+  });
 });
