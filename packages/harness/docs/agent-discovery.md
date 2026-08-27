@@ -242,7 +242,7 @@ the intuitive answer ("the depth limit") is wrong.
 
 This was 3 until round 1. Three assumed the root you opened was more or less the
 agent's own folder, which stopped being true when the rail became project-rooted:
-a real agent sits at `~/polsia/backend/src/agents/ads` (4 segments) and
+an agent sits at `<root>/backend/src/agents/<agent>` (4 segments) and
 `<root>/apps/<app>/src/features/<x>/agents/<agent>` is 6. At 3, those agents
 were not found at all.
 

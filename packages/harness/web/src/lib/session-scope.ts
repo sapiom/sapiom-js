@@ -289,8 +289,9 @@ export type CanvasSource =
    *  that session's current binding. */
   | { kind: "session"; sessionId: string }
   /** `GET /api/workflows/:path/graph` — the session-free entry point onto the
-   *  same derivation (IA-01). */
-  | { kind: "workflow"; path: string };
+   *  same derivation (IA-01). Keyed by the AGENT's directory path; the route's
+   *  own segment keeps the legacy word because it is a shipped API surface. */
+  | { kind: "agent"; path: string };
 
 export interface CanvasSourceInput {
   /** The subject the pane is drawing (`canvasSubject`). */
@@ -331,7 +332,7 @@ export function canvasSourceFor({
       : bindingPath != null && samePath(bindingPath, subjectPath);
   if (sessionId != null && agrees) return { kind: "session", sessionId };
   if (subjectPath == null) return { kind: "none" };
-  return { kind: "workflow", path: subjectPath };
+  return { kind: "agent", path: subjectPath };
 }
 
 // ---------------------------------------------------------------------------

@@ -12,4 +12,4 @@ This adds a second, session-free entry point onto the *same* derivation. `derive
 
 Failure modes are deliberately distinct: `400` for a blank, relative or `..`-carrying path (and for a `sapiom.json` symlinked out of the project), `404` only for a path that is not a registered workflow, and `200` with `status: "empty" | "preparing" | "error" | "ok"` for everything else — a missing `sapiom.json` is an empty board, never a missing route.
 
-Full contract: `packages/harness/docs/workflow-canvas-graph.md`.
+Full contract: `packages/harness/docs/agent-canvas-graph.md`.

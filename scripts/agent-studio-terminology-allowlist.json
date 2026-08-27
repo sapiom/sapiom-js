@@ -168,6 +168,20 @@
     "reason": "The Studio localhost deploy route remains stable for existing clients."
   },
   {
+    "id": "workflow-graph-local-route",
+    "path": "packages/harness/src/server/workflow-graph.ts",
+    "pattern": "^/api/workflows/:path/graph$",
+    "occurrences": 1,
+    "reason": "The agent-keyed canvas route is a shipped localhost API surface and its path stays stable for existing clients."
+  },
+  {
+    "id": "readme-canvas-graph-route",
+    "path": "packages/harness/README.md",
+    "pattern": "/api/workflows/:path/graph",
+    "occurrences": 1,
+    "reason": "The README quotes the shipped route path verbatim; the prose around it says agent."
+  },
+  {
     "id": "actions-input-contract-route",
     "path": "packages/harness/src/server/actions.ts",
     "pattern": "^/api/workflows/:id/input-contract$",
@@ -213,7 +227,7 @@
     "id": "canvas-pane-icon-identifier",
     "path": "packages/harness/web/src/components/CanvasPane.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 4,
+    "occurrences": 5,
     "reason": "The design-system Workflow icon identifier is private and remains unchanged."
   },
   {
