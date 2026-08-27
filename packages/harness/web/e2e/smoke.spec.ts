@@ -310,7 +310,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
 
     // An AGENT row carries a deployed/draft cloud state; no session dot, no
     // expander.
-    await expect(page.getByTestId("workflow-status-leasing")).toHaveAttribute("data-deployed", "true");
+    await expect(page.getByTestId("workflow-status-/Users/demo/acme-app/leasing")).toHaveAttribute("data-deployed", "true");
     await expect(page.locator("[data-testid^='workflow-session-dot-']")).toHaveCount(0);
     await expect(page.locator("[data-testid^='workflow-expander-']")).toHaveCount(0);
     await expect(page.locator("[data-testid^='rail-session-']")).toHaveCount(0);
@@ -322,7 +322,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     const rfq = page.getByTestId("workflow-rfq");
     await expect(rfq).toHaveCount(1);
     await expect(rfq).toHaveClass(/workspace-row/);
-    await expect(page.getByTestId("workflow-status-rfq")).toHaveCount(0);
+    await expect(page.getByTestId("workflow-status-/Users/demo/rfq-agent")).toHaveCount(0);
 
     // A project with live sessions but no agent (scratch) is the one focusable
     // project row — its sessions live in the tab strip, not the rail.

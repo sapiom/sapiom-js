@@ -20,7 +20,30 @@ import { parentOf } from "./project-dir";
 /** What detection found at a resolved path. */
 export type FolderOutcome =
   | { kind: "project" }
-  | { kind: "multi"; found: number }
+  | {
+      kind: "multi";
+      /**
+       * Agent projects sitting DIRECTLY inside this folder — one level down,
+       * because that is all `GET /api/fs/list` reports and all this function
+       * ever asks for.
+       *
+       * RENAMED FROM `found`, and the rename is the fix.
+       *
+       * `found` read as "what adding will find", and the dialog printed it on
+       * the ink button: `Add all {found}`. But `POST /api/workflows/scan` walks
+       * the whole tree — eight levels, bounded by a node budget — so the two
+       * numbers are answers to different questions. Measured on a real install:
+       * the button read **Add all 1** and the click registered **87** agents.
+       * That single press is where the user's 88-row registry came from, and
+       * the flood of "outside your projects" rows this round exists to fix.
+       *
+       * So the count keeps its honest meaning and loses its false one: it is
+       * stated as a fact about the folder's immediate contents, and it is NOT
+       * what any button promises. See `StartDialog`'s `PrimaryActions` for why
+       * the promise could not simply be corrected to the right number.
+       */
+      directChildren: number;
+    }
   | { kind: "plain" }
   | { kind: "new" };
 
@@ -61,7 +84,7 @@ export async function classifyFolder(
     // Resolved somewhere else than asked → the folder doesn't exist yet.
     if (stripTrailingSlash(children.path) !== t) return { kind: "new" };
     const inside = children.dirs.filter((dir) => dir.hasAgentProject).length;
-    return inside > 0 ? { kind: "multi", found: inside } : { kind: "plain" };
+    return inside > 0 ? { kind: "multi", directChildren: inside } : { kind: "plain" };
   } catch {
     // Unreadable target, readable parent → a folder that doesn't exist yet (the
     // real server's 404 path). Both unreadable is a real error.

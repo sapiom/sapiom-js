@@ -73,11 +73,31 @@ test.describe("add existing agents (detection-driven)", () => {
     const modal = page.locator(".modal-start");
     await modal.getByTestId("dir-picker-input").fill("/Users/demo");
 
-    // Bulk discovery is what the dialog OFFERS once the picked folder turns out
-    // to contain projects. Two of the three fixture workflows sit directly under
-    // /Users/demo (the third is nested in acme-app), so that is what detection
-    // reports here.
-    await expect(modal.getByTestId("aw-add-all")).toContainText("Add all 2");
+    /* RE-POINTED IN ROUND 2, and this fixture is the defect in miniature.
+       Detection sees TWO agent projects directly under /Users/demo (the third
+       is nested inside acme-app); the scan is recursive and registers THREE.
+       Round 1 printed the first number on the button — `Add all 2` — for an
+       action that did the second. At real scale that mismatch was 1 vs 87, and
+       those 87 rows are the flood this whole round is about.
+
+       So the count stays where it is true (the readout, which now says which
+       question it answered), the reach is stated in words, and the button
+       promises nothing it cannot keep. */
+    await expect(modal.getByTestId("aw-result")).toContainText(
+      "2 agent projects directly inside this folder",
+    );
+    await expect(modal.getByTestId("aw-scan-reach")).toContainText("searches the whole tree");
+    await expect(modal.getByTestId("aw-add-all")).toContainText("Add every agent under this folder");
+
+    /* And it takes TWO presses. The first arms and restates the consequence in
+       the terms that actually bit — one unconfirmed click is how 87 rows
+       arrived — and only the second registers anything. */
+    await modal.getByTestId("aw-add-all").click();
+    await expect(modal).toBeVisible();
+    await expect(modal.getByTestId("aw-add-all")).toHaveAttribute("data-armed", "true");
+    await expect(modal.getByTestId("aw-add-all")).toContainText("this can be a lot of rows");
+    await expect(page.locator(".toast")).toHaveCount(0);
+
     await modal.getByTestId("aw-add-all").click();
     await expect(modal).toBeHidden();
     // The scan itself is recursive, so it finds all three.

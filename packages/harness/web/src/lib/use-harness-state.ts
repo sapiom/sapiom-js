@@ -43,6 +43,7 @@ import {
   planProjectRemoval,
   reopenedClosedProjects,
 } from "./project-membership";
+import { rootContains } from "./session-scope";
 import { loadUiPrefs, saveUiPrefs } from "./ui-prefs";
 import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
@@ -206,6 +207,17 @@ export interface HarnessStateHook {
    * the cap suggests.
    */
   removeProject: (root: string) => Promise<void>;
+  /**
+   * OPENS A FOLDER AS A PROJECT — the other half of `removeProject`.
+   *
+   * Distinct from `connectWorkflow`, which registers an AGENT and only records
+   * the folder when nothing else already holds it. That gate is right for a
+   * build (it is what stopped one row per agent) and wrong for this: a project
+   * is a folder the user CHOSE, and whether it currently contains an agent is
+   * not the question. Round 1 had no such action at all, so the rail's `+`
+   * opened agent detection and an empty folder could not be added.
+   */
+  openProject: (root: string) => Promise<void>;
   /** Adapter registry (GET /api/harnesses) — drives the new-session picker
    *  (installed/experimental/external flags) and the MCP setup prompts. */
   listHarnesses: () => Promise<HarnessEntry[]>;
@@ -1577,6 +1589,35 @@ export function useHarnessState(): HarnessStateHook {
    * cwds are project roots too — so without it the project is back on the next
    * reload, wearing a dead session's cwd.
    */
+  /**
+   * "Open this folder as a project."
+   *
+   * Two things, in this order, and the first is why the second is safe.
+   *
+   * TOMBSTONES INSIDE THE OPENED FOLDER ARE DROPPED, not just the one that
+   * names it. `hiddenByClosedProject` deliberately refuses to let an EQUAL
+   * entry un-close a root (the next boot would re-record it and quietly undo
+   * every removal), and it rescues a path only via an open root STRICTLY
+   * INSIDE the closed one. Both rules are right, and together they leave a hole:
+   * remove `~/acme`, then open `~/` above it, and `~/acme`'s agents are inside
+   * a project the user has open and still rendered nowhere — an agent that
+   * exists and nothing shows, which is the failure this whole module is
+   * organised around. You cannot open a folder as a project and keep part of it
+   * removed; the rail would show a project silently missing its contents.
+   *
+   * Then the folder is remembered, which is what puts the row on screen.
+   */
+  const openProject = useCallback(
+    async (root: string): Promise<void> => {
+      const swallowed = closedProjectsRef.current.filter((closed) =>
+        rootContains(root, closed),
+      );
+      if (swallowed.length > 0) reopenProjects(swallowed);
+      await rememberProjectDir(root);
+    },
+    [reopenProjects, rememberProjectDir],
+  );
+
   const removeProject = useCallback(
     async (root: string): Promise<void> => {
       const plan = planProjectRemoval({
@@ -1994,6 +2035,7 @@ export function useHarnessState(): HarnessStateHook {
     scanWorkflows,
     closedProjects,
     removeProject,
+    openProject,
     listHarnesses,
     bindWorkflow,
     updateSettings,

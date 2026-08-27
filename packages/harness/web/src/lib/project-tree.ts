@@ -1,6 +1,7 @@
 import type { WorkflowInfo } from "@shared/types";
 
-import { basenameOf, isWithinDir, joinPath, stripTrailingSep } from "./paths";
+import { displayAgentName } from "./agent-name";
+import { basenameOf, isWithinDir, joinPath, parentOf, stripTrailingSep } from "./paths";
 
 /**
  * The rail's filing axes.
@@ -155,6 +156,76 @@ export function abbreviate(segments: string[]): string {
   return `${segments[0]}/…/${segments[segments.length - 1]}`;
 }
 
+/**
+ * COLLIDING LABELS GROW LEFTWARD — one rule, one implementation.
+ *
+ * `segments` is the path chain a row could show, deepest segment last; `others`
+ * is the same chain for every row this one could be confused with. The answer
+ * is the SHORTEST trailing run of `segments` that no entry in `others` shares.
+ *
+ * Only the colliding rows pay. Widening every label to be safe would spend the
+ * rail's width disambiguating things that were never ambiguous, which is why
+ * the loop starts at `min` and stops the moment the row is distinguishable.
+ *
+ * Two callers, deliberately: `projectLabeller` (two unrelated roots that happen
+ * to share a basename) and `unrootedAgents` (six git worktrees holding one
+ * agent name). They are the same question asked about different chains, and
+ * round 1 shipped an unrooted section of six identical rows precisely because
+ * the rule existed for one of them and not the other.
+ *
+ * Exhausting the chain returns it whole — there is nothing further left to
+ * grow into, and a caller that has an absolute form to fall back on says so
+ * itself.
+ */
+export function growLeftward(
+  segments: readonly string[],
+  others: readonly (readonly string[])[],
+  min = 1,
+): string[] {
+  for (let take = Math.max(min, 1); take <= segments.length; take++) {
+    const candidate = segments.slice(-take).join("/");
+    if (!others.some((other) => other.slice(-take).join("/") === candidate)) {
+      return segments.slice(-take);
+    }
+  }
+  return [...segments];
+}
+
+/**
+ * Does `prefix/name` spell a real path tail for this agent?
+ *
+ * THE ROW COMPOSES TWO DIFFERENT KINDS OF THING and joins them with a slash,
+ * which asserts they are one path. That assertion is TRUE exactly when the
+ * agent's own directory is named for the agent — `scripts/tools/rollup` holding
+ * `rollup` renders `tools/rollup`, which is really there on disk.
+ *
+ * It is FALSE whenever they differ, and on the user's real install that was the
+ * DOMINANT case: `ari-grade-repo` lives in `ari/orchestration`, so the row read
+ * `ari/ari-grade-repo` — a location that does not exist, printed on the axis
+ * whose entire job is being trustworthy about location. (The registry takes an
+ * agent's name from its `package.json`, so name-vs-folder drift is normal, not
+ * exotic.)
+ *
+ * The answer is not to widen the row into `ari/orchestration · ari-grade-repo`
+ * — a rail cannot spend that width, and the prefix was always display context
+ * rather than identity. It is to stop the SEPARATOR lying: a slash where the
+ * join is a path, and a different mark where the row is saying two things.
+ * Callers read this and pick the separator; nothing about the two spans, or
+ * about [SEEN] rule 2 (the separator lives outside the truncating span),
+ * changes.
+ *
+ * Compared against the DISPLAY name too, because that is what the row prints:
+ * `@sapiom/example-slack-notifier` in a folder called `slack-notifier` is a
+ * folder named for its agent as far as the reader is concerned.
+ */
+export function prefixIsPathTail(
+  workflow: Pick<WorkflowInfo, "path" | "name">,
+  displayName: string,
+): boolean {
+  const folder = basenameOf(canonical(workflow.path));
+  return folder === workflow.name || folder === displayName;
+}
+
 /** The letter a project row falls back to when no mark was found inside it.
  *  Derived, never fetched: a remote avatar is an identicon as often as a logo,
  *  and a wrong logo is worse than an honest initial. */
@@ -169,7 +240,12 @@ const agentOrder =
   (sort: RailSort) =>
   (a: AgentNode, b: AgentNode): number =>
     sort === "name"
-      ? a.workflow.name.localeCompare(b.workflow.name)
+      ? // BY WHAT THE ROW SHOWS. `workflow.name` is the registry's raw name and
+        // the row prints `displayAgentName` of it — so a rail full of
+        // `@sapiom/example-*` agents sorted on a scope the user cannot see, and
+        // "Sort by: Name" produced an order with no visible logic. A sort is a
+        // claim about the list on screen.
+        displayAgentName(a.workflow.name).localeCompare(displayAgentName(b.workflow.name))
       : a.workflow.path.localeCompare(b.workflow.path);
 
 /** A raw trie node, before compaction. */
@@ -321,6 +397,42 @@ export function projectIsEmpty(project: ProjectNode): boolean {
 }
 
 /**
+ * The prefix each agent row should show, for a set of agents rendered TOGETHER
+ * outside the directory tree.
+ *
+ * `buildProjectTree` computes prefixes as a side effect of compaction, which
+ * only works because that tree has directory rows to carry the context a prefix
+ * leaves out. The Group axis has none — a group is a relationship, not a place —
+ * so its rows are the whole answer to "which agent is this", and round 1 passed
+ * them no prefix at all. Two agents named `ads` in one project rendered as two
+ * identical rows inside `Ungrouped`, which is the same failure the unrooted
+ * section had, one axis over.
+ *
+ * Same rule, therefore: the immediate parent by default ([SEEN] rule 1), grown
+ * leftward only for the rows that actually collide. Relative to `root`, because
+ * here there IS a root and repeating it on every row would spend the rail's
+ * width saying what the section header already said.
+ */
+export function agentPrefixes(
+  workflows: readonly WorkflowInfo[],
+  root: string,
+): Map<string, AgentNode> {
+  const chains = workflows.map((workflow) => segmentsBetween(root, workflow.path).slice(0, -1));
+  const out = new Map<string, AgentNode>();
+  workflows.forEach((workflow, index) => {
+    const others = workflows.flatMap((other, j) =>
+      j !== index && other.name === workflow.name ? [chains[j]!] : [],
+    );
+    out.set(workflow.path, {
+      workflow,
+      prefix: growLeftward(chains[index]!, others).join("/"),
+      prefixFull: chains[index]!.join("/"),
+    });
+  });
+  return out;
+}
+
+/**
  * Agents no open root contains — rendered under a quiet header of their own,
  * still as agent rows.
  *
@@ -335,9 +447,35 @@ export function unrootedAgents(
   roots: readonly string[],
   sort: RailSort = "recent",
 ): AgentNode[] {
-  return workflows
-    .filter((workflow) => !roots.some((root) => isUnder(workflow.path, root)))
-    .map((workflow) => ({ workflow, prefix: "", prefixFull: "" }))
+  const outside = workflows.filter(
+    (workflow) => !roots.some((root) => isUnder(workflow.path, root)),
+  );
+  // The chain ABOVE each agent's own directory, canonical, deepest segment
+  // last. There is no project root to measure from here, so the chain is the
+  // whole absolute parent — which is exactly why the growing has to be bounded
+  // by collision rather than by depth.
+  const chains = outside.map((workflow) =>
+    canonical(workflow.path).split("/").filter(Boolean).slice(0, -1),
+  );
+  return outside
+    .map((workflow, index) => {
+      // TWO ROWS COLLIDE WHEN THEIR NAME AND THEIR PREFIX BOTH MATCH, so the
+      // set this row has to be told apart from is the other rows wearing its
+      // name — not every unrooted row. A real install had `ari-grade-repo` six
+      // times across git worktrees; `filler-1` next to them was never ambiguous
+      // and keeps its single parent segment.
+      const others = outside.flatMap((other, j) =>
+        j !== index && other.name === workflow.name ? [chains[j]!] : [],
+      );
+      return {
+        workflow,
+        prefix: growLeftward(chains[index]!, others).join("/"),
+        // The ABSOLUTE parent directory, not a chain below some root: an
+        // unrooted agent has no root, and half a path would be a worse answer
+        // than none.
+        prefixFull: parentOf(workflow.path) ?? "",
+      };
+    })
     .sort(agentOrder(sort));
 }
 
@@ -457,13 +595,17 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
     const base = basenameOf(root);
     if ((counts.get(base) ?? 0) < 2) return base;
     const segments = segmentsOf(root);
-    for (let take = 2; take <= segments.length; take++) {
-      const candidate = segments.slice(-take).join("/");
-      const clashes = roots.filter(
-        (other) => segmentsOf(other).slice(-take).join("/") === candidate,
-      ).length;
-      if (clashes === 1) return candidate;
-    }
-    return root;
+    // The SAME grow-leftward rule the unrooted rows use — see `growLeftward`.
+    // `min` is 2 because reaching here already proved one segment collides.
+    const others = roots
+      .filter((other) => canonical(other) !== canonical(root))
+      .map(segmentsOf);
+    const grown = growLeftward(segments, others, 2);
+    // Exhausted without ever becoming unique (two roots spelled the same in
+    // different filesystem roots): the absolute path is the only honest answer
+    // left, and unlike the joined segments it keeps its leading separator.
+    if (grown.length === segments.length && others.some((other) => other.join("/") === segments.join("/")))
+      return root;
+    return grown.join("/");
   };
 }

@@ -3,6 +3,7 @@ import type { WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
 import { displayAgentName } from "../lib/agent-name";
+import { prefixIsPathTail } from "../lib/project-tree";
 import { workflowDeploymentState } from "../lib/workflow-deployment";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -58,6 +59,21 @@ export function WorkflowRow({
   onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
 }): JSX.Element {
+  const name = displayAgentName(workflow.name);
+  /**
+   * THE SEPARATOR TELLS THE TRUTH ABOUT WHAT IT JOINS.
+   *
+   * `prefix` and `name` are different kinds of thing — a place and a name — and
+   * a slash between them asserts they are one path. That is true only when the
+   * agent's own folder is named for the agent. On a real install the common
+   * case was the other one: `ari-grade-repo` living in `ari/orchestration`
+   * rendered as `ari/ari-grade-repo`, a location that is not on disk, on the
+   * axis whose whole job is being trustworthy about location.
+   *
+   * A middle dot where the join is not a path. The rule lives in
+   * `project-tree.prefixIsPathTail`; the row only picks the glyph.
+   */
+  const pathTail = prefixIsPathTail(workflow, name);
   const deploymentState = workflowDeploymentState(workflow);
   const deployed = deploymentState === "ready";
   const statusTitle =
@@ -74,6 +90,13 @@ export function WorkflowRow({
     <div
       className={"workflow-item" + (isFocused ? " is-focused" : "")}
       data-testid={`workflow-${workflow.name}`}
+      /* THE UNIQUE HANDLE. `workflow-<name>` is not one: the registry takes an
+         agent's name from its `package.json`, so six git worktrees of one repo
+         give six rows that share it, and `getByTestId` cannot address the row
+         it means. The name-keyed testid stays (the suite addresses ~140 rows by
+         it), and the path — which is unique by construction — rides alongside
+         it, so anything that needs to name ONE row can. */
+      data-agent-path={workflow.path}
       style={depth > 0 ? ({ "--tree-depth": depth } as CSSProperties) : undefined}
       draggable={draggable || undefined}
       onDragStart={onDragStart}
@@ -100,31 +123,34 @@ export function WorkflowRow({
         <span className="tree-row-name">
           {prefix && (
             <>
-              <span className="tree-row-prefix" data-testid={`workflow-prefix-${workflow.name}`}>
+              <span className="tree-row-prefix" data-testid={`workflow-prefix-${workflow.path}`}>
                 {prefix}
               </span>
-              {/* The slash sits OUTSIDE the truncating span so it survives.
+              {/* The separator sits OUTSIDE the truncating span so it survives.
                   Inside it, a clipped prefix lost its separator and
                   `components/mailer` rendered as `componen…mailer` — one word
                   where there were two things. */}
-              <span className="tree-row-sep" aria-hidden="true">
-                /
+              <span
+                className={"tree-row-sep" + (pathTail ? "" : " tree-row-sep-loose")}
+                aria-hidden="true"
+              >
+                {pathTail ? "/" : "·"}
               </span>
             </>
           )}
           <span
             className="tree-row-label"
-            data-testid={`workflow-name-${workflow.name}`}
-            title={prefixFull ? `${prefixFull}/${workflow.name}` : undefined}
+            data-testid={`workflow-name-${workflow.path}`}
+            title={prefixFull ? workflow.path : undefined}
           >
-            {displayAgentName(workflow.name)}
+            {name}
           </span>
         </span>
         <span
           className="workflow-status"
           data-deployed={deployed}
           data-deployment-state={deploymentState}
-          data-testid={`workflow-status-${workflow.name}`}
+          data-testid={`workflow-status-${workflow.path}`}
           title={statusTitle}
         >
           <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />

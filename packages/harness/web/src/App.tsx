@@ -73,6 +73,7 @@ import {
   liveSessionsForFocus,
   mergeSubjectRuns,
   projectRootForAgent,
+  rootContains,
   runsForSubject,
   selectedRunForSubject,
   sessionForFocus,
@@ -504,15 +505,36 @@ export const App = (): JSX.Element => {
   }, [paletteOpen]);
 
   // First focus once state is ready: the active session's bound agent, or the
-  // first agent. Done once (a ref guard) so it never fights a later user
-  // focus. Runs before the mobile-reset effect below — order is stable.
+  // first agent INSIDE A PROJECT. Done once (a ref guard) so it never fights a
+  // later user focus. Runs before the mobile-reset effect below — order is
+  // stable.
   const didInitFocus = useRef(false);
   useEffect(() => {
     if (didInitFocus.current || !harness.state) return;
     didInitFocus.current = true;
     const active = harness.state.sessions.find((s) => s.id === harness.activeSessionId);
-    setFocusedAgentPath(boundWorkflowPathOf(active) ?? harness.state.workflows[0]?.path ?? null);
-  }, [harness.state, harness.activeSessionId]);
+    /* AN AGENT THE USER CAN SEE (round 2).
+       `workflows[0]` is registry order, and on a real install ~78 of 88 agents
+       are outside every open project — so boot routinely landed on one of them:
+       an agent the user never opened, in a section that is closed by default,
+       with the whole app pointed at it and nothing on screen highlighted. An
+       agent a project CONTAINS is one the rail is already showing.
+       The fallback stays, because "no project contains anything" is a real
+       state and focusing nothing would be worse than focusing something. */
+    const openRoots = [
+      ...(harness.settings?.recentDirs ?? []),
+      ...harness.state.sessions.map((session) => session.cwd),
+    ];
+    const inAProject = harness.state.workflows.find((workflow) =>
+      openRoots.some((root) => rootContains(root, workflow.path)),
+    );
+    setFocusedAgentPath(
+      boundWorkflowPathOf(active) ??
+        inAProject?.path ??
+        harness.state.workflows[0]?.path ??
+        null,
+    );
+  }, [harness.state, harness.activeSessionId, harness.settings]);
 
   // Client PostHog (SAP-1988): init once state is known and re-sync identity +
   // consent whenever they change. initAnalytics is idempotent and gates itself
@@ -1575,6 +1597,7 @@ export const App = (): JSX.Element => {
           recentDirs={harness.settings?.recentDirs ?? []}
           closedProjects={harness.closedProjects}
           onRemoveProject={harness.removeProject}
+          onOpenProject={harness.openProject}
           launchDir={state.launchDir ?? null}
           listDir={harness.listDir}
           onCreateSession={handleCreateSession}
@@ -1749,18 +1772,45 @@ export const App = (): JSX.Element => {
                  in the prototype and the buttons stayed enabled off the BOUND
                  agent's deployment state, so selecting the undeployed `rfq`
                  left Prod and Run live against `leasing`. */
+              /* PRESENT AND GATED, never absent (round 2).
+                 This used to be `showWorkbench && activeSession && …`, so an
+                 agent with no session got no verbs AT ALL — not disabled ones
+                 with a reason, none. That contradicts SAP-2931's own criterion,
+                 which is that a verb states why it cannot run: a control that
+                 disappears cannot state anything, and the user is left to guess
+                 whether Deploy is missing, broken, or simply not for them.
+
+                 The gating was already right and already had the sentence —
+                 `macroDisabledReason` returns "Start a session first" for a null
+                 session — so the fix is to stop hiding the bar and let it say
+                 it. The bar renders whenever the pane is ABOUT an agent, which
+                 is exactly `rightPaneWorkflow`.
+
+                 `activeSessionId` is passed only when the active session
+                 actually belongs to this subject (`showWorkbench`). A session
+                 focused on a DIFFERENT agent must not enable an inject here:
+                 that is the SAP-2931 trap itself — the verbs staying live
+                 against the bound agent while the pane showed another. */
               actions={
-                showWorkbench && activeSession && rightPaneWorkflow ? (
+                rightPaneWorkflow ? (
                   <SessionStepsBar
                     workflow={rightPaneWorkflow}
-                    activeSessionId={harness.activeSessionId}
-                    sessionReady={activeSession.ready === true && activeSession.status !== "exited"}
+                    activeSessionId={showWorkbench ? harness.activeSessionId : null}
+                    sessionReady={
+                      showWorkbench &&
+                      activeSession?.ready === true &&
+                      activeSession.status !== "exited"
+                    }
                     macros={state.macros}
                     onRunMacro={(macro) => handleRunMacroForWorkflow(rightPaneWorkflow, macro)}
                     onRequestRun={(target, returnFocus) =>
                       setRunRequest({ workflow: rightPaneWorkflow, target, returnFocus })
                     }
-                    preview={harness.previewBySession.get(activeSession.id) ?? null}
+                    preview={
+                      showWorkbench && activeSession
+                        ? harness.previewBySession.get(activeSession.id) ?? null
+                        : null
+                    }
                     /* By the SUBJECT's path: a stale failure belonging to the
                        agent the session happens to be bound to would otherwise
                        disable a verb on a perfectly healthy one. */

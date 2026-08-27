@@ -104,7 +104,7 @@ test.describe("a move", () => {
     expect(before).toContain(`${ROOT}/scripts/tools/rollup`);
     // Its whole unbranched chain is compacted onto its own row as the prefix
     // `tools`, which is the context that has to CHANGE when it moves.
-    await expect(page.getByTestId("workflow-prefix-rollup")).toHaveText("tools");
+    await expect(page.getByTestId("workflow-prefix-/Users/demo/polsia/scripts/tools/rollup")).toHaveText("tools");
 
     await dragAgent(page, rowIn(page, "rollup"), page.getByTestId("dir-row-services"));
 
@@ -115,7 +115,7 @@ test.describe("a move", () => {
     // And the tree re-derived rather than relabelling: `services` owns its own
     // directory row, so the agent under it needs no prefix at all, and the
     // three-segment `scripts/tools` chain is simply gone from the rail.
-    await expect(page.getByTestId("workflow-prefix-rollup")).toHaveCount(0);
+    await expect(page.getByTestId("workflow-prefix-/Users/demo/polsia/scripts/tools/rollup")).toHaveCount(0);
     const after = await pathsOnScreen(page);
     expect(after).not.toContain(`${ROOT}/scripts/tools/rollup`);
     expect(after).toContain(`${ROOT}/services/rollup`);

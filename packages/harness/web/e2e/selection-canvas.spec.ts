@@ -55,10 +55,15 @@ const activeSessionId = (page: Page): Promise<string | null> =>
  * is a pure board, so its subject is read off the document instead.
  */
 async function openSteps(page: Page): Promise<void> {
-  const expand = page.getByTestId("right-expand");
-  if ((await expand.count()) > 0) await expand.click();
+  await openRightPane(page);
   await page.getByTestId("right-tab-steps").click();
 }
+
+async function openRightPane(page: Page): Promise<void> {
+  const expand = page.getByTestId("right-expand");
+  if ((await expand.count()) > 0) await expand.click();
+}
+
 
 /** The agent the pane says it is about (Steps surface). */
 const paneSubject = (page: Page) =>
@@ -77,6 +82,25 @@ const paneSubject = (page: Page) =>
 const boardFrame = (page: Page) => page.locator(".canvas-iframe");
 
 /**
+ * Wait for a board to be MOUNTED for the current selection.
+ *
+ * The right pane folds for a board with nothing in it — which a
+ * just-started session always has — and unfolds again when the selection moves
+ * to an agent that has one. So between `select()` and reading the frame there
+ * is a fold/unfold the DOM announces only by the frame arriving. Asserting on
+ * `boardFrame` directly retries the ATTRIBUTE but not the element, so a locator
+ * that resolves to nothing simply fails; this waits for the element itself.
+ *
+ * Round 1 got away without it because `startSessionOn` waited on the lifecycle
+ * verbs appearing, which happened to land after the fold. Those verbs now
+ * render always (round 2, F8 — a control that disappears cannot state why it is
+ * unavailable), so the accident is gone.
+ */
+const boardMounted = async (page: Page): Promise<void> => {
+  await expect.poll(() => boardFrame(page).count(), { timeout: 10_000 }).toBeGreaterThan(0);
+};
+
+/**
  * Select `name` and start a session for it — the create+bind path, which roots
  * the session at the agent's PROJECT ROOT (SAP-2927). Resolves the new
  * session's id, so a later assertion can name the session it is watching.
@@ -84,9 +108,32 @@ const boardFrame = (page: Page) => page.locator(".canvas-iframe");
 async function startSessionOn(page: Page, name: string): Promise<string> {
   await select(page, name);
   await page.getByTestId("open-agent-start-session").click();
-  await expect(page.getByTestId("session-steps")).toBeVisible();
+  /* RE-POINTED IN ROUND 2. This waited on `session-steps` becoming VISIBLE,
+     which worked only because the lifecycle verbs used to be absent until a
+     session existed. That absence was the bug (round 2, F8): a verb that
+     disappears cannot state why it is unavailable, so the bar now always
+     renders and gates instead — "Start a session first" is a sentence the user
+     can act on, an empty space is not. So the honest signal for "a session
+     started" is the session itself. */
+  await expect.poll(() => activeSessionId(page)).toBeTruthy();
+  // …and then for the pane to SETTLE around it. A session started here has an
+  // empty board, so the right pane folds — and it unfolds again the moment the
+  // selection moves to an agent that has one. Returning mid-fold leaves the
+  // caller clicking `right-expand` against a pane that is about to reopen on
+  // its own, which is a race the old wait avoided only by accident: it waited
+  // on the lifecycle verbs appearing, and those appeared after the fold. They
+  // now render always (round 2, F8 — a control that disappears cannot state why
+  // it is unavailable), so the settle is waited for explicitly instead.
+  await expect(page.getByTestId("right-expand")).toBeVisible();
+  // …and let that fold SETTLE. There is no DOM signal for the end of it: the
+  // pane's auto-collapse runs off canvas-state probes, and a selection change
+  // that lands mid-fold leaves the pane shut with no probe to reopen it (the
+  // audit filed that separately as F7 — it is a product bug in the pane, not in
+  // this spec, and it is NOT fixed in this round). A fixed wait is the honest
+  // way to say "wait out a transition nothing announces"; polling for the frame
+  // instead just times out, because with no probe the frame never arrives.
+  await page.waitForTimeout(500);
   const id = await activeSessionId(page);
-  expect(id).toBeTruthy();
   return id!;
 }
 
@@ -104,6 +151,7 @@ test.describe("the board follows the selection; the session does not", () => {
     const sessionId = await startSessionOn(page, "ads");
 
     await select(page, "outreach");
+    await boardMounted(page);
 
     // The board is `outreach`'s, served by the workflow-keyed route — which is
     // reached ONLY when the subject and the session's binding differ, so this
@@ -123,6 +171,7 @@ test.describe("the board follows the selection; the session does not", () => {
     // contract, so the assertion is that one name serves both surfaces.
     await startSessionOn(page, "ads");
     await select(page, "outreach");
+    await boardMounted(page);
     // Canvas: the document on screen is outreach's.
     await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock workflow board/);
     // Steps: the same agent, read from the other projection.
