@@ -49,6 +49,12 @@ Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
 
+HTTP contracts that need more than a type to use are written up under `docs/`:
+
+- [`docs/workflow-canvas-graph.md`](docs/workflow-canvas-graph.md) — `GET
+  /api/workflows/:path/graph`, the session-free canvas route keyed by an agent's
+  path.
+
 ## Testing
 
 Three tiers — run whatever fits your change:
