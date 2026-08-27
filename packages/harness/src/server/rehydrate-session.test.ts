@@ -99,11 +99,6 @@ describe("portable continue — rehydrating a fresh session", () => {
       agentSessionId: PRIOR_AGENT_SESSION,
       harness,
     };
-    // Keep fixtures inside the event store's 30-day retention window. A fixed
-    // date makes this wiring test race the boot-time retention sweep once that
-    // date ages out: direct creates can read the events before the sweep while
-    // the HTTP request below sometimes loses them first.
-    const startedAt = Date.now() - 10 * 60_000;
     const at = (minutes: number): string =>
       new Date(startedAt + minutes * 60_000).toISOString();
     const event = (
