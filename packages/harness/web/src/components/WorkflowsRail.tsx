@@ -25,6 +25,7 @@ import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { ProjectRow, ProjectTreeRows, dirKey, projectKey } from "./ProjectTreeRows";
 import type { RailDrag } from "./ProjectTreeRows";
+import { RemoveProjectConfirm } from "./RemoveProjectConfirm";
 import { GroupSections } from "./GroupRow";
 import type { GroupDropRequest } from "./GroupRow";
 import { useRailGroups } from "../lib/use-rail-groups";
@@ -43,6 +44,7 @@ import { useAccountPlan } from "../lib/use-account-plan";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildProjectTree, projectIsEmpty, projectRoots, unrootedAgents } from "../lib/project-tree";
+import { hiddenByClosedProject, planProjectRemoval } from "../lib/project-membership";
 import type { RailAxis, RailSort } from "../lib/project-tree";
 import { samePath } from "../lib/paths";
 import type { PendingWorkspace } from "../lib/use-harness-state";
@@ -98,6 +100,13 @@ interface WorkflowsRailProps {
   historyLoading: boolean;
   onOpenHistory: (cwds: string[]) => void;
   recentDirs: string[];
+  /** Project roots the user REMOVED. A closed root hides its own subtree —
+   *  itself, its agents, and the session cwds under it — minus any project
+   *  opened separately inside it. See `lib/project-membership.ts`. */
+  closedProjects: string[];
+  /** Removes a project: out of `recentDirs`, out of the rail, and the live
+   *  sessions rooted in it end. Nothing on disk is touched. */
+  onRemoveProject: (root: string) => Promise<void>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
@@ -263,6 +272,8 @@ export function WorkflowsRail({
   historyLoading,
   onOpenHistory,
   recentDirs,
+  closedProjects,
+  onRemoveProject,
   launchDir,
   listDir,
   onCreateSession,
@@ -411,11 +422,27 @@ export function WorkflowsRail({
   // branch > agents. There is no migration — every recentDirs entry and every
   // session cwd becomes a project, so nothing a user already had disappears.
   const pendingCwds = pendingWorkspaces.map((pending) => pending.cwd);
-  const roots = projectRoots({ recentDirs, sessions, pendingCwds, sort });
-  const projects = buildProjectTree(workflows, roots, sort);
+  // A REMOVED project takes its whole subtree with it (SAP-2932): its own row,
+  // its agents — which would otherwise reappear as strays — and the session
+  // cwds under it, which are project roots in their own right and would
+  // otherwise replace one row with a row per folder a session had run in. The
+  // exception is a project opened separately inside it, which `openRoots`
+  // (explicit choices only, never a session cwd) rescues.
+  const openRoots = [...recentDirs, ...pendingCwds];
+  const shown = (path: string): boolean =>
+    !hiddenByClosedProject(path, closedProjects, openRoots);
+  const visibleWorkflows = workflows.filter((workflow) => shown(workflow.path));
+  const roots = projectRoots({ recentDirs, sessions, pendingCwds, sort }).filter(shown);
+  const projects = buildProjectTree(visibleWorkflows, roots, sort);
   // Agents no open root contains. Rarer than the old "No workspace" bucket,
   // but dropping them would hide an agent that exists.
-  const strays = unrootedAgents(workflows, roots, sort);
+  const strays = unrootedAgents(visibleWorkflows, roots, sort);
+  // The project whose remove confirm is open, and the row control focus
+  // returns to when it closes.
+  const [removing, setRemoving] = useState<{ root: string; label: string } | null>(null);
+  // Set imperatively from the clicked row's own control, so Escape hands focus
+  // back to the button the flow started from rather than to the document.
+  const removeTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   // The directory currently under the pointer during a Project-axis drag. Held
   // HERE rather than by each row: only one row may be the target at a time, and
@@ -926,20 +953,42 @@ export function WorkflowsRail({
                         : undefined
                   }
                   trailing={
-                    creating ? (
-                      <span className="workspace-row-spinner" aria-hidden="true" />
-                    ) : bare ? (
+                    <>
+                      {creating ? (
+                        <span className="workspace-row-spinner" aria-hidden="true" />
+                      ) : bare ? (
+                        <button
+                          type="button"
+                          className="workspace-row-action"
+                          data-testid={`workspace-scaffold-${project.label}`}
+                          aria-label={`Scaffold an agent in ${project.label}`}
+                          data-tooltip="Scaffold an agent here"
+                          onClick={() => onScaffoldInSession(bare.id)}
+                        >
+                          <Icon name="Sparkles" size={13} />
+                        </button>
+                      ) : null}
+                      {/* REMOVE PROJECT. An `X`, not a trash can: this closes a
+                          project and ends its sessions, and never touches a
+                          file — a bin glyph would say the opposite of the copy
+                          in the confirm. Hover-revealed like every other row
+                          action (and reachable by keyboard), because a standing
+                          destructive control on every project row would be the
+                          loudest thing in the rail. */}
                       <button
                         type="button"
                         className="workspace-row-action"
-                        data-testid={`workspace-scaffold-${project.label}`}
-                        aria-label={`Scaffold an agent in ${project.label}`}
-                        data-tooltip="Scaffold an agent here"
-                        onClick={() => onScaffoldInSession(bare.id)}
+                        data-testid={`project-remove-${project.label}`}
+                        aria-label={`Remove ${project.label} from the rail`}
+                        data-tooltip="Remove project"
+                        onClick={(event) => {
+                          removeTriggerRef.current = event.currentTarget;
+                          setRemoving({ root: project.root, label: project.label });
+                        }}
                       >
-                        <Icon name="Sparkles" size={13} />
+                        <Icon name="X" size={13} />
                       </button>
-                    ) : undefined
+                    </>
                   }
                 />
                 {!collapsed && axis === "project" && (
@@ -1091,6 +1140,26 @@ export function WorkflowsRail({
           onConnect={onConnect}
           onScan={onScanWorkflows}
           triggerRef={connectTriggerRef}
+        />
+      )}
+
+      {removing && (
+        <RemoveProjectConfirm
+          label={removing.label}
+          root={removing.root}
+          /* Counted from the SAME plan that does the ending, so the number the
+             dialog names and the sessions that die cannot drift apart. */
+          runningCount={
+            planProjectRemoval({ root: removing.root, recentDirs, sessions })
+              .endSessionIds.length
+          }
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            const root = removing.root;
+            setRemoving(null);
+            void onRemoveProject(root);
+          }}
+          triggerRef={removeTriggerRef}
         />
       )}
 

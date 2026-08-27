@@ -53,6 +53,21 @@ export interface UiPrefs {
    *  rename endpoint yet, so the name lives with the UI
    *  arrangement it belongs to. */
   sessionNames?: Record<string, string>;
+  /**
+   * Project roots the user REMOVED from the rail (SAP-2932).
+   *
+   * Client-side, for the same reason `sessionNames` is: the server has no
+   * place to record it. `recentDirs` loses the entry on removal, but session
+   * cwds are also project roots (there is no migration) and a session record
+   * outlives the session — so without a tombstone a removed project comes
+   * straight back on the next reload, wearing the cwd of a session that has
+   * already ended.
+   *
+   * Read by the rail as "closed": a closed root hides its own subtree, minus
+   * any project opened separately inside it. `project-membership.ts` owns
+   * every rule about that, including how a root gets un-closed.
+   */
+  closedProjects?: string[];
   /** Manual height (px) for the canvas bottom inspector panel, set by
    *  dragging its top edge. Null/absent = auto: the panel hugs its content
    *  up to half the pane. Double-clicking the handle clears it. */
