@@ -120,6 +120,7 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createWorkflowGraphRouter } from "./workflow-graph.js";
 import { createStudioRailRouter } from "./studio-rail.js";
+import { createAgentMoveRouter, remapUnder } from "./agent-move.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -1382,6 +1383,33 @@ export const startServer = async (
         ];
       },
       listWorkflows: () => workflowsCache,
+    }),
+  );
+  // SAP-2930: the Project axis's drag, performed on disk. Its own guards live
+  // in the module — a planner is not a permission system, so the route stats
+  // the destination itself. Only a REGISTERED agent may be moved, resolved
+  // through the same live cache the canvas and action routes use.
+  app.use(
+    createAgentMoveRouter({
+      resolveAgent: (agentPath) =>
+        workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
+      // Everything under the moved directory travelled with it, so every live
+      // session whose cwd sat inside follows — a session left pointing at a
+      // directory that no longer exists is the whole reason this remap exists.
+      // Then prune the path that is gone and rescan the destination, which
+      // broadcasts `workflows.changed`: the rail re-derives the tree from the
+      // NEW path rather than from a stale registry row.
+      onMoved: async (from, to) => {
+        for (const session of sessionManager.list()) {
+          const moved = remapUnder(session.cwd, from, to);
+          if (moved !== session.cwd) session.cwd = moved;
+          if (session.boundWorkflowPath != null) {
+            session.boundWorkflowPath = remapUnder(session.boundWorkflowPath, from, to);
+          }
+        }
+        await workflowRegistry.prune();
+        await scanWorkflowsAndBroadcast(dirname(to));
+      },
     }),
   );
   app.use(
