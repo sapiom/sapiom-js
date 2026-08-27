@@ -4154,6 +4154,11 @@ button.rail-footer-card:hover {
   user-select: none;
 }
 
+.system-graph-viewport:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
 .system-graph-subject {
   position: absolute;
   top: 50%;

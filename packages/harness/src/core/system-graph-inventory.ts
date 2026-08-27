@@ -1,13 +1,16 @@
 import { realpathSync } from "node:fs";
 import * as path from "node:path";
 
-import type {
-  AgentKey,
-  GraphWarning,
-  WorkspaceKey,
+import {
+  workspaceRelativeLocalKey,
+  type AgentKey,
+  type GraphWarning,
+  type WorkspaceKey,
 } from "../shared/system-graph.js";
 import type { WorkflowInfo } from "../shared/types.js";
 import type { ManifestNameInspection } from "./definition-name.js";
+
+export { workspaceRelativeLocalKey } from "../shared/system-graph.js";
 
 export interface WorkspaceScope {
   workspaceKey: WorkspaceKey;
@@ -208,19 +211,6 @@ export function dirtyGraphSourceRoots(
   return [...dirty].sort();
 }
 
-export function workspaceRelativeLocalKey(
-  scopeRoot: string,
-  sourceRoot: string,
-): AgentKey {
-  const api = pathApi(scopeRoot);
-  const relative = api.relative(scopeRoot, sourceRoot);
-  const local =
-    relative === ""
-      ? api.basename(sourceRoot) || "root"
-      : relative.split(api.sep).join("/");
-  return `local:${local}`;
-}
-
 function normalizedAlias(value: string | null): string | null {
   const alias = value?.trim() ?? "";
   if (
@@ -298,8 +288,9 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
 
   async listAgents(scope: WorkspaceScope): Promise<AgentInventoryResult> {
     // A registry read is the one operation whose failure makes inventory
-    // unavailable. Scope-catalog and per-agent enrichment failures degrade.
+    // unavailable. Per-agent enrichment failures degrade to local identities.
     const workflows = await this.options.listWorkflows();
+    const navigationRoot = scope.root;
     const selectedScope: WorkspaceScope = {
       workspaceKey: scope.workspaceKey,
       root: canonicalGraphPath(scope.root),
@@ -316,23 +307,32 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
       }))
       .filter(({ sourceRoot }) =>
         isWithinGraphPath(selectedScope.root, sourceRoot),
-      );
+      )
+      .map(({ workflow, sourceRoot }) => {
+        const fallbackKey =
+          workspaceRelativeLocalKey(navigationRoot, workflow.path) ??
+          workspaceRelativeLocalKey(selectedScope.root, sourceRoot);
+        if (!fallbackKey) {
+          throw new Error("Contained system graph path had no local identity");
+        }
+        return { workflow, sourceRoot, fallbackKey };
+      });
 
     const inspections = await mapWithDeadline(
       contained,
       MANIFEST_INSPECTION_CONCURRENCY,
       this.options.manifestInspectionBudgetMs ?? MANIFEST_INSPECTION_BUDGET_MS,
-      ({ workflow, sourceRoot }) =>
-        this.prepareAgent(selectedScope, workflow, sourceRoot),
+      ({ workflow, sourceRoot, fallbackKey }) =>
+        this.prepareAgent(workflow, sourceRoot, fallbackKey),
     );
     const prepared = Array.from(
       { length: contained.length },
       (_, index) =>
         inspections[index] ??
         this.prepareFallbackAgent(
-          selectedScope,
           contained[index]!.workflow,
           contained[index]!.sourceRoot,
+          contained[index]!.fallbackKey,
         ),
     ).sort(preparedOrder);
 
@@ -403,9 +403,9 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
   }
 
   private async prepareAgent(
-    scope: WorkspaceScope,
     workflow: WorkflowInfo,
     sourceRoot: string,
+    fallbackKey: AgentKey,
   ): Promise<PreparedAgent> {
     const definitionSlug = normalizedAlias(workflow.definitionSlug);
     let manifestName: string | null = null;
@@ -423,7 +423,6 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
       }
     }
 
-    const fallbackKey = workspaceRelativeLocalKey(scope.root, sourceRoot);
     const candidateKey = definitionSlug ?? manifestName ?? fallbackKey;
     // Keep the pre-disambiguation candidate as an alias for every copy. When
     // duplicate local fallbacks exist, a caller targeting that candidate must
@@ -451,12 +450,11 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
   }
 
   private prepareFallbackAgent(
-    scope: WorkspaceScope,
     workflow: WorkflowInfo,
     sourceRoot: string,
+    fallbackKey: AgentKey,
   ): PreparedAgent {
     const definitionSlug = normalizedAlias(workflow.definitionSlug);
-    const fallbackKey = workspaceRelativeLocalKey(scope.root, sourceRoot);
     const candidateKey = definitionSlug ?? fallbackKey;
     return {
       candidateKey,

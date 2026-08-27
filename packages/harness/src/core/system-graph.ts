@@ -9,13 +9,13 @@ import type {
   WorkspaceKey,
   WorkspaceScopeSummary,
 } from "../shared/system-graph.js";
+import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
 import {
   canonicalGraphPath,
   isWithinGraphPath,
   type AgentInventoryItem,
   type AgentInventoryProvider,
   type WorkspaceScope,
-  workspaceRelativeLocalKey,
 } from "./system-graph-inventory.js";
 import {
   CachedAgentRelationshipProvider,
@@ -115,7 +115,8 @@ function fallbackAgentKey(scope: WorkspaceScope, sourceRoot: string): AgentKey {
   const canonicalScope = canonicalGraphPath(scope.root);
   const canonicalSource = canonicalGraphPath(sourceRoot);
   if (isWithinGraphPath(canonicalScope, canonicalSource)) {
-    return workspaceRelativeLocalKey(canonicalScope, canonicalSource);
+    const localKey = workspaceRelativeLocalKey(canonicalScope, canonicalSource);
+    if (localKey) return localKey;
   }
   return `local:${createHash("sha256")
     .update(canonicalSource)

@@ -10,6 +10,7 @@ import {
 import type {
   CSSProperties,
   JSX,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type { AgentKey, SystemGraph, WorkspaceKey } from "@shared/system-graph";
@@ -17,6 +18,7 @@ import type { AgentKey, SystemGraph, WorkspaceKey } from "@shared/system-graph";
 import {
   layoutSystemGraph,
   systemGraphNodeById,
+  type SystemGraphLayoutNode,
 } from "../lib/system-graph-layout";
 import {
   SYSTEM_GRAPH_DEFAULT_MIN_ZOOM,
@@ -25,8 +27,12 @@ import {
   clampSystemGraphZoom,
   createSystemGraphViewportStore,
   fitSystemGraphView,
+  panSystemGraphViewWithKeyboard,
   resetSystemGraphView,
+  revealSystemGraphRect,
+  systemGraphViewIntersectsViewport,
   wheelSystemGraphView,
+  type SystemGraphArrowKey,
   type SystemGraphView,
 } from "../lib/system-graph-viewport";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
@@ -71,9 +77,8 @@ export function SystemGraphCanvas({
   }, [graph]);
   const layout = computed.layout;
   const graphNodes = useMemo(() => systemGraphNodeById(graph), [graph]);
-  const saved = viewportStore.get(workspaceKey);
   const [view, setView] = useState<SystemGraphView>(
-    saved?.view ?? resetSystemGraphView(),
+    () => viewportStore.get(workspaceKey) ?? resetSystemGraphView(),
   );
   const [minZoom, setMinZoom] = useState(SYSTEM_GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
@@ -89,17 +94,14 @@ export function SystemGraphCanvas({
     ): void => {
       setView((current) => {
         const resolved = typeof next === "function" ? next(current) : next;
-        viewportStore.set(workspaceKey, {
-          view: resolved,
-          autoFitted: true,
-        });
+        viewportStore.set(workspaceKey, resolved);
         return resolved;
       });
     },
     [workspaceKey],
   );
 
-  const readFit = useCallback(() => {
+  const readViewportFit = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return null;
     const rect = viewport.getBoundingClientRect();
@@ -107,42 +109,53 @@ export function SystemGraphCanvas({
     const rootFontSize = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
-    return fitSystemGraphView(
-      layout.bounds,
-      { width: rect.width, height: rect.height },
-      Number.isFinite(rootFontSize) ? rootFontSize : 16,
-    );
+    const viewportSize = { width: rect.width, height: rect.height };
+    return {
+      fit: fitSystemGraphView(
+        layout.bounds,
+        viewportSize,
+        Number.isFinite(rootFontSize) ? rootFontSize : 16,
+      ),
+      viewport: viewportSize,
+    };
   }, [layout]);
 
   const fitView = useCallback((): void => {
-    const fit = readFit();
-    if (!fit) return;
+    const measured = readViewportFit();
+    if (!measured) return;
+    const { fit } = measured;
     setMinZoom(fit.minZoom);
     commitView({ zoom: fit.zoom, x: fit.x, y: fit.y });
-  }, [commitView, readFit]);
+  }, [commitView, readViewportFit]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
     const syncFloor = (): void => {
-      const fit = readFit();
-      if (fit) setMinZoom(fit.minZoom);
+      const measured = readViewportFit();
+      if (measured) setMinZoom(measured.fit.minZoom);
     };
     const existing = viewportStore.get(workspaceKey);
-    const fit = readFit();
-    if (fit) {
+    const measured = readViewportFit();
+    if (measured) {
+      const { fit, viewport: viewportSize } = measured;
       setMinZoom(fit.minZoom);
-      if (existing?.autoFitted) {
-        setView(existing.view);
+      if (
+        existing &&
+        systemGraphViewIntersectsViewport(
+          existing,
+          layout.bounds,
+          viewportSize,
+          layout.nodes,
+        )
+      ) {
+        setView(existing);
       } else {
         // The system-map reference never enlarges a small graph on arrival;
         // explicit Fit may zoom up later. Containment wins when 100% crops.
         const initial = { ...fit, zoom: Math.min(1, fit.zoom) };
         const initialView = { zoom: initial.zoom, x: 0, y: 0 };
-        viewportStore.set(workspaceKey, {
-          view: initialView,
-          autoFitted: true,
-        });
+        viewportStore.set(workspaceKey, initialView);
         setView(initialView);
       }
     }
@@ -150,7 +163,7 @@ export function SystemGraphCanvas({
     const observer = new ResizeObserver(syncFloor);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [layout, readFit, workspaceKey]);
+  }, [layout, readViewportFit, workspaceKey]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -220,6 +233,22 @@ export function SystemGraphCanvas({
     });
   };
 
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.target !== event.currentTarget) return;
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "ArrowDown"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    commitView((current) =>
+      panSystemGraphViewWithKeyboard(current, event.key as SystemGraphArrowKey),
+    );
+  };
+
   if (computed.failed || !layout) {
     return (
       <EmptyState
@@ -232,12 +261,31 @@ export function SystemGraphCanvas({
     );
   }
 
+  const revealNode = (node: SystemGraphLayoutNode): void => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    commitView((current) =>
+      revealSystemGraphRect(
+        current,
+        layout.bounds,
+        { width: rect.width, height: rect.height },
+        node,
+      ),
+    );
+  };
+
   return (
     <div className="system-graph-canvas" data-testid="system-graph-canvas">
       <div
         ref={viewportRef}
         className={"system-graph-viewport" + (panning ? " is-panning" : "")}
         data-testid="system-graph-viewport"
+        role="region"
+        aria-label="Workspace dependency graph. Use arrow keys to pan."
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={finishPan}
@@ -335,6 +383,7 @@ export function SystemGraphCanvas({
                 style={style}
                 title={graphNode.label}
                 aria-label={`Open ${graphNode.label}`}
+                onFocus={() => revealNode(placed)}
                 onClick={() => onOpenAgent(graphNode.agentKey)}
                 {...trackingAttrs({ object: "agent" })}
               >

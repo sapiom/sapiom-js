@@ -649,6 +649,98 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     );
   });
 
+  test("workspace graph keyboard navigation reveals focus and rejects a blank saved view", async ({
+    page,
+  }) => {
+    await page.getByTestId("project-select-acme-app").click();
+    const viewport = page.getByTestId("system-graph-viewport");
+    const subject = page.getByTestId("system-graph-subject");
+    const reset = page.getByTestId("system-graph-zoom-reset");
+    const viewportBounds = await viewport.boundingBox();
+    if (!viewportBounds) throw new Error("Missing system graph viewport bounds");
+
+    await viewport.focus();
+    await expect(viewport).toBeFocused();
+    const beforeKeyboardPan = await subject.evaluate(
+      (element) => (element as HTMLElement).style.transform,
+    );
+    await page.keyboard.press("ArrowRight");
+    await expect
+      .poll(() =>
+        subject.evaluate((element) => (element as HTMLElement).style.transform),
+      )
+      .not.toBe(beforeKeyboardPan);
+    await reset.click();
+
+    const panGraphOffscreen = async () => {
+      await page.mouse.move(viewportBounds.x + 8, viewportBounds.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(
+        viewportBounds.x + viewportBounds.width + 2_000,
+        viewportBounds.y + viewportBounds.height + 2_000,
+      );
+      await page.mouse.up();
+      await expect
+        .poll(async () => {
+          const [viewportBox, subjectBox] = await Promise.all([
+            viewport.boundingBox(),
+            subject.boundingBox(),
+          ]);
+          if (!viewportBox || !subjectBox) return false;
+          return (
+            subjectBox.x >= viewportBox.x + viewportBox.width ||
+            subjectBox.x + subjectBox.width <= viewportBox.x ||
+            subjectBox.y >= viewportBox.y + viewportBox.height ||
+            subjectBox.y + subjectBox.height <= viewportBox.y
+          );
+        })
+        .toBe(true);
+    };
+
+    // Tabbing from the viewport to an offscreen card must pan that card back
+    // into view before its visible focus ring is shown.
+    await panGraphOffscreen();
+    await viewport.focus();
+    await page.keyboard.press("Tab");
+    const focusedCard = page.locator("button.system-graph-node").first();
+    await expect(focusedCard).toBeFocused();
+    const focusedBounds = await focusedCard.boundingBox();
+    if (!focusedBounds) throw new Error("Missing focused graph card bounds");
+    expect(focusedBounds.x).toBeGreaterThanOrEqual(viewportBounds.x + 16);
+    expect(focusedBounds.y).toBeGreaterThanOrEqual(viewportBounds.y + 16);
+    expect(focusedBounds.x + focusedBounds.width).toBeLessThanOrEqual(
+      viewportBounds.x + viewportBounds.width - 16,
+    );
+    expect(focusedBounds.y + focusedBounds.height).toBeLessThanOrEqual(
+      viewportBounds.y + viewportBounds.height - 16,
+    );
+
+    // A user may still pan beyond the subject while exploring. Reopening that
+    // workspace rejects the non-intersecting snapshot and auto-fits again.
+    await panGraphOffscreen();
+    await page
+      .getByTestId("workflow-leasing")
+      .locator(".workflow-item-trigger")
+      .click();
+    await page.getByTestId("project-select-acme-app").click();
+    const restoredBounds = await page
+      .getByTestId("system-graph-node-research")
+      .boundingBox();
+    if (!restoredBounds) throw new Error("Missing restored graph card bounds");
+    expect(restoredBounds.x + restoredBounds.width).toBeGreaterThan(
+      viewportBounds.x,
+    );
+    expect(restoredBounds.x).toBeLessThan(
+      viewportBounds.x + viewportBounds.width,
+    );
+    expect(restoredBounds.y + restoredBounds.height).toBeGreaterThan(
+      viewportBounds.y,
+    );
+    expect(restoredBounds.y).toBeLessThan(
+      viewportBounds.y + viewportBounds.height,
+    );
+  });
+
   test("a persisted workspace graph is viewable with no active session", async ({
     page,
   }) => {
