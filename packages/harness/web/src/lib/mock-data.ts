@@ -992,7 +992,11 @@ const deepAgent = (
 export const MOCK_DEEP_WORKFLOWS: WorkflowInfo[] = [
   deepAgent(`${DEEP_ROOT}/backend/src/agents/ads`, "ads"),
   deepAgent(`${DEEP_ROOT}/backend/src/agents/outreach`, "outreach"),
-  deepAgent(`${DEEP_ROOT}/scripts/tools/rollup`, "rollup"),
+  // No slug or deployment identity: this is the realistic project-relative
+  // fallback case the graph must still navigate back to the agent row.
+  deepAgent(`${DEEP_ROOT}/scripts/tools/rollup`, "rollup", {
+    definitionSlug: null,
+  }),
   deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/mailer`, "mailer", {
     definitionId: 7701,
     activeBuildRunId: "build-mailer-ready",

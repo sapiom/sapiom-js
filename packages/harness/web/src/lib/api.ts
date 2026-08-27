@@ -1250,6 +1250,73 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
   ].join("");
 }
 
+const MOCK_POLSIA_ROOT = "/Users/demo/polsia";
+
+/**
+ * A compact Polsia-style direct-call topology for the deep Project fixture.
+ * Two source records for Outreach -> Mailer deliberately collapse into one
+ * combined connector in the renderer. Rollup stays disconnected so inventory
+ * coverage is tested independently of relationship extraction.
+ */
+const MOCK_POLSIA_GRAPH_EDGES: SystemGraph["edges"] = [
+  {
+    from: "agent:outreach",
+    to: "agent:mailer",
+    kind: "invokes",
+    basis: "static",
+    mode: "blocking",
+  },
+  {
+    from: "agent:outreach",
+    to: "agent:mailer",
+    kind: "invokes",
+    basis: "static",
+    mode: "async",
+  },
+  {
+    from: "agent:ads",
+    to: "agent:gateway",
+    kind: "invokes",
+    basis: "static",
+    mode: "blocking",
+  },
+  {
+    from: "agent:gateway",
+    to: "agent:ads-worker",
+    kind: "invokes",
+    basis: "static",
+    mode: "async",
+  },
+  {
+    from: "agent:gateway",
+    to: "agent:queue",
+    kind: "invokes",
+    basis: "static",
+    mode: "blocking",
+  },
+  {
+    from: "agent:ads-worker",
+    to: "agent:queue",
+    kind: "invokes",
+    basis: "static",
+    mode: "async",
+  },
+  {
+    from: "agent:queue",
+    to: "agent:sender",
+    kind: "invokes",
+    basis: "static",
+    mode: "blocking",
+  },
+  {
+    from: "agent:sender",
+    to: "agent:gateway",
+    kind: "invokes",
+    basis: "static",
+    mode: "async",
+  },
+];
+
 class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
@@ -1628,7 +1695,9 @@ class MockApi implements HarnessApi {
               };
             })
             .sort((left, right) => left.agentKey.localeCompare(right.agentKey)),
-          edges: [],
+          edges: samePath(selectedScope.cwd, MOCK_POLSIA_ROOT)
+            ? MOCK_POLSIA_GRAPH_EDGES
+            : [],
           warnings: [],
         };
     return { workspaceKey, revision, state, graph };
