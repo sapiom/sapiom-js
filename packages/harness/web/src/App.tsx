@@ -1478,6 +1478,8 @@ export const App = (): JSX.Element => {
           historyLoading={harness.historyLoading}
           onOpenHistory={(cwds) => void harness.loadHistory(cwds)}
           recentDirs={harness.settings?.recentDirs ?? []}
+          closedProjects={harness.closedProjects}
+          onRemoveProject={harness.removeProject}
           launchDir={state.launchDir ?? null}
           listDir={harness.listDir}
           onCreateSession={handleCreateSession}
