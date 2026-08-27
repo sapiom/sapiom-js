@@ -1614,8 +1614,31 @@ export function useHarnessState(): HarnessStateHook {
       );
       if (swallowed.length > 0) reopenProjects(swallowed);
       await rememberProjectDir(root);
+      // AND SCAN IT. Remembering the root only draws the row; nothing in the
+      // harness scans a folder just because it became a project — the scan
+      // triggers are boot(launchDir), session-create, workspace-change,
+      // agent-linked, agent-moved and an explicit request (see
+      // docs/agent-discovery.md). So opening a folder whose agents were not
+      // already registered produced a project row with NOTHING UNDER IT, which
+      // reads as "adding a project did nothing" — the exact symptom reported
+      // against round 2. Mock mode hid it because its fixtures arrive
+      // pre-registered.
+      //
+      // Opening a folder IS the user asking for its agents, which is the
+      // explainability rule discovery is built on, and the scan is bounded by
+      // the node budget and stops at repository boundaries — so this cannot
+      // wander into sibling checkouts the way the old Add-all did.
+      //
+      // A scan failure must not un-open the project: the row is already correct
+      // and the folder is already remembered, so this degrades to "no agents
+      // found yet" rather than throwing out of the open.
+      try {
+        await scanWorkflows(root);
+      } catch (err) {
+        console.warn("[harness] scan after opening project failed", root, err);
+      }
     },
-    [reopenProjects, rememberProjectDir],
+    [reopenProjects, rememberProjectDir, scanWorkflows],
   );
 
   const removeProject = useCallback(

@@ -792,7 +792,7 @@ test.describe("dead sessions never trap the user", () => {
 
 test("the rail's filing panel offers Group by / Sort by as visible dropdowns", async ({ page }) => {
   // The old projection toggle and the custom-groups view are gone; filing lives
-  // behind the sliders glyph as two dropdowns that state their current value on
+  // behind the settings ellipsis as two dropdowns that state their current value on
   // the face of the control.
   await expect(page.getByTestId("rail-view-toggle")).toHaveCount(0);
   await expect(page.locator("[data-testid^='custom-group-']")).toHaveCount(0);

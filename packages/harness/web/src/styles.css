@@ -1010,6 +1010,13 @@ input {
   min-width: 0;
 }
 
+/* ADD, at the leading edge. Sits tight to the label it acts on rather than
+   drifting to the trailing group, and gives up the -sp2 of gap so the pair
+   reads as one unit ("+ Projects") instead of two controls. */
+.rail-header-btn-lead {
+  margin-right: calc(var(--sp2) * -1 + 2px);
+}
+
 .rail-header-actions {
   margin-left: auto;
   display: flex;
@@ -9942,9 +9949,15 @@ button.rail-footer-card:hover {
   letter-spacing: 0;
 }
 
-.workspace-row:hover .project-mark,
-.workspace-row.is-focused .project-mark,
-.workspace-row.is-selected .project-mark {
+/* The brand fill says "this row IS a project". A row carrying
+   `project-mark-none` has no project behind it — the stray-agents header is a
+   section title, not a project — so it must be excluded. Without the :not() the
+   hover rule (0,3,0) outranks `.project-mark-none`'s `background: transparent`
+   (0,1,0) whatever the source order, and the section header lit up solid brand
+   green on hover. */
+.workspace-row:hover .project-mark:not(.project-mark-none),
+.workspace-row.is-focused .project-mark:not(.project-mark-none),
+.workspace-row.is-selected .project-mark:not(.project-mark-none) {
   background: var(--brand);
   color: var(--brand-ink);
 }
@@ -10107,7 +10120,11 @@ button.rail-footer-card:hover {
    row's height and shoves every row under it by a pixel mid-drag, which reads
    as the list rearranging before the drop has happened. */
 .workspace-row.is-drop-target {
-  background: var(--accent);
+  /* A WASH, which is what the comment above always claimed. `var(--accent)` is
+     `var(--brand)` — a saturated green — so this painted the whole row solid
+     brand and read as an error state rather than a target. The leading rule
+     stays full-strength: that is the part doing the pointing. */
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
   box-shadow: inset 2px 0 0 var(--brand);
 }
 

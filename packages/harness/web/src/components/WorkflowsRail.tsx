@@ -675,44 +675,52 @@ export function WorkflowsRail({
       {/* A TITLE, not a control. Folding this header hid the only thing the
           rail is for and left a header sitting on nothing — so it has no
           disclosure of its own. Its two buttons ask two different questions:
-          `+` adds a project, sliders change how the list is filed. */}
+          `+` adds a project, the ellipsis opens the rail's settings. */}
       <div className="rail-header">
         {/* The header names what the list is FILED BY, so it changes with the
             axis. A header reading "Projects" over a list of relationship
             clusters would describe the wrong thing. */}
+        {/* ADD sits at the LEADING edge, beside the thing it adds to, because
+            it is the header's primary action — opening a project is how this
+            list gets its contents. FOLDER-with-plus, because what it adds is a
+            folder. One `+` per question: this one opens a project; starting
+            another session is the tab strip's trailing `+`, and project rows
+            carry none. */}
+        <button
+          type="button"
+          className="theme-toggle rail-header-btn rail-header-btn-lead"
+          ref={addProjectTriggerRef}
+          data-testid="rail-add-project"
+          aria-label="Add a project"
+          data-tooltip="Add a project"
+          onClick={() => {
+            setHistoryOpen(false);
+            setStartMode("open");
+          }}
+        >
+          <Icon name="FolderPlus" size={14} />
+        </button>
         <span className="rail-header-label">{axis === "group" ? "Groups" : "Projects"}</span>
         <div className="rail-header-actions">
-          {/* FOLDER-with-plus, because what it adds is a folder. One `+` per
-              question: this one opens a project; starting another session is
-              the tab strip's trailing `+`, and project rows carry none. */}
-          <button
-            type="button"
-            className="theme-toggle rail-header-btn"
-            ref={addProjectTriggerRef}
-            data-testid="rail-add-project"
-            aria-label="Add a project"
-            data-tooltip="Add a project"
-            onClick={() => {
-              setHistoryOpen(false);
-              setStartMode("open");
-            }}
-          >
-            <Icon name="FolderPlus" size={14} />
-          </button>
-          {/* SLIDERS, not an ellipsis. An ellipsis has no subject, so it can
-              only mean "more stuff"; this panel has exactly one — how the list
-              is filed. */}
+          {/* AN ELLIPSIS, deliberately reversing the design doc's "sliders, not
+              an ellipsis". That rule's reasoning was "an ellipsis has no
+              subject, so it can only mean more stuff; this panel has exactly
+              one". The panel no longer has exactly one: it carries filing
+              (Group by / Sort by) AND past sessions, i.e. the rail's settings.
+              Once a control genuinely holds more than one subject, the ellipsis
+              is the honest glyph and a sliders icon is the misleading one —
+              sliders promise filing and nothing else. */}
           <button
             ref={historyTriggerRef}
             className="theme-toggle rail-header-btn"
             data-testid="history-trigger"
-            aria-label="Filing and past sessions"
+            aria-label="Rail settings"
             aria-haspopup="menu"
             aria-expanded={historyOpen}
-            data-tooltip="Group, sort and past sessions"
+            data-tooltip="Filing, sorting and past sessions"
             onClick={toggleHistory}
           >
-            <Icon name="SlidersHorizontal" size={14} />
+            <Icon name="MoreHorizontal" size={14} />
           </button>
         </div>
       </div>

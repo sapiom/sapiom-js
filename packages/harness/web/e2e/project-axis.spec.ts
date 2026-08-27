@@ -269,19 +269,36 @@ test.describe("row chrome", () => {
     );
   });
 
-  test("the header's + adds a PROJECT and the filing trigger is a sliders glyph", async ({
+  test("the header's + LEADS and adds a PROJECT; settings is an ellipsis that trails", async ({
     page,
   }) => {
     await expect(page.getByTestId("rail-add-project")).toHaveAttribute("aria-label", "Add a project");
+
+    // ORDER, asserted from the live DOM rather than from CSS: `+` is the
+    // header's FIRST child and settings its last. Add is the primary action —
+    // opening a project is how this list gets its contents — so it sits at the
+    // leading edge beside the label, not in the trailing group.
+    const headerOrder = await page.locator(".rail-header").evaluate((el) =>
+      [...el.querySelectorAll("[data-testid], .rail-header-label")].map(
+        (n) => n.getAttribute("data-testid") ?? "label",
+      ),
+    );
+    expect(headerOrder.indexOf("rail-add-project")).toBe(0);
+    expect(headerOrder.indexOf("rail-add-project")).toBeLessThan(headerOrder.indexOf("label"));
+    expect(headerOrder[headerOrder.length - 1]).toBe("history-trigger");
+
     await page.getByTestId("rail-add-project").click();
     await expect(page.locator(".modal-start")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    // An ellipsis has no subject, so it can only mean "more stuff"; this panel
-    // has exactly one.
-    await expect(page.getByTestId("history-trigger").locator("svg.lucide-sliders-horizontal")).toHaveCount(
-      1,
-    );
+    // AN ELLIPSIS, reversing the design doc's "sliders, not an ellipsis". That
+    // rule held while the panel had exactly one subject; it now carries filing
+    // AND past sessions, so sliders would promise filing and nothing else.
+    // lucide ships MoreHorizontal under the class `lucide-ellipsis` — verified
+    // against the rendered DOM, not guessed from the component name.
+    await expect(page.getByTestId("history-trigger").locator("svg.lucide-ellipsis")).toHaveCount(1);
+    await expect(page.getByTestId("history-trigger").locator("svg.lucide-sliders-horizontal")).toHaveCount(0);
+    await expect(page.getByTestId("history-trigger")).toHaveAttribute("aria-label", "Rail settings");
     await page.getByTestId("history-trigger").click();
     // VISIBLE dropdowns, not a menu of radio rows: each states its current
     // value on the face of the control.
