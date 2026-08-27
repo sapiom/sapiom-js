@@ -360,11 +360,11 @@ export function WorkflowsRail({
   const startOpen = startMode !== null;
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
   const addProjectTriggerRef = useRef<HTMLButtonElement>(null);
-  // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
+  // The ⋮ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
 
-  // The ⋯ overflow menu: how the tree is grouped, how it is sorted, and the
+  // The ⋮ overflow menu: how the tree is grouped, how it is sorted, and the
   // sessions that have ended. Grouping and sort are persisted so the explorer
   // resumes as the user left it (docs/IA.md).
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -724,12 +724,12 @@ export function WorkflowsRail({
             data-tooltip="Filing, sorting and past sessions"
             onClick={toggleHistory}
           >
-            <Icon name="MoreHorizontal" size={14} />
+            <Icon name="EllipsisVertical" size={14} />
           </button>
         </div>
       </div>
       <div className="rail-tree">
-        {/* The ⋯ overflow menu. The popover is the TRACK, not the card: it
+        {/* The ⋮ overflow menu. The popover is the TRACK, not the card: it
             opens BESIDE the rail (never over the tree it configures), and its
             one unbounded set — Past sessions — opens as a sub-card beside the
             options card rather than a scrolling list nailed under four fixed
@@ -805,7 +805,7 @@ export function WorkflowsRail({
                 {/* One row that opens a sub-card beside the menu — the set is
                     unbounded (every session this install has finished), so a
                     list nailed here would give a card of four choices a
-                    scrollbar. The count rides the row, not the ⋯ trigger.
+                    scrollbar. The count rides the row, not the ⋮ trigger.
                     Opens on hover (moving onto it) as well as click. */}
                 <button
                   type="button"

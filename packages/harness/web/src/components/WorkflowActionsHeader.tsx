@@ -47,7 +47,7 @@ function runChipLabel(run: RunView, target: RunTarget | null): string {
  * - Steps list: the workflow name and the real step count, info left, no
  *   competing actions (rows are the interface).
  * - Step detail: 1×1 back left-anchored, the step's name and kind, then the
- *   right-anchored main action (Ask coding agent) and a ⋯ menu with the rest —
+ *   right-anchored main action (Ask coding agent) and a ⋮ menu with the rest —
  *   the drill-down's chrome lives HERE, not inside the scroll area.
  */
 export function WorkflowActionsHeader({
@@ -65,7 +65,7 @@ export function WorkflowActionsHeader({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
-  // The steps-mode run picker: its own open state and refs — the ⋯
+  // The steps-mode run picker: its own open state and refs — the ⋮
   // menu above belongs to the detail mode and never coexists with this one.
   const [runMenuOpen, setRunMenuOpen] = useState(false);
   const runMenuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -117,7 +117,7 @@ export function WorkflowActionsHeader({
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
           >
-            <Icon name="MoreHorizontal" size={14} />
+            <Icon name="EllipsisVertical" size={14} />
           </button>
           <AnchoredPopover
             open={menuOpen}
