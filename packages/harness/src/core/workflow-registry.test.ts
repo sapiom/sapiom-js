@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { AgentProjectScanBudget } from "./agent-project-discovery.js";
 import { WorkflowRegistry } from "./workflow-registry.js";
 
 async function writeMarker(
@@ -45,10 +46,10 @@ describe("WorkflowRegistry", () => {
     );
     // Depth 1: no package.json, undeployed.
     await writeMarker(path.join(tmpRoot, "proj-b"), null);
-    // Depth 3: right at the boundary — should be found.
-    await writeMarker(path.join(tmpRoot, "a", "b", "c"), 7);
-    // Depth 4: past the boundary — should NOT be found.
-    await writeMarker(path.join(tmpRoot, "d", "e", "f", "g"), 9);
+    // Depth 8: right at the boundary — should be found.
+    await writeMarker(path.join(tmpRoot, "a", "b", "c", "d", "e", "f", "g", "h"), 7);
+    // Depth 9: past the boundary — should NOT be found.
+    await writeMarker(path.join(tmpRoot, "d", "e", "f", "g", "h", "i", "j", "k", "l"), 9);
     // Inside generated/private trees — should never be scanned.
     await writeMarker(path.join(tmpRoot, "node_modules", "some-pkg"), 1);
     await writeMarker(path.join(tmpRoot, ".git", "worktrees", "x"), 1);
@@ -80,8 +81,12 @@ describe("WorkflowRegistry", () => {
       starterId: null,
       source: "scan",
     });
-    expect(byPath.has(path.join(tmpRoot, "a", "b", "c"))).toBe(true);
-    expect(byPath.has(path.join(tmpRoot, "d", "e", "f", "g"))).toBe(false);
+    expect(byPath.has(path.join(tmpRoot, "a", "b", "c", "d", "e", "f", "g", "h"))).toBe(
+      true,
+    );
+    expect(
+      byPath.has(path.join(tmpRoot, "d", "e", "f", "g", "h", "i", "j", "k", "l")),
+    ).toBe(false);
     expect(
       found.some((workflow) => workflow.path.includes("node_modules")),
     ).toBe(false);
@@ -380,5 +385,126 @@ describe("WorkflowRegistry", () => {
       expect(list).toHaveLength(1);
       expect(list[0].path).toBe(path.join(tmpRoot, "proj-ok"));
     });
+  });
+});
+
+/**
+ * The depth cap that predated the project-rooted rail was 3, which is shallower
+ * than where agents actually sit under a root a user would choose. These pin
+ * both halves of what replaced it: the reach, and the reconciliation rule that
+ * keeps a *bounded* scan from mistaking "I didn't look there" for "it's gone".
+ */
+describe("WorkflowRegistry deep discovery under a chosen project root", () => {
+  let projectRoot: string;
+  let registryPath: string;
+  let registry: WorkflowRegistry;
+
+  beforeEach(async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-deep-root-"));
+    registryPath = path.join(projectRoot, ".state", "workflows.json");
+    registry = new WorkflowRegistry(registryPath);
+  });
+
+  afterEach(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it("discovers an agent four and more segments below the opened root, under that root", async () => {
+    // The real shape from the design doc: ~/polsia/backend/src/agents/ads.
+    const ads = path.join(projectRoot, "backend", "src", "agents", "ads");
+    const deeper = path.join(
+      projectRoot,
+      "apps",
+      "web",
+      "src",
+      "features",
+      "mail",
+      "agents",
+      "digest",
+    );
+    await writeMarker(ads, 1);
+    await writeMarker(deeper, 2);
+
+    const found = await registry.scan(projectRoot);
+    const paths = found.map((workflow) => workflow.path);
+
+    expect(paths).toContain(ads);
+    expect(paths).toContain(deeper);
+    // Filing under the root is what the rail does with these rows, so the row's
+    // own path has to be inside the root the user opened — not a resolved
+    // sibling, not the agent's git root.
+    for (const found of paths) {
+      expect(found.startsWith(`${projectRoot}${path.sep}`)).toBe(true);
+    }
+    // 7 segments deep — the design's deepest realistic layout, still inside 8.
+    expect(path.relative(projectRoot, deeper).split(path.sep)).toHaveLength(7);
+  });
+
+  it("does not reconcile away a project below the depth a budget-truncated scan reached", async () => {
+    // This is the failure a node budget introduces if reconciliation keeps
+    // trusting the static cap: the scan stops early, finds nothing deep, and
+    // deletes every deep row as "gone" on a tree where nothing changed.
+    const deep = path.join(projectRoot, "backend", "src", "agents", "ads");
+    await writeMarker(deep, 1);
+    for (const sibling of ["a", "b", "c", "d", "e", "f"]) {
+      await fs.mkdir(path.join(projectRoot, sibling, "child"), { recursive: true });
+    }
+    await registry.scan(projectRoot);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([deep]);
+
+    // Root + a few level-1 dirs and nothing more: the scan cannot have looked
+    // at level 4, where the row lives.
+    const starved = new AgentProjectScanBudget({ maxNodes: 4 });
+    const found = await registry.scan(projectRoot, starved);
+
+    expect(found).toEqual([]);
+    expect(starved.truncated).toBe(true);
+    expect(starved.envelopeDepth).toBeLessThan(4);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([deep]);
+
+    // And a scan that DID cover that depth still reconciles it away when the
+    // marker really is gone — the protection is about coverage, not immunity.
+    await fs.rm(path.join(deep, "sapiom.json"));
+    await registry.scan(projectRoot);
+    expect(await registry.list()).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates on a symlink cycle and registers nothing through the link",
+    async () => {
+      const real = path.join(projectRoot, "pkg", "agents", "one");
+      await writeMarker(real, 1);
+      // loop -> the root itself: an infinitely deep tree if links were followed.
+      await fs.symlink(projectRoot, path.join(projectRoot, "pkg", "loop"), "dir");
+
+      const started = performance.now();
+      const found = await registry.scan(projectRoot);
+      const elapsed = performance.now() - started;
+
+      expect(found.map((workflow) => workflow.path)).toEqual([real]);
+      expect(elapsed).toBeLessThan(2_000);
+    },
+  );
+
+  it("stays cheap on a large ignored tree — node_modules is never entered", async () => {
+    const real = path.join(projectRoot, "pkg", "agents", "one");
+    await writeMarker(real, 1);
+    // 600 directories that must cost nothing, plus a marker inside one of them
+    // that must never be registered.
+    for (let i = 0; i < 200; i++) {
+      await fs.mkdir(
+        path.join(projectRoot, "node_modules", `pkg-${i}`, "dist", "esm"),
+        { recursive: true },
+      );
+    }
+    await writeMarker(path.join(projectRoot, "node_modules", "pkg-7", "agent"), 9);
+
+    const budget = new AgentProjectScanBudget();
+    const found = await registry.scan(projectRoot, budget);
+
+    expect(found.map((workflow) => workflow.path)).toEqual([real]);
+    // root + pkg + agents + one = 4. If node_modules were walked it would be
+    // in the hundreds.
+    expect(budget.visited).toBeLessThan(10);
   });
 });

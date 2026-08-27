@@ -28,15 +28,23 @@
  * The fallback walk is async (fs/promises) to avoid blocking the event loop
  * on a wide cwd — the poll interval is longer than the watch debounce,
  * so a filesystem event via the watcher is still the fast path.
+ *
+ * Both walks run core/agent-project-discovery.ts's shared bounded traversal, so
+ * "which directories a scan of this root covers" has one definition here and in
+ * the workflow registry. The fingerprint's budget is deliberately the tighter of
+ * the two — see AGENT_PROJECT_WATCH_MAX_NODES.
  */
 import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
-  AGENT_PROJECT_SCAN_MAX_DEPTH,
+  AGENT_PROJECT_WATCH_MAX_NODES,
+  AgentProjectScanBudget,
+  type AgentProjectWalkAction,
   inspectAgentProjectMarker,
   inspectAgentProjectMarkerSync,
   isAgentProjectScanIgnoredDir,
+  walkAgentProjectTree,
+  walkAgentProjectTreeAsync,
 } from "./agent-project-discovery.js";
 
 const DEBOUNCE_MS = 250;
@@ -44,14 +52,62 @@ const DEBOUNCE_MS = 250;
  *  the poll is just a backstop for platforms without recursive fs.watch. */
 const POLL_INTERVAL_MS = 2_000;
 const UNREADABLE_FINGERPRINT = "<unreadable>";
-
-function isConfirmedMissing(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "ENOENT" || code === "ENOTDIR";
-}
+/** Sentinel for "the node budget stopped this walk at depth N" — see
+ *  addTruncatedFingerprint. */
+const TRUNCATED_FINGERPRINT = "<truncated>";
 
 function addUnreadableFingerprint(fingerprints: string[], dir: string): void {
   fingerprints.push(`${dir}\0${UNREADABLE_FINGERPRINT}`);
+}
+
+/** A fresh watch budget — tighter than a registry scan's, because this walk is
+ *  synchronous and re-runs on the debounce after every save. */
+function watchBudget(): AgentProjectScanBudget {
+  return new AgentProjectScanBudget({ maxNodes: AGENT_PROJECT_WATCH_MAX_NODES });
+}
+
+/**
+ * One sentinel, keyed by root and the depth the node budget cut at, when a walk
+ * did not cover the whole tree.
+ *
+ * It is one entry rather than one per unvisited directory for two reasons: the
+ * unvisited frontier can be tens of thousands of directories on a real root,
+ * and the cut depth is the only thing about it that is *stable*. The walk is
+ * breadth-first over sorted entries, so the cut lands in the same place on
+ * every pass over an unchanged tree, and the fingerprint stays put instead of
+ * flapping and rescanning the workspace forever.
+ */
+function addTruncatedFingerprint(
+  fingerprints: string[],
+  root: string,
+  budget: AgentProjectScanBudget,
+): void {
+  if (!budget.truncated) return;
+  fingerprints.push(`${root}\0${TRUNCATED_FINGERPRINT}@${budget.truncatedAtDepth}`);
+}
+
+/**
+ * Classifies one directory for the fingerprint, shared by the sync and async
+ * walks so they cannot disagree. Returns what the walk should do next.
+ */
+function fingerprintDirectory(
+  markerDirs: string[],
+  dir: string,
+  markerResult: import("./agent-project-discovery.js").AgentProjectMarkerInspection,
+): AgentProjectWalkAction {
+  if (markerResult.status === "valid") {
+    markerDirs.push(`${dir}\0${JSON.stringify(markerResult.marker)}`);
+    return "stop";
+  }
+  // Preserve "temporarily unreadable" as a distinct state. If it collapsed
+  // to the same fingerprint as an absent/invalid project, a quick
+  // unreadable -> invalid transition could be swallowed by the debounce and
+  // leave a stale workflow in the registry until some later filesystem event.
+  if (markerResult.status === "unreadable") {
+    addUnreadableFingerprint(markerDirs, dir);
+    return "stop";
+  }
+  return "descend";
 }
 
 function firstSegmentIgnored(relPath: string): boolean {
@@ -63,51 +119,38 @@ function firstSegmentIgnored(relPath: string): boolean {
 
 /**
  * Fingerprint of the set of workflow-marker directories under `root` (sorted,
- * bounded depth, ignored subtrees skipped), plus opaque sentinels for subtrees
- * that are temporarily unreadable. Changes when a workflow is added, removed,
- * renamed, or crosses that unreadable boundary — not when unrelated readable
+ * bounded by depth AND by directories visited, ignored subtrees skipped), plus
+ * opaque sentinels for subtrees that are temporarily unreadable or that the
+ * node budget kept the walk out of. Changes when a workflow is added, removed,
+ * renamed, or crosses one of those boundaries — not when unrelated readable
  * files are edited. Exported for direct testing.
  *
  * The synchronous form is retained for callers that need an immediate
  * baseline at construction time (before async I/O is possible). The
  * polling fallback uses the async form to avoid blocking the event loop on
  * a wide directory tree.
+ *
+ * `budget` is injectable so a benchmark can read the directories visited off
+ * the same object the walk spends, and so a test can force truncation. Pass the
+ * SAME limits to both forms: the two produce identical fingerprints on one tree
+ * only when their bounds match, and SessionWorkspaceWatcher compares a sync
+ * baseline against an async poll result.
  */
-export function snapshotWorkspaceWorkflows(root: string): string {
+export function snapshotWorkspaceWorkflows(
+  root: string,
+  budget: AgentProjectScanBudget = watchBudget(),
+): string {
   const markerDirs: string[] = [];
-
-  const walk = (dir: string, depth: number): void => {
-    if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
-    // Preserve "temporarily unreadable" as a distinct state. If it collapsed
-    // to the same fingerprint as an absent/invalid project, a quick
-    // unreadable -> invalid transition could be swallowed by the debounce and
-    // leave a stale workflow in the registry until some later filesystem event.
-    const markerResult = inspectAgentProjectMarkerSync(dir);
-    if (markerResult.status === "valid") {
-      markerDirs.push(`${dir}\0${JSON.stringify(markerResult.marker)}`);
-      return;
-    }
-    if (markerResult.status === "unreadable") {
-      addUnreadableFingerprint(markerDirs, dir);
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
-      if (!isConfirmedMissing(error)) {
-        addUnreadableFingerprint(markerDirs, dir);
-      }
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
-      walk(path.join(dir, entry.name), depth + 1);
-    }
-  };
-
-  walk(root, 0);
+  walkAgentProjectTree(
+    root,
+    {
+      onDirectory: (dir) =>
+        fingerprintDirectory(markerDirs, dir, inspectAgentProjectMarkerSync(dir)),
+      onUnreadable: (dir) => addUnreadableFingerprint(markerDirs, dir),
+    },
+    budget,
+  );
+  addTruncatedFingerprint(markerDirs, path.resolve(root), budget);
   return markerDirs.sort().join("|");
 }
 
@@ -117,37 +160,21 @@ export function snapshotWorkspaceWorkflows(root: string): string {
  * fs.watch. Produces the same fingerprint as the sync version. Exported for
  * direct testing.
  */
-export async function snapshotWorkspaceWorkflowsAsync(root: string): Promise<string> {
+export async function snapshotWorkspaceWorkflowsAsync(
+  root: string,
+  budget: AgentProjectScanBudget = watchBudget(),
+): Promise<string> {
   const markerDirs: string[] = [];
-
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
-    const markerResult = await inspectAgentProjectMarker(dir);
-    if (markerResult.status === "valid") {
-      markerDirs.push(`${dir}\0${JSON.stringify(markerResult.marker)}`);
-      return;
-    }
-    if (markerResult.status === "unreadable") {
-      addUnreadableFingerprint(markerDirs, dir);
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if (!isConfirmedMissing(error)) {
-        addUnreadableFingerprint(markerDirs, dir);
-      }
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
-      await walk(path.join(dir, entry.name), depth + 1);
-    }
-  };
-
-  await walk(root, 0);
+  await walkAgentProjectTreeAsync(
+    root,
+    {
+      onDirectory: async (dir) =>
+        fingerprintDirectory(markerDirs, dir, await inspectAgentProjectMarker(dir)),
+      onUnreadable: (dir) => addUnreadableFingerprint(markerDirs, dir),
+    },
+    budget,
+  );
+  addTruncatedFingerprint(markerDirs, path.resolve(root), budget);
   return markerDirs.sort().join("|");
 }
 
