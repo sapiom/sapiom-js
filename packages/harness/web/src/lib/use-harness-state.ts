@@ -33,6 +33,7 @@ import {
   type FsListResponse,
   type HarnessApi,
   type RunLocalLine,
+  type WorkflowScanOutcome,
 } from "./api";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
@@ -186,7 +187,13 @@ export interface HarnessStateHook {
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
   /** Bulk discovery: POST /api/workflows/scan under a root, then
    *  refreshes the registry list so found agents join the rail at once. */
-  scanWorkflows: (root: string) => Promise<WorkflowInfo[]>;
+  scanWorkflows: (root: string) => Promise<WorkflowScanOutcome>;
+  /**
+   * Checkouts a scan of a given root stopped at rather than entering, keyed by
+   * the root that was scanned. Empty for a normal project. Non-empty means an
+   * empty-looking project is not necessarily empty.
+   */
+  unsearchedCheckouts: Record<string, string[]>;
   /**
    * Project roots the user removed from the rail — the rail hides their
    * subtrees (`project-membership.ts` owns every rule about that). Persisted
@@ -378,6 +385,9 @@ export function useHarnessState(): HarnessStateHook {
    * restore-from-storage render, which is how a persisted list learns to
    * rewrite itself with whatever the first render happened to hold.
    */
+  // Per-root record of checkouts a scan declined to enter. Not persisted: it
+  // describes the last scan, and the next scan of that root re-derives it.
+  const [unsearchedCheckouts, setUnsearchedCheckouts] = useState<Record<string, string[]>>({});
   const [closedProjects, setClosedProjects] = useState<string[]>(
     () => loadUiPrefs().closedProjects ?? [],
   );
@@ -1559,8 +1569,8 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   const scanWorkflows = useCallback(
-    async (root: string): Promise<WorkflowInfo[]> => {
-      const found = await api.scanWorkflows(root);
+    async (root: string): Promise<WorkflowScanOutcome> => {
+      const outcome = await api.scanWorkflows(root);
       // The scan registers server-side; re-list so every discovered agent
       // joins the rail in one shot instead of trickling in per connect.
       const workflows = await refreshWorkflows();
@@ -1568,7 +1578,17 @@ export function useHarnessState(): HarnessStateHook {
       // never inflates the built-agents count.
       const seen = (seenAgentPathsRef.current ??= new Set<string>());
       for (const workflow of workflows) seen.add(workflow.path);
-      return found;
+      // Remember what the walk declined to enter, per root. A project row that
+      // ends up empty needs this to tell "there is nothing here" apart from
+      // "I did not look in there" — the two look identical without it.
+      setUnsearchedCheckouts((prev) =>
+        outcome.repositoryBoundaries.length > 0
+          ? { ...prev, [root]: outcome.repositoryBoundaries }
+          : Object.keys(prev).includes(root)
+            ? Object.fromEntries(Object.entries(prev).filter(([key]) => key !== root))
+            : prev,
+      );
+      return outcome;
     },
     [refreshWorkflows],
   );
@@ -2057,6 +2077,7 @@ export function useHarnessState(): HarnessStateHook {
     connectWorkflow,
     scanWorkflows,
     closedProjects,
+    unsearchedCheckouts,
     removeProject,
     openProject,
     listHarnesses,

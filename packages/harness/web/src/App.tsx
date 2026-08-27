@@ -1195,12 +1195,21 @@ export const App = (): JSX.Element => {
 
   // Bulk discovery from the add dialog.
   const handleScanWorkflows = async (root: string): Promise<number> => {
-    const found = await harness.scanWorkflows(root);
+    const { found, repositoryBoundaries } = await harness.scanWorkflows(root);
     // Finding agents is the win this dialog exists for; an empty sweep is a
     // neutral fact, not a failure.
+    //
+    // But "found nothing" and "did not look" are different facts, and the walk
+    // stops at every separate checkout — so a folder of clones legitimately
+    // finds nothing while the agents are right there. Reporting that as "no
+    // agent projects found" is false, and it is false in the most misleading
+    // direction: it tells the user their agents do not exist.
+    const skipped = repositoryBoundaries.length;
     harness.showToast(
       found.length === 0
-        ? "No agent projects found under this folder."
+        ? skipped === 0
+          ? "No agent projects found under this folder."
+          : `No agents here — ${skipped === 1 ? "1 separate git checkout was" : `${skipped} separate git checkouts were`} not searched. Open one as its own project.`
         : found.length === 1
           ? "Found 1 agent project."
           : `Found ${found.length} agent projects.`,
@@ -1596,6 +1605,7 @@ export const App = (): JSX.Element => {
           onOpenHistory={(cwds) => void harness.loadHistory(cwds)}
           recentDirs={harness.settings?.recentDirs ?? []}
           closedProjects={harness.closedProjects}
+          unsearchedCheckouts={harness.unsearchedCheckouts}
           onRemoveProject={harness.removeProject}
           onOpenProject={harness.openProject}
           launchDir={state.launchDir ?? null}

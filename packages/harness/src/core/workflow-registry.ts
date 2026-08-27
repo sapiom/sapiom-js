@@ -148,7 +148,12 @@ export async function scanAgentProjects(
     {
       onDirectory,
       onUnreadable: (dir) => unreconciledRoots.push(dir),
-      onRepositoryBoundary: (dir) => repositoryBoundaries.push(dir),
+      onRepositoryBoundary: (dir) => {
+        repositoryBoundaries.push(dir);
+        // Also onto the budget, so a caller that only holds the budget (the
+        // server's scan wrapper) can explain an empty result.
+        budget.repositoryBoundaries.push(dir);
+      },
     },
     budget,
     options,
@@ -304,7 +309,14 @@ export class WorkflowRegistry {
    */
   async list(): Promise<WorkflowInfo[]> {
     await this.ensureLoaded();
-    if (Date.now() - this.lastPruneAt >= LAZY_PRUNE_INTERVAL_MS) await this.prune();
+    if (Date.now() - this.lastPruneAt >= LAZY_PRUNE_INTERVAL_MS) {
+      // CLAIM THE INTERVAL BEFORE SWEEPING. `lastPruneAt` used to be written
+      // only inside the queued task, so every read in a burst passed the
+      // throttle and queued its own full stat sweep of the whole registry.
+      // Claiming it here closes the burst to one sweep per interval.
+      this.lastPruneAt = Date.now();
+      await this.prune();
+    }
     return this.workflows;
   }
 
@@ -317,15 +329,29 @@ export class WorkflowRegistry {
    * stays registered. Returns what was pruned so the caller can log it.
    */
   async prune(): Promise<WorkflowInfo[]> {
+    await this.ensureLoaded();
+    // THE STAT SWEEP RUNS OUTSIDE THE WRITE QUEUE. It only reads the
+    // filesystem, so putting it behind `enqueue` made the rail's hot read
+    // (`GET /api/workflows`, via list()) block until any in-flight `scan()`
+    // finished — 239 ms on a measured real root, 6.8 s uncapped — where it used
+    // to answer from memory. Only the WRITE needs the lock, and only when
+    // something was actually dropped, which is the rare case.
+    const { pruned } = await partitionByPathExists(this.workflows);
+    this.lastPruneAt = Date.now();
+    if (pruned.length === 0) return [];
+
+    const gone = new Set(pruned.map((workflow) => workflow.path));
     return this.enqueue(async () => {
-      await this.ensureLoaded();
-      const { kept, pruned } = await partitionByPathExists(this.workflows);
-      this.lastPruneAt = Date.now();
-      if (pruned.length > 0) {
-        this.workflows = kept;
-        await this.persist();
-      }
-      return pruned;
+      // RE-DERIVE FROM CURRENT STATE rather than assigning the `kept` computed
+      // above: a scan may have registered entries while we were statting, and
+      // writing a stale snapshot back would silently drop them. Removing a set
+      // of known-missing paths is safe whatever else changed meanwhile.
+      const before = this.workflows;
+      const removed = before.filter((workflow) => gone.has(workflow.path));
+      if (removed.length === 0) return [];
+      this.workflows = before.filter((workflow) => !gone.has(workflow.path));
+      await this.persist();
+      return removed;
     });
   }
 
@@ -417,9 +443,32 @@ export class WorkflowRegistry {
  * with resolved slugs) without an unsafe cast — a missing method is then a
  * compile error, not a runtime crash.
  */
+/**
+ * What a requested scan found, AND what it deliberately declined to enter.
+ *
+ * The second half exists because the two are only honest together. A scan stops
+ * at a foreign repository root, so pointing it at a folder that is not itself a
+ * repo but holds several clones finds NOTHING while several agents sit on disk —
+ * and a UI told only `found: []` will state, in good faith, that the folder is
+ * empty and offer to create the *first* agent in it. `repositoryBoundaries`
+ * turns that false statement into the true one: these checkouts were not
+ * searched, open one as its own project.
+ */
+export interface WorkflowScanOutcome {
+  found: WorkflowInfo[];
+  /** Absolute paths of checkouts the walk stopped at rather than entering. */
+  repositoryBoundaries: string[];
+}
+
 export interface WorkflowRegistryLike {
   list(): Promise<WorkflowInfo[]>;
   scan(root: string): Promise<WorkflowInfo[]>;
+  /**
+   * The same scan, reporting the boundaries it stopped at. Optional so an
+   * embedder implementing this interface keeps compiling; the route degrades to
+   * `scan` with an empty boundary list, which is the pre-existing behaviour.
+   */
+  scanWithBoundaries?(root: string): Promise<WorkflowScanOutcome>;
   connectPath(inputPath: string): Promise<WorkflowInfo>;
 }
 
@@ -450,7 +499,12 @@ export function createWorkflowsRouter(registry: WorkflowRegistryLike): ExpressRo
       return;
     }
     try {
-      res.json(await registry.scan(root));
+      // Responds with the OUTCOME, not a bare array: see WorkflowScanOutcome
+      // for why `found` alone lets a caller state a falsehood.
+      const outcome: WorkflowScanOutcome = registry.scanWithBoundaries
+        ? await registry.scanWithBoundaries(root)
+        : { found: await registry.scan(root), repositoryBoundaries: [] };
+      res.json(outcome);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

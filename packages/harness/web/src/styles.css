@@ -625,7 +625,13 @@ input {
   display: flex;
   flex-direction: column;
   gap: var(--sp0);
-  padding: var(--sp2) 0 0;
+  /* SYMMETRIC padding, so the nav group owns the boundary on BOTH sides. The
+     rail header's comment already claimed its gap from this group was "owned by
+     the last nav row's bottom margin" — but no such margin existed, so the
+     Projects header sat directly against "Add existing agents" with only the
+     nav's internal --sp0 between them. A button and the title of a different
+     section read as one continuous stack. The group closes itself now. */
+  padding: var(--sp2) 0;
 }
 
 /* The unboxed shortcut hint on the Search row — right-aligned, quiet mono, no
@@ -991,8 +997,10 @@ input {
   gap: var(--sp2);
   /* A compact section-label row (a peer of the Search/Templates nav rows and
      the folder rows below), not a 56px band — it reads as the header of the
-     tree it sits above. Its gap from the nav group is the same --sp2 as every
-     other top-stack boundary, owned by the last nav row's bottom margin. */
+     tree it sits above. Its gap from the nav group is --sp2, owned by
+     `.rail-nav`'s bottom padding — not by a margin here, so the nav group
+     closes itself and this header only ever positions itself relative to the
+     tree it titles. */
   min-height: var(--control-h);
   margin-top: 0;
   /* One deliberate divider under the Workspaces header, setting the explorer
@@ -1008,13 +1016,6 @@ input {
 
 .rail-header-label {
   min-width: 0;
-}
-
-/* ADD, at the leading edge. Sits tight to the label it acts on rather than
-   drifting to the trailing group, and gives up the -sp2 of gap so the pair
-   reads as one unit ("+ Projects") instead of two controls. */
-.rail-header-btn-lead {
-  margin-right: calc(var(--sp2) * -1 + 2px);
 }
 
 .rail-header-actions {
@@ -10360,4 +10361,30 @@ button.rail-footer-card:hover {
 .tree-row-empty-action:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+/* A NOTE ROW, not an action. The empty-project row's companion when a scan
+   stopped at separate checkouts: it states a fact the user needs in order to
+   read the empty project correctly, and it is deliberately NOT clickable —
+   which checkout to open is the user's decision, and guessing one would be the
+   same overreach as the walk entering all of them. */
+.tree-row-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  /* min-width:0 so the label can actually truncate inside the rail instead of
+     pushing the row past its right edge — a note that overflows the pane is
+     worse than one that elides, because the tooltip holds the full text. */
+  min-width: 0;
+  height: var(--tree-row-h);
+  padding: 0 var(--row-bleed);
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--type-ui);
+  cursor: default;
+}
+
+.tree-row-note svg {
+  flex: 0 0 auto;
+  opacity: 0.7;
 }

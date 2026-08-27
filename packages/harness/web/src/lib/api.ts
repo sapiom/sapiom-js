@@ -242,7 +242,7 @@ export type WorkflowGraphStatus = "ok" | "empty" | "preparing" | "error";
 
 /**
  * `GET /api/workflows/:path/graph` — the SESSION-FREE canvas entry point
- * (IA-01; contract in `packages/harness/docs/workflow-canvas-graph.md`).
+ * (IA-01; contract in `packages/harness/docs/agent-canvas-graph.md`).
  *
  * Declared here rather than imported from `src/server/workflow-graph.ts`: that
  * module reaches for `node:path` and `express`, so the browser cannot see it.
@@ -280,6 +280,22 @@ export interface AuthStatusResponse {
 export interface AuthStartResponse {
   started: boolean;
 }
+
+/** What a requested scan found, and what it deliberately did not enter. */
+export interface WorkflowScanOutcome {
+  found: WorkflowInfo[];
+  /** Absolute paths of checkouts the walk stopped at rather than entering. */
+  repositoryBoundaries: string[];
+}
+
+/**
+ * Roots whose scan stops at checkouts, keyed by root — mock mode's stand-in for
+ * a folder full of clones. Keyed rather than derived so a spec can point at one
+ * deliberately.
+ */
+const MOCK_SCAN_BOUNDARIES: Record<string, string[]> = {
+  "/Users/demo/src": ["/Users/demo/src/clone-a", "/Users/demo/src/clone-b"],
+};
 
 export interface HarnessApi {
   /**
@@ -342,7 +358,17 @@ export interface HarnessApi {
    */
   getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
-  scanWorkflows(root: string): Promise<WorkflowInfo[]>;
+  /**
+   * `POST /api/workflows/scan` — a requested deep scan of one root.
+   *
+   * Returns the OUTCOME, not a bare array. `found` alone is not enough to
+   * describe what happened: the walk stops at a foreign repository root, so
+   * scanning a folder that is not itself a repo but holds several clones finds
+   * nothing while several agents sit on disk. `repositoryBoundaries` is what
+   * lets the rail say "these checkouts were not searched" instead of "this
+   * folder is empty" — the difference between a true and a false statement.
+   */
+  scanWorkflows(root: string): Promise<WorkflowScanOutcome>;
   /**
    * Moves an agent's DIRECTORY on disk — the Project axis's drag (SAP-2930).
    *
@@ -593,8 +619,8 @@ class RealApi implements HarnessApi {
     });
   }
 
-  scanWorkflows(root: string): Promise<WorkflowInfo[]> {
-    return this.request<WorkflowInfo[]>("/api/workflows/scan", {
+  scanWorkflows(root: string): Promise<WorkflowScanOutcome> {
+    return this.request<WorkflowScanOutcome>("/api/workflows/scan", {
       method: "POST",
       body: JSON.stringify({ root }),
     });
@@ -1773,14 +1799,18 @@ class MockApi implements HarnessApi {
     });
   }
 
-  async scanWorkflows(root: string): Promise<WorkflowInfo[]> {
+  async scanWorkflows(root: string): Promise<WorkflowScanOutcome> {
     await delay(250);
     // Honest mock: "found" means the fixture workflow actually lives under
     // the scanned root — scanning a folder with no agents finds nothing.
     const prefix = root.endsWith("/") ? root : `${root}/`;
-    return this.workflows.filter(
+    const found = this.workflows.filter(
       (w) => w.path === root || w.path.startsWith(prefix),
     );
+    // The mock can also reproduce the real walk's most confusing outcome — a
+    // folder holding separate checkouts, where the scan legitimately finds
+    // nothing — so the rail's explanation is exercisable in a browser.
+    return { found, repositoryBoundaries: MOCK_SCAN_BOUNDARIES[root] ?? [] };
   }
 
   async listHarnesses(): Promise<HarnessEntry[]> {

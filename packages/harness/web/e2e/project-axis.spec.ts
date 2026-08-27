@@ -269,23 +269,35 @@ test.describe("row chrome", () => {
     );
   });
 
-  test("the header's + LEADS and adds a PROJECT; settings is an ellipsis that trails", async ({
+  test("the header's + sits LEFT OF the settings ellipsis, and adds a PROJECT", async ({
     page,
   }) => {
     await expect(page.getByTestId("rail-add-project")).toHaveAttribute("aria-label", "Add a project");
 
-    // ORDER, asserted from the live DOM rather than from CSS: `+` is the
-    // header's FIRST child and settings its last. Add is the primary action —
-    // opening a project is how this list gets its contents — so it sits at the
-    // leading edge beside the label, not in the trailing group.
+    // ORDER, asserted from the live DOM rather than from CSS: the LABEL owns the
+    // leading edge, then `+`, then settings last. A control at the leading edge
+    // put the header in the same icon slot and indent as the nav rows above it,
+    // so it read as one more nav button rather than the title of the tree below.
     const headerOrder = await page.locator(".rail-header").evaluate((el) =>
       [...el.querySelectorAll("[data-testid], .rail-header-label")].map(
         (n) => n.getAttribute("data-testid") ?? "label",
       ),
     );
-    expect(headerOrder.indexOf("rail-add-project")).toBe(0);
-    expect(headerOrder.indexOf("rail-add-project")).toBeLessThan(headerOrder.indexOf("label"));
-    expect(headerOrder[headerOrder.length - 1]).toBe("history-trigger");
+    expect(headerOrder).toEqual(["label", "rail-add-project", "history-trigger"]);
+
+    // And the header's label is NOT indented like a nav row: it aligns to the
+    // pane, where a section title belongs, not to the nav rows' icon slot.
+    const indents = await page.evaluate(() => ({
+      header: Math.round(
+        document.querySelector(".rail-header-label")!.getBoundingClientRect().left,
+      ),
+      navRow: Math.round(
+        document
+          .querySelector('[data-testid="add-existing-agents"] span')!
+          .getBoundingClientRect().left,
+      ),
+    }));
+    expect(indents.header).toBeLessThan(indents.navRow);
 
     await page.getByTestId("rail-add-project").click();
     await expect(page.locator(".modal-start")).toBeVisible();

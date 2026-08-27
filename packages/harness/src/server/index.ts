@@ -1365,6 +1365,14 @@ export const startServer = async (
       logAgentScan("requested", root, found.length, budget);
       return found;
     },
+    scanWithBoundaries: async (root: string) => {
+      const budget = new AgentProjectScanBudget();
+      const found = await workflowRegistry.scan(root, budget);
+      logAgentScan("requested", root, found.length, budget);
+      // The boundaries the walk stopped at travel with the result so the rail
+      // can explain an empty project instead of misdescribing one.
+      return { found, repositoryBoundaries: budget.repositoryBoundaries };
+    },
     connectPath: (inputPath: string) => workflowRegistry.connectPath(inputPath),
   };
   app.use(
