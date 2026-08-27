@@ -939,16 +939,21 @@ function mockWorkflowGraph(name: string): CanvasGraph {
  *  pane stamps on the frame's root (a `srcdoc` frame carries no query string,
  *  so the served document's `?theme=` reader has nothing to read). */
 function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
+  // Escaped even though every value here is fixture-authored: this builds an
+  // HTML document by concatenation, and the next person to key it off a real
+  // registry name (which is a directory basename) should not have to notice.
+  const esc = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const nodes = graph.nodes
     .map(
       (n) =>
-        `<div class="node" data-kind="${n.kind}" data-step-name="${n.label}">` +
-        `<strong>${n.label}</strong><small>${n.role}</small></div>`,
+        `<div class="node" data-kind="${esc(n.kind)}" data-step-name="${esc(n.label)}">` +
+        `<strong>${esc(n.label)}</strong><small>${esc(n.role)}</small></div>`,
     )
     .join('<div class="edge" aria-hidden="true"></div>');
   return [
     "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" />",
-    `<title>${name} — mock workflow board</title>`,
+    `<title>${esc(name)} — mock workflow board</title>`,
     "<style>",
     ":root{--bg:#fff;--ink:#141417;--dim:#54545e;--line:rgba(17,17,20,.12);--node:#f2f2f3}",
     '[data-theme="dark"]{--bg:#12161d;--ink:#f4f4f5;--dim:#a7a7b0;--line:rgba(255,255,255,.14);--node:#17171b}',

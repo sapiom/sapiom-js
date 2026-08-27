@@ -227,6 +227,13 @@ test.describe("boards for agents with no session", () => {
       page.frameLocator(".canvas-iframe").getByTestId("mock-workflow-board"),
     ).toBeVisible();
     await expect(boardFrame(page)).toHaveAttribute("srcdoc", /gateway — mock workflow board/);
+    // The theme bridge: a `srcdoc` frame has no URL, so the served document's
+    // `?theme=` reader has nothing to read and the app hands it the theme in an
+    // appended script instead. Without it the board paints by
+    // `prefers-color-scheme` and can come up light inside a dark app.
+    await expect(
+      page.frameLocator(".canvas-iframe").locator("html"),
+    ).toHaveAttribute("data-canvas-theme", /light|dark/);
     // …and it posted its graph, which is what the pane's reveal gate waits for:
     // the count is read from the posted graph, not from the document's markup.
     await openSteps(page);
