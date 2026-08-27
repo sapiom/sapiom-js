@@ -289,9 +289,12 @@ test.describe("row chrome", () => {
     await expect(page.getByTestId("filing-group-by")).toHaveValue("project");
     await expect(page.getByTestId("filing-sort-by")).toBeVisible();
     await expect(page.getByTestId("filing-sort-by")).toHaveValue("recent");
-    // The Deployment axis is retired.
+    // The Deployment axis is retired; Group took its slot (SAP-2929).
     await expect(page.getByTestId("group-deployment")).toHaveCount(0);
-    await expect(page.getByTestId("filing-group-by").locator("option")).toHaveText(["Project"]);
+    await expect(page.getByTestId("filing-group-by").locator("option")).toHaveText([
+      "Project",
+      "Group",
+    ]);
   });
 
   test("Sort by actually reorders the projects, and the choice survives a reload", async ({

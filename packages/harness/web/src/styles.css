@@ -10075,3 +10075,113 @@ button.rail-footer-card:hover {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
+
+/* ── Group axis: group rows, the drag host, and the two list-end actions ────
+   Added with the rail's Group axis (SAP-2929), appended as its own block for
+   the same reason the Project-axis block above was: it keeps parallel work off
+   each other's lines. Nothing above is reordered or restated except where a
+   `:has()` selector cannot see this axis's markup, which is noted where it
+   happens. The pixel system is unchanged. */
+
+/* The group-axis agent row is WRAPPED in a drag host (components/GroupRow.tsx:
+   GroupAgentRow) so `draggable` and the dataTransfer payload have somewhere to
+   live without a second copy of the agent-row anatomy. One rule above gives
+   `.workspace-group > .workflow-item` its stacking context and cannot see
+   through the wrapper, so it is re-stated for it here rather than edited in
+   place. The project's single hairline guide needs nothing: a group section is a
+   `.workspace-subgroup`, which the Project-axis block already draws the guide
+   for at the PROJECT level and deliberately suppresses per-subgroup. */
+.group-agent-drag {
+  position: relative;
+}
+
+/* A row being dragged reads as picked up rather than gone: the source stays in
+   place (the drop may be a copy, and on a refused drop nothing happened at
+   all), it simply steps back. */
+.group-agent-drag:active {
+  opacity: 0.65;
+}
+
+/* THE DROP TARGET.
+   A wash plus a leading rule, not a border: a border on a 24px row changes the
+   row's height and shoves every row under it by a pixel mid-drag, which reads
+   as the list rearranging before the drop has happened. */
+.workspace-row.is-drop-target {
+  background: var(--accent);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
+.workspace-row.is-drop-target .tree-row-label {
+  color: var(--text);
+}
+
+/* CREATE and RESET, at the END of the list they act on.
+   Both were menu items in the prototype and neither was found — someone went
+   looking for a way to make a group and concluded the feature did not exist. A
+   row at the end of the list is where the eye already is after reading it, and
+   it is visible AT REST rather than on hover, because a list you cannot add to
+   reads as a fixed list. Built from the row metrics so it sits in the same
+   rhythm as the group rows above it, and dimmed so it never competes with a
+   real group for attention. */
+.rail-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  min-height: var(--tree-row-h);
+  /* Its glyph lands on the same axis as a group row's, which `is-nested`
+     resolves to (depth 0 + 1) × --tree-indent. Stated the same way rather than
+     as a magic number, so an indent-token change moves both. */
+  padding: 0 var(--tree-pad-x) 0 var(--tree-indent);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--type-label);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.rail-add-row:hover {
+  background: var(--accent);
+  color: var(--text);
+}
+
+.rail-add-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* The cost of a reset, stated in the copy rather than paid for by hiding the
+   control: "Discards 3 groups". Pushed to the row's right so the label reads
+   first and the consequence second. */
+.rail-add-row-cost {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+/* Armed: the second click performs the reset, so the row says so. Danger tone
+   only once it is actually about to happen — a permanently red row in the tree
+   would read as a warning about the list rather than about one action. */
+.rail-reset-row.is-armed {
+  background: var(--accent);
+  color: var(--red-text, var(--red));
+}
+
+.rail-reset-row.is-armed .rail-add-row-cost {
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-add-row {
+    transition: none;
+  }
+}

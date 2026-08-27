@@ -16,11 +16,15 @@ import { basenameOf, isWithinDir, joinPath, stripTrailingSep } from "./paths";
  *
  * `deployment` bucketed `definitionId != null` — a fact every agent row
  * already prints as a cloud glyph — so it re-sorted the rail to tell you
- * nothing new. It is retired. Any future axis must be a fact the row cannot
- * already show; the next one is `group` (what an agent is RELATED to, from
- * launch edges), which the filing panel's Group-by dropdown has room for.
+ * nothing new. It is retired.
+ *
+ * `group` took its slot: what an agent is RELATED to, read off the launch edges
+ * between agents, which say nothing about the disk. Its model and derivation
+ * live in `agent-groups.ts` — nothing about a group is a path, so none of this
+ * module's tree building applies to it. Any future axis must clear the same bar:
+ * a fact the row cannot already show.
  */
-export type RailAxis = "project";
+export type RailAxis = "project" | "group";
 
 /**
  * Row order within a container. "name" is A–Z; "recent" is

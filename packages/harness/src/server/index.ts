@@ -119,6 +119,7 @@ import {
 import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createWorkflowGraphRouter } from "./workflow-graph.js";
+import { createStudioRailRouter } from "./studio-rail.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -1363,6 +1364,24 @@ export const startServer = async (
     createWorkflowGraphRouter({
       resolveWorkflow: (agentPath) =>
         workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
+    }),
+  );
+  // SAP-2929: the Group axis's stored arrangement, one `.sapiom/studio-rail.json`
+  // per project root, plus the launch edges it seeds from. Writable roots are
+  // exactly the roots the rail can SHOW — recentDirs, the configured project
+  // root, and live session cwds — so the route cannot be aimed anywhere the
+  // studio has not already been pointed.
+  app.use(
+    createStudioRailRouter({
+      listKnownRoots: async () => {
+        const stored = await loadSettings(statePaths.settings);
+        return [
+          ...stored.recentDirs,
+          ...(stored.projectRoot ? [stored.projectRoot] : []),
+          ...sessionManager.list().map((session) => session.cwd),
+        ];
+      },
+      listWorkflows: () => workflowsCache,
     }),
   );
   app.use(

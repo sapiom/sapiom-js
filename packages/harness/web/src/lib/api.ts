@@ -23,6 +23,9 @@ import type {
   RunMacroRequest,
   SessionRecord,
   SessionSummary,
+  StudioRailFileResponse,
+  StudioRailLaunchEdge,
+  StudioRailLaunchEdgesResponse,
   TemplateDetailView,
   TemplateListResponse,
   RunView,
@@ -295,6 +298,28 @@ export interface HarnessApi {
    *  mode/installed/experimental flags plus per-agent Sapiom MCP install
    *  instructions — the new-session picker and MCP setup block feed on it. */
   listHarnesses(): Promise<HarnessEntry[]>;
+  /**
+   * The Group axis's stored arrangement for one project root — the exact text of
+   * `<root>/.sapiom/studio-rail.json`, or null when there is no file.
+   *
+   * TEXT, not a decoded object, and deliberately so: the file distinguishes
+   * `groups: null` ("nothing stored, detection owns this") from `groups: []`
+   * ("the user materialized groups and then deleted them all"), and a second
+   * decoder anywhere on this path is a second place for those to collapse into
+   * each other. `lib/agent-groups.ts` is the only decoder.
+   */
+  getRailState(projectRoot: string): Promise<string | null>;
+  /** Write a MATERIALIZED arrangement. An un-materialized one is
+   *  `clearRailState`, never `{ groups: [] }`. */
+  saveRailState(projectRoot: string, raw: string): Promise<void>;
+  /** Remove the file: how an un-materialized arrangement — including the one
+   *  `Reset to detected` produces — is persisted. Removing rather than skipping
+   *  the write is what stops the old arrangement outliving the reset. */
+  clearRailState(projectRoot: string): Promise<void>;
+  /** Every detected launch edge across the registered agents, from the existing
+   *  grep in `core/canvas-interconnections.ts`. The Group axis seeds its groups
+   *  from the connected components over these. */
+  listLaunchEdges(): Promise<StudioRailLaunchEdge[]>;
   listMacros(): Promise<MacroDef[]>;
   runMacro(id: string, req: RunMacroRequest): Promise<void>;
   getSettings(): Promise<HarnessSettings>;
@@ -508,6 +533,34 @@ class RealApi implements HarnessApi {
 
   listHarnesses(): Promise<HarnessEntry[]> {
     return this.request<HarnessEntry[]>("/api/harnesses");
+  }
+
+  async getRailState(projectRoot: string): Promise<string | null> {
+    const res = await this.request<StudioRailFileResponse>(
+      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
+    );
+    return res.raw;
+  }
+
+  async saveRailState(projectRoot: string, raw: string): Promise<void> {
+    await this.request<{ ok: true }>(
+      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
+      { method: "PUT", body: JSON.stringify({ raw }) },
+    );
+  }
+
+  async clearRailState(projectRoot: string): Promise<void> {
+    await this.request<{ ok: true }>(
+      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async listLaunchEdges(): Promise<StudioRailLaunchEdge[]> {
+    const res = await this.request<StudioRailLaunchEdgesResponse>(
+      "/api/studio-rail/launch-edges",
+    );
+    return res.edges;
   }
 
   listMacros(): Promise<MacroDef[]> {
@@ -829,6 +882,56 @@ export function progressiveLeasingRun(executionId: string, elapsedMs: number): R
   });
   const done = steps.every((s) => s.status === "passed");
   return { executionId, status: done ? "completed" : "running", steps };
+}
+
+/**
+ * Launch edges for mock mode — what `core/canvas-interconnections.ts`'s grep
+ * would find across the fixture agents, without a filesystem to grep.
+ *
+ * Shaped to produce every case the Group axis has to render, against
+ * `?mockFixtures=deep` (see MOCK_DEEP_WORKFLOWS):
+ *
+ *  - `gateway` reaches `queue` and `ads-worker` — a three-member component,
+ *    named for the head nothing launches.
+ *  - `mailer` reaches `sender` — a second, smaller component, so group ordering
+ *    (biggest first) is observable.
+ *  - `outreach` reaches `ghost-agent`, which this install does NOT have. An edge
+ *    to a missing agent forms NO group, so `outreach` stays in `Ungrouped`.
+ *  - `ads` and `rollup` are reached by nothing at all, which is the ordinary
+ *    case in a real repo and why `Ungrouped` has to be named rather than hidden.
+ *
+ * Lives here rather than in `mock-data.ts` because it is a fixture for a route
+ * this client owns, and `mock-data.ts` holds no route fixtures.
+ */
+const MOCK_LAUNCH_EDGES: StudioRailLaunchEdge[] = [
+  { parent: "gateway", child: "queue" },
+  { parent: "gateway", child: "ads-worker" },
+  { parent: "mailer", child: "sender" },
+  { parent: "outreach", child: "ghost-agent" },
+];
+
+/** One key per project root, mirroring one file per project root. */
+const MOCK_RAIL_STATE_PREFIX = "sapiom-mock-studio-rail:";
+
+/**
+ * Every rail-state write the mock has served this page load, newest last, for
+ * Playwright to read back.
+ *
+ * MockApi has no other observable effect (same reason `runMacro` records
+ * `lastMacroRun`), and the assertion that matters most in this area is a
+ * NEGATIVE one: loading the page twice must write nothing at all. A spec that
+ * only counted rows would pass while a mount effect quietly stored
+ * `groups: []` — which is exactly how the regression shipped.
+ */
+function recordRailStateWrite(entry: { root: string; raw: string | null }): void {
+  if (typeof window === "undefined") return;
+  const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+  const previous =
+    (win.__HARNESS_TEST__?.railStateWrites as Array<{ root: string; raw: string | null }>) ?? [];
+  win.__HARNESS_TEST__ = {
+    ...(win.__HARNESS_TEST__ ?? {}),
+    railStateWrites: [...previous, entry],
+  };
 }
 
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
@@ -1330,6 +1433,60 @@ class MockApi implements HarnessApi {
   async listHarnesses(): Promise<HarnessEntry[]> {
     await delay(120);
     return MOCK_HARNESSES;
+  }
+
+  /**
+   * The mock's stand-in for `<root>/.sapiom/studio-rail.json`.
+   *
+   * `localStorage`, keyed per project root, because the one thing this file has
+   * to be tested for is what it looks like ACROSS a page load — and the bug it
+   * exists to prevent lived in a mount effect, not in the serializer. A
+   * per-instance Map would be wiped by every reload and could never see it.
+   * Contents are the same text the server stores, so a spec asserting the
+   * written shape is asserting the real shape.
+   */
+  private railStateKey(projectRoot: string): string {
+    return `${MOCK_RAIL_STATE_PREFIX}${projectRoot.replace(/\/+$/, "")}`;
+  }
+
+  async getRailState(projectRoot: string): Promise<string | null> {
+    await delay(60);
+    try {
+      return window.localStorage.getItem(this.railStateKey(projectRoot));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The store is written BEFORE the simulated latency, not after: two edits in
+   * quick succession have to land in the order they were made, and awaiting
+   * first let an earlier, slower write finish last — a reset that erased the
+   * file followed by a pending save that put it straight back.
+   */
+  async saveRailState(projectRoot: string, raw: string): Promise<void> {
+    recordRailStateWrite({ root: projectRoot, raw });
+    try {
+      window.localStorage.setItem(this.railStateKey(projectRoot), raw);
+    } catch {
+      // Private mode / quota: persistence is best-effort, the live state wins.
+    }
+    await delay(60);
+  }
+
+  async clearRailState(projectRoot: string): Promise<void> {
+    recordRailStateWrite({ root: projectRoot, raw: null });
+    try {
+      window.localStorage.removeItem(this.railStateKey(projectRoot));
+    } catch {
+      // Same: nothing stored is the goal state either way.
+    }
+    await delay(60);
+  }
+
+  async listLaunchEdges(): Promise<StudioRailLaunchEdge[]> {
+    await delay(120);
+    return MOCK_LAUNCH_EDGES;
   }
 
   async listMacros(): Promise<MacroDef[]> {
