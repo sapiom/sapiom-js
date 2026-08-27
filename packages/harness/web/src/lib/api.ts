@@ -37,6 +37,8 @@ import type {
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
+import { refuseMove, remapUnder } from "./agent-move";
+import { samePath } from "./paths";
 
 import type { CanvasGraph, CanvasGraphNode } from "./canvas-graph";
 import {
@@ -341,6 +343,17 @@ export interface HarnessApi {
   getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   scanWorkflows(root: string): Promise<WorkflowInfo[]>;
+  /**
+   * Moves an agent's DIRECTORY on disk — the Project axis's drag (SAP-2930).
+   *
+   * The Project axis is derived from real paths, so a drag has two honest
+   * outcomes: move, or refuse. Rejects with an `ApiError` carrying the server's
+   * reason when the destination is occupied or the move is impossible; the
+   * server guards independently of the rail's `planMove`, so a refusal can
+   * arrive even for a plan the rail blessed. On success the server broadcasts
+   * `workflows.changed` and the rail re-derives the tree from the new path.
+   */
+  moveAgent(from: string, to: string): Promise<void>;
   /** Adapter registry (GET /api/harnesses): every known harness with its
    *  mode/installed/experimental flags plus per-agent Sapiom MCP install
    *  instructions — the new-session picker and MCP setup block feed on it. */
@@ -584,6 +597,13 @@ class RealApi implements HarnessApi {
     return this.request<WorkflowInfo[]>("/api/workflows/scan", {
       method: "POST",
       body: JSON.stringify({ root }),
+    });
+  }
+
+  async moveAgent(from: string, to: string): Promise<void> {
+    await this.request<{ ok: true }>("/api/agents/move", {
+      method: "POST",
+      body: JSON.stringify({ from, to }),
     });
   }
 
@@ -990,6 +1010,43 @@ function recordRailStateWrite(entry: { root: string; raw: string | null }): void
   };
 }
 
+/**
+ * Mock mode's stand-in for THE DISK, for the one mutation that is a filesystem
+ * change: the Project-axis move (SAP-2930).
+ *
+ * Module-level, not per-instance, and that is the whole reason it exists.
+ * `createApi()` is called from several modules (`use-harness-state`,
+ * `use-rail-groups`, `use-account-plan`), and each mock instance holds its OWN
+ * copy of the fixtures — so a move dispatched through one instance would be
+ * invisible to the list the app renders from another. There is only one disk, so
+ * there is one log, and every instance's reads fold it in (see the `workflows`
+ * and `sessions` accessors below). Reset on reload, like every other mock
+ * mutation.
+ */
+const mockMoves: Array<{ from: string; to: string }> = [];
+
+/** Every move so far, applied in order. Identity-preserving and free when
+ *  nothing has moved, which is every spec but this ticket's own. */
+function replayMockMoves(p: string): string {
+  let at = p;
+  for (const move of mockMoves) at = remapUnder(at, move.from, move.to);
+  return at;
+}
+
+/** Test-only escape hatch, mock mode only: what the rail actually dispatched.
+ *  A count-only drag assertion passes when nothing happened at all, so the spec
+ *  reads this to prove the drop reached the mover — and that a GROUP-axis drag
+ *  never does. */
+function recordAgentMove(entry: { from: string; to: string }): void {
+  if (typeof window === "undefined") return;
+  const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+  const previous = (win.__HARNESS_TEST__?.agentMoves as Array<{ from: string; to: string }>) ?? [];
+  win.__HARNESS_TEST__ = {
+    ...(win.__HARNESS_TEST__ ?? {}),
+    agentMoves: [...previous, entry],
+  };
+}
+
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
 /**
  * Mock mode's stand-in for the workflow-keyed board (IA-01).
@@ -1173,15 +1230,53 @@ class MockApi implements HarnessApi {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("mockConsentSource") ===
       "prompted";
-  private sessions = this.fresh
+  private sessionsStore: HarnessSession[] = this.fresh
     ? []
     : MOCK_SESSIONS.map((session) => ({ ...session }));
-  private workflows = this.fresh
+  private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
         ...MOCK_WORKFLOWS,
         ...(isSearchFixturesEnabled() ? MOCK_SEARCH_WORKFLOWS : []),
       ].map((workflow) => ({ ...workflow }));
+
+  /*
+   * Every read of the fixtures goes through the move log (`mockMoves`), so a
+   * moved agent reads at its NEW path from every instance and every call site —
+   * rather than only from the one method that happened to remember. With no
+   * move recorded these return the backing array untouched, so nothing else in
+   * the mock changes shape.
+   */
+  private get workflows(): WorkflowInfo[] {
+    if (mockMoves.length === 0) return this.workflowsStore;
+    return this.workflowsStore.map((workflow) => ({
+      ...workflow,
+      path: replayMockMoves(workflow.path),
+    }));
+  }
+
+  private set workflows(next: WorkflowInfo[]) {
+    this.workflowsStore = next;
+  }
+
+  /** A session whose cwd sat inside a moved directory follows it — on disk it
+   *  has no choice, and a session pointing at a directory that no longer exists
+   *  is the bug this remap prevents. Its binding travels the same way. */
+  private get sessions(): HarnessSession[] {
+    if (mockMoves.length === 0) return this.sessionsStore;
+    return this.sessionsStore.map((session) => ({
+      ...session,
+      cwd: replayMockMoves(session.cwd),
+      boundWorkflowPath:
+        session.boundWorkflowPath == null
+          ? session.boundWorkflowPath
+          : replayMockMoves(session.boundWorkflowPath),
+    }));
+  }
+
+  private set sessions(next: HarnessSession[]) {
+    this.sessionsStore = next;
+  }
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
     : {
@@ -1645,6 +1740,37 @@ class MockApi implements HarnessApi {
     };
     this.workflows = [...this.workflows.filter((w) => w.path !== path), info];
     return info;
+  }
+
+  /**
+   * The mock's stand-in for `POST /api/agents/move`.
+   *
+   * A SECOND GUARD, deliberately: the rail asks `planMove` before dispatching,
+   * but the mover must not be the only thing between a bad destination and a
+   * clobbered agent — and in the reference prototype it was, so anything
+   * reaching the registry another way clobbered silently. The real server stats
+   * the destination (`src/server/agent-move.ts`); the mock has no disk, so it
+   * checks what the registry can see, which is the same guard minus the `stat`.
+   *
+   * The move is recorded rather than applied to this instance's fixtures — see
+   * `mockMoves` for why there is exactly one log — and then announced as
+   * `workflows.changed`, the same signal the real server broadcasts, so the rail
+   * re-derives the tree from the new path through its normal refresh path.
+   */
+  async moveAgent(from: string, to: string): Promise<void> {
+    recordAgentMove({ from, to });
+    await delay(120);
+    const refusal = refuseMove(
+      this.workflows.map((workflow) => workflow.path),
+      from,
+      to,
+    );
+    if (refusal) throw new ApiError(409, "POST /api/agents/move \u2192 409 (mock)", refusal);
+    if (samePath(from, to)) return;
+    mockMoves.push({ from, to });
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "workflows.changed" });
+    });
   }
 
   async scanWorkflows(root: string): Promise<WorkflowInfo[]> {

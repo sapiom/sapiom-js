@@ -1,4 +1,4 @@
-import type { CSSProperties, JSX } from "react";
+import type { CSSProperties, DragEvent, JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
@@ -27,6 +27,9 @@ export function WorkflowRow({
   prefix = "",
   prefixFull = "",
   depth = 0,
+  draggable = false,
+  onDragStart,
+  onDragEnd,
 }: {
   workflow: WorkflowInfo;
   /** The focused agent — THE single filled selection in the rail. */
@@ -40,6 +43,20 @@ export function WorkflowRow({
   prefixFull?: string;
   /** Nesting level under the project row. Indent alone carries the nesting. */
   depth?: number;
+  /**
+   * Project-axis MOVE (SAP-2930). The handlers land on the row itself rather
+   * than on a wrapper element: this row's ORDER among its siblings is asserted
+   * structurally (`e2e/project-axis.spec.ts` walks `element.children` to prove
+   * agents render before directories), so an extra host node changes a rendered
+   * rule this rail was corrected to obey. The Group axis wraps instead
+   * (`GroupRow.tsx`: GroupAgentRow) because its rows sit inside a section that
+   * is walked no such way — the DRAG IDIOM is the same either way, and it is
+   * the part that matters: the payload rides in `dataTransfer`, the hover
+   * highlight keys on `types`, and only the drop reads `getData`.
+   */
+  draggable?: boolean;
+  onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
 }): JSX.Element {
   const deploymentState = workflowDeploymentState(workflow);
   const deployed = deploymentState === "ready";
@@ -58,6 +75,9 @@ export function WorkflowRow({
       className={"workflow-item" + (isFocused ? " is-focused" : "")}
       data-testid={`workflow-${workflow.name}`}
       style={depth > 0 ? ({ "--tree-depth": depth } as CSSProperties) : undefined}
+      draggable={draggable || undefined}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       // `object: "agent"` is load-bearing for privacy, not just for breakdowns:
       // before-send reads it to drop $el_text on this subtree, because an
       // agent's label is a name its owner wrote. See USER_NAMED_OBJECTS.
