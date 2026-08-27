@@ -5,17 +5,15 @@ import type { MacroDef, WorkflowInfo } from "@shared/types";
 import { Icon } from "./Icon";
 import { macroNeedsReadySession } from "../lib/macro-actions";
 import { macroDisabledReason } from "../lib/macro-gating";
+import { lifecycleVerbGate } from "../lib/session-scope";
 import type { RunTarget } from "../lib/use-harness-state";
 import {
   loadStoredRunTarget,
   saveStoredRunTarget,
 } from "../lib/run-input";
 import { track } from "../lib/track";
-import { SAPIOM_DASHBOARD_ROOT, agentUrl } from "../lib/urls";
-import {
-  prodRunDisabledReason,
-  workflowDeploymentState,
-} from "../lib/workflow-deployment";
+import { agentUrl } from "../lib/urls";
+import { workflowDeploymentState } from "../lib/workflow-deployment";
 import { RunTargetMenu } from "./RunTargetMenu";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -48,8 +46,8 @@ interface SessionStepsBarProps {
  * longer its own row). Per Sapiom's model these are repeatable ACTIONS, not
  * one-way stages. Order is fixed at every width: Prod globe → Test → Run →
  * Deploy.
- *   Prod (globe) = open the agent in the Sapiom dashboard (deep-link when
- *                  linked, dashboard root otherwise)
+ *   Prod (globe) = open THIS agent in the Sapiom dashboard; disabled, with its
+ *                  reason, until the agent has a definition to open
  *   Test         = run_local  (Sapiom capabilities stubbed; no auth)
  *   Run          = prod_run   (real cloud execution; needs a ready build + auth)
  *   Deploy       = deploy     (push + cloud build; needs auth)
@@ -74,11 +72,6 @@ export function SessionStepsBar({
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
   const deploymentState = workflowDeploymentState(workflow, lastDeployError);
   const runnable = deploymentState === "ready";
-  // A linked agent deep-links to its definition; a draft (or signed-out)
-  // agent has no definition yet, so the globe falls back to the dashboard root
-  // — always a real destination, never a dead click.
-  const dashboardUrl =
-    workflow.definitionId != null ? agentUrl(workflow.definitionId) : SAPIOM_DASHBOARD_ROOT;
 
   // Launched-but-not-durable feedback: a clicked action shows a dotted
   // "in flight" ring until a durable signal lands. The ring clears on ANY
@@ -129,9 +122,24 @@ export function SessionStepsBar({
     },
   ].filter((action) => action.macro);
 
-  const cloudDisabledReason =
-    (!authenticated ? "Connect your account first" : null) ??
-    prodRunDisabledReason(workflow, lastDeployError);
+  /**
+   * The verbs are GATED by their subject, not merely aimed at it (SAP-2931).
+   *
+   * `workflow` is the rail SELECTION, and every enabled/disabled decision in
+   * this bar comes out of `lifecycleVerbGate` with that one input — which is the
+   * whole point. Wiring only the handlers left the buttons live off the BOUND
+   * agent's deployment state in the reference prototype: selecting the
+   * undeployed `rfq` kept Prod and Run enabled against `leasing`, so you could
+   * be talking about B, looking at F, and deploy B.
+   *
+   * Every reason reaches BOTH `aria-label` and `data-tooltip`: a disabled
+   * control without its reason is mute.
+   */
+  const gate = (verb: Parameters<typeof lifecycleVerbGate>[0]): string | null =>
+    lifecycleVerbGate(verb, { subject: workflow, authenticated, deployError: lastDeployError })
+      .reason;
+  const prodDisabledReason = gate("prod");
+  const cloudDisabledReason = gate("run");
   const effectiveTarget: RunTarget =
     preferredTarget === "prod" && cloudDisabledReason ? "local" : preferredTarget;
   const runLabel = effectiveTarget === "local" ? "Local" : "Cloud";
@@ -168,22 +176,37 @@ export function SessionStepsBar({
         </a>
       )}
 
-      {/* Prod: the compact globe shortcut to the Sapiom dashboard. Always shown. */}
-      <a
-        className="session-step session-action-prod"
-        data-testid="session-step-prod"
-        href={dashboardUrl}
-        target="_blank"
-        rel="noreferrer"
-        aria-label="Open this agent in the Sapiom dashboard"
-        data-tooltip={
-          workflow.definitionId != null
-            ? "Open this linked agent in the Sapiom dashboard"
-            : "Open the Sapiom dashboard"
-        }
-      >
-        <Icon name="Globe" size={14} />
-      </a>
+      {/* Prod: the compact globe shortcut to THIS agent in the Sapiom
+          dashboard. Always shown, and disabled with its reason when the subject
+          has no definition to open — it used to fall back to the dashboard
+          root, which reads as "your agent is over there" for an agent that has
+          never been anywhere. A real `<button disabled>`, not an `aria-disabled`
+          link, so the control is genuinely unclickable rather than merely
+          announced as unavailable. */}
+      {prodDisabledReason ? (
+        <button
+          className="session-step session-action-prod"
+          data-testid="session-step-prod"
+          type="button"
+          disabled
+          aria-label={`Prod: ${prodDisabledReason}`}
+          data-tooltip={`Prod: ${prodDisabledReason}`}
+        >
+          <Icon name="Globe" size={14} />
+        </button>
+      ) : (
+        <a
+          className="session-step session-action-prod"
+          data-testid="session-step-prod"
+          href={agentUrl(workflow.definitionId ?? 0)}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${workflow.name} in the Sapiom dashboard`}
+          data-tooltip="Open this linked agent in the Sapiom dashboard"
+        >
+          <Icon name="Globe" size={14} />
+        </a>
+      )}
 
       <div
         className="session-run-split"
@@ -231,12 +254,9 @@ export function SessionStepsBar({
       {actions.map((action) => {
         // Auth gate: actions requiring authentication are disabled when not
         // signed in. Test remains available because its Sapiom calls are stubbed.
-        const authReason =
-          action.needsAuth && !authenticated ? "Connect your account first" : null;
+        const authReason = action.needsAuth ? gate("deploy") : null;
         // A definition id is only a link. Prod Run requires a ready cloud build.
-        const funnelReason = action.needsDeploy
-          ? prodRunDisabledReason(workflow, lastDeployError)
-          : null;
+        const funnelReason = action.needsDeploy ? cloudDisabledReason : null;
         // Direct actions bypass the pty; only actual prompt injection waits for
         // the coding-agent session to become ready.
         const readyReason =

@@ -38,6 +38,7 @@ import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
 
+import type { CanvasGraph, CanvasGraphNode } from "./canvas-graph";
 import {
   MOCK_ACCOUNT_PLAN,
   MOCK_FS_TREE,
@@ -234,6 +235,40 @@ export function getBootToken(): string {
 }
 
 /** Response from GET /api/auth/status — live auth state from the server. */
+/** Why a workflow-keyed board is not a graph. `ok` is the only status carrying one. */
+export type WorkflowGraphStatus = "ok" | "empty" | "preparing" | "error";
+
+/**
+ * `GET /api/workflows/:path/graph` — the SESSION-FREE canvas entry point
+ * (IA-01; contract in `packages/harness/docs/workflow-canvas-graph.md`).
+ *
+ * Declared here rather than imported from `src/server/workflow-graph.ts`: that
+ * module reaches for `node:path` and `express`, so the browser cannot see it.
+ * `enrichment` stays `unknown` because nothing client-side reads it yet — the
+ * pane draws `document` and inspects `graph`.
+ *
+ * The route returns JSON and CANNOT be an `<iframe src>`: it sits behind the
+ * `X-Harness-Token` middleware and a bare `src` carries no header. `document`
+ * is byte-identical to what a bound session's `/canvas/:sessionId/` serves for
+ * the same workflow, and is present for EVERY status — an empty board is still
+ * a renderable page, never a hole — so a consumer renders it via `srcdoc`.
+ */
+export interface WorkflowGraphResponse {
+  /** The resolved absolute agent directory the board was derived from. */
+  path: string;
+  /** The registry's display name — the board's panel title. */
+  name: string;
+  status: WorkflowGraphStatus;
+  /** The extracted graph; null for every status but "ok". */
+  graph: CanvasGraph | null;
+  enrichment: unknown | null;
+  /** Human-readable explanation for "empty"/"error"; null otherwise. */
+  reason: string | null;
+  /** True when the graph came from the extraction cache — no child process ran. */
+  cached: boolean;
+  document: string;
+}
+
 export interface AuthStatusResponse {
   authenticated: boolean;
   organizationName: string | null;
@@ -292,6 +327,18 @@ export interface HarnessApi {
   getWorkflowInputContract(
     workflowPath: string,
   ): Promise<WorkflowInputContractResponse>;
+  /**
+   * The workflow-keyed canvas board (IA-01) — the only way to read agent F's
+   * board while the active session is bound to agent B, and the only board an
+   * agent that has never hosted a session has at all.
+   *
+   * Rejects with `ApiError(404)` when the path is not a registered workflow and
+   * `ApiError(400)` for a rejected path shape. A registered agent with no
+   * usable `sapiom.json` resolves `200` with `status: "empty"` — absent means
+   * empty, never missing — so a consumer must tell a real board from an empty
+   * one by `status`, never by the status code.
+   */
+  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   scanWorkflows(root: string): Promise<WorkflowInfo[]>;
   /** Adapter registry (GET /api/harnesses): every known harness with its
@@ -514,6 +561,15 @@ class RealApi implements HarnessApi {
   ): Promise<WorkflowInputContractResponse> {
     return this.request<WorkflowInputContractResponse>(
       `/api/workflows/${encodeURIComponent(workflowPath)}/input-contract`,
+    );
+  }
+
+  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+    // Same encoding as `input-contract` and `deploy` beside it: the agent's
+    // absolute path URI-encoded into ONE segment. Express matches on the raw
+    // path and decodes the param, so an encoded `/` never splits the route.
+    return this.request<WorkflowGraphResponse>(
+      `/api/workflows/${encodeURIComponent(workflowPath)}/graph`,
     );
   }
 
@@ -935,6 +991,120 @@ function recordRailStateWrite(entry: { root: string; raw: string | null }): void
 }
 
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
+/**
+ * Mock mode's stand-in for the workflow-keyed board (IA-01).
+ *
+ * `VITE_MOCK=1` has no harness server, so `GET /api/workflows/:path/graph`
+ * cannot answer — and the e2e suite runs entirely in mock mode. This builds the
+ * same SHAPE the real route returns for `status: "ok"`: a small three-step graph
+ * plus a document that posts `sapiom-canvas:graph` and `sapiom-canvas:size`,
+ * which is what the pane's reveal gate actually waits for. It is a fixture, not
+ * a renderer — the real route derives from the agent's `sapiom.json` through
+ * `deriveWorkflowCanvas` and this cannot.
+ *
+ * It deliberately does NOT live in `mock-data.ts`: the fixture is keyed by
+ * workflow, generated per call, and belongs to this route's mock rather than to
+ * the shared seed data.
+ */
+function mockWorkflowGraph(name: string): CanvasGraph {
+  const node = (
+    id: string,
+    kind: CanvasGraphNode["kind"],
+    role: string,
+  ): CanvasGraphNode => ({
+    id,
+    kind,
+    label: id,
+    role,
+    description: "",
+    timeoutMs: null,
+    inputSchema: null,
+    capabilities: [],
+  });
+  return {
+    name,
+    entry: "intake",
+    nodes: [
+      node("intake", "entry", "entry"),
+      node("work", "step", "step"),
+      node("done", "terminal-success", "terminal · success"),
+    ],
+    edges: [
+      { from: "intake", to: "work", kind: "sequential", label: "" },
+      { from: "work", to: "done", kind: "sequential", label: "" },
+    ],
+    groups: [],
+    warnings: [],
+  };
+}
+
+/**
+ * The fixture stand-in for the message documents the real route returns for
+ * every status but `ok` — the calm "Preparing your agent" placeholder, the
+ * "Nothing rendered yet" page, the honest error panel. They are pages, not
+ * boards, and crucially they post NO graph: that is what keeps the pane from
+ * revealing itself on setup scaffolding, so the mock must not post one either.
+ */
+function mockWorkflowMessageDocument(title: string, subtitle: string | null): string {
+  const esc = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return [
+    '<!doctype html><html lang="en"><head><meta charset="utf-8" />',
+    `<title>${esc(title)}</title>`,
+    "<style>html,body{height:100%;margin:0;display:grid;place-items:center;",
+    'font:13px/1.5 "Geist",system-ui,sans-serif;color:#54545e}',
+    "main{text-align:center;max-width:32ch}</style></head><body>",
+    `<main data-testid="mock-workflow-message"><h1>${esc(title)}</h1>`,
+    subtitle ? `<p>${esc(subtitle)}</p>` : "",
+    "</main></body></html>",
+  ].join("");
+}
+
+/** The fixture board document. Theme comes from the `data-theme` the embedding
+ *  pane stamps on the frame's root (a `srcdoc` frame carries no query string,
+ *  so the served document's `?theme=` reader has nothing to read). */
+function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
+  // Escaped even though every value here is fixture-authored: this builds an
+  // HTML document by concatenation, and the next person to key it off a real
+  // registry name (which is a directory basename) should not have to notice.
+  const esc = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const nodes = graph.nodes
+    .map(
+      (n) =>
+        `<div class="node" data-kind="${esc(n.kind)}" data-step-name="${esc(n.label)}">` +
+        `<strong>${esc(n.label)}</strong><small>${esc(n.role)}</small></div>`,
+    )
+    .join('<div class="edge" aria-hidden="true"></div>');
+  return [
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" />",
+    `<title>${esc(name)} — mock workflow board</title>`,
+    "<style>",
+    ":root{--bg:#fff;--ink:#141417;--dim:#54545e;--line:rgba(17,17,20,.12);--node:#f2f2f3}",
+    '[data-theme="dark"]{--bg:#12161d;--ink:#f4f4f5;--dim:#a7a7b0;--line:rgba(255,255,255,.14);--node:#17171b}',
+    "html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);",
+    'font:13px/1.5 "Geist",system-ui,sans-serif}',
+    ".board{padding:40px 20px 72px;display:flex;flex-direction:column;align-items:center;gap:0}",
+    ".node{border:1px solid var(--line);background:var(--node);border-radius:8px;padding:10px 16px;",
+    "min-width:180px;text-align:center;display:flex;flex-direction:column;gap:2px}",
+    ".node small{color:var(--dim)}",
+    ".edge{width:1px;height:24px;background:var(--line)}",
+    "</style></head><body>",
+    `<main class="board" id="board" data-testid="mock-workflow-board">${nodes}</main>`,
+    '<script id="sapiom-graph" type="application/json">',
+    JSON.stringify(graph),
+    "</script><script>",
+    "(function(){",
+    'var el=document.getElementById("sapiom-graph");',
+    "try{parent.postMessage({type:\"sapiom-canvas:graph\",graph:JSON.parse(el.textContent||\"{}\")},\"*\")}catch(e){}",
+    'var b=document.getElementById("board");',
+    "try{parent.postMessage({type:\"sapiom-canvas:size\",width:b.offsetWidth,height:b.offsetHeight,",
+    "insetTop:40,insetBottom:72,insetX:20},\"*\")}catch(e){}",
+    "})();",
+    "</script></body></html>",
+  ].join("");
+}
+
 class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
@@ -1357,6 +1527,63 @@ class MockApi implements HarnessApi {
   async listWorkflows(): Promise<WorkflowInfo[]> {
     await delay();
     return this.workflows;
+  }
+
+  async getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+    await delay(80);
+    const workflow = this.workflows.find((item) => item.path === workflowPath);
+    // 404 means "not a registered workflow" and NOTHING else — an agent whose
+    // board is empty still answers 200. The mock keeps that distinction because
+    // it is the one a consumer can get wrong invisibly.
+    if (!workflow) throw new ApiError(404, "agent not found", "Agent not found");
+    // e2e seam: drive the non-`ok` statuses the pane must render as DISTINCT
+    // honest states. `preparing` is not a failure (a fresh scaffold with no
+    // deps installed) and `empty` is not an error (absent ⇒ empty), so a test
+    // has to be able to reach each one.
+    const override =
+      typeof window !== "undefined"
+        ? (window as unknown as {
+            __MOCK_WORKFLOW_GRAPH__?: Record<
+              string,
+              { status: WorkflowGraphStatus; reason?: string | null }
+            >;
+          }).__MOCK_WORKFLOW_GRAPH__?.[workflowPath]
+        : undefined;
+    const status = override?.status ?? "ok";
+    const base = {
+      path: workflow.path,
+      name: workflow.name,
+      enrichment: null,
+      cached: false,
+    };
+    if (status !== "ok") {
+      const reason = override?.reason ?? null;
+      return {
+        ...base,
+        status,
+        graph: null,
+        reason,
+        // The real route returns a renderable document for EVERY status — an
+        // empty board is still a page, never a hole — so an empty string here
+        // would be indistinguishable from a truncated body.
+        document: mockWorkflowMessageDocument(
+          status === "preparing"
+            ? "Preparing your agent"
+            : status === "empty"
+              ? "Nothing rendered yet"
+              : "Couldn't render this agent",
+          reason,
+        ),
+      };
+    }
+    const graph = mockWorkflowGraph(workflow.name);
+    return {
+      ...base,
+      status: "ok",
+      graph,
+      reason: null,
+      document: mockWorkflowGraphDocument(workflow.name, graph),
+    };
   }
 
   async getWorkflowInputContract(

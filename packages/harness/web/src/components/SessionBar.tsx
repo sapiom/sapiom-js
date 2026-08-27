@@ -296,7 +296,8 @@ export function SessionBar({
               className="session-menu-bound"
               data-testid="session-workflow-chip"
             >
-              Bound to <strong>{boundWorkflowName}</strong> · shown in Canvas
+              Bound to <strong>{boundWorkflowName}</strong> · what this session
+              is working on
             </div>
           )}
 

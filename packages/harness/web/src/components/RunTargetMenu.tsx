@@ -63,7 +63,14 @@ export function RunTargetMenu({
             role="menuitemradio"
             aria-checked={isSelected}
             disabled={Boolean(disabledReason)}
+            /* The reason reaches all three channels on purpose (SAP-2931): a
+               `title` is a native tooltip only, so a disabled option was mute to
+               the app's own tooltip layer and gave a screen reader nothing but
+               the label. `Cloud` is the gated verb the rail's selection decides,
+               and the whole point of gating it is that the reason is readable. */
             title={disabledReason ?? undefined}
+            aria-label={disabledReason ? `${target.label}: ${disabledReason}` : target.label}
+            data-tooltip={disabledReason ?? undefined}
             onClick={() => onSelect(target.id)}
           >
             <Icon name={target.icon} size={15} />

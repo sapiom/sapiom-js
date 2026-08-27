@@ -32,16 +32,20 @@ test.describe("the Code tab follows the BOUND workflow's deploy state", () => {
   test("an undeployed binding swaps to the deploy-first empty state; a deployed one brings the panel back", async ({
     page,
   }) => {
-    // Opening rfq (no session in its workspace) swaps the tab to the honest
-    // "no session" state — no other agent's snippets leak in.
+    // Opening rfq (no session in its workspace) swaps the tab to rfq's own
+    // deploy-first state — no other agent's snippets leak in. Since SAP-2931
+    // the tab follows the rail SELECTION, not the binding: how you trigger an
+    // agent from code has nothing to do with which session is live, so an
+    // unsessioned undeployed agent reads the same as a bound one. It used to
+    // say "no running session for rfq", which described the session rather than
+    // the question the tab answers. Selecting it reveals a real board, so the
+    // pane is already open.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
-    // Focusing rfq (no live session) auto-collapses the right pane — reopen it to read the Code tab.
-    await page.getByTestId("right-expand").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
-    await expect(page.getByTestId("right-panel-code")).toContainText("No running session for rfq");
+    await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");
 
-    // Starting the session binds rfq (undeployed) — the deploy-first state. The
-    // pane stays open from the expand above (starting a session doesn't re-fold).
+    // Starting the session binds rfq and changes nothing here — the tab was
+    // already about rfq.
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
     await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");

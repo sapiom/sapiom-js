@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { BackgroundTask, BusMessage, MacroDef, RunView, WorkflowInfo } from "@shared/types";
 
-import { isMockMode } from "../lib/api";
+import { ApiError, isMockMode, type WorkflowGraphResponse } from "../lib/api";
 import { MOCK_CANVAS_OVERVIEWS, hasMockCanvasDoc } from "../lib/mock-data";
 import { getTheme, subscribeTheme } from "../lib/theme";
+import type { CanvasSource } from "../lib/session-scope";
 import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
 import type { DeployProgress, ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
@@ -29,21 +30,84 @@ const ACTIVITY_LINES_SHOWN = 8;
  *  can't strand opaquely over an otherwise-usable board. */
 const FRAME_LOAD_TIMEOUT_MS = 4000;
 
+/**
+ * How long a changed selection settles before the workflow-keyed board is
+ * fetched.
+ *
+ * A cache miss on that route runs a real esbuild extraction (shared with
+ * bind-triggered renders via `core/canvas-cache.ts`), so it is a render, not a
+ * lookup — and arrowing down the rail would otherwise queue one per row. Short
+ * enough that a deliberate click still feels immediate.
+ */
+const WORKFLOW_BOARD_SETTLE_MS = 220;
+
+/**
+ * The workflow-keyed board as this pane needs it: the route's four statuses
+ * plus the three ways the request itself can fail, kept distinct because each
+ * one means something different to the person reading the pane.
+ *
+ * `notRegistered` is the ONLY meaning of a 404 — an agent whose `sapiom.json`
+ * is missing answers `200 empty` (absent ⇒ empty, never an error), so an empty
+ * board can never be mistaken for a missing route.
+ */
+interface WorkflowBoard {
+  /** The subject this answer is about — a late reply for the previous
+   *  selection must not be drawn under the current one. */
+  path: string;
+  status: WorkflowGraphResponse["status"] | "notRegistered" | "rejected" | "unreachable";
+  /** The finished document, for `srcdoc`; null when the request itself failed. */
+  document: string | null;
+  reason: string | null;
+}
+
+/**
+ * The app's theme, handed to a `srcdoc` frame.
+ *
+ * A served document reads `?theme=` off its own URL; a `srcdoc` frame has no
+ * URL and no query string, so it would fall back to `prefers-color-scheme` and
+ * paint light while the app is dark. Appending a script is enough — the parser
+ * hoists a trailing script into the body and it runs before first paint of the
+ * board's own content. Both attribute names are set because the server template
+ * keys on `data-canvas-theme` and the bundled demo document on `data-theme`.
+ */
+function withFrameTheme(document: string, theme: string): string {
+  return `${document}<script>(function(){var r=window.document.documentElement;r.setAttribute("data-canvas-theme",${JSON.stringify(theme)});r.setAttribute("data-theme",${JSON.stringify(theme)});})();</script>`;
+}
+
 interface CanvasPaneProps {
   sessionId: string | null;
   lastMessage: BusMessage | null;
-  boundWorkflow: WorkflowInfo | null;
-  /** Set when an agent is open with no live session in its workspace: the
-   *  pane shows the honest "no session for <name>" state instead of another
-   *  agent's board (the canvas is served per session, so an
-   *  unsessioned agent has no board to render). */
-  noSessionAgent?: string | null;
+  /**
+   * THE subject: the rail selection, not the active session's binding
+   * (SAP-2931). Everything this pane draws, labels, gates and attributes reads
+   * this one value, so the board and the Steps list cannot be about different
+   * agents.
+   */
+  subjectWorkflow: WorkflowInfo | null;
+  /**
+   * Which canvas entry point serves the subject's document — the session-keyed
+   * board when the active session is bound to the subject, IA-01's
+   * workflow-keyed route otherwise (`lib/session-scope.ts:canvasSourceFor`).
+   * An agent that has never hosted a session is served by the second one; it is
+   * no longer a hole in the pane.
+   */
+  source: CanvasSource;
+  /**
+   * Reads the workflow-keyed board. It is a `fetch`, never an `<iframe src>`:
+   * the route sits behind the `X-Harness-Token` middleware and a bare `src`
+   * carries no header, so the JSON's `document` is rendered via `srcdoc`.
+   * Rejects `ApiError(404)` for an unregistered path, `ApiError(400)` for a
+   * rejected one.
+   */
+  loadWorkflowGraph: (workflowPath: string) => Promise<WorkflowGraphResponse>;
   /** the overview/welcome panel owns the center pane — no session is
    *  displayed, so the canvas shows the fresh-install "start a session"
    *  state instead of the previous session's empty state and CTA. */
   overviewActive: boolean;
-  /** the displayed session has exited — Visualize can't do anything,
-   *  so the empty state swaps to a resume invitation. */
+  /** the displayed session has exited — Visualize can't do anything, so the
+   *  empty state swaps to a resume invitation. Only reachable while the board
+   *  is session-keyed; a subject served by the workflow-keyed route has a real
+   *  board whether or not any session is alive. */
   sessionExited: boolean;
   /** Canvas full-screen state + toggle — owned by App so the control sits in
    *  the right-pane tab bar; CanvasPane renders the frame + exit affordance. */
@@ -124,8 +188,9 @@ function isLegendItem(value: unknown): value is CanvasLegendItem {
 export function CanvasPane({
   sessionId,
   lastMessage,
-  boundWorkflow,
-  noSessionAgent = null,
+  subjectWorkflow,
+  source,
+  loadWorkflowGraph,
   overviewActive,
   sessionExited,
   expanded,
@@ -158,8 +223,16 @@ export function CanvasPane({
   onCanvasStateRef.current = onCanvasState;
   const onGraphChangeRef = useRef(onGraphChange);
   onGraphChangeRef.current = onGraphChange;
-  const boundWorkflowPathRef = useRef(boundWorkflow?.path ?? null);
-  boundWorkflowPathRef.current = boundWorkflow?.path ?? null;
+  const subjectPathRef = useRef(subjectWorkflow?.path ?? null);
+  subjectPathRef.current = subjectWorkflow?.path ?? null;
+  /**
+   * `source` is rebuilt by the shell on every render, so nothing may depend on
+   * its identity — an effect keyed to the object re-ran on every render, which
+   * turned the run-state bridge into a postMessage on each one. These two
+   * primitives are what the effects and callbacks below key on instead.
+   */
+  const workflowSourcePath = source.kind === "workflow" ? source.path : null;
+  const sessionSourceId = source.kind === "session" ? source.sessionId : null;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
   // True while the initial HEAD probe for this session is still in flight —
@@ -517,7 +590,7 @@ export function CanvasPane({
       } else if (data.type === "sapiom-canvas:graph") {
         const nextGraph = parseCanvasGraph((data as { graph?: unknown }).graph);
         setGraph(nextGraph);
-        const workflowPath = boundWorkflowPathRef.current;
+        const workflowPath = subjectPathRef.current;
         if (nextGraph && workflowPath) {
           onGraphChangeRef.current?.(workflowPath, nextGraph);
         }
@@ -635,15 +708,17 @@ export function CanvasPane({
   // still loading (the onLoad re-post below catches that case).
   const postRunStateToFrame = useCallback((): void => {
     if (!run || !runTarget) return;
-    // Guard: only post when the served board is actually mounted. Mirror the
-    // sessionHasServableDoc / showingFrame guards used for the iframe element.
-    if (!sessionId || (isMockMode() && !hasMockCanvasDoc(sessionId))) return;
+    // Guard: only post when a board is actually mounted. The workflow-keyed
+    // document is a real board too (same derivation), so it animates a run the
+    // same way; a session-keyed one still needs its mock-doc gate.
+    if (workflowSourcePath == null && sessionSourceId == null) return;
+    if (sessionSourceId != null && isMockMode() && !hasMockCanvasDoc(sessionSourceId)) return;
     if (frameLoading) return;
     frameRef.current?.contentWindow?.postMessage(
       { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
       "*",
     );
-  }, [run, runTarget, sessionId, frameLoading]);
+  }, [run, runTarget, workflowSourcePath, sessionSourceId, frameLoading]);
 
   useEffect(() => {
     postRunStateToFrame();
@@ -651,7 +726,7 @@ export function CanvasPane({
 
   const overview =
     postedOverview ??
-    (isMockMode() && boundWorkflow ? MOCK_CANVAS_OVERVIEWS[boundWorkflow.path] : undefined);
+    (isMockMode() && subjectWorkflow ? MOCK_CANVAS_OVERVIEWS[subjectWorkflow.path] : undefined);
   // Failed-task panels the user has explicitly dismissed (client-side only —
   // the task record itself stays in the server's list).
   const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(new Set());
@@ -663,7 +738,11 @@ export function CanvasPane({
 
   // Probe once per session for pre-existing content — the agent may have written
   // it in an earlier turn, before this pane was around to catch a reload event.
+  // Skipped entirely while the subject is served by the workflow-keyed route:
+  // `/canvas/:sessionId/` resolves by the session's BINDING, so its answer is
+  // about a different agent and would decide this pane's content for it.
   useEffect(() => {
+    if (workflowSourcePath != null) return;
     setFrameLoading(true);
     if (!sessionId) {
       setHasGeneratedContent(false);
@@ -704,7 +783,81 @@ export function CanvasPane({
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, workflowSourcePath]);
+
+  /**
+   * The workflow-keyed board (IA-01) — the pane's document whenever the active
+   * session is not bound to the subject, including for an agent that has never
+   * hosted a session.
+   *
+   * Fetched, not framed: the route is behind the `X-Harness-Token` middleware,
+   * so an `<iframe src>` could not authenticate. The JSON carries `document`
+   * (byte-identical to what a bound session's canvas serves) and `graph`; the
+   * document is what renders, via `srcdoc`.
+   */
+  const [workflowBoard, setWorkflowBoard] = useState<WorkflowBoard | null>(null);
+  /** Bumped by any render landing anywhere, so a board read from the route
+   *  refreshes instead of showing a snapshot from before the render. */
+  const [workflowReloadSeq, setWorkflowReloadSeq] = useState(0);
+  const loadWorkflowGraphRef = useRef(loadWorkflowGraph);
+  loadWorkflowGraphRef.current = loadWorkflowGraph;
+  useEffect(() => {
+    if (workflowSourcePath == null) {
+      setWorkflowBoard(null);
+      return;
+    }
+    // `probing` is owned by whichever source is reading. Leaving it set when
+    // this effect is torn down mid-flight stranded the loading spinner over an
+    // otherwise-usable pane for the rest of the session — binding the subject
+    // (which flips the source to session-keyed) does exactly that.
+    let cancelled = false;
+    setFrameLoading(true);
+    setProbing(true);
+    const settle = setTimeout(() => {
+      loadWorkflowGraphRef
+        .current(workflowSourcePath)
+        .then((res) => {
+          if (cancelled) return;
+          setWorkflowBoard({
+            path: workflowSourcePath,
+            status: res.status,
+            document: res.document,
+            reason: res.reason,
+          });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          // Each of these is a different sentence to the reader, so none of
+          // them collapse into one generic failure. A 404 means "not a
+          // registered agent" and nothing else; a 400 means the path itself was
+          // refused; anything else is the request not landing at all.
+          const status =
+            err instanceof ApiError && err.status === 404
+              ? "notRegistered"
+              : err instanceof ApiError && err.status === 400
+                ? "rejected"
+                : "unreachable";
+          setWorkflowBoard({
+            path: workflowSourcePath,
+            status,
+            document: null,
+            reason: err instanceof Error ? err.message : null,
+          });
+        })
+        .finally(() => {
+          if (!cancelled) setProbing(false);
+        });
+    }, WORKFLOW_BOARD_SETTLE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(settle);
+      setProbing(false);
+    };
+  }, [workflowSourcePath, workflowReloadSeq]);
+
+  useEffect(() => {
+    if (lastMessage?.type === "canvas.reload") setWorkflowReloadSeq((seq) => seq + 1);
+  }, [lastMessage]);
 
   useEffect(() => {
     if (!lastMessage || !sessionId) return;
@@ -728,7 +881,7 @@ export function CanvasPane({
   // a bind/unbind changes what the same URL serves — refetch immediately
   // instead of waiting for the render write's canvas.reload to arrive. A new
   // document also invalidates the old view transform.
-  const boundWorkflowPath = boundWorkflow?.path ?? null;
+  const subjectPath = subjectWorkflow?.path ?? null;
   useEffect(() => {
     setFrameLoading(true);
     setReloadKey((key) => key + 1);
@@ -736,7 +889,7 @@ export function CanvasPane({
     setPan({ x: 0, y: 0 });
     setRestView({ zoom: 1, x: 0, y: 0 });
     userAdjustedRef.current = false;
-  }, [boundWorkflowPath]);
+  }, [subjectPath]);
 
   // Background-task state for THIS session's pane, scoped to the CURRENT
   // binding: a task that carries a workflowPath only surfaces while the pane
@@ -749,7 +902,7 @@ export function CanvasPane({
   const sessionTasks = tasks.filter(
     (task) =>
       task.harnessSessionId === sessionId &&
-      (task.workflowPath == null || task.workflowPath === boundWorkflowPath),
+      (task.workflowPath == null || task.workflowPath === subjectPath),
   );
   // A "describe" run is a HIDDEN background pass — its only surface is the
   // overview button's loading state (below), never the board activity/overlay
@@ -776,8 +929,33 @@ export function CanvasPane({
   // document may EVER mount the iframe — state can go stale for one render
   // across a session switch, and on the static Pages build a wrong URL is
   // GitHub's 404 page rendered inside the pane.
-  const sessionHasServableDoc = sessionId != null && (!isMockMode() || hasMockCanvasDoc(sessionId));
-  const showsContent = hasGeneratedContent && sessionHasServableDoc;
+  const sessionHasServableDoc =
+    sessionSourceId != null && (!isMockMode() || hasMockCanvasDoc(sessionSourceId));
+  /**
+   * The workflow-keyed answer for the CURRENT subject. Path-checked, so a reply
+   * that arrives after the selection moved on is ignored rather than drawn
+   * under the new agent's name.
+   */
+  const boardFromRoute =
+    workflowSourcePath != null && workflowBoard?.path === workflowSourcePath
+      ? workflowBoard
+      : null;
+  /**
+   * `preparing` mounts the frame alongside `ok`: it is the calm "installing
+   * dependencies" placeholder the server renders for a fresh scaffold, and
+   * treating it as a failure would show an esbuild message to someone who has
+   * just created an agent. It posts no graph, so the reveal gate still holds.
+   */
+  const routeFrameDocument =
+    boardFromRoute != null &&
+    (boardFromRoute.status === "ok" || boardFromRoute.status === "preparing") &&
+    boardFromRoute.document != null
+      ? boardFromRoute.document
+      : null;
+  const showsContent =
+    source.kind === "workflow"
+      ? routeFrameDocument != null
+      : hasGeneratedContent && sessionHasServableDoc;
 
 
   // The observability header for the Steps surface: a deploy landing (if one is
@@ -789,7 +967,7 @@ export function CanvasPane({
       {deployState && (
         <DeployStatusBanner
           deployState={deployState}
-          workflow={boundWorkflow}
+          workflow={subjectWorkflow}
           onDismiss={onDismissDeploy}
           onOpenCode={onOpenCode}
         />
@@ -797,11 +975,55 @@ export function CanvasPane({
     </>
   );
 
+  /**
+   * The honest state for a workflow-keyed board that is not a graph.
+   *
+   * Four distinct sentences, not one generic failure, because each one asks a
+   * different thing of the reader: `preparing` needs nothing (it mounts the
+   * frame above), `empty` needs a render, `error` names what broke, and
+   * `notRegistered` says the rail is listing a path the registry no longer
+   * knows. Collapsing them was how a fresh scaffold came to show an esbuild
+   * message to someone who had just created an agent.
+   */
+  const routeEmptyState =
+    boardFromRoute == null || routeFrameDocument != null
+      ? null
+      : boardFromRoute.status === "empty"
+        ? {
+            testId: "canvas-empty-route-empty",
+            icon: "Workflow",
+            title: surface === "steps" ? "No steps yet" : "Nothing rendered yet",
+            body:
+              boardFromRoute.reason ??
+              "This agent has no diagram yet; it is generated from its code.",
+          }
+        : boardFromRoute.status === "error"
+          ? {
+              testId: "canvas-empty-route-error",
+              icon: "TriangleAlert",
+              title: "Couldn't read this agent's diagram",
+              body: boardFromRoute.reason ?? "The diagram extraction failed.",
+            }
+          : boardFromRoute.status === "notRegistered"
+            ? {
+                testId: "canvas-empty-route-unregistered",
+                icon: "Radio",
+                title: "Studio doesn't know this agent",
+                body:
+                  "The path is not a registered agent — rescan the project to pick it up again.",
+              }
+            : {
+                testId: "canvas-empty-route-unavailable",
+                icon: "Radio",
+                title: "Couldn't load this agent's board",
+                body: boardFromRoute.reason ?? "The harness didn't answer.",
+              };
+
   return (
     <aside className="canvas-pane" {...trackingAttrs({ surface: "canvas" })}>
-      {boundWorkflow && !overviewActive && (
+      {subjectWorkflow && !overviewActive && (
         <WorkflowActionsHeader
-          workflow={boundWorkflow}
+          workflow={subjectWorkflow}
           detailStep={null}
           onBack={() => {}}
           onAskAgent={onInjectPrompt}
@@ -818,25 +1040,14 @@ export function CanvasPane({
           steps (read from the visualized workflow), the Canvas tab keeps its
           board copy. Both "no steps" states share one title; the hint names
           the cause. */}
-      {noSessionAgent ? (
-        /* An agent opened with no live session in its workspace: honest
-           absence, naming the agent. The main panel carries the primary
-           "Start session" action, so this state teaches the move without a
-           duplicate button. */
-        <EmptyState
-          className="canvas-empty"
-          testId="canvas-empty-no-session"
-          icon="Radio"
-          title={`No running session for ${noSessionAgent}`}
-          body={
-            surface === "steps"
-              ? "Start a session to map this agent's steps here."
-              : "Start a session to map, run, and inspect this agent."
-          }
-        />
-      ) : overviewActive || !sessionId ? (
-        // Overview mode reads identically to fresh install: no
-        // session is on display, so no Visualize CTA and no stale copy.
+      {overviewActive || source.kind === "none" ? (
+        /* Nothing is the subject — a project or folder row, the create-new
+           draft, or a review. There used to be a "No running session for X"
+           state here as well; with IA-01's workflow-keyed route an agent with
+           no session HAS a board, so an absence of sessions is no longer an
+           absence of subject (SAP-2931). */
+        // Reads identically to a fresh install: nothing is on display, so no
+        // Visualize CTA and no stale copy.
         surface === "steps" ? (
           <EmptyState
             className="canvas-empty"
@@ -918,7 +1129,7 @@ export function CanvasPane({
               <RunWorkspace
                 run={run}
                 target={runTarget}
-                workflow={boundWorkflow}
+                workflow={subjectWorkflow}
                 focus={expanded}
                 onToggleFocus={onToggleExpanded}
                 onAskAgent={onInjectPrompt}
@@ -929,6 +1140,14 @@ export function CanvasPane({
             )}
           </div>
         </div>
+      ) : routeEmptyState ? (
+        <EmptyState
+          className="canvas-empty"
+          testId={routeEmptyState.testId}
+          icon={routeEmptyState.icon}
+          title={routeEmptyState.title}
+          body={routeEmptyState.body}
+        />
       ) : !showsContent && sessionExited ? (
         /* nothing was generated and the session is dead — a render here would
            target a pty that no longer exists. */
@@ -1154,9 +1373,24 @@ export function CanvasPane({
           )}
           <iframe
             ref={frameRef}
-            key={`${sessionId}:${reloadKey}`}
+            key={
+              routeFrameDocument != null
+                ? `wf:${workflowSourcePath}:${workflowReloadSeq}`
+                : `${sessionId}:${reloadKey}`
+            }
             className="canvas-iframe"
-            src={`${import.meta.env.BASE_URL}canvas/${sessionId}/${isMockMode() ? "index.html" : ""}?theme=${theme}`}
+            /* Two entry points, one element. The session-keyed board is a URL
+               (`/canvas/:sessionId/` is mounted unauthenticated for exactly
+               this reason); the workflow-keyed one CANNOT be a `src` — it sits
+               behind the `X-Harness-Token` middleware, which an iframe cannot
+               carry — so its document arrives as JSON and renders via `srcdoc`.
+               The theme rides in a query string for the first and an appended
+               script for the second, which has no URL to read. */
+            {...(routeFrameDocument != null
+              ? { srcDoc: withFrameTheme(routeFrameDocument, theme) }
+              : {
+                  src: `${import.meta.env.BASE_URL}canvas/${sessionId}/${isMockMode() ? "index.html" : ""}?theme=${theme}`,
+                })}
             sandbox="allow-scripts"
             // The board is navigated only through the app's zoom/fit/pan
             // controls (the view is posted INTO the document); it must never
@@ -1176,7 +1410,7 @@ export function CanvasPane({
               // the current animation immediately without waiting for the next
               // run update. frameLoading is still true at this point (it clears
               // after the hold timer), so call the raw post directly.
-              if (run && runTarget && sessionId && (!isMockMode() || hasMockCanvasDoc(sessionId))) {
+              if (run && runTarget && (routeFrameDocument != null || sessionHasServableDoc)) {
                 frameRef.current?.contentWindow?.postMessage(
                   { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
                   "*",
@@ -1209,7 +1443,7 @@ export function CanvasPane({
                 <RunWorkspace
                   run={run}
                   target={runTarget}
-                  workflow={boundWorkflow}
+                  workflow={subjectWorkflow}
                   focus={expanded}
                   onToggleFocus={onToggleExpanded}
                   onAskAgent={onInjectPrompt}
@@ -1261,8 +1495,8 @@ export function CanvasPane({
               onDeselect={() => setSelectedNodeId(null)}
               onCollapse={() => setOverviewOpen(false)}
               onDescribeWithAI={
-                boundWorkflow && sessionId && !sessionExited
-                  ? () => onDescribeWorkflow(boundWorkflow)
+                subjectWorkflow && sessionId && !sessionExited
+                  ? () => onDescribeWorkflow(subjectWorkflow)
                   : undefined
               }
               describing={describeRunning}

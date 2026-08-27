@@ -1,4 +1,15 @@
-import type { WorkflowInfo } from "@shared/types";
+/**
+ * The linkage + build fields every deployment decision reads. Structural on
+ * purpose: `WorkflowInfo` satisfies it, and widening the parameters lets the
+ * pure gating decisions in `session-scope.ts` reuse this ONE answer instead of
+ * re-deriving deployment state from raw fields (SAP-2931). There is exactly one
+ * place that turns linkage + build status into a user-facing reason, and it is
+ * this module.
+ */
+export interface DeployableWorkflow {
+  definitionId: number | null;
+  activeBuildRunStatus?: string | null;
+}
 
 /** The five states Studio can prove from local linkage plus cloud build data. */
 export type WorkflowDeploymentState =
@@ -17,7 +28,7 @@ const FAILED_STATUSES = new Set(["failed", "cancelled", "superseded", "stale"]);
  * error (a failed rebuild can leave the previous ready version runnable).
  */
 export function workflowDeploymentState(
-  workflow: WorkflowInfo,
+  workflow: DeployableWorkflow,
   lastDeployError: string | null = null,
 ): WorkflowDeploymentState {
   if (workflow.activeBuildRunStatus === "ready") return "ready";
@@ -38,13 +49,13 @@ export function workflowDeploymentState(
 }
 
 /** Only the backend's ready build projection proves a production run can start. */
-export function isWorkflowRunnable(workflow: WorkflowInfo | null): boolean {
+export function isWorkflowRunnable(workflow: DeployableWorkflow | null): boolean {
   return workflow?.activeBuildRunStatus === "ready";
 }
 
 /** Exact action-bar reason when Prod Run is blocked, or null when runnable. */
 export function prodRunDisabledReason(
-  workflow: WorkflowInfo,
+  workflow: DeployableWorkflow,
   lastDeployError: string | null = null,
 ): string | null {
   switch (workflowDeploymentState(workflow, lastDeployError)) {
