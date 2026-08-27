@@ -12,6 +12,7 @@ import {
   runsForSubject,
   selectedRunForSubject,
   sessionForFocus,
+  sessionReachesFocus,
   sessionStripSubject,
   shownRunForSubject,
   type AttributedRun,
@@ -710,6 +711,76 @@ describe("run evidence follows the subject, not the session", () => {
       expect(shownRunForSubject(runs, null)).toBe(last);
       expect(shownRunForSubject([], first)).toBeNull();
       expect(shownRunForSubject([], null)).toBeNull();
+    });
+  });
+});
+
+describe("sessionReachesFocus: one containment answer, two callers", () => {
+  const at = (over: Partial<ScopedSession>): ScopedSession => session(over);
+
+  it("is true for an agent inside the session's project", () => {
+    expect(sessionReachesFocus(at({ cwd: POLSIA }), ADS, [POLSIA])).toBe(true);
+    // The session's own PROJECT, not its raw cwd: a session an older build left
+    // rooted in the agent's folder still belongs to the project around it.
+    expect(sessionReachesFocus(at({ cwd: ADS }), OUTREACH, [POLSIA])).toBe(true);
+  });
+
+  it("is false for an agent in another project", () => {
+    // The case a naive "is any session live" check got wrong: closing the last
+    // tab in a project falls back to whatever else is running, and the
+    // workbench then pointed at a project that does not contain the agent on
+    // screen.
+    expect(sessionReachesFocus(at({ cwd: TROPEE }), ADS, [POLSIA, TROPEE])).toBe(false);
+  });
+
+  it("is false with nothing active, an exited session, or no selection", () => {
+    expect(sessionReachesFocus(null, ADS, [POLSIA])).toBe(false);
+    expect(sessionReachesFocus(at({ cwd: POLSIA, status: "exited" }), ADS, [POLSIA])).toBe(false);
+    expect(sessionReachesFocus(at({ cwd: POLSIA }), null, [POLSIA])).toBe(false);
+  });
+
+  it("agrees with sessionForFocus, which is the point of having one answer", () => {
+    for (const [cwd, focus] of [
+      [POLSIA, ADS],
+      [TROPEE, ADS],
+      [ADS, OUTREACH],
+    ] as const) {
+      const active = at({ id: "a", cwd });
+      const reaches = sessionReachesFocus(active, focus, [POLSIA, TROPEE]);
+      const decision = sessionForFocus({
+        focusPath: focus,
+        active,
+        sessions: [active],
+        roots: [POLSIA, TROPEE],
+      });
+      expect(decision.kind === "keep").toBe(reaches);
+    }
+  });
+});
+
+describe("canvasSourceFor: a session bound to nothing still draws its own board", () => {
+  it("is session-keyed when neither a subject nor a binding exists", () => {
+    // A bare-folder scaffold session: no agent selected, nothing bound, but a
+    // live session whose board the pane has always drawn and whose empty-state
+    // copy speaks about it. Reading "no subject" as "no source" replaced that
+    // with a fresh-install "No session" message under a running session.
+    expect(canvasSourceFor({ subjectPath: null, bindingPath: null, sessionId: "s1" })).toEqual({
+      kind: "session",
+      sessionId: "s1",
+    });
+  });
+
+  it("is nothing when there is neither a subject nor a session", () => {
+    expect(canvasSourceFor({ subjectPath: null, bindingPath: null, sessionId: null })).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("is nothing when the subject is suppressed under a bound session", () => {
+    // The create-new draft or a review owns the centre: an absence must not
+    // have the bound agent's board sitting behind it.
+    expect(canvasSourceFor({ subjectPath: null, bindingPath: ADS, sessionId: "s1" })).toEqual({
+      kind: "none",
     });
   });
 });

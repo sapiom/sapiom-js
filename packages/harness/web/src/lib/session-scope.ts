@@ -152,6 +152,31 @@ export function sessionStripSubject(
   return active.boundWorkflowPath ?? active.cwd;
 }
 
+/**
+ * Whether the active session can work on the selected agent.
+ *
+ * Asked ONE way, downward: does the session's PROJECT contain the agent? Its
+ * own project, not its raw cwd — a session an older build left rooted in an
+ * agent's folder still belongs to the project around it, and must not read as a
+ * project of one directory.
+ *
+ * Two callers, on purpose. `sessionForFocus` asks it to decide whether
+ * selecting an agent should move the session, and the shell asks it to decide
+ * whether the main panel shows that session or the honest "no session for this
+ * agent" state. Answered twice, those two drifted: a session left active by
+ * some other path — closing the last tab in a project falls back to any other
+ * running session — kept the workbench pointed at a project that does not
+ * contain the agent on screen.
+ */
+export function sessionReachesFocus(
+  active: ScopedSession | null,
+  focusPath: string | null,
+  roots: readonly string[],
+): boolean {
+  if (!active || active.status === "exited" || focusPath == null) return false;
+  return rootContains(projectRootForAgent(active.cwd, roots), focusPath);
+}
+
 export interface FocusSessionInput<S extends ScopedSession> {
   /** The agent (or bare folder) being selected. */
   focusPath: string;
@@ -211,13 +236,7 @@ export function sessionForFocus<S extends ScopedSession>({
 }: FocusSessionInput<S>): FocusSessionDecision<S> {
   const live = sessions.filter((session) => session.status !== "exited");
 
-  if (active && active.status !== "exited") {
-    // The session's own PROJECT, not its raw cwd: a session an older build
-    // left rooted in an agent's folder still belongs to the project around it,
-    // and must not read as a project of one directory.
-    const activeRoot = projectRootForAgent(active.cwd, roots);
-    if (rootContains(activeRoot, focusPath)) return { kind: "keep" };
-  }
+  if (sessionReachesFocus(active, focusPath, roots)) return { kind: "keep" };
 
   // The agent's own session wins the handover: navigating to F should land on
   // F's session when it has one. Then the project's most recent session, since
@@ -301,10 +320,17 @@ export function canvasSourceFor({
   bindingPath,
   sessionId,
 }: CanvasSourceInput): CanvasSource {
+  // Both absent counts as agreement, and it matters: a live session bound to
+  // nothing (a bare-folder scaffold session) has always drawn its OWN board
+  // here, and the pane's empty-state copy speaks about that session. Treating
+  // "no subject" as "no source" turned that into a fresh-install "No session"
+  // message under a session that was plainly running.
+  const agrees =
+    subjectPath == null
+      ? bindingPath == null
+      : bindingPath != null && samePath(bindingPath, subjectPath);
+  if (sessionId != null && agrees) return { kind: "session", sessionId };
   if (subjectPath == null) return { kind: "none" };
-  if (sessionId != null && bindingPath != null && samePath(bindingPath, subjectPath)) {
-    return { kind: "session", sessionId };
-  }
   return { kind: "workflow", path: subjectPath };
 }
 

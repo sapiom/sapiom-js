@@ -104,8 +104,10 @@ interface CanvasPaneProps {
    *  displayed, so the canvas shows the fresh-install "start a session"
    *  state instead of the previous session's empty state and CTA. */
   overviewActive: boolean;
-  /** the displayed session has exited — Visualize can't do anything,
-   *  so the empty state swaps to a resume invitation. */
+  /** the displayed session has exited — Visualize can't do anything, so the
+   *  empty state swaps to a resume invitation. Only reachable while the board
+   *  is session-keyed; a subject served by the workflow-keyed route has a real
+   *  board whether or not any session is alive. */
   sessionExited: boolean;
   /** Canvas full-screen state + toggle — owned by App so the control sits in
    *  the right-pane tab bar; CanvasPane renders the frame + exit affordance. */
@@ -223,9 +225,14 @@ export function CanvasPane({
   onGraphChangeRef.current = onGraphChange;
   const subjectPathRef = useRef(subjectWorkflow?.path ?? null);
   subjectPathRef.current = subjectWorkflow?.path ?? null;
-  /** The subject's path when the workflow-keyed route is the one serving it —
-   *  the single value every source-dependent branch below keys on. */
+  /**
+   * `source` is rebuilt by the shell on every render, so nothing may depend on
+   * its identity — an effect keyed to the object re-ran on every render, which
+   * turned the run-state bridge into a postMessage on each one. These two
+   * primitives are what the effects and callbacks below key on instead.
+   */
   const workflowSourcePath = source.kind === "workflow" ? source.path : null;
+  const sessionSourceId = source.kind === "session" ? source.sessionId : null;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
   // True while the initial HEAD probe for this session is still in flight —
@@ -704,14 +711,14 @@ export function CanvasPane({
     // Guard: only post when a board is actually mounted. The workflow-keyed
     // document is a real board too (same derivation), so it animates a run the
     // same way; a session-keyed one still needs its mock-doc gate.
-    if (source.kind === "none") return;
-    if (source.kind === "session" && isMockMode() && !hasMockCanvasDoc(source.sessionId)) return;
+    if (workflowSourcePath == null && sessionSourceId == null) return;
+    if (sessionSourceId != null && isMockMode() && !hasMockCanvasDoc(sessionSourceId)) return;
     if (frameLoading) return;
     frameRef.current?.contentWindow?.postMessage(
       { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
       "*",
     );
-  }, [run, runTarget, source, frameLoading]);
+  }, [run, runTarget, workflowSourcePath, sessionSourceId, frameLoading]);
 
   useEffect(() => {
     postRunStateToFrame();
@@ -799,6 +806,10 @@ export function CanvasPane({
       setWorkflowBoard(null);
       return;
     }
+    // `probing` is owned by whichever source is reading. Leaving it set when
+    // this effect is torn down mid-flight stranded the loading spinner over an
+    // otherwise-usable pane for the rest of the session — binding the subject
+    // (which flips the source to session-keyed) does exactly that.
     let cancelled = false;
     setFrameLoading(true);
     setProbing(true);
@@ -840,6 +851,7 @@ export function CanvasPane({
     return () => {
       cancelled = true;
       clearTimeout(settle);
+      setProbing(false);
     };
   }, [workflowSourcePath, workflowReloadSeq]);
 
@@ -918,7 +930,7 @@ export function CanvasPane({
   // across a session switch, and on the static Pages build a wrong URL is
   // GitHub's 404 page rendered inside the pane.
   const sessionHasServableDoc =
-    source.kind === "session" && (!isMockMode() || hasMockCanvasDoc(source.sessionId));
+    sessionSourceId != null && (!isMockMode() || hasMockCanvasDoc(sessionSourceId));
   /**
    * The workflow-keyed answer for the CURRENT subject. Path-checked, so a reply
    * that arrives after the selection moved on is ignored rather than drawn

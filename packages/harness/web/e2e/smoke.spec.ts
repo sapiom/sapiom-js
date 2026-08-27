@@ -445,11 +445,17 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(start).toContainText("Start a session to map, run, and inspect this agent.");
     await expect(page.getByTestId("open-agent-start-session")).toBeVisible();
 
-    // The session bar names the same agent with an honest "no session" tag, and
-    // the right pane echoes the state instead of another agent's board.
+    // The session bar names the same agent with an honest "no session" tag. The
+    // right pane no longer echoes that absence: since SAP-2931 the board is the
+    // rail SELECTION, served for an unsessioned agent by the workflow-keyed
+    // route, so what draws here is rfq's own board — never the boot session's.
     await expect(page.getByTestId("session-context-title")).toHaveText("rfq");
     await expect(page.getByTestId("session-status-tag")).toContainText("no session");
-    await expect(page.getByTestId("canvas-empty-no-session")).toContainText("No running session for rfq");
+    await expect(page.getByTestId("canvas-empty-no-session")).toHaveCount(0);
+    await expect(page.locator(".canvas-iframe")).toHaveAttribute(
+      "srcdoc",
+      /rfq — mock workflow board/,
+    );
 
     // Focusing rfq never touched the boot session's binding.
     await expect(

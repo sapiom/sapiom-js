@@ -8,13 +8,24 @@
  *  2. MAIN PANEL — the workbench for the focused agent: browser-style live
  *     session tabs inside the shared header, then the conversation/terminal.
  *     Session switching and same-folder session creation live in that strip.
- *  3. RIGHT PANEL — projections of the ACTIVE session's bound agent (Canvas |
- *     Steps | Code), session-keyed. The canvas stays mounted behind CSS when
- *     another tab is active so a running Visualize enrichment (and the
- *     graph-posting document) is never disturbed by a tab flip.
+ *  3. RIGHT PANEL — projections of the rail SELECTION (Canvas | Steps | Code).
+ *     The canvas stays mounted behind CSS when another tab is active so a
+ *     running Visualize enrichment (and the graph-posting document) is never
+ *     disturbed by a tab flip.
  *
- * The mapping invariant: rail focused agent == tab strip's agent == active
- * tab's bound agent == right panel's subject.
+ * The invariant used to be one chain — selection == tab strip == active tab's
+ * binding == right panel — and SAP-2931 deliberately cut it in two, because
+ * looking and working are different acts: you read agent F's board while the
+ * terminal is mid-sentence with agent B.
+ *
+ *   Right panel == the rail SELECTION. Board, Steps, Code, the lifecycle verbs
+ *                  and the run evidence are projections of that ONE subject
+ *                  (`lib/session-scope.ts`); if two of them can disagree, that
+ *                  is a bug by contract.
+ *   Tab strip   == the ACTIVE session's own agent. Keyed to the selection it
+ *                  emptied itself under a still-running session.
+ *   The session  moves only when the selection leaves its PROJECT, because a
+ *                  session is project-scoped and cannot reach outside it.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JSX } from "react";
@@ -65,6 +76,7 @@ import {
   runsForSubject,
   selectedRunForSubject,
   sessionForFocus,
+  sessionReachesFocus,
   sessionStripSubject,
   shownRunForSubject,
 } from "./lib/session-scope";
@@ -726,6 +738,23 @@ export const App = (): JSX.Element => {
   }
 
   const { state } = harness;
+  /**
+   * The roots this install knows it has opened.
+   *
+   * `launchDir` is included because a first boot records the launch directory
+   * before `recentDirs` has it, and that is exactly the session whose cwd
+   * matters most. Session cwds are deliberately NOT roots: a session an older
+   * build left rooted in an agent's own folder would then be the longest
+   * "root" containing that agent, and SAP-2927's bug would resolve itself
+   * straight back into place. `projectRoot` is not one either — it is where
+   * NEW projects are created (a parent of many projects), so treating it as a
+   * root would boot every agent under it in the same shared folder.
+   */
+  const knownProjectRoots = (): string[] => [
+    ...(harness.settings?.recentDirs ?? []),
+    ...(state.launchDir ? [state.launchDir] : []),
+  ];
+
   const activeSession = state.sessions.find((session) => session.id === harness.activeSessionId) ?? null;
   const boundWorkflowPath = boundWorkflowPathOf(activeSession);
   const boundWorkflow = state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
@@ -739,14 +768,24 @@ export const App = (): JSX.Element => {
   const focusTabs = liveSessionsForFocus(state.sessions, stripSubjectPath);
   const showReview = reviewSummary != null;
   const showDead = !showReview && activeSession?.status === "exited";
-  // An agent selected with NO live session to work in: honest absence, and
-  // opening one lands on the "start a session" state. Keyed to the ACTIVE
-  // session rather than to the selection's own tabs, because a same-project
-  // selection deliberately keeps a session that is bound elsewhere — under the
-  // old test the terminal vanished the moment you looked at a sibling.
-  // `composing` (explicit New-session intent) forces the composer over this.
+  // An agent selected with no session that can WORK on it: honest absence, and
+  // opening one lands on the "start a session" state.
+  //
+  // The question is reachability, not "does this agent have its own tabs"
+  // (SAP-2931). A same-project selection deliberately keeps a session bound
+  // elsewhere — under the old test the terminal vanished the moment you looked
+  // at a sibling. But "any live session at all" is too weak in the other
+  // direction: closing the last tab in a project falls back to whatever else is
+  // running, which can be a session in a project that does not contain this
+  // agent. `sessionReachesFocus` is the same containment question
+  // `sessionForFocus` answers, so the derived state and the movement decision
+  // cannot disagree. `composing` forces the composer over this.
   const showAgentEmpty =
-    !showReview && !showDead && !composing && focusedWorkflow != null && activeSession == null;
+    !showReview &&
+    !showDead &&
+    !composing &&
+    focusedWorkflow != null &&
+    !sessionReachesFocus(activeSession, focusedAgentPath, knownProjectRoots());
   // The workbench: a live active session.
   const showWorkbench =
     !showReview &&
@@ -857,23 +896,6 @@ export const App = (): JSX.Element => {
   const closeMobileDrawer = (): void => {
     if (isMobile) setRailCollapsed(true);
   };
-
-  /**
-   * The roots this install knows it has opened.
-   *
-   * `launchDir` is included because a first boot records the launch directory
-   * before `recentDirs` has it, and that is exactly the session whose cwd
-   * matters most. Session cwds are deliberately NOT roots: a session an older
-   * build left rooted in an agent's own folder would then be the longest
-   * "root" containing that agent, and SAP-2927's bug would resolve itself
-   * straight back into place. `projectRoot` is not one either — it is where
-   * NEW projects are created (a parent of many projects), so treating it as a
-   * root would boot every agent under it in the same shared folder.
-   */
-  const knownProjectRoots = (): string[] => [
-    ...(harness.settings?.recentDirs ?? []),
-    ...(state.launchDir ? [state.launchDir] : []),
-  ];
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -1777,10 +1799,11 @@ export const App = (): JSX.Element => {
                   onClose={() => void harness.closeSession(activeSession.id)}
                 />
               ) : showAgentEmpty && focusedWorkflow ? (
-                /* Honest absence: no session to render this agent's board from.
-                   Start runs the create+bind path at the agent's PROJECT ROOT,
-                   so the booting agent gets the project's CLAUDE.md, .claude/
-                   and skills (SAP-2927). */
+                /* Honest absence: no session that can WORK on this agent — its
+                   board still draws on the right, from the workflow-keyed route
+                   (SAP-2931). Start runs the create+bind path at the agent's
+                   PROJECT ROOT, so the booting agent gets the project's
+                   CLAUDE.md, .claude/ and skills (SAP-2927). */
                 <EmptyState
                   className="terminal-empty"
                   testId="open-agent-empty"
