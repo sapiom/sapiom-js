@@ -56,6 +56,7 @@ import {
   slugifyIdea,
 } from "./lib/project-dir";
 import { basenameOf, isWithinDir, samePath } from "./lib/paths";
+import { projectRootForAgent } from "./lib/session-scope";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
@@ -799,8 +800,41 @@ export const App = (): JSX.Element => {
     if (isMobile) setRailCollapsed(true);
   };
 
+  /**
+   * The roots this install knows it has opened.
+   *
+   * `launchDir` is included because a first boot records the launch directory
+   * before `recentDirs` has it, and that is exactly the session whose cwd
+   * matters most. Session cwds are deliberately NOT roots: a session an older
+   * build left rooted in an agent's own folder would then be the longest
+   * "root" containing that agent, and SAP-2927's bug would resolve itself
+   * straight back into place. `projectRoot` is not one either — it is where
+   * NEW projects are created (a parent of many projects), so treating it as a
+   * root would boot every agent under it in the same shared folder.
+   */
+  const knownProjectRoots = (): string[] => [
+    ...(harness.settings?.recentDirs ?? []),
+    ...(state.launchDir ? [state.launchDir] : []),
+  ];
+
+  /**
+   * The ONE answer to "where does a session for this agent boot" (SAP-2927).
+   *
+   * Every path that starts a session ON AN EXISTING AGENT — the tab-strip `+`,
+   * the workbench empty-state Start, the command palette, and the bind path —
+   * goes through here. The paths that create a session for a BRAND-NEW project
+   * folder (scaffold, templates, the composer, a deep-link clone) deliberately
+   * do not: that folder is the new project's root by construction, and
+   * resolving it upward would drop the new agent into its parent project.
+   */
+  const sessionCwdForAgent = (agentPath: string): string =>
+    projectRootForAgent(agentPath, knownProjectRoots());
+
   // The ONE choke point for session creation: sets the focus to the new
   // session's folder (so the main panel shows it) and fires telemetry once.
+  // `cwd` is already a project root by the time it gets here — resolve it with
+  // `sessionCwdForAgent` at the entry point, not in here, because the
+  // new-project doors legitimately pass a folder that no root should swallow.
   const createSessionAt = async (
     cwd: string,
     agentHarness: HarnessKind,
@@ -872,6 +906,11 @@ export const App = (): JSX.Element => {
   // The workbench tab + starts a fresh coding-agent process beside the active
   // session. Folder, provider, and optional agent binding carry over; prompt,
   // transcript, resume identity, and rehydration deliberately do not.
+  //
+  // The folder carries over RESOLVED (SAP-2927): a source session an older
+  // build left rooted in the agent's own directory is the bug, not a workspace
+  // worth inheriting, so the sibling boots at the project root instead. A
+  // source already rooted at a known root resolves to itself.
   const handleStartSiblingSession = (source: HarnessSession): void => {
     if (siblingSessionPendingRef.current) return;
 
@@ -885,11 +924,17 @@ export const App = (): JSX.Element => {
         )?.name ?? basenameOf(workflowPath))
       : null;
 
+    // Resolved once, and reused for the unbound-focus fallbacks below: focus
+    // has to name the folder the session ACTUALLY booted in, or an unbound
+    // sibling drops out of its own tab strip (liveSessionsForFocus matches an
+    // unbound session by cwd).
+    const cwd = sessionCwdForAgent(source.cwd);
+
     void (async () => {
       try {
-        const session = await createSessionAt(source.cwd, source.harness);
+        const session = await createSessionAt(cwd, source.harness);
         if (!workflowPath) {
-          setFocusedAgentPath(source.cwd);
+          setFocusedAgentPath(cwd);
           return;
         }
 
@@ -900,7 +945,7 @@ export const App = (): JSX.Element => {
           // Creation already succeeded. Keep that independent process alive
           // and visible as an unbound folder session rather than rolling it
           // back because the secondary binding write failed.
-          setFocusedAgentPath(source.cwd);
+          setFocusedAgentPath(cwd);
           harness.showToast(
             `Session started, but couldn't attach it to ${workflowName ?? "the agent"}.`,
           );
@@ -920,10 +965,21 @@ export const App = (): JSX.Element => {
 
   // The focused-agent empty state's Start creates the first session. This is
   // distinct from the tab + because there is no source provider to inherit.
+  //
+  // It boots at the agent's PROJECT ROOT (SAP-2927), binds there, and focuses
+  // the agent so the new session joins its tab strip. An existing session of
+  // this agent still wins the cwd, but only when that session is itself rooted
+  // at a known root: joining a colleague's tab keeps a second opened root (an
+  // agent files under every root that contains it) instead of silently
+  // re-rooting you elsewhere, while a session left in the agent's own folder
+  // is the bug, and its cwd is discarded rather than inherited.
   const handleStartSessionForAgent = (workflow: WorkflowInfo): void => {
     void (async () => {
-      const owner = liveSessionsForFocus(state.sessions, workflow.path)[0];
-      const cwd = owner?.cwd ?? workflow.path;
+      const roots = knownProjectRoots();
+      const owner = liveSessionsForFocus(state.sessions, workflow.path).find((session) =>
+        roots.some((root) => samePath(root, session.cwd)),
+      );
+      const cwd = owner?.cwd ?? sessionCwdForAgent(workflow.path);
       try {
         const session = await createSessionAt(cwd, "claude-code");
         await harness.bindWorkflow(session.id, workflow.path);
@@ -1183,8 +1239,12 @@ export const App = (): JSX.Element => {
   // used when navigating to a launched sub-workflow from the canvas/steps, and
   // before running a macro against a workflow (the canvas is served from the
   // binding). Same-workspace by contract: it lands on a live
-  // session in the workflow's own workspace, or STARTS one in the workflow's
-  // folder. Resolves to the session the binding landed on.
+  // session in the workflow's own workspace, or STARTS one at the workflow's
+  // PROJECT ROOT. Resolves to the session the binding landed on.
+  //
+  // Starting one is where SAP-2927's bug lived: this passed `path` — the agent
+  // directory — straight to createSessionAt, so a bound-on-demand session came
+  // up without the project's CLAUDE.md, .claude/ or skills.
   const handleBindWorkflow = async (path: string): Promise<string | null> => {
     closeMobileDrawer();
     const live = state.sessions.filter((s) => s.status !== "exited");
@@ -1209,7 +1269,7 @@ export const App = (): JSX.Element => {
       targetId = owner.id;
     } else {
       try {
-        targetId = (await createSessionAt(path, "claude-code")).id;
+        targetId = (await createSessionAt(sessionCwdForAgent(path), "claude-code")).id;
       } catch (err) {
         harness.showToast((err as Error).message || "Couldn't start a session in this folder.");
         return null;
@@ -1636,7 +1696,9 @@ export const App = (): JSX.Element => {
                 />
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session to render this agent's board from.
-                   Start runs the create+bind path in the agent's own folder. */
+                   Start runs the create+bind path at the agent's PROJECT ROOT,
+                   so the booting agent gets the project's CLAUDE.md, .claude/
+                   and skills (SAP-2927). */
                 <EmptyState
                   className="terminal-empty"
                   testId="open-agent-empty"
@@ -2007,9 +2069,17 @@ export const App = (): JSX.Element => {
                   {
                     id: "new-session-here",
                     label: "New session in this folder",
-                    meta: activeSession.cwd,
+                    // The project root, not the active session's raw cwd
+                    // (SAP-2927) — and `meta` shows the resolved folder, so a
+                    // session an older build left in an agent's directory
+                    // cannot make this row name a folder it will not open.
+                    meta: sessionCwdForAgent(activeSession.cwd),
                     icon: "Plus",
-                    run: () => void handleCreateSession(activeSession.cwd, "claude-code"),
+                    run: () =>
+                      void handleCreateSession(
+                        sessionCwdForAgent(activeSession.cwd),
+                        "claude-code",
+                      ),
                   },
                 ]
               : []),
