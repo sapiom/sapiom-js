@@ -1,5 +1,5 @@
 packages:
-  - 'packages/*'
+  - "packages/*"
 
 # node-pty needs its postinstall (chmods spawn-helper +x); pnpm skips build
 # scripts by default, which leaves it silently non-functional on fresh installs.
@@ -10,7 +10,7 @@ onlyBuiltDependencies:
   - node-pty
   - electron
   - esbuild
-  - '@electron/rebuild'
+  - "@electron/rebuild"
 
 # Upgrade the @electron/rebuild that electron-builder bundles (app-builder-lib
 # pins 3.6.1, which drags node-gyp@9.4.1 — its VS detection can't parse recent
@@ -19,4 +19,7 @@ onlyBuiltDependencies:
 # itself, rather than forcing node-gyp@10 under the old 3.6.1, avoids the
 # cross-platform rebuild HANG that the bare node-gyp override caused.
 overrides:
-  '@electron/rebuild': ^3.7.0
+  "@electron/rebuild": ^3.7.0
+  # Keep the stable desktop rollback on the pre-graph Harness while the rest of
+  # the monorepo continues to develop and publish the beta implementation.
+  "@sapiom/harness-desktop>@sapiom/harness": 0.8.9

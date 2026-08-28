@@ -44,14 +44,41 @@ const DS_PACKAGE = "@sapiom/design-system";
  * ERR_PACKAGE_PATH_NOT_EXPORTED even when it IS installed — the same reason
  * vite.config.ts probes `${DS_PACKAGE}/package.json`.
  */
-function resolveDesignSystemDir() {
+async function resolveDesignSystemDir() {
   try {
-    return { dir: dirname(require.resolve(`${DS_PACKAGE}/package.json`)), seam: "private package" };
+    return {
+      dir: dirname(require.resolve(`${DS_PACKAGE}/package.json`)),
+      seam: "private package",
+    };
   } catch {
-    // The harness owns the committed fallback; resolve it through the package so
-    // this works from the workspace build regardless of cwd.
-    const harnessRoot = dirname(require.resolve("@sapiom/harness/package.json"));
-    return { dir: join(harnessRoot, "web", "src", "styles", "ds-neutral"), seam: "ds-neutral fallback" };
+    // The harness owns the committed fallback. Prefer resolving it through the
+    // installed package so workspace builds keep following the exact Harness
+    // source they package.
+    const harnessRoot = dirname(
+      require.resolve("@sapiom/harness/package.json"),
+    );
+    const packagedFallback = join(
+      harnessRoot,
+      "web",
+      "src",
+      "styles",
+      "ds-neutral",
+    );
+    try {
+      await stat(join(packagedFallback, "tokens.css"));
+      return { dir: packagedFallback, seam: "ds-neutral fallback" };
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+
+    // Published Harness tarballs contain only dist/, so an intentionally pinned
+    // desktop rollback cannot read the fallback's source files through that
+    // package. Packaging still runs from this repository, where the canonical
+    // committed fallback is available beside harness-desktop.
+    return {
+      dir: join(root, "..", "harness", "web", "src", "styles", "ds-neutral"),
+      seam: "workspace ds-neutral fallback",
+    };
   }
 }
 
@@ -84,7 +111,7 @@ for (const file of ["setup.html", "setup.css", "update.html", "update.css"]) {
 // reference it same-origin (<img src="./icon.png">, covered by img-src 'self').
 await cp(join(root, "assets", "icon.png"), join(outDir, "icon.png"));
 
-const { dir: dsDir, seam } = resolveDesignSystemDir();
+const { dir: dsDir, seam } = await resolveDesignSystemDir();
 
 // tokens.css is the one file flattened and renamed on the way out (the `ds-`
 // prefix marks the files this window does not own). Everything else keeps its
@@ -106,12 +133,21 @@ await cp(join(dsDir, "themes"), join(outDir, "themes"), { recursive: true });
 // DOES ship both, and a unit test pins that, so this tolerance can never quietly
 // cover the seam every build here actually resolves. Degrading to system-ui is
 // what this window did before it loaded any faces at all.
-const fontCss = await copyIfPresent(join(dsDir, "fonts.css"), join(outDir, "ds-fonts.css"));
-const fontFiles = await copyIfPresent(join(dsDir, "assets", "fonts"), join(outDir, "assets", "fonts"), {
-  recursive: true,
-});
+const fontCss = await copyIfPresent(
+  join(dsDir, "fonts.css"),
+  join(outDir, "ds-fonts.css"),
+);
+const fontFiles = await copyIfPresent(
+  join(dsDir, "assets", "fonts"),
+  join(outDir, "assets", "fonts"),
+  {
+    recursive: true,
+  },
+);
 
 console.log(
   `copied renderer assets + design-system tokens (${seam}) → dist/renderer` +
-    (fontCss && fontFiles ? "" : ` — NOTE: ${seam} ships no font layer, this window falls back to system-ui`),
+    (fontCss && fontFiles
+      ? ""
+      : ` — NOTE: ${seam} ships no font layer, this window falls back to system-ui`),
 );
