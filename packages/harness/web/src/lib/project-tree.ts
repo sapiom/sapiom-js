@@ -1,7 +1,13 @@
 import type { SessionStatus, WorkflowInfo } from "@shared/types";
 
 import { displayAgentName } from "./agent-name";
-import { basenameOf, isWithinDir, joinPath, parentOf, stripTrailingSep } from "./paths";
+import {
+  basenameOf,
+  isWithinDir,
+  joinPath,
+  parentOf,
+  stripTrailingSep,
+} from "./paths";
 
 /**
  * The rail's filing axes.
@@ -127,11 +133,13 @@ const ABBREVIATE_OVER_CHARS = 22;
  * which is the sort of disagreement that files an agent under one project
  * while its session boots in another.
  */
-const isUnder = (childPath: string, root: string): boolean => isWithinDir(root, childPath);
+const isUnder = (childPath: string, root: string): boolean =>
+  isWithinDir(root, childPath);
 
 /** Comparison form: forward slashes, no trailing separator. Never rendered and
  *  never POSTed — what the server sent keeps its native spelling. */
-const canonical = (p: string): string => stripTrailingSep(p.replace(/\\/g, "/"));
+const canonical = (p: string): string =>
+  stripTrailingSep(p.replace(/\\/g, "/"));
 
 /** The segments of `target` below `root`, empty when they are the same
  *  directory. Compares in canonical form so a trailing slash or a
@@ -152,7 +160,8 @@ function segmentsBetween(root: string, target: string): string[] {
  */
 export function abbreviate(segments: string[]): string {
   const full = segments.join("/");
-  if (segments.length <= MAX_SEGMENTS || full.length <= ABBREVIATE_OVER_CHARS) return full;
+  if (segments.length <= MAX_SEGMENTS || full.length <= ABBREVIATE_OVER_CHARS)
+    return full;
   return `${segments[0]}/…/${segments[segments.length - 1]}`;
 }
 
@@ -245,7 +254,9 @@ const agentOrder =
         // `@sapiom/example-*` agents sorted on a scope the user cannot see, and
         // "Sort by: Name" produced an order with no visible logic. A sort is a
         // claim about the list on screen.
-        displayAgentName(a.workflow.name).localeCompare(displayAgentName(b.workflow.name))
+        displayAgentName(a.workflow.name).localeCompare(
+          displayAgentName(b.workflow.name),
+        )
       : a.workflow.path.localeCompare(b.workflow.path);
 
 /** A raw trie node, before compaction. */
@@ -281,7 +292,10 @@ function collapse(node: TrieNode): { segments: string[]; node: TrieNode } {
 }
 
 /** Turns a compacted trie node into the rendered rows beneath it. */
-function renderChildren(node: TrieNode, sort: RailSort): { dirs: DirNode[]; agents: AgentNode[] } {
+function renderChildren(
+  node: TrieNode,
+  sort: RailSort,
+): { dirs: DirNode[]; agents: AgentNode[] } {
   const dirs: DirNode[] = [];
   const agents: AgentNode[] = [];
 
@@ -380,7 +394,9 @@ export function buildProjectTree(
       label: label(root),
       dirs,
       agents,
-      rootAgent: trieRoot.agent ? { workflow: trieRoot.agent, prefix: "", prefixFull: "" } : null,
+      rootAgent: trieRoot.agent
+        ? { workflow: trieRoot.agent, prefix: "", prefixFull: "" }
+        : null,
     };
   });
 }
@@ -393,7 +409,11 @@ export function buildProjectTree(
  * and the rail renders its agent row under a "No agents yet" empty state.
  */
 export function projectIsEmpty(project: ProjectNode): boolean {
-  return project.rootAgent === null && project.dirs.length === 0 && project.agents.length === 0;
+  return (
+    project.rootAgent === null &&
+    project.dirs.length === 0 &&
+    project.agents.length === 0
+  );
 }
 
 /**
@@ -417,7 +437,9 @@ export function agentPrefixes(
   workflows: readonly WorkflowInfo[],
   root: string,
 ): Map<string, AgentNode> {
-  const chains = workflows.map((workflow) => segmentsBetween(root, workflow.path).slice(0, -1));
+  const chains = workflows.map((workflow) =>
+    segmentsBetween(root, workflow.path).slice(0, -1),
+  );
   // COMPARE WHAT THE ROW PRINTS, not the registry's raw name. The row renders
   // `displayAgentName`, which strips an npm scope and a leading `example-` — so
   // keying the collision on `workflow.name` let `@sapiom/example-ads` and
@@ -497,7 +519,11 @@ export interface ProjectRootSources {
   /** Session cwds widen the candidate set for folders `recentDirs` has not yet
    *  recorded, and carry the recency signal for them. `status` separates the
    *  two very different claims a cwd can make: see rule 2. */
-  sessions: readonly { cwd: string; createdAt: string; status?: SessionStatus }[];
+  sessions: readonly {
+    cwd: string;
+    createdAt: string;
+    status?: SessionStatus;
+  }[];
   /** Folders whose agent is mid-creation: known before any session or agent
    *  exists under them. */
   pendingCwds: readonly string[];
@@ -551,9 +577,59 @@ export interface ProjectRootSources {
  * considered and rejected, because every threshold that saves `/Users/demo`
  * also breaks a legitimate two-segment root.
  */
+/**
+ * WHAT OPENING A FOLDER ACTUALLY OPENS.
+ *
+ * The second caller of `holdingProjectFor`, given its own name so the argument
+ * it passes is a thing a test can hold. Two rounds of review found a bug here,
+ * both times in the ARGUMENT rather than the rule: first no guards at all, then
+ * the guards fed `recentDirs` alone while the rail feeds its derived roots. A
+ * narrower question gets a wronger answer, and the answer is acted on by
+ * `rememberProjectDir`, which takes an explicit choice at its word.
+ *
+ * `projects` is therefore the same union `agentNeedsOwnProject` is given, and
+ * for the reason stated there: `recentDirs` is capped at 8 and session cwds are
+ * not, so a project can outlive its entry in the list. A folder the rail is
+ * already showing because a session ran in it must be able to block a promotion
+ * that would swallow it, or opening one agent silently opens the user's home
+ * directory over the top of it.
+ *
+ * The union is deliberately WIDER than the rail's derived roots. Every extra
+ * entry can only make the swallow guard refuse more often, and refusing is the
+ * safe direction: the agent's own folder is opened instead.
+ */
+export function projectToOpen(
+  requested: string,
+  {
+    agentPaths,
+    recentDirs,
+    pendingCwds,
+    sessionCwds,
+  }: {
+    agentPaths: readonly string[];
+    recentDirs: readonly string[];
+    pendingCwds: readonly string[];
+    sessionCwds: readonly string[];
+  },
+): string {
+  const isAgentDir = agentPaths.some(
+    (path) => canonical(path) === canonical(requested),
+  );
+  if (!isAgentDir) return requested;
+  return (
+    holdingProjectFor(requested, {
+      agentPaths,
+      projects: [...recentDirs, ...pendingCwds, ...sessionCwds],
+    }) ?? requested
+  );
+}
+
 export function holdingProjectFor(
   agentDir: string,
-  { agentPaths, projects }: { agentPaths: readonly string[]; projects: readonly string[] },
+  {
+    agentPaths,
+    projects,
+  }: { agentPaths: readonly string[]; projects: readonly string[] },
 ): string | null {
   const agentDirs = new Set(agentPaths.map(canonical));
   let parent = parentOf(agentDir);
@@ -634,7 +710,8 @@ export function projectRoots({
   for (const session of sessions) {
     const key = canonical(session.cwd);
     const prev = newestByCwd.get(key);
-    if (!prev || session.createdAt > prev) newestByCwd.set(key, session.createdAt);
+    if (!prev || session.createdAt > prev)
+      newestByCwd.set(key, session.createdAt);
   }
 
   // First spelling wins: recentDirs and a session cwd can name one directory
@@ -642,7 +719,11 @@ export function projectRoots({
   // what the user typed), and two rows for one folder is unreadable.
   const seen = new Set<string>();
   const candidates: string[] = [];
-  for (const dir of [...pendingCwds, ...recentDirs, ...sessions.map((s) => s.cwd)]) {
+  for (const dir of [
+    ...pendingCwds,
+    ...recentDirs,
+    ...sessions.map((s) => s.cwd),
+  ]) {
     const key = canonical(dir);
     if (key === "" || seen.has(key)) continue;
     seen.add(key);
@@ -662,16 +743,21 @@ export function projectRoots({
   const liveCwds = sessions
     .filter((session) => session.status != null && session.status !== "exited")
     .map((session) => session.cwd);
-  const chosen = new Set([...pendingCwds, ...recentDirs, ...liveCwds].map(canonical));
+  const chosen = new Set(
+    [...pendingCwds, ...recentDirs, ...liveCwds].map(canonical),
+  );
   const wasChosen = (dir: string): boolean => chosen.has(canonical(dir));
   const agentsUnder = (root: string): string[] =>
-    agentPaths.filter((path) => isUnder(path, root) && canonical(path) !== canonical(root));
+    agentPaths.filter(
+      (path) => isUnder(path, root) && canonical(path) !== canonical(root),
+    );
 
   /** What each surviving root was DERIVED FROM, so a promoted row inherits the
    *  recency of the entry that produced it rather than sorting as an unknown. */
   const from = new Map<string, string>();
   const kept: string[] = [];
-  const holds = (root: string): boolean => kept.some((held) => canonical(held) === canonical(root));
+  const holds = (root: string): boolean =>
+    kept.some((held) => canonical(held) === canonical(root));
 
   // The folders the user CHOSE, unconditionally and in order. `recentDirs` is a
   // list of deliberate acts; second-guessing it is how a rail starts hiding a
@@ -700,7 +786,8 @@ export function projectRoots({
   for (const dir of sessionOnly) {
     const under = agentsUnder(dir);
     if (under.length === 0) continue;
-    if (under.every((path) => kept.some((root) => isUnder(path, root)))) continue;
+    if (under.every((path) => kept.some((root) => isUnder(path, root))))
+      continue;
     kept.push(dir);
     from.set(canonical(dir), dir);
   }
@@ -710,15 +797,24 @@ export function projectRoots({
   // absorbed by an earlier one's promotion.
   for (const dir of candidates) {
     if (!isAgentDir(dir)) continue;
-    if (kept.some((root) => isUnder(dir, root) && canonical(root) !== canonical(dir))) continue;
+    if (
+      kept.some(
+        (root) => isUnder(dir, root) && canonical(root) !== canonical(dir),
+      )
+    )
+      continue;
     const root = holdingProjectFor(dir, { agentPaths, projects: kept }) ?? dir;
     if (holds(root)) continue;
     kept.push(root);
     from.set(canonical(root), dir);
   }
 
-  const pendingRank = new Map(pendingCwds.map((cwd, index) => [canonical(cwd), index]));
-  const recentRank = new Map(recentDirs.map((dir, index) => [canonical(dir), index]));
+  const pendingRank = new Map(
+    pendingCwds.map((cwd, index) => [canonical(cwd), index]),
+  );
+  const recentRank = new Map(
+    recentDirs.map((dir, index) => [canonical(dir), index]),
+  );
   /** Rank and recency are asked of the ENTRY a row came from, so a promoted
    *  parent sorts where the agent that produced it sorted. */
   const source = (root: string): string => from.get(canonical(root)) ?? root;
@@ -742,7 +838,8 @@ export function projectRoots({
       if (ra !== undefined && rb !== undefined) return ra - rb;
       return ra !== undefined ? -1 : 1;
     }
-    if (sort === "name") return basenameOf(a).localeCompare(basenameOf(b)) || a.localeCompare(b);
+    if (sort === "name")
+      return basenameOf(a).localeCompare(basenameOf(b)) || a.localeCompare(b);
     return byRecency(a, b) || a.localeCompare(b);
   });
 }
@@ -767,7 +864,8 @@ export function projectRoots({
  * spend the rail's width disambiguating things that were never ambiguous.
  */
 function projectLabeller(roots: readonly string[]): (root: string) => string {
-  const segmentsOf = (root: string): string[] => canonical(root).split("/").filter(Boolean);
+  const segmentsOf = (root: string): string[] =>
+    canonical(root).split("/").filter(Boolean);
   const counts = new Map<string, number>();
   for (const root of roots) {
     const base = basenameOf(root);
@@ -777,8 +875,10 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
   const parentOf = (root: string): string | null => {
     let best: string | null = null;
     for (const other of roots) {
-      if (canonical(other) === canonical(root) || !isUnder(root, other)) continue;
-      if (best === null || canonical(other).length > canonical(best).length) best = other;
+      if (canonical(other) === canonical(root) || !isUnder(root, other))
+        continue;
+      if (best === null || canonical(other).length > canonical(best).length)
+        best = other;
     }
     return best;
   };
@@ -795,7 +895,8 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
        testids and broke six specs. The label wants fixing WITH a stable row
        identity, not before one, and bundling that into this change would hide
        it inside a rename. Filed. */
-    if (parent) return `${basenameOf(parent)}/${segmentsBetween(parent, root).join("/")}`;
+    if (parent)
+      return `${basenameOf(parent)}/${segmentsBetween(parent, root).join("/")}`;
     const base = basenameOf(root);
     if ((counts.get(base) ?? 0) < 2) return base;
     const segments = segmentsOf(root);
@@ -808,7 +909,10 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
     // Exhausted without ever becoming unique (two roots spelled the same in
     // different filesystem roots): the absolute path is the only honest answer
     // left, and unlike the joined segments it keeps its leading separator.
-    if (grown.length === segments.length && others.some((other) => other.join("/") === segments.join("/")))
+    if (
+      grown.length === segments.length &&
+      others.some((other) => other.join("/") === segments.join("/"))
+    )
       return root;
     return grown.join("/");
   };

@@ -37,7 +37,7 @@ import {
 } from "./api";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
-import { holdingProjectFor } from "./project-tree";
+import { projectToOpen } from "./project-tree";
 import {
   agentNeedsOwnProject,
   applyProjectRemoval,
@@ -395,7 +395,9 @@ export function useHarnessState(): HarnessStateHook {
    */
   // Per-root record of checkouts a scan declined to enter. Not persisted: it
   // describes the last scan, and the next scan of that root re-derives it.
-  const [unsearchedCheckouts, setUnsearchedCheckouts] = useState<Record<string, string[]>>({});
+  const [unsearchedCheckouts, setUnsearchedCheckouts] = useState<
+    Record<string, string[]>
+  >({});
   const [closedProjects, setClosedProjects] = useState<string[]>(
     () => loadUiPrefs().closedProjects ?? [],
   );
@@ -523,6 +525,11 @@ export function useHarnessState(): HarnessStateHook {
   const [pendingWorkspaces, setPendingWorkspaces] = useState<
     PendingWorkspace[]
   >([]);
+  // Mirror, for the same reason `sessionsRef` exists: `openProject` is a
+  // callback that must read the CURRENT set without re-creating itself, and a
+  // folder mid-creation is one of the projects a promotion must not swallow.
+  const pendingWorkspacesRef = useRef<PendingWorkspace[]>([]);
+  pendingWorkspacesRef.current = pendingWorkspaces;
   const addPendingWorkspace = useCallback((cwd: string): void => {
     setPendingWorkspaces((prev) =>
       prev.some((p) => p.cwd === cwd)
@@ -1615,7 +1622,9 @@ export function useHarnessState(): HarnessStateHook {
         outcome.repositoryBoundaries.length > 0
           ? { ...prev, [root]: outcome.repositoryBoundaries }
           : Object.keys(prev).includes(root)
-            ? Object.fromEntries(Object.entries(prev).filter(([key]) => key !== root))
+            ? Object.fromEntries(
+                Object.entries(prev).filter(([key]) => key !== root),
+              )
             : prev,
       );
       return outcome;
@@ -1679,21 +1688,18 @@ export function useHarnessState(): HarnessStateHook {
       const isAgentDir = workflowsRef.current.some((workflow) =>
         samePath(workflow.path, requested),
       );
-      /* THE SAME ANSWER THE RAIL USES, not a second copy of the hop. A private
-         `parentOf(requested)` here shipped without either of the derivation's
-         guards, and `rememberProjectDir` takes an explicit choice at its word,
-         so nothing downstream could decline it: opening a registered agent at
-         `~/my-agent` would have opened HOME as a project, un-closed every
-         removed project underneath it, and scanned the whole tree. At `/solo`
-         it would have been `/`. `holdingProjectFor` refuses both, and refusing
-         means the agent's own folder is opened, which is the honest fallback. */
-      const root =
-        (isAgentDir
-          ? holdingProjectFor(requested, {
-              agentPaths: workflowsRef.current.map((workflow) => workflow.path),
-              projects: settingsRef.current?.recentDirs ?? [],
-            })
-          : null) ?? requested;
+      /* THE SAME QUESTION THE RAIL ASKS, not just the same function.
+         Round 3 caught this hop having no guards; round 4 caught it passing
+         `recentDirs` alone, where the rail passes its derived roots, so the
+         swallow guard saw no projects while the rail saw several and opening an
+         agent could still reach HOME. Both were the argument, not the rule.
+         `projectToOpen` owns the argument now and a unit test pins it. */
+      const root = projectToOpen(requested, {
+        agentPaths: workflowsRef.current.map((workflow) => workflow.path),
+        recentDirs: settingsRef.current?.recentDirs ?? [],
+        pendingCwds: pendingWorkspacesRef.current.map((pending) => pending.cwd),
+        sessionCwds: sessionsRef.current.map((session) => session.cwd),
+      });
       const swallowed = closedProjectsRef.current.filter((closed) =>
         rootContains(root, closed),
       );

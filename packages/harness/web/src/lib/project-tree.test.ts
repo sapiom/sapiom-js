@@ -20,12 +20,16 @@ import {
   projectIsEmpty,
   holdingProjectFor,
   projectRoots,
+  projectToOpen,
   unrootedAgents,
 } from "./project-tree";
 import type { SessionStatus } from "@shared/types";
 import type { RailSort } from "./project-tree";
 
-const agent = (path: string, name = path.split("/").pop() ?? path): WorkflowInfo => ({
+const agent = (
+  path: string,
+  name = path.split("/").pop() ?? path,
+): WorkflowInfo => ({
   name,
   path,
   definitionId: null,
@@ -46,8 +50,13 @@ describe("buildProjectTree", () => {
 
     expect(project.label).toBe("polsia");
     // The branch point earns a directory row; the run above it is one label.
-    expect(project.dirs.map((d) => d.labelFull)).toEqual(["backend/src/agents"]);
-    expect(project.dirs[0].agents.map((a) => a.workflow.name)).toEqual(["ads", "outreach"]);
+    expect(project.dirs.map((d) => d.labelFull)).toEqual([
+      "backend/src/agents",
+    ]);
+    expect(project.dirs[0].agents.map((a) => a.workflow.name)).toEqual([
+      "ads",
+      "outreach",
+    ]);
     // The unbranched run to a lone agent collapses ONTO the agent row.
     expect(project.agents.map((a) => a.workflow.name)).toEqual(["rollup"]);
     expect(project.agents[0].prefixFull).toBe("scripts/tools");
@@ -66,7 +75,11 @@ describe("buildProjectTree", () => {
   });
 
   it("names an agent row for the agent, never for its path", () => {
-    const [project] = buildProjectTree([agent(`${ROOT}/a/b/c/mailer`, "mailer")], [ROOT], "name");
+    const [project] = buildProjectTree(
+      [agent(`${ROOT}/a/b/c/mailer`, "mailer")],
+      [ROOT],
+      "name",
+    );
     expect(project.agents[0].workflow.name).toBe("mailer");
     expect(project.agents[0].prefixFull).toBe("a/b/c");
     // The ROW shows only the immediate parent; the chain lives in the title.
@@ -79,7 +92,9 @@ describe("buildProjectTree", () => {
       [ROOT],
       "name",
     );
-    expect(project.agents[0].prefixFull).toBe("packages/harness/web/src/components");
+    expect(project.agents[0].prefixFull).toBe(
+      "packages/harness/web/src/components",
+    );
     /* An agent row's prefix is never abbreviated because it is never more than
        one segment — abbreviating it produced a double ellipsis beside a
        truncated agent name. `abbreviate` still governs DIRECTORY labels, which
@@ -94,7 +109,9 @@ describe("buildProjectTree", () => {
       agent(`${ROOT}/packages/harness/web/src/components/sender`, "sender"),
     ];
     const [project] = buildProjectTree(workflows, [ROOT], "name");
-    expect(project.dirs[0].labelFull).toBe("packages/harness/web/src/components");
+    expect(project.dirs[0].labelFull).toBe(
+      "packages/harness/web/src/components",
+    );
     expect(project.dirs[0].label).toBe("packages/…/components");
   });
 
@@ -122,12 +139,19 @@ describe("buildProjectTree", () => {
     expect(services).toBeDefined();
     expect(services!.agents.map((a) => a.workflow.name)).toEqual(["gateway"]);
     expect(services!.dirs.map((d) => d.labelFull)).toEqual(["workers"]);
-    expect(services!.dirs[0].agents.map((a) => a.workflow.name)).toEqual(["ads-worker", "queue"]);
+    expect(services!.dirs[0].agents.map((a) => a.workflow.name)).toEqual([
+      "ads-worker",
+      "queue",
+    ]);
   });
 
   it("names a project opened inside another by its path from the parent", () => {
     const nested = `${ROOT}/agents`;
-    const [outer, inner] = buildProjectTree([agent(`${nested}/ads`)], [ROOT, nested], "name");
+    const [outer, inner] = buildProjectTree(
+      [agent(`${nested}/ads`)],
+      [ROOT, nested],
+      "name",
+    );
     expect(outer.label).toBe("polsia");
     // Not a bare "agents", which would collide with the plain subdirectory row
     // of that name inside the outer project.
@@ -136,7 +160,11 @@ describe("buildProjectTree", () => {
 
   it("labels a deeply nested project by its whole path from the parent", () => {
     const nested = `${ROOT}/services/workers`;
-    const [, inner] = buildProjectTree([agent(`${nested}/queue`)], [ROOT, nested], "name");
+    const [, inner] = buildProjectTree(
+      [agent(`${nested}/queue`)],
+      [ROOT, nested],
+      "name",
+    );
     expect(inner.label).toBe("polsia/services/workers");
   });
 
@@ -185,7 +213,11 @@ describe("buildProjectTree", () => {
   });
 
   it("has no rootAgent when the root holds no sapiom.json of its own", () => {
-    const [project] = buildProjectTree([agent(`${ROOT}/agents/ads`)], [ROOT], "name");
+    const [project] = buildProjectTree(
+      [agent(`${ROOT}/agents/ads`)],
+      [ROOT],
+      "name",
+    );
     expect(project.rootAgent).toBeNull();
   });
 
@@ -208,7 +240,10 @@ describe("buildProjectTree", () => {
   });
 
   it("keeps two agents in the same directory under that directory", () => {
-    const workflows = [agent(`${ROOT}/agents/ads`), agent(`${ROOT}/agents/outreach`)];
+    const workflows = [
+      agent(`${ROOT}/agents/ads`),
+      agent(`${ROOT}/agents/outreach`),
+    ];
     const [project] = buildProjectTree(workflows, [ROOT], "name");
     expect(project.dirs.map((d) => d.labelFull)).toEqual(["agents"]);
     expect(project.dirs[0].agents).toHaveLength(2);
@@ -216,7 +251,11 @@ describe("buildProjectTree", () => {
   });
 
   it("ignores agents outside the root", () => {
-    const [project] = buildProjectTree([agent("/elsewhere/ads")], [ROOT], "name");
+    const [project] = buildProjectTree(
+      [agent("/elsewhere/ads")],
+      [ROOT],
+      "name",
+    );
     expect(project.dirs).toEqual([]);
     expect(project.agents).toEqual([]);
     expect(projectIsEmpty(project)).toBe(true);
@@ -224,12 +263,20 @@ describe("buildProjectTree", () => {
 
   it("does not treat a sibling with a shared prefix as being inside the root", () => {
     // `/Users/dev/polsia-2` is not under `/Users/dev/polsia`.
-    const [project] = buildProjectTree([agent("/Users/dev/polsia-2/ads")], [ROOT], "name");
+    const [project] = buildProjectTree(
+      [agent("/Users/dev/polsia-2/ads")],
+      [ROOT],
+      "name",
+    );
     expect(projectIsEmpty(project)).toBe(true);
   });
 
   it("tolerates a trailing separator on the root", () => {
-    const [project] = buildProjectTree([agent(`${ROOT}/agents/ads`)], [`${ROOT}/`], "name");
+    const [project] = buildProjectTree(
+      [agent(`${ROOT}/agents/ads`)],
+      [`${ROOT}/`],
+      "name",
+    );
     expect(project.agents.map((a) => a.workflow.name)).toEqual(["ads"]);
     expect(project.agents[0].prefixFull).toBe("agents");
   });
@@ -248,7 +295,10 @@ describe("buildProjectTree", () => {
   it("builds directory paths in the root's native separator", () => {
     const winRoot = "C:\\Users\\demo\\app";
     const [project] = buildProjectTree(
-      [agent("C:\\Users\\demo\\app\\agents\\ads", "ads"), agent("C:\\Users\\demo\\app\\agents\\out", "out")],
+      [
+        agent("C:\\Users\\demo\\app\\agents\\ads", "ads"),
+        agent("C:\\Users\\demo\\app\\agents\\out", "out"),
+      ],
       [winRoot],
       "name",
     );
@@ -263,14 +313,23 @@ describe("buildProjectTree", () => {
       agent(`${ROOT}/beta/two`),
     ];
     const [project] = buildProjectTree(workflows, [ROOT], "name");
-    expect(project.agents.map((a) => a.workflow.name)).toEqual(["alpha", "zeta"]);
+    expect(project.agents.map((a) => a.workflow.name)).toEqual([
+      "alpha",
+      "zeta",
+    ]);
     expect(project.dirs.map((d) => d.labelFull)).toEqual(["beta"]);
   });
 
   it("sorts agent rows by path under 'recent' — WorkflowInfo carries no timestamp", () => {
-    const workflows = [agent(`${ROOT}/b-dir/zeta`, "zeta"), agent(`${ROOT}/a-dir/alpha`, "alpha")];
+    const workflows = [
+      agent(`${ROOT}/b-dir/zeta`, "zeta"),
+      agent(`${ROOT}/a-dir/alpha`, "alpha"),
+    ];
     const byRecent = buildProjectTree(workflows, [ROOT], "recent")[0];
-    expect(byRecent.agents.map((a) => a.workflow.name)).toEqual(["alpha", "zeta"]);
+    expect(byRecent.agents.map((a) => a.workflow.name)).toEqual([
+      "alpha",
+      "zeta",
+    ]);
   });
 });
 
@@ -289,11 +348,15 @@ describe("projectIsEmpty", () => {
 describe("unrootedAgents", () => {
   it("keeps an agent no open root contains", () => {
     const stray = agent("/elsewhere/ads");
-    expect(unrootedAgents([stray], [ROOT], "name").map((a) => a.workflow.name)).toEqual(["ads"]);
+    expect(
+      unrootedAgents([stray], [ROOT], "name").map((a) => a.workflow.name),
+    ).toEqual(["ads"]);
   });
 
   it("drops an agent any root contains, however deep", () => {
-    expect(unrootedAgents([agent(`${ROOT}/a/b/c/ads`)], [ROOT], "name")).toEqual([]);
+    expect(
+      unrootedAgents([agent(`${ROOT}/a/b/c/ads`)], [ROOT], "name"),
+    ).toEqual([]);
   });
 
   /* RE-POINTED IN ROUND 2. This used to assert `prefix === ""` — "there is no
@@ -303,13 +366,16 @@ describe("unrootedAgents", () => {
      context, which makes the parent directory MORE load-bearing here than in
      the tree, not less. */
   it("gives an unrooted agent its immediate parent as the prefix", () => {
-    expect(unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0].prefix).toBe("b");
+    expect(
+      unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0].prefix,
+    ).toBe("b");
   });
 
   it("carries the ABSOLUTE parent directory as prefixFull — there is no root to be relative to", () => {
-    expect(unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0].prefixFull).toBe(
-      "/elsewhere/a/b",
-    );
+    expect(
+      unrootedAgents([agent("/elsewhere/a/b/ads")], [ROOT], "name")[0]
+        .prefixFull,
+    ).toBe("/elsewhere/a/b");
   });
 
   /* THE REAL INSTALL'S SHAPE: six git worktrees, one agent name, one identical
@@ -326,11 +392,15 @@ describe("unrootedAgents", () => {
       "worktrees/design-agent-terminology",
     ];
     const rows = unrootedAgents(
-      worktrees.map((w) => agent(`/Users/dev/${w}/ari/orchestration`, "ari-grade-repo")),
+      worktrees.map((w) =>
+        agent(`/Users/dev/${w}/ari/orchestration`, "ari-grade-repo"),
+      ),
       [ROOT],
       "name",
     );
-    expect(rows.map((row) => `${row.prefix}/${row.workflow.name}`).sort()).toEqual([
+    expect(
+      rows.map((row) => `${row.prefix}/${row.workflow.name}`).sort(),
+    ).toEqual([
       "design-agent-port-pin/ari/ari-grade-repo",
       "design-agent-terminology/ari/ari-grade-repo",
       "design-eng-fix/ari/ari-grade-repo",
@@ -338,7 +408,9 @@ describe("unrootedAgents", () => {
       "design-eng-main/ari/ari-grade-repo",
       "design-eng/ari/ari-grade-repo",
     ]);
-    expect(new Set(rows.map((row) => `${row.prefix}/${row.workflow.name}`)).size).toBe(6);
+    expect(
+      new Set(rows.map((row) => `${row.prefix}/${row.workflow.name}`)).size,
+    ).toBe(6);
   });
 
   it("only the colliding rows pay: a uniquely-named neighbour keeps one segment", () => {
@@ -351,7 +423,9 @@ describe("unrootedAgents", () => {
       [ROOT],
       "name",
     );
-    expect(rows.find((row) => row.workflow.name === "filler-1")?.prefix).toBe("pkg1");
+    expect(rows.find((row) => row.workflow.name === "filler-1")?.prefix).toBe(
+      "pkg1",
+    );
   });
 
   it("a name that collides only with itself at the SAME parent still differs by the grown chain", () => {
@@ -359,19 +433,31 @@ describe("unrootedAgents", () => {
     // already enough, so the rule stops there.
     const rows = unrootedAgents(
       [
-        agent("/Users/dev/team-tools/slack-notifier", "@sapiom/example-slack-notifier"),
-        agent("/Users/dev/other-tools/slack-notifier", "@sapiom/example-slack-notifier"),
+        agent(
+          "/Users/dev/team-tools/slack-notifier",
+          "@sapiom/example-slack-notifier",
+        ),
+        agent(
+          "/Users/dev/other-tools/slack-notifier",
+          "@sapiom/example-slack-notifier",
+        ),
       ],
       [ROOT],
       "name",
     );
-    expect(rows.map((row) => row.prefix).sort()).toEqual(["other-tools", "team-tools"]);
+    expect(rows.map((row) => row.prefix).sort()).toEqual([
+      "other-tools",
+      "team-tools",
+    ]);
   });
 });
 
 describe("growLeftward", () => {
   it("stops at the shortest trailing run nothing else shares", () => {
-    expect(growLeftward(["a", "b", "c"], [["x", "y", "c"]])).toEqual(["b", "c"]);
+    expect(growLeftward(["a", "b", "c"], [["x", "y", "c"]])).toEqual([
+      "b",
+      "c",
+    ]);
   });
 
   it("keeps one segment when nothing collides", () => {
@@ -404,8 +490,11 @@ describe("growLeftward", () => {
  * scanned the whole tree.
  */
 describe("holdingProjectFor", () => {
-  const of = (dir: string, agentPaths: string[], projects: string[] = []): string | null =>
-    holdingProjectFor(dir, { agentPaths, projects });
+  const of = (
+    dir: string,
+    agentPaths: string[],
+    projects: string[] = [],
+  ): string | null => holdingProjectFor(dir, { agentPaths, projects });
 
   it("answers the folder that holds the agent", () => {
     expect(of("/w/loose/one", ["/w/loose/one"])).toBe("/w/loose");
@@ -420,13 +509,89 @@ describe("holdingProjectFor", () => {
   });
 
   it("REFUSES a home directory that holds another project, which is opening HOME as a project", () => {
-    expect(of("/Users/demo/my-agent", ["/Users/demo/my-agent"], ["/Users/demo/acme-app"])).toBeNull();
+    expect(
+      of(
+        "/Users/demo/my-agent",
+        ["/Users/demo/my-agent"],
+        ["/Users/demo/acme-app"],
+      ),
+    ).toBeNull();
   });
 
   it("allows the hop when the parent holds no other project", () => {
-    expect(of("/Users/demo/proj/my-agent", ["/Users/demo/proj/my-agent"], ["/elsewhere"])).toBe(
-      "/Users/demo/proj",
-    );
+    expect(
+      of(
+        "/Users/demo/proj/my-agent",
+        ["/Users/demo/proj/my-agent"],
+        ["/elsewhere"],
+      ),
+    ).toBe("/Users/demo/proj");
+  });
+});
+
+/**
+ * THE ARGUMENT, not the rule.
+ *
+ * Two review rounds found a bug in this hop and neither was in
+ * `holdingProjectFor`: the first passed no guards, the second passed
+ * `recentDirs` alone while the rail passes its derived roots. Both were the
+ * question being narrower than the one the rail asks, and the answer is acted
+ * on by `rememberProjectDir`, which takes an explicit choice at its word. So
+ * these assert the CALLER's own function, which the previous five cases,
+ * hand-building `projects`, could not have caught.
+ */
+describe("projectToOpen", () => {
+  const open = (
+    requested: string,
+    over: {
+      agentPaths?: string[];
+      recentDirs?: string[];
+      pendingCwds?: string[];
+      sessionCwds?: string[];
+    },
+  ): string =>
+    projectToOpen(requested, {
+      agentPaths: over.agentPaths ?? [],
+      recentDirs: over.recentDirs ?? [],
+      pendingCwds: over.pendingCwds ?? [],
+      sessionCwds: over.sessionCwds ?? [],
+    });
+
+  it("leaves an ordinary folder alone", () => {
+    expect(
+      open("/Users/demo/acme", { agentPaths: ["/Users/demo/acme/leasing"] }),
+    ).toBe("/Users/demo/acme");
+  });
+
+  it("opens the folder that HOLDS an agent, rather than doing nothing", () => {
+    expect(
+      open("/Users/demo/proj/my-agent", {
+        agentPaths: ["/Users/demo/proj/my-agent"],
+      }),
+    ).toBe("/Users/demo/proj");
+  });
+
+  it("counts a project the rail knows only from a SESSION CWD, which recentDirs alone would miss and which is how opening one agent could have opened HOME", () => {
+    expect(
+      open("/Users/demo/my-agent", {
+        agentPaths: ["/Users/demo/my-agent"],
+        recentDirs: [],
+        sessionCwds: ["/Users/demo/acme-app"],
+      }),
+    ).toBe("/Users/demo/my-agent");
+  });
+
+  it("counts a folder mid-creation too", () => {
+    expect(
+      open("/Users/demo/my-agent", {
+        agentPaths: ["/Users/demo/my-agent"],
+        pendingCwds: ["/Users/demo/acme-app"],
+      }),
+    ).toBe("/Users/demo/my-agent");
+  });
+
+  it("refuses a filesystem root rather than opening the whole disk", () => {
+    expect(open("/solo", { agentPaths: ["/solo"] })).toBe("/solo");
   });
 });
 
@@ -457,9 +622,9 @@ describe("projectRoots", () => {
 
   describe("a directory you CHOSE", () => {
     it("keeps a chosen folder that holds agents", () => {
-      expect(roots({ recentDirs: ["/a/acme"], agentPaths: ["/a/acme/leasing"] })).toEqual([
-        "/a/acme",
-      ]);
+      expect(
+        roots({ recentDirs: ["/a/acme"], agentPaths: ["/a/acme/leasing"] }),
+      ).toEqual(["/a/acme"]);
     });
 
     it("keeps a chosen folder with NO agents: opening an empty folder to build the first agent in it is the whole point of that row", () => {
@@ -471,7 +636,9 @@ describe("projectRoots", () => {
     });
 
     it("drops a folder known only because a session ran there and holding no agent", () => {
-      expect(roots({ sessions: [at("/a/visited", "2026-01-01T00:00:00.000Z")] })).toEqual([]);
+      expect(
+        roots({ sessions: [at("/a/visited", "2026-01-01T00:00:00.000Z")] }),
+      ).toEqual([]);
     });
 
     /* THE LIVE CLAUSE. A bare scaffold session, a live session in a folder with
@@ -482,13 +649,17 @@ describe("projectRoots", () => {
        claims about the same cwd. */
     it("keeps a folder with no agent when a session is LIVE in it", () => {
       expect(
-        roots({ sessions: [at("/a/bare", "2026-01-01T00:00:00.000Z", "running")] }),
+        roots({
+          sessions: [at("/a/bare", "2026-01-01T00:00:00.000Z", "running")],
+        }),
       ).toEqual(["/a/bare"]);
     });
 
     it("drops that same folder once its session has exited", () => {
       expect(
-        roots({ sessions: [at("/a/bare", "2026-01-01T00:00:00.000Z", "exited")] }),
+        roots({
+          sessions: [at("/a/bare", "2026-01-01T00:00:00.000Z", "exited")],
+        }),
       ).toEqual([]);
     });
 
@@ -560,8 +731,16 @@ describe("projectRoots", () => {
        ordinary project present) does NOT reproduce it and passes either way. */
     it("REFUSES a promotion that would swallow another project", () => {
       const out = roots({
-        recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq", "/Users/demo/onboarding"],
-        agentPaths: ["/Users/demo/acme-app/leasing", "/Users/demo/rfq", "/Users/demo/onboarding"],
+        recentDirs: [
+          "/Users/demo/acme-app",
+          "/Users/demo/rfq",
+          "/Users/demo/onboarding",
+        ],
+        agentPaths: [
+          "/Users/demo/acme-app/leasing",
+          "/Users/demo/rfq",
+          "/Users/demo/onboarding",
+        ],
       });
       expect(out).not.toContain("/Users/demo");
       expect(out).toHaveLength(3);
@@ -575,11 +754,15 @@ describe("projectRoots", () => {
        and rejected: every threshold that saves `/Users/demo` also breaks a
        legitimate two-segment root. */
     it("does promote into a bare parent when there is no project to swallow, the known limit of the guard", () => {
-      expect(roots({ recentDirs: ["/a/x", "/a/y"], agentPaths: ["/a/x", "/a/y"] })).toEqual(["/a"]);
+      expect(
+        roots({ recentDirs: ["/a/x", "/a/y"], agentPaths: ["/a/x", "/a/y"] }),
+      ).toEqual(["/a"]);
     });
 
     it("keeps an agent at the filesystem root: an agent that exists and nothing shows is the worse answer", () => {
-      expect(roots({ recentDirs: ["/solo"], agentPaths: ["/solo"] })).toEqual(["/solo"]);
+      expect(roots({ recentDirs: ["/solo"], agentPaths: ["/solo"] })).toEqual([
+        "/solo",
+      ]);
     });
   });
 
@@ -639,10 +822,9 @@ describe("projectRoots", () => {
     });
 
     it("keeps several pending folders in creation order, newest first", () => {
-      expect(roots({ pendingCwds: ["/a/second", "/a/first"], sort: "name" })).toEqual([
-        "/a/second",
-        "/a/first",
-      ]);
+      expect(
+        roots({ pendingCwds: ["/a/second", "/a/first"], sort: "name" }),
+      ).toEqual(["/a/second", "/a/first"]);
     });
 
     it("a PROMOTED row inherits the recency of the entry that produced it", () => {
@@ -689,16 +871,16 @@ describe("abbreviate", () => {
   });
 
   it("elides the middle of a long chain", () => {
-    expect(abbreviate(["packages", "harness", "web", "src", "components"])).toBe(
-      "packages/…/components",
-    );
+    expect(
+      abbreviate(["packages", "harness", "web", "src", "components"]),
+    ).toBe("packages/…/components");
   });
 
   it("keeps two segments whole even when they are wide", () => {
     // Both conditions must hold, so a 2-segment label never elides.
-    expect(abbreviate(["averyverylongdirectoryname", "anotherlongdirectory"])).toBe(
-      "averyverylongdirectoryname/anotherlongdirectory",
-    );
+    expect(
+      abbreviate(["averyverylongdirectoryname", "anotherlongdirectory"]),
+    ).toBe("averyverylongdirectoryname/anotherlongdirectory");
   });
 
   it("is empty for no segments", () => {
