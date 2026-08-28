@@ -71,6 +71,23 @@ describe('deploy transport selection', () => {
     expect(build?.[1]).toEqual({ digest: 'a'.repeat(64), message: 'fix retry backoff' });
   });
 
+  it('falls back when the agent imports code outside its own directory', async () => {
+    // An existing agent with a shared `kit/` a level up deployed fine via the push
+    // path, because esbuild inlined it. It must keep deploying — an author who
+    // upgrades the SDK did not ask for their layout to stop working.
+    const { packSource } = require('./pack-source.js') as { packSource: jest.Mock };
+    packSource.mockRejectedValueOnce(
+      new AgentOperationError({ code: 'UNSUPPORTED_LAYOUT', message: 'imports outside' }),
+    );
+    const client = makeClient();
+    const result = await load()(OPTS, client as unknown as GatewayClient);
+
+    expect(result.status).toBe('ready');
+    expect(client.postArchive).not.toHaveBeenCalled();
+    const posts = client.post.mock.calls as Array<[string, ...unknown[]]>;
+    expect(posts.filter(([p]) => p.includes('push-credentials'))).toHaveLength(1);
+  });
+
   it('falls back when the engine predates the upload route (404)', async () => {
     // The case that actually happens: the CLI ships on npm independently of the
     // engine deploy, so a user can be on a new SDK against an old engine. Without

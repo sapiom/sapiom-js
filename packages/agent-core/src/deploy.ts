@@ -139,9 +139,17 @@ async function deployOperation(
       //       independently of the engine deploy, so a user can upgrade the SDK
       //       first. Without it, that user's deploy fails outright instead of
       //       falling back.
-      const cannotAcceptArchives =
-        err instanceof AgentOperationError && (err.code === "HTTP_409" || err.code === "HTTP_404");
-      if (transport === "archive" || !cannotAcceptArchives) throw err;
+      // UNSUPPORTED_LAYOUT is the CLIENT-side equivalent: this agent imports code
+      // from outside its own directory, which a raw archive cannot represent.
+      // esbuild inlined those files for the push path, so the git transport still
+      // handles it — and falling back means such an agent keeps deploying exactly
+      // as before instead of failing on an upgrade the author did not ask for.
+      // The transport metric still shows it as `git`, so this defers the work
+      // rather than hiding it.
+      const archiveNotUsable =
+        err instanceof AgentOperationError &&
+        (err.code === "HTTP_409" || err.code === "HTTP_404" || err.code === "UNSUPPORTED_LAYOUT");
+      if (transport === "archive" || !archiveNotUsable) throw err;
       // else: fall through to the git path below
     }
   }
