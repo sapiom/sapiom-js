@@ -71,6 +71,20 @@ describe('deploy transport selection', () => {
     expect(build?.[1]).toEqual({ digest: 'a'.repeat(64), message: 'fix retry backoff' });
   });
 
+  it('falls back when the engine predates the upload route (404)', async () => {
+    // The case that actually happens: the CLI ships on npm independently of the
+    // engine deploy, so a user can be on a new SDK against an old engine. Without
+    // this their deploy fails outright rather than using the path that still works.
+    const client = makeClient({
+      uploadFails: new AgentOperationError({ code: 'HTTP_404', message: 'Cannot POST /source' }),
+    });
+    const result = await load()(OPTS, client as unknown as GatewayClient);
+
+    expect(result.status).toBe('ready');
+    const posts = client.post.mock.calls as Array<[string, ...unknown[]]>;
+    expect(posts.filter(([p]) => p.includes('push-credentials'))).toHaveLength(1);
+  });
+
   it('falls back to the git push when the server reports archives disabled', async () => {
     const client = makeClient({
       uploadFails: new AgentOperationError({ code: 'HTTP_409', message: 'disabled' }),
@@ -86,7 +100,7 @@ describe('deploy transport selection', () => {
     // A rejected archive (400) or an auth problem (401) is a real error the author
     // must see. Falling back would hide it and silently deploy by a different
     // route — the transport is not a retry strategy for genuine failures.
-    for (const code of ['HTTP_400', 'HTTP_401', 'NETWORK']) {
+    for (const code of ['HTTP_400', 'HTTP_401', 'HTTP_500', 'NETWORK']) {
       const client = makeClient({ uploadFails: new AgentOperationError({ code, message: code }) });
       await expect(load()(OPTS, client as unknown as GatewayClient)).rejects.toMatchObject({ code });
       const posts = client.post.mock.calls as Array<[string, ...unknown[]]>;

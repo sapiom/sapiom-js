@@ -132,8 +132,16 @@ async function deployOperation(
     try {
       return await deployArchive(opts, client);
     } catch (err) {
-      const disabled = err instanceof AgentOperationError && err.code === "HTTP_409";
-      if (transport === "archive" || !disabled) throw err;
+      // 409 — the route exists and the engine has archives switched off.
+      // 404 — the route does not exist at all, i.e. an engine older than this
+      //       SDK. Both mean "this server cannot take an archive", and 404 is the
+      //       one that actually happens in the wild: the CLI is published to npm
+      //       independently of the engine deploy, so a user can upgrade the SDK
+      //       first. Without it, that user's deploy fails outright instead of
+      //       falling back.
+      const cannotAcceptArchives =
+        err instanceof AgentOperationError && (err.code === "HTTP_409" || err.code === "HTTP_404");
+      if (transport === "archive" || !cannotAcceptArchives) throw err;
       // else: fall through to the git path below
     }
   }
