@@ -530,15 +530,14 @@ describe("holdingProjectFor", () => {
 });
 
 /**
- * THE ARGUMENT, not the rule.
+ * WHAT OPENING A FOLDER OPENS.
  *
- * Two review rounds found a bug in this hop and neither was in
- * `holdingProjectFor`: the first passed no guards, the second passed
- * `recentDirs` alone while the rail passes its derived roots. Both were the
- * question being narrower than the one the rail asks, and the answer is acted
- * on by `rememberProjectDir`, which takes an explicit choice at its word. So
- * these assert the CALLER's own function, which the previous five cases,
- * hand-building `projects`, could not have caught.
+ * Every case here is stated in terms of what the RAIL would draw, because that
+ * is the invariant: `projectToOpen` may only refuse a hop when the rail really
+ * has a project in the way. Four earlier versions of this function built their
+ * own notion of "project" and each declined hops the rail would have made,
+ * putting the silent no-op back. It derives the list from `projectRoots` now,
+ * so these cases double as a check that the two agree.
  */
 describe("projectToOpen", () => {
   const open = (
@@ -547,88 +546,102 @@ describe("projectToOpen", () => {
       agentPaths?: string[];
       recentDirs?: string[];
       pendingCwds?: string[];
-      sessionCwds?: string[];
+      sessions?: { cwd: string; createdAt: string; status?: SessionStatus }[];
     },
   ): string =>
     projectToOpen(requested, {
       agentPaths: over.agentPaths ?? [],
       recentDirs: over.recentDirs ?? [],
       pendingCwds: over.pendingCwds ?? [],
-      sessionCwds: over.sessionCwds ?? [],
+      sessions: over.sessions ?? [],
+      sort: "recent",
     });
+  const ran = (
+    cwd: string,
+    status: SessionStatus = "exited",
+  ): { cwd: string; createdAt: string; status: SessionStatus } => ({
+    cwd,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    status,
+  });
 
   it("leaves an ordinary folder alone", () => {
-    expect(
-      open("/Users/demo/acme", { agentPaths: ["/Users/demo/acme/leasing"] }),
-    ).toBe("/Users/demo/acme");
+    expect(open("/w/acme", { agentPaths: ["/w/acme/leasing"] })).toBe(
+      "/w/acme",
+    );
   });
 
   it("opens the folder that HOLDS an agent, rather than doing nothing", () => {
-    expect(
-      open("/Users/demo/proj/my-agent", {
-        agentPaths: ["/Users/demo/proj/my-agent"],
-      }),
-    ).toBe("/Users/demo/proj");
-  });
-
-  it("counts a project the rail knows only from a SESSION CWD, which recentDirs alone would miss and which is how opening one agent could have opened HOME", () => {
-    expect(
-      open("/Users/demo/my-agent", {
-        agentPaths: ["/Users/demo/my-agent"],
-        recentDirs: [],
-        sessionCwds: ["/Users/demo/acme-app"],
-      }),
-    ).toBe("/Users/demo/my-agent");
-  });
-
-  it("counts a folder mid-creation too", () => {
-    expect(
-      open("/Users/demo/my-agent", {
-        agentPaths: ["/Users/demo/my-agent"],
-        pendingCwds: ["/Users/demo/acme-app"],
-      }),
-    ).toBe("/Users/demo/my-agent");
+    expect(open("/w/proj/my-agent", { agentPaths: ["/w/proj/my-agent"] })).toBe(
+      "/w/proj",
+    );
   });
 
   it("refuses a filesystem root rather than opening the whole disk", () => {
     expect(open("/solo", { agentPaths: ["/solo"] })).toBe("/solo");
   });
 
-  /* THE AGENT'S OWN FOLDER IS NOT A PROJECT THE GUARD MAY COUNT.
-     An agent no project contains boots its sessions in its OWN folder, so
-     `sessionCwds` routinely holds agent directories. Counting them, the guard
-     found `~/work/alpha` "under" `~/work`, called it a swallowed project, and
-     refused, handing back the agent folder: the silent no-op this function
-     exists to remove, arriving through its own guard. The rail never had this
-     problem because `projectRoots` skips agent dirs when it builds the list the
-     guard measures. Both shapes are asserted: the agent's own cwd, and a
-     sibling agent's, which is what makes it look like a populated parent. */
-  it("does not let an agent's own session cwd block the hop", () => {
-    expect(
-      open("/w/work/alpha", {
-        agentPaths: ["/w/work/alpha"],
-        sessionCwds: ["/w/work/alpha"],
-      }),
-    ).toBe("/w/work");
-  });
+  describe("refuses only where the rail really has a project in the way", () => {
+    it("a CHOSEN sibling project blocks the hop", () => {
+      expect(
+        open("/w/work/alpha", {
+          agentPaths: ["/w/work/alpha"],
+          recentDirs: ["/w/work/acme-app"],
+        }),
+      ).toBe("/w/work/alpha");
+    });
 
-  it("does not let a SIBLING agent's folder block it either", () => {
-    expect(
-      open("/w/work/alpha", {
-        agentPaths: ["/w/work/alpha", "/w/work/beta"],
-        sessionCwds: ["/w/work/alpha", "/w/work/beta"],
-        recentDirs: ["/w/work/beta"],
-      }),
-    ).toBe("/w/work");
-  });
+    it("a sibling the rail keeps from a session cwd, because it HOLDS an agent, blocks it too", () => {
+      expect(
+        open("/w/work/alpha", {
+          agentPaths: ["/w/work/alpha", "/w/work/acme-app/leasing"],
+          sessions: [ran("/w/work/acme-app")],
+        }),
+      ).toBe("/w/work/alpha");
+    });
 
-  it("still refuses when a REAL project sits under the parent", () => {
-    expect(
-      open("/w/work/alpha", {
-        agentPaths: ["/w/work/alpha"],
-        sessionCwds: ["/w/work/acme-app"],
-      }),
-    ).toBe("/w/work/alpha");
+    it("a folder with a LIVE session blocks it, since the rail keeps that row", () => {
+      expect(
+        open("/w/work/alpha", {
+          agentPaths: ["/w/work/alpha"],
+          sessions: [ran("/w/work/scratch", "running")],
+        }),
+      ).toBe("/w/work/alpha");
+    });
+
+    /* The shape four versions of this function got wrong. A sibling folder a
+       session merely visited and exited, holding no agent, is NOT a row the
+       rail draws, so it may not block the hop. Counting it hands back the agent
+       folder: the scan walks the agent instead of its holder, an agent
+       directory is written into the 8-capped recentDirs, and the rail declines
+       to draw the row. */
+    it("a STALE exited session cwd holding no agent does NOT block it", () => {
+      expect(
+        open("/w/work/alpha", {
+          agentPaths: ["/w/work/alpha"],
+          sessions: [ran("/w/work/scratch")],
+        }),
+      ).toBe("/w/work");
+    });
+
+    it("the agent's OWN session cwd does not block it", () => {
+      expect(
+        open("/w/work/alpha", {
+          agentPaths: ["/w/work/alpha"],
+          sessions: [ran("/w/work/alpha")],
+        }),
+      ).toBe("/w/work");
+    });
+
+    it("a SIBLING agent's folder does not block it either", () => {
+      expect(
+        open("/w/work/alpha", {
+          agentPaths: ["/w/work/alpha", "/w/work/beta"],
+          sessions: [ran("/w/work/alpha"), ran("/w/work/beta")],
+          recentDirs: ["/w/work/beta"],
+        }),
+      ).toBe("/w/work");
+    });
   });
 });
 

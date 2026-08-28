@@ -1683,16 +1683,22 @@ export function useHarnessState(): HarnessStateHook {
          that you get the project the agent lives in.
 
          THE SAME QUESTION THE RAIL ASKS, not merely the same function. This hop
-         broke three times and never once in the rule: no guards, then the
-         guards fed `recentDirs` alone, then the guards fed a union that still
-         held agent directories. `projectToOpen` owns the whole argument now,
-         including which entries are eligible to be counted, and its own tests
-         pin it. */
+         The eligible projects are the rail's own derivation, passed through
+         rather than rebuilt here: see `projectToOpen`. Sessions carry `status`,
+         because a live session in an agentless folder is a project and an
+         exited one is not. */
       const root = projectToOpen(requested, {
         agentPaths: workflowsRef.current.map((workflow) => workflow.path),
         recentDirs: settingsRef.current?.recentDirs ?? [],
         pendingCwds: pendingWorkspacesRef.current.map((pending) => pending.cwd),
-        sessionCwds: sessionsRef.current.map((session) => session.cwd),
+        sessions: sessionsRef.current.map((session) => ({
+          cwd: session.cwd,
+          createdAt: session.createdAt,
+          status: session.status,
+        })),
+        // Containment, not order: `projectRoots` sorts its output and nothing
+        // here reads the order.
+        sort: "recent",
       });
       const swallowed = closedProjectsRef.current.filter((closed) =>
         rootContains(root, closed),

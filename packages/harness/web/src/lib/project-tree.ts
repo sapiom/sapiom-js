@@ -544,13 +544,13 @@ export interface ProjectRootSources {
  *
  * ONE ANSWER, because there are two callers and they must not disagree. The
  * rail's derivation asks it to decide which row to draw; `openProject` asks it
- * to decide what the picker actually opens when you point it at an agent. A
- * second copy of this hop shipped without either guard below and would have
- * opened a user's HOME DIRECTORY as a project: `rememberProjectDir` takes an
- * explicit choice at its word, so no derivation guard downstream can decline
- * it, `reopenProjects` then un-closes every removed project underneath it, and
- * the follow-up scan walks the whole tree. For an agent at `/solo` the same
- * path yields `/`.
+ * to decide what the picker actually opens when you point it at an agent.
+ *
+ * `projects` must be the list `projectRoots` produces. The guard below is only
+ * as good as the definition of "project" it is handed, and a caller that builds
+ * its own will decline hops the rail would have made, which restores the silent
+ * no-op this exists to remove. `openProject` therefore passes
+ * `projectRoots(...)` verbatim rather than assembling anything.
  *
  * Null means REFUSE, and refusing is safe: the agent's own folder stays the
  * root and renders as a project with that agent inside, which is what opening
@@ -580,64 +580,41 @@ export interface ProjectRootSources {
 /**
  * WHAT OPENING A FOLDER ACTUALLY OPENS.
  *
- * The second caller of `holdingProjectFor`, given its own name so the argument
- * it passes is a thing a test can hold. Two rounds of review found a bug here,
- * both times in the ARGUMENT rather than the rule: first no guards at all, then
- * the guards fed `recentDirs` alone while the rail feeds its derived roots. A
- * narrower question gets a wronger answer, and the answer is acted on by
- * `rememberProjectDir`, which takes an explicit choice at its word.
+ * You cannot open a single agent as a project, so pointing the picker at an
+ * agent's own folder opens the folder that holds it. Without this the press is
+ * a silent no-op: `projectRoots` declines to draw a row for an agent-rooted
+ * entry, so the picker says "This is an agent project", the user presses Open,
+ * and nothing changes.
  *
- * `projects` is therefore the same union `agentNeedsOwnProject` is given, and
- * for the reason stated there: `recentDirs` is capped at 8 and session cwds are
- * not, so a project can outlive its entry in the list. A folder the rail is
- * already showing because a session ran in it must be able to block a promotion
- * that would swallow it, or opening one agent silently opens the user's home
- * directory over the top of it.
+ * THE ELIGIBLE PROJECTS ARE `projectRoots`' OWN OUTPUT, not a list assembled
+ * here to resemble it. That is the whole design of this function, and it is the
+ * only version of it that has held: the guard inside `holdingProjectFor` asks
+ * "would this promotion swallow a project", and the answer is only as good as
+ * the definition of "project" it is handed. Four separate attempts to
+ * reconstruct that definition locally were each wrong in a different way, and
+ * every one of them failed in the same direction, by counting something the
+ * rail does not keep and so refusing a hop the rail would have made, which puts
+ * the silent no-op back.
  *
- * AGENT DIRECTORIES ARE FILTERED OUT, because the rail's list never contains
- * one: `projectRoots` skips `isAgentDir` in both of the loops that build `kept`,
- * so its swallow guard only ever measures PROJECTS. The raw union does not have
- * that property. An agent no project contains boots its sessions in its own
- * folder (`session-scope.projectRootForAgent` falls back to the agent path, and
- * the scaffold door passes the new agent folder as cwd), so `sessionCwds`
- * routinely holds agent directories, and siblings put several under one parent.
- * Left in, opening `~/work/alpha` finds `~/work/alpha` strictly under `~/work`,
- * calls that a swallowed project, refuses, and hands back the agent folder:
- * `scanWorkflows` then walks the agent instead of the folder holding it,
- * `rememberProjectDir` writes an agent directory into the 8-capped `recentDirs`
- * (the exact category error rule 1 exists to stop), and the rail declines to
- * draw the row. That is the silent no-op this function was added to remove,
- * arriving through its own guard.
- *
- * So "wider can only make it refuse more often, and refusing is safe" is FALSE,
- * and it was the reasoning that shipped this bug: refusing IS the no-op. The
- * union has to be the same KIND of list the rail passes, not merely a superset.
+ * `projectRoots` is the one place that decides what a project is: chosen
+ * folders, folders with a live session, and session-only folders that hold an
+ * agent no other root already shows, with agent directories excluded and
+ * promotions guarded. Calling it costs one derivation on a user gesture and
+ * removes the entire class of drift, because there is no second definition left
+ * to disagree with.
  */
 export function projectToOpen(
   requested: string,
-  {
-    agentPaths,
-    recentDirs,
-    pendingCwds,
-    sessionCwds,
-  }: {
-    agentPaths: readonly string[];
-    recentDirs: readonly string[];
-    pendingCwds: readonly string[];
-    sessionCwds: readonly string[];
-  },
+  sources: ProjectRootSources,
 ): string {
-  const isAgentDir = agentPaths.some(
+  const isAgentDir = sources.agentPaths.some(
     (path) => canonical(path) === canonical(requested),
   );
   if (!isAgentDir) return requested;
-  const agentDirs = new Set(agentPaths.map(canonical));
   return (
     holdingProjectFor(requested, {
-      agentPaths,
-      projects: [...recentDirs, ...pendingCwds, ...sessionCwds].filter(
-        (dir) => !agentDirs.has(canonical(dir)),
-      ),
+      agentPaths: sources.agentPaths,
+      projects: projectRoots(sources),
     }) ?? requested
   );
 }
