@@ -17,6 +17,7 @@
  */
 
 import * as crypto from "node:crypto";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -29,8 +30,14 @@ import {
   type WorkflowInfo,
 } from "../shared/types.js";
 
-function toContextAgentEntry(workflow: WorkflowInfo): HarnessWorkspaceContextAgent {
-  return { name: workflow.name, path: workflow.path, definitionId: workflow.definitionId };
+function toContextAgentEntry(
+  workflow: WorkflowInfo,
+): HarnessWorkspaceContextAgent {
+  return {
+    name: workflow.name,
+    path: workflow.path,
+    definitionId: workflow.definitionId,
+  };
 }
 
 export interface WorkspaceContextSession {
@@ -56,7 +63,10 @@ export interface WorkspaceContextSession {
  */
 const writeQueues = new Map<string, Promise<void>>();
 
-async function withPerPathQueue(filePath: string, task: () => Promise<void>): Promise<void> {
+async function withPerPathQueue(
+  filePath: string,
+  task: () => Promise<void>,
+): Promise<void> {
   const previous = writeQueues.get(filePath) ?? Promise.resolve();
   // Chain onto both branches of `previous`: strict launch/resume operations
   // may throw when they cannot make the prompt-visible schema safe, but that
@@ -85,9 +95,15 @@ export async function writeHarnessContext(
   session: WorkspaceContextSession,
   boundWorkflow: WorkflowInfo | null,
   workflows: WorkflowInfo[],
+  isCurrent?: () => boolean,
 ): Promise<void> {
   try {
-    await writeHarnessContextForLaunch(session, boundWorkflow, workflows);
+    await writeHarnessContextForLaunch(
+      session,
+      boundWorkflow,
+      workflows,
+      isCurrent,
+    );
   } catch (err) {
     const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
     console.error(`[harness] failed to write ${filePath}:`, err);
@@ -105,16 +121,93 @@ export async function writeHarnessContextForLaunch(
   session: WorkspaceContextSession,
   boundWorkflow: WorkflowInfo | null,
   workflows: WorkflowInfo[],
+  isCurrent?: () => boolean,
 ): Promise<void> {
   const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
   const context = buildHarnessContext(session, boundWorkflow, workflows);
 
   await withPerPathQueue(filePath, async () => {
-    await writeContextAtomically(filePath, context);
+    await writeContextAtomically(filePath, context, isCurrent);
   });
 }
 
-export type HarnessContextResumePreparation = "current" | "migrated" | "rewritten";
+export interface StagedHarnessContext {
+  readonly filePath: string;
+  /** Synchronous by design: a publisher commits every staged context and its
+   * accepted cache/event snapshot without yielding between visible renames. */
+  commit(): void;
+  discard(): void;
+}
+
+/**
+ * Prepares a context replacement without exposing it at HARNESS_CONTEXT_FILE.
+ * Registry publication stages every active session asynchronously, rechecks
+ * its generation/session projection, then calls commit() for all successful
+ * stages in one non-yielding acceptance turn.
+ */
+export async function stageHarnessContextForPublication(
+  session: WorkspaceContextSession,
+  boundWorkflow: WorkflowInfo | null,
+  workflows: WorkflowInfo[],
+  isCurrent: () => boolean,
+): Promise<StagedHarnessContext | null> {
+  const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
+  const context = buildHarnessContext(session, boundWorkflow, workflows);
+  let staged: StagedHarnessContext | null = null;
+
+  await withPerPathQueue(filePath, async () => {
+    if (!isCurrent()) return;
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    const tmpPath = path.join(
+      dir,
+      `.harness-context.json.stage-${process.pid}-${crypto.randomUUID()}`,
+    );
+    let settled = false;
+    try {
+      await fs.writeFile(
+        tmpPath,
+        `${JSON.stringify(context, null, 2)}\n`,
+        "utf8",
+      );
+      if (!isCurrent()) return;
+      staged = {
+        filePath,
+        commit: () => {
+          if (settled) return;
+          try {
+            fsSync.renameSync(tmpPath, filePath);
+          } finally {
+            settled = true;
+            try {
+              fsSync.rmSync(tmpPath, { force: true });
+            } catch {
+              // The visible rename already succeeded or failed atomically.
+            }
+          }
+        },
+        discard: () => {
+          if (settled) return;
+          settled = true;
+          try {
+            fsSync.rmSync(tmpPath, { force: true });
+          } catch {
+            // Best-effort cleanup of an unpublished staging file.
+          }
+        },
+      };
+    } finally {
+      if (!staged) await fs.rm(tmpPath, { force: true });
+    }
+  });
+
+  return staged;
+}
+
+export type HarnessContextResumePreparation =
+  | "current"
+  | "migrated"
+  | "rewritten";
 
 interface LegacyHarnessWorkspaceContext {
   boundWorkflow: HarnessWorkspaceContextAgent | null;
@@ -128,7 +221,9 @@ function buildHarnessContext(
   boundWorkflow: WorkflowInfo | null,
   workflows: WorkflowInfo[],
 ): HarnessWorkspaceContext {
-  const agents = [...workflows].sort((a, b) => a.path.localeCompare(b.path)).map(toContextAgentEntry);
+  const agents = [...workflows]
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map(toContextAgentEntry);
   return {
     boundAgent: boundWorkflow ? toContextAgentEntry(boundWorkflow) : null,
     agents,
@@ -137,14 +232,27 @@ function buildHarnessContext(
   };
 }
 
-async function writeContextAtomically(filePath: string, context: HarnessWorkspaceContext): Promise<void> {
+async function writeContextAtomically(
+  filePath: string,
+  context: HarnessWorkspaceContext,
+  isCurrent?: () => boolean,
+): Promise<void> {
+  if (isCurrent && !isCurrent()) return;
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
   // A random suffix, not just pid+Date.now(): millisecond resolution is not
   // fine enough to stay unique across a burst of concurrent writes.
-  const tmpPath = path.join(dir, `.harness-context.json.tmp-${process.pid}-${crypto.randomUUID()}`);
+  const tmpPath = path.join(
+    dir,
+    `.harness-context.json.tmp-${process.pid}-${crypto.randomUUID()}`,
+  );
   try {
-    await fs.writeFile(tmpPath, JSON.stringify(context, null, 2) + "\n", "utf8");
+    await fs.writeFile(
+      tmpPath,
+      JSON.stringify(context, null, 2) + "\n",
+      "utf8",
+    );
+    if (isCurrent && !isCurrent()) return;
     await fs.rename(tmpPath, filePath);
   } finally {
     await fs.rm(tmpPath, { force: true });
@@ -158,11 +266,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  return (
+    actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+  );
 }
 
 function isContextAgent(value: unknown): value is HarnessWorkspaceContextAgent {
-  if (!isRecord(value) || !hasExactKeys(value, ["definitionId", "name", "path"])) return false;
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["definitionId", "name", "path"])
+  )
+    return false;
   return (
     typeof value.name === "string" &&
     typeof value.path === "string" &&
@@ -170,8 +285,11 @@ function isContextAgent(value: unknown): value is HarnessWorkspaceContextAgent {
   );
 }
 
-function isContextSession(value: unknown): value is HarnessWorkspaceContext["session"] {
-  if (!isRecord(value) || !hasExactKeys(value, ["cwd", "harness", "id"])) return false;
+function isContextSession(
+  value: unknown,
+): value is HarnessWorkspaceContext["session"] {
+  if (!isRecord(value) || !hasExactKeys(value, ["cwd", "harness", "id"]))
+    return false;
   return (
     typeof value.id === "string" &&
     typeof value.cwd === "string" &&
@@ -185,7 +303,11 @@ function hasSharedValidFields(value: Record<string, unknown>): boolean {
 }
 
 function isCurrentContext(value: unknown): value is HarnessWorkspaceContext {
-  if (!isRecord(value) || !hasExactKeys(value, ["agents", "boundAgent", "session", "updatedAt"])) return false;
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["agents", "boundAgent", "session", "updatedAt"])
+  )
+    return false;
   return (
     hasSharedValidFields(value) &&
     (value.boundAgent === null || isContextAgent(value.boundAgent)) &&
@@ -194,8 +316,13 @@ function isCurrentContext(value: unknown): value is HarnessWorkspaceContext {
   );
 }
 
-function isLegacyContext(value: unknown): value is LegacyHarnessWorkspaceContext {
-  if (!isRecord(value) || !hasExactKeys(value, ["boundWorkflow", "session", "updatedAt", "workflows"])) {
+function isLegacyContext(
+  value: unknown,
+): value is LegacyHarnessWorkspaceContext {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["boundWorkflow", "session", "updatedAt", "workflows"])
+  ) {
     return false;
   }
   return (
@@ -234,8 +361,12 @@ export async function prepareHarnessContextForResume(
     try {
       parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
     } catch (error) {
-      if (!isMissingFileError(error) && !(error instanceof SyntaxError)) throw error;
-      await writeContextAtomically(filePath, buildHarnessContext(session, boundWorkflow, workflows));
+      if (!isMissingFileError(error) && !(error instanceof SyntaxError))
+        throw error;
+      await writeContextAtomically(
+        filePath,
+        buildHarnessContext(session, boundWorkflow, workflows),
+      );
       result = "rewritten";
       return;
     }
@@ -256,7 +387,10 @@ export async function prepareHarnessContextForResume(
       return;
     }
 
-    await writeContextAtomically(filePath, buildHarnessContext(session, boundWorkflow, workflows));
+    await writeContextAtomically(
+      filePath,
+      buildHarnessContext(session, boundWorkflow, workflows),
+    );
     result = "rewritten";
   });
 

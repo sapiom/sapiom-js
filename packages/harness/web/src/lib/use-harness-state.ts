@@ -52,6 +52,7 @@ import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
 import { systemGraphLoader } from "./system-graph-loader";
+import { WorkflowProjectionOrder } from "./workflow-projection-order";
 import {
   retainSystemGraphAnnouncements,
   systemGraphAnnouncementsAfterMessage,
@@ -451,6 +452,12 @@ export function useHarnessState(): HarnessStateHook {
    */
   const workflowsRef = useRef<WorkflowInfo[]>([]);
   workflowsRef.current = state?.workflows ?? [];
+  // One ordering domain for every workflow-bearing response, including the
+  // boot AppState fetch. Without it, an older boot/list response can resolve
+  // after `workflows.changed` and resurrect a removed/rekeyed rail row.
+  const workflowProjectionOrder = useRef(
+    new WorkflowProjectionOrder<WorkflowInfo>(),
+  ).current;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -1047,6 +1054,7 @@ export function useHarnessState(): HarnessStateHook {
 
   useEffect(() => {
     let cancelled = false;
+    const workflowRequest = workflowProjectionOrder.begin();
     // A retry re-enters the loading state and clears the prior failure so the
     // shell shows "reconnecting", not a stale error, while the refetch runs.
     if (reloadSeq > 0) {
@@ -1057,12 +1065,22 @@ export function useHarnessState(): HarnessStateHook {
     Promise.all([api.getState(), api.getSettings()])
       .then(([appState, harnessSettings]) => {
         if (cancelled) return;
-        setState(appState);
+        const bootWorkflowsAccepted = workflowProjectionOrder.accept(
+          workflowRequest,
+          appState.workflows,
+        );
+        // Always adopt the boot response's non-workflow fields. Its workflow
+        // projection participates in the same monotonic ordering as event and
+        // explicit refreshes; if stale, retain the newer accepted projection
+        // (or an empty placeholder while that newer request is still pending).
+        const workflows = bootWorkflowsAccepted
+          ? appState.workflows
+          : [...(workflowProjectionOrder.current() ?? [])];
+        setState({ ...appState, workflows });
         // Baseline the built-agents metric: everything present at load already
         // existed, so seed it into the seen-set and never count it as built.
         const seenAtLoad = (seenAgentPathsRef.current ??= new Set<string>());
-        for (const workflow of appState.workflows)
-          seenAtLoad.add(workflow.path);
+        for (const workflow of workflows) seenAtLoad.add(workflow.path);
         setSettings(harnessSettings);
         setErrorKind(null);
         if (appState.tasks) setTasks(appState.tasks);
@@ -1070,8 +1088,7 @@ export function useHarnessState(): HarnessStateHook {
           (session) => session.status !== "exited",
         );
         if (running) setActiveSessionId(running.id);
-        if (appState.workflows[0])
-          setSelectedWorkflowPath(appState.workflows[0].path);
+        if (workflows[0]) setSelectedWorkflowPath(workflows[0].path);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -1090,7 +1107,7 @@ export function useHarnessState(): HarnessStateHook {
     return () => {
       cancelled = true;
     };
-  }, [reloadSeq]);
+  }, [reloadSeq, workflowProjectionOrder]);
 
   // Recovery path for a failed boot: re-run the one-shot fetch. Bumping the
   // seq re-fires the boot effect above (which resets loading/error itself).
@@ -1107,10 +1124,17 @@ export function useHarnessState(): HarnessStateHook {
   }, [activeSessionId]);
 
   const refreshWorkflows = useCallback(async () => {
+    const request = workflowProjectionOrder.begin();
     const workflows = await api.listWorkflows();
-    setState((prev) => (prev ? { ...prev, workflows } : prev));
-    return workflows;
-  }, []);
+    if (workflowProjectionOrder.accept(request, workflows)) {
+      setState((prev) => (prev ? { ...prev, workflows } : prev));
+      return workflows;
+    }
+    // A stale caller still receives the current accepted projection. This
+    // matters for analytics/import callers: processing the stale HTTP payload
+    // could baseline or emit rows that the UI correctly refused to render.
+    return [...(workflowProjectionOrder.current() ?? workflowsRef.current)];
+  }, [workflowProjectionOrder]);
 
   useEffect(() => {
     return subscribeEvents((message) => {
@@ -1152,21 +1176,32 @@ export function useHarnessState(): HarnessStateHook {
         // The workspace watcher saw a sapiom.json appear/change — the one
         // client signal for an agent built in-app. Emit agent.created for any
         // path we haven't already baselined (load) or imported (scan/connect).
-        void refreshWorkflows().then((workflows) => {
-          const seen = seenAgentPathsRef.current;
-          if (seen === null) {
-            // Lost the race with the initial load — baseline, don't emit.
-            seenAgentPathsRef.current = new Set(workflows.map((w) => w.path));
-            return;
-          }
-          for (const path of newAgentPaths(seen, workflows)) {
-            seen.add(path);
-            trackProduct("agent.created", {
-              workflow_slug: slugFromPath(path),
-              ...agentProvenance(workflows.find((w) => w.path === path)),
-            });
-          }
-        });
+        // Capture this at message receipt, not response settlement: boot can
+        // resolve while this list is in flight. Anything announced before boot
+        // established its baseline belongs to that baseline regardless of HTTP
+        // completion order.
+        const baselineOnly = seenAgentPathsRef.current === null;
+        void refreshWorkflows()
+          .then((workflows) => {
+            const seen = seenAgentPathsRef.current;
+            if (baselineOnly || seen === null) {
+              // Lost the race with the initial load — baseline, don't emit.
+              const baseline = (seenAgentPathsRef.current ??= new Set());
+              for (const workflow of workflows) baseline.add(workflow.path);
+              return;
+            }
+            for (const path of newAgentPaths(seen, workflows)) {
+              seen.add(path);
+              trackProduct("agent.created", {
+                workflow_slug: slugFromPath(path),
+                ...agentProvenance(workflows.find((w) => w.path === path)),
+              });
+            }
+          })
+          // A bus refresh is best-effort. Keep the last successful projection
+          // and let the next event/auth/manual refresh retry; never create an
+          // unhandled rejection from the event callback.
+          .catch(() => undefined);
       } else if (message.type === "system-graph.changed") {
         // Invalidate even while its workspace destination is closed. The next
         // open must never resurrect a pre-edit process-lifetime promise.
@@ -1229,7 +1264,7 @@ export function useHarnessState(): HarnessStateHook {
         // Definition build evidence is authenticated enrichment. Re-list on
         // both sign-in and sign-out so a post-boot login can enable a ready
         // agent and a logout cannot leave tenant metadata pinned in memory.
-        void refreshWorkflows();
+        void refreshWorkflows().catch(() => undefined);
       }
     });
   }, [refreshWorkflows, startRunPolling]);
@@ -1578,17 +1613,10 @@ export function useHarnessState(): HarnessStateHook {
   const connectWorkflow = useCallback(
     async (path: string): Promise<WorkflowInfo> => {
       const workflow = await api.connectWorkflow(path);
-      setState((prev) =>
-        prev
-          ? {
-              ...prev,
-              workflows: [
-                ...prev.workflows.filter((w) => w.path !== workflow.path),
-                workflow,
-              ],
-            }
-          : prev,
-      );
+      // The mutation response is not an inventory snapshot. Re-list through
+      // the shared ordering domain so it cannot resurrect a row after a newer
+      // deletion event, and an older in-flight list cannot erase this import.
+      await refreshWorkflows();
       // Connecting an existing agent is an import, not a build — baseline it so
       // it is never counted as newly built.
       (seenAgentPathsRef.current ??= new Set<string>()).add(workflow.path);
@@ -1635,7 +1663,7 @@ export function useHarnessState(): HarnessStateHook {
       }
       return workflow;
     },
-    [rememberProjectDir, reopenProjects],
+    [refreshWorkflows, rememberProjectDir, reopenProjects],
   );
 
   const scaffoldAgent = useCallback(
@@ -2012,7 +2040,7 @@ export function useHarnessState(): HarnessStateHook {
               );
               // The link is already durable at this point. Pull its mutable
               // build projection so the chip can say Building, not Deployed.
-              void refreshWorkflows();
+              void refreshWorkflows().catch(() => undefined);
             }
           });
           if (terminal.phase === "ready") {

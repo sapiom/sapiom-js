@@ -6,6 +6,7 @@ import type { PackageInventoryAgent } from "@sapiom/agent";
 import type { WorkflowInfo } from "../shared/types.js";
 import {
   HarnessRegistryInventoryProvider,
+  CachedAgentRelationshipProvider,
   LocalWorkspaceScopeCatalog,
   StaticSystemGraphBuilder,
   type AgentInventoryProvider,
@@ -228,10 +229,22 @@ describe("StaticSystemGraphBuilder", () => {
       ),
     };
 
-    const graph = await buildGraph(
-      new StaticSystemGraphBuilder(inventory),
-      scope,
-    );
+    const builder = new StaticSystemGraphBuilder(inventory);
+    const first = await builder.build(scope);
+
+    // The cold phase is inventory-only: all cards and navigation are available
+    // before bounded project relationship I/O starts.
+    expect(first.cacheable).toBe(false);
+    expect(first.graph.nodes).toHaveLength(2);
+    expect(first.graph.edges).toEqual([]);
+    expect(first.navigation).toHaveLength(2);
+    first.afterCommit?.();
+
+    let graph = first.graph;
+    await vi.waitFor(async () => {
+      graph = (await builder.build(scope)).graph;
+      expect(graph.edges).toHaveLength(2);
+    });
 
     expect(graph).toEqual({
       kind: "system",
@@ -259,6 +272,81 @@ describe("StaticSystemGraphBuilder", () => {
       warnings: [],
     });
     expect(JSON.stringify(graph)).not.toContain(FIXTURE);
+  });
+
+  it("returns inventory navigation while relationship extraction is still held", async () => {
+    const inventory: AgentInventoryProvider = {
+      listAgents: vi.fn(async () =>
+        inventoryResult(scope, [
+          {
+            agentKey: "growth",
+            label: "Growth",
+            resolutionAliases: ["growth"],
+          },
+          {
+            agentKey: "research",
+            label: "Research",
+            resolutionAliases: ["research"],
+          },
+        ]),
+      ),
+    };
+    let release!: (result: AgentRelationshipProviderResult) => void;
+    const held = new Promise<AgentRelationshipProviderResult>((resolve) => {
+      release = resolve;
+    });
+    const inner = relationshipProvider(async (root) =>
+      root.endsWith("research") ? held : EMPTY_RELATIONSHIPS,
+    );
+    const onChange = vi.fn();
+    const relationships = new CachedAgentRelationshipProvider(
+      inner,
+      async () => "unused",
+      { concurrency: 1, onChange },
+    );
+    const builder = new StaticSystemGraphBuilder(inventory, relationships);
+
+    const cold = await builder.build(scope);
+
+    expect(inner.listRelationships).not.toHaveBeenCalled();
+    expect(cold.cacheable).toBe(false);
+    expect(cold.graph.nodes.map((node) => node.agentKey)).toEqual([
+      "growth",
+      "research",
+    ]);
+    expect(cold.graph.edges).toEqual([]);
+    expect(cold.navigation?.map((target) => target.agentKey)).toEqual([
+      "growth",
+      "research",
+    ]);
+
+    cold.afterCommit?.();
+    await vi.waitFor(() => expect(inner.listRelationships).toHaveBeenCalled());
+    // The held project task cannot withhold the already-returned inventory.
+    expect(cold.graph.nodes).toHaveLength(2);
+    release({
+      relationships: [
+        {
+          target: "growth",
+          mode: "blocking",
+          evidence: EVIDENCE,
+        },
+      ],
+      warnings: [],
+    });
+
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    const enriched = await builder.build(scope);
+    expect(enriched.graph.edges).toEqual([
+      {
+        from: "agent:research",
+        to: "agent:growth",
+        kind: "invokes",
+        basis: "static",
+        mode: "blocking",
+      },
+    ]);
+    expect(enriched.cacheable).toBe(true);
   });
 
   it("deduplicates by mode, retains dual-mode edges, and reports duplicate and unresolved targets", async () => {

@@ -242,6 +242,8 @@ interface ConsumedInventory {
   warnings: GraphWarning[];
   /** Every identity has finished resolving, however it resolved. */
   identitySettled: boolean;
+  /** The accepted workspace walk considered every eligible discovery path. */
+  discoveryComplete: boolean;
   startEnrichment?: () => void;
 }
 
@@ -311,6 +313,7 @@ function consumeInventory(
           agent.identityStatus === "provisional" &&
           agent.identityIssue === "identity-pending",
       ),
+    discoveryComplete: result.discoveryComplete === true,
     ...(typeof result.startEnrichment === "function"
       ? { startEnrichment: result.startEnrichment }
       : {}),
@@ -371,30 +374,56 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
     const seenEdges = new Set<string>();
     let relationshipsComplete = true;
 
-    // Source walks are independent. Run them together so first-open latency is
-    // bounded by the slowest agent tree rather than the sum of every tree.
-    const scans = await Promise.all(
-      agents.map(async (caller) => {
-        try {
+    const supportsBackgroundRelationships =
+      typeof this.relationships.peekRelationships === "function" &&
+      typeof this.relationships.startRelationships === "function";
+    // Production is deliberately two-phase: project cache-only inventory now,
+    // then perform bounded relationship I/O after nodes/navigation are visible.
+    // Legacy/test providers without the cache surface retain the old awaited
+    // adapter behavior.
+    const scans = supportsBackgroundRelationships
+      ? agents.map((caller) => {
+          const snapshot = this.relationships.peekRelationships!(caller);
           return {
             caller,
-            result: await this.relationships.listRelationships(caller),
-            failed: false as const,
+            result:
+              snapshot?.result ??
+              ({
+                relationships: [],
+                warnings: [],
+              } satisfies AgentRelationshipProviderResult),
+            failed: snapshot?.status === "failed",
+            pending: snapshot === undefined,
           };
-        } catch {
-          return {
-            caller,
-            result: {
-              relationships: [],
-              warnings: [],
-            } satisfies AgentRelationshipProviderResult,
-            failed: true as const,
-          };
-        }
-      }),
-    );
+        })
+      : await Promise.all(
+          agents.map(async (caller) => {
+            try {
+              return {
+                caller,
+                result: await this.relationships.listRelationships(caller),
+                failed: false,
+                pending: false,
+              };
+            } catch {
+              return {
+                caller,
+                result: {
+                  relationships: [],
+                  warnings: [],
+                } satisfies AgentRelationshipProviderResult,
+                failed: true,
+                pending: false,
+              };
+            }
+          }),
+        );
 
-    for (const { caller, result, failed } of scans) {
+    for (const { caller, result, failed, pending } of scans) {
+      if (pending) {
+        relationshipsComplete = false;
+        continue;
+      }
       if (failed) {
         relationshipsComplete = false;
         warnings.push({
@@ -403,6 +432,14 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
           message: `Could not inspect ${caller.label}.`,
         });
         continue;
+      }
+      if (result.complete === false) {
+        relationshipsComplete = false;
+        warnings.push({
+          code: "projection-failed",
+          agentKey: caller.agentKey,
+          message: `Could not fully inspect ${caller.label}.`,
+        });
       }
 
       for (const warning of result.warnings) {
@@ -476,8 +513,20 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       ).values(),
     ].sort(warningOrder);
 
+    const afterCommit =
+      consumed.startEnrichment || supportsBackgroundRelationships
+        ? () => {
+            consumed.startEnrichment?.();
+            if (supportsBackgroundRelationships) {
+              this.relationships.startRelationships!(agents);
+            }
+          }
+        : undefined;
     return {
-      cacheable: consumed.identitySettled && relationshipsComplete,
+      cacheable:
+        consumed.identitySettled &&
+        consumed.discoveryComplete &&
+        relationshipsComplete,
       graph: {
         kind: "system",
         scope: { kind: "working-tree", workspaceKey: scope.workspaceKey },
@@ -489,9 +538,7 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
         agentKey,
         workflowPath,
       })),
-      ...(consumed.startEnrichment
-        ? { afterCommit: consumed.startEnrichment }
-        : {}),
+      ...(afterCommit ? { afterCommit } : {}),
     };
   }
 

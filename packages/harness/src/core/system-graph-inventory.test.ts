@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import type { WorkflowInfo } from "../shared/types.js";
+import type { RegistryWorkflowInfo as WorkflowInfo } from "./workflow-registry.js";
 import {
   dirtyGraphSourceRoots,
   graphSourceRootsWithinScope,
@@ -13,8 +13,11 @@ import {
   type HarnessRegistryInventoryProviderOptions,
   type WorkspaceScope,
 } from "./system-graph-inventory.js";
-import type { ManifestNameInspection } from "./definition-name.js";
 import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
+import type {
+  ManifestNameInspection,
+  ManifestNameInspectionOptions,
+} from "./definition-name.js";
 
 const WORKSPACE = "/private/workspaces/acme";
 const SCOPE: WorkspaceScope = {
@@ -33,6 +36,7 @@ function workflow(
     path: relativePath ? `${WORKSPACE}/${relativePath}` : WORKSPACE,
     definitionId: definitionSlug ? 1 : null,
     definitionSlug,
+    markerPresent: true,
     source: "scan",
     ...overrides,
   };
@@ -45,7 +49,28 @@ function provider(
   return new HarnessRegistryInventoryProvider({
     listWorkflows: () => workflows,
     fingerprintSource: async (sourceRoot) => `fingerprint:${sourceRoot}`,
+    revalidateMarker: async () => true,
     ...options,
+    inventorySnapshot:
+      options.inventorySnapshot ??
+      (async (scope) => ({
+        workflows,
+        status: await (options.inventoryStatus?.(scope) ?? "complete"),
+        generation: 1,
+        canonicalScopeRoot: scope.root,
+        canonicalWorkflowRoots: workflows.map((item) => ({
+          workflowPath: item.path,
+          canonicalRoot: item.path,
+          identityEvidence: Object.prototype.hasOwnProperty.call(
+            item,
+            "sourceDefinitionName",
+          )
+            ? ("source" as const)
+            : item.markerPresent === true
+              ? ("marker" as const)
+              : ("unknown" as const),
+        })),
+      })),
   });
 }
 
@@ -60,6 +85,188 @@ async function enrich(
 }
 
 describe("HarnessRegistryInventoryProvider", () => {
+  it("uses syntax-proven source identity immediately without extraction", async () => {
+    const inspectManifestName = vi.fn(async () => {
+      throw new Error("source-only rows must never execute extraction");
+    });
+    const inventory = provider(
+      [
+        workflow("Billing package", "billing", "old-marker", {
+          sourceDefinitionName: "CurrentSourceName",
+        }),
+      ],
+      {
+        inspectManifestName,
+        inventoryStatus: async () => "degraded" as const,
+      },
+    );
+
+    const result = await inventory.listAgents(SCOPE);
+
+    expect(result.inventory).toMatchObject({
+      status: "degraded",
+      agents: [
+        {
+          agentKey: "CurrentSourceName",
+          identityStatus: "canonical",
+        },
+      ],
+    });
+    expect(result.context[0]?.resolutionAliases).toContain("old-marker");
+    expect(result.startEnrichment).toBeUndefined();
+    expect(inspectManifestName).not.toHaveBeenCalled();
+  });
+
+  it("never extracts a markerless manual row even after discovery is complete", async () => {
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "Executed",
+    }));
+    let status: "complete" | "degraded" = "degraded";
+    const inventory = provider(
+      [
+        workflow("Pending", "pending", null, {
+          markerPresent: undefined,
+          source: "connect",
+        }),
+      ],
+      { inspectManifestName, inventoryStatus: () => status },
+    );
+
+    const degraded = await inventory.listAgents(SCOPE);
+    degraded.startEnrichment?.();
+    await Promise.resolve();
+    expect(degraded.startEnrichment).toBeUndefined();
+    expect(inspectManifestName).not.toHaveBeenCalled();
+
+    status = "complete";
+    const complete = await inventory.listAgents(SCOPE);
+    expect(complete.startEnrichment).toBeUndefined();
+    complete.startEnrichment?.();
+    expect(inspectManifestName).not.toHaveBeenCalled();
+  });
+
+  it("enriches a markerless row with retained cloud-link authorization", async () => {
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "CloudLinked",
+    }));
+    const inventory = provider(
+      [
+        workflow("Linked", "linked", "old-alias", {
+          markerPresent: undefined,
+          source: "connect",
+        }),
+      ],
+      { inspectManifestName },
+    );
+
+    const initial = await inventory.listAgents(SCOPE);
+    expect(initial.startEnrichment).toBeTypeOf("function");
+    initial.startEnrichment?.();
+    await vi.waitFor(() => expect(inspectManifestName).toHaveBeenCalledOnce());
+    await expect(inventory.listAgents(SCOPE)).resolves.toMatchObject({
+      inventory: {
+        agents: [{ agentKey: "CloudLinked", identityStatus: "canonical" }],
+      },
+    });
+  });
+
+  it("enriches a marker-proven row despite unrelated degraded discovery", async () => {
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "CurrentSource",
+    }));
+    const inventory = provider(
+      [
+        workflow("Linked", "linked", null, {
+          markerPresent: true,
+        }),
+      ],
+      {
+        inspectManifestName,
+        inventoryStatus: () => "degraded",
+      },
+    );
+
+    const degraded = await inventory.listAgents(SCOPE);
+    expect(degraded.inventory.status).toBe("degraded");
+    expect(degraded.startEnrichment).toBeTypeOf("function");
+    degraded.startEnrichment?.();
+    await vi.waitFor(() => expect(inspectManifestName).toHaveBeenCalledOnce());
+  });
+
+  it("prefers one atomic inventory snapshot over independently racing reads", async () => {
+    const listWorkflows = vi.fn(() => [workflow("wrong", "wrong", "wrong")]);
+    const inventoryStatus = vi.fn(() => "complete" as const);
+    const inventory = new HarnessRegistryInventoryProvider({
+      listWorkflows,
+      inventoryStatus,
+      inventorySnapshot: () => ({
+        workflows: [
+          workflow("Atomic", "atomic", null, {
+            sourceDefinitionName: "atomic-source",
+          }),
+        ],
+        status: "degraded",
+        generation: 7,
+      }),
+    });
+
+    const result = await inventory.listAgents(SCOPE);
+
+    expect(result.inventory).toMatchObject({
+      status: "degraded",
+      agents: [{ agentKey: "atomic-source", path: "atomic" }],
+    });
+    expect(listWorkflows).not.toHaveBeenCalled();
+    expect(inventoryStatus).not.toHaveBeenCalled();
+  });
+
+  it("retires an active legacy extraction when syntax evidence arrives", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let workflows: WorkflowInfo[] = [workflow("Legacy", "agent", "old-marker")];
+    const inspectManifestName = vi.fn(async () => {
+      await gate;
+      return { status: "found" as const, name: "StaleExtracted" };
+    });
+    const changed = vi.fn();
+    const inventory = new HarnessRegistryInventoryProvider({
+      listWorkflows: () => workflows,
+      inventoryStatus: () => "complete",
+      fingerprintSource: async () => "fingerprint",
+      revalidateMarker: async () => true,
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+    const legacy = await inventory.listAgents(SCOPE);
+    legacy.startEnrichment?.();
+    await vi.waitFor(() => expect(inspectManifestName).toHaveBeenCalledOnce());
+
+    workflows = [
+      workflow("Source", "agent", "old-marker", {
+        sourceDefinitionName: "CurrentSyntax",
+      }),
+    ];
+    const syntax = await inventory.listAgents(SCOPE);
+    expect(syntax.inventory.agents[0]).toMatchObject({
+      agentKey: "CurrentSyntax",
+      identityStatus: "canonical",
+    });
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(changed).not.toHaveBeenCalled();
+    await expect(inventory.listAgents(SCOPE)).resolves.toMatchObject({
+      inventory: {
+        agents: [{ agentKey: "CurrentSyntax", identityStatus: "canonical" }],
+      },
+    });
+  });
+
   it("derives inventory roots using POSIX, drive, and UNC workspace flavor", () => {
     expect(inventorySourceRoot("/workspace", "nested/agent")).toBe(
       "/workspace/nested/agent",
@@ -532,6 +739,147 @@ describe("HarnessRegistryInventoryProvider", () => {
     expect(maximum).toBe(4);
   });
 
+  it("retires queued and active marker inspections synchronously on a raw scope edit", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
+      await gate;
+      return { status: "found" as const, name: path.basename(sourceRoot) };
+    });
+    const changed = vi.fn();
+    const inventory = provider(
+      Array.from({ length: 5 }, (_, index) =>
+        workflow(`Agent ${index}`, `agent-${index}`, null),
+      ),
+      { inspectManifestName, onIdentityChange: changed },
+    );
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(4),
+    );
+    inventory.invalidateScope(WORKSPACE);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(inspectManifestName).toHaveBeenCalledTimes(4);
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("queues fresh proof behind an invalidated active inspection and converges", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const inspectManifestName = vi.fn(async () => {
+      if (inspectManifestName.mock.calls.length === 1) await firstGate;
+      return { status: "found" as const, name: "FreshIdentity" };
+    });
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", null)], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() => expect(inspectManifestName).toHaveBeenCalledOnce());
+
+    // A raw edit in another active scope conservatively invalidates the shared
+    // provider epoch. A later ordinary read of this scope must enqueue fresh
+    // work instead of mistaking the stale active task for the same request.
+    inventory.invalidateScope("/private/workspaces/unrelated");
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    releaseFirst();
+
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(2),
+    );
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    await expect(inventory.listAgents(SCOPE)).resolves.toMatchObject({
+      inventory: {
+        agents: [{ agentKey: "FreshIdentity", identityStatus: "canonical" }],
+      },
+    });
+  });
+
+  it("revalidates marker proof after fingerprinting immediately before inspection", async () => {
+    let releaseFingerprint!: () => void;
+    const fingerprintGate = new Promise<void>((resolve) => {
+      releaseFingerprint = resolve;
+    });
+    let markerPresent = true;
+    const fingerprintEntered = vi.fn();
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "must-not-run",
+    }));
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", null)], {
+      fingerprintSource: async () => {
+        fingerprintEntered();
+        await fingerprintGate;
+        return "fingerprint";
+      },
+      revalidateMarker: async () => markerPresent,
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() => expect(fingerprintEntered).toHaveBeenCalledOnce());
+    markerPresent = false;
+    releaseFingerprint();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(inspectManifestName).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("threads current marker proof to the inspector's actual child-launch boundary", async () => {
+    let releaseInnerFingerprint!: () => void;
+    const innerFingerprintGate = new Promise<void>((resolve) => {
+      releaseInnerFingerprint = resolve;
+    });
+    let markerPresent = true;
+    const innerFingerprintEntered = vi.fn();
+    const actualExtractorLaunch = vi.fn();
+    const inspectManifestName = vi.fn(
+      async (
+        _sourceRoot: string,
+        options?: ManifestNameInspectionOptions,
+      ): Promise<ManifestNameInspection> => {
+        innerFingerprintEntered();
+        await innerFingerprintGate;
+        if (!(await options?.authorizeBeforeLaunch?.())) {
+          return { status: "failed" };
+        }
+        actualExtractorLaunch();
+        return { status: "found", name: "must-not-run" };
+      },
+    );
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", null)], {
+      revalidateMarker: async () => markerPresent,
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(innerFingerprintEntered).toHaveBeenCalledOnce(),
+    );
+    markerPresent = false;
+    releaseInnerFingerprint();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+
+    expect(actualExtractorLaunch).not.toHaveBeenCalled();
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0],
+    ).toMatchObject({ identityIssue: "identity-unavailable" });
+  });
+
   it("surfaces settled identities within a bounded window while slower work continues", async () => {
     let releaseSlow!: () => void;
     const slow = new Promise<void>((resolve) => {
@@ -785,6 +1133,7 @@ describe("HarnessRegistryInventoryProvider", () => {
     const inventory = provider([workflow("Agent", "agent", "marker")], {
       inspectManifestName,
       fingerprintSource: async () => fingerprint,
+      revalidateMarker: async () => true,
       onIdentityChange: changed,
     });
     const before = await enrich(
@@ -879,6 +1228,7 @@ describe("HarnessRegistryInventoryProvider", () => {
       listWorkflows: () => workflows,
       inspectManifestName,
       fingerprintSource: async () => fingerprint,
+      revalidateMarker: async () => true,
       onIdentityChange: changed,
     });
     await enrich(inventory, await inventory.listAgents(SCOPE), changed);

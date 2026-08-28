@@ -96,6 +96,152 @@ describe("MockApi deterministic system graph identity and navigation", () => {
     );
   });
 
+  it("gives proven source identity precedence over a legacy marker alias", () => {
+    const workflow: WorkflowInfo = {
+      name: "billing-package",
+      path: "/workspace/billing",
+      definitionId: null,
+      definitionSlug: "payments",
+      activeBuildRunId: null,
+      activeBuildRunStatus: null,
+      source: "scan",
+    };
+
+    const projection = projectMockSystemGraphInventory(
+      "/workspace",
+      [workflow],
+      {
+        [workflow.path]: {
+          kind: "source",
+          sourceDefinitionName: "billing",
+        },
+      },
+    );
+
+    expect(projection.nodes).toEqual([
+      {
+        id: "agent:billing",
+        agentKey: "billing",
+        label: "billing-package",
+      },
+    ]);
+    expect(projection.targets).toEqual([
+      { agentKey: "billing", workflowPath: workflow.path },
+    ]);
+    expect(projection.degraded).toBe(false);
+  });
+
+  it("keeps persisted unknown source identity visible but lifecycle-degraded", () => {
+    const workflow: WorkflowInfo = {
+      name: "billing-package",
+      path: "/workspace/billing",
+      definitionId: null,
+      definitionSlug: null,
+      source: "scan",
+    };
+
+    const projection = projectMockSystemGraphInventory(
+      "/workspace",
+      [workflow],
+      {
+        [workflow.path]: {
+          kind: "unknown",
+          sourceDefinitionName: "billing",
+        },
+      },
+    );
+
+    expect(projection.nodes[0]?.agentKey).toBe("billing");
+    expect(projection.degraded).toBe(true);
+  });
+
+  it("falls back deterministically for duplicate proven source identities", () => {
+    const workflows: WorkflowInfo[] = ["first", "second"].map((name) => ({
+      name,
+      path: `/workspace/${name}`,
+      definitionId: null,
+      definitionSlug: null,
+      source: "scan",
+    }));
+    const evidence = Object.fromEntries(
+      workflows.map((workflow) => [
+        workflow.path,
+        { kind: "source", sourceDefinitionName: "billing" } as const,
+      ]),
+    );
+
+    const projection = projectMockSystemGraphInventory(
+      "/workspace",
+      workflows,
+      evidence,
+    );
+
+    expect(projection.nodes.map((node) => node.agentKey)).toEqual([
+      "local:first",
+      "local:second",
+    ]);
+    expect(projection.warnings).toEqual([
+      {
+        code: "duplicate-agent-key",
+        agentKey: "billing",
+        message:
+          "Multiple agents use billing; kept each with a local identity.",
+      },
+    ]);
+    expect(projection.degraded).toBe(true);
+  });
+
+  it("invalidates mock rail and graph revisions across source add, edit, and delete", async () => {
+    const events = await import("./events");
+    const publish = vi.spyOn(events, "publishMockBusMessage");
+    const api = new MockApi();
+    const state = await api.getState();
+    const scope = state.workspaceScopes?.find(
+      (candidate) => candidate.cwd === "/Users/demo/rfq-agent",
+    );
+    expect(scope).toBeDefined();
+    const before = await api.getSystemGraph(scope!.workspaceKey);
+    const row: WorkflowInfo = {
+      name: "rfq-package",
+      path: scope!.cwd,
+      definitionId: null,
+      definitionSlug: null,
+      activeBuildRunId: null,
+      activeBuildRunStatus: null,
+      source: "scan",
+    };
+
+    api.replaceSourceDiscoveredWorkflows([row], {
+      [row.path]: { kind: "source", sourceDefinitionName: "rfq-current" },
+    });
+    const added = await api.getSystemGraph(scope!.workspaceKey);
+    expect(added.revision).toBeGreaterThan(before.revision);
+    expect(added.graph?.nodes.map((node) => node.agentKey)).toEqual([
+      "rfq-current",
+    ]);
+
+    api.replaceSourceDiscoveredWorkflows([row], {
+      [row.path]: { kind: "source", sourceDefinitionName: "rfq-next" },
+    });
+    const edited = await api.getSystemGraph(scope!.workspaceKey);
+    expect(edited.revision).toBeGreaterThan(added.revision);
+    expect(edited.graph?.nodes.map((node) => node.agentKey)).toEqual([
+      "rfq-next",
+    ]);
+
+    api.replaceSourceDiscoveredWorkflows([], {});
+    const removed = await api.getSystemGraph(scope!.workspaceKey);
+    expect(removed.revision).toBeGreaterThan(edited.revision);
+    expect(removed.graph?.nodes).toEqual([]);
+    await vi.waitFor(() => {
+      expect(
+        publish.mock.calls.filter(
+          ([message]) => message.type === "workflows.changed",
+        ),
+      ).toHaveLength(3);
+    });
+  });
+
   it("uses projection warnings and lifecycle for non-special mock graphs", async () => {
     const api = new MockApi();
     const scope = (await api.getState()).workspaceScopes?.find(

@@ -34,6 +34,14 @@ test("a Polsia-style Project opens its complete graph without a session and reus
   await expect(
     project.getByTestId(`workflow-status-${POLSIA}/scripts/tools/rollup`),
   ).toHaveAttribute("data-deployed", "false");
+  // `outreach` is the markerless syntax-discovered fixture: its public rail
+  // row has null cloud metadata, while the mock's private accepted evidence
+  // gives the graph its canonical source key (asserted below).
+  await expect(
+    project.getByTestId(
+      `workflow-status-${POLSIA}/backend/src/agents/outreach`,
+    ),
+  ).toHaveAttribute("data-deployed", "false");
   await expect(page.getByTestId("session-context")).not.toHaveAttribute(
     "data-session-id",
     /.+/,
@@ -59,7 +67,9 @@ test("a Polsia-style Project opens its complete graph without a session and reus
     "queue",
     "local:scripts/tools/rollup",
   ]) {
-    await expect(page.getByTestId(`system-graph-node-${agentKey}`)).toBeVisible();
+    await expect(
+      page.getByTestId(`system-graph-node-${agentKey}`),
+    ).toBeVisible();
   }
 
   // The fixture exercises fan-out, fan-in, a cycle, mixed call modes, and one
@@ -81,9 +91,7 @@ test("a Polsia-style Project opens its complete graph without a session and reus
     7,
   );
   await expect(
-    page.locator(
-      '[data-testid^="system-graph-edge-"][data-testid*="rollup"]',
-    ),
+    page.locator('[data-testid^="system-graph-edge-"][data-testid*="rollup"]'),
   ).toHaveCount(0);
   await expect.poll(() => graphRequestCount(page)).toBe(1);
 

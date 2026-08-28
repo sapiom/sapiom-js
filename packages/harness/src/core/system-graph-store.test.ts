@@ -481,4 +481,98 @@ describe("SystemGraphStore", () => {
 
     expect(returned.revision).toBeGreaterThan(first.revision);
   });
+
+  it("does not build a cold projection until its inventory prerequisite is accepted", async () => {
+    const build = vi.fn().mockResolvedValue(buildResult("accepted"));
+    const store = new SystemGraphStore({ build });
+
+    const blocked = store.markStale(scope, "scan:workspace");
+    await expect(store.get(scope)).resolves.toBe(blocked);
+    expect(build).not.toHaveBeenCalled();
+
+    store.releasePrerequisite(scope, "scan:workspace");
+    await vi.waitFor(() => expect(build).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(store.peek(scope.workspaceKey)).toMatchObject({
+        state: "ready",
+        graph: graphFor("accepted"),
+      });
+    });
+  });
+
+  it("keeps overlapping prerequisites stale until every scan accepts", async () => {
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce(buildResult("initial"))
+      .mockResolvedValueOnce(buildResult("accepted"));
+    const store = new SystemGraphStore({ build });
+    await store.get(scope);
+
+    store.markStale(scope, "scan:parent");
+    store.markStale(scope, "scan:child");
+    store.releasePrerequisite(scope, "scan:child");
+    store.requestRefresh(scope); // Late identity enrichment cannot bypass it.
+
+    expect(store.peek(scope.workspaceKey)).toMatchObject({
+      state: "stale",
+      graph: graphFor("initial"),
+    });
+    expect(build).toHaveBeenCalledTimes(1);
+
+    store.releasePrerequisite(scope, "scan:parent");
+    await vi.waitFor(() => expect(build).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(store.peek(scope.workspaceKey)).toMatchObject({
+        state: "ready",
+        graph: graphFor("accepted"),
+      });
+    });
+  });
+
+  it("does not let a superseded build or identity refresh bypass a prerequisite", async () => {
+    const obsolete = deferred<SystemGraphBuildResult>();
+    const accepted = deferred<SystemGraphBuildResult>();
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce(buildResult("initial"))
+      .mockReturnValueOnce(obsolete.promise)
+      .mockReturnValueOnce(accepted.promise);
+    const store = new SystemGraphStore({ build });
+    await store.get(scope);
+    store.requestRefresh(scope);
+
+    store.markStale(scope, "scan:workspace");
+    store.requestRefresh(scope); // An older identity task settles while blocked.
+    obsolete.resolve(buildResult("obsolete"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(store.peek(scope.workspaceKey)).toMatchObject({
+      state: "stale",
+      graph: graphFor("initial"),
+    });
+
+    store.releasePrerequisite(scope, "scan:workspace");
+    await vi.waitFor(() => expect(build).toHaveBeenCalledTimes(3));
+    accepted.resolve(buildResult("accepted"));
+    await vi.waitFor(() => {
+      expect(store.peek(scope.workspaceKey)?.graph).toEqual(
+        graphFor("accepted"),
+      );
+    });
+  });
+
+  it("does not recreate a retired scope while awaiting an accepted build", async () => {
+    const store = new SystemGraphStore({
+      build: vi.fn().mockResolvedValue(buildResult("ready")),
+    });
+    store.markStale(scope, "scan:workspace");
+    store.retire(scope.workspaceKey);
+
+    await expect(
+      store.waitForCurrentRefresh(scope.workspaceKey),
+    ).resolves.toBeNull();
+    expect(store.peek(scope.workspaceKey)).toBeNull();
+  });
 });

@@ -3,7 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AgentProjectScanBudget } from "./agent-project-discovery.js";
+import {
+  AgentProjectScanAllowance,
+  AgentProjectScanBudget,
+} from "./agent-project-discovery.js";
+import { AgentSourceScanBudget } from "./agent-source-discovery.js";
 import { WorkflowRegistry } from "./workflow-registry.js";
 
 async function writeMarker(
@@ -18,13 +22,40 @@ async function writeMarker(
   );
 }
 
+async function writeSourceAgent(
+  dir: string,
+  name: string,
+  extraSource = "",
+): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "index.ts"),
+    `import { defineAgent } from "@sapiom/agent";
+${extraSource}
+export const agent = defineAgent({ name: ${JSON.stringify(name)} });`,
+  );
+}
+
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 describe("WorkflowRegistry", () => {
   let tmpRoot: string;
   let registryPath: string;
   let registry: WorkflowRegistry;
 
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-workflow-registry-"));
+    tmpRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-workflow-registry-"),
+    );
     registryPath = path.join(tmpRoot, "state", "workflows.json");
     registry = new WorkflowRegistry(registryPath);
   });
@@ -37,6 +68,36 @@ describe("WorkflowRegistry", () => {
     expect(await registry.list()).toEqual([]);
   });
 
+  it("shares one directory and source allowance across composite direct-root scans", async () => {
+    const firstRoot = path.join(tmpRoot, "first");
+    const secondRoot = path.join(tmpRoot, "second");
+    await writeSourceAgent(firstRoot, "first");
+    await writeSourceAgent(secondRoot, "second");
+    const project = new AgentProjectScanAllowance(2);
+    const source = new AgentSourceScanBudget({
+      maxModules: 1,
+      maxBytes: 1024 * 1024,
+      maxLookups: 32,
+    });
+
+    const first = await registry.scanDetailed(
+      firstRoot,
+      new AgentProjectScanBudget({}, project),
+      source,
+    );
+    const second = await registry.scanDetailed(
+      secondRoot,
+      new AgentProjectScanBudget({}, project),
+      source,
+    );
+
+    expect(project.visited).toBe(2);
+    expect(source.modules).toBe(1);
+    expect(first.sourceBudget).toBe(source);
+    expect(second.sourceBudget).toBe(source);
+    expect(second.status).toBe("degraded");
+  });
+
   it("scans a tree for sapiom.json markers, honoring depth and skip rules", async () => {
     // Depth 1: has package.json, deployed.
     await writeMarker(path.join(tmpRoot, "proj-a"), 42);
@@ -47,9 +108,15 @@ describe("WorkflowRegistry", () => {
     // Depth 1: no package.json, undeployed.
     await writeMarker(path.join(tmpRoot, "proj-b"), null);
     // Depth 8: right at the boundary — should be found.
-    await writeMarker(path.join(tmpRoot, "a", "b", "c", "d", "e", "f", "g", "h"), 7);
+    await writeMarker(
+      path.join(tmpRoot, "a", "b", "c", "d", "e", "f", "g", "h"),
+      7,
+    );
     // Depth 9: past the boundary — should NOT be found.
-    await writeMarker(path.join(tmpRoot, "d", "e", "f", "g", "h", "i", "j", "k", "l"), 9);
+    await writeMarker(
+      path.join(tmpRoot, "d", "e", "f", "g", "h", "i", "j", "k", "l"),
+      9,
+    );
     // Inside generated/private trees — should never be scanned.
     await writeMarker(path.join(tmpRoot, "node_modules", "some-pkg"), 1);
     await writeMarker(path.join(tmpRoot, ".git", "worktrees", "x"), 1);
@@ -66,6 +133,7 @@ describe("WorkflowRegistry", () => {
       path: path.join(tmpRoot, "proj-a"),
       definitionId: 42,
       definitionSlug: null,
+      markerPresent: true,
       templateId: null,
       forkId: null,
       starterId: null,
@@ -76,25 +144,38 @@ describe("WorkflowRegistry", () => {
       path: path.join(tmpRoot, "proj-b"),
       definitionId: null,
       definitionSlug: null,
+      markerPresent: true,
       templateId: null,
       forkId: null,
       starterId: null,
       source: "scan",
     });
-    expect(byPath.has(path.join(tmpRoot, "a", "b", "c", "d", "e", "f", "g", "h"))).toBe(
-      true,
-    );
     expect(
-      byPath.has(path.join(tmpRoot, "d", "e", "f", "g", "h", "i", "j", "k", "l")),
+      byPath.has(path.join(tmpRoot, "a", "b", "c", "d", "e", "f", "g", "h")),
+    ).toBe(true);
+    expect(
+      byPath.has(
+        path.join(tmpRoot, "d", "e", "f", "g", "h", "i", "j", "k", "l"),
+      ),
     ).toBe(false);
     expect(
       found.some((workflow) => workflow.path.includes("node_modules")),
     ).toBe(false);
-    expect(found.some((workflow) => workflow.path.includes(".git"))).toBe(false);
-    expect(found.some((workflow) => workflow.path.includes(".sapiom"))).toBe(false);
-    expect(found.some((workflow) => workflow.path.includes("dist"))).toBe(false);
-    expect(found.some((workflow) => workflow.path.includes("build"))).toBe(false);
-    expect(found.some((workflow) => workflow.path.includes(".next"))).toBe(false);
+    expect(found.some((workflow) => workflow.path.includes(".git"))).toBe(
+      false,
+    );
+    expect(found.some((workflow) => workflow.path.includes(".sapiom"))).toBe(
+      false,
+    );
+    expect(found.some((workflow) => workflow.path.includes("dist"))).toBe(
+      false,
+    );
+    expect(found.some((workflow) => workflow.path.includes("build"))).toBe(
+      false,
+    );
+    expect(found.some((workflow) => workflow.path.includes(".next"))).toBe(
+      false,
+    );
   });
 
   it("requires sapiom.json to contain a top-level JSON object", async () => {
@@ -105,10 +186,15 @@ describe("WorkflowRegistry", () => {
       await fs.writeFile(path.join(dir, "sapiom.json"), value);
     }
     await writeMarker(path.join(tmpRoot, "valid-empty-object"), null);
-    await fs.writeFile(path.join(tmpRoot, "valid-empty-object", "sapiom.json"), "{}");
+    await fs.writeFile(
+      path.join(tmpRoot, "valid-empty-object", "sapiom.json"),
+      "{}",
+    );
 
     const found = await registry.scan(tmpRoot);
-    expect(found.map((workflow) => workflow.name)).toEqual(["valid-empty-object"]);
+    expect(found.map((workflow) => workflow.name)).toEqual([
+      "valid-empty-object",
+    ]);
   });
 
   it("persists scan results and reloads them for a fresh registry instance", async () => {
@@ -147,6 +233,36 @@ describe("WorkflowRegistry", () => {
     expect(info.definitionId).toBe(99);
   });
 
+  it("normalizes untrusted marker fields identically for scan, connect, and reload", async () => {
+    const projectDir = path.join(tmpRoot, "malformed-fields");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, "sapiom.json"),
+      JSON.stringify({
+        definitionId: "99",
+        name: "bad/name",
+        templateId: { private: true },
+        forkId: "bad\u0085value",
+        starterId: 42,
+      }),
+    );
+
+    const scanned = (await registry.scan(tmpRoot))[0]!;
+    const connected = await registry.connectPath(projectDir);
+    const reloaded = (await new WorkflowRegistry(registryPath).list())[0]!;
+
+    expect(scanned).toMatchObject({
+      definitionId: null,
+      definitionSlug: null,
+      templateId: null,
+      forkId: null,
+      starterId: null,
+      markerPresent: true,
+    });
+    expect({ ...connected, source: "scan" }).toEqual(scanned);
+    expect(reloaded).toEqual(connected);
+  });
+
   it("passes marker provenance through both scan and connectPath", async () => {
     // A gallery clone writes templateId AND forkId; a scaffold writes starterId.
     const cloned = path.join(tmpRoot, "cloned");
@@ -158,7 +274,10 @@ describe("WorkflowRegistry", () => {
     await writeMarker(scaffolded, null, { starterId: "coding-pause" });
 
     const byPath = new Map(
-      (await registry.scan(tmpRoot)).map((workflow) => [workflow.path, workflow]),
+      (await registry.scan(tmpRoot)).map((workflow) => [
+        workflow.path,
+        workflow,
+      ]),
     );
     expect(byPath.get(cloned)).toMatchObject({
       templateId: "web-research-digest",
@@ -220,7 +339,9 @@ describe("WorkflowRegistry", () => {
     await fs.rm(path.join(connectedDir, "sapiom.json"));
     await registry.scan(tmpRoot);
 
-    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([connectedDir]);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+      connectedDir,
+    ]);
     expect((await registry.list())[0].source).toBe("connect");
   });
 
@@ -263,9 +384,9 @@ describe("WorkflowRegistry", () => {
 
     await registry.scan(path.join(tmpRoot, "left"));
 
-    expect((await registry.list()).map((workflow) => workflow.path).sort()).toEqual(
-      [left, right].sort(),
-    );
+    expect(
+      (await registry.list()).map((workflow) => workflow.path).sort(),
+    ).toEqual([left, right].sort());
   });
 
   describe("prune", () => {
@@ -279,11 +400,15 @@ describe("WorkflowRegistry", () => {
 
       const pruned = await registry.prune();
       expect(pruned.map((workflow) => workflow.path)).toEqual([deadDir]);
-      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([liveDir]);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+        liveDir,
+      ]);
 
       // Persisted, not just dropped from the in-memory list.
       const reloaded = new WorkflowRegistry(registryPath);
-      expect((await reloaded.list()).map((workflow) => workflow.path)).toEqual([liveDir]);
+      expect((await reloaded.list()).map((workflow) => workflow.path)).toEqual([
+        liveDir,
+      ]);
     });
 
     it("keeps an existing-but-unbuilt project (only nonexistent paths are pruned)", async () => {
@@ -294,7 +419,9 @@ describe("WorkflowRegistry", () => {
       await registry.scan(tmpRoot);
 
       expect(await registry.prune()).toEqual([]);
-      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([unbuiltDir]);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+        unbuiltDir,
+      ]);
     });
 
     it("does not rewrite the registry file when nothing was pruned", async () => {
@@ -316,6 +443,45 @@ describe("WorkflowRegistry", () => {
   });
 
   describe("write serialization", () => {
+    it("compensates a scan superseded after rename so disk never retains unpublished rows", async () => {
+      const projectDir = path.join(tmpRoot, "source-agent");
+      const renamed = deferred();
+      const releaseRename = deferred();
+      let pauseNextRename = false;
+      const guardedRegistry = new WorkflowRegistry(registryPath, undefined, {
+        afterPrimaryRename: async () => {
+          if (!pauseNextRename) return;
+          pauseNextRename = false;
+          renamed.resolve();
+          await releaseRename.promise;
+        },
+      });
+
+      await writeSourceAgent(projectDir, "accepted-a");
+      await guardedRegistry.scanDetailed(tmpRoot);
+      pauseNextRename = true;
+      await writeSourceAgent(projectDir, "intermediate-b");
+      const intermediateScan = guardedRegistry.scanDetailed(tmpRoot);
+      await renamed.promise;
+
+      const renamedRows = JSON.parse(
+        await fs.readFile(registryPath, "utf8"),
+      ) as Array<{ sourceDefinitionName?: string }>;
+      expect(renamedRows[0]?.sourceDefinitionName).toBe("intermediate-b");
+
+      await writeSourceAgent(projectDir, "accepted-a");
+      expect(guardedRegistry.markDiscoveryDirty(tmpRoot)).toBe(true);
+      releaseRename.resolve();
+      await expect(intermediateScan).rejects.toThrow(/superseded/);
+
+      // This recovery is deliberately row-identical to the in-memory accepted
+      // snapshot. Without compensation, it skips persistence and a restart
+      // observes the unpublished intermediate-b rename forever.
+      await guardedRegistry.scanDetailed(tmpRoot);
+      const reloaded = await new WorkflowRegistry(registryPath).list();
+      expect(reloaded[0]?.sourceDefinitionName).toBe("accepted-a");
+    });
+
     it("concurrent scan/prune calls serialize so no entry is lost from the persisted file", async () => {
       // Seed N workflow directories and fire scan + prune concurrently.
       // Without the write queue, a prune that starts reading this.workflows
@@ -438,9 +604,19 @@ describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {
   /** The measured shape of the anomaly: a launch dir with its own agents, and
    *  sibling checkouts of one repo, each carrying the SAME four agents. */
   async function buildSiblingCheckouts(): Promise<void> {
-    await writeMarker(path.join(tmpRoot, "wf-demo-testing", "agents", "mine"), 1);
-    await writeMarker(path.join(tmpRoot, "wf-demo-testing", "demo", "also-mine"), 2);
-    for (const checkout of ["design-eng", "design-eng-fix", "worktrees/port-pin"]) {
+    await writeMarker(
+      path.join(tmpRoot, "wf-demo-testing", "agents", "mine"),
+      1,
+    );
+    await writeMarker(
+      path.join(tmpRoot, "wf-demo-testing", "demo", "also-mine"),
+      2,
+    );
+    for (const checkout of [
+      "design-eng",
+      "design-eng-fix",
+      "worktrees/port-pin",
+    ]) {
       await fs.mkdir(path.join(tmpRoot, checkout, ".git"), { recursive: true });
       for (const agent of ["ari/orchestration", "brain/agent"]) {
         await writeMarker(path.join(tmpRoot, checkout, agent), null);
@@ -450,7 +626,9 @@ describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {
 
   beforeEach(async () => {
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-scan-rooted-"));
-    registry = new WorkflowRegistry(path.join(tmpRoot, ".state", "workflows.json"));
+    registry = new WorkflowRegistry(
+      path.join(tmpRoot, ".state", "workflows.json"),
+    );
   });
 
   afterEach(async () => {
@@ -462,7 +640,9 @@ describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {
 
     const found = await registry.scan(path.join(tmpRoot, "wf-demo-testing"));
 
-    expect(found.map((workflow) => path.relative(tmpRoot, workflow.path)).sort()).toEqual(
+    expect(
+      found.map((workflow) => path.relative(tmpRoot, workflow.path)).sort(),
+    ).toEqual(
       [
         path.join("wf-demo-testing", "agents", "mine"),
         path.join("wf-demo-testing", "demo", "also-mine"),
@@ -478,13 +658,17 @@ describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {
     // copies of one agent" the rail was showing.
     const found = await registry.scan(tmpRoot);
 
-    expect(found.map((workflow) => path.relative(tmpRoot, workflow.path)).sort()).toEqual(
+    expect(
+      found.map((workflow) => path.relative(tmpRoot, workflow.path)).sort(),
+    ).toEqual(
       [
         path.join("wf-demo-testing", "agents", "mine"),
         path.join("wf-demo-testing", "demo", "also-mine"),
       ].sort(),
     );
-    expect(found.some((workflow) => workflow.path.includes("design-eng"))).toBe(false);
+    expect(found.some((workflow) => workflow.path.includes("design-eng"))).toBe(
+      false,
+    );
   });
 
   it("a checkout that IS an agent is still registered — the marker outranks the boundary", async () => {
@@ -502,14 +686,20 @@ describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {
     // the checkout, finds no marker below it, and the depth envelope alone
     // would call every row under it gone.
     const inner = path.join(tmpRoot, "opened-repo", "agents", "worker");
-    await fs.mkdir(path.join(tmpRoot, "opened-repo", ".git"), { recursive: true });
+    await fs.mkdir(path.join(tmpRoot, "opened-repo", ".git"), {
+      recursive: true,
+    });
     await writeMarker(inner, 5);
     await registry.scan(path.join(tmpRoot, "opened-repo"));
-    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([inner]);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+      inner,
+    ]);
 
     await registry.scan(tmpRoot);
 
-    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([inner]);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+      inner,
+    ]);
   });
 });
 
@@ -528,7 +718,7 @@ describe("WorkflowRegistry stale entries", () => {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 
-  it("list() prunes a deleted agent without waiting for a boot or a rescan", async () => {
+  it("list() stays cache-backed while its lazy prune runs in the background", async () => {
     const gone = path.join(tmpRoot, "gone");
     const stays = path.join(tmpRoot, "stays");
     await writeMarker(gone, 1);
@@ -539,7 +729,14 @@ describe("WorkflowRegistry stale entries", () => {
     // A fresh instance, so the throttle window has not been consumed — this is
     // the shape of "the SPA asks /api/workflows again".
     const reader = new WorkflowRegistry(registryPath);
-    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([stays]);
+    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([
+      gone,
+      stays,
+    ]);
+    await reader.prune();
+    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([
+      stays,
+    ]);
 
     // And it is persisted, not merely filtered on the way out.
     expect(JSON.parse(await fs.readFile(registryPath, "utf8"))).toHaveLength(1);
@@ -551,11 +748,61 @@ describe("WorkflowRegistry stale entries", () => {
     await writeMarker(here, 1);
     await writeMarker(elsewhere, 2);
     await registry.scan(tmpRoot);
-    await fs.rm(path.join(tmpRoot, "elsewhere"), { recursive: true, force: true });
+    await fs.rm(path.join(tmpRoot, "elsewhere"), {
+      recursive: true,
+      force: true,
+    });
 
     await registry.scan(path.join(tmpRoot, "here"));
 
-    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([here]);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+      here,
+    ]);
+  });
+
+  it("retires source observations when an unrelated scan prunes their missing row", async () => {
+    const here = path.join(tmpRoot, "here", "agent");
+    const elsewhere = path.join(tmpRoot, "elsewhere", "agent");
+    await writeMarker(here, 1);
+    await writeSourceAgent(elsewhere, "elsewhere");
+    await registry.scan(tmpRoot);
+    expect(
+      (await registry.inventorySnapshot(tmpRoot)).sourceObservations.some(
+        (observation) => observation.candidateRoot === elsewhere,
+      ),
+    ).toBe(true);
+
+    await fs.rm(path.join(tmpRoot, "elsewhere"), {
+      recursive: true,
+      force: true,
+    });
+    await registry.scan(path.join(tmpRoot, "here"));
+
+    const snapshot = await registry.inventorySnapshot(tmpRoot);
+    expect(snapshot.workflows.map((workflow) => workflow.path)).toEqual([here]);
+    expect(
+      snapshot.sourceObservations.some(
+        (observation) =>
+          observation.candidateRoot === elsewhere ||
+          observation.paths.some((observedPath) =>
+            observedPath.startsWith(elsewhere),
+          ),
+      ),
+    ).toBe(false);
+  });
+
+  it("prune retires canonical identity and source-observation sidecars", async () => {
+    const gone = path.join(tmpRoot, "gone");
+    await writeSourceAgent(gone, "gone");
+    await registry.scan(tmpRoot);
+    await fs.rm(gone, { recursive: true, force: true });
+
+    await registry.prune();
+
+    const snapshot = await registry.inventorySnapshot(tmpRoot);
+    expect(snapshot.workflows).toEqual([]);
+    expect(snapshot.canonicalWorkflowRoots).toEqual([]);
+    expect(snapshot.sourceObservations).toEqual([]);
   });
 
   it("keeps an unreadable-but-present directory: only a confirmed-missing path leaves", async () => {
@@ -568,7 +815,9 @@ describe("WorkflowRegistry stale entries", () => {
     // never touched by the missing-path sweep. (Here the scan removes it; the
     // point is that the sweep is not what did.)
     const reader = new WorkflowRegistry(registryPath);
-    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([unbuilt]);
+    expect((await reader.list()).map((workflow) => workflow.path)).toEqual([
+      unbuilt,
+    ]);
   });
 });
 
@@ -578,7 +827,9 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
   let registry: WorkflowRegistry;
 
   beforeEach(async () => {
-    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-deep-root-"));
+    projectRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-deep-root-"),
+    );
     registryPath = path.join(projectRoot, ".state", "workflows.json");
     registry = new WorkflowRegistry(registryPath);
   });
@@ -625,10 +876,14 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
     const deep = path.join(projectRoot, "backend", "src", "agents", "ads");
     await writeMarker(deep, 1);
     for (const sibling of ["a", "b", "c", "d", "e", "f"]) {
-      await fs.mkdir(path.join(projectRoot, sibling, "child"), { recursive: true });
+      await fs.mkdir(path.join(projectRoot, sibling, "child"), {
+        recursive: true,
+      });
     }
     await registry.scan(projectRoot);
-    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([deep]);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+      deep,
+    ]);
 
     // Root + a few level-1 dirs and nothing more: the scan cannot have looked
     // at level 4, where the row lives.
@@ -638,7 +893,9 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
     expect(found).toEqual([]);
     expect(starved.truncated).toBe(true);
     expect(starved.envelopeDepth).toBeLessThan(4);
-    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([deep]);
+    expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+      deep,
+    ]);
 
     // And a scan that DID cover that depth still reconciles it away when the
     // marker really is gone — the protection is about coverage, not immunity.
@@ -653,7 +910,11 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
       const real = path.join(projectRoot, "pkg", "agents", "one");
       await writeMarker(real, 1);
       // loop -> the root itself: an infinitely deep tree if links were followed.
-      await fs.symlink(projectRoot, path.join(projectRoot, "pkg", "loop"), "dir");
+      await fs.symlink(
+        projectRoot,
+        path.join(projectRoot, "pkg", "loop"),
+        "dir",
+      );
 
       const started = performance.now();
       const found = await registry.scan(projectRoot);
@@ -675,7 +936,10 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
         { recursive: true },
       );
     }
-    await writeMarker(path.join(projectRoot, "node_modules", "pkg-7", "agent"), 9);
+    await writeMarker(
+      path.join(projectRoot, "node_modules", "pkg-7", "agent"),
+      9,
+    );
 
     const budget = new AgentProjectScanBudget();
     const found = await registry.scan(projectRoot, budget);
@@ -685,4 +949,562 @@ describe("WorkflowRegistry deep discovery under a chosen project root", () => {
     // in the hundreds.
     expect(budget.visited).toBeLessThan(10);
   });
+});
+
+describe("WorkflowRegistry syntax-only inventory reconciliation", () => {
+  let root: string;
+  let registryPath: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "harness-source-registry-"));
+    registryPath = path.join(root, ".state", "workflows.json");
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("discovers, persists, and reloads a source-only row without shape drift", async () => {
+    const agent = path.join(root, "agents", "billing");
+    await writeSourceAgent(agent, "billing");
+    await fs.writeFile(
+      path.join(agent, "package.json"),
+      JSON.stringify({ name: "@acme/billing" }),
+    );
+    const registry = new WorkflowRegistry(registryPath);
+
+    const found = await registry.scan(root);
+    expect(found).toEqual([
+      {
+        name: "@acme/billing",
+        path: agent,
+        definitionId: null,
+        definitionSlug: null,
+        sourceDefinitionName: "billing",
+        activeBuildRunId: null,
+        activeBuildRunStatus: null,
+        templateId: null,
+        forkId: null,
+        starterId: null,
+        source: "scan",
+      },
+    ]);
+    expect((await registry.inventorySnapshot(root)).status).toBe("complete");
+
+    const reloaded = new WorkflowRegistry(registryPath);
+    expect(await reloaded.list()).toEqual(await registry.list());
+    expect((await reloaded.inventorySnapshot(root)).status).toBe("degraded");
+  });
+
+  it("retires the candidate's syntax observations when a valid marker takes precedence", async () => {
+    const agent = path.join(root, "agent");
+    await writeSourceAgent(
+      agent,
+      "source-name",
+      `import { helper } from "./helper";\nvoid helper;`,
+    );
+    await fs.writeFile(
+      path.join(agent, "helper.ts"),
+      `export const helper = 1;`,
+    );
+    const registry = new WorkflowRegistry(registryPath);
+    await registry.scan(root);
+    expect(
+      (await registry.inventorySnapshot(root)).sourceObservations.some(
+        (observation) => observation.candidateRoot === agent,
+      ),
+    ).toBe(true);
+
+    await writeMarker(agent, null, { name: "marker-name" });
+    await registry.scan(root);
+
+    expect(
+      (await registry.inventorySnapshot(root)).sourceObservations.some(
+        (observation) => observation.candidateRoot === agent,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps source observations scoped to the scan envelope across a direct child rescan", async () => {
+    const agent = path.join(root, "agent");
+    const shared = path.join(root, "shared.ts");
+    await fs.mkdir(agent, { recursive: true });
+    await fs.writeFile(
+      shared,
+      `export { defineAgent as makeAgent } from "@sapiom/agent";`,
+    );
+    await fs.writeFile(
+      path.join(agent, "index.ts"),
+      `import { makeAgent } from "../shared.js";
+export const agent = makeAgent({ name: "broad-agent" });`,
+    );
+    const registry = new WorkflowRegistry(registryPath);
+    await registry.scan(root);
+    await registry.scan(agent);
+
+    const observations = (await registry.inventorySnapshot(root))
+      .sourceObservations;
+    const broad = observations.find(
+      (observation) =>
+        observation.workspaceRoot === root &&
+        observation.candidateRoot === agent,
+    );
+    const direct = observations.find(
+      (observation) =>
+        observation.workspaceRoot === agent &&
+        observation.candidateRoot === agent,
+    );
+    expect(broad?.paths).toContain(shared);
+    expect(direct?.paths).not.toContain(shared);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "projects lexical watch paths into a symlink-selected canonical envelope",
+    async () => {
+      const realWorkspace = path.join(root, "real-workspace");
+      const linkedWorkspace = path.join(root, "linked-workspace");
+      const realAgent = path.join(realWorkspace, "agent");
+      await fs.mkdir(realAgent, { recursive: true });
+      await fs.writeFile(
+        path.join(realAgent, "index.ts"),
+        `import { makeAgent } from "./helper.js";
+export const agent = makeAgent({ name: "linked-agent" });`,
+      );
+      await fs.writeFile(
+        path.join(realAgent, "helper.ts"),
+        `export { defineAgent as makeAgent } from "@sapiom/agent";`,
+      );
+      await fs.symlink(realWorkspace, linkedWorkspace, "dir");
+      const registry = new WorkflowRegistry(registryPath);
+
+      await registry.scan(linkedWorkspace);
+
+      const observation = (
+        await registry.inventorySnapshot(linkedWorkspace)
+      ).sourceObservations.find((entry) => entry.candidateRoot === realAgent);
+      expect(observation?.workspaceRoot).toBe(realWorkspace);
+      expect(observation?.paths).toContain(path.join(realAgent, "helper.ts"));
+      expect(
+        observation?.paths.some((observedPath) =>
+          observedPath.startsWith(linkedWorkspace),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("falls through an invalid marker but not a foreign repository boundary", async () => {
+    const nested = path.join(root, "nested-repo");
+    await writeSourceAgent(nested, "nested");
+    await fs.writeFile(path.join(nested, "sapiom.json"), "not-json");
+    await fs.mkdir(path.join(nested, ".git"));
+    const parentRegistry = new WorkflowRegistry(registryPath);
+
+    expect(await parentRegistry.scan(root)).toEqual([]);
+
+    const directRegistry = new WorkflowRegistry(
+      path.join(root, ".state", "direct.json"),
+    );
+    await expect(directRegistry.scan(nested)).resolves.toMatchObject([
+      { path: nested, sourceDefinitionName: "nested" },
+    ]);
+  });
+
+  it("continues below an incomplete source candidate to nested agents and markers", async () => {
+    const unresolved = path.join(root, "unresolved");
+    await fs.mkdir(unresolved, { recursive: true });
+    await fs.writeFile(
+      path.join(unresolved, "index.ts"),
+      `export { agent } from "./missing";`,
+    );
+    const nestedSource = path.join(unresolved, "nested-source");
+    const nestedMarker = path.join(unresolved, "nested-marker");
+    await writeSourceAgent(nestedSource, "nested-source");
+    await writeMarker(nestedMarker, 17, { name: "nested-marker" });
+    const registry = new WorkflowRegistry(registryPath);
+
+    const found = await registry.scan(root);
+
+    expect(found).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: nestedSource,
+          sourceDefinitionName: "nested-source",
+        }),
+        expect.objectContaining({
+          path: nestedMarker,
+          definitionId: 17,
+        }),
+      ]),
+    );
+    expect((await registry.inventorySnapshot(root)).status).toBe("degraded");
+  });
+
+  it.each(["marker", "source"] as const)(
+    "preserves directly proven descendants below a discovered %s stop root",
+    async (parentKind) => {
+      const parent = path.join(root, `${parentKind}-parent`);
+      const nested = path.join(parent, "nested-agent");
+      await writeSourceAgent(nested, "nested-agent");
+      const registry = new WorkflowRegistry(registryPath);
+
+      await registry.scan(nested);
+      expect((await registry.inventorySnapshot(nested)).status).toBe(
+        "complete",
+      );
+
+      if (parentKind === "marker") {
+        await writeMarker(parent, 77, { name: "parent-marker" });
+      } else {
+        await writeSourceAgent(parent, "parent-source");
+      }
+      await registry.scan(root);
+
+      expect((await registry.list()).map((row) => row.path).sort()).toEqual(
+        [nested, parent].sort(),
+      );
+      expect((await registry.inventorySnapshot(root)).status).toBe("complete");
+      // The parent candidate was proven, but its descendants were deliberately
+      // not traversed after the discovery stop.
+      expect((await registry.inventorySnapshot(nested)).status).toBe(
+        "complete",
+      );
+    },
+  );
+
+  it("preserves connected cloud evidence while syntax identity becomes canonical", async () => {
+    const agent = path.join(root, "connected");
+    await writeMarker(agent, 42, {
+      name: "payments",
+      templateId: "template-old",
+    });
+    const registry = new WorkflowRegistry(registryPath);
+    await registry.connectPath(agent);
+    await fs.rm(path.join(agent, "sapiom.json"));
+    await writeSourceAgent(agent, "billing");
+
+    await registry.scan(root);
+    expect(await registry.list()).toMatchObject([
+      {
+        path: agent,
+        source: "connect",
+        definitionId: 42,
+        definitionSlug: "payments",
+        templateId: "template-old",
+        sourceDefinitionName: "billing",
+      },
+    ]);
+
+    await writeMarker(agent, 99, { name: "current-marker" });
+    await registry.scan(root);
+    const adoptedMarker = (await registry.list())[0]!;
+    expect(adoptedMarker.definitionId).toBe(42);
+    expect(adoptedMarker.definitionSlug).toBe("payments");
+    expect(adoptedMarker).not.toHaveProperty("sourceDefinitionName");
+  });
+
+  it.each(["remove", "ordinary"])(
+    "retires stale source evidence from a connected row after a definitive %s",
+    async (mode) => {
+      const agent = path.join(root, "connected");
+      await writeSourceAgent(agent, "before");
+      const registry = new WorkflowRegistry(registryPath);
+      await registry.scan(root);
+      await registry.connectPath(agent);
+
+      if (mode === "remove") {
+        await fs.rm(path.join(agent, "index.ts"));
+      } else {
+        await fs.writeFile(
+          path.join(agent, "index.ts"),
+          `export const ordinary = true;`,
+        );
+      }
+      await registry.scan(root);
+
+      const row = (await registry.list())[0]!;
+      expect(row.source).toBe("connect");
+      expect(row).not.toHaveProperty("sourceDefinitionName");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "deduplicates canonical aliases while preserving lexical path and complementary evidence",
+    async () => {
+      const real = path.join(root, "real-agent");
+      const alias = path.join(root, "agent-alias");
+      await fs.mkdir(real);
+      await fs.symlink(real, alias, "dir");
+      await fs.mkdir(path.dirname(registryPath), { recursive: true });
+      await fs.writeFile(
+        registryPath,
+        JSON.stringify([
+          {
+            name: "connected",
+            path: alias,
+            definitionId: 7,
+            definitionSlug: "marker-name",
+            sourceDefinitionName: null,
+            templateId: null,
+            forkId: "fork-1",
+            starterId: null,
+            source: "connect",
+          },
+          {
+            name: "source",
+            path: real,
+            definitionId: null,
+            definitionSlug: null,
+            sourceDefinitionName: "source-name",
+            templateId: "template-1",
+            forkId: null,
+            starterId: "starter-1",
+            source: "scan",
+          },
+        ]),
+      );
+
+      const registry = new WorkflowRegistry(registryPath);
+      expect(await registry.list()).toMatchObject([
+        {
+          path: alias,
+          source: "connect",
+          definitionId: 7,
+          definitionSlug: "marker-name",
+          sourceDefinitionName: "source-name",
+          templateId: "template-1",
+          forkId: "fork-1",
+          starterId: "starter-1",
+        },
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a scan row's lexical alias stable across canonical-root rescans",
+    async () => {
+      const realRoot = path.join(root, "real-workspace");
+      const linkedRoot = path.join(root, "workspace-link");
+      const realAgent = path.join(realRoot, "agent");
+      await writeSourceAgent(realAgent, "stable-path");
+      await fs.symlink(realRoot, linkedRoot, "dir");
+      const registry = new WorkflowRegistry(registryPath);
+
+      await registry.scan(linkedRoot);
+      const lexicalAgent = path.join(linkedRoot, "agent");
+      expect((await registry.list())[0]?.path).toBe(lexicalAgent);
+      const before = await registry.inventorySnapshot(linkedRoot);
+
+      await registry.scan(realRoot);
+      expect((await registry.list())[0]?.path).toBe(lexicalAgent);
+      expect((await registry.inventorySnapshot(realRoot)).workflows).toEqual(
+        before.workflows,
+      );
+      expect((await registry.inventorySnapshot(linkedRoot)).status).toBe(
+        "complete",
+      );
+      expect((await registry.inventorySnapshot(realRoot)).status).toBe(
+        "complete",
+      );
+    },
+  );
+
+  it("sanitizes source identity and bounded package labels before persistence", async () => {
+    const invalid = path.join(root, "invalid-package");
+    await writeSourceAgent(invalid, "bad/name");
+    await fs.writeFile(
+      path.join(invalid, "package.json"),
+      JSON.stringify({ name: 42, padding: "x".repeat(70 * 1024) }),
+    );
+    const registry = new WorkflowRegistry(registryPath);
+
+    await registry.scan(root);
+    expect(await registry.list()).toMatchObject([
+      {
+        name: "invalid-package",
+        sourceDefinitionName: null,
+      },
+    ]);
+    expect(await new WorkflowRegistry(registryPath).list()).toEqual(
+      await registry.list(),
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow a package.json symlink for a display label",
+    async () => {
+      const agent = path.join(root, "symlink-package");
+      const external = path.join(root, "external-package.json");
+      await writeSourceAgent(agent, "safe");
+      await fs.writeFile(external, JSON.stringify({ name: "external-secret" }));
+      await fs.symlink(external, path.join(agent, "package.json"));
+      const registry = new WorkflowRegistry(registryPath);
+
+      await registry.scan(root);
+      expect((await registry.list())[0]?.name).toBe("symlink-package");
+    },
+  );
+
+  it("keeps completeness honest and supersedes only proven child coverage", async () => {
+    const child = path.join(root, "child");
+    await writeSourceAgent(child, "child");
+    const registry = new WorkflowRegistry(registryPath);
+    expect((await registry.inventorySnapshot(root)).status).toBe("degraded");
+
+    await registry.scan(child);
+    expect((await registry.inventorySnapshot(child)).status).toBe("complete");
+    await fs.writeFile(
+      path.join(child, "index.ts"),
+      `export { agent } from "./missing";`,
+    );
+    await registry.scan(root);
+    expect((await registry.inventorySnapshot(child)).status).toBe("degraded");
+    expect((await registry.inventorySnapshot(root)).status).toBe("degraded");
+
+    await writeSourceAgent(child, "child");
+    await registry.scan(root);
+    expect((await registry.inventorySnapshot(root)).status).toBe("complete");
+    expect((await registry.inventorySnapshot(child)).status).toBe("complete");
+  });
+
+  it("preserves a complete child claim when uncertainty is confined to a sibling", async () => {
+    const proven = path.join(root, "proven");
+    const unresolved = path.join(root, "unresolved");
+    await writeSourceAgent(proven, "proven");
+    await fs.mkdir(unresolved, { recursive: true });
+    await fs.writeFile(
+      path.join(unresolved, "index.ts"),
+      `export { agent } from "./missing";`,
+    );
+    const registry = new WorkflowRegistry(registryPath);
+    await registry.scan(proven);
+    expect((await registry.inventorySnapshot(proven)).status).toBe("complete");
+
+    await registry.scan(root);
+
+    expect((await registry.inventorySnapshot(root)).status).toBe("degraded");
+    expect((await registry.inventorySnapshot(proven)).status).toBe("complete");
+  });
+
+  it("keeps exact ignored-child status separate from a complete parent envelope", async () => {
+    const ignored = path.join(root, "node_modules", "selected-agent");
+    await fs.mkdir(ignored, { recursive: true });
+    await fs.writeFile(
+      path.join(ignored, "index.ts"),
+      `export { agent } from "./missing";`,
+    );
+    const registry = new WorkflowRegistry(registryPath);
+    await registry.scan(ignored);
+    expect((await registry.inventorySnapshot(ignored)).status).toBe("degraded");
+
+    await registry.scan(root);
+
+    expect((await registry.inventorySnapshot(root)).status).toBe("complete");
+    expect((await registry.inventorySnapshot(ignored)).status).toBe("degraded");
+  });
+
+  it("preserves a directly scanned source row and its proof below an ignored parent boundary", async () => {
+    const ignored = path.join(root, "node_modules", "selected-agent");
+    await writeSourceAgent(
+      ignored,
+      "selected-agent",
+      `import { helper } from "./helper";\nvoid helper;`,
+    );
+    await fs.writeFile(
+      path.join(ignored, "helper.ts"),
+      `export const helper = true;`,
+    );
+    const registry = new WorkflowRegistry(registryPath);
+
+    await registry.scan(ignored);
+    const direct = await registry.inventorySnapshot(ignored);
+    expect(direct.workflows.map((workflow) => workflow.path)).toEqual([
+      ignored,
+    ]);
+    expect(direct.canonicalWorkflowRoots).toEqual([
+      expect.objectContaining({
+        canonicalRoot: ignored,
+        identityEvidence: "source",
+      }),
+    ]);
+    expect(
+      direct.sourceObservations.some(
+        (observation) => observation.candidateRoot === ignored,
+      ),
+    ).toBe(true);
+
+    await registry.scan(root);
+
+    const parent = await registry.inventorySnapshot(root);
+    expect(parent.workflows.map((workflow) => workflow.path)).toEqual([
+      ignored,
+    ]);
+    expect(parent.canonicalWorkflowRoots).toEqual([
+      expect.objectContaining({
+        canonicalRoot: ignored,
+        identityEvidence: "source",
+      }),
+    ]);
+    expect(
+      parent.sourceObservations.some(
+        (observation) => observation.candidateRoot === ignored,
+      ),
+    ).toBe(true);
+    expect((await registry.inventorySnapshot(ignored)).status).toBe("complete");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "retires a parent-owned source row when that candidate becomes a foreign repository",
+    async () => {
+      const checkout = path.join(root, "checkout");
+      await writeSourceAgent(checkout, "checkout-agent");
+      const registry = new WorkflowRegistry(registryPath);
+
+      await registry.scan(root);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+        checkout,
+      ]);
+
+      await fs.mkdir(path.join(checkout, ".git"));
+      await registry.scan(root);
+      expect(await registry.list()).toEqual([]);
+
+      // Selecting the repository itself is explicit proof. A later parent
+      // scan preserves that directly-owned row behind the boundary.
+      await registry.scan(checkout);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+        checkout,
+      ]);
+      await registry.scan(root);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([
+        checkout,
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps nested-repository completeness exact across parent scans",
+    async () => {
+      const checkout = path.join(root, "checkout");
+      await writeSourceAgent(checkout, "checkout-agent");
+      await fs.mkdir(path.join(checkout, ".git"));
+      const registry = new WorkflowRegistry(registryPath);
+
+      await registry.scan(root);
+      expect((await registry.inventorySnapshot(root)).status).toBe("complete");
+      expect((await registry.inventorySnapshot(checkout)).status).toBe(
+        "degraded",
+      );
+
+      await registry.scan(checkout);
+      expect((await registry.inventorySnapshot(checkout)).status).toBe(
+        "complete",
+      );
+
+      await registry.scan(root);
+      expect((await registry.inventorySnapshot(root)).status).toBe("complete");
+      expect((await registry.inventorySnapshot(checkout)).status).toBe(
+        "complete",
+      );
+    },
+  );
 });

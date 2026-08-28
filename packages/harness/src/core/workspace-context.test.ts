@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkflowInfo } from "../shared/types.js";
 import {
   prepareHarnessContextForResume,
+  stageHarnessContextForPublication,
   writeHarnessContext,
   writeHarnessContextForLaunch,
   type WorkspaceContextSession,
@@ -42,7 +43,10 @@ describe("writeHarnessContext", () => {
   });
 
   async function readContext(): Promise<unknown> {
-    const raw = await fs.readFile(path.join(cwd, ".sapiom", "harness-context.json"), "utf8");
+    const raw = await fs.readFile(
+      path.join(cwd, ".sapiom", "harness-context.json"),
+      "utf8",
+    );
     return JSON.parse(raw);
   }
 
@@ -50,7 +54,11 @@ describe("writeHarnessContext", () => {
     await writeHarnessContext(session, workflow, [workflow]);
     const context = await readContext();
     expect(context).toMatchObject({
-      boundAgent: { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821 },
+      boundAgent: {
+        name: "leasing",
+        path: "/Users/demo/acme-app/leasing",
+        definitionId: 4821,
+      },
     });
     expect(context).not.toHaveProperty("boundWorkflow");
     expect(context).not.toHaveProperty("workflows");
@@ -69,7 +77,9 @@ describe("writeHarnessContext", () => {
     const context = await readContext();
     expect(context).toMatchObject({ boundAgent: null });
     // The file must still exist (only its content changed).
-    await expect(fs.access(path.join(cwd, ".sapiom", "harness-context.json"))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(cwd, ".sapiom", "harness-context.json")),
+    ).resolves.toBeUndefined();
   });
 
   it("overwrites cleanly on repeated binds and leaves no leftover tmp files", async () => {
@@ -77,10 +87,45 @@ describe("writeHarnessContext", () => {
     const renamed = { ...workflow, name: "renamed", definitionId: 9999 };
     await writeHarnessContext(session, renamed, [renamed]);
     const context = await readContext();
-    expect(context).toMatchObject({ boundAgent: { name: "renamed", definitionId: 9999 } });
+    expect(context).toMatchObject({
+      boundAgent: { name: "renamed", definitionId: 9999 },
+    });
 
     const entries = await fs.readdir(path.join(cwd, ".sapiom"));
     expect(entries).toEqual(["harness-context.json"]);
+  });
+
+  it("keeps staged publication invisible until synchronous commit and discards superseded stages", async () => {
+    await writeHarnessContext(session, workflow, [workflow]);
+    const staged = await stageHarnessContextForPublication(
+      session,
+      otherWorkflow,
+      [otherWorkflow],
+      () => true,
+    );
+    expect(staged).not.toBeNull();
+    expect((await readContext()) as object).toMatchObject({
+      boundAgent: { name: "leasing" },
+    });
+
+    staged!.commit();
+    expect((await readContext()) as object).toMatchObject({
+      boundAgent: { name: "billing" },
+    });
+
+    const discarded = await stageHarnessContextForPublication(
+      session,
+      workflow,
+      [workflow],
+      () => true,
+    );
+    discarded!.discard();
+    expect((await readContext()) as object).toMatchObject({
+      boundAgent: { name: "billing" },
+    });
+    expect(await fs.readdir(path.join(cwd, ".sapiom"))).toEqual([
+      "harness-context.json",
+    ]);
   });
 
   it("does not throw when the cwd is unwritable (logs and returns)", async () => {
@@ -90,7 +135,9 @@ describe("writeHarnessContext", () => {
     const blockedFile = path.join(cwd, "blocked");
     await fs.writeFile(blockedFile, "x");
     await expect(
-      writeHarnessContext({ ...session, cwd: blockedFile }, workflow, [workflow]),
+      writeHarnessContext({ ...session, cwd: blockedFile }, workflow, [
+        workflow,
+      ]),
     ).resolves.toBeUndefined();
   });
 
@@ -99,15 +146,25 @@ describe("writeHarnessContext", () => {
     await fs.writeFile(blockedFile, "x");
 
     await expect(
-      writeHarnessContextForLaunch({ ...session, cwd: blockedFile }, workflow, [workflow]),
+      writeHarnessContextForLaunch({ ...session, cwd: blockedFile }, workflow, [
+        workflow,
+      ]),
     ).rejects.toThrow();
   });
 
   it("writes the full agents registry, trimmed to {name, path, definitionId} (no source)", async () => {
     await writeHarnessContext(session, null, [workflow, otherWorkflow]);
     const context = (await readContext()) as { agents: unknown[] };
-    expect(context.agents).toContainEqual({ name: "leasing", path: workflow.path, definitionId: 4821 });
-    expect(context.agents).toContainEqual({ name: "billing", path: otherWorkflow.path, definitionId: 4822 });
+    expect(context.agents).toContainEqual({
+      name: "leasing",
+      path: workflow.path,
+      definitionId: 4821,
+    });
+    expect(context.agents).toContainEqual({
+      name: "billing",
+      path: otherWorkflow.path,
+      definitionId: 4822,
+    });
     for (const entry of context.agents) {
       expect(entry).not.toHaveProperty("source");
     }
@@ -120,27 +177,42 @@ describe("writeHarnessContext", () => {
     await writeHarnessContext(session, null, [otherWorkflow, workflow]); // billing, then leasing
     const second = (await readContext()) as { agents: Array<{ path: string }> };
 
-    expect(first.agents.map((w) => w.path)).toEqual(second.agents.map((w) => w.path));
-    expect(first.agents.map((w) => w.path)).toEqual([otherWorkflow.path, workflow.path].sort());
+    expect(first.agents.map((w) => w.path)).toEqual(
+      second.agents.map((w) => w.path),
+    );
+    expect(first.agents.map((w) => w.path)).toEqual(
+      [otherWorkflow.path, workflow.path].sort(),
+    );
   });
 
   it("includes agents even when none of them is the bound one", async () => {
     await writeHarnessContext(session, workflow, [workflow, otherWorkflow]);
-    const context = (await readContext()) as { boundAgent: { path: string }; agents: Array<{ path: string }> };
+    const context = (await readContext()) as {
+      boundAgent: { path: string };
+      agents: Array<{ path: string }>;
+    };
     expect(context.boundAgent?.path).toBe(workflow.path);
     expect(context.agents.map((w) => w.path)).toContain(otherWorkflow.path);
   });
 
   it("embeds the session's own identity", async () => {
     await writeHarnessContext(session, null, []);
-    const context = (await readContext()) as { session: { id: string; cwd: string; harness: string } };
-    expect(context.session).toEqual({ id: "sess-1", cwd, harness: "claude-code" });
+    const context = (await readContext()) as {
+      session: { id: string; cwd: string; harness: string };
+    };
+    expect(context.session).toEqual({
+      id: "sess-1",
+      cwd,
+      harness: "claude-code",
+    });
   });
 
   it("creates .sapiom/ from scratch for a cwd that has never had any file written to it", async () => {
     await expect(fs.access(path.join(cwd, ".sapiom"))).rejects.toThrow();
     await writeHarnessContext(session, null, []);
-    await expect(fs.access(path.join(cwd, ".sapiom", "harness-context.json"))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(cwd, ".sapiom", "harness-context.json")),
+    ).resolves.toBeUndefined();
   });
 
   it("handles a burst of concurrent writes to the same destination: no rejections, valid JSON, no leftover tmp files, last call wins", async () => {
@@ -150,13 +222,17 @@ describe("writeHarnessContext", () => {
     // tmp filename within the same millisecond and steal each other's tmp
     // file out from under a pending rename.
     const writes = Array.from({ length: 10 }, (_, i) =>
-      writeHarnessContext(session, { ...workflow, definitionId: i }, [workflow]),
+      writeHarnessContext(session, { ...workflow, definitionId: i }, [
+        workflow,
+      ]),
     );
 
     const results = await Promise.allSettled(writes);
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
 
-    const context = (await readContext()) as { boundAgent: { definitionId: number } };
+    const context = (await readContext()) as {
+      boundAgent: { definitionId: number };
+    };
     // Serialized in call order, not completion order: the last call
     // enqueued must be the one that's actually on disk at the end,
     // regardless of which write's disk I/O happened to finish first.
@@ -167,20 +243,38 @@ describe("writeHarnessContext", () => {
   });
 
   it("interleaves concurrent writes to two different destinations independently", async () => {
-    const otherCwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-context-test-other-"));
-    const otherSession: WorkspaceContextSession = { id: "sess-2", cwd: otherCwd, harness: "codex" };
+    const otherCwd = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-context-test-other-"),
+    );
+    const otherSession: WorkspaceContextSession = {
+      id: "sess-2",
+      cwd: otherCwd,
+      harness: "codex",
+    };
 
     try {
       await Promise.all([
-        ...Array.from({ length: 5 }, (_, i) => writeHarnessContext(session, { ...workflow, definitionId: i }, [])),
         ...Array.from({ length: 5 }, (_, i) =>
-          writeHarnessContext(otherSession, { ...otherWorkflow, definitionId: i + 100 }, []),
+          writeHarnessContext(session, { ...workflow, definitionId: i }, []),
+        ),
+        ...Array.from({ length: 5 }, (_, i) =>
+          writeHarnessContext(
+            otherSession,
+            { ...otherWorkflow, definitionId: i + 100 },
+            [],
+          ),
         ),
       ]);
 
-      const mine = (await readContext()) as { boundAgent: { definitionId: number }; session: { id: string } };
+      const mine = (await readContext()) as {
+        boundAgent: { definitionId: number };
+        session: { id: string };
+      };
       const theirs = JSON.parse(
-        await fs.readFile(path.join(otherCwd, ".sapiom", "harness-context.json"), "utf8"),
+        await fs.readFile(
+          path.join(otherCwd, ".sapiom", "harness-context.json"),
+          "utf8",
+        ),
       ) as { boundAgent: { definitionId: number }; session: { id: string } };
 
       expect(mine.session.id).toBe("sess-1");
@@ -199,7 +293,9 @@ describe("prepareHarnessContextForResume", () => {
   let contextPath: string;
 
   beforeEach(async () => {
-    cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-context-resume-test-"));
+    cwd = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-context-resume-test-"),
+    );
     session = { id: "current-session", cwd, harness: "claude-code" };
     contextPath = path.join(cwd, ".sapiom", "harness-context.json");
   });
@@ -214,7 +310,10 @@ describe("prepareHarnessContextForResume", () => {
   }
 
   async function readParsed(): Promise<Record<string, unknown>> {
-    return JSON.parse(await fs.readFile(contextPath, "utf8")) as Record<string, unknown>;
+    return JSON.parse(await fs.readFile(contextPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
   }
 
   it("leaves an already-current schema byte-for-byte untouched", async () => {
@@ -226,7 +325,9 @@ describe("prepareHarnessContextForResume", () => {
     });
     await writeRaw(raw);
 
-    await expect(prepareHarnessContextForResume(session, workflow, [workflow])).resolves.toBe("current");
+    await expect(
+      prepareHarnessContextForResume(session, workflow, [workflow]),
+    ).resolves.toBe("current");
     await expect(fs.readFile(contextPath, "utf8")).resolves.toBe(raw);
   });
 
@@ -239,7 +340,9 @@ describe("prepareHarnessContextForResume", () => {
     };
     await writeRaw(JSON.stringify(legacy));
 
-    await expect(prepareHarnessContextForResume(session, workflow, [workflow])).resolves.toBe("migrated");
+    await expect(
+      prepareHarnessContextForResume(session, workflow, [workflow]),
+    ).resolves.toBe("migrated");
     const migrated = await readParsed();
     expect(migrated).toEqual({
       boundAgent: legacy.boundWorkflow,
@@ -252,15 +355,30 @@ describe("prepareHarnessContextForResume", () => {
   });
 
   it("rebuilds a missing file from the current session, binding, and registry", async () => {
-    await expect(prepareHarnessContextForResume(session, workflow, [otherWorkflow, workflow])).resolves.toBe(
-      "rewritten",
-    );
+    await expect(
+      prepareHarnessContextForResume(session, workflow, [
+        otherWorkflow,
+        workflow,
+      ]),
+    ).resolves.toBe("rewritten");
 
     expect(await readParsed()).toMatchObject({
-      boundAgent: { name: workflow.name, path: workflow.path, definitionId: workflow.definitionId },
+      boundAgent: {
+        name: workflow.name,
+        path: workflow.path,
+        definitionId: workflow.definitionId,
+      },
       agents: [
-        { name: otherWorkflow.name, path: otherWorkflow.path, definitionId: otherWorkflow.definitionId },
-        { name: workflow.name, path: workflow.path, definitionId: workflow.definitionId },
+        {
+          name: otherWorkflow.name,
+          path: otherWorkflow.path,
+          definitionId: otherWorkflow.definitionId,
+        },
+        {
+          name: workflow.name,
+          path: workflow.path,
+          definitionId: workflow.definitionId,
+        },
       ],
       session: { id: "current-session", cwd, harness: "claude-code" },
     });
@@ -269,10 +387,18 @@ describe("prepareHarnessContextForResume", () => {
   it("rebuilds malformed JSON from the current state", async () => {
     await writeRaw("{ nope");
 
-    await expect(prepareHarnessContextForResume(session, null, [workflow])).resolves.toBe("rewritten");
+    await expect(
+      prepareHarnessContextForResume(session, null, [workflow]),
+    ).resolves.toBe("rewritten");
     expect(await readParsed()).toMatchObject({
       boundAgent: null,
-      agents: [{ name: workflow.name, path: workflow.path, definitionId: workflow.definitionId }],
+      agents: [
+        {
+          name: workflow.name,
+          path: workflow.path,
+          definitionId: workflow.definitionId,
+        },
+      ],
       session: { id: "current-session", cwd, harness: "claude-code" },
     });
   });
@@ -302,7 +428,9 @@ describe("prepareHarnessContextForResume", () => {
   ])("rebuilds a %s schema instead of exposing it", async (_label, saved) => {
     await writeRaw(JSON.stringify(saved));
 
-    await expect(prepareHarnessContextForResume(session, workflow, [workflow])).resolves.toBe("rewritten");
+    await expect(
+      prepareHarnessContextForResume(session, workflow, [workflow]),
+    ).resolves.toBe("rewritten");
     const rewritten = await readParsed();
     expect(rewritten).toMatchObject({
       boundAgent: { name: workflow.name, path: workflow.path },
@@ -316,6 +444,8 @@ describe("prepareHarnessContextForResume", () => {
   it("rejects resume when an existing path cannot be read as a file", async () => {
     await fs.mkdir(contextPath, { recursive: true });
 
-    await expect(prepareHarnessContextForResume(session, workflow, [workflow])).rejects.toThrow();
+    await expect(
+      prepareHarnessContextForResume(session, workflow, [workflow]),
+    ).rejects.toThrow();
   });
 });

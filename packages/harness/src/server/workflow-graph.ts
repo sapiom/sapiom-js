@@ -65,7 +65,10 @@ import {
   type AgentProjectMarkerInspection,
 } from "../core/agent-project-discovery.js";
 import { renderCanvasMessageDocument } from "../core/canvas-template.js";
-import { deriveWorkflowCanvas, type RenderableWorkflow } from "../core/canvas-render.js";
+import {
+  deriveWorkflowCanvas,
+  type RenderableWorkflow,
+} from "../core/canvas-render.js";
 import type { CanvasGraph } from "../core/canvas-graph.js";
 import type { CanvasEnrichment } from "../core/canvas-enrichment.js";
 import { hasTraversalSegment, resolveWithinRoot } from "../core/path-safety.js";
@@ -113,13 +116,20 @@ export interface WorkflowGraphRouterDeps {
 const EMPTY_REASONS = {
   gone: "This agent's directory is no longer on disk.",
   absent: "This agent has no sapiom.json, so there is no graph to render yet.",
-  invalid: "This agent's sapiom.json is not valid JSON, so its graph can't be read.",
+  invalid:
+    "This agent's sapiom.json is not valid JSON, so its graph can't be read.",
   unreadable: "This agent's sapiom.json could not be read.",
+  changed:
+    "This agent's marker changed before its graph extraction could start.",
 } as const;
 
 /** The empty board — the same message document server/canvas.ts serves, with
  *  the specific reason as its subtitle so the pane is never mutely blank. */
-function emptyResponse(agentPath: string, name: string, reason: string): WorkflowGraphResponse {
+function emptyResponse(
+  agentPath: string,
+  name: string,
+  reason: string,
+): WorkflowGraphResponse {
   return {
     path: agentPath,
     name,
@@ -142,7 +152,11 @@ function emptyResponse(agentPath: string, name: string, reason: string): Workflo
  * agent's graph could not be extracted" — the same distinction
  * `server/actions.ts` preserves when its input-contract extraction fails.
  */
-function errorResponse(agentPath: string, name: string, reason: string): WorkflowGraphResponse {
+function errorResponse(
+  agentPath: string,
+  name: string,
+  reason: string,
+): WorkflowGraphResponse {
   return {
     path: agentPath,
     name,
@@ -161,7 +175,9 @@ function failureReason(err: unknown): string {
   return `Studio couldn't read this agent's graph: ${detail || "the derivation failed."}`;
 }
 
-export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): ExpressRouter {
+export function createWorkflowGraphRouter(
+  deps: WorkflowGraphRouterDeps,
+): ExpressRouter {
   const inspectMarker = deps.inspectMarker ?? inspectAgentProjectMarker;
   const deriveCanvas = deps.deriveCanvas ?? deriveWorkflowCanvas;
   const realpath = deps.realpath ?? ((p: string) => fsp.realpath(p));
@@ -178,7 +194,9 @@ export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): Expres
     // error, not something normalization silently lands on another registered
     // path. (path-safety.ts's segment-aware test — "a..b" is a normal name.)
     if (hasTraversalSegment(raw)) {
-      res.status(400).json({ error: "agent path must not contain a '..' segment" });
+      res
+        .status(400)
+        .json({ error: "agent path must not contain a '..' segment" });
       return;
     }
     if (!path.isAbsolute(raw)) {
@@ -213,9 +231,13 @@ export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): Expres
     // agent DIRECTORY is legitimate (the user registered it, and realDir is
     // its target), but a `sapiom.json` symlinked out of the project would make
     // a path-keyed read endpoint into a file reader — refuse that outright.
-    const marker = await realpath(path.join(realDir, "sapiom.json")).catch(() => null);
+    const marker = await realpath(path.join(realDir, "sapiom.json")).catch(
+      () => null,
+    );
     if (marker !== null && resolveWithinRoot(realDir, marker) === null) {
-      res.status(400).json({ error: "sapiom.json resolves outside the agent directory" });
+      res
+        .status(400)
+        .json({ error: "sapiom.json resolves outside the agent directory" });
       return;
     }
 
@@ -226,16 +248,33 @@ export function createWorkflowGraphRouter(deps: WorkflowGraphRouterDeps): Expres
     try {
       const inspection = await inspectMarker(realDir);
       if (inspection.status !== "valid") {
-        res.json(emptyResponse(agentPath, name, EMPTY_REASONS[inspection.status]));
+        res.json(
+          emptyResponse(agentPath, name, EMPTY_REASONS[inspection.status]),
+        );
         return;
       }
 
-      const derived = await deriveCanvas({
-        path: workflow.path,
-        name,
-        definitionId: workflow.definitionId ?? null,
-        activeBuildRunStatus: workflow.activeBuildRunStatus ?? null,
-      });
+      const derived = await deriveCanvas(
+        {
+          path: workflow.path,
+          name,
+          definitionId: workflow.definitionId ?? null,
+          activeBuildRunStatus: workflow.activeBuildRunStatus ?? null,
+        },
+        {
+          authorizeBeforeExtraction: async () =>
+            (await inspectMarker(realDir)).status === "valid",
+        },
+      );
+      if (derived.status === "cancelled") {
+        const currentMarker = await inspectMarker(realDir);
+        const reason =
+          currentMarker.status === "valid"
+            ? EMPTY_REASONS.changed
+            : EMPTY_REASONS[currentMarker.status];
+        res.json(emptyResponse(agentPath, name, reason));
+        return;
+      }
 
       res.json({
         path: agentPath,

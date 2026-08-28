@@ -7,6 +7,7 @@ import {
   detectAgentInvocations,
   detectStepCapabilities,
   detectWorkflowLaunches,
+  listSourceFilesWithObservations,
 } from "./canvas-interconnections.js";
 
 const FIXTURES_DIR = path.join(
@@ -159,6 +160,12 @@ ctx.sapiom.agents.launch({ definition: "async-child" });
         },
       ],
       warnings: [],
+      observedPaths: [
+        dir,
+        path.join(dir, "nested"),
+        path.join(dir, "nested", "index.ts"),
+      ],
+      complete: true,
     });
   });
 
@@ -309,7 +316,69 @@ function helper(agents: { launch(spec: unknown): unknown }) {
     await expect(detectAgentInvocations(dir, new Set())).resolves.toEqual({
       invocations: [],
       warnings: [],
+      observedPaths: [dir, path.join(dir, "index.ts")],
+      complete: true,
     });
+  });
+});
+
+describe("listSourceFilesWithObservations", () => {
+  it("bounds a broad empty-directory tree and marks the scan incomplete", async () => {
+    const dir = await tmpProject({ "index.ts": "export const value = 1;\n" });
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        fs.mkdir(path.join(dir, `directory-${String(index).padStart(2, "0")}`)),
+      ),
+    );
+
+    const result = await listSourceFilesWithObservations(dir, {
+      maxDirectories: 4,
+    });
+
+    expect(result.complete).toBe(false);
+    expect(
+      result.observedPaths.filter((observed) =>
+        result.files.includes(observed) ? false : true,
+      ),
+    ).toHaveLength(4);
+    expect(result.files).toEqual([path.join(dir, "index.ts")]);
+  });
+
+  it("uses a deterministic depth boundary instead of recursing indefinitely", async () => {
+    const dir = await tmpProject({
+      "one/two/three/index.ts": "export const value = 1;\n",
+    });
+
+    const result = await listSourceFilesWithObservations(dir, { maxDepth: 1 });
+
+    expect(result.complete).toBe(false);
+    expect(result.files).toEqual([]);
+    expect(result.observedPaths).toEqual([dir, path.join(dir, "one")]);
+  });
+
+  it("bounds candidates and observations in one very large directory", async () => {
+    const dir = await tmpProject(
+      Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [
+          `source-${String(index).padStart(2, "0")}.ts`,
+          `export const value${index} = ${index};\n`,
+        ]),
+      ),
+    );
+
+    const first = await listSourceFilesWithObservations(dir, {
+      maxFiles: 4,
+      maxEntries: 6,
+    });
+    const second = await listSourceFilesWithObservations(dir, {
+      maxFiles: 4,
+      maxEntries: 6,
+    });
+
+    expect(first.complete).toBe(false);
+    expect(first.files).toEqual([]);
+    expect(first.observedPaths).toEqual([dir]);
+    expect(second).toEqual(first);
   });
 });
 

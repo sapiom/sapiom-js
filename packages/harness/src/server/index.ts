@@ -30,9 +30,8 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
-import type { SystemGraphSnapshot } from "../shared/system-graph.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
-import { resolveStatePaths } from "../core/paths.js";
+import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
   SessionManager,
   type LaunchOptsBuilder,
@@ -41,11 +40,18 @@ import { TaskManager } from "../core/task-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
 import {
+  type RegistryWorkflowInfo,
   WorkflowRegistry,
+  type WorkflowIdentityEvidence,
   type WorkflowRegistryLike,
   createWorkflowsRouter,
 } from "../core/workflow-registry.js";
-import { AgentProjectScanBudget } from "../core/agent-project-discovery.js";
+import {
+  AgentProjectScanAllowance,
+  AgentProjectScanBudget,
+  inspectAgentProjectMarker,
+} from "../core/agent-project-discovery.js";
+import { AgentSourceScanBudget } from "../core/agent-source-discovery.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
 import {
@@ -90,15 +96,21 @@ import {
 } from "../core/inject/retention.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
-import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
+import {
+  sourceObservationsWithinScope,
+  WorkspaceWatcherManager,
+  type WorkflowSourceObservation,
+} from "../core/workspace-watcher.js";
 import { InstallWatcherManager } from "../core/install-watcher.js";
 import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import {
   prepareHarnessContextForResume,
+  stageHarnessContextForPublication,
   writeHarnessContext,
   writeHarnessContextForLaunch,
+  type StagedHarnessContext,
 } from "../core/workspace-context.js";
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { renderCanvasForSession } from "../core/canvas-render.js";
@@ -118,7 +130,10 @@ import {
   isWithinGraphPath,
 } from "../core/system-graph-inventory.js";
 import { SystemGraphStore } from "../core/system-graph-store.js";
-import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
+import {
+  SharedWorkspaceWatchBroker,
+  SystemGraphWatcherManager,
+} from "../core/system-graph-watcher.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
   createDefinitionSlugResolver,
@@ -172,12 +187,6 @@ import { createAuthRouter, createMutableAuthState } from "./auth-routes.js";
  */
 const CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS = 15_000;
 const CODEX_ROLLOUT_DISCOVERY_POLL_MS = 300;
-
-/** Workflow list is refreshed off this interval for the (synchronous)
- * macro-resolution lookup — connect/scan are infrequent user actions, so a
- * few seconds of staleness there is an acceptable tradeoff for not having to
- * thread an async registry lookup through the macro-runner's sync contract. */
-const WORKFLOWS_CACHE_REFRESH_MS = 3_000;
 
 /** How often SessionManager.sweepDeadSessions() runs — the backstop that
  * reconciles any non-exited session record whose pty process is actually
@@ -286,6 +295,31 @@ export interface HarnessServerOptions {
    * Passed through into AppState.consentEnvReason.
    */
   consentEnvReason?: string | null;
+  /** Internal deterministic seams for coordinator race tests. */
+  workflowDiscoveryTestHooks?: {
+    beforeScan?: (input: {
+      root: string;
+      reason: WorkflowScanReason;
+      generation: number;
+    }) => void | Promise<void>;
+    afterScan?: (input: {
+      root: string;
+      reason: WorkflowScanReason;
+      generation: number;
+    }) => void | Promise<void>;
+    beforePublication?: (input: {
+      epoch: number;
+      roots: readonly string[];
+    }) => void | Promise<void>;
+    afterContextStaging?: (input: {
+      epoch: number;
+      sessionIds: readonly string[];
+    }) => void | Promise<void>;
+    /** Called at the exact automatic Canvas execution boundary. */
+    beforeAutomaticCanvasLaunch?: (
+      workflowPath: string,
+    ) => void | Promise<void>;
+  };
 }
 
 export interface HarnessServer {
@@ -302,27 +336,29 @@ function packageRoot(): string {
 }
 
 /**
- * Why a registry scan is running. There are exactly six ways an agent can enter
- * this install's registry and five of them are a scan, so naming them is what
+ * Why a registry scan is running. Naming every entry path is what
  * turns "the rail grew rows I did not ask for" into a line in the log:
  *
  *   boot             the directory the studio was launched in
  *   session-create   the directory a new session was opened in
  *   workspace-change the session cwd whose marker set the watcher saw change
  *   agent-linked     one agent's own directory, after `deploy` wrote its id
+ *   agent-created    a newly scaffolded agent's containing project
+ *   agent-connected  one manually connected path, to settle syntax evidence
  *   agent-moved      the destination of a rail drag
  *   graph-refresh    a project graph open or explicit graph refresh
  *   requested        POST /api/workflows/scan — the "Add all" button
  *
- * The sixth, POST /api/workflows/connect, registers exactly one path and is not
- * a walk at all.
+ * POST /api/workflows/connect registers one path before its reconciliation
+ * scan; every other reason enters through discovery directly.
  */
-type WorkflowScanReason =
+export type WorkflowScanReason =
   | "boot"
   | "session-create"
   | "workspace-change"
   | "agent-linked"
   | "agent-created"
+  | "agent-connected"
   | "agent-moved"
   | "graph-refresh"
   | "requested";
@@ -338,13 +374,22 @@ function logAgentScan(
   root: string,
   found: number,
   budget: AgentProjectScanBudget,
+  sourceBudget?: {
+    modules: number;
+    bytes: number;
+    lookups: number;
+    truncated: boolean;
+  },
 ): void {
   const truncated = budget.truncated
     ? `, TRUNCATED at depth ${String(budget.truncatedAtDepth)} (envelope ${budget.envelopeDepth})`
     : "";
+  const source = sourceBudget
+    ? `, source ${sourceBudget.modules} module(s) / ${sourceBudget.bytes} bytes / ${sourceBudget.lookups} lookup(s)${sourceBudget.truncated ? " TRUNCATED" : ""}`
+    : "";
   console.error(
     `[harness] agent scan (${reason}) ${root}: ${found} agent(s), ` +
-      `${budget.visited} dirs${truncated}`,
+      `${budget.visited} dirs${truncated}${source}`,
   );
 }
 
@@ -352,8 +397,8 @@ function logAgentScan(
  *  compares the fields the SPA actually renders/keys on, order-insensitive, so
  *  a rescan that turned up nothing new doesn't trigger a needless broadcast. */
 function workflowListsEqual(
-  a: readonly WorkflowInfo[],
-  b: readonly WorkflowInfo[],
+  a: readonly RegistryWorkflowInfo[],
+  b: readonly RegistryWorkflowInfo[],
 ): boolean {
   if (a.length !== b.length) return false;
   // NUL separates the fields because it can't occur in any of them. Keep it
@@ -361,10 +406,37 @@ function workflowListsEqual(
   // grep and ripgrep classify this whole file as binary and silently skip it.
   // Mutable cloud-build fields are deliberately enriched at serve/render
   // time; the registry snapshots compared here never own those fields.
-  const key = (w: WorkflowInfo): string =>
-    `${w.path}\u0000${w.name}\u0000${w.definitionId ?? ""}\u0000${w.definitionSlug ?? ""}\u0000${w.source}`;
+  const key = (w: RegistryWorkflowInfo): string =>
+    JSON.stringify([
+      w.path,
+      w.name,
+      w.definitionId,
+      w.definitionSlug,
+      Object.prototype.hasOwnProperty.call(w, "sourceDefinitionName"),
+      w.sourceDefinitionName ?? null,
+      w.markerPresent === true,
+      w.activeBuildRunId ?? null,
+      w.activeBuildRunStatus ?? null,
+      w.templateId ?? null,
+      w.forkId ?? null,
+      w.starterId ?? null,
+      w.source,
+    ]);
   const setA = new Set(a.map(key));
   return b.every((w) => setA.has(key(w)));
+}
+
+function publicWorkflowInfo(workflow: RegistryWorkflowInfo): WorkflowInfo {
+  const publicRow = { ...workflow };
+  delete publicRow.sourceDefinitionName;
+  delete publicRow.markerPresent;
+  return publicRow;
+}
+
+function publicWorkflowInfos(
+  workflows: readonly RegistryWorkflowInfo[],
+): WorkflowInfo[] {
+  return workflows.map(publicWorkflowInfo);
 }
 
 function readVersion(): string {
@@ -525,8 +597,8 @@ export const startServer = async (
    *  so it is refreshed even when the stable slug is already present.
    *  Resolves all lookups in parallel. Never mutates the registry. */
   const enrichWorkflows = async (
-    workflows: WorkflowInfo[],
-  ): Promise<WorkflowInfo[]> => {
+    workflows: RegistryWorkflowInfo[],
+  ): Promise<RegistryWorkflowInfo[]> => {
     return Promise.all(
       workflows.map(async (workflow) => {
         if (workflow.definitionId == null) return workflow;
@@ -640,13 +712,111 @@ export const startServer = async (
   } catch (err) {
     console.error("[harness] recent-dirs prune failed:", err);
   }
-  let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
-  const workflowsCacheTimer = setInterval(() => {
-    void workflowRegistry.list().then((list) => {
-      workflowsCache = list;
+  let workflowsCache: RegistryWorkflowInfo[] = await workflowRegistry.list();
+  const initialInventorySnapshot =
+    await workflowRegistry.inventorySnapshot(launchDir);
+  type AcceptedCanonicalWorkflowRoot = {
+    workflowPath: string;
+    canonicalRoot: string;
+    identityEvidence: WorkflowIdentityEvidence;
+  };
+  let acceptedInventoryGeneration = initialInventorySnapshot.generation;
+  let acceptedCanonicalWorkflowRoots: AcceptedCanonicalWorkflowRoot[] =
+    initialInventorySnapshot.canonicalWorkflowRoots.map((entry) => ({
+      ...entry,
+    }));
+  let acceptedSourceObservations: WorkflowSourceObservation[] =
+    initialInventorySnapshot.sourceObservations.map((entry) => ({
+      ...entry,
+      paths: [...entry.paths],
+    }));
+  const acceptedScopeStatusByCanonicalRoot = new Map<
+    string,
+    "complete" | "degraded"
+  >([
+    [
+      initialInventorySnapshot.canonicalScopeRoot,
+      initialInventorySnapshot.status,
+    ],
+  ]);
+  const acceptedCanonicalScopeByLexicalRoot = new Map<string, string>([
+    [
+      resolve(expandHome(launchDir)),
+      initialInventorySnapshot.canonicalScopeRoot,
+    ],
+    [
+      initialInventorySnapshot.canonicalScopeRoot,
+      initialInventorySnapshot.canonicalScopeRoot,
+    ],
+  ]);
+
+  const acceptedCanonicalScopeRoot = (root: string): string => {
+    const lexicalRoot = resolve(expandHome(root));
+    return (
+      acceptedCanonicalScopeByLexicalRoot.get(lexicalRoot) ??
+      canonicalGraphPath(lexicalRoot)
+    );
+  };
+  const acceptedInventorySnapshot = (scope: WorkspaceScope) => {
+    const canonicalScopeRoot = acceptedCanonicalScopeRoot(scope.root);
+    return {
+      workflows: workflowsCache,
+      status:
+        acceptedScopeStatusByCanonicalRoot.get(canonicalScopeRoot) ??
+        ("degraded" as const),
+      generation: acceptedInventoryGeneration,
+      canonicalScopeRoot,
+      canonicalWorkflowRoots: acceptedCanonicalWorkflowRoots,
+      sourceObservations: acceptedSourceObservations,
+    };
+  };
+
+  const acceptedSourceObservationsForRoot = (
+    root: string,
+  ): WorkflowSourceObservation[] => {
+    const canonicalRoot = acceptedCanonicalScopeRoot(root);
+    return sourceObservationsWithinScope(canonicalRoot, [
+      ...acceptedSourceObservations,
+      ...systemGraphRelationships.sourceObservations(),
+    ]);
+  };
+
+  const markAcceptedInventoryDirty = (root: string): void => {
+    const canonicalRoot = acceptedCanonicalScopeRoot(root);
+    let changed = false;
+    let sawIntersectingStatus = false;
+    for (const [scopeRoot, status] of acceptedScopeStatusByCanonicalRoot) {
+      if (
+        isWithinGraphPath(scopeRoot, canonicalRoot) ||
+        isWithinGraphPath(canonicalRoot, scopeRoot)
+      ) {
+        sawIntersectingStatus = true;
+        if (status !== "degraded") {
+          acceptedScopeStatusByCanonicalRoot.set(scopeRoot, "degraded");
+          changed = true;
+        }
+      }
+    }
+    if (!sawIntersectingStatus) {
+      acceptedScopeStatusByCanonicalRoot.set(canonicalRoot, "degraded");
+      changed = true;
+    }
+    const nextRoots = acceptedCanonicalWorkflowRoots.map((entry) => {
+      if (
+        entry.identityEvidence === "unknown" ||
+        (!isWithinGraphPath(canonicalRoot, entry.canonicalRoot) &&
+          !isWithinGraphPath(entry.canonicalRoot, canonicalRoot))
+      ) {
+        return entry;
+      }
+      changed = true;
+      return { ...entry, identityEvidence: "unknown" as const };
     });
-  }, WORKFLOWS_CACHE_REFRESH_MS);
-  workflowsCacheTimer.unref?.();
+    if (changed) {
+      acceptedCanonicalWorkflowRoots = nextRoots;
+      acceptedInventoryGeneration += 1;
+    }
+  };
 
   const boundWorkflowForSession = (
     session: HarnessSession,
@@ -667,11 +837,32 @@ export const startServer = async (
    */
   const writeSessionContext = async (
     session: HarnessSession,
+    workflows: WorkflowInfo[] = workflowsCache,
+    isCurrent?: () => boolean,
   ): Promise<void> => {
-    await writeHarnessContext(
+    const boundWorkflow = session.boundWorkflowPath
+      ? (workflows.find(
+          (workflow) => workflow.path === session.boundWorkflowPath,
+        ) ?? null)
+      : null;
+    await writeHarnessContext(session, boundWorkflow, workflows, isCurrent);
+  };
+
+  const stageAcceptedSessionContext = async (
+    session: HarnessSession,
+    workflows: WorkflowInfo[],
+    isCurrent: () => boolean,
+  ): Promise<StagedHarnessContext | null> => {
+    const boundWorkflow = session.boundWorkflowPath
+      ? (workflows.find(
+          (workflow) => workflow.path === session.boundWorkflowPath,
+        ) ?? null)
+      : null;
+    return stageHarnessContextForPublication(
       session,
-      boundWorkflowForSession(session),
-      workflowsCache,
+      boundWorkflow,
+      workflows,
+      isCurrent,
     );
   };
 
@@ -856,13 +1047,35 @@ export const startServer = async (
     ...(await loadSettings(statePaths.settings)).recentDirs,
     ...sessionManager.list().map((session) => session.cwd),
   ]);
+  const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphRelationships = new CachedAgentRelationshipProvider(
     new SourceAgentRelationshipProvider(),
+    undefined,
+    {
+      onChange: (sourceRoots) => {
+        const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
+        for (const scope of activeSystemGraphScopes.values()) {
+          const canonicalScope = {
+            workspaceKey: scope.workspaceKey,
+            root: canonicalGraphPath(scope.root),
+          };
+          if (
+            systemGraphStore.peek(canonicalScope.workspaceKey) &&
+            canonicalSourceRoots.some((sourceRoot) =>
+              isWithinGraphPath(canonicalScope.root, sourceRoot),
+            )
+          ) {
+            systemGraphStore.requestRefresh(canonicalScope);
+          }
+        }
+      },
+    },
   );
-  const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInventory = new HarnessRegistryInventoryProvider({
     listWorkflows: () => workflowsCache,
-    inspectManifestName,
+    inventorySnapshot: acceptedInventorySnapshot,
+    inspectManifestName: (sourceRoot, extractionOptions) =>
+      inspectManifestName(sourceRoot, undefined, extractionOptions),
     onIdentityChange: (sourceRoots) => {
       const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
       for (const scope of activeSystemGraphScopes.values()) {
@@ -1036,40 +1249,22 @@ export const startServer = async (
   // marker disappears or becomes invalid; manually connected folders remain.
   const rescanWorkspaceForSession = async (
     harnessSessionId: string,
+    dirty = true,
+    sourceRoots: readonly string[] | null = null,
   ): Promise<void> => {
     const session = sessionManager.get(harnessSessionId);
     if (!session || session.status === "exited") return;
-    const before = workflowsCache;
-    await workflowRegistry.prune();
-    const rescanBudget = new AgentProjectScanBudget();
-    const rescanFound = await workflowRegistry.scan(session.cwd, rescanBudget);
-    logAgentScan(
-      "workspace-change",
-      session.cwd,
-      rescanFound.length,
-      rescanBudget,
+    const roots = [...(sourceRoots ?? []), session.cwd];
+    const discoveryBudget = workspaceDiscoveryBudget(session.cwd);
+    await Promise.all(
+      [...new Set(roots)].map((root) =>
+        scanWorkflowsAndBroadcast(root, "workspace-change", {
+          dirty,
+          discoveryBudget,
+        }),
+      ),
     );
-    const after = await workflowRegistry.list();
-    workflowsCache = after;
-    const inventoryChanged = !workflowListsEqual(before, after);
-    if (inventoryChanged) {
-      await refreshSystemGraphScopesForRoot(session.cwd);
-    }
-
-    // A removed project must not leave a live session permanently bound to a
-    // path that the registry can no longer resolve. Clear only stale bindings;
-    // the triggering session may immediately auto-bind to another candidate
-    // below its cwd in the block that follows.
-    const registeredPaths = new Set(after.map((workflow) => workflow.path));
-    for (const openSession of sessionManager.list()) {
-      if (
-        openSession.status !== "exited" &&
-        openSession.boundWorkflowPath &&
-        !registeredPaths.has(openSession.boundWorkflowPath)
-      ) {
-        sessionManager.setBoundWorkflowPath(openSession.id, null);
-      }
-    }
+    const after = workflowsCache;
 
     // Auto-bind: if this session is still unbound, find the workflow at or
     // directly under its cwd and bind it — same mechanism as
@@ -1092,20 +1287,55 @@ export const startServer = async (
         // so the session reference we already hold already carries the new
         // binding — pass it directly, same as the PATCH handler does.
         await writeSessionContext(session);
-        await renderCanvas(session).catch((err: unknown) => {
+        await autoRenderCanvas(session).catch((err: unknown) => {
           console.error("[harness] auto-bind canvas render failed:", err);
         });
       }
     }
-
-    if (!inventoryChanged) return;
-    await Promise.all(sessionManager.list().map((s) => writeSessionContext(s)));
-    bus.publish({ type: "workflows.changed" });
   };
+  const sharedWorkspaceWatchBroker = new SharedWorkspaceWatchBroker({
+    onLastLeaseReleased: (root) => {
+      if (!coordinatorActive) return;
+      // Losing continuous observation invalidates freshness, but it is not a
+      // filesystem mutation and must not manufacture a trailing destructive
+      // scan after the final watcher has gone away. Supersede any publication
+      // based on pre-retirement proof and retain the last-known rows degraded;
+      // the next lease's normal background scan will reconcile the interval.
+      supersedePublication();
+      coordinatorEpoch += 1;
+      systemGraphInventory.invalidateScope(root);
+      systemGraphRelationships.invalidateScope(root);
+      workflowRegistry.markDiscoveryDirty(root);
+      markAcceptedInventoryDirty(root);
+    },
+  });
   const workspaceWatcher = new WorkspaceWatcherManager({
-    onChange: (harnessSessionId) => {
-      rescanWorkspaceForSession(harnessSessionId).catch((err: unknown) => {
+    sharedWatchBroker: sharedWorkspaceWatchBroker,
+    listSourceRoots: (_harnessSessionId, cwd) =>
+      graphSourceRootsWithinScope(
+        cwd,
+        workflowsCache.map((workflow) => workflow.path),
+      ),
+    listSourceObservations: (_harnessSessionId, cwd) =>
+      acceptedSourceObservationsForRoot(cwd),
+    onPotentialChange: (harnessSessionId) => {
+      const session = sessionManager.get(harnessSessionId);
+      if (session && session.status !== "exited") {
+        prepareDirtyWorkflowRoot(
+          session.cwd,
+          undefined,
+          workspaceDiscoveryBudget(session.cwd),
+        );
+      }
+    },
+    onChange: (harnessSessionId, sourceRoots) => {
+      return rescanWorkspaceForSession(
+        harnessSessionId,
+        true,
+        sourceRoots,
+      ).catch((err: unknown) => {
         console.error("[harness] workspace rescan failed:", err);
+        throw err;
       });
     },
   });
@@ -1236,62 +1466,675 @@ export const startServer = async (
   // nobody had opened, and reconstructing which root did it took a filesystem
   // archaeology session. Now every scan says its root, its reason, what it
   // found, what it cost, and what it declined to enter.
-  const scanWorkflowsAndBroadcast = async (
-    scanRoot: string,
-    reason: WorkflowScanReason,
-    options: { refreshGraphs?: () => Promise<void> } = {},
-  ): Promise<WorkflowInfo[]> => {
-    // The registry keys rows by path, so two spellings of one directory
-    // register the same agent twice. Only the graph-refresh caller resolved
-    // symlinks: booting under a symlinked launch dir (macOS `os.tmpdir()` is
-    // `/var/...` for `/private/var/...`) registered every agent under the
-    // symlinked path, then the first graph open registered them all again
-    // under the real one. The duplicates collided into `local:` fallback keys,
-    // so every cross-agent target became ambiguous and its edge vanished.
-    // Resolved here rather than inside the registry: registry paths are
-    // compared by exact string elsewhere (a session auto-binds on
-    // `path === cwd`, index.ts:1057), so rewriting stored paths unbinds them.
-    const root = canonicalGraphPath(scanRoot);
-    const before = workflowsCache;
-    const budget = new AgentProjectScanBudget();
-    const found = await workflowRegistry.scan(root, budget);
-    logAgentScan(reason, root, found.length, budget);
-    const after = await workflowRegistry.list();
-    workflowsCache = after;
-    const changed = !workflowListsEqual(before, after);
-    // Rewrite every open session's context file before broadcasting — a
-    // listener reacting to workflows.changed (the SPA, or an agent that
-    // happens to re-read the file right then) must never see the
-    // notification before the file it describes is actually updated.
-    if (changed) {
-      await Promise.all(
-        sessionManager.list().map((session) => writeSessionContext(session)),
-      );
-    }
-    if (options.refreshGraphs) await options.refreshGraphs();
-    else if (changed) refreshSystemGraphScopesForRoot(root);
-    if (changed) bus.publish({ type: "workflows.changed" });
-    return found;
+  interface CoordinatedScanResult {
+    found: WorkflowInfo[];
+    repositoryBoundaries: string[];
+  }
+  interface ScanFlight {
+    canonicalRoot: string;
+    lexicalRoot: string;
+    token: string;
+    generation: number;
+    acceptedGeneration: number;
+    acceptedChanged: boolean;
+    pending: boolean;
+    dirty: boolean;
+    reason: WorkflowScanReason;
+    discoveryBudget: WorkspaceDiscoveryBudget;
+    promise: Promise<CoordinatedScanResult>;
+  }
+  interface WorkspaceDiscoveryBudget {
+    project: AgentProjectScanAllowance;
+    source: AgentSourceScanBudget;
+  }
+  interface PublicationWaiter {
+    promise: Promise<boolean>;
+    resolve: (published: boolean) => void;
+    reject: (error: unknown) => void;
+  }
+  const scanFlights = new Map<string, ScanFlight>();
+  const outstandingDirtyPrerequisites = new Map<string, string>();
+  let coordinatorEpoch = 0;
+  let mutationTokenSequence = 0;
+  let coordinatorActive = true;
+  let publicationWaiter: PublicationWaiter | null = null;
+  let publicationQueue: Promise<void> = Promise.resolve();
+  const sameTurnDirtyPreparations = new Map<
+    string,
+    { canonicalRoot: string; lexicalRoot: string; token: string }
+  >();
+  const sameTurnDiscoveryBudgets = new Map<string, WorkspaceDiscoveryBudget>();
+  const workspaceDiscoveryBudget = (root: string): WorkspaceDiscoveryBudget => {
+    const canonicalRoot = canonicalGraphPath(resolve(expandHome(root)));
+    const existing = sameTurnDiscoveryBudgets.get(canonicalRoot);
+    if (existing) return existing;
+    const created = {
+      project: new AgentProjectScanAllowance(),
+      source: new AgentSourceScanBudget(),
+    };
+    sameTurnDiscoveryBudgets.set(canonicalRoot, created);
+    queueMicrotask(() => {
+      if (sameTurnDiscoveryBudgets.get(canonicalRoot) === created) {
+        sameTurnDiscoveryBudgets.delete(canonicalRoot);
+      }
+    });
+    return created;
   };
 
-  const refreshSystemGraphInventory = async (scope: WorkspaceScope) => {
+  const intersectingGraphScopes = (changedRoot: string): WorkspaceScope[] => {
+    const canonicalChangedRoot = canonicalGraphPath(changedRoot);
+    const scopes: WorkspaceScope[] = [];
+    for (const scope of activeSystemGraphScopes.values()) {
+      const canonicalScope = {
+        workspaceKey: scope.workspaceKey,
+        root: canonicalGraphPath(scope.root),
+      };
+      if (
+        isWithinGraphPath(canonicalScope.root, canonicalChangedRoot) ||
+        isWithinGraphPath(canonicalChangedRoot, canonicalScope.root)
+      ) {
+        scopes.push(canonicalScope);
+      }
+    }
+    return scopes;
+  };
+  const staleSystemGraphScopesForRoot = (
+    changedRoot: string,
+    token: string,
+  ): void => {
+    for (const scope of intersectingGraphScopes(changedRoot)) {
+      systemGraphStore.markStale(scope, token);
+    }
+  };
+  const releaseSystemGraphPrerequisite = (token: string): void => {
+    // A symlink scope can be retargeted by the accepted scan, so release by
+    // token rather than recomputing containment against its former target.
+    for (const scope of activeSystemGraphScopes.values()) {
+      systemGraphStore.releasePrerequisite(
+        {
+          workspaceKey: scope.workspaceKey,
+          root: canonicalGraphPath(scope.root),
+        },
+        token,
+      );
+    }
+    outstandingDirtyPrerequisites.delete(token);
+  };
+  const cancelSystemGraphPrerequisite = (token: string): void => {
+    for (const scope of activeSystemGraphScopes.values()) {
+      systemGraphStore.cancelPrerequisite(scope.workspaceKey, token);
+    }
+    outstandingDirtyPrerequisites.delete(token);
+  };
+  const attachOutstandingPrerequisites = (scope: WorkspaceScope): void => {
     const canonicalScope = {
       workspaceKey: scope.workspaceKey,
       root: canonicalGraphPath(scope.root),
     };
-    let refreshPromise: Promise<SystemGraphSnapshot> | null = null;
-    const refreshGraph = (): Promise<void> => {
-      refreshSystemGraphScopesForRoot(
-        canonicalScope.root,
-        canonicalScope.workspaceKey,
-      );
-      refreshPromise = systemGraphStore.refresh(canonicalScope);
-      return refreshPromise.then(() => undefined);
-    };
-    await scanWorkflowsAndBroadcast(canonicalScope.root, "graph-refresh", {
-      refreshGraphs: refreshGraph,
+    for (const [token, dirtyRoot] of outstandingDirtyPrerequisites) {
+      if (
+        isWithinGraphPath(canonicalScope.root, dirtyRoot) ||
+        isWithinGraphPath(dirtyRoot, canonicalScope.root)
+      ) {
+        systemGraphStore.markStale(canonicalScope, token);
+      }
+    }
+  };
+  const reportSystemGraphRefreshFailure = (changedRoot: string): void => {
+    for (const scope of intersectingGraphScopes(changedRoot)) {
+      systemGraphStore.reportRefreshFailure(scope);
+    }
+  };
+  const allFlightsAccepted = (): boolean =>
+    [...scanFlights.values()].every(
+      (flight) =>
+        !flight.pending && flight.acceptedGeneration === flight.generation,
+    );
+  const getPublicationWaiter = (): PublicationWaiter => {
+    if (publicationWaiter) return publicationWaiter;
+    let resolve!: (published: boolean) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<boolean>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
     });
-    return await (refreshPromise ?? systemGraphStore.refresh(canonicalScope));
+    publicationWaiter = { promise, resolve, reject };
+    return publicationWaiter;
+  };
+  const supersedePublication = (): void => {
+    const waiter = publicationWaiter;
+    if (!waiter) return;
+    publicationWaiter = null;
+    waiter.resolve(false);
+  };
+  const rejectPublication = (error: unknown): void => {
+    const waiter = publicationWaiter;
+    if (!waiter) return;
+    publicationWaiter = null;
+    waiter.reject(error);
+  };
+  const prepareDirtyWorkflowRoot = (
+    root: string,
+    tokenOverride?: string,
+    discoveryBudget?: WorkspaceDiscoveryBudget,
+  ): { canonicalRoot: string; lexicalRoot: string; token: string } => {
+    const lexicalRoot = resolve(expandHome(root));
+    const canonicalRoot = canonicalGraphPath(lexicalRoot);
+    if (!tokenOverride) {
+      const existingPreparation = sameTurnDirtyPreparations.get(canonicalRoot);
+      if (existingPreparation) return existingPreparation;
+    }
+    const token = tokenOverride ?? `inventory:${canonicalRoot}`;
+    supersedePublication();
+    coordinatorEpoch += 1;
+    systemGraphInventory.invalidateScope(lexicalRoot);
+    systemGraphRelationships.invalidateScope(lexicalRoot);
+    workflowRegistry.markDiscoveryDirty(lexicalRoot);
+    markAcceptedInventoryDirty(lexicalRoot);
+    outstandingDirtyPrerequisites.set(token, canonicalRoot);
+    staleSystemGraphScopesForRoot(lexicalRoot, token);
+    const currentFlight = scanFlights.get(canonicalRoot);
+    if (currentFlight && !currentFlight.pending) {
+      currentFlight.generation += 1;
+      currentFlight.acceptedGeneration = 0;
+      currentFlight.acceptedChanged = false;
+      currentFlight.pending = true;
+      currentFlight.dirty = true;
+      // Every edit generation gets fresh memoization/counters. Reusing the
+      // prior AgentSourceScanBudget can return old file promises after a raw
+      // save, while an exhausted project allowance makes the trailing proof a
+      // permanent false-negative.
+      currentFlight.discoveryBudget =
+        discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
+    }
+    const prepared = { canonicalRoot, lexicalRoot, token };
+    if (!tokenOverride) {
+      sameTurnDirtyPreparations.set(canonicalRoot, prepared);
+      queueMicrotask(() => {
+        if (sameTurnDirtyPreparations.get(canonicalRoot) === prepared) {
+          sameTurnDirtyPreparations.delete(canonicalRoot);
+        }
+      });
+    }
+    return prepared;
+  };
+
+  const requestAcceptedPublication = (): Promise<boolean> => {
+    const waiter = getPublicationWaiter();
+    const attempt = publicationQueue
+      .catch(() => {})
+      .then(async () => {
+        if (
+          publicationWaiter !== waiter ||
+          !coordinatorActive ||
+          !allFlightsAccepted()
+        ) {
+          return;
+        }
+        const epoch = coordinatorEpoch;
+        const isCurrent = (): boolean =>
+          publicationWaiter === waiter &&
+          coordinatorActive &&
+          coordinatorEpoch === epoch &&
+          allFlightsAccepted();
+        try {
+          await options.workflowDiscoveryTestHooks?.beforePublication?.({
+            epoch,
+            roots: [...scanFlights.values()].map(
+              (flight) => flight.lexicalRoot,
+            ),
+          });
+          if (!isCurrent()) return;
+          const snapshotRoots = [
+            ...new Set([
+              launchDir,
+              ...[...scanFlights.values()].map((flight) => flight.lexicalRoot),
+              ...[...activeSystemGraphScopes.values()].map(
+                (scope) => scope.root,
+              ),
+            ]),
+          ];
+          const snapshots: Array<{
+            lexicalRoot: string;
+            snapshot: Awaited<
+              ReturnType<WorkflowRegistry["inventorySnapshot"]>
+            >;
+          }> = [];
+          for (const root of snapshotRoots) {
+            snapshots.push({
+              lexicalRoot: resolve(expandHome(root)),
+              snapshot: await workflowRegistry.inventorySnapshot(root),
+            });
+            if (!isCurrent()) return;
+          }
+          const snapshot = snapshots[0]!.snapshot;
+          const before = workflowsCache;
+          const after = [...snapshot.workflows];
+          const rowsChanged = !workflowListsEqual(before, after);
+          const acceptedFlights = [...scanFlights.values()];
+          const nextCanonicalWorkflowRoots =
+            snapshot.canonicalWorkflowRoots.map((entry) => ({ ...entry }));
+          const nextSourceObservations = snapshot.sourceObservations.map(
+            (entry) => ({ ...entry, paths: [...entry.paths] }),
+          );
+          const nextScopeStatuses = new Map(acceptedScopeStatusByCanonicalRoot);
+          const nextCanonicalScopeByLexicalRoot = new Map(
+            acceptedCanonicalScopeByLexicalRoot,
+          );
+          for (const entry of snapshots) {
+            nextCanonicalScopeByLexicalRoot.set(
+              entry.lexicalRoot,
+              entry.snapshot.canonicalScopeRoot,
+            );
+            nextCanonicalScopeByLexicalRoot.set(
+              entry.snapshot.canonicalScopeRoot,
+              entry.snapshot.canonicalScopeRoot,
+            );
+            nextScopeStatuses.set(
+              entry.snapshot.canonicalScopeRoot,
+              entry.snapshot.status,
+            );
+          }
+          const inventoryProjectionChanged =
+            JSON.stringify(acceptedCanonicalWorkflowRoots) !==
+              JSON.stringify(nextCanonicalWorkflowRoots) ||
+            JSON.stringify(acceptedSourceObservations) !==
+              JSON.stringify(nextSourceObservations) ||
+            JSON.stringify([...acceptedScopeStatusByCanonicalRoot].sort()) !==
+              JSON.stringify([...nextScopeStatuses].sort()) ||
+            JSON.stringify([...acceptedCanonicalScopeByLexicalRoot].sort()) !==
+              JSON.stringify([...nextCanonicalScopeByLexicalRoot].sort());
+          let stagedContexts: StagedHarnessContext[] = [];
+          if (rowsChanged) {
+            let contextsStable = false;
+            for (let pass = 0; pass < 3; pass += 1) {
+              for (const staged of stagedContexts) staged.discard();
+              stagedContexts = [];
+              const sessions = sessionManager
+                .list()
+                .filter((session) => session.status !== "exited")
+                .sort((left, right) => left.id.localeCompare(right.id));
+              const sessionProjection = JSON.stringify(
+                sessions.map((session) => [
+                  session.id,
+                  session.cwd,
+                  session.harness,
+                  session.boundWorkflowPath,
+                ]),
+              );
+              const stageResults = await Promise.allSettled(
+                sessions.map((session) =>
+                  stageAcceptedSessionContext(session, after, isCurrent),
+                ),
+              );
+              for (const [index, result] of stageResults.entries()) {
+                if (result.status === "fulfilled") {
+                  if (result.value) stagedContexts.push(result.value);
+                  continue;
+                }
+                console.error(
+                  `[harness] failed to stage accepted context for ${sessions[index]?.id ?? "unknown session"}:`,
+                  result.reason,
+                );
+              }
+              if (!isCurrent()) {
+                for (const staged of stagedContexts) staged.discard();
+                return;
+              }
+              await options.workflowDiscoveryTestHooks?.afterContextStaging?.({
+                epoch,
+                sessionIds: sessions.map((session) => session.id),
+              });
+              if (!isCurrent()) {
+                for (const staged of stagedContexts) staged.discard();
+                return;
+              }
+              const currentSessionProjection = JSON.stringify(
+                sessionManager
+                  .list()
+                  .filter((session) => session.status !== "exited")
+                  .sort((left, right) => left.id.localeCompare(right.id))
+                  .map((session) => [
+                    session.id,
+                    session.cwd,
+                    session.harness,
+                    session.boundWorkflowPath,
+                  ]),
+              );
+              if (currentSessionProjection === sessionProjection) {
+                contextsStable = true;
+                break;
+              }
+            }
+            if (!contextsStable) {
+              for (const staged of stagedContexts) staged.discard();
+              coordinatorEpoch += 1;
+              supersedePublication();
+              return;
+            }
+          }
+          if (!isCurrent()) {
+            for (const staged of stagedContexts) staged.discard();
+            return;
+          }
+
+          // From this point through event publication there is no await: the
+          // cache, bindings, graph prerequisites, and bus frame become one
+          // accepted process-local snapshot before another raw signal can run.
+          for (const staged of stagedContexts) {
+            try {
+              staged.commit();
+            } catch (error) {
+              staged.discard();
+              console.error(
+                `[harness] failed to commit accepted context ${staged.filePath}:`,
+                error,
+              );
+            }
+          }
+          workflowsCache = after;
+          acceptedCanonicalWorkflowRoots = nextCanonicalWorkflowRoots;
+          acceptedSourceObservations = nextSourceObservations;
+          acceptedScopeStatusByCanonicalRoot.clear();
+          for (const [scopeRoot, status] of nextScopeStatuses) {
+            acceptedScopeStatusByCanonicalRoot.set(scopeRoot, status);
+          }
+          acceptedCanonicalScopeByLexicalRoot.clear();
+          for (const [
+            lexicalRoot,
+            canonicalRoot,
+          ] of nextCanonicalScopeByLexicalRoot) {
+            acceptedCanonicalScopeByLexicalRoot.set(lexicalRoot, canonicalRoot);
+          }
+          if (rowsChanged || inventoryProjectionChanged) {
+            acceptedInventoryGeneration += 1;
+          }
+          if (rowsChanged) {
+            const registeredPaths = new Set(
+              after.map((workflow) => workflow.path),
+            );
+            for (const openSession of sessionManager.list()) {
+              if (
+                openSession.status !== "exited" &&
+                openSession.boundWorkflowPath &&
+                !registeredPaths.has(openSession.boundWorkflowPath)
+              ) {
+                sessionManager.setBoundWorkflowPath(openSession.id, null);
+              }
+            }
+          }
+          if (rowsChanged || inventoryProjectionChanged) {
+            // A scan prunes confirmed-missing rows registry-wide, not only below
+            // its requested root. Refresh every active projection so an
+            // unrelated workspace cannot retain a ghost node/navigation target.
+            for (const scope of activeSystemGraphScopes.values()) {
+              systemGraphStore.requestRefresh({
+                workspaceKey: scope.workspaceKey,
+                root: canonicalGraphPath(scope.root),
+              });
+            }
+          } else {
+            for (const flight of acceptedFlights) {
+              if (flight.acceptedChanged && !flight.dirty) {
+                refreshSystemGraphScopesForRoot(flight.lexicalRoot);
+              }
+            }
+          }
+          const acceptedCanonicalRoots = new Set(
+            acceptedFlights.map((flight) => flight.canonicalRoot),
+          );
+          for (const [token, dirtyRoot] of [...outstandingDirtyPrerequisites]) {
+            // A terminal dirty attempt deliberately keeps its token armed. A
+            // later ordinary scan of that exact root inherits the proof by
+            // publication: once its newest generation is in this quiescent
+            // accepted snapshot, release every producer token for that root.
+            if (acceptedCanonicalRoots.has(dirtyRoot)) {
+              releaseSystemGraphPrerequisite(token);
+            }
+          }
+          if (rowsChanged) bus.publish({ type: "workflows.changed" });
+          publicationWaiter = null;
+          waiter.resolve(true);
+        } catch (error) {
+          if (publicationWaiter === waiter) {
+            publicationWaiter = null;
+            waiter.reject(error);
+          }
+        }
+      });
+    publicationQueue = attempt.then(
+      () => undefined,
+      () => undefined,
+    );
+    return waiter.promise;
+  };
+
+  const scanWorkflowsAndBroadcast = (
+    root: string,
+    reason: WorkflowScanReason,
+    scanOptions: {
+      dirty?: boolean;
+      discoveryBudget?: WorkspaceDiscoveryBudget;
+    } = {},
+  ): Promise<CoordinatedScanResult> => {
+    if (!coordinatorActive) {
+      return Promise.reject(
+        new Error("Workflow discovery coordinator is closed"),
+      );
+    }
+    const prepared = scanOptions.dirty
+      ? prepareDirtyWorkflowRoot(root)
+      : {
+          lexicalRoot: resolve(expandHome(root)),
+          canonicalRoot: canonicalGraphPath(resolve(expandHome(root))),
+          token: `inventory:${canonicalGraphPath(resolve(expandHome(root)))}`,
+        };
+    const { lexicalRoot, canonicalRoot, token } = prepared;
+    if (!scanOptions.dirty) {
+      supersedePublication();
+      coordinatorEpoch += 1;
+    }
+    const existing = scanFlights.get(canonicalRoot);
+    if (existing) {
+      if (!existing.pending) {
+        existing.generation += 1;
+        existing.acceptedGeneration = 0;
+        existing.acceptedChanged = false;
+        existing.discoveryBudget =
+          scanOptions.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
+      }
+      existing.pending = true;
+      existing.dirty ||= scanOptions.dirty === true;
+      if (scanOptions.discoveryBudget) {
+        existing.discoveryBudget = scanOptions.discoveryBudget;
+      }
+      existing.lexicalRoot = lexicalRoot;
+      existing.reason = reason;
+      return existing.promise;
+    }
+
+    const flight: ScanFlight = {
+      canonicalRoot,
+      lexicalRoot,
+      token,
+      generation: 1,
+      acceptedGeneration: 0,
+      acceptedChanged: false,
+      pending: false,
+      dirty: scanOptions.dirty === true,
+      reason,
+      discoveryBudget:
+        scanOptions.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot),
+      promise: Promise.resolve({
+        found: [] as WorkflowInfo[],
+        repositoryBoundaries: [] as string[],
+      }),
+    };
+    flight.promise = (async () => {
+      let retries = 0;
+      let retryGeneration = 0;
+      while (coordinatorActive) {
+        // Shared watcher fanout invokes session and graph subscribers in the
+        // same turn. Let every sibling register/coalesce before one pass
+        // captures the generation; a genuinely later edit still increments
+        // it during the held scan and gets exactly one trailing pass.
+        await Promise.resolve();
+        const generation = flight.generation;
+        const discoveryBudget = flight.discoveryBudget;
+        if (retryGeneration !== generation) {
+          retryGeneration = generation;
+          retries = 0;
+        }
+        const passReason = flight.reason;
+        flight.pending = false;
+        try {
+          await options.workflowDiscoveryTestHooks?.beforeScan?.({
+            root: flight.lexicalRoot,
+            reason: passReason,
+            generation,
+          });
+          if (!coordinatorActive) {
+            throw new Error("Workflow discovery coordinator is closed");
+          }
+          const outcome = await workflowRegistry.scanDetailed(
+            flight.lexicalRoot,
+            new AgentProjectScanBudget({}, discoveryBudget.project),
+            discoveryBudget.source,
+          );
+          await options.workflowDiscoveryTestHooks?.afterScan?.({
+            root: flight.lexicalRoot,
+            reason: passReason,
+            generation,
+          });
+          logAgentScan(
+            passReason,
+            flight.lexicalRoot,
+            outcome.found.length,
+            outcome.budget,
+            outcome.sourceBudget,
+          );
+          if (!coordinatorActive) {
+            throw new Error("Workflow discovery coordinator is closed");
+          }
+          if (generation !== flight.generation || flight.pending) {
+            continue;
+          }
+          flight.acceptedGeneration = generation;
+          flight.acceptedChanged = outcome.changed;
+          let published = false;
+          while (
+            !published &&
+            generation === flight.generation &&
+            !flight.pending
+          ) {
+            published = await requestAcceptedPublication();
+          }
+          if (!published) continue;
+          if (generation !== flight.generation || flight.pending) {
+            continue;
+          }
+          const acceptedFoundByPath = new Map<string, RegistryWorkflowInfo>();
+          for (const found of outcome.found) {
+            const exact = workflowsCache.find(
+              (workflow) => workflow.path === found.path,
+            );
+            const foundCanonicalRoot = canonicalGraphPath(found.path);
+            const canonicalEntry = acceptedCanonicalWorkflowRoots.find(
+              (entry) =>
+                entry.workflowPath === exact?.path ||
+                entry.canonicalRoot === foundCanonicalRoot,
+            );
+            const accepted =
+              exact ??
+              (canonicalEntry
+                ? workflowsCache.find(
+                    (workflow) => workflow.path === canonicalEntry.workflowPath,
+                  )
+                : undefined);
+            if (
+              accepted &&
+              canonicalEntry &&
+              (canonicalEntry.identityEvidence === "marker" ||
+                canonicalEntry.identityEvidence === "source")
+            ) {
+              acceptedFoundByPath.set(accepted.path, accepted);
+            }
+          }
+          return {
+            found: [...acceptedFoundByPath.values()],
+            repositoryBoundaries: outcome.repositoryBoundaries,
+          };
+        } catch (error) {
+          flight.acceptedGeneration = 0;
+          flight.acceptedChanged = false;
+          if (!coordinatorActive) throw error;
+          if (generation !== flight.generation || flight.pending) {
+            continue;
+          }
+          if (retries < 3) {
+            const delay = 50 * 2 ** retries;
+            retries += 1;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            if (generation === flight.generation && !flight.pending) {
+              flight.discoveryBudget = workspaceDiscoveryBudget(
+                flight.lexicalRoot,
+              );
+            }
+            continue;
+          }
+          reportSystemGraphRefreshFailure(flight.lexicalRoot);
+          supersedePublication();
+          throw error;
+        }
+      }
+      throw new Error("Workflow discovery coordinator is closed");
+    })().finally(() => {
+      if (scanFlights.get(canonicalRoot) === flight) {
+        scanFlights.delete(canonicalRoot);
+        if (publicationWaiter) {
+          void requestAcceptedPublication().catch(() => {
+            // The owning accepted flight observes publication failures.
+          });
+        }
+      }
+    });
+    scanFlights.set(canonicalRoot, flight);
+    return flight.promise;
+  };
+
+  const refreshSystemGraphInventory = async (
+    scope: WorkspaceScope,
+    includeRetainedRoots = true,
+  ) => {
+    const canonicalScope = {
+      workspaceKey: scope.workspaceKey,
+      root: canonicalGraphPath(scope.root),
+    };
+    const roots = includeRetainedRoots
+      ? [
+          ...graphSourceRootsWithinScope(
+            scope.root,
+            workflowsCache.map((workflow) => workflow.path),
+          ),
+          scope.root,
+        ]
+      : [scope.root];
+    const discoveryBudget = workspaceDiscoveryBudget(scope.root);
+    await Promise.all(
+      [...new Set(roots)].map((root) =>
+        scanWorkflowsAndBroadcast(root, "graph-refresh", {
+          dirty: true,
+          discoveryBudget,
+        }),
+      ),
+    );
+    const refreshed = await systemGraphStore.waitForCurrentRefresh(
+      canonicalScope.workspaceKey,
+    );
+    if (!refreshed) {
+      throw new Error("Workspace graph scope retired during refresh");
+    }
+    return refreshed;
   };
 
   const workflowRootsForGraphScope = (scope: WorkspaceScope): string[] =>
@@ -1300,35 +2143,76 @@ export const startServer = async (
       workflowsCache.map((workflow) => workflow.path),
     );
 
-  const systemGraphWatcher = new SystemGraphWatcherManager({
-    listSourceRoots: workflowRootsForGraphScope,
-    onSourceChange: (scope, sourcePaths) => {
-      const canonicalScope = {
-        workspaceKey: scope.workspaceKey,
-        root: canonicalGraphPath(scope.root),
-      };
-      const dirtyRoots = dirtyGraphSourceRoots(
-        canonicalScope.root,
-        workflowsCache.map((workflow) => workflow.path),
-        sourcePaths,
-      );
-      if (dirtyRoots.length === 0) return;
-      for (const workflowRoot of dirtyRoots) {
-        systemGraphInventory.invalidateSource(workflowRoot);
-        systemGraphRelationships.invalidateSource(workflowRoot);
-      }
-      systemGraphStore.requestRefresh(canonicalScope);
+  const systemGraphWatcher = new SystemGraphWatcherManager(
+    {
+      listSourceRoots: workflowRootsForGraphScope,
+      listSourceObservations: (scope) =>
+        acceptedSourceObservationsForRoot(scope.root),
+      onPotentialChange: (scope, sourcePaths) => {
+        const discoveryBudget = workspaceDiscoveryBudget(scope.root);
+        prepareDirtyWorkflowRoot(scope.root, undefined, discoveryBudget);
+        if (sourcePaths === null) {
+          systemGraphInventory.invalidateScope(scope.root);
+          systemGraphRelationships.invalidateScope(scope.root);
+        } else {
+          for (const root of dirtyGraphSourceRoots(
+            scope.root,
+            workflowsCache.map((workflow) => workflow.path),
+            sourcePaths,
+          )) {
+            prepareDirtyWorkflowRoot(root, undefined, discoveryBudget);
+            systemGraphInventory.invalidateSource(root);
+            systemGraphRelationships.invalidateSource(root);
+          }
+        }
+      },
+      onSourceChange: async (scope, sourcePaths) => {
+        const canonicalScope = {
+          workspaceKey: scope.workspaceKey,
+          root: canonicalGraphPath(scope.root),
+        };
+        const dirtyRoots =
+          sourcePaths === null
+            ? workflowRootsForGraphScope(scope)
+            : dirtyGraphSourceRoots(
+                canonicalScope.root,
+                workflowsCache.map((workflow) => workflow.path),
+                sourcePaths,
+              );
+        if (sourcePaths === null) {
+          systemGraphInventory.invalidateScope(canonicalScope.root);
+          systemGraphRelationships.invalidateScope(canonicalScope.root);
+        } else {
+          for (const workflowRoot of dirtyRoots) {
+            systemGraphInventory.invalidateSource(workflowRoot);
+            systemGraphRelationships.invalidateSource(workflowRoot);
+          }
+        }
+        const discoveryBudget = workspaceDiscoveryBudget(scope.root);
+        await Promise.all(
+          [...new Set([...dirtyRoots, scope.root])].map((root) =>
+            scanWorkflowsAndBroadcast(root, "graph-refresh", {
+              dirty: true,
+              discoveryBudget,
+            }),
+          ),
+        );
+      },
+      onInventoryChange: async (scope) => {
+        try {
+          // A structural boundary event (for example `candidate/.git`) must
+          // first be reconciled from the containing scope. Treating every
+          // retained row as an explicit selection here would immediately
+          // direct-scan and resurrect the candidate the parent just retired.
+          await refreshSystemGraphInventory(scope, false);
+        } catch (err) {
+          console.error("[harness] workspace graph inventory refresh failed");
+          throw err;
+        }
+      },
     },
-    onInventoryChange: async (scope) => {
-      try {
-        await refreshSystemGraphInventory(scope);
-      } catch (err) {
-        systemGraphStore.reportRefreshFailure(scope);
-        console.error("[harness] workspace graph inventory refresh failed");
-        throw err;
-      }
-    },
-  });
+    { sharedBroker: sharedWorkspaceWatchBroker },
+  );
 
   const listWorkspaceScopesAndRetain = async () => {
     const scopes = await workspaceScopeCatalog.list();
@@ -1360,6 +2244,32 @@ export const startServer = async (
     const workflows = [...workflowsCache];
     workflows[boundIndex] = enrichedBound;
     return workflows;
+  };
+
+  const automaticCanvasAuthorized = async (
+    session: Pick<HarnessSession, "boundWorkflowPath">,
+    expectedWorkflowPath = session.boundWorkflowPath,
+  ): Promise<boolean> => {
+    if (
+      !expectedWorkflowPath ||
+      session.boundWorkflowPath !== expectedWorkflowPath
+    ) {
+      return false;
+    }
+    const workflow = workflowsCache.find(
+      (candidate) => candidate.path === expectedWorkflowPath,
+    );
+    if (!workflow) return false;
+    // A retained cloud definition link is explicit legacy authorization even
+    // when the local marker is no longer present. Marker-only rows require
+    // both fresh accepted proof and a hardened launch-time recheck so a queued
+    // automatic render cannot race an offline marker removal.
+    if (workflow.definitionId !== null) return true;
+    const evidence = acceptedCanonicalWorkflowRoots.find(
+      (entry) => entry.workflowPath === workflow.path,
+    )?.identityEvidence;
+    if (evidence !== "marker") return false;
+    return (await inspectAgentProjectMarker(workflow.path)).status === "valid";
   };
 
   // Renders a session's bound workflow via the fully deterministic pipeline —
@@ -1394,11 +2304,21 @@ export const startServer = async (
     reactToRenderOutcome(session, outcome);
   };
   const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
-    const outcome = await renderCanvasForSession(
-      session,
-      await canvasWorkflowsForSession(session),
-      { preserveExistingOnFailure: true },
-    );
+    const workflowPath = session.boundWorkflowPath;
+    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
+    const workflows = await canvasWorkflowsForSession(session);
+    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
+    const outcome = await renderCanvasForSession(session, workflows, {
+      preserveExistingOnFailure: true,
+      authorizeBeforeExtraction: () =>
+        automaticCanvasAuthorized(session, workflowPath),
+      beforeExtractionLaunchAuthorization: workflowPath
+        ? () =>
+            options.workflowDiscoveryTestHooks?.beforeAutomaticCanvasLaunch?.(
+              workflowPath,
+            )
+        : undefined,
+    });
     reactToRenderOutcome(session, outcome);
   };
   // Used only by the install-watcher timeout: forces extraction even with deps
@@ -1408,11 +2328,21 @@ export const startServer = async (
   const renderCanvasSurfacingDepErrors = async (
     session: HarnessSession,
   ): Promise<void> => {
-    const outcome = await renderCanvasForSession(
-      session,
-      await canvasWorkflowsForSession(session),
-      { surfaceErrorOnMissingDeps: true },
-    );
+    const workflowPath = session.boundWorkflowPath;
+    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
+    const workflows = await canvasWorkflowsForSession(session);
+    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
+    const outcome = await renderCanvasForSession(session, workflows, {
+      surfaceErrorOnMissingDeps: true,
+      authorizeBeforeExtraction: () =>
+        automaticCanvasAuthorized(session, workflowPath),
+      beforeExtractionLaunchAuthorization: workflowPath
+        ? () =>
+            options.workflowDiscoveryTestHooks?.beforeAutomaticCanvasLaunch?.(
+              workflowPath,
+            )
+        : undefined,
+    });
     reactToRenderOutcome(session, outcome);
   };
 
@@ -1421,7 +2351,10 @@ export const startServer = async (
     "boot",
   ).catch((err: unknown) => {
     console.error("[harness] initial agent scan failed:", err);
-    return [] as WorkflowInfo[];
+    return {
+      found: [] as WorkflowInfo[],
+      repositoryBoundaries: [] as string[],
+    };
   });
 
   // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
@@ -1540,7 +2473,8 @@ export const startServer = async (
             organizationName: identity.organizationName,
           }
         : null,
-      listWorkflows: () => workflowRegistry.list().then(enrichWorkflows),
+      listWorkflows: async () =>
+        publicWorkflowInfos(await enrichWorkflows(workflowsCache)),
       listWorkspaceScopes: listWorkspaceScopesAndRetain,
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>
@@ -1549,8 +2483,8 @@ export const startServer = async (
       renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
       onSessionCreated: (cwd, harnessSessionId) => {
-        scanWorkflowsAndBroadcast(cwd, "session-create")
-          .then((found) => {
+        scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true })
+          .then(({ found }) => {
             // Only auto-render when THIS session's own directory turned up a
             // workflow — an unrelated project scanned earlier elsewhere in
             // the registry shouldn't unprompt-render into a brand new,
@@ -1592,15 +2526,36 @@ export const startServer = async (
       scopeResolver: workspaceScopeCatalog,
       store: systemGraphStore,
       onScopeAccess: (scope) => {
+        const firstAccess = !activeSystemGraphScopes.has(scope.workspaceKey);
         activeSystemGraphScopes.set(scope.workspaceKey, scope);
+        // A destructive signal may predate this store entry (or arrive while
+        // the scope was retired). Attach every intersecting producer token
+        // synchronously before store.get can project old clickable inventory.
+        attachOutstandingPrerequisites(scope);
+        if (firstAccess) {
+          // A scope can be reopened after an interval with no continuous
+          // watcher lease. Its accepted rows remain useful for the immediate
+          // cache-backed graph, but pre-lease completeness/identity proof is
+          // no longer fresh enough to report ready or authorize legacy work.
+          markAcceptedInventoryDirty(scope.root);
+          void scanWorkflowsAndBroadcast(scope.root, "graph-refresh").catch(
+            (err: unknown) => {
+              console.error("[harness] workspace graph discovery failed:", err);
+            },
+          );
+        }
         return systemGraphWatcher.start(scope);
       },
       onScopeRefresh: async (scope) => {
         try {
           systemGraphInventory.retryFailedInspections(scope);
+          systemGraphRelationships.retryFailed(scope.root);
           return await refreshSystemGraphInventory(scope);
         } catch {
           console.error("[harness] workspace graph manual refresh failed");
+          if (!systemGraphStore.peek(scope.workspaceKey)) {
+            throw new Error("Workspace graph scope is no longer active");
+          }
           return systemGraphStore.reportRefreshFailure(scope);
         }
       },
@@ -1625,25 +2580,49 @@ export const startServer = async (
   // wrapped; scan/connect write through to the real registry untouched. Typed
   // as WorkflowRegistryLike so this wrapper needs no unsafe cast.
   const enrichedWorkflowRegistry: WorkflowRegistryLike = {
-    list: () => workflowRegistry.list().then(enrichWorkflows),
-    scan: (root: string) => scanWorkflowsAndBroadcast(root, "requested"),
+    list: async () =>
+      publicWorkflowInfos(await enrichWorkflows(workflowsCache)),
+    scan: (root: string) =>
+      scanWorkflowsAndBroadcast(root, "requested", { dirty: true }).then(
+        (outcome) => publicWorkflowInfos(outcome.found),
+      ),
     connectPath: async (inputPath: string) => {
-      const workflow = await workflowRegistry.connectPath(inputPath);
-      workflowsCache = await workflowRegistry.list();
-      await Promise.all(
-        sessionManager.list().map((session) => writeSessionContext(session)),
+      mutationTokenSequence += 1;
+      const prepared = prepareDirtyWorkflowRoot(
+        inputPath,
+        `connect:${mutationTokenSequence}`,
       );
-      await refreshSystemGraphScopesForRoot(workflow.path);
-      bus.publish({ type: "workflows.changed" });
-      return workflow;
+      try {
+        const workflow = await workflowRegistry.connectPath(inputPath);
+        const scan = scanWorkflowsAndBroadcast(
+          workflow.path,
+          "agent-connected",
+          { dirty: true },
+        );
+        // scanWorkflowsAndBroadcast synchronously installs its own flight
+        // token before returning. The mutation token no longer owns freshness.
+        cancelSystemGraphPrerequisite(prepared.token);
+        const outcome = await scan;
+        return publicWorkflowInfo(
+          workflowsCache.find(
+            (candidate) => candidate.path === workflow.path,
+          ) ??
+            outcome.found.find(
+              (candidate) => candidate.path === workflow.path,
+            ) ??
+            workflow,
+        );
+      } catch (error) {
+        cancelSystemGraphPrerequisite(prepared.token);
+        reportSystemGraphRefreshFailure(prepared.lexicalRoot);
+        throw error;
+      }
     },
     scanWithBoundaries: async (root: string) => {
-      const budget = new AgentProjectScanBudget();
-      const found = await workflowRegistry.scan(root, budget);
-      logAgentScan("requested", root, found.length, budget);
-      // The boundaries the walk stopped at travel with the result so the rail
-      // can explain an empty project instead of misdescribing one.
-      return { found, repositoryBoundaries: budget.repositoryBoundaries };
+      const outcome = await scanWorkflowsAndBroadcast(root, "requested", {
+        dirty: true,
+      });
+      return { ...outcome, found: publicWorkflowInfos(outcome.found) };
     },
   };
   app.use(
@@ -1694,7 +2673,9 @@ export const startServer = async (
       // which the watcher's directory-set diff cannot see — rescan that project
       // so the Draft→Deployed chip and the deploy-gated actions update.
       onLinked: async (workflow) => {
-        await scanWorkflowsAndBroadcast(workflow.path, "agent-linked");
+        await scanWorkflowsAndBroadcast(workflow.path, "agent-linked", {
+          dirty: true,
+        });
       },
     }),
   );
@@ -1758,16 +2739,14 @@ export const startServer = async (
       // NEW path rather than from a stale registry row.
       onMoved: async (from, to) => {
         remapSessions(sessionManager.list(), from, to);
-        await workflowRegistry.prune();
-        await scanWorkflowsAndBroadcast(dirname(to), "agent-moved", {
-          refreshGraphs: async () => {
-            // A cross-project move changes two containment inventories. Refresh
-            // every active parent/nested graph touching either side so neither
-            // keeps a ghost node or misses the arrival.
-            refreshSystemGraphScopesForRoot(dirname(from));
-            refreshSystemGraphScopesForRoot(dirname(to));
-          },
-        });
+        await Promise.all([
+          scanWorkflowsAndBroadcast(dirname(from), "agent-moved", {
+            dirty: true,
+          }),
+          scanWorkflowsAndBroadcast(dirname(to), "agent-moved", {
+            dirty: true,
+          }),
+        ]);
       },
     }),
   );
@@ -1826,7 +2805,9 @@ export const startServer = async (
       // scan broadcasts `workflows.changed` so the row is there before the
       // dialog's caller opens a session on it.
       onScaffolded: async (agentDir) => {
-        await scanWorkflowsAndBroadcast(dirname(agentDir), "agent-created");
+        await scanWorkflowsAndBroadcast(dirname(agentDir), "agent-created", {
+          dirty: true,
+        });
       },
     }),
   );
@@ -2121,7 +3102,7 @@ export const startServer = async (
         // Reuses the scan already kicked off above rather than scanning
         // launchDir twice — only renders when it actually found something,
         // same "discoverable" gate as the REST onSessionCreated path.
-        const found = await initialWorkflowScan;
+        const { found } = await initialWorkflowScan;
         if (found.length > 0) await autoRenderCanvas(session);
       })
       .catch((err: unknown) => {
@@ -2141,7 +3122,10 @@ export const startServer = async (
     port: actualPort,
     sessionManager,
     close: async () => {
-      clearInterval(workflowsCacheTimer);
+      coordinatorActive = false;
+      coordinatorEpoch += 1;
+      await workflowRegistry.retirePendingDiscovery();
+      rejectPublication(new Error("Workflow discovery coordinator is closed"));
       clearInterval(sessionSweepTimer);
       clearInterval(ndjsonRetentionTimer);
       canvasWatcher.stopAll();

@@ -49,10 +49,12 @@ export function createSystemGraphRouter(
         return;
       }
       try {
-        await options.onScopeAccess?.(scope);
+        void Promise.resolve(options.onScopeAccess?.(scope)).catch(() => {
+          // Watcher/discovery setup is best-effort and detached. Graph reads
+          // are strictly cache-backed and never await a baseline or scan.
+        });
       } catch {
-        // Watcher setup is best-effort. A graph read must remain available
-        // even when automatic freshness cannot be armed.
+        // Synchronous setup failures are best-effort too.
       }
       await (refresh
         ? (options.onScopeRefresh?.(scope) ?? options.store.refresh(scope))
@@ -87,9 +89,12 @@ export function createSystemGraphRouter(
         return;
       }
       try {
-        await options.onScopeAccess?.(scope);
+        void Promise.resolve(options.onScopeAccess?.(scope)).catch(() => {
+          // Resolver reads remain cache-backed while freshness arms in the
+          // background.
+        });
       } catch {
-        // Resolver reads remain available when freshness watching cannot arm.
+        // Synchronous setup failures are best-effort too.
       }
       await options.store.ensureInitialized(scope);
       if (!options.store.peek(scope.workspaceKey)) {

@@ -6,21 +6,31 @@ shows the wrong number of agents:
 1. [How is an agent discovered?](#1-how-is-an-agent-discovered)
 2. [What happens when I create a new agent?](#2-what-happens-when-i-create-a-new-agent)
 3. [How is it tracked afterwards, and how does an entry ever leave?](#3-how-is-it-tracked-afterwards)
-4. [What are the bounds, what do they cost, and what is *not* scanned?](#4-the-bounds-what-they-cost-and-what-is-not-scanned)
+4. [What are the bounds, what do they cost, and what is _not_ scanned?](#4-the-bounds-what-they-cost-and-what-is-not-scanned)
 5. [What changed, and what did not](#5-what-changed-and-what-did-not)
 
-Every claim below has a file and line beside it. If the code and this document
-disagree, the code is right and this document is a bug.
+Important implementation claims below name their owning module. If the code and
+this document disagree, the code is right and this document is a bug.
 
 ---
 
 ## 1. How is an agent discovered?
 
-### What marks a directory as an agent
+### What proves a directory is an agent
 
-One file: **`sapiom.json`**, directly inside the directory
-(`src/shared/types.ts:52`, `AGENT_PROJECT_MARKER`). Nothing else — not
-`package.json`, not a `defineAgent` call, not a naming convention.
+Studio uses two ordered proofs:
+
+1. A valid **`sapiom.json`** directly inside the directory is authoritative.
+   It wins without reading TypeScript and stops descent below that agent.
+2. When the marker is absent or invalid, a regular, non-symlink `index.ts` may
+   prove exactly one exported agent definition created by `defineAgent` or the
+   legacy `defineOrchestration` API. This fallback is syntax-only: Studio parses
+   TypeScript ASTs and never bundles, typechecks, dynamically imports, or
+   executes project code merely to discover it.
+
+An unresolved/dynamic export, ambiguous definition, transient read failure, or
+exhausted analysis budget is **incomplete**, not "not an agent". Existing rows
+under that uncertain envelope survive until a later scan can prove the answer.
 
 "Has a `sapiom.json`" is stricter than it sounds
 (`inspectAgentProjectMarkerSync`, `src/core/agent-project-discovery.ts:237`):
@@ -40,7 +50,14 @@ momentary I/O failure is never mistaken for "this agent was deleted" — see
 
 Everything the marker carries — `definitionId`, `name`, `templateId`, `forkId`,
 `starterId` — is provenance written by `link`, `clone` or `scaffold`. None of it
-affects *whether* the directory is an agent.
+affects _whether_ a valid marker is authoritative. A syntax-only row has null
+cloud metadata. If a connected row also has syntax proof, its source name is
+canonical while its retained marker/cloud slug remains a compatibility alias.
+
+The syntax resolver follows only supported relative TypeScript re-exports and
+aliases within the selected workspace. It never crosses ignored directories,
+symlink components, or a nested repository checkout. Bare-package or otherwise
+unresolved export structure fails closed rather than guessing.
 
 ### Who walks the tree
 
@@ -54,11 +71,12 @@ It is **breadth-first**, and that is load-bearing rather than stylistic — see
 §4. At each directory it asks the caller what to do, and stops descending on
 three answers:
 
-| It stops at | Because |
-|---|---|
-| a directory with a valid marker | that is the agent; agents do not nest |
-| a directory whose marker is `unreadable` | the whole subtree is treated as opaque for this pass |
-| a directory that is **its own repository checkout** | it belongs to a repo you did not ask about — see §4 |
+| It stops at                                         | Because                                              |
+| --------------------------------------------------- | ---------------------------------------------------- |
+| a directory with a valid marker                     | that is the agent; agents do not nest                |
+| a directory with one syntax-proven exported agent   | that is the agent; agents do not nest                |
+| a directory whose marker is `unreadable`            | the whole subtree is treated as opaque for this pass |
+| a directory that is **its own repository checkout** | it belongs to a repo you did not ask about — see §4  |
 
 and it never enters `node_modules`, `.git`, `.sapiom`, `dist`, `build`, `.next`
 (`IGNORED_DIR_NAMES`, `agent-project-discovery.ts:154`), nor any symlink —
@@ -70,21 +88,23 @@ cycle terminate.
 
 **This is the part that actually decides what you see.** A scan only ever covers
 the tree beneath the root it is given, so the whole question is "who chose the
-root". There are exactly six ways an agent can enter the registry, five of them
-a walk:
+root". There are eight scan reasons, plus one direct connection mutation:
 
-| Reason | Root | Fires when |
-|---|---|---|
-| `boot` | the launch directory | server start (`src/server/index.ts:1174`) |
-| `session-create` | the new session's `cwd` | `POST /api/sessions` (`index.ts:1305`) |
-| `workspace-change` | a live session's `cwd` | the workspace watcher saw the marker set change (`index.ts:889`) |
-| `agent-linked` | that one agent's directory | a deploy wrote a `definitionId` into its marker (`index.ts:1418`) |
-| `agent-moved` | the destination's parent | a rail drag moved an agent on disk (`index.ts:1468`) |
-| `requested` | whatever folder you named | `POST /api/workflows/scan` — the **"Add all N"** button (`index.ts:1365`) |
+| Reason             | Root                       | Fires when                                                                |
+| ------------------ | -------------------------- | ------------------------------------------------------------------------- |
+| `boot`             | the launch directory       | server start (`src/server/index.ts:1174`)                                 |
+| `session-create`   | the new session's `cwd`    | `POST /api/sessions` (`index.ts:1305`)                                    |
+| `workspace-change` | a live session's `cwd`     | the workspace watcher saw the marker set change (`index.ts:889`)          |
+| `agent-linked`     | that one agent's directory | a deploy wrote a `definitionId` into its marker (`index.ts:1418`)         |
+| `agent-connected`  | that connected directory   | a manual connection settles its current marker/source evidence            |
+| `agent-moved`      | the destination's parent   | a rail drag moved an agent on disk (`index.ts:1468`)                      |
+| `graph-refresh`    | the selected Project root  | first graph access, a source/inventory change, or explicit graph refresh  |
+| `requested`        | whatever folder you named  | `POST /api/workflows/scan` — the **"Add all N"** button (`index.ts:1365`) |
 
-The sixth is `POST /api/workflows/connect` (`workflow-registry.ts:433`), which
-registers exactly one path and does not walk at all — the **"Add workspace"**
-button.
+`POST /api/workflows/connect` first mutates exactly one path —
+the **"Add workspace"** button. It applies the same marker-first, syntax-only
+proof and freshness rules, then its `agent-connected` scan reconciles and
+publishes the accepted inventory.
 
 Every one of those logs a line naming its reason, its root, what it found and
 what it cost (`logAgentScan`, `index.ts:305`):
@@ -102,24 +122,24 @@ filesystem archaeology session.
 
 ## 2. What happens when I create a new agent?
 
-An agent is created by writing `sapiom.json` into a directory — by
-`sapiom agents init`, by a gallery-template clone (`@sapiom/agent-core`'s
-`clone.ts`), or by hand. **Nothing about creation talks to the registry.** The
-registry finds out the same way it finds out about anything: something scans.
+An agent can appear by writing a marker, or by adding a markerless `index.ts`
+whose exports satisfy the syntax proof above. **Nothing about creation talks to
+the registry.** The registry finds out the same way it finds out about
+anything: something scans.
 
 ### With the studio running (the normal case)
 
-1. Your coding agent (or you) writes the marker somewhere under the session's
-   `cwd`.
+1. Your coding agent (or you) writes the marker or relevant TypeScript somewhere
+   under the session's `cwd`.
 2. The **workspace watcher** for that session sees a filesystem event
    (`SessionWorkspaceWatcher`, `src/core/workspace-watcher.ts:182`). A raw event
-   only *arms* a check — it does not itself mean anything, because recursive
+   only _arms_ a check — it does not itself mean anything, because recursive
    `fs.watch` on macOS reports `rename` for ordinary content writes too.
-3. After a **250 ms debounce** (`workspace-watcher.ts:50`) it recomputes a
-   fingerprint of the marker directories under the cwd
-   (`snapshotWorkspaceWorkflows`, `:139`) and fires only if that fingerprint
-   actually changed. Editing a file in an existing agent does not fire it;
-   adding, removing or renaming an agent does.
+3. After a short debounce it recomputes a bounded asynchronous fingerprint of
+   markers, candidate `index.ts` files, and the accepted relative dependency
+   observations needed to revisit split definitions. A raw relevant event
+   fail-closes affected graph navigation immediately; the expensive fingerprint
+   and reconciliation stay off the event callback.
 4. That calls `rescanWorkspaceForSession` (`index.ts:889`), which prunes dead
    paths, rescans the session's `cwd`, rewrites every open session's
    `harness-context.json`, and broadcasts `workflows.changed`. The SPA refetches
@@ -129,13 +149,14 @@ registry finds out the same way it finds out about anything: something scans.
 (`apps/web/src/features/billing/agents/invoice-chaser`) inside a live session's
 cwd appeared in `GET /api/workflows` within about a second, with no restart.
 
-On Linux, or if the watcher errors, the same check runs on a 2 s poll instead
-(`workspace-watcher.ts:53`) — same fingerprint, same firing rule, slightly
-slower.
+On Linux, or if the watcher errors, the same check runs on a 2 s poll instead —
+same fingerprint and reconciliation rules, slightly slower. Missing,
+unreadable, symlink, and non-file observations remain distinct so a recovery or
+confirmed deletion cannot be swallowed as "unchanged".
 
 There is one more trigger for the same case: a session's **first** transition to
 `running` runs one rescan unconditionally (`index.ts:995`). The watcher captures
-the markers already present as its baseline and only fires on a *later* change,
+the markers already present as its baseline and only fires on a _later_ change,
 so a session that starts in a folder where the agent already exists (a
 just-cloned template) would otherwise never trigger anything.
 
@@ -149,11 +170,11 @@ workspace / Add all** at it. That is not a failure mode; it is the design in §4
 
 ### If the new agent is its own git repository
 
-It is still registered. The marker is inspected *before* the repository boundary
+It is still registered. The marker is inspected _before_ the repository boundary
 is considered (`stopsAtRepositoryBoundary`, `agent-project-discovery.ts:420`, is
 reached only after `onDirectory` has already declined to stop), so
 "one git repo per agent" works exactly as it did. What the boundary declines to
-enter is a checkout that merely *contains* agents. Verified against a real
+enter is a checkout that merely _contains_ agents. Verified against a real
 server: a scaffold that runs `git init` in its own new directory registers
 within the same second as one that does not.
 
@@ -168,9 +189,11 @@ temp-file rename so a crash mid-write cannot tear it
 through a single write queue, so a concurrent scan and prune cannot interleave
 and drop entries (`enqueue`, `:288`).
 
-Each entry records where it came from in its `source` field: `"scan"` (a walk
-found it) or `"connect"` (you named it). That distinction is what protects a
-folder you added by hand from being reconciled away by an unrelated scan.
+Each public entry records where it came from in its `source` field: `"scan"` (a
+walk found it) or `"connect"` (you named it). Private source-name, marker-proof,
+canonical-path, observation, and completeness evidence lives in the registry
+and accepted inventory sidecars; it is never serialized by `/api/state` or
+`/api/workflows`.
 
 ### What adds entries
 
@@ -180,7 +203,7 @@ folder you added by hand from being reconciled away by an unrelated scan.
 survive it. That is deliberate — a scan of one project must not delete the
 agents of another — but it is also why the registry is the union of every root
 ever scanned over the life of an install, and why an over-broad scan is
-expensive in a way a single bad session is not. It is a file you have to *clean*,
+expensive in a way a single bad session is not. It is a file you have to _clean_,
 not one that resets.
 
 ### What removes entries
@@ -201,12 +224,12 @@ Three things, and they are deliberately narrow:
    - on a session workspace change and after an agent move (`index.ts:895`,
      `:1467`).
 2. **Scan reconciliation** (`isCoveredByScan`, `:171`). A `"scan"`-sourced entry
-   whose marker is gone or has become invalid is dropped — but *only* if this
+   whose marker is gone or has become invalid is dropped — but _only_ if this
    scan can prove it would have looked there. Three things protect an entry from
    that proof: it sits deeper than the scan actually reached
    (`budget.envelopeDepth`), it sits beneath a subtree that was unreadable on
    this pass, or it sits **inside a repository checkout this scan declined to
-   enter** (`isBehindRepositoryBoundary`, `:208`). Without that last one,
+   enter** (`isProtectedByIncompleteScan`, `workflow-registry.ts`). Without that last one,
    opening `~/src` after having opened `~/src/some-repo` would delete that repo's
    agents.
 3. **Removing a project in the rail**, which is a client-side concept: it drops
@@ -219,7 +242,7 @@ Three things, and they are deliberately narrow:
   practice that is within 30 s of the next read, without a restart. (Verified on
   a real server: an agent deleted outside any watched session's cwd disappeared
   from `GET /api/workflows` 33 s later with no scan and no restart.)
-- **Renamed or moved by hand** — this is a delete *and* a create. The old path
+- **Renamed or moved by hand** — this is a delete _and_ a create. The old path
   is pruned; the new one is registered by whichever scan next covers it. A live
   session's `boundWorkflowPath` pointing at the old path is cleared rather than
   left dangling (`index.ts:911`).
@@ -228,7 +251,7 @@ Three things, and they are deliberately narrow:
   destination is rescanned in one step (`index.ts:1465`).
 
 Note the asymmetry: **removal needs proof, registration does not.** That is the
-right way round for not losing your work, and it is exactly why the *breadth* of
+right way round for not losing your work, and it is exactly why the _breadth_ of
 a scan matters so much — see §4.
 
 ---
@@ -253,17 +276,33 @@ deterministic outer envelope for reconciliation.
 ### Directories entered: `AGENT_PROJECT_SCAN_MAX_NODES = 10_000` (`:76`)
 
 The bound that governs cost. Per directory entered = one `lstat` + one `readdir`,
-~22–25 µs warm at every depth, so cost is linear and predictable in *directories
-entered* and that is what is bounded.
+~22–25 µs warm at every depth, so cost is linear and predictable in _directories
+entered_ and that is what is bounded.
 
 Past the budget a scan is incomplete. Because the walk is breadth-first, the
 budget degrades by **depth**: every level above the cut is complete, and the scan
 reports how far it got as `budget.envelopeDepth`. Nothing beyond that is
 reconciled away as missing.
 
-The watcher's fingerprint gets a tighter budget of its own —
-`AGENT_PROJECT_WATCH_MAX_NODES = 2_500` (`:90`) — because that walk is
-synchronous and re-runs on a 250 ms debounce while you type.
+The watcher walk is asynchronous and bounded over the same 10,000-directory
+candidate envelope, so polling cannot permanently miss a candidate the scanner
+would admit. Dependency observations have their own bounded, scope-confined
+metadata projection; multiple sessions and graphs sharing a canonical root
+reuse one watcher rather than multiplying filesystem walks.
+
+### Syntax analysis budgets
+
+Syntax fallback has independent deterministic limits:
+
+- relative re-export depth: 8;
+- per candidate: 32 unique TypeScript modules and 1 MiB;
+- per workspace scan: 2,000 unique TypeScript modules and 16 MiB;
+- parsed-summary LRU: 10,000 entries.
+
+Warm cache hits avoid physical reads/parses but spend the same logical scan and
+candidate budgets as cold reads. Shared modules spend the workspace budget once
+and each candidate budget once. Hitting any limit degrades completeness and
+protects unresolved prior rows; it never turns uncertainty into deletion.
 
 ### Repository boundary (`isForeignRepositoryRoot`, `:150`)
 
@@ -274,34 +313,33 @@ that repo.
 
 This is the round-2 addition, and it is the one that changes what you see.
 Measured on one real install (macOS/APFS, warm cache, at the 10,000-node budget).
-Cells are *agents registered / distinct names among them / directories entered /
-wall clock*:
+Cells are _agents registered / distinct names among them / directories entered /
+wall clock_:
 
-| root | before | after |
-|---|---|---|
-| `~/sapiom/wf-demo-testing` (a launch dir) | 10 / 10, 17 dirs, 0 ms | 10 / 10, 17 dirs, 0 ms |
-| `~/sapiom` (a parent of it) | 88 / 65, 10,000 dirs, 239 ms — **truncated at depth 5** | 68 / 64, 408 dirs, 8 ms — complete |
-| `~/sapiom/sapiom-js` (a monorepo) | 25 / **2**, 9,016 dirs, 233 ms | 2 / 2, 444 dirs, 8 ms |
-| `~/sapiom/Sapiom` | 0 / 0, 10,000 dirs, 200 ms — **truncated** | 0 / 0, 5,408 dirs, 107 ms — complete |
+| root                                      | before                                                  | after                                |
+| ----------------------------------------- | ------------------------------------------------------- | ------------------------------------ |
+| `~/sapiom/wf-demo-testing` (a launch dir) | 10 / 10, 17 dirs, 0 ms                                  | 10 / 10, 17 dirs, 0 ms               |
+| `~/sapiom` (a parent of it)               | 88 / 65, 10,000 dirs, 239 ms — **truncated at depth 5** | 68 / 64, 408 dirs, 8 ms — complete   |
+| `~/sapiom/sapiom-js` (a monorepo)         | 25 / **2**, 9,016 dirs, 233 ms                          | 2 / 2, 444 dirs, 8 ms                |
+| `~/sapiom/Sapiom`                         | 0 / 0, 10,000 dirs, 200 ms — **truncated**              | 0 / 0, 5,408 dirs, 107 ms — complete |
 
 The `sapiom-js` row is the whole argument. Of the 25 agents a scan of that repo
 used to register, **24 were the same agent** — one e2e fixture, reachable once
 per git worktree under `.trees/`. Two were real. Reading the distinct-name column
-down the table: the boundary barely changes how many *agents* a scan finds and
-collapses how many *rows* it writes.
+down the table: the boundary barely changes how many _agents_ a scan finds and
+collapses how many _rows_ it writes.
 
 Raising the node budget makes this worse, not better: uncapped, `~/sapiom` is 141
 agents across 83,969 directories in 6.8 s — and still only 73 distinct names.
 
-### What is *not* scanned, stated plainly
+### What is _not_ scanned, stated plainly
 
 - anything below a directory that already has a marker;
 - `node_modules`, `.git`, `.sapiom`, `dist`, `build`, `.next`, and anything under
   them;
 - anything reached only through a symlink;
 - anything more than 8 levels below the root;
-- anything past 10,000 directories on one walk (2,500 for the watcher's
-  fingerprint);
+- anything past 10,000 directories on one scan or watcher candidate walk;
 - **anything inside a git checkout that is not the one you pointed at.**
 
 The last is the only one that loses whole agents rather than duplicates. On the
@@ -310,8 +348,8 @@ agent under `~/sapiom/Sapiom`. Each of them lives inside a checkout below the
 scan root, and each is registered the moment that checkout is itself the root:
 launch the studio there, open a session there, or name it to **Add workspace**.
 
-That is the trade the user asked for in as many words — *"It's okay if we don't
-fully scan."* The rule it buys is worth stating on its own:
+That is the trade the user asked for in as many words — _"It's okay if we don't
+fully scan."_ The rule it buys is worth stating on its own:
 
 > **An agent is in your registry because you opened its folder, created it, or
 > asked for a scan that covers it — never because a walk wandered into a
@@ -339,15 +377,18 @@ It is worth being blunt about this, because the opposite belief is also wrong.
 Round 1 **raised** the depth cap from 3 to 8, and added two things beside it: a
 10,000-directory budget (`AGENT_PROJECT_SCAN_MAX_NODES`) and `envelopeDepth`, the
 scan's own report of how deep it actually got, so reconciliation could only
-delete rows the scan could prove it had looked for. The watcher got a tighter
-2,500-directory budget.
+delete rows the scan could prove it had looked for. Round 1 gave the synchronous
+marker watcher a tighter 2,500-directory budget; syntax reconciliation later
+made that watcher asynchronous and aligned its candidate coverage with the
+10,000-directory scan envelope so polling cannot miss an otherwise discoverable
+agent forever.
 
 So: **there is still a depth scan, and after round 1 it reached further than
-before, not less far.** What round 1 changed was *what limits it* — directories
+before, not less far.** What round 1 changed was _what limits it_ — directories
 entered rather than levels descended — and it made a truncated scan honest about
 being truncated instead of silently deleting what it had not reached.
 
-What round 1 did **not** change was scan *breadth*. A scan still followed its
+What round 1 did **not** change was scan _breadth_. A scan still followed its
 root wherever that root led, across as many unrelated repositories as fitted in
 the budget. That is what produced a registry of 88 agents spanning twelve
 top-level directories nobody had opened, and six copies each of four agents from
@@ -375,16 +416,32 @@ six checkouts of one repo.
   those projects, not waiting for a scan to undo it.
 - Removal still requires proof of absence. An unreadable directory keeps its
   entry.
-- Duplicate agent *names* are still possible and still legitimate: open two
+- Duplicate agent _names_ are still possible and still legitimate: open two
   worktrees of one repo as two projects and you will see the same agent twice,
   because you asked for both. What the boundary stops is getting them without
   asking. Disambiguating two legitimately-open copies in the rail is the SPA's
   job, not the registry's.
 
+### Syntax discovery and live reconciliation
+
+- Marker-first semantics remain intact. Only an absent or invalid marker falls
+  through to source; an unreadable marker keeps the subtree opaque.
+- Markerless current and legacy authoring APIs now enter the same registry,
+  rail, graph, and revision-matched navigation lifecycle as linked agents.
+- Discovery results and completeness publish as one accepted generation after
+  context staging. Watcher races, overlapping roots, stale scans, and reverse
+  browser responses cannot publish an older inventory over a newer one.
+- Known inventory renders from memory immediately in a degraded graph while
+  background discovery and bounded relationship extraction settle. No ordinary
+  GET waits on a filesystem scan, project execution, or remote metadata fetch.
+- Syntax-only/null-cloud rows never authorize automatic legacy Canvas or
+  manifest extraction. Existing explicit valid-marker or cloud-link evidence
+  retains that legacy path, with authorization rechecked at process launch.
+
 ### The one thing this document cannot tell you
 
 A registry that was already polluted stays polluted. The boundary changes what
-*future* scans register; it does not retroactively remove what an earlier
+_future_ scans register; it does not retroactively remove what an earlier
 over-broad scan wrote. Rescanning the root that caused it will now reconcile the
 duplicates away — but only that root, and only if you point at it again.
 Otherwise, remove those projects from the rail, or delete

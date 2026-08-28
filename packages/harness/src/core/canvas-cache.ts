@@ -13,25 +13,37 @@
  *
  * Process-lifetime only; a server restart re-extracts once per workflow.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { extractWorkflowGraph, type ExtractionResult, type ExtractionSuccess } from "./canvas-graph.js";
-import { listSourceFiles } from "./canvas-interconnections.js";
+import {
+  extractWorkflowGraph,
+  type ExtractionResult,
+  type ExtractionSuccess,
+} from "./canvas-graph.js";
+import {
+  listSourceFilesWithObservations,
+  workflowSourceFileMetadata,
+} from "./canvas-interconnections.js";
 
-/** `<file count>:<newest mtimeMs>` over the workflow's own sources. */
-export async function fingerprintWorkflowSources(root: string): Promise<string> {
-  const files = await listSourceFiles(root);
-  let maxMtimeMs = 0;
-  for (const file of files) {
-    try {
-      const stat = await fs.stat(file);
-      if (stat.mtimeMs > maxMtimeMs) maxMtimeMs = stat.mtimeMs;
-    } catch {
-      // A file deleted mid-walk still counts toward the file count; the next
-      // fingerprint won't include it, which is invalidation working as intended.
-    }
+/** Stable no-follow metadata over the workflow's bounded admitted sources. */
+export async function fingerprintWorkflowSources(
+  root: string,
+): Promise<string> {
+  const sourceSet = await listSourceFilesWithObservations(root);
+  const parts: string[] = [];
+  for (const observedPath of sourceSet.observedPaths) {
+    const metadata = await workflowSourceFileMetadata(root, observedPath);
+    parts.push(
+      JSON.stringify([
+        path.relative(path.resolve(root), observedPath),
+        metadata.status,
+        metadata.size ?? null,
+        metadata.mtimeMs ?? null,
+        metadata.dev ?? null,
+        metadata.ino ?? null,
+      ]),
+    );
   }
-  return `${files.length}:${maxMtimeMs}`;
+  return parts.join("\n");
 }
 
 interface CacheEntry {
@@ -51,6 +63,26 @@ export interface CachedExtraction {
   fingerprint: string;
 }
 
+export interface CachedExtractionOptions {
+  /**
+   * Revalidates provenance in the same continuation that starts a cache-miss
+   * extractor. It intentionally does not run for a cache hit: returning an
+   * already-derived process-local value launches no project code.
+   */
+  authorizeBeforeLaunch?: () => boolean | Promise<boolean>;
+  /** Test/lifecycle hook immediately before the final authorization check. */
+  beforeLaunchAuthorization?: () => void | Promise<void>;
+}
+
+/** A cache miss whose launch proof expired is cancellation, not extraction
+ * failure. Callers use this to avoid writing a misleading error render. */
+export class ExtractionLaunchCancelledError extends Error {
+  constructor() {
+    super("Workflow extraction authorization expired before launch");
+    this.name = "ExtractionLaunchCancelledError";
+  }
+}
+
 /**
  * `extractWorkflowGraph` behind the fingerprint cache. The `extract`
  * parameter exists for tests only (inject a spy to prove hit/miss behavior).
@@ -58,11 +90,22 @@ export interface CachedExtraction {
 export async function extractWorkflowGraphCached(
   sourceDir: string,
   extract: (dir: string) => Promise<ExtractionResult> = extractWorkflowGraph,
+  options: CachedExtractionOptions = {},
 ): Promise<CachedExtraction> {
   const key = path.resolve(sourceDir);
   const fingerprint = await fingerprintWorkflowSources(key);
   const hit = cache.get(key);
-  if (hit && hit.fingerprint === fingerprint) return { result: hit.result, cached: true, fingerprint };
+  if (hit && hit.fingerprint === fingerprint) {
+    return { result: hit.result, cached: true, fingerprint };
+  }
+
+  await options.beforeLaunchAuthorization?.();
+  if (
+    options.authorizeBeforeLaunch &&
+    !(await options.authorizeBeforeLaunch())
+  ) {
+    throw new ExtractionLaunchCancelledError();
+  }
 
   const result = await extract(key);
   if (result.ok) cache.set(key, { fingerprint, result });

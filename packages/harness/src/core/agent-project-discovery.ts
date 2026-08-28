@@ -76,18 +76,13 @@ export const AGENT_PROJECT_SCAN_MAX_DEPTH = 8;
 export const AGENT_PROJECT_SCAN_MAX_NODES = 10_000;
 
 /**
- * The watcher fingerprint's budget, deliberately tighter than the scan's.
- *
- * `snapshotWorkspaceWorkflows` is synchronous and re-runs on a 250 ms debounce
- * after any file change under the session's cwd, so its cost lands on the event
- * loop while the user is typing. 2,500 dirs ~= 60 ms warm, which is the same
- * order as what depth-3 cost on the widest real root measured (1,298 dirs /
- * 32 ms): the watcher gets the full depth on an ordinary project and gets no
- * slower on a huge one. A truncated fingerprint means a *deep* structural
- * change may not arm a rescan until some shallower event does; discovery depth
- * itself is the registry scan's budget, not this one.
+ * The watcher must observe every directory the accepted discovery envelope can
+ * later reconcile. Production fingerprints are async and shared per canonical
+ * root, so keeping the same 10k breadth-first allowance avoids a permanently
+ * blind suffix on polling-only platforms without multiplying event-loop work
+ * per session/graph caller. The synchronous helper remains test/compat only.
  */
-export const AGENT_PROJECT_WATCH_MAX_NODES = 2_500;
+export const AGENT_PROJECT_WATCH_MAX_NODES = AGENT_PROJECT_SCAN_MAX_NODES;
 
 /**
  * The entry name that marks a directory as its own repository checkout: a
@@ -182,6 +177,13 @@ export type AgentProjectMarkerInspection =
   | { status: "valid"; marker: AgentProjectMarker }
   | { status: "absent" | "invalid" | "unreadable" };
 
+export interface AgentProjectMarkerInspectionHooks {
+  /** Deterministic race seam: runs after lstat admission and before open. */
+  beforeOpen?: (markerPath: string) => void | Promise<void>;
+  /** Test-only observation that project-controlled bytes were actually read. */
+  onBytesRead?: (bytes: number) => void;
+}
+
 export function isAgentProjectScanIgnoredDir(name: string): boolean {
   return IGNORED_DIR_NAMES.has(name);
 }
@@ -227,6 +229,60 @@ function markerReadErrorStatus(error: unknown): "absent" | "unreadable" {
   return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
 }
 
+const AGENT_PROJECT_MARKER_MAX_BYTES = 64 * 1024;
+const MARKER_OPEN_FLAGS =
+  fs.constants.O_RDONLY |
+  (fs.constants.O_NOFOLLOW ?? 0) |
+  (fs.constants.O_NONBLOCK ?? 0);
+const MARKER_FALLBACK_OPEN_FLAGS =
+  fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
+
+function sameMarkerIdentity(
+  expected: import("node:fs").Stats,
+  actual: import("node:fs").Stats,
+): boolean {
+  return (
+    actual.isFile() &&
+    !actual.isSymbolicLink() &&
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.size === actual.size &&
+    expected.mtimeMs === actual.mtimeMs &&
+    actual.size <= AGENT_PROJECT_MARKER_MAX_BYTES
+  );
+}
+
+function openMarkerSync(markerPath: string): number {
+  try {
+    return fs.openSync(markerPath, MARKER_OPEN_FLAGS);
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code !== "EINVAL" ||
+      MARKER_OPEN_FLAGS === MARKER_FALLBACK_OPEN_FLAGS
+    ) {
+      throw error;
+    }
+    // Some platforms do not implement O_NOFOLLOW. The pre-read fstat identity
+    // check below is still fail-closed: a followed replacement can be opened,
+    // but it is never read unless it is the exact lstat-authorized inode.
+    return fs.openSync(markerPath, MARKER_FALLBACK_OPEN_FLAGS);
+  }
+}
+
+async function openMarker(markerPath: string): Promise<fsp.FileHandle> {
+  try {
+    return await fsp.open(markerPath, MARKER_OPEN_FLAGS);
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code !== "EINVAL" ||
+      MARKER_OPEN_FLAGS === MARKER_FALLBACK_OPEN_FLAGS
+    ) {
+      throw error;
+    }
+    return fsp.open(markerPath, MARKER_FALLBACK_OPEN_FLAGS);
+  }
+}
+
 export function readAgentProjectMarkerSync(
   dir: string,
 ): AgentProjectMarker | null {
@@ -251,11 +307,30 @@ export function inspectAgentProjectMarkerSync(
     return { status: "invalid" };
   }
 
+  let fd: number | null = null;
   try {
-    const marker = parseAgentProjectMarker(fs.readFileSync(markerPath, "utf8"));
+    fd = openMarkerSync(markerPath);
+    const openedStat = fs.fstatSync(fd);
+    if (!sameMarkerIdentity(markerStat, openedStat)) {
+      return { status: "unreadable" };
+    }
+    const buffer = Buffer.alloc(openedStat.size + 1);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const finalStat = fs.fstatSync(fd);
+    if (
+      bytesRead !== openedStat.size ||
+      !sameMarkerIdentity(openedStat, finalStat)
+    ) {
+      return { status: "unreadable" };
+    }
+    const marker = parseAgentProjectMarker(
+      buffer.subarray(0, bytesRead).toString("utf8"),
+    );
     return marker ? { status: "valid", marker } : { status: "invalid" };
   } catch (error) {
     return { status: markerReadErrorStatus(error) };
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
 }
 
@@ -268,6 +343,7 @@ export async function readAgentProjectMarker(
 
 export async function inspectAgentProjectMarker(
   dir: string,
+  hooks: AgentProjectMarkerInspectionHooks = {},
 ): Promise<AgentProjectMarkerInspection> {
   const markerPath = resolveAgentProjectMarkerPath(dir);
   if (!markerPath) return { status: "invalid" };
@@ -283,13 +359,32 @@ export async function inspectAgentProjectMarker(
     return { status: "invalid" };
   }
 
+  let handle: fsp.FileHandle | null = null;
   try {
+    await hooks.beforeOpen?.(markerPath);
+    handle = await openMarker(markerPath);
+    const openedStat = await handle.stat();
+    if (!sameMarkerIdentity(markerStat, openedStat)) {
+      return { status: "unreadable" };
+    }
+    const buffer = Buffer.alloc(openedStat.size + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > 0) hooks.onBytesRead?.(bytesRead);
+    const finalStat = await handle.stat();
+    if (
+      bytesRead !== openedStat.size ||
+      !sameMarkerIdentity(openedStat, finalStat)
+    ) {
+      return { status: "unreadable" };
+    }
     const marker = parseAgentProjectMarker(
-      await fsp.readFile(markerPath, "utf8"),
+      buffer.subarray(0, bytesRead).toString("utf8"),
     );
     return marker ? { status: "valid", marker } : { status: "invalid" };
   } catch (error) {
     return { status: markerReadErrorStatus(error) };
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 
@@ -297,6 +392,22 @@ export async function inspectAgentProjectMarker(
 export interface AgentProjectScanLimits {
   maxDepth: number;
   maxNodes: number;
+}
+
+/** One logical workspace reconciliation allowance shared by direct-root walks. */
+export class AgentProjectScanAllowance {
+  readonly maxNodes: number;
+  visited = 0;
+
+  constructor(maxNodes = AGENT_PROJECT_SCAN_MAX_NODES) {
+    this.maxNodes = maxNodes;
+  }
+
+  admit(): boolean {
+    if (this.visited >= this.maxNodes) return false;
+    this.visited += 1;
+    return true;
+  }
 }
 
 /**
@@ -326,7 +437,10 @@ export class AgentProjectScanBudget implements AgentProjectScanLimits {
    */
   repositoryBoundaries: string[] = [];
 
-  constructor(limits: Partial<AgentProjectScanLimits> = {}) {
+  constructor(
+    limits: Partial<AgentProjectScanLimits> = {},
+    private readonly sharedAllowance?: AgentProjectScanAllowance,
+  ) {
     this.maxDepth = limits.maxDepth ?? AGENT_PROJECT_SCAN_MAX_DEPTH;
     this.maxNodes = limits.maxNodes ?? AGENT_PROJECT_SCAN_MAX_NODES;
   }
@@ -350,7 +464,10 @@ export class AgentProjectScanBudget implements AgentProjectScanLimits {
 
   /** Charges one directory. False (and records the cut) once spent. */
   admit(depth: number): boolean {
-    if (this.visited >= this.maxNodes) {
+    if (
+      this.visited >= this.maxNodes ||
+      (this.sharedAllowance && !this.sharedAllowance.admit())
+    ) {
       if (this.truncatedAtDepth === null) this.truncatedAtDepth = depth;
       return false;
     }
@@ -371,6 +488,16 @@ export interface AgentProjectWalkVisitor<
 > {
   /** Every directory entered, root first, shallowest level first. */
   onDirectory(dir: string, depth: number): Action;
+  /**
+   * A directory whose entries were read and whose repository boundary was
+   * admitted. Marker inspection belongs in `onDirectory`; source discovery
+   * belongs here so an unmarked `index.ts` never crosses into another checkout.
+   */
+  onAdmittedDirectory?(
+    dir: string,
+    depth: number,
+    entries: fs.Dirent[],
+  ): Action;
   /** `dir`'s entries could not be listed, and not because it is gone. */
   onUnreadable?(dir: string, depth: number): void;
   /**
@@ -409,7 +536,10 @@ export interface AgentProjectWalkOptions {
  */
 function scanSubdirNames(entries: fs.Dirent[]): string[] {
   return entries
-    .filter((entry) => entry.isDirectory() && !isAgentProjectScanIgnoredDir(entry.name))
+    .filter(
+      (entry) =>
+        entry.isDirectory() && !isAgentProjectScanIgnoredDir(entry.name),
+    )
     .map((entry) => entry.name)
     .sort();
 }
@@ -428,7 +558,9 @@ function isConfirmedMissingDir(error: unknown): boolean {
  * entered while it belongs to the same checkout.
  */
 function stopsAtRepositoryBoundary(
-  visitor: AgentProjectWalkVisitor<AgentProjectWalkAction | Promise<AgentProjectWalkAction>>,
+  visitor: AgentProjectWalkVisitor<
+    AgentProjectWalkAction | Promise<AgentProjectWalkAction>
+  >,
   entries: fs.Dirent[],
   dir: string,
   depth: number,
@@ -460,7 +592,11 @@ export function walkAgentProjectTree(
   options: AgentProjectWalkOptions = {},
 ): AgentProjectScanBudget {
   let frontier = [path.resolve(root)];
-  for (let depth = 0; depth <= budget.maxDepth && frontier.length > 0; depth += 1) {
+  for (
+    let depth = 0;
+    depth <= budget.maxDepth && frontier.length > 0;
+    depth += 1
+  ) {
     const next: string[] = [];
     for (const dir of frontier) {
       if (!budget.admit(depth)) return budget;
@@ -472,8 +608,12 @@ export function walkAgentProjectTree(
         if (!isConfirmedMissingDir(error)) visitor.onUnreadable?.(dir, depth);
         continue;
       }
-      if (stopsAtRepositoryBoundary(visitor, entries, dir, depth, options)) continue;
-      for (const name of scanSubdirNames(entries)) next.push(path.join(dir, name));
+      if (stopsAtRepositoryBoundary(visitor, entries, dir, depth, options))
+        continue;
+      if (visitor.onAdmittedDirectory?.(dir, depth, entries) === "stop")
+        continue;
+      for (const name of scanSubdirNames(entries))
+        next.push(path.join(dir, name));
     }
     frontier = next;
   }
@@ -488,12 +628,18 @@ export function walkAgentProjectTree(
  */
 export async function walkAgentProjectTreeAsync(
   root: string,
-  visitor: AgentProjectWalkVisitor<AgentProjectWalkAction | Promise<AgentProjectWalkAction>>,
+  visitor: AgentProjectWalkVisitor<
+    AgentProjectWalkAction | Promise<AgentProjectWalkAction>
+  >,
   budget: AgentProjectScanBudget = new AgentProjectScanBudget(),
   options: AgentProjectWalkOptions = {},
 ): Promise<AgentProjectScanBudget> {
   let frontier = [path.resolve(root)];
-  for (let depth = 0; depth <= budget.maxDepth && frontier.length > 0; depth += 1) {
+  for (
+    let depth = 0;
+    depth <= budget.maxDepth && frontier.length > 0;
+    depth += 1
+  ) {
     const next: string[] = [];
     for (const dir of frontier) {
       if (!budget.admit(depth)) return budget;
@@ -505,8 +651,16 @@ export async function walkAgentProjectTreeAsync(
         if (!isConfirmedMissingDir(error)) visitor.onUnreadable?.(dir, depth);
         continue;
       }
-      if (stopsAtRepositoryBoundary(visitor, entries, dir, depth, options)) continue;
-      for (const name of scanSubdirNames(entries)) next.push(path.join(dir, name));
+      if (stopsAtRepositoryBoundary(visitor, entries, dir, depth, options))
+        continue;
+      if (
+        visitor.onAdmittedDirectory &&
+        (await visitor.onAdmittedDirectory(dir, depth, entries)) === "stop"
+      ) {
+        continue;
+      }
+      for (const name of scanSubdirNames(entries))
+        next.push(path.join(dir, name));
     }
     frontier = next;
   }

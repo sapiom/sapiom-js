@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach, beforeEach } from "vitest";
+import { describe, expect, it, afterEach, beforeEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,7 +13,10 @@ import {
   type RenderableWorkflow,
 } from "./canvas-render.js";
 
-const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__");
+const FIXTURES_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "__fixtures__",
+);
 const ORDER_TRIAGE = path.join(FIXTURES_DIR, "order-triage");
 const NO_DEFINITION = path.join(FIXTURES_DIR, "no-definition");
 const HUB = path.join(FIXTURES_DIR, "hub");
@@ -27,7 +30,9 @@ async function tmpCwd(): Promise<string> {
 }
 beforeEach(() => clearExtractionCache());
 afterEach(async () => {
-  await Promise.all(tmpDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
+  await Promise.all(
+    tmpDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })),
+  );
 });
 
 async function readRender(cwd: string, workflowPath: string): Promise<string> {
@@ -48,8 +53,13 @@ describe("slugForWorkflowPath", () => {
 describe("renderCanvasForSession", () => {
   it("renders the bound workflow's real step names into its own per-workflow render file — index.html is never touched", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
 
     expect(outcome.mode).toBe("single");
     expect(outcome.workflowPath).toBe(ORDER_TRIAGE);
@@ -58,25 +68,45 @@ describe("renderCanvasForSession", () => {
     expect(outcome.renderPath).toBe(renderFileFor(cwd, ORDER_TRIAGE));
 
     const html = await readRender(cwd, ORDER_TRIAGE);
-    for (const step of ["intake", "classify", "route", "auto_resolve", "escalate"]) {
+    for (const step of [
+      "intake",
+      "classify",
+      "route",
+      "auto_resolve",
+      "escalate",
+    ]) {
       expect(html).toContain(`>${step}<`);
     }
 
-    await expect(fs.access(path.join(cwd, CANVAS_DIR, "index.html"))).rejects.toThrow();
+    await expect(
+      fs.access(path.join(cwd, CANVAS_DIR, "index.html")),
+    ).rejects.toThrow();
   });
 
   it("embeds the step-graph JSON block the Steps tab reads — parseable, with the real nodes/edges", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
-    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
 
     const html = await readRender(cwd, ORDER_TRIAGE);
-    const match = html.match(/<script type="application\/json" id="sapiom-graph">([\s\S]*?)<\/script>/);
+    const match = html.match(
+      /<script type="application\/json" id="sapiom-graph">([\s\S]*?)<\/script>/,
+    );
     expect(match).not.toBeNull();
     // The escaped "<" keeps a "</script>" in any label from breaking out —
     // and it round-trips through JSON.parse back to real data.
-    const graph = JSON.parse(match![1]) as { nodes: { id: string }[]; edges: unknown[] };
-    expect(graph.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(["intake", "classify", "route"]));
+    const graph = JSON.parse(match![1]) as {
+      nodes: { id: string }[];
+      edges: unknown[];
+    };
+    expect(graph.nodes.map((n) => n.id)).toEqual(
+      expect.arrayContaining(["intake", "classify", "route"]),
+    );
     expect(graph.edges.length).toBeGreaterThan(0);
   });
 
@@ -105,26 +135,69 @@ describe("renderCanvasForSession", () => {
 
   it("serves the second render of an unchanged workflow from the extraction cache", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
-    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
-    const second = await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
+    const second = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
     expect(second.cachedExtraction).toBe(true);
     await expect(readRender(cwd, ORDER_TRIAGE)).resolves.toContain(">intake<");
   });
 
+  it("writes nothing when unprompted launch authorization expires after fingerprinting", async () => {
+    const cwd = await tmpCwd();
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    const beforeExtractionLaunchAuthorization = vi.fn();
+    const authorizeBeforeExtraction = vi.fn(async () => false);
+
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+      {
+        beforeExtractionLaunchAuthorization,
+        authorizeBeforeExtraction,
+      },
+    );
+
+    expect(beforeExtractionLaunchAuthorization).toHaveBeenCalledOnce();
+    expect(authorizeBeforeExtraction).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      mode: "single",
+      authorizationExpired: true,
+      extractionFailed: [],
+    });
+    await expect(fs.access(renderFileFor(cwd, ORDER_TRIAGE))).rejects.toThrow();
+  });
+
   it("renders an old-SDK (legacy-branded) workflow — the dual-brand extraction end to end", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: LEGACY_FLOW, name: "legacy-flow", definitionId: null }];
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: LEGACY_FLOW }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: LEGACY_FLOW, name: "legacy-flow", definitionId: null },
+    ];
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: LEGACY_FLOW },
+      workflows,
+    );
 
     expect(outcome.extractionFailed).toEqual([]);
     const html = await readRender(cwd, LEGACY_FLOW);
-    for (const step of ["receive", "confirm", "award"]) expect(html).toContain(`>${step}<`);
+    for (const step of ["receive", "confirm", "award"])
+      expect(html).toContain(`>${step}<`);
   });
 
   it("includes detected launches as dashed launched-workflow nodes in the bound workflow's own diagram", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: HUB, name: "hub", definitionId: null }];
+    const workflows: RenderableWorkflow[] = [
+      { path: HUB, name: "hub", definitionId: null },
+    ];
     await renderCanvasForSession({ cwd, boundWorkflowPath: HUB }, workflows);
 
     const html = await readRender(cwd, HUB);
@@ -137,8 +210,13 @@ describe("renderCanvasForSession", () => {
 
   it("degrades to an honest error panel when the bound workflow fails to extract — never crashes, never falls back to an LLM prompt", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: NO_DEFINITION }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: NO_DEFINITION, name: "broken-flow", definitionId: null },
+    ];
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: NO_DEFINITION },
+      workflows,
+    );
 
     expect(outcome.mode).toBe("single");
     expect(outcome.extractionFailed).toEqual(["broken-flow"]);
@@ -154,8 +232,13 @@ describe("renderCanvasForSession", () => {
 
   it("is a cheap no-op when unbound: no extraction, no write — the server serves the empty state itself", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: null }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: null },
+      workflows,
+    );
 
     expect(outcome).toEqual({ mode: "empty", extractionFailed: [] });
     await expect(fs.access(path.join(cwd, CANVAS_DIR))).rejects.toThrow(); // nothing written at all
@@ -163,8 +246,13 @@ describe("renderCanvasForSession", () => {
 
   it("treats a boundWorkflowPath that matches no known workflow as unbound", async () => {
     const cwd = await tmpCwd();
-    const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: "/no/such/workflow" }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: "/no/such/workflow" },
+      workflows,
+    );
     expect(outcome.mode).toBe("empty");
   });
 
@@ -174,8 +262,13 @@ describe("renderCanvasForSession", () => {
     const notADir = path.join(parent, "not-a-directory");
     await fs.writeFile(notADir, "x");
 
-    const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
-    const outcome = await renderCanvasForSession({ cwd: notADir, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    const workflows: RenderableWorkflow[] = [
+      { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+    ];
+    const outcome = await renderCanvasForSession(
+      { cwd: notADir, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
     expect(outcome.mode).toBe("single");
     expect(outcome.writeError).toBeTruthy();
   });
@@ -188,11 +281,17 @@ describe("renderCanvasForSession", () => {
       const renderPath = renderFileFor(cwd, NO_DEFINITION);
       await fs.mkdir(path.dirname(renderPath), { recursive: true });
       await fs.writeFile(renderPath, GOOD_RENDER, "utf8");
-      const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+      const workflows: RenderableWorkflow[] = [
+        { path: NO_DEFINITION, name: "broken-flow", definitionId: null },
+      ];
 
-      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: NO_DEFINITION }, workflows, {
-        preserveExistingOnFailure: true,
-      });
+      const outcome = await renderCanvasForSession(
+        { cwd, boundWorkflowPath: NO_DEFINITION },
+        workflows,
+        {
+          preserveExistingOnFailure: true,
+        },
+      );
 
       expect(outcome.extractionFailed).toEqual(["broken-flow"]);
       expect(outcome.preservedExisting).toBe(true);
@@ -201,11 +300,17 @@ describe("renderCanvasForSession", () => {
 
     it("still writes the honest error page when nothing exists to preserve", async () => {
       const cwd = await tmpCwd();
-      const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+      const workflows: RenderableWorkflow[] = [
+        { path: NO_DEFINITION, name: "broken-flow", definitionId: null },
+      ];
 
-      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: NO_DEFINITION }, workflows, {
-        preserveExistingOnFailure: true,
-      });
+      const outcome = await renderCanvasForSession(
+        { cwd, boundWorkflowPath: NO_DEFINITION },
+        workflows,
+        {
+          preserveExistingOnFailure: true,
+        },
+      );
 
       expect(outcome.preservedExisting).toBeUndefined();
       expect(await readRender(cwd, NO_DEFINITION)).toContain("render failed");
@@ -216,9 +321,14 @@ describe("renderCanvasForSession", () => {
       const renderPath = renderFileFor(cwd, NO_DEFINITION);
       await fs.mkdir(path.dirname(renderPath), { recursive: true });
       await fs.writeFile(renderPath, GOOD_RENDER, "utf8");
-      const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+      const workflows: RenderableWorkflow[] = [
+        { path: NO_DEFINITION, name: "broken-flow", definitionId: null },
+      ];
 
-      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: NO_DEFINITION }, workflows);
+      const outcome = await renderCanvasForSession(
+        { cwd, boundWorkflowPath: NO_DEFINITION },
+        workflows,
+      );
 
       expect(outcome.preservedExisting).toBeUndefined();
       expect(await readRender(cwd, NO_DEFINITION)).toContain("render failed");
@@ -227,7 +337,11 @@ describe("renderCanvasForSession", () => {
 });
 
 describe("deriveWorkflowCanvas (the session-free entry point behind IA-01)", () => {
-  const ORDER: RenderableWorkflow = { path: ORDER_TRIAGE, name: "order-triage", definitionId: null };
+  const ORDER: RenderableWorkflow = {
+    path: ORDER_TRIAGE,
+    name: "order-triage",
+    definitionId: null,
+  };
 
   it("produces the byte-identical document the session-bound render writes to disk", async () => {
     // The proof that the workflow-keyed route (server/workflow-graph.ts) and
@@ -235,7 +349,9 @@ describe("deriveWorkflowCanvas (the session-free entry point behind IA-01)", () 
     // both sides come out of this one derivation, so a board read by agent path
     // IS the board a bound session sees.
     const cwd = await tmpCwd();
-    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, [ORDER]);
+    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, [
+      ORDER,
+    ]);
     const written = await readRender(cwd, ORDER_TRIAGE);
 
     const derived = await deriveWorkflowCanvas(ORDER);
@@ -249,11 +365,17 @@ describe("deriveWorkflowCanvas (the session-free entry point behind IA-01)", () 
   it("writes nothing — no render file, no canvas dir", async () => {
     const cwd = await tmpCwd();
     await deriveWorkflowCanvas(ORDER);
-    await expect(fs.stat(path.join(cwd, CANVAS_DIR))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(path.join(cwd, CANVAS_DIR))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("reports an extraction failure as status 'error' with the reason, never a throw", async () => {
-    const derived = await deriveWorkflowCanvas({ path: NO_DEFINITION, name: "broken-flow", definitionId: null });
+    const derived = await deriveWorkflowCanvas({
+      path: NO_DEFINITION,
+      name: "broken-flow",
+      definitionId: null,
+    });
 
     expect(derived.status).toBe("error");
     expect(derived.graph).toBeNull();
@@ -268,7 +390,9 @@ describe("dependencies not installed yet (fresh scaffold, pre-`npm install`)", (
   // not-yet-installed project. (The repo's own __fixtures__ resolve the SDK via
   // the monorepo's node_modules, so they are NOT deps-missing.)
   async function depsMissingProject(): Promise<string> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-render-noinstall-"));
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "canvas-render-noinstall-"),
+    );
     tmpDirs.push(dir);
     await fs.writeFile(
       path.join(dir, "index.ts"),
@@ -281,9 +405,14 @@ describe("dependencies not installed yet (fresh scaffold, pre-`npm install`)", (
   it("shows the calm 'preparing' placeholder — not the esbuild error — and flags depsMissing", async () => {
     const cwd = await tmpCwd();
     const project = await depsMissingProject();
-    const workflows: RenderableWorkflow[] = [{ path: project, name: "enrich-list-leads", definitionId: null }];
+    const workflows: RenderableWorkflow[] = [
+      { path: project, name: "enrich-list-leads", definitionId: null },
+    ];
 
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: project }, workflows);
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: project },
+      workflows,
+    );
 
     expect(outcome.depsMissing).toBe(true);
     expect(outcome.extractionFailed).toEqual([]);
@@ -302,11 +431,17 @@ describe("dependencies not installed yet (fresh scaffold, pre-`npm install`)", (
     const renderPath = renderFileFor(cwd, project);
     await fs.mkdir(path.dirname(renderPath), { recursive: true });
     await fs.writeFile(renderPath, "<!doctype html><!-- good -->", "utf8");
-    const workflows: RenderableWorkflow[] = [{ path: project, name: "enrich-list-leads", definitionId: null }];
+    const workflows: RenderableWorkflow[] = [
+      { path: project, name: "enrich-list-leads", definitionId: null },
+    ];
 
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: project }, workflows, {
-      preserveExistingOnFailure: true,
-    });
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: project },
+      workflows,
+      {
+        preserveExistingOnFailure: true,
+      },
+    );
 
     expect(outcome.depsMissing).toBe(true);
     expect(outcome.preservedExisting).toBe(true);
@@ -316,11 +451,17 @@ describe("dependencies not installed yet (fresh scaffold, pre-`npm install`)", (
   it("surfaceErrorOnMissingDeps forces the honest error (the install-timeout safety valve)", async () => {
     const cwd = await tmpCwd();
     const project = await depsMissingProject();
-    const workflows: RenderableWorkflow[] = [{ path: project, name: "enrich-list-leads", definitionId: null }];
+    const workflows: RenderableWorkflow[] = [
+      { path: project, name: "enrich-list-leads", definitionId: null },
+    ];
 
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: project }, workflows, {
-      surfaceErrorOnMissingDeps: true,
-    });
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: project },
+      workflows,
+      {
+        surfaceErrorOnMissingDeps: true,
+      },
+    );
 
     // Extraction runs and genuinely fails to resolve the SDK — the error panel
     // (and its Retry/Ask actions) is restored, and depsMissing is NOT set.
@@ -331,11 +472,16 @@ describe("dependencies not installed yet (fresh scaffold, pre-`npm install`)", (
 });
 
 describe("deterministic enrichment merged into renders", () => {
-  const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
+  const workflows: RenderableWorkflow[] = [
+    { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+  ];
 
   it("always annotates a successful render with a derived summary — no cache, no AI, no stale chip", async () => {
     const cwd = await tmpCwd();
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
     expect(outcome.enrichmentApplied).toBe(true);
 
     const html = await readRender(cwd, ORDER_TRIAGE);
@@ -343,23 +489,36 @@ describe("deterministic enrichment merged into renders", () => {
     expect(html).toContain("3 steps · 1 branch point · 2 success outcomes");
     expect(html).not.toContain("stale — Refresh");
     // Never writes an enrichment cache dir — the annotation is recomputed each render.
-    await expect(fs.access(path.join(cwd, CANVAS_DIR, "cache"))).rejects.toThrow();
+    await expect(
+      fs.access(path.join(cwd, CANVAS_DIR, "cache")),
+    ).rejects.toThrow();
   });
 
   it("is byte-stable across re-renders — same graph in, identical annotated HTML out", async () => {
     const cwd = await tmpCwd();
-    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
     const first = await readRender(cwd, ORDER_TRIAGE);
     clearExtractionCache();
-    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    await renderCanvasForSession(
+      { cwd, boundWorkflowPath: ORDER_TRIAGE },
+      workflows,
+    );
     expect(await readRender(cwd, ORDER_TRIAGE)).toBe(first);
   });
 
   it("carries no annotations on an extraction-failure panel", async () => {
     const cwd = await tmpCwd();
-    const broken: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+    const broken: RenderableWorkflow[] = [
+      { path: NO_DEFINITION, name: "broken-flow", definitionId: null },
+    ];
 
-    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: NO_DEFINITION }, broken);
+    const outcome = await renderCanvasForSession(
+      { cwd, boundWorkflowPath: NO_DEFINITION },
+      broken,
+    );
     expect(outcome.enrichmentApplied).toBeUndefined();
     const html = await readRender(cwd, NO_DEFINITION);
     expect(html).toContain("render failed");

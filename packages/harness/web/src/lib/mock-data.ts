@@ -3,18 +3,32 @@
  * running harness server (see MockApi in ./api).
  */
 import type { CanvasOverviewContent } from "../components/CanvasOverviewPanel";
-import type { AccountPlanView, HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionRecord, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
+import type {
+  AccountPlanView,
+  HarnessEntry,
+  HarnessSession,
+  HarnessSettings,
+  MacroDef,
+  SessionRecord,
+  SessionSummary,
+  TemplateDetailView,
+  TemplateSummary,
+  WorkflowInfo,
+} from "@shared/types";
 
 const now = Date.now();
-const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
-const daysAgo = (n: number): string => new Date(now - n * 24 * 60 * 60_000).toISOString();
+const minutesAgo = (n: number): string =>
+  new Date(now - n * 60_000).toISOString();
+const daysAgo = (n: number): string =>
+  new Date(now - n * 24 * 60 * 60_000).toISOString();
 
 /** The directory the harness itself was launched from (`npx @sapiom/harness [dir]`). */
 /** Demo-only canvas overview content (the real renderer emits this inside
  * its own document; live mode therefore renders no app-side panel). */
 export const MOCK_CANVAS_OVERVIEWS: Record<string, CanvasOverviewContent> = {
   "/Users/demo/acme-app/leasing": {
-    description: "Handles lease applications end to end: screening, credit check, and approval routing.",
+    description:
+      "Handles lease applications end to end: screening, credit check, and approval routing.",
     // Counting rule shared with the Steps tab (canvas-graph's graphCounts):
     // pipeline steps exclude the two terminal exits, counted separately.
     stats: "4 steps · 2 exits · intake entry",
@@ -90,7 +104,8 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
   {
     id: "hello-agent",
     name: "Hello Agent",
-    description: "The minimal single-step agent: a smoke test for the build, deploy, run path.",
+    description:
+      "The minimal single-step agent: a smoke test for the build, deploy, run path.",
     tags: ["starter", "minimal"],
     category: "starter",
     cadence: "on-demand",
@@ -113,7 +128,8 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
   {
     id: "web-research-digest",
     name: "Web Research Digest",
-    description: "Search the web for a topic and return a concise, sourced digest.",
+    description:
+      "Search the web for a topic and return a concise, sourced digest.",
     tags: ["research", "search"],
     category: "data-knowledge",
     cadence: "on-demand",
@@ -241,13 +257,25 @@ export const MOCK_TEMPLATE_GRAPHS: Record<
 > = {
   "hello-agent": {
     steps: [
-      { name: "greet", description: "Validate the input and return a greeting.", capabilities: [], kind: "entry", sublabel: "entry" },
+      {
+        name: "greet",
+        description: "Validate the input and return a greeting.",
+        capabilities: [],
+        kind: "entry",
+        sublabel: "entry",
+      },
     ],
     transitions: [],
   },
   "web-research-digest": {
     steps: [
-      { name: "search", description: "Query the web for the topic.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
+      {
+        name: "search",
+        description: "Query the web for the topic.",
+        capabilities: ["web.search"],
+        kind: "entry",
+        sublabel: "entry",
+      },
       {
         name: "summarize",
         description: "Condense the results into a sourced digest.",
@@ -256,16 +284,48 @@ export const MOCK_TEMPLATE_GRAPHS: Record<
         sublabel: "terminal · success",
       },
     ],
-    transitions: [{ from: "search", to: "summarize", label: null, kind: "continue" }],
+    transitions: [
+      { from: "search", to: "summarize", label: null, kind: "continue" },
+    ],
   },
   "dependency-upgrade": {
     steps: [
-      { name: "scan", description: "List outdated dependencies.", capabilities: ["sandbox.run"], kind: "entry", sublabel: "entry" },
-      { name: "bump", description: "Apply the upgrades in a sandbox.", capabilities: [], kind: "step", sublabel: "step" },
-      { name: "test", description: "Run the suite against the bumped tree.", capabilities: [], kind: "step", sublabel: "step · can also terminate" },
-      { name: "open_pr", description: "Open a PR with the passing upgrade.", capabilities: [], kind: "terminal-success", sublabel: "terminal · success" },
+      {
+        name: "scan",
+        description: "List outdated dependencies.",
+        capabilities: ["sandbox.run"],
+        kind: "entry",
+        sublabel: "entry",
+      },
+      {
+        name: "bump",
+        description: "Apply the upgrades in a sandbox.",
+        capabilities: [],
+        kind: "step",
+        sublabel: "step",
+      },
+      {
+        name: "test",
+        description: "Run the suite against the bumped tree.",
+        capabilities: [],
+        kind: "step",
+        sublabel: "step · can also terminate",
+      },
+      {
+        name: "open_pr",
+        description: "Open a PR with the passing upgrade.",
+        capabilities: [],
+        kind: "terminal-success",
+        sublabel: "terminal · success",
+      },
       // A fail-only sink: amber "needs attention", NOT a green success exit.
-      { name: "give_up", description: "Tests still failing after retries.", capabilities: [], kind: "terminal-warn", sublabel: "terminal · needs attention" },
+      {
+        name: "give_up",
+        description: "Tests still failing after retries.",
+        capabilities: [],
+        kind: "terminal-warn",
+        sublabel: "terminal · needs attention",
+      },
     ],
     transitions: [
       { from: "scan", to: "bump", label: null, kind: "continue" },
@@ -276,25 +336,78 @@ export const MOCK_TEMPLATE_GRAPHS: Record<
   },
   "approval-chain": {
     steps: [
-      { name: "start", description: "Record the request.", capabilities: ["database.create"], kind: "entry", sublabel: "entry" },
-      { name: "present", description: "Email the current gate's approver.", capabilities: ["email.send"], kind: "step", sublabel: "step" },
+      {
+        name: "start",
+        description: "Record the request.",
+        capabilities: ["database.create"],
+        kind: "entry",
+        sublabel: "entry",
+      },
+      {
+        name: "present",
+        description: "Email the current gate's approver.",
+        capabilities: ["email.send"],
+        kind: "step",
+        sublabel: "step",
+      },
       // A pause step shows the signal it waits for.
-      { name: "decide", description: "Wait for the approver's answer.", capabilities: [], kind: "pause", sublabel: "pause · approval.decided" },
-      { name: "finalize", description: "All gates passed.", capabilities: ["email.send"], kind: "terminal-success", sublabel: "terminal · success" },
-      { name: "compensate", description: "Roll back on rejection.", capabilities: ["email.send"], kind: "terminal-warn", sublabel: "terminal · needs attention" },
+      {
+        name: "decide",
+        description: "Wait for the approver's answer.",
+        capabilities: [],
+        kind: "pause",
+        sublabel: "pause · approval.decided",
+      },
+      {
+        name: "finalize",
+        description: "All gates passed.",
+        capabilities: ["email.send"],
+        kind: "terminal-success",
+        sublabel: "terminal · success",
+      },
+      {
+        name: "compensate",
+        description: "Roll back on rejection.",
+        capabilities: ["email.send"],
+        kind: "terminal-warn",
+        sublabel: "terminal · needs attention",
+      },
     ],
     transitions: [
       { from: "start", to: "present", label: null, kind: "continue" },
       { from: "present", to: "decide", label: null, kind: "continue" },
-      { from: "decide", to: "finalize", label: "approval.decided", kind: "pause" },
+      {
+        from: "decide",
+        to: "finalize",
+        label: "approval.decided",
+        kind: "pause",
+      },
       { from: "decide", to: "compensate", label: null, kind: "continue" },
     ],
   },
   "cold-outreach-engine": {
     steps: [
-      { name: "enrich", description: "Enrich the lead list.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
-      { name: "personalize", description: "Write a first line per prospect.", capabilities: [], kind: "step", sublabel: "step" },
-      { name: "send", description: "Drip the sends.", capabilities: ["email.send"], kind: "terminal-success", sublabel: "terminal · success" },
+      {
+        name: "enrich",
+        description: "Enrich the lead list.",
+        capabilities: ["web.search"],
+        kind: "entry",
+        sublabel: "entry",
+      },
+      {
+        name: "personalize",
+        description: "Write a first line per prospect.",
+        capabilities: [],
+        kind: "step",
+        sublabel: "step",
+      },
+      {
+        name: "send",
+        description: "Drip the sends.",
+        capabilities: ["email.send"],
+        kind: "terminal-success",
+        sublabel: "terminal · success",
+      },
     ],
     transitions: [
       { from: "enrich", to: "personalize", label: null, kind: "continue" },
@@ -306,10 +419,34 @@ export const MOCK_TEMPLATE_GRAPHS: Record<
   // registry declares, with the one model step the Moderate band turns on.
   "scheduled-research-brief": {
     steps: [
-      { name: "search", description: "Gather sources on the topic.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
-      { name: "summarize", description: "Draft the brief from the sources.", capabilities: ["models.run"], kind: "step", sublabel: "step" },
-      { name: "review", description: "Check the brief covers the ask.", capabilities: [], kind: "step", sublabel: "step" },
-      { name: "deliver", description: "Send the finished brief.", capabilities: [], kind: "terminal-success", sublabel: "terminal · success" },
+      {
+        name: "search",
+        description: "Gather sources on the topic.",
+        capabilities: ["web.search"],
+        kind: "entry",
+        sublabel: "entry",
+      },
+      {
+        name: "summarize",
+        description: "Draft the brief from the sources.",
+        capabilities: ["models.run"],
+        kind: "step",
+        sublabel: "step",
+      },
+      {
+        name: "review",
+        description: "Check the brief covers the ask.",
+        capabilities: [],
+        kind: "step",
+        sublabel: "step",
+      },
+      {
+        name: "deliver",
+        description: "Send the finished brief.",
+        capabilities: [],
+        kind: "terminal-success",
+        sublabel: "terminal · success",
+      },
     ],
     transitions: [
       { from: "search", to: "summarize", label: null, kind: "continue" },
@@ -464,7 +601,9 @@ const FLOOD_WORKTREES = [
  */
 export function isFloodRailFixture(): boolean {
   if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).get("mockFixtures") === "flood";
+  return (
+    new URLSearchParams(window.location.search).get("mockFixtures") === "flood"
+  );
 }
 
 /**
@@ -481,7 +620,9 @@ const floodFsTree = (): Record<string, string[]> =>
       const segments = tree.split("/");
       const base = `/Users/demo/${tree}`;
       return [
-        ...(segments.length > 1 ? [[`/Users/demo/${segments[0]}`, [segments[1]!]] as const] : []),
+        ...(segments.length > 1
+          ? [[`/Users/demo/${segments[0]}`, [segments[1]!]] as const]
+          : []),
         [base, ["ari"]] as const,
         [`${base}/ari`, ["orchestration", "brain"]] as const,
         [`${base}/ari/orchestration`, []] as const,
@@ -490,7 +631,10 @@ const floodFsTree = (): Record<string, string[]> =>
     }),
     ["/Users/demo/team-tools", ["slack-notifier"]] as const,
     ["/Users/demo/other-tools", ["slack-notifier"]] as const,
-    ["/Users/demo/misc", Array.from({ length: 10 }, (_, i) => `pkg${i + 1}`)] as const,
+    [
+      "/Users/demo/misc",
+      Array.from({ length: 10 }, (_, i) => `pkg${i + 1}`),
+    ] as const,
     ...Array.from(
       { length: 10 },
       (_, i) => [`/Users/demo/misc/pkg${i + 1}`, ["agent"]] as const,
@@ -507,7 +651,16 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
     "scratch",
     "blank-slate",
     ...(isFloodRailFixture()
-      ? ["design-eng", "design-eng-fix", "design-eng-ij", "design-eng-main", "worktrees", "misc", "team-tools", "other-tools"]
+      ? [
+          "design-eng",
+          "design-eng-fix",
+          "design-eng-ij",
+          "design-eng-main",
+          "worktrees",
+          "misc",
+          "team-tools",
+          "other-tools",
+        ]
       : []),
   ],
   ...(isFloodRailFixture() ? floodFsTree() : {}),
@@ -676,11 +829,16 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     reconstructed: true,
     // Folded live from events.ndjson — nothing archived about it yet.
     archivedAt: null,
-    limitations: ["truncated-tool-output", "assistant-narration-gap", "incomplete-final-turn"],
+    limitations: [
+      "truncated-tool-output",
+      "assistant-narration-gap",
+      "incomplete-final-turn",
+    ],
     turns: [
       {
         index: 1,
-        prompt: "Add the screening step to the leasing agent and wire it to the credit check.",
+        prompt:
+          "Add the screening step to the leasing agent and wire it to the credit check.",
         promptAt: minutesAgo(48),
         toolCalls: [
           {
@@ -692,8 +850,10 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
           },
           {
             name: "Edit",
-            input: '{"file_path":"/Users/demo/acme-app/leasing/index.ts","old_string":"steps: [apply]","new_string":"steps: [apply, screening]"}',
-            responseSummary: "Applied 1 edit to /Users/demo/acme-app/leasing/index.ts\n…[truncated 2048 chars]",
+            input:
+              '{"file_path":"/Users/demo/acme-app/leasing/index.ts","old_string":"steps: [apply]","new_string":"steps: [apply, screening]"}',
+            responseSummary:
+              "Applied 1 edit to /Users/demo/acme-app/leasing/index.ts\n…[truncated 2048 chars]",
             responseTruncated: true,
             at: minutesAgo(46),
           },
@@ -753,7 +913,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
             at: daysAgo(1),
           },
         ],
-        assistantText: "Wired it through `applicantQueue.publish()` and added the retry policy.",
+        assistantText:
+          "Wired it through `applicantQueue.publish()` and added the retry policy.",
         model: "claude-opus-4-6",
         usage: { inputTokens: 9120, outputTokens: 340 },
         completedAt: daysAgo(1),
@@ -764,7 +925,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
         prompt: "Add a test for the retry path.",
         promptAt: daysAgo(1),
         toolCalls: [],
-        assistantText: "Added `screening.retry.test.ts` covering the 5xx-then-success path.",
+        assistantText:
+          "Added `screening.retry.test.ts` covering the 5xx-then-success path.",
         model: "claude-opus-4-6",
         usage: { inputTokens: 10240, outputTokens: 210 },
         completedAt: daysAgo(1),
@@ -813,7 +975,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
             at: daysAgo(3),
           },
         ],
-        assistantText: "Mid tier is metered now; the annual discount still needs deciding.",
+        assistantText:
+          "Mid tier is metered now; the annual discount still needs deciding.",
         model: "claude-opus-4-6",
         usage: { inputTokens: 8210, outputTokens: 280 },
         completedAt: daysAgo(3),
@@ -826,7 +989,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
         toolCalls: [
           {
             name: "Write",
-            input: '{"file_path":"/Users/demo/acme-app/migrations/0042-pricing.sql"}',
+            input:
+              '{"file_path":"/Users/demo/acme-app/migrations/0042-pricing.sql"}',
             responseSummary: "wrote 34 lines",
             responseTruncated: false,
             at: daysAgo(3),
@@ -864,7 +1028,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
           {
             name: "shell",
             input: '{"command":["cat","README.md"]}',
-            responseSummary: "# rfq-agent\nRequest-for-quote intake and routing.",
+            responseSummary:
+              "# rfq-agent\nRequest-for-quote intake and routing.",
             responseTruncated: false,
             at: daysAgo(1),
           },
@@ -897,7 +1062,11 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     eventCount: 61,
     reconstructed: true,
     archivedAt: daysAgo(45),
-    limitations: ["truncated-tool-output", "compacted-archive", "dropped-early-turns"],
+    limitations: [
+      "truncated-tool-output",
+      "compacted-archive",
+      "dropped-early-turns",
+    ],
     turns: [
       {
         index: 8,
@@ -912,7 +1081,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
             at: daysAgo(45),
           },
         ],
-        assistantText: "Backfilled 41,203 applicant rows; 12 failed validation and are listed in `backfill-errors.json`.",
+        assistantText:
+          "Backfilled 41,203 applicant rows; 12 failed validation and are listed in `backfill-errors.json`.",
         model: "claude-opus-4-6",
         usage: { inputTokens: 21400, outputTokens: 480 },
         completedAt: daysAgo(45),
@@ -923,7 +1093,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
         prompt: "Ship the migration and note the 12 failures in the changelog.",
         promptAt: daysAgo(45),
         toolCalls: [],
-        assistantText: "Shipped, with the 12 unmigrated applicants called out under Known issues.",
+        assistantText:
+          "Shipped, with the 12 unmigrated applicants called out under Known issues.",
         model: "claude-opus-4-6",
         usage: { inputTokens: 22100, outputTokens: 130 },
         completedAt: daysAgo(45),
@@ -991,18 +1162,30 @@ const deepAgent = (
 
 export const MOCK_DEEP_WORKFLOWS: WorkflowInfo[] = [
   deepAgent(`${DEEP_ROOT}/backend/src/agents/ads`, "ads"),
-  deepAgent(`${DEEP_ROOT}/backend/src/agents/outreach`, "outreach"),
+  // Markerless/unlinked source agent: the mock API keeps its syntax proof in a
+  // private accepted sidecar, so the public row retains null cloud metadata
+  // while the graph still resolves the canonical `outreach` key and edges.
+  deepAgent(`${DEEP_ROOT}/backend/src/agents/outreach`, "outreach", {
+    definitionSlug: null,
+  }),
   // No slug or deployment identity: this is the realistic project-relative
   // fallback case the graph must still navigate back to the agent row.
   deepAgent(`${DEEP_ROOT}/scripts/tools/rollup`, "rollup", {
     definitionSlug: null,
   }),
-  deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/mailer`, "mailer", {
-    definitionId: 7701,
-    activeBuildRunId: "build-mailer-ready",
-    activeBuildRunStatus: "ready",
-  }),
-  deepAgent(`${DEEP_ROOT}/packages/harness/web/src/components/sender`, "sender"),
+  deepAgent(
+    `${DEEP_ROOT}/packages/harness/web/src/components/mailer`,
+    "mailer",
+    {
+      definitionId: 7701,
+      activeBuildRunId: "build-mailer-ready",
+      activeBuildRunStatus: "ready",
+    },
+  ),
+  deepAgent(
+    `${DEEP_ROOT}/packages/harness/web/src/components/sender`,
+    "sender",
+  ),
   deepAgent(`${DEEP_ROOT}/services/gateway`, "gateway"),
   deepAgent(`${DEEP_ROOT}/services/workers/ads`, "ads-worker"),
   deepAgent(`${DEEP_ROOT}/services/workers/queue`, "queue"),
@@ -1050,8 +1233,14 @@ export const MOCK_FLOOD_WORKFLOWS: WorkflowInfo[] = [
     deepAgent(`/Users/demo/${tree}/ari/orchestration`, "ari-grade-repo"),
     deepAgent(`/Users/demo/${tree}/ari/brain`, "brain-agent"),
   ]),
-  deepAgent("/Users/demo/team-tools/slack-notifier", "@sapiom/example-slack-notifier"),
-  deepAgent("/Users/demo/other-tools/slack-notifier", "@sapiom/example-slack-notifier"),
+  deepAgent(
+    "/Users/demo/team-tools/slack-notifier",
+    "@sapiom/example-slack-notifier",
+  ),
+  deepAgent(
+    "/Users/demo/other-tools/slack-notifier",
+    "@sapiom/example-slack-notifier",
+  ),
   ...Array.from({ length: 10 }, (_, i) =>
     deepAgent(`/Users/demo/misc/pkg${i + 1}/agent`, `filler-${i + 1}`),
   ),
@@ -1070,7 +1259,9 @@ export const MOCK_DEEP_ROOTS: string[] = [
  */
 export function isDeepRailFixture(): boolean {
   if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).get("mockFixtures") === "deep";
+  return (
+    new URLSearchParams(window.location.search).get("mockFixtures") === "deep"
+  );
 }
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
@@ -1169,7 +1360,8 @@ export const MOCK_SEARCH_HISTORY: Record<string, SessionSummary[]> = {
       agentSessionId: "search-annotate",
       harness: "claude-code" as const,
       cwd: "/Users/demo/acme-app",
-      title: "You are annotating an already-generated draft of the leasing docs",
+      title:
+        "You are annotating an already-generated draft of the leasing docs",
       lastActiveAt: daysAgo(3),
       source: "transcript" as const,
       resumeMode: "rehydrate" as const,
@@ -1206,21 +1398,33 @@ export const MOCK_MACROS: MacroDef[] = [
     id: "run_local",
     label: "Run local",
     icon: "Play",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target local", submit: true },
+    action: {
+      kind: "inject",
+      text: "cd {{workflow.path}} && sapiom agents run --target local",
+      submit: true,
+    },
     requiresWorkflow: true,
   },
   {
     id: "deploy",
     label: "Deploy",
     icon: "Cloud",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents deploy", submit: true },
+    action: {
+      kind: "inject",
+      text: "cd {{workflow.path}} && sapiom agents deploy",
+      submit: true,
+    },
     requiresWorkflow: true,
   },
   {
     id: "prod_run",
     label: "Prod run",
     icon: "Zap",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target prod", submit: true },
+    action: {
+      kind: "inject",
+      text: "cd {{workflow.path}} && sapiom agents run --target prod",
+      submit: true,
+    },
     requiresWorkflow: true,
   },
   {

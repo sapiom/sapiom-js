@@ -1470,7 +1470,13 @@ export interface HarnessSettings {
  * server/rest.ts and the picker are all derived from this tuple, so adding an
  * editor is a one-line change here plus its label.
  */
-export const EDITOR_KINDS = ["vscode", "vscode-insiders", "cursor", "windsurf", "zed"] as const;
+export const EDITOR_KINDS = [
+  "vscode",
+  "vscode-insiders",
+  "cursor",
+  "windsurf",
+  "zed",
+] as const;
 
 export type EditorKind = (typeof EDITOR_KINDS)[number];
 
@@ -1514,17 +1520,22 @@ export interface FsListResponse {
 // Workflows (left rail)
 // ---------------------------------------------------------------------------
 
-/** An orchestration project on disk, identified by its sapiom.json marker. */
+/**
+ * An agent project known to Studio. It may have been identified by a valid
+ * `sapiom.json` marker or by static proof in its regular `index.ts` entrypoint.
+ */
 export interface WorkflowInfo {
-  /** Directory name (or package.json name when present). */
+  /** Stable display name, normally the package name or directory name. */
   name: string;
-  /** Absolute path to the project directory (contains sapiom.json). */
+  /** Absolute path to the project directory; a marker is not required. */
   path: string;
-  /** From sapiom.json once linked; null before first link. */
+  /** Cloud definition id once explicitly linked; null for local-only rows. */
   definitionId: number | null;
-  /** The deployed agent's slug — the `defineAgent({ name })` that sapiom.json
-   *  caches as `name`, used as the executions-API handle
-   *  (`/agents/v1/definitions/{slug}/executions`). Null before first link. */
+  /**
+   * Cloud definition slug cached by linking/marker metadata, used as the
+   * executions-API handle (`/agents/v1/definitions/{slug}/executions`). This is
+   * null for source-only rows; Studio keeps static source identity private.
+   */
   definitionSlug: string | null;
   /**
    * Cloud build evidence from the definition-detail projection. An id alone

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   clearExtractionCache,
+  ExtractionLaunchCancelledError,
   extractWorkflowGraphCached,
   fingerprintWorkflowSources,
 } from "./canvas-cache.js";
@@ -27,7 +28,9 @@ async function tmpWorkflow(): Promise<string> {
   return dir;
 }
 afterEach(async () => {
-  await Promise.all(tmpDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
+  await Promise.all(
+    tmpDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })),
+  );
 });
 beforeEach(() => clearExtractionCache());
 
@@ -81,7 +84,10 @@ describe("extractWorkflowGraphCached", () => {
 
   it("never caches a failure — 'npm install' fixes don't touch any .ts file, so a cached failure would never self-invalidate", async () => {
     const dir = await tmpWorkflow();
-    const extract = vi.fn().mockResolvedValueOnce(FAIL).mockResolvedValueOnce(OK);
+    const extract = vi
+      .fn()
+      .mockResolvedValueOnce(FAIL)
+      .mockResolvedValueOnce(OK);
 
     const first = await extractWorkflowGraphCached(dir, extract);
     const second = await extractWorkflowGraphCached(dir, extract);
@@ -102,18 +108,58 @@ describe("extractWorkflowGraphCached", () => {
     expect(extract).toHaveBeenCalledTimes(2);
     expect(b.cached).toBe(false);
   });
+
+  it("rechecks launch authorization after fingerprinting and never starts an unauthorized extractor", async () => {
+    const dir = await tmpWorkflow();
+    const extract = vi.fn().mockResolvedValue(OK);
+    const beforeLaunchAuthorization = vi.fn();
+    const authorizeBeforeLaunch = vi.fn(async () => false);
+
+    await expect(
+      extractWorkflowGraphCached(dir, extract, {
+        beforeLaunchAuthorization,
+        authorizeBeforeLaunch,
+      }),
+    ).rejects.toBeInstanceOf(ExtractionLaunchCancelledError);
+
+    expect(beforeLaunchAuthorization).toHaveBeenCalledOnce();
+    expect(authorizeBeforeLaunch).toHaveBeenCalledOnce();
+    expect(extract).not.toHaveBeenCalled();
+  });
+
+  it("does not require launch authorization when serving a cache hit", async () => {
+    const dir = await tmpWorkflow();
+    const extract = vi.fn().mockResolvedValue(OK);
+    await extractWorkflowGraphCached(dir, extract);
+    const beforeLaunchAuthorization = vi.fn();
+    const authorizeBeforeLaunch = vi.fn(async () => false);
+
+    const hit = await extractWorkflowGraphCached(dir, extract, {
+      beforeLaunchAuthorization,
+      authorizeBeforeLaunch,
+    });
+
+    expect(hit.cached).toBe(true);
+    expect(extract).toHaveBeenCalledOnce();
+    expect(beforeLaunchAuthorization).not.toHaveBeenCalled();
+    expect(authorizeBeforeLaunch).not.toHaveBeenCalled();
+  });
 });
 
 describe("fingerprintWorkflowSources", () => {
   it("is stable for an unchanged tree and skips node_modules", async () => {
     const dir = await tmpWorkflow();
     await fs.mkdir(path.join(dir, "node_modules", "dep"), { recursive: true });
-    await fs.writeFile(path.join(dir, "node_modules", "dep", "index.ts"), "ignored");
+    await fs.writeFile(
+      path.join(dir, "node_modules", "dep", "index.ts"),
+      "ignored",
+    );
 
     const first = await fingerprintWorkflowSources(dir);
     const second = await fingerprintWorkflowSources(dir);
     expect(second).toBe(first);
-    expect(first.startsWith("1:")).toBe(true); // only the workflow's own index.ts counted
+    expect(first).toContain('"index.ts","regular"');
+    expect(first).not.toContain("node_modules");
   });
 
   it("changes when a source is edited", async () => {

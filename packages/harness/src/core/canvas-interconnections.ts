@@ -20,6 +20,7 @@
  * calls are syntax-accurate (comments and strings cannot become relationships),
  * while dynamic targets are returned as explicit extraction warnings.
  */
+import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import ts from "typescript";
@@ -35,8 +36,11 @@ const SKIP_DIR_NAMES = new Set([
   "build",
   ".sapiom",
 ]);
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
-const MAX_FILES_PER_WORKFLOW = 200;
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+export const RELATIONSHIP_SCAN_MAX_FILES = 200;
+export const RELATIONSHIP_SCAN_MAX_DIRECTORIES = 2_000;
+export const RELATIONSHIP_SCAN_MAX_DEPTH = 16;
+export const RELATIONSHIP_SCAN_MAX_ENTRIES = 10_000;
 const MAX_FILE_BYTES = 512 * 1024;
 
 // Matches `sapiom.<ns>.<method>(` chains — e.g. `ctx.sapiom.web.search(`,
@@ -71,34 +75,321 @@ const STEP_NAME_PATTERN = /(?<![\w$.])name\s*:\s*(['"`])([^'"`]+)\1/g;
 const DEFINE_STEP_PATTERN = /(?<![\w$.])defineStep\s*\(/g;
 
 /**
- * Lists the workflow's own `.ts`/`.tsx` sources (skipping node_modules and
- * friends), bounded to MAX_FILES_PER_WORKFLOW. Shared with the extraction
+ * Lists the workflow's own TypeScript sources (skipping node_modules and
+ * friends), bounded by fixed file, directory, entry, and depth limits. Shared with the extraction
  * cache's source fingerprint (core/canvas-cache.ts) so "the files this grep
  * reads" and "the files whose mtimes invalidate the cache" can't drift.
  */
-export async function listSourceFiles(root: string): Promise<string[]> {
+export interface WorkflowSourceFileSet {
+  files: string[];
+  /** Directories plus candidate files whose metadata defines membership. */
+  observedPaths: string[];
+  /** False when an opaque path or a deterministic work cap hid sources. */
+  complete: boolean;
+}
+
+export interface WorkflowSourceWalkLimits {
+  maxFiles?: number;
+  maxDirectories?: number;
+  maxDepth?: number;
+  maxEntries?: number;
+}
+
+export async function listSourceFilesWithObservations(
+  root: string,
+  limits: WorkflowSourceWalkLimits = {},
+): Promise<WorkflowSourceFileSet> {
+  const absoluteRoot = path.resolve(root);
   const files: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    if (files.length >= MAX_FILES_PER_WORKFLOW) return;
-    let entries: import("node:fs").Dirent[];
+  const observedPaths: string[] = [];
+  const pending: Array<{ dir: string; depth: number }> = [
+    { dir: absoluteRoot, depth: 0 },
+  ];
+  let directories = 0;
+  let entriesVisited = 0;
+  let complete = true;
+  const maxFiles = Math.max(1, limits.maxFiles ?? RELATIONSHIP_SCAN_MAX_FILES);
+  const maxDirectories = Math.max(
+    1,
+    limits.maxDirectories ?? RELATIONSHIP_SCAN_MAX_DIRECTORIES,
+  );
+  const maxDepth = Math.max(0, limits.maxDepth ?? RELATIONSHIP_SCAN_MAX_DEPTH);
+  const maxEntries = Math.max(
+    1,
+    limits.maxEntries ?? RELATIONSHIP_SCAN_MAX_ENTRIES,
+  );
+
+  while (pending.length > 0) {
+    if (directories >= maxDirectories) {
+      complete = false;
+      break;
+    }
+    const current = pending.shift()!;
+    const { dir, depth } = current;
+    const entries: import("node:fs").Dirent[] = [];
+    let directoryTruncated = false;
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      const directory = await fs.opendir(dir);
+      try {
+        const remainingEntries = maxEntries - entriesVisited;
+        for (let index = 0; index < remainingEntries; index += 1) {
+          const entry = await directory.read();
+          if (!entry) break;
+          entries.push(entry);
+          entriesVisited += 1;
+        }
+        // Do not perform an unbounded count merely to distinguish exactly-at-
+        // cap from over-cap. Treat the boundary conservatively as incomplete;
+        // the containing directory metadata still detects membership changes.
+        if (entriesVisited >= maxEntries) {
+          complete = false;
+          directoryTruncated = true;
+        }
+      } finally {
+        await directory.close().catch(() => {});
+      }
     } catch {
-      return;
+      complete = false;
+      continue;
+    }
+    directories += 1;
+    observedPaths.push(dir);
+    if (directoryTruncated) {
+      // Filesystem directory iteration order is not portable. Never project a
+      // cap-sized prefix whose membership could differ across hosts/passes;
+      // keep the containing directory observation and discard this partial
+      // directory atomically.
+      entries.length = 0;
     }
     entries.sort((left, right) => left.name.localeCompare(right.name));
+    if (
+      dir !== absoluteRoot &&
+      entries.some((entry) => entry.name === ".git")
+    ) {
+      continue;
+    }
     for (const entry of entries) {
-      if (files.length >= MAX_FILES_PER_WORKFLOW) return;
+      const candidate = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (SKIP_DIR_NAMES.has(entry.name)) continue;
-        await walk(path.join(dir, entry.name));
+        if (depth >= maxDepth) {
+          complete = false;
+          continue;
+        }
+        pending.push({ dir: candidate, depth: depth + 1 });
       } else if (SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
-        files.push(path.join(dir, entry.name));
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          complete = false;
+          continue;
+        }
+        if (files.length >= maxFiles) {
+          complete = false;
+          continue;
+        }
+        files.push(candidate);
+        observedPaths.push(candidate);
+      } else if (entry.isSymbolicLink()) {
+        // A symlink may hide a directory of project sources. Never follow it,
+        // and keep the relationship projection explicitly degraded.
+        complete = false;
       }
     }
+    if (entriesVisited >= maxEntries) break;
   }
-  await walk(root);
-  return files;
+  return { files, observedPaths, complete };
+}
+
+export async function listSourceFiles(root: string): Promise<string[]> {
+  return (await listSourceFilesWithObservations(root)).files;
+}
+
+export interface WorkflowSourceReadHooks {
+  /** Deterministic race seam after initial admission but before open. */
+  beforeOpen?: (file: string) => void | Promise<void>;
+  /** Called only after bytes were read from the admitted opened handle. */
+  onBytesRead?: (file: string, bytes: number) => void;
+}
+
+export interface WorkflowSourceFileMetadata {
+  status: "regular" | "directory" | "absent" | "unreadable" | "inadmissible";
+  size?: number;
+  mtimeMs?: number;
+  dev?: number;
+  ino?: number;
+}
+
+function confinedSourceFile(root: string, file: string): boolean {
+  const relative = path.relative(root, file);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+async function admittedSourceAncestors(
+  root: string,
+  file: string,
+): Promise<boolean> {
+  if (!confinedSourceFile(root, file)) return false;
+  const relativeDirectory = path.relative(root, path.dirname(file));
+  let current = root;
+  for (const segment of [
+    "",
+    ...relativeDirectory.split(path.sep).filter(Boolean),
+  ]) {
+    if (segment) current = path.join(current, segment);
+    let stat: import("node:fs").Stats;
+    try {
+      stat = await fs.lstat(current);
+    } catch {
+      return false;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (current === root) continue;
+    try {
+      await fs.lstat(path.join(current, ".git"));
+      return false;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return false;
+    }
+  }
+  return true;
+}
+
+/** Metadata-only, no-follow admission used by cache and watcher fingerprints. */
+export async function workflowSourceFileMetadata(
+  root: string,
+  file: string,
+): Promise<WorkflowSourceFileMetadata> {
+  const absoluteRoot = path.resolve(root);
+  const absoluteFile = path.resolve(file);
+  if (absoluteFile === absoluteRoot) {
+    try {
+      const stat = await fs.lstat(absoluteRoot);
+      return stat.isDirectory() && !stat.isSymbolicLink()
+        ? {
+            status: "directory",
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            dev: stat.dev,
+            ino: stat.ino,
+          }
+        : { status: "inadmissible" };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return {
+        status:
+          code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable",
+      };
+    }
+  }
+  if (!(await admittedSourceAncestors(absoluteRoot, absoluteFile))) {
+    return { status: "inadmissible" };
+  }
+  try {
+    const stat = await fs.lstat(absoluteFile);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      return {
+        status: "directory",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        dev: stat.dev,
+        ino: stat.ino,
+      };
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      return { status: "inadmissible" };
+    }
+    return {
+      status: "regular",
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      dev: stat.dev,
+      ino: stat.ino,
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return {
+      status: code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable",
+    };
+  }
+}
+
+function sameOpenedSource(
+  expected: WorkflowSourceFileMetadata,
+  actual: import("node:fs").Stats,
+): boolean {
+  return (
+    expected.status === "regular" &&
+    actual.isFile() &&
+    !actual.isSymbolicLink() &&
+    actual.dev === expected.dev &&
+    actual.ino === expected.ino &&
+    actual.size === expected.size &&
+    actual.mtimeMs === expected.mtimeMs
+  );
+}
+
+/** Bounded opened-handle read that never follows a final or ancestor symlink. */
+export async function readWorkflowSourceFile(
+  root: string,
+  file: string,
+  hooks: WorkflowSourceReadHooks = {},
+): Promise<string | null> {
+  const absoluteRoot = path.resolve(root);
+  const absoluteFile = path.resolve(file);
+  const admitted = await workflowSourceFileMetadata(absoluteRoot, absoluteFile);
+  if (
+    admitted.status !== "regular" ||
+    (admitted.size ?? MAX_FILE_BYTES + 1) > MAX_FILE_BYTES
+  ) {
+    return null;
+  }
+  await hooks.beforeOpen?.(absoluteFile);
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    handle = await fs.open(
+      absoluteFile,
+      fsConstants.O_RDONLY |
+        (fsConstants.O_NOFOLLOW ?? 0) |
+        (fsConstants.O_NONBLOCK ?? 0),
+    );
+    const opened = await handle.stat();
+    if (
+      !sameOpenedSource(admitted, opened) ||
+      !(await admittedSourceAncestors(absoluteRoot, absoluteFile))
+    ) {
+      return null;
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total <= MAX_FILE_BYTES) {
+      const chunk = Buffer.allocUnsafe(
+        Math.min(64 * 1024, MAX_FILE_BYTES + 1 - total),
+      );
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      hooks.onBytesRead?.(absoluteFile, bytesRead);
+      if (total > MAX_FILE_BYTES) return null;
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    const final = await handle.stat();
+    if (
+      !sameOpenedSource(admitted, final) ||
+      !(await admittedSourceAncestors(absoluteRoot, absoluteFile))
+    ) {
+      return null;
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
 }
 
 // --- attribution: which step's defineStep(...) block a call sits in ---------
@@ -228,6 +519,8 @@ export interface AgentInvocationDetectionWarning {
 export interface AgentInvocationScanResult {
   invocations: DetectedAgentInvocation[];
   warnings: AgentInvocationDetectionWarning[];
+  observedPaths: string[];
+  complete: boolean;
 }
 
 export interface DetectedCapability {
@@ -242,6 +535,10 @@ export interface WorkflowSourceScan {
   invocations: DetectedAgentInvocation[];
   invocationWarnings: AgentInvocationDetectionWarning[];
   capabilities: DetectedCapability[];
+  /** Confined metadata paths actually considered by the bounded extractor. */
+  observedPaths: string[];
+  /** False when an opaque path or work cap prevented a complete scan. */
+  complete: boolean;
 }
 
 interface SupportedNamespaces {
@@ -523,7 +820,7 @@ function scanAgentInvocationsInFile(
   file: string,
   content: string,
   blocks: readonly StepBlock[],
-): AgentInvocationScanResult {
+): Pick<AgentInvocationScanResult, "invocations" | "warnings"> {
   const sourceFile = ts.createSourceFile(
     path.basename(file),
     content,
@@ -582,17 +879,17 @@ function evidenceOrder(left: SourceEvidence, right: SourceEvidence): number {
 export async function scanWorkflowSources(
   root: string,
   knownStepIds: ReadonlySet<string>,
+  readHooks: WorkflowSourceReadHooks = {},
 ): Promise<WorkflowSourceScan> {
   const invocations: DetectedAgentInvocation[] = [];
   const invocationWarnings: AgentInvocationDetectionWarning[] = [];
   const capabilities: DetectedCapability[] = [];
-  for (const file of await listSourceFiles(root)) {
-    let content: string;
-    try {
-      const stat = await fs.stat(file);
-      if (stat.size > MAX_FILE_BYTES) continue;
-      content = await fs.readFile(file, "utf8");
-    } catch {
+  const sourceSet = await listSourceFilesWithObservations(root);
+  let complete = sourceSet.complete;
+  for (const file of sourceSet.files) {
+    const content = await readWorkflowSourceFile(root, file, readHooks);
+    if (content === null) {
+      complete = false;
       continue;
     }
 
@@ -626,7 +923,14 @@ export async function scanWorkflowSources(
   const launches = invocations
     .filter((invocation) => invocation.mode === "async")
     .map(({ slug, fromStepId }) => ({ slug, fromStepId }));
-  return { launches, invocations, invocationWarnings, capabilities };
+  return {
+    launches,
+    invocations,
+    invocationWarnings,
+    capabilities,
+    observedPaths: sourceSet.observedPaths,
+    complete,
+  };
 }
 
 /** Direct agent invocations plus deterministic warnings for supported calls
@@ -634,11 +938,14 @@ export async function scanWorkflowSources(
 export async function detectAgentInvocations(
   root: string,
   knownStepIds: ReadonlySet<string>,
+  readHooks: WorkflowSourceReadHooks = {},
 ): Promise<AgentInvocationScanResult> {
-  const scan = await scanWorkflowSources(root, knownStepIds);
+  const scan = await scanWorkflowSources(root, knownStepIds, readHooks);
   return {
     invocations: scan.invocations,
     warnings: scan.invocationWarnings,
+    observedPaths: scan.observedPaths,
+    complete: scan.complete,
   };
 }
 

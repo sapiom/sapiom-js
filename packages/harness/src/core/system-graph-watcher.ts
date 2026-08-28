@@ -1,26 +1,34 @@
 import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
 import type { WorkspaceKey } from "../shared/system-graph.js";
 import { isAgentProjectScanIgnoredDir } from "./agent-project-discovery.js";
 import { normalizeWatchPath } from "./canvas-watcher.js";
+import { canonicalGraphPath } from "./canonical-graph-path.js";
 import type { WorkspaceScope } from "./system-graph.js";
-import { snapshotWorkspaceWorkflowsAsync } from "./workspace-watcher.js";
+import {
+  snapshotWorkflowSourceRootsAsync,
+  snapshotWorkspaceWorkflowsAsync,
+  type WorkflowSourceObservation,
+} from "./workspace-watcher.js";
 
 const SOURCE_DEBOUNCE_MS = 150;
 const INVENTORY_DEBOUNCE_MS = 250;
 const INVENTORY_RETRY_BASE_MS = 500;
 const MAX_INVENTORY_RETRIES = 3;
+const MAX_SOURCE_RETRIES = 3;
 const POLL_INTERVAL_MS = 2_000;
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
-const UNREADABLE_SOURCE_FINGERPRINT = "<unreadable>";
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
 function ignoredRelativePath(relativePath: string): boolean {
-  return relativePath
-    .split("/")
-    .filter(Boolean)
-    .some((segment) => isAgentProjectScanIgnoredDir(segment));
+  const segments = relativePath.split("/").filter(Boolean);
+  const ignoredIndex = segments.findIndex((segment) =>
+    isAgentProjectScanIgnoredDir(segment),
+  );
+  // Creating/removing the boundary directory itself (notably `agent/.git`)
+  // changes whether a parent scan is allowed to own that candidate. Churn
+  // below an established boundary remains ignored.
+  return ignoredIndex >= 0 && ignoredIndex < segments.length - 1;
 }
 
 function sourceRelativePath(relativePath: string): boolean {
@@ -41,60 +49,6 @@ function confinedSourcePath(root: string, relativePath: string): string | null {
     return null;
   }
   return absolute;
-}
-
-/**
- * Async source fingerprint for the registered agent roots in one workspace.
- *
- * The graph watcher deliberately does not reuse Canvas's synchronous,
- * 400-file project snapshot here: a workspace can contain many agent projects,
- * and polling it on the server event loop would both stutter Studio and miss
- * edits after that project-sized ceiling. Async directory reads yield between
- * entries, while scoping the walk to registry roots keeps the unbounded file
- * count honest without traversing unrelated workspace trees.
- */
-export async function snapshotWorkflowSourceRootsAsync(
-  sourceRoots: readonly string[],
-): Promise<ReadonlyMap<string, string>> {
-  const roots = [
-    ...new Set(sourceRoots.map((root) => path.resolve(root))),
-  ].sort();
-  const snapshots = new Map<string, string>();
-
-  const walk = async (dir: string, parts: string[]): Promise<void> => {
-    let entries: fs.Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      parts.push(`${dir}\0${UNREADABLE_SOURCE_FINGERPRINT}`);
-      return;
-    }
-
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (isAgentProjectScanIgnoredDir(entry.name)) continue;
-        await walk(full, parts);
-        continue;
-      }
-      if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
-        continue;
-      }
-      try {
-        const stat = await fsp.stat(full);
-        parts.push(`${full}:${stat.mtimeMs}:${stat.size}`);
-      } catch {
-        parts.push(`${full}:gone`);
-      }
-    }
-  };
-
-  for (const root of roots) {
-    const parts = [`root\0${root}`];
-    await walk(root, parts);
-    snapshots.set(root, parts.sort().join("|"));
-  }
-  return snapshots;
 }
 
 function isNestedSourceRoot(parent: string, candidate: string): boolean {
@@ -130,12 +84,20 @@ function changedSourceRoots(
 export interface SystemGraphWatcherCallbacks {
   /** Current registry roots inside this scope; read lazily on every poll. */
   listSourceRoots: (scope: WorkspaceScope) => readonly string[];
+  listSourceObservations?: (
+    scope: WorkspaceScope,
+  ) => readonly WorkflowSourceObservation[];
   onSourceChange: (
     scope: WorkspaceScope,
     /** Null when the platform can only report a workspace-level change. */
     sourcePaths: readonly string[] | null,
   ) => void | Promise<void>;
   onInventoryChange: (scope: WorkspaceScope) => void | Promise<void>;
+  /** Synchronous raw-event fail-close hook, before debounce or async I/O. */
+  onPotentialChange?: (
+    scope: WorkspaceScope,
+    sourcePaths: readonly string[] | null,
+  ) => void;
 }
 
 export interface SystemGraphWatchHandle {
@@ -153,57 +115,159 @@ export interface SystemGraphWatcherOptions {
   inventoryDebounceMs?: number;
   inventoryRetryBaseMs?: number;
   maxInventoryRetries?: number;
+  maxSourceRetries?: number;
   pollIntervalMs?: number;
   /** Deterministic test seam for the supported polling fallback. */
   forcePolling?: boolean;
   /** Deterministic test seam for native event routing and watcher errors. */
   watchFactory?: SystemGraphWatchFactory;
+  /** Deterministic lifecycle seam: the native handle is armed before this. */
+  beforeInitialSnapshot?: () => void | Promise<void>;
+  /** Deterministic test seams for proving one owned polling baseline. */
+  snapshotWorkspace?: (root: string) => Promise<string>;
+  snapshotSources?: (
+    roots: readonly string[],
+    observations: readonly WorkflowSourceObservation[],
+  ) => Promise<ReadonlyMap<string, string>>;
+  /** Optional process-wide root broker shared with session watchers. */
+  sharedBroker?: SharedWorkspaceWatchBrokerLike;
+  /** Fresh process-local proof expires when the final continuous lease ends. */
+  onLastLeaseReleased?: (canonicalRoot: string) => void;
+}
+
+export interface SharedWorkspaceWatchSubscriber {
+  scope: WorkspaceScope;
+  listSourceRoots: () => readonly string[];
+  listSourceObservations?: () => readonly WorkflowSourceObservation[];
+  onSourceChange: (
+    sourcePaths: readonly string[] | null,
+  ) => void | Promise<void>;
+  onInventoryChange: () => void | Promise<void>;
+  onPotentialChange?: (sourcePaths: readonly string[] | null) => void;
+}
+
+export interface SharedWorkspaceWatchBrokerLike {
+  subscribe(
+    key: object,
+    subscriber: SharedWorkspaceWatchSubscriber,
+  ): Promise<void>;
+  unsubscribe(key: object): void;
 }
 
 class WorkspaceSystemGraphWatcher {
   private watcher: SystemGraphWatchHandle | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private sourceTimer: ReturnType<typeof setTimeout> | null = null;
+  private sourceRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private inventoryTimer: ReturnType<typeof setTimeout> | null = null;
   private inventoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private sourcePaths = new Set<string>();
   private ambiguousSourceChange = false;
   private lastSourceSnapshots: ReadonlyMap<string, string> | null = null;
-  private lastInventorySnapshot: string;
+  private lastInventorySnapshot: string | null;
   private failedInventorySnapshot: string | null = null;
   private inventoryGeneration = 0;
   private inventoryCheckInFlight = false;
   private inventoryCheckPending = false;
+  private inventoryReconcilePending = false;
   private pollInFlight = false;
+  private initialized = false;
+  private polling = false;
   private callbackQueue: Promise<void> = Promise.resolve();
+  private rawGeneration = 0;
+  private sourceGeneration = 0;
 
   private constructor(
     readonly scope: WorkspaceScope,
     private readonly callbacks: SystemGraphWatcherCallbacks,
     private readonly options: SystemGraphWatcherOptions,
-    initialInventorySnapshot: string,
   ) {
-    this.lastInventorySnapshot = initialInventorySnapshot;
+    this.lastInventorySnapshot = null;
     this.arm();
   }
 
-  static async create(
+  static begin(
     scope: WorkspaceScope,
     callbacks: SystemGraphWatcherCallbacks,
     options: SystemGraphWatcherOptions,
-  ): Promise<WorkspaceSystemGraphWatcher> {
-    // Establish the native/polling watcher from an async baseline. The graph
-    // route awaits this factory, so no synchronous workspace walk runs on the
-    // server loop before the watcher starts.
-    const initialInventorySnapshot = await snapshotWorkspaceWorkflowsAsync(
-      scope.root,
+  ): { watcher: WorkspaceSystemGraphWatcher; ready: Promise<void> } {
+    // Arm before reading the async baseline. A generation change during that
+    // walk forces a reconciliation callback plus a trailing fingerprint pass.
+    const watcher = new WorkspaceSystemGraphWatcher(scope, callbacks, options);
+    return { watcher, ready: watcher.initialize() };
+  }
+
+  private async initialize(): Promise<void> {
+    const generation = this.rawGeneration;
+    await this.options.beforeInitialSnapshot?.();
+    if (this.closed) return;
+    let sourceRoots: readonly string[] = [];
+    let sourceObservations: readonly WorkflowSourceObservation[] = [];
+    try {
+      sourceRoots = this.callbacks.listSourceRoots(this.scope);
+      sourceObservations =
+        this.callbacks.listSourceObservations?.(this.scope) ?? [];
+    } catch {
+      // The workspace baseline remains useful and the next poll retries.
+    }
+    const [initialInventorySnapshot, initialSourceSnapshots] =
+      await Promise.all([
+        this.snapshotWorkspace(this.scope.root),
+        this.snapshotSources(sourceRoots, sourceObservations),
+      ]);
+    if (this.closed) return;
+    if (this.lastInventorySnapshot === null) {
+      this.lastInventorySnapshot = initialInventorySnapshot;
+    } else if (this.lastInventorySnapshot !== initialInventorySnapshot) {
+      this.checkInventoryAsync();
+    }
+    if (this.lastSourceSnapshots === null) {
+      this.lastSourceSnapshots = initialSourceSnapshots;
+    } else if (
+      changedSourceRoots(this.lastSourceSnapshots, initialSourceSnapshots)
+        .length > 0
+    ) {
+      this.scheduleSourceChange(null);
+    }
+    if (generation !== this.rawGeneration) {
+      this.checkInventoryAsync();
+    }
+    this.initialized = true;
+    if (this.polling) {
+      // Polling has no raw event protecting the baseline walk. Reconcile once
+      // from the baseline we just accepted, without launching a competing
+      // second workspace/source walk. This covers an edit that landed between
+      // watcher setup and the first sample while retaining a single owner for
+      // startup I/O.
+      try {
+        this.callbacks.onPotentialChange?.(this.scope, null);
+      } catch {
+        // The source callback below still performs the bounded reconciliation.
+      }
+      const retainedRoots = [...initialSourceSnapshots.keys()].sort();
+      this.sourceGeneration += 1;
+      // An empty concrete list still asks every production subscriber to scan
+      // its containing workspace. Avoid null here: null intentionally performs
+      // a fresh source snapshot to attribute an ambiguous runtime event, which
+      // would reintroduce the duplicate startup walk this path eliminates.
+      this.dispatchSourceChange(retainedRoots, this.sourceGeneration);
+    }
+  }
+
+  private snapshotWorkspace(root: string): Promise<string> {
+    return (this.options.snapshotWorkspace ?? snapshotWorkspaceWorkflowsAsync)(
+      root,
     );
-    return new WorkspaceSystemGraphWatcher(
-      scope,
-      callbacks,
-      options,
-      initialInventorySnapshot,
+  }
+
+  private snapshotSources(
+    roots: readonly string[],
+    observations: readonly WorkflowSourceObservation[],
+  ): Promise<ReadonlyMap<string, string>> {
+    return (this.options.snapshotSources ?? snapshotWorkflowSourceRootsAsync)(
+      roots,
+      observations,
     );
   }
 
@@ -227,11 +291,36 @@ class WorkspaceSystemGraphWatcher {
     });
   }
 
+  private enqueueSource(
+    callback: () => void | Promise<void>,
+    onFailure: () => void,
+  ): void {
+    // Source generations intentionally overlap. A raw edit arriving while an
+    // accepted scan is held must reach the coordinator immediately so it can
+    // supersede that flight and run one trailing pass; serializing behind the
+    // older callback would publish the stale pass and then start a third scan.
+    void Promise.resolve()
+      .then(async () => {
+        if (this.closed) return;
+        await callback();
+      })
+      .catch(() => {
+        if (this.closed) return;
+        try {
+          onFailure();
+        } catch {
+          // Failure recovery remains best-effort.
+        }
+      });
+  }
+
   private scheduleSourceChange(sourcePath: string | null): void {
     if (this.closed) return;
     if (sourcePath === null) this.ambiguousSourceChange = true;
     else this.sourcePaths.add(sourcePath);
     if (this.sourceTimer) clearTimeout(this.sourceTimer);
+    if (this.sourceRetryTimer) clearTimeout(this.sourceRetryTimer);
+    this.sourceRetryTimer = null;
     this.sourceTimer = setTimeout(() => {
       this.sourceTimer = null;
       const paths = this.ambiguousSourceChange
@@ -239,8 +328,71 @@ class WorkspaceSystemGraphWatcher {
         : [...this.sourcePaths].sort();
       this.sourcePaths.clear();
       this.ambiguousSourceChange = false;
-      this.enqueue(() => this.callbacks.onSourceChange(this.scope, paths));
+      this.sourceGeneration += 1;
+      this.dispatchSourceChange(paths, this.sourceGeneration);
     }, this.options.sourceDebounceMs ?? SOURCE_DEBOUNCE_MS);
+  }
+
+  private dispatchSourceChange(
+    paths: readonly string[] | null,
+    generation: number,
+    retry = 0,
+  ): void {
+    this.enqueueSource(
+      async () => {
+        if (generation !== this.sourceGeneration) return;
+        let effectivePaths = paths;
+        let observedSnapshots: ReadonlyMap<string, string> | null = null;
+        if (paths === null) {
+          let roots: readonly string[] = [];
+          let observations: readonly WorkflowSourceObservation[] = [];
+          try {
+            roots = this.callbacks.listSourceRoots(this.scope);
+            observations =
+              this.callbacks.listSourceObservations?.(this.scope) ?? [];
+          } catch {
+            // Keep the conservative scope-wide callback.
+          }
+          observedSnapshots = await this.snapshotSources(roots, observations);
+          if (this.lastSourceSnapshots) {
+            const changed = changedSourceRoots(
+              this.lastSourceSnapshots,
+              observedSnapshots,
+            );
+            effectivePaths = changed.length > 0 ? changed : null;
+          } else {
+            // A raw event raced the initial baseline. The post-edit sample
+            // cannot identify a delta, so reconcile every retained root rather
+            // than only the parent scope (which may stop at repo/ignore roots).
+            const retainedRoots = [...observedSnapshots.keys()].sort();
+            effectivePaths = retainedRoots.length > 0 ? retainedRoots : null;
+          }
+        }
+        await this.callbacks.onSourceChange(this.scope, effectivePaths);
+        if (generation !== this.sourceGeneration || this.closed) return;
+        if (observedSnapshots) this.lastSourceSnapshots = observedSnapshots;
+      },
+      () => {
+        if (this.closed || generation !== this.sourceGeneration) return;
+        if (retry >= (this.options.maxSourceRetries ?? MAX_SOURCE_RETRIES)) {
+          // Keep the graph fail-closed after bounded recovery. A later raw
+          // event advances sourceGeneration and rearms a fresh retry series;
+          // ordinary polling must not become an endless registry-scan loop.
+          return;
+        }
+        const nextRetry = retry + 1;
+        const delay = Math.min(
+          2_000,
+          (this.options.inventoryRetryBaseMs ?? INVENTORY_RETRY_BASE_MS) *
+            2 ** Math.min(nextRetry - 1, 3),
+        );
+        this.sourceRetryTimer = setTimeout(() => {
+          this.sourceRetryTimer = null;
+          if (this.closed || generation !== this.sourceGeneration) return;
+          this.dispatchSourceChange(paths, generation, nextRetry);
+        }, delay);
+      },
+    );
   }
 
   private dispatchInventoryChange(
@@ -304,7 +456,7 @@ class WorkspaceSystemGraphWatcher {
     this.inventoryRetryTimer = setTimeout(() => {
       this.inventoryRetryTimer = null;
       if (this.closed || generation !== this.inventoryGeneration) return;
-      void snapshotWorkspaceWorkflowsAsync(this.scope.root)
+      void this.snapshotWorkspace(this.scope.root)
         .then((currentSnapshot) => {
           if (this.closed || generation !== this.inventoryGeneration) return;
           if (currentSnapshot !== snapshot) {
@@ -341,12 +493,15 @@ class WorkspaceSystemGraphWatcher {
     }
     this.inventoryCheckInFlight = true;
     this.inventoryCheckPending = false;
-    void snapshotWorkspaceWorkflowsAsync(this.scope.root)
+    void this.snapshotWorkspace(this.scope.root)
       .then((snapshot) => {
         if (this.closed) return;
+        const mustReconcile = this.inventoryReconcilePending;
+        this.inventoryReconcilePending = false;
         if (
           snapshot === this.lastInventorySnapshot &&
-          snapshot !== this.failedInventorySnapshot
+          snapshot !== this.failedInventorySnapshot &&
+          !mustReconcile
         ) {
           return;
         }
@@ -375,18 +530,43 @@ class WorkspaceSystemGraphWatcher {
         _event: "rename" | "change",
         rawFilename: string | null,
       ): void => {
+        if (this.closed) return;
+        const potential = (paths: readonly string[] | null): void => {
+          this.rawGeneration += 1;
+          try {
+            this.callbacks.onPotentialChange?.(this.scope, paths);
+          } catch {
+            // Raw-event invalidation is best-effort; async reconciliation still
+            // runs and reports failures through the normal callback path.
+          }
+        };
         if (rawFilename === null) {
+          potential(null);
           this.scheduleSourceChange(null);
-          this.scheduleInventoryCheck();
           return;
         }
         const relativePath = normalizeWatchPath(rawFilename);
         if (ignoredRelativePath(relativePath)) return;
         if (sourceRelativePath(relativePath)) {
-          this.scheduleSourceChange(
-            confinedSourcePath(this.scope.root, relativePath),
-          );
+          const sourcePath = confinedSourcePath(this.scope.root, relativePath);
+          potential(sourcePath ? [sourcePath] : null);
+          this.scheduleSourceChange(sourcePath);
+          // Source reconciliation also scans inventory. Do not enqueue a
+          // second serialized inventory callback for the same native edit.
+          return;
         }
+        const basename = path.posix.basename(relativePath);
+        if (basename === "sapiom.json" || basename === "package.json") {
+          const sourcePath = confinedSourcePath(this.scope.root, relativePath);
+          potential(sourcePath ? [sourcePath] : null);
+          this.scheduleSourceChange(sourcePath);
+          return;
+        }
+        if (_event !== "rename") {
+          return;
+        }
+        potential(null);
+        this.inventoryReconcilePending = true;
         // Event kind is unreliable across editors/platforms. The marker
         // fingerprint decides whether inventory really changed.
         this.scheduleInventoryCheck();
@@ -408,42 +588,60 @@ class WorkspaceSystemGraphWatcher {
 
   private fallBackToPolling(): void {
     if (this.closed || this.pollTimer) return;
-    let refreshAfterInitialSnapshot = this.watcher !== null;
+    this.polling = true;
     this.watcher?.close();
     this.watcher = null;
     const poll = (): void => {
-      if (this.closed || this.pollInFlight) return;
+      if (this.closed || this.pollInFlight || !this.initialized) return;
       this.pollInFlight = true;
       let sourceRoots: readonly string[] = [];
+      let sourceObservations: readonly WorkflowSourceObservation[] = [];
       try {
         sourceRoots = this.callbacks.listSourceRoots(this.scope);
+        sourceObservations =
+          this.callbacks.listSourceObservations?.(this.scope) ?? [];
       } catch {
         // Registry reads are hints too. Inventory polling still proceeds.
       }
       void Promise.all([
-        snapshotWorkflowSourceRootsAsync(sourceRoots),
-        snapshotWorkspaceWorkflowsAsync(this.scope.root),
+        this.snapshotSources(sourceRoots, sourceObservations),
+        this.snapshotWorkspace(this.scope.root),
       ])
         .then(([sourceSnapshots, inventorySnapshot]) => {
           if (this.closed) return;
           const changedRoots = this.lastSourceSnapshots
             ? changedSourceRoots(this.lastSourceSnapshots, sourceSnapshots)
             : [];
-          const ambiguousInitialChange =
-            this.lastSourceSnapshots === null && refreshAfterInitialSnapshot;
-          const sourceChanged =
-            ambiguousInitialChange || changedRoots.length > 0;
+          const inventoryChanged =
+            this.lastInventorySnapshot !== null &&
+            inventorySnapshot !== this.lastInventorySnapshot;
           this.lastSourceSnapshots = sourceSnapshots;
-          refreshAfterInitialSnapshot = false;
-          if (ambiguousInitialChange) this.scheduleSourceChange(null);
-          else {
+          let sourceChanged = false;
+          if (inventoryChanged) {
+            // Structural evidence wins when both bounded channels move. A
+            // newly-created `candidate/.git` also changes that candidate's
+            // directory/source fingerprint; direct-scanning it would turn the
+            // foreign repository into an accidental explicit selection.
+            try {
+              this.callbacks.onPotentialChange?.(this.scope, null);
+            } catch {
+              // Reconciliation still follows below.
+            }
+            this.dispatchInventoryChange(inventorySnapshot);
+          } else if (changedRoots.length > 0) {
+            sourceChanged = true;
+            try {
+              this.callbacks.onPotentialChange?.(this.scope, changedRoots);
+            } catch {
+              // The queued callbacks still reconcile the observed delta.
+            }
             for (const sourceRoot of changedRoots) {
               this.scheduleSourceChange(sourceRoot);
             }
           }
 
-          if (inventorySnapshot !== this.lastInventorySnapshot) {
-            this.dispatchInventoryChange(inventorySnapshot);
+          if (this.lastInventorySnapshot === null) {
+            this.lastInventorySnapshot = inventorySnapshot;
           } else if (
             sourceChanged &&
             inventorySnapshot === this.failedInventorySnapshot
@@ -460,7 +658,11 @@ class WorkspaceSystemGraphWatcher {
           this.pollInFlight = false;
         });
     };
-    poll();
+    // Constructor-time fallback is intentionally quiet: initialize() owns the
+    // first source + inventory baseline and its conservative reconciliation.
+    // A runtime native-watch failure occurs after initialization and therefore
+    // performs an immediate recovery poll.
+    if (this.initialized) poll();
     this.pollTimer = setInterval(
       poll,
       this.options.pollIntervalMs ?? POLL_INTERVAL_MS,
@@ -470,11 +672,172 @@ class WorkspaceSystemGraphWatcher {
   close(): void {
     this.closed = true;
     if (this.sourceTimer) clearTimeout(this.sourceTimer);
+    if (this.sourceRetryTimer) clearTimeout(this.sourceRetryTimer);
     if (this.inventoryTimer) clearTimeout(this.inventoryTimer);
     if (this.inventoryRetryTimer) clearTimeout(this.inventoryRetryTimer);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.watcher?.close();
     this.watcher = null;
+  }
+}
+
+interface SharedWorkspaceWatchLease {
+  canonicalRoot: string;
+  subscribers: Map<object, SharedWorkspaceWatchSubscriber>;
+  watcher: WorkspaceSystemGraphWatcher;
+  ready: Promise<void>;
+}
+
+/**
+ * Process-wide watcher/fingerprint lease keyed by canonical workspace root.
+ * Session and graph consumers share one native handle, one polling baseline,
+ * and one bounded metadata traversal; callbacks fan out only after that shared
+ * observation has been accepted.
+ */
+export class SharedWorkspaceWatchBroker implements SharedWorkspaceWatchBrokerLike {
+  private readonly leases = new Map<string, SharedWorkspaceWatchLease>();
+  private readonly rootBySubscriber = new Map<object, string>();
+
+  constructor(private readonly options: SystemGraphWatcherOptions = {}) {}
+
+  subscribe(
+    key: object,
+    subscriber: SharedWorkspaceWatchSubscriber,
+  ): Promise<void> {
+    const canonicalRoot = canonicalGraphPath(subscriber.scope.root);
+    const previousRoot = this.rootBySubscriber.get(key);
+    if (previousRoot && previousRoot !== canonicalRoot) this.unsubscribe(key);
+
+    const existing = this.leases.get(canonicalRoot);
+    if (existing) {
+      existing.subscribers.set(key, subscriber);
+      this.rootBySubscriber.set(key, canonicalRoot);
+      return existing.ready;
+    }
+
+    const subscribers = new Map([[key, subscriber]]);
+    const brokerScope: WorkspaceScope = {
+      workspaceKey: `watch:${canonicalRoot}`,
+      root: canonicalRoot,
+    };
+    const currentSubscribers = (): SharedWorkspaceWatchSubscriber[] => [
+      ...subscribers.values(),
+    ];
+    const started = WorkspaceSystemGraphWatcher.begin(
+      brokerScope,
+      {
+        listSourceRoots: () => {
+          const roots = new Set<string>();
+          for (const current of currentSubscribers()) {
+            try {
+              for (const root of current.listSourceRoots()) roots.add(root);
+            } catch {
+              // Another subscriber can still supply a useful baseline.
+            }
+          }
+          return [...roots].sort();
+        },
+        listSourceObservations: () => {
+          const observations: WorkflowSourceObservation[] = [];
+          const seen = new Set<string>();
+          for (const current of currentSubscribers()) {
+            let listed: readonly WorkflowSourceObservation[] = [];
+            try {
+              listed = current.listSourceObservations?.() ?? [];
+            } catch {
+              continue;
+            }
+            for (const observation of listed) {
+              const fingerprint = JSON.stringify([
+                observation.workspaceRoot,
+                observation.candidateRoot,
+                [...observation.paths].sort(),
+              ]);
+              if (seen.has(fingerprint)) continue;
+              seen.add(fingerprint);
+              observations.push(observation);
+            }
+          }
+          return observations;
+        },
+        onPotentialChange: (_scope, paths) => {
+          for (const current of currentSubscribers()) {
+            try {
+              current.onPotentialChange?.(paths);
+            } catch {
+              // One fail-close consumer must not suppress the others.
+            }
+          }
+        },
+        onSourceChange: async (_scope, paths) => {
+          const results = await Promise.allSettled(
+            currentSubscribers().map((current) =>
+              Promise.resolve().then(() => current.onSourceChange(paths)),
+            ),
+          );
+          const failed = results.find(
+            (result): result is PromiseRejectedResult =>
+              result.status === "rejected",
+          );
+          if (failed) throw failed.reason;
+        },
+        onInventoryChange: async () => {
+          const results = await Promise.allSettled(
+            currentSubscribers().map((current) =>
+              Promise.resolve().then(() => current.onInventoryChange()),
+            ),
+          );
+          const failed = results.find(
+            (result): result is PromiseRejectedResult =>
+              result.status === "rejected",
+          );
+          if (failed) throw failed.reason;
+        },
+      },
+      this.options,
+    );
+    const lease: SharedWorkspaceWatchLease = {
+      canonicalRoot,
+      subscribers,
+      watcher: started.watcher,
+      ready: Promise.resolve(),
+    };
+    lease.ready = started.ready.catch((error: unknown) => {
+      started.watcher.close();
+      if (this.leases.get(canonicalRoot) === lease) {
+        this.leases.delete(canonicalRoot);
+        for (const subscriberKey of subscribers.keys()) {
+          if (this.rootBySubscriber.get(subscriberKey) === canonicalRoot) {
+            this.rootBySubscriber.delete(subscriberKey);
+          }
+        }
+      }
+      throw error;
+    });
+    this.leases.set(canonicalRoot, lease);
+    this.rootBySubscriber.set(key, canonicalRoot);
+    return lease.ready;
+  }
+
+  unsubscribe(key: object): void {
+    const canonicalRoot = this.rootBySubscriber.get(key);
+    if (!canonicalRoot) return;
+    this.rootBySubscriber.delete(key);
+    const lease = this.leases.get(canonicalRoot);
+    if (!lease) return;
+    lease.subscribers.delete(key);
+    if (lease.subscribers.size > 0) return;
+    lease.watcher.close();
+    this.leases.delete(canonicalRoot);
+    try {
+      this.options.onLastLeaseReleased?.(canonicalRoot);
+    } catch {
+      // Lease retirement must always close the underlying OS resource.
+    }
+  }
+
+  get size(): number {
+    return this.leases.size;
   }
 }
 
@@ -486,7 +849,16 @@ export class SystemGraphWatcherManager {
   >();
   private readonly pendingStarts = new Map<
     WorkspaceKey,
-    { root: string; token: object; promise: Promise<void> }
+    {
+      root: string;
+      token: object;
+      watcher: WorkspaceSystemGraphWatcher;
+      promise: Promise<void>;
+    }
+  >();
+  private readonly sharedSubscriptions = new Map<
+    WorkspaceKey,
+    { root: string; key: object }
   >();
 
   constructor(
@@ -495,25 +867,62 @@ export class SystemGraphWatcherManager {
   ) {}
 
   start(scope: WorkspaceScope): Promise<void> {
+    const sharedBroker = this.options.sharedBroker;
+    if (sharedBroker) {
+      const canonicalRoot = canonicalGraphPath(scope.root);
+      const existingShared = this.sharedSubscriptions.get(scope.workspaceKey);
+      if (existingShared?.root === canonicalRoot) return Promise.resolve();
+      this.stop(scope.workspaceKey);
+      const key = {};
+      this.sharedSubscriptions.set(scope.workspaceKey, {
+        root: canonicalRoot,
+        key,
+      });
+      return sharedBroker
+        .subscribe(key, {
+          scope,
+          listSourceRoots: () => this.callbacks.listSourceRoots(scope),
+          listSourceObservations: () =>
+            this.callbacks.listSourceObservations?.(scope) ?? [],
+          onPotentialChange: (paths) =>
+            this.callbacks.onPotentialChange?.(scope, paths),
+          onSourceChange: (paths) =>
+            this.callbacks.onSourceChange(scope, paths),
+          onInventoryChange: () => this.callbacks.onInventoryChange(scope),
+        })
+        .catch((error: unknown) => {
+          if (this.sharedSubscriptions.get(scope.workspaceKey)?.key === key) {
+            this.sharedSubscriptions.delete(scope.workspaceKey);
+          }
+          throw error;
+        });
+    }
     const existing = this.watchers.get(scope.workspaceKey);
     if (existing?.scope.root === scope.root) return Promise.resolve();
     const pending = this.pendingStarts.get(scope.workspaceKey);
     if (pending?.root === scope.root) return pending.promise;
     this.stop(scope.workspaceKey);
     const token = {};
-    const promise = WorkspaceSystemGraphWatcher.create(
+    const started = WorkspaceSystemGraphWatcher.begin(
       scope,
       this.callbacks,
       this.options,
-    )
-      .then((watcher) => {
-        const current = this.pendingStarts.get(scope.workspaceKey);
-        if (current?.token !== token) {
-          watcher.close();
-          return;
-        }
-        this.watchers.set(scope.workspaceKey, watcher);
-      })
+    );
+    const promise = started.ready
+      .then(
+        () => {
+          const current = this.pendingStarts.get(scope.workspaceKey);
+          if (current?.token !== token) {
+            started.watcher.close();
+            return;
+          }
+          this.watchers.set(scope.workspaceKey, started.watcher);
+        },
+        (error: unknown) => {
+          started.watcher.close();
+          throw error;
+        },
+      )
       .finally(() => {
         if (this.pendingStarts.get(scope.workspaceKey)?.token === token) {
           this.pendingStarts.delete(scope.workspaceKey);
@@ -522,6 +931,7 @@ export class SystemGraphWatcherManager {
     this.pendingStarts.set(scope.workspaceKey, {
       root: scope.root,
       token,
+      watcher: started.watcher,
       promise,
     });
     return promise;
@@ -531,6 +941,7 @@ export class SystemGraphWatcherManager {
     const tracked = new Set([
       ...this.watchers.keys(),
       ...this.pendingStarts.keys(),
+      ...this.sharedSubscriptions.keys(),
     ]);
     for (const workspaceKey of tracked) {
       if (!workspaceKeys.has(workspaceKey)) this.stop(workspaceKey);
@@ -538,6 +949,10 @@ export class SystemGraphWatcherManager {
   }
 
   stop(workspaceKey: WorkspaceKey): void {
+    const shared = this.sharedSubscriptions.get(workspaceKey);
+    if (shared) this.options.sharedBroker?.unsubscribe(shared.key);
+    this.sharedSubscriptions.delete(workspaceKey);
+    this.pendingStarts.get(workspaceKey)?.watcher.close();
     this.pendingStarts.delete(workspaceKey);
     this.watchers.get(workspaceKey)?.close();
     this.watchers.delete(workspaceKey);
@@ -547,6 +962,7 @@ export class SystemGraphWatcherManager {
     const tracked = new Set([
       ...this.watchers.keys(),
       ...this.pendingStarts.keys(),
+      ...this.sharedSubscriptions.keys(),
     ]);
     for (const workspaceKey of tracked) {
       this.stop(workspaceKey);
@@ -554,6 +970,6 @@ export class SystemGraphWatcherManager {
   }
 
   get size(): number {
-    return this.watchers.size;
+    return this.watchers.size + this.sharedSubscriptions.size;
   }
 }

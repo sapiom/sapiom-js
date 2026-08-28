@@ -12,7 +12,14 @@
  *  - Propagates the new binding live via the existing session.status broadcast.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
@@ -59,6 +66,20 @@ async function scaffoldWorkflow(dir: string): Promise<void> {
   );
 }
 
+async function scaffoldHostileSourceWorkflow(
+  workflowDir: string,
+  sideEffectPath: string,
+): Promise<void> {
+  await mkdir(workflowDir, { recursive: true });
+  await writeFile(
+    join(workflowDir, "index.ts"),
+    `import { writeFileSync } from "node:fs";
+import { defineAgent } from "@sapiom/agent";
+writeFileSync(${JSON.stringify(sideEffectPath)}, "executed");
+export const agent = defineAgent({ name: "hostile-source-only" });`,
+  );
+}
+
 /** Fetch the session list from a running server. */
 async function listSessions(port: number): Promise<HarnessSession[]> {
   const res = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
@@ -67,14 +88,28 @@ async function listSessions(port: number): Promise<HarnessSession[]> {
   return (await res.json()) as HarnessSession[];
 }
 
+async function expectPrivateWorkflowEvidenceHidden(
+  port: number,
+): Promise<void> {
+  const headers = { "X-Harness-Token": "test-token" };
+  const workflows = (await (
+    await fetch(`http://127.0.0.1:${port}/api/workflows`, { headers })
+  ).json()) as Array<Record<string, unknown>>;
+  const state = (await (
+    await fetch(`http://127.0.0.1:${port}/api/state`, { headers })
+  ).json()) as { workflows: Array<Record<string, unknown>> };
+  for (const workflow of [...workflows, ...state.workflows]) {
+    expect(workflow).not.toHaveProperty("sourceDefinitionName");
+    expect(workflow).not.toHaveProperty("markerPresent");
+  }
+}
+
 /** Open the /ws/events WebSocket and return a collector of received messages. */
 async function collectEvents(
   port: number,
 ): Promise<{ messages: BusMessage[]; close: () => void }> {
   const messages: BusMessage[] = [];
-  const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/ws/events?token=test-token`,
-  );
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events?token=test-token`);
   await new Promise<void>((resolve, reject) => {
     ws.once("open", resolve);
     ws.once("error", reject);
@@ -107,10 +142,22 @@ describe("auto-bind on rescan (SAP-1897)", () => {
     server = undefined;
     // maxRetries guards against macOS's occasional ENOTEMPTY on temp-dir
     // removal when a watcher handle releases slightly after close().
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 100,
+    });
   });
 
-  async function startTestServer(): Promise<number> {
+  async function startTestServer(
+    options: {
+      autoCreateSession?: boolean;
+      beforeAutomaticCanvasLaunch?: (
+        workflowPath: string,
+      ) => void | Promise<void>;
+    } = {},
+  ): Promise<number> {
     server = await startServer({
       port: 0,
       bootToken: "test-token",
@@ -118,10 +165,174 @@ describe("auto-bind on rescan (SAP-1897)", () => {
       adapters: { "claude-code": fakeClaudeAdapter() },
       stateRoot: dir,
       launchDir: cwd,
-      autoCreateSession: false,
+      autoCreateSession: options.autoCreateSession ?? false,
+      workflowDiscoveryTestHooks: {
+        beforeAutomaticCanvasLaunch: options.beforeAutomaticCanvasLaunch,
+      },
     });
     return server.port;
   }
+
+  it(
+    "binds but never automatically executes a hostile source-only workflow discovered by the watcher",
+    { timeout: 20_000 },
+    async () => {
+      const launches = vi.fn();
+      const sideEffect = join(dir, "source-executed");
+      const port = await startTestServer({
+        beforeAutomaticCanvasLaunch: launches,
+      });
+      const session = await server!.sessionManager.create({
+        cwd,
+        harness: "claude-code",
+      });
+
+      await scaffoldHostileSourceWorkflow(cwd, sideEffect);
+      await vi.waitFor(
+        async () => {
+          const sessions = await listSessions(port);
+          expect(
+            sessions.find((candidate) => candidate.id === session.id)
+              ?.boundWorkflowPath,
+          ).toBe(cwd);
+        },
+        { timeout: 8_000, interval: 150 },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(launches).not.toHaveBeenCalled();
+      await expect(access(sideEffect)).rejects.toThrow();
+      await expectPrivateWorkflowEvidenceHidden(port);
+    },
+  );
+
+  it(
+    "never automatically executes a hostile source-only workflow during boot auto-create",
+    { timeout: 20_000 },
+    async () => {
+      const launches = vi.fn();
+      const sideEffect = join(dir, "boot-source-executed");
+      await scaffoldHostileSourceWorkflow(cwd, sideEffect);
+
+      await startTestServer({
+        autoCreateSession: true,
+        beforeAutomaticCanvasLaunch: launches,
+      });
+      await vi.waitFor(() => {
+        expect(server!.sessionManager.list().length).toBeGreaterThan(0);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(launches).not.toHaveBeenCalled();
+      await expect(access(sideEffect)).rejects.toThrow();
+    },
+  );
+
+  it(
+    "never automatically executes a hostile source-only workflow on REST session creation",
+    { timeout: 20_000 },
+    async () => {
+      const launches = vi.fn();
+      const sideEffect = join(dir, "session-source-executed");
+      await scaffoldHostileSourceWorkflow(cwd, sideEffect);
+      const port = await startTestServer({
+        beforeAutomaticCanvasLaunch: launches,
+      });
+
+      const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-harness-token": "test-token",
+        },
+        body: JSON.stringify({ cwd, harness: "claude-code" }),
+      });
+      expect(response.status).toBe(201);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(launches).not.toHaveBeenCalled();
+      await expect(access(sideEffect)).rejects.toThrow();
+    },
+  );
+
+  it(
+    "revalidates marker proof after dependency and fingerprint work at the actual automatic extraction boundary",
+    { timeout: 20_000 },
+    async () => {
+      const sideEffect = join(dir, "late-marker-removal-executed");
+      await scaffoldHostileSourceWorkflow(cwd, sideEffect);
+      await scaffoldWorkflow(cwd);
+      // Make the temp project extraction-ready so the hook sits after the
+      // dependency probe and source fingerprint, immediately before the child
+      // launch instead of being skipped by the preparing placeholder.
+      await symlink(
+        join(process.cwd(), "node_modules"),
+        join(cwd, "node_modules"),
+        "dir",
+      );
+      const beforeLaunch = vi.fn(async (workflowPath: string) => {
+        await rm(join(workflowPath, "sapiom.json"));
+      });
+
+      await startTestServer({
+        autoCreateSession: true,
+        beforeAutomaticCanvasLaunch: beforeLaunch,
+      });
+      await vi.waitFor(() => expect(beforeLaunch).toHaveBeenCalledOnce(), {
+        timeout: 8_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(beforeLaunch).toHaveBeenCalledWith(cwd);
+      await expect(access(sideEffect)).rejects.toThrow();
+    },
+  );
+
+  it(
+    "preserves legacy automatic Canvas authorization for a markerless cloud-linked source row",
+    { timeout: 20_000 },
+    async () => {
+      const launches = vi.fn();
+      await mkdir(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "index.ts"),
+        `import { defineAgent } from "@sapiom/agent";
+export const agent = defineAgent({ name: "linked-source" });`,
+      );
+      await symlink(
+        join(process.cwd(), "node_modules"),
+        join(cwd, "node_modules"),
+        "dir",
+      );
+      await writeFile(
+        join(dir, "workflows.json"),
+        JSON.stringify([
+          {
+            name: "linked-source",
+            path: cwd,
+            definitionId: 42,
+            definitionSlug: "linked-source",
+            sourceDefinitionName: "linked-source",
+            activeBuildRunId: null,
+            activeBuildRunStatus: null,
+            templateId: null,
+            forkId: null,
+            starterId: null,
+            source: "connect",
+          },
+        ]),
+      );
+
+      await startTestServer({
+        autoCreateSession: true,
+        beforeAutomaticCanvasLaunch: launches,
+      });
+      await vi.waitFor(() => expect(launches).toHaveBeenCalled(), {
+        timeout: 8_000,
+      });
+      expect(launches).toHaveBeenCalledWith(cwd);
+    },
+  );
 
   it(
     "binds an unbound session when a workflow appears at exactly session.cwd",
@@ -159,6 +370,7 @@ describe("auto-bind on rescan (SAP-1897)", () => {
             m.session.boundWorkflowPath === cwd,
         ),
       ).toBe(true);
+      await expectPrivateWorkflowEvidenceHidden(port);
     },
   );
 
@@ -381,10 +593,9 @@ describe("auto-bind on rescan (SAP-1897)", () => {
       // and `rescanWorkspaceForSession` completed.
       await vi.waitFor(
         async () => {
-          const res = await fetch(
-            `http://127.0.0.1:${port}/api/workflows`,
-            { headers: { "X-Harness-Token": "test-token" } },
-          );
+          const res = await fetch(`http://127.0.0.1:${port}/api/workflows`, {
+            headers: { "X-Harness-Token": "test-token" },
+          });
           const workflows = (await res.json()) as Array<{ path: string }>;
           expect(workflows.some((w) => w.path === secondWorkflow)).toBe(true);
         },
@@ -394,9 +605,9 @@ describe("auto-bind on rescan (SAP-1897)", () => {
       // The binding must remain on the FIRST workflow — the
       // `!session.boundWorkflowPath` guard (now false) prevented any re-bind.
       const sessions = await listSessions(port);
-      expect(
-        sessions.find((x) => x.id === session.id)?.boundWorkflowPath,
-      ).toBe(firstWorkflow);
+      expect(sessions.find((x) => x.id === session.id)?.boundWorkflowPath).toBe(
+        firstWorkflow,
+      );
 
       // No NEW session.status frames should have been emitted for a bind
       // attempt on account of the second rescan (the guard prevented it).

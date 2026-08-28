@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
 import * as path from "node:path";
 
 import {
@@ -14,9 +13,16 @@ import {
   type GraphWarning,
   type WorkspaceKey,
 } from "../shared/system-graph.js";
-import type { WorkflowInfo } from "../shared/types.js";
+import type { RegistryWorkflowInfo as WorkflowInfo } from "./workflow-registry.js";
 import { fingerprintWorkflowSources } from "./canvas-cache.js";
-import type { ManifestNameInspection } from "./definition-name.js";
+import { canonicalGraphPath } from "./canonical-graph-path.js";
+import type {
+  ManifestNameInspection,
+  ManifestNameInspectionOptions,
+} from "./definition-name.js";
+import { inspectAgentProjectMarker } from "./agent-project-discovery.js";
+
+export { canonicalGraphPath } from "./canonical-graph-path.js";
 
 export interface WorkspaceScope {
   workspaceKey: WorkspaceKey;
@@ -66,6 +72,13 @@ export interface AgentInventoryResult {
    * the public contract continues to answer only what exists and where.
    */
   identitySettled: boolean;
+  /**
+   * Private discovery coverage: false when the accepted workspace scan could
+   * not prove that every eligible agent was considered. This is independent
+   * of identity settlement because a settled provisional identity is still a
+   * cacheable result, while an incomplete workspace walk is not.
+   */
+  discoveryComplete: boolean;
   /** Starts source identity work only after the provisional graph is committed. */
   startEnrichment?: () => void;
 }
@@ -79,6 +92,7 @@ export interface AgentInventoryProvider {
 
 type ManifestNameInspector = (
   sourceRoot: string,
+  options?: ManifestNameInspectionOptions,
 ) => Promise<ManifestNameInspection>;
 
 export interface HarnessRegistryInventoryProviderOptions {
@@ -86,6 +100,36 @@ export interface HarnessRegistryInventoryProviderOptions {
     | readonly WorkflowInfo[]
     | Promise<readonly WorkflowInfo[]>;
   inspectManifestName?: ManifestNameInspector;
+  /** Hardened launch-time marker proof; injectable for filesystem-free tests. */
+  revalidateMarker?: (sourceRoot: string) => Promise<boolean>;
+  /** Last discovery completeness for this exact selected scope. */
+  inventoryStatus?: (
+    scope: WorkspaceScope,
+  ) => "complete" | "degraded" | Promise<"complete" | "degraded">;
+  /** Atomic registry/cache projection; preferred over separate legacy reads. */
+  inventorySnapshot?: (scope: WorkspaceScope) =>
+    | {
+        workflows: readonly WorkflowInfo[];
+        status: "complete" | "degraded";
+        generation: number;
+        canonicalScopeRoot?: string;
+        canonicalWorkflowRoots?: readonly {
+          workflowPath: string;
+          canonicalRoot: string;
+          identityEvidence: "marker" | "source" | "not-agent" | "unknown";
+        }[];
+      }
+    | Promise<{
+        workflows: readonly WorkflowInfo[];
+        status: "complete" | "degraded";
+        generation: number;
+        canonicalScopeRoot?: string;
+        canonicalWorkflowRoots?: readonly {
+          workflowPath: string;
+          canonicalRoot: string;
+          identityEvidence: "marker" | "source" | "not-agent" | "unknown";
+        }[];
+      }>;
   /**
    * Called with coalesced identity changes. Settled roots are surfaced within
    * a short bounded window, while a fully drained queue flushes immediately.
@@ -127,35 +171,6 @@ function pathApi(input: string): typeof path.posix {
  * Resolve with the input path's own flavor so mixed Windows separators remain
  * comparable even when the test process (or a future remote host) is POSIX.
  */
-export function canonicalGraphPath(input: string): string {
-  const windows = isWindowsAbsolute(input);
-  const api = pathApi(input);
-  const normalizedInput = windows ? input.replace(/\//g, "\\") : input;
-  const resolved = api.resolve(normalizedInput);
-  const matchesHost = windows === (process.platform === "win32");
-  if (!matchesHost) return resolved;
-  try {
-    return realpathSync.native(resolved);
-  } catch {
-    // Watchers can report a path after an atomic rename or deletion, so the
-    // leaf itself may no longer exist. Resolve the nearest existing ancestor.
-    const missingSegments: string[] = [];
-    let ancestor = resolved;
-    let parent = api.dirname(ancestor);
-    while (parent !== ancestor) {
-      missingSegments.unshift(api.basename(ancestor));
-      ancestor = parent;
-      try {
-        return api.join(realpathSync.native(ancestor), ...missingSegments);
-      } catch {
-        // Keep walking toward an existing ancestor.
-      }
-      parent = api.dirname(ancestor);
-    }
-    return resolved;
-  }
-}
-
 /**
  * Resolve a public package-relative inventory path against its workspace.
  * The inventory path is always POSIX, while the workspace path keeps the
@@ -276,7 +291,12 @@ function compareText(left: string, right: string): number {
   return left === right ? 0 : left < right ? -1 : 1;
 }
 
-function packageRelativePath(scopeRoot: string, workflowPath: string): string {
+function packageRelativePath(
+  scopeRoot: string,
+  workflowPath: string,
+  knownCanonicalScope?: string,
+  knownCanonicalSource?: string,
+): string {
   const api = pathApi(scopeRoot);
   const relative = api.relative(scopeRoot, workflowPath);
   if (
@@ -291,8 +311,9 @@ function packageRelativePath(scopeRoot: string, workflowPath: string): string {
 
   // A symlinked registry path can have a different lexical spelling. Its
   // canonical source was already proven inside the canonical scope.
-  const canonicalScope = canonicalGraphPath(scopeRoot);
-  const canonicalSource = canonicalGraphPath(workflowPath);
+  const canonicalScope = knownCanonicalScope ?? canonicalGraphPath(scopeRoot);
+  const canonicalSource =
+    knownCanonicalSource ?? canonicalGraphPath(workflowPath);
   const canonicalApi = pathApi(canonicalScope);
   const canonicalRelative = canonicalApi.relative(
     canonicalScope,
@@ -319,10 +340,13 @@ function stableJson(value: unknown): string {
 function buildWorkingTreeInventory(
   workspaceKey: WorkspaceKey,
   agents: PackageInventoryAgent[],
+  discoveryStatus: "complete" | "degraded",
 ): PackageInventory {
-  const status = agents.some((agent) => agent.identityStatus === "provisional")
-    ? "degraded"
-    : "complete";
+  const status =
+    discoveryStatus === "degraded" ||
+    agents.some((agent) => agent.identityStatus === "provisional")
+      ? "degraded"
+      : "complete";
   const normalized = packageInventorySchema.parse({
     protocol: PACKAGE_INVENTORY_PROTOCOL,
     version: {
@@ -373,6 +397,8 @@ interface IdentityTask {
   sourceRoot: string;
   generation: number;
   epoch: number;
+  freshnessEpoch: number;
+  authorization: "marker" | "linked";
 }
 
 function preparedOrder(left: PreparedAgent, right: PreparedAgent): number {
@@ -434,42 +460,108 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
   private identityChangeTimer: ReturnType<typeof setTimeout> | null = null;
   private epoch = 0;
   private nextGeneration = 1;
+  private latestInventoryGeneration = -1;
+  private freshnessEpoch = 0;
 
   constructor(
     private readonly options: HarnessRegistryInventoryProviderOptions,
   ) {}
 
   async listAgents(scope: WorkspaceScope): Promise<AgentInventoryResult> {
-    const workflows = await this.options.listWorkflows();
-    this.retainSources(
-      new Set(workflows.map((workflow) => canonicalGraphPath(workflow.path))),
+    let snapshot = this.options.inventorySnapshot
+      ? await this.options.inventorySnapshot(scope)
+      : null;
+    for (
+      let retry = 0;
+      snapshot &&
+      snapshot.generation < this.latestInventoryGeneration &&
+      retry < 3;
+      retry += 1
+    ) {
+      snapshot = await this.options.inventorySnapshot!(scope);
+    }
+    if (snapshot && snapshot.generation < this.latestInventoryGeneration) {
+      throw new Error(
+        "Inventory snapshot was superseded by a newer generation",
+      );
+    }
+    if (snapshot) {
+      this.latestInventoryGeneration = Math.max(
+        this.latestInventoryGeneration,
+        snapshot.generation,
+      );
+    }
+    const [workflows, discoveryStatus] = snapshot
+      ? [snapshot.workflows, snapshot.status]
+      : await Promise.all([
+          this.options.listWorkflows(),
+          this.options.inventoryStatus?.(scope) ?? "complete",
+        ]);
+    const canonicalEntries = new Map(
+      snapshot?.canonicalWorkflowRoots?.map((entry) => [
+        entry.workflowPath,
+        entry,
+      ]) ?? [],
     );
-    const canonicalScopeRoot = canonicalGraphPath(scope.root);
+    const canonicalScopeRoot =
+      snapshot?.canonicalScopeRoot ?? canonicalGraphPath(scope.root);
     const bySourceRoot = new Map<
       string,
-      { workflow: WorkflowInfo; sourceRoot: string }
+      {
+        workflow: WorkflowInfo;
+        sourceRoot: string;
+        identityEvidence: "marker" | "source" | "not-agent" | "unknown";
+      }
     >();
-    const contained = workflows
-      .map((workflow) => ({
+    const projected = workflows.map((workflow) => {
+      const canonicalEntry = canonicalEntries.get(workflow.path);
+      return {
         workflow,
-        sourceRoot: canonicalGraphPath(workflow.path),
-      }))
+        sourceRoot:
+          canonicalEntry?.canonicalRoot ?? canonicalGraphPath(workflow.path),
+        identityEvidence:
+          canonicalEntry?.identityEvidence ??
+          (Object.prototype.hasOwnProperty.call(
+            workflow,
+            "sourceDefinitionName",
+          )
+            ? "source"
+            : workflow.markerPresent === true
+              ? "marker"
+              : "unknown"),
+      } as const;
+    });
+    this.retainSources(new Set(projected.map(({ sourceRoot }) => sourceRoot)));
+    const contained = projected
       .filter(({ sourceRoot }) =>
         isWithinGraphPath(canonicalScopeRoot, sourceRoot),
       )
       .sort((left, right) => workflowRegistryOrder(scope.root, left, right));
-    for (const { workflow, sourceRoot } of contained) {
+    for (const { workflow, sourceRoot, identityEvidence } of contained) {
       // Registry persistence is expected to be unique by path. Keep the first
       // deterministic row if a corrupt/legacy file contains an exact duplicate.
       if (!bySourceRoot.has(sourceRoot)) {
-        bySourceRoot.set(sourceRoot, { workflow, sourceRoot });
+        bySourceRoot.set(sourceRoot, {
+          workflow,
+          sourceRoot,
+          identityEvidence,
+        });
       }
     }
 
-    const inspectionRoots: string[] = [];
+    const inspectionRoots: Array<{
+      sourceRoot: string;
+      authorization: "marker" | "linked";
+    }> = [];
+    let consumedUnknownPersistedIdentity = false;
     const prepared = [...bySourceRoot.values()]
-      .map(({ workflow, sourceRoot }): PreparedAgent => {
-        const inventoryPath = packageRelativePath(scope.root, workflow.path);
+      .map(({ workflow, sourceRoot, identityEvidence }): PreparedAgent => {
+        const inventoryPath = packageRelativePath(
+          scope.root,
+          workflow.path,
+          canonicalScopeRoot,
+          sourceRoot,
+        );
         const fallbackKey = `local:${
           inventoryPath === "." ? "root" : inventoryPath
         }` as AgentKey;
@@ -479,10 +571,35 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
         let identityIssue: InventoryIdentityIssue | null = null;
         let identitySettled = true;
         let warnOnIdentityFailure = false;
-        if (!this.options.inspectManifestName) {
+        const hasPersistedSourceIdentity =
+          Object.prototype.hasOwnProperty.call(
+            workflow,
+            "sourceDefinitionName",
+          ) &&
+          (identityEvidence === "source" || identityEvidence === "unknown");
+        if (hasPersistedSourceIdentity) {
+          this.retireInspectionSource(sourceRoot);
+          consumedUnknownPersistedIdentity ||= identityEvidence === "unknown";
+          const sourceDefinitionName = workflow.sourceDefinitionName ?? null;
+          canonicalName = canonicalIdentity(sourceDefinitionName);
+          if (!canonicalName) {
+            identityIssue = sourceDefinitionName
+              ? "identity-invalid"
+              : "identity-unavailable";
+          }
+        } else if (
+          identityEvidence !== "marker" &&
+          workflow.definitionId === null
+        ) {
+          this.retireInspectionSource(sourceRoot);
+          identityIssue = "identity-unavailable";
+        } else if (!this.options.inspectManifestName) {
           identityIssue = "identity-unavailable";
         } else {
-          inspectionRoots.push(sourceRoot);
+          inspectionRoots.push({
+            sourceRoot,
+            authorization: identityEvidence === "marker" ? "marker" : "linked",
+          });
           this.ensureGeneration(sourceRoot);
           if (!cached) {
             identityIssue = "identity-pending";
@@ -657,6 +774,7 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
     const inventory = buildWorkingTreeInventory(
       scope.workspaceKey,
       publicAgents,
+      consumedUnknownPersistedIdentity ? "degraded" : discoveryStatus,
     );
     const contextByAgent = new Map(
       context.map((item) => [item.agentKey, item]),
@@ -667,19 +785,27 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
       return item;
     });
     warnings.sort(warningOrder);
-    const roots = [...new Set(inspectionRoots)].sort(compareText);
+    const roots = [
+      ...new Map(
+        inspectionRoots.map((entry) => [entry.sourceRoot, entry]),
+      ).values(),
+    ].sort((left, right) => compareText(left.sourceRoot, right.sourceRoot));
     const enrichmentEpoch = this.epoch;
-    const tasks = roots.map((sourceRoot) => ({
+    const tasks = roots.map(({ sourceRoot, authorization }) => ({
       sourceRoot,
+      authorization,
       generation: this.generations.get(sourceRoot)!,
       epoch: enrichmentEpoch,
+      freshnessEpoch: this.freshnessEpoch,
     }));
     return {
       inventory,
       context: normalizedContext,
       warnings,
       identitySettled: prepared.every((agent) => agent.identitySettled),
-      ...(roots.length > 0
+      discoveryComplete:
+        discoveryStatus === "complete" && !consumedUnknownPersistedIdentity,
+      ...(tasks.length > 0
         ? {
             startEnrichment: () =>
               this.enqueueInspections(tasks, enrichmentEpoch),
@@ -695,6 +821,25 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
     this.generations.set(key, this.nextGeneration++);
     this.dropQueuedTasks(key);
     this.pendingIdentityChanges.delete(key);
+    if (this.pendingIdentityChanges.size === 0) {
+      this.clearIdentityChangeTimer();
+    }
+  }
+
+  /** O(1) fail-closed invalidation for a raw change beneath a graph scope. */
+  invalidateScope(_scopeRoot: string): void {
+    // Conservatively invalidate every queued/active V0 task. This is a true
+    // O(1) raw-event operation; queue cleanup happens when a worker slot next
+    // drains, and each task's captured epoch prevents it from launching or
+    // publishing in the meantime.
+    this.freshnessEpoch += 1;
+  }
+
+  private retireInspectionSource(sourceRoot: string): void {
+    this.identityCache.delete(sourceRoot);
+    this.generations.delete(sourceRoot);
+    this.dropQueuedTasks(sourceRoot);
+    this.pendingIdentityChanges.delete(sourceRoot);
     if (this.pendingIdentityChanges.size === 0) {
       this.clearIdentityChangeTimer();
     }
@@ -721,6 +866,7 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
     this.generations.clear();
     this.queuedTasks.length = 0;
     this.pendingIdentityChanges.clear();
+    this.freshnessEpoch += 1;
     this.clearIdentityChangeTimer();
   }
 
@@ -757,7 +903,8 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
       const active = this.activeTasks.get(task.sourceRoot);
       if (
         active?.generation === task.generation &&
-        active.epoch === task.epoch
+        active.epoch === task.epoch &&
+        active.freshnessEpoch === task.freshnessEpoch
       ) {
         continue;
       }
@@ -798,13 +945,37 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
     let fingerprint: string | null = null;
     let inspection: ManifestNameInspection;
     try {
+      if (task.authorization === "marker") {
+        const validMarker = this.options.revalidateMarker
+          ? await this.options.revalidateMarker(task.sourceRoot)
+          : (await inspectAgentProjectMarker(task.sourceRoot)).status ===
+            "valid";
+        if (!validMarker || !this.isCurrentTask(task)) return;
+      }
       fingerprint = await (
         this.options.fingerprintSource ?? fingerprintWorkflowSources
       )(task.sourceRoot);
       if (!this.isCurrentTask(task)) return;
+      if (task.authorization === "marker") {
+        const validMarker = this.options.revalidateMarker
+          ? await this.options.revalidateMarker(task.sourceRoot)
+          : (await inspectAgentProjectMarker(task.sourceRoot)).status ===
+            "valid";
+        if (!validMarker || !this.isCurrentTask(task)) return;
+      }
       const hit = this.identityCache.get(task.sourceRoot);
       if (hit?.fingerprint === fingerprint) return;
-      inspection = await inspect(task.sourceRoot);
+      inspection = await inspect(task.sourceRoot, {
+        authorizeBeforeLaunch: async () => {
+          if (!this.isCurrentTask(task)) return false;
+          if (task.authorization === "linked") return true;
+          const validMarker = this.options.revalidateMarker
+            ? await this.options.revalidateMarker(task.sourceRoot)
+            : (await inspectAgentProjectMarker(task.sourceRoot)).status ===
+              "valid";
+          return validMarker && this.isCurrentTask(task);
+        },
+      });
     } catch {
       if (!this.isCurrentTask(task)) return;
       const hit = this.identityCache.get(task.sourceRoot);
@@ -877,7 +1048,8 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
   private isCurrentTask(task: IdentityTask): boolean {
     return (
       task.epoch === this.epoch &&
-      task.generation === this.generations.get(task.sourceRoot)
+      task.generation === this.generations.get(task.sourceRoot) &&
+      task.freshnessEpoch === this.freshnessEpoch
     );
   }
 

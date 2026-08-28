@@ -27,7 +27,10 @@ import * as path from "node:path";
 import { CANVAS_RENDERS_DIR } from "../shared/types.js";
 import { agentDepsInstalled } from "./agent-deps.js";
 import { renderCanvasDocument } from "./canvas-template.js";
-import { extractWorkflowGraphCached } from "./canvas-cache.js";
+import {
+  ExtractionLaunchCancelledError,
+  extractWorkflowGraphCached,
+} from "./canvas-cache.js";
 import type { CanvasGraph } from "./canvas-graph.js";
 import type { CanvasEnrichment } from "./canvas-enrichment.js";
 import { deriveEnrichment } from "./canvas-derive.js";
@@ -63,13 +66,20 @@ export function slugForWorkflowPath(workflowPath: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "") || "workflow";
-  const hash = createHash("sha256").update(path.resolve(workflowPath)).digest("hex").slice(0, 8);
+  const hash = createHash("sha256")
+    .update(path.resolve(workflowPath))
+    .digest("hex")
+    .slice(0, 8);
   return `${base}-${hash}`;
 }
 
 /** Absolute path of `workflowPath`'s render file under `cwd`'s canvas dir. */
 export function renderFileFor(cwd: string, workflowPath: string): string {
-  return path.join(cwd, CANVAS_RENDERS_DIR, `${slugForWorkflowPath(workflowPath)}.html`);
+  return path.join(
+    cwd,
+    CANVAS_RENDERS_DIR,
+    `${slugForWorkflowPath(workflowPath)}.html`,
+  );
 }
 
 export interface CanvasRenderOutcome {
@@ -96,6 +106,9 @@ export interface CanvasRenderOutcome {
    *  esbuild error panel. The server arms an install watcher on this to
    *  re-render once dependencies land — see server/index.ts. */
   depsMissing?: boolean;
+  /** The unprompted launch proof expired after async dependency/fingerprint
+   *  work. No extractor ran and no render file was written. */
+  authorizationExpired?: boolean;
 }
 
 export interface RenderCanvasOptions {
@@ -117,6 +130,11 @@ export interface RenderCanvasOptions {
    * wait forever. Normal renders leave it off.
    */
   surfaceErrorOnMissingDeps?: boolean;
+  /** Unprompted-render provenance check, evaluated on a cache miss immediately
+   *  before the extractor child starts. Manual Visualize calls omit it. */
+  authorizeBeforeExtraction?: () => boolean | Promise<boolean>;
+  /** Lifecycle/test hook immediately before the launch-boundary recheck. */
+  beforeExtractionLaunchAuthorization?: () => void | Promise<void>;
 }
 
 function badgesFor(workflow: RenderableWorkflow): string[] {
@@ -146,11 +164,22 @@ function buildSingleBody(
 ): string {
   if (!graph) {
     return assembleCanvasBody({
-      panels: [buildErrorPanelHtml(workflow.name, reason ?? "unknown extraction failure")],
+      panels: [
+        buildErrorPanelHtml(
+          workflow.name,
+          reason ?? "unknown extraction failure",
+        ),
+      ],
     });
   }
   return assembleCanvasBody({
-    panels: [buildWorkflowPanelHtml(graph, { title: workflow.name, badges: badgesFor(workflow) }, enrichment)],
+    panels: [
+      buildWorkflowPanelHtml(
+        graph,
+        { title: workflow.name, badges: badgesFor(workflow) },
+        enrichment,
+      ),
+    ],
   });
 }
 
@@ -165,7 +194,9 @@ export async function renderCanvasForSession(
   workflows: readonly RenderableWorkflow[],
   options: RenderCanvasOptions = {},
 ): Promise<CanvasRenderOutcome> {
-  const bound = session.boundWorkflowPath ? workflows.find((w) => w.path === session.boundWorkflowPath) : undefined;
+  const bound = session.boundWorkflowPath
+    ? workflows.find((w) => w.path === session.boundWorkflowPath)
+    : undefined;
   if (!bound) {
     return { mode: "empty", extractionFailed: [] };
   }
@@ -184,7 +215,7 @@ export interface WorkflowCanvasDerivation {
   /** "ok": extracted and rendered. "preparing": dependencies aren't installed
    *  yet, so extraction was skipped and the calm placeholder was built
    *  instead. "error": extraction ran and failed — the honest error panel. */
-  status: "ok" | "preparing" | "error";
+  status: "ok" | "preparing" | "error" | "cancelled";
   graph: CanvasGraph | null;
   enrichment: CanvasEnrichment | null;
   /** The extraction failure reason ("error" only); null otherwise. */
@@ -213,7 +244,10 @@ export async function deriveWorkflowCanvas(
   // it self-resolves when install finishes. So skip extraction entirely and
   // build a calm "preparing" placeholder. A bundle failure WITH deps installed
   // stays a genuine error (below).
-  if (!options.surfaceErrorOnMissingDeps && !(await agentDepsInstalled(workflow.path))) {
+  if (
+    !options.surfaceErrorOnMissingDeps &&
+    !(await agentDepsInstalled(workflow.path))
+  ) {
     return {
       status: "preparing",
       graph: null,
@@ -224,14 +258,38 @@ export async function deriveWorkflowCanvas(
     };
   }
 
-  const { result, cached } = await extractWorkflowGraphCached(workflow.path);
+  let extracted: Awaited<ReturnType<typeof extractWorkflowGraphCached>>;
+  try {
+    extracted = await extractWorkflowGraphCached(workflow.path, undefined, {
+      authorizeBeforeLaunch: options.authorizeBeforeExtraction,
+      beforeLaunchAuthorization: options.beforeExtractionLaunchAuthorization,
+    });
+  } catch (error) {
+    if (!(error instanceof ExtractionLaunchCancelledError)) throw error;
+    return {
+      status: "cancelled",
+      graph: null,
+      enrichment: null,
+      reason: null,
+      cached: false,
+      // This document is intentionally never written by the render path. It
+      // keeps the session-free return shape total for defensive callers.
+      document: renderCanvasDocument(buildPreparingPanelHtml(workflow.name)),
+    };
+  }
+  const { result, cached } = extracted;
 
   // Enrichment only decorates a successful extraction — deriving annotations
   // for an error panel whose steps we can't even show would be noise. Derived
   // deterministically from the freshly extracted graph, so it's always in sync
   // with the diagram and can never go stale.
   const enrichment = result.ok ? deriveEnrichment(result.graph) : null;
-  const body = buildSingleBody(workflow, result.ok ? result.graph : null, result.ok ? null : result.reason, enrichment);
+  const body = buildSingleBody(
+    workflow,
+    result.ok ? result.graph : null,
+    result.ok ? null : result.reason,
+    enrichment,
+  );
 
   return {
     status: result.ok ? "ok" : "error",
@@ -259,6 +317,15 @@ export async function renderWorkflowRenderFile(
   const renderPath = renderFileFor(cwd, bound.path);
   const derived = await deriveWorkflowCanvas(bound, options);
 
+  if (derived.status === "cancelled") {
+    return {
+      mode: "single",
+      workflowPath: bound.path,
+      extractionFailed: [],
+      authorizationExpired: true,
+    };
+  }
+
   const outcome: CanvasRenderOutcome = {
     mode: "single",
     workflowPath: bound.path,
@@ -274,7 +341,11 @@ export async function renderWorkflowRenderFile(
   // good) diagram for this workflow — an agent mid-edit whose sources are
   // transiently un-buildable, or deps that went missing. `depsMissing` is still
   // flagged above so the server's install watcher re-renders when they return.
-  if (options.preserveExistingOnFailure && derived.status !== "ok" && (await pathExists(renderPath))) {
+  if (
+    options.preserveExistingOnFailure &&
+    derived.status !== "ok" &&
+    (await pathExists(renderPath))
+  ) {
     outcome.preservedExisting = true;
     return outcome;
   }

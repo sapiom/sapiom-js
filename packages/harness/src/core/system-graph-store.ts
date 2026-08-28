@@ -21,6 +21,7 @@ interface SystemGraphEntry {
   generation: number;
   refreshPending: boolean;
   automaticRetryUsed: boolean;
+  prerequisiteTokens: Set<string>;
   retired: boolean;
 }
 
@@ -66,6 +67,9 @@ export class SystemGraphStore {
 
   get(scope: WorkspaceScope): Promise<SystemGraphSnapshot> {
     const entry = this.ensureEntry(scope);
+    if (entry.prerequisiteTokens.size > 0) {
+      return Promise.resolve(entry.snapshot);
+    }
     if (entry.activeBuild) {
       return entry.snapshot.graph === null
         ? entry.activeBuild
@@ -97,6 +101,9 @@ export class SystemGraphStore {
   ensureInitialized(scope: WorkspaceScope): Promise<SystemGraphSnapshot> {
     const entry = this.entries.get(scope.workspaceKey);
     if (!entry) return this.get(scope);
+    if (entry.prerequisiteTokens.size > 0) {
+      return Promise.resolve(entry.snapshot);
+    }
     if (entry.activeBuild && entry.snapshot.graph === null) {
       return entry.activeBuild;
     }
@@ -107,15 +114,86 @@ export class SystemGraphStore {
   requestRefresh(scope: WorkspaceScope): SystemGraphSnapshot {
     const entry = this.ensureEntry(scope);
     entry.automaticRetryUsed = false;
+    if (entry.prerequisiteTokens.size > 0) {
+      entry.refreshPending = true;
+      return entry.snapshot;
+    }
     this.queueRefresh(entry);
     return entry.snapshot;
+  }
+
+  /**
+   * Fails closed on a raw inventory/source signal without projecting the old
+   * registry snapshot. The reconciliation coordinator starts the replacement
+   * build only after its atomic snapshot commit succeeds.
+   */
+  markStale(
+    scope: WorkspaceScope,
+    prerequisiteToken = "inventory",
+  ): SystemGraphSnapshot {
+    const entry = this.ensureEntry(scope);
+    entry.prerequisiteTokens.add(prerequisiteToken);
+    entry.generation += 1;
+    entry.refreshPending = false;
+    entry.automaticRetryUsed = true;
+    const visible = visibleProjection(entry);
+    return visible.graph === null
+      ? this.transition(entry, "building", null)
+      : this.transition(
+          entry,
+          "stale",
+          visible.graph,
+          false,
+          visible.navigation,
+        );
   }
 
   /** Explicit user recovery: start a fresh projection and await its result. */
   refresh(scope: WorkspaceScope): Promise<SystemGraphSnapshot> {
     const entry = this.ensureEntry(scope);
     entry.automaticRetryUsed = false;
+    if (entry.prerequisiteTokens.size > 0) {
+      entry.refreshPending = true;
+      return entry.activeBuild ?? Promise.resolve(entry.snapshot);
+    }
     return this.queueRefresh(entry) ?? Promise.resolve(entry.snapshot);
+  }
+
+  /**
+   * Releases one accepted inventory prerequisite. A projection is rebuilt
+   * only after every overlapping scan has accepted its current generation.
+   */
+  releasePrerequisite(
+    scope: WorkspaceScope,
+    prerequisiteToken = "inventory",
+  ): SystemGraphSnapshot {
+    const entry = this.ensureEntry(scope);
+    if (!entry.prerequisiteTokens.delete(prerequisiteToken)) {
+      return entry.snapshot;
+    }
+    if (entry.prerequisiteTokens.size > 0) return entry.snapshot;
+    entry.automaticRetryUsed = false;
+    this.queueRefresh(entry);
+    return entry.snapshot;
+  }
+
+  /** Retires a failed prerequisite without projecting the pre-mutation cache. */
+  cancelPrerequisite(
+    workspaceKey: WorkspaceKey,
+    prerequisiteToken = "inventory",
+  ): SystemGraphSnapshot | null {
+    const entry = this.entries.get(workspaceKey);
+    if (!entry) return null;
+    entry.prerequisiteTokens.delete(prerequisiteToken);
+    return entry.snapshot;
+  }
+
+  /** Awaits the already-started accepted-snapshot build without queuing one. */
+  waitForCurrentRefresh(
+    workspaceKey: WorkspaceKey,
+  ): Promise<SystemGraphSnapshot | null> {
+    const entry = this.entries.get(workspaceKey);
+    return entry?.activeBuild ?? Promise.resolve(entry?.snapshot ?? null);
   }
 
   peek(workspaceKey: WorkspaceKey): SystemGraphSnapshot | null {
@@ -203,6 +281,7 @@ export class SystemGraphStore {
       generation: 0,
       refreshPending: false,
       automaticRetryUsed: false,
+      prerequisiteTokens: new Set(),
       retired: false,
     };
     this.entries.set(scope.workspaceKey, entry);
@@ -337,6 +416,9 @@ export class SystemGraphStore {
     entry.activeBuild = null;
     if (entry.retired || this.entries.get(entry.scope.workspaceKey) !== entry) {
       this.retainBuilderWorkspaces();
+      return entry.snapshot;
+    }
+    if (entry.prerequisiteTokens.size > 0) {
       return entry.snapshot;
     }
     if (entry.refreshPending) {

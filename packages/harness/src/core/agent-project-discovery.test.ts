@@ -1,20 +1,26 @@
 import * as fs from "node:fs/promises";
+import { execFile } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { promisify } from "node:util";
 
 import { AGENT_PROJECT_MARKER } from "../shared/types.js";
 import {
   AGENT_PROJECT_SCAN_MAX_DEPTH,
   AGENT_PROJECT_SCAN_MAX_NODES,
   AGENT_PROJECT_WATCH_MAX_NODES,
+  AgentProjectScanAllowance,
   AgentProjectScanBudget,
   type AgentProjectWalkAction,
+  inspectAgentProjectMarker,
   readAgentProjectMarker,
   readAgentProjectMarkerSync,
   walkAgentProjectTree,
   walkAgentProjectTreeAsync,
 } from "./agent-project-discovery.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("agent project marker reads", () => {
   let root: string;
@@ -61,6 +67,63 @@ describe("agent project marker reads", () => {
       await fs.rm(outside, { force: true });
     }
   });
+
+  it("reads zero external bytes when the admitted marker is swapped to a symlink", async () => {
+    const markerPath = path.join(root, AGENT_PROJECT_MARKER);
+    const admittedPath = `${markerPath}.admitted`;
+    const outside = path.join(
+      path.dirname(root),
+      `${path.basename(root)}-outside.json`,
+    );
+    await fs.writeFile(markerPath, JSON.stringify({ definitionId: 1 }));
+    await fs.writeFile(outside, JSON.stringify({ definitionId: 999 }));
+    let bytesRead = 0;
+
+    try {
+      const result = await inspectAgentProjectMarker(root, {
+        beforeOpen: async () => {
+          await fs.rename(markerPath, admittedPath);
+          await fs.symlink(outside, markerPath);
+        },
+        onBytesRead: (bytes) => {
+          bytesRead += bytes;
+        },
+      });
+      expect(result.status).toBe("unreadable");
+      expect(bytesRead).toBe(0);
+    } finally {
+      await fs.rm(outside, { force: true });
+    }
+  });
+
+  it("does not block or read when an ancestor swap resolves the marker to a FIFO", async () => {
+    const agent = path.join(root, "agent");
+    const admitted = path.join(root, "agent-admitted");
+    const replacement = path.join(root, "replacement");
+    await fs.mkdir(agent);
+    await fs.mkdir(replacement);
+    await fs.writeFile(
+      path.join(agent, AGENT_PROJECT_MARKER),
+      JSON.stringify({ definitionId: 1 }),
+    );
+    await execFileAsync("mkfifo", [
+      path.join(replacement, AGENT_PROJECT_MARKER),
+    ]);
+    let bytesRead = 0;
+
+    const result = await inspectAgentProjectMarker(agent, {
+      beforeOpen: async () => {
+        await fs.rename(agent, admitted);
+        await fs.symlink(replacement, agent, "dir");
+      },
+      onBytesRead: (bytes) => {
+        bytesRead += bytes;
+      },
+    });
+
+    expect(result.status).toBe("unreadable");
+    expect(bytesRead).toBe(0);
+  });
 });
 
 /**
@@ -81,7 +144,10 @@ describe("bounded agent-project traversal", () => {
   });
 
   /** Records every directory the walk enters, in order, and descends always. */
-  function recorder(): { visits: [string, number][]; onDirectory: (dir: string, depth: number) => AgentProjectWalkAction } {
+  function recorder(): {
+    visits: [string, number][];
+    onDirectory: (dir: string, depth: number) => AgentProjectWalkAction;
+  } {
     const visits: [string, number][] = [];
     return {
       visits,
@@ -93,14 +159,19 @@ describe("bounded agent-project traversal", () => {
   }
 
   async function mkdirs(...relative: string[]): Promise<void> {
-    for (const rel of relative) await fs.mkdir(path.join(root, rel), { recursive: true });
+    for (const rel of relative)
+      await fs.mkdir(path.join(root, rel), { recursive: true });
   }
 
   it("visits shallowest-first, so a truncated walk loses the DEEPEST level, not a branch", async () => {
     await mkdirs("a/deep/deeper", "b/deep/deeper", "c/deep/deeper");
 
     const rec = recorder();
-    const budget = walkAgentProjectTree(root, rec, new AgentProjectScanBudget());
+    const budget = walkAgentProjectTree(
+      root,
+      rec,
+      new AgentProjectScanBudget(),
+    );
     const depths = rec.visits.map(([, depth]) => depth);
 
     // Non-decreasing depth is what "breadth-first" means operationally, and it
@@ -130,6 +201,22 @@ describe("bounded agent-project traversal", () => {
     expect(budget.envelopeDepth).toBe(1);
   });
 
+  it("shares one node allowance across direct-root reconciliation walks", () => {
+    const allowance = new AgentProjectScanAllowance(3);
+    const first = new AgentProjectScanBudget({ maxNodes: 10 }, allowance);
+    const second = new AgentProjectScanBudget({ maxNodes: 10 }, allowance);
+
+    expect(first.admit(0)).toBe(true);
+    expect(first.admit(1)).toBe(true);
+    expect(second.admit(0)).toBe(true);
+    expect(second.admit(1)).toBe(false);
+
+    expect(allowance.visited).toBe(3);
+    expect(first.visited).toBe(2);
+    expect(second.visited).toBe(1);
+    expect(second.truncatedAtDepth).toBe(1);
+  });
+
   it("truncates at the same place twice, so a fingerprint built from it holds still", async () => {
     for (const a of ["a", "b", "c", "d", "e", "f"]) {
       for (const b of ["m", "n", "o", "p"]) await mkdirs(`${a}/${b}`);
@@ -137,7 +224,11 @@ describe("bounded agent-project traversal", () => {
 
     const runs = [0, 1].map(() => {
       const rec = recorder();
-      walkAgentProjectTree(root, rec, new AgentProjectScanBudget({ maxNodes: 12 }));
+      walkAgentProjectTree(
+        root,
+        rec,
+        new AgentProjectScanBudget({ maxNodes: 12 }),
+      );
       return rec.visits.map(([rel]) => rel);
     });
 
@@ -149,19 +240,31 @@ describe("bounded agent-project traversal", () => {
     await mkdirs("node_modules/pkg/nested", "src/agents/one", ".git/objects");
 
     const rec = recorder();
-    walkAgentProjectTree(root, rec, new AgentProjectScanBudget({ maxDepth: 20 }));
+    walkAgentProjectTree(
+      root,
+      rec,
+      new AgentProjectScanBudget({ maxDepth: 20 }),
+    );
     const seen = rec.visits.map(([rel]) => rel);
 
     expect(seen).toContain(path.join("src", "agents", "one"));
-    expect(seen.some((rel) => rel.split(path.sep).includes("node_modules"))).toBe(false);
-    expect(seen.some((rel) => rel.split(path.sep).includes(".git"))).toBe(false);
+    expect(
+      seen.some((rel) => rel.split(path.sep).includes("node_modules")),
+    ).toBe(false);
+    expect(seen.some((rel) => rel.split(path.sep).includes(".git"))).toBe(
+      false,
+    );
   });
 
   it("obeys maxDepth exactly: a directory at maxDepth is entered, one below is not", async () => {
     await mkdirs("l1/l2/l3/l4");
 
     const rec = recorder();
-    walkAgentProjectTree(root, rec, new AgentProjectScanBudget({ maxDepth: 3 }));
+    walkAgentProjectTree(
+      root,
+      rec,
+      new AgentProjectScanBudget({ maxDepth: 3 }),
+    );
     const seen = rec.visits.map(([rel]) => rel);
 
     expect(seen).toContain(path.join("l1", "l2", "l3"));
@@ -208,8 +311,13 @@ describe("bounded agent-project traversal", () => {
         "a",
         path.join("a", "b"),
       ]);
-      expect(await walkAgentProjectTreeAsync(root, recorder(), new AgentProjectScanBudget({ maxDepth: 64 })))
-        .toMatchObject({ visited: 3, truncatedAtDepth: null });
+      expect(
+        await walkAgentProjectTreeAsync(
+          root,
+          recorder(),
+          new AgentProjectScanBudget({ maxDepth: 64 }),
+        ),
+      ).toMatchObject({ visited: 3, truncatedAtDepth: null });
     },
   );
 
@@ -218,7 +326,11 @@ describe("bounded agent-project traversal", () => {
     // inside PATH_MAX on every platform this runs on.
     await mkdirs(Array.from({ length: 100 }, (_, i) => `d${i}`).join("/"));
 
-    const budget = walkAgentProjectTree(root, recorder(), new AgentProjectScanBudget());
+    const budget = walkAgentProjectTree(
+      root,
+      recorder(),
+      new AgentProjectScanBudget(),
+    );
     // One directory per level, root inclusive — the chain is never wider.
     expect(budget.visited).toBe(budget.maxDepth + 1);
     expect(budget.truncated).toBe(false);
@@ -227,29 +339,46 @@ describe("bounded agent-project traversal", () => {
   it.skipIf(
     process.platform === "win32" ||
       (typeof process.getuid === "function" && process.getuid() === 0),
-  )("reports an unreadable directory once, and a vanished one not at all", async () => {
-    await mkdirs("locked/child", "gone");
-    await fs.rm(path.join(root, "gone"), { recursive: true, force: true });
-    await fs.chmod(path.join(root, "locked"), 0o000);
+  )(
+    "reports an unreadable directory once, and a vanished one not at all",
+    async () => {
+      await mkdirs("locked/child", "gone");
+      await fs.rm(path.join(root, "gone"), { recursive: true, force: true });
+      await fs.chmod(path.join(root, "locked"), 0o000);
+      const permissionsAreEnforced = await fs
+        .readdir(path.join(root, "locked"))
+        .then(
+          () => false,
+          () => true,
+        );
 
-    const unreadable: string[] = [];
-    try {
-      walkAgentProjectTree(root, {
-        onDirectory: () => "descend",
-        onUnreadable: (dir) => unreadable.push(path.relative(root, dir)),
-      });
-    } finally {
-      await fs.chmod(path.join(root, "locked"), 0o700);
-    }
+      const unreadable: string[] = [];
+      try {
+        walkAgentProjectTree(root, {
+          onDirectory: () => "descend",
+          onUnreadable: (dir) => unreadable.push(path.relative(root, dir)),
+        });
+      } finally {
+        await fs.chmod(path.join(root, "locked"), 0o700);
+      }
 
-    expect(unreadable).toEqual(["locked"]);
-  });
+      // Some CI/container filesystems grant the runner permission capabilities
+      // that make chmod(000) readable. Pin the contract only when the fixture is
+      // genuinely unreadable; the deterministic race tests above cover the
+      // fail-closed read path independently of host permission semantics.
+      expect(unreadable).toEqual(permissionsAreEnforced ? ["locked"] : []);
+    },
+  );
 
   it("sync and async walks agree on order and on what the budget bought", async () => {
     await mkdirs("z/1", "a/2/3", "m/4", "node_modules/x");
 
     const syncRec = recorder();
-    const syncBudget = walkAgentProjectTree(root, syncRec, new AgentProjectScanBudget());
+    const syncBudget = walkAgentProjectTree(
+      root,
+      syncRec,
+      new AgentProjectScanBudget(),
+    );
     const asyncRec = recorder();
     const asyncBudget = await walkAgentProjectTreeAsync(
       root,
@@ -269,13 +398,16 @@ describe("bounded agent-project traversal", () => {
 
     walkAgentProjectTree(root, {
       onDirectory: rec.onDirectory,
-      onRepositoryBoundary: (dir, depth) => boundaries.push([path.relative(root, dir), depth]),
+      onRepositoryBoundary: (dir, depth) =>
+        boundaries.push([path.relative(root, dir), depth]),
     });
 
     // The checkout itself IS entered (its marker still gets inspected, so a
     // repo that is itself an agent is registered) — nothing below it is.
     expect(rec.visits.map(([rel]) => rel)).toContain("vendor-repo");
-    expect(rec.visits.some(([rel]) => rel.startsWith(`vendor-repo${path.sep}`))).toBe(false);
+    expect(
+      rec.visits.some(([rel]) => rel.startsWith(`vendor-repo${path.sep}`)),
+    ).toBe(false);
     expect(rec.visits.map(([rel]) => rel)).toContain(`src${path.sep}agents`);
     expect(boundaries).toEqual([["vendor-repo", 1]]);
   });
@@ -292,7 +424,9 @@ describe("bounded agent-project traversal", () => {
 
     // This is the six-copies case: the same agent reachable once per worktree.
     expect(
-      rec.visits.some(([rel]) => rel.startsWith(`worktrees${path.sep}feature-a${path.sep}`)),
+      rec.visits.some(([rel]) =>
+        rel.startsWith(`worktrees${path.sep}feature-a${path.sep}`),
+      ),
     ).toBe(false);
   });
 
@@ -302,8 +436,12 @@ describe("bounded agent-project traversal", () => {
 
     walkAgentProjectTree(root, rec);
 
-    expect(rec.visits.map(([rel]) => rel)).toContain(`packages${path.sep}a${path.sep}agents`);
-    expect(rec.visits.map(([rel]) => rel)).toContain(`packages${path.sep}b${path.sep}agents`);
+    expect(rec.visits.map(([rel]) => rel)).toContain(
+      `packages${path.sep}a${path.sep}agents`,
+    );
+    expect(rec.visits.map(([rel]) => rel)).toContain(
+      `packages${path.sep}b${path.sep}agents`,
+    );
   });
 
   it("crossRepositoryBoundaries re-enables the old reach — the measurement escape hatch only", async () => {
@@ -314,7 +452,11 @@ describe("bounded agent-project traversal", () => {
       crossRepositoryBoundaries: true,
     });
 
-    expect(rec.visits.some(([rel]) => rel.startsWith(`vendor-repo${path.sep}agents`))).toBe(true);
+    expect(
+      rec.visits.some(([rel]) =>
+        rel.startsWith(`vendor-repo${path.sep}agents`),
+      ),
+    ).toBe(true);
   });
 
   it("sync and async walks agree about repository boundaries too", async () => {
@@ -323,13 +465,15 @@ describe("bounded agent-project traversal", () => {
     const syncBoundaries: string[] = [];
     walkAgentProjectTree(root, {
       onDirectory: syncRec.onDirectory,
-      onRepositoryBoundary: (dir) => syncBoundaries.push(path.relative(root, dir)),
+      onRepositoryBoundary: (dir) =>
+        syncBoundaries.push(path.relative(root, dir)),
     });
     const asyncRec = recorder();
     const asyncBoundaries: string[] = [];
     await walkAgentProjectTreeAsync(root, {
       onDirectory: asyncRec.onDirectory,
-      onRepositoryBoundary: (dir) => asyncBoundaries.push(path.relative(root, dir)),
+      onRepositoryBoundary: (dir) =>
+        asyncBoundaries.push(path.relative(root, dir)),
     });
 
     expect(asyncRec.visits).toEqual(syncRec.visits);
@@ -345,6 +489,6 @@ describe("bounded agent-project traversal", () => {
     // under a chosen project root (`<root>/backend/src/agents/ads` is 4).
     expect(AGENT_PROJECT_SCAN_MAX_DEPTH).toBeGreaterThanOrEqual(6);
     // The watcher's synchronous fingerprint must stay the cheaper of the two.
-    expect(AGENT_PROJECT_WATCH_MAX_NODES).toBeLessThan(AGENT_PROJECT_SCAN_MAX_NODES);
+    expect(AGENT_PROJECT_WATCH_MAX_NODES).toBe(AGENT_PROJECT_SCAN_MAX_NODES);
   });
 });

@@ -1438,10 +1438,23 @@ export interface MockSystemGraphProjection {
   degraded: boolean;
 }
 
+/** Process-local discovery proof used by the browser mock. The real REST
+ * WorkflowInfo intentionally does not expose registry evidence, so mock graph
+ * projection receives the same information as a separate sidecar. */
+export interface MockWorkflowIdentityEvidence {
+  kind: "marker" | "source" | "not-agent" | "unknown";
+  sourceDefinitionName?: string | null;
+}
+
+export type MockWorkflowIdentityEvidenceByPath = Readonly<
+  Record<string, MockWorkflowIdentityEvidence>
+>;
+
 /** Deterministic identity/navigation projection for the browser mock. */
 export function projectMockSystemGraphInventory(
   scopeRoot: string,
   workflows: readonly WorkflowInfo[],
+  evidenceByPath: MockWorkflowIdentityEvidenceByPath = {},
 ): MockSystemGraphProjection {
   const rows = workflows
     .filter((workflow) => isWithinDir(scopeRoot, workflow.path))
@@ -1449,11 +1462,35 @@ export function projectMockSystemGraphInventory(
       const inventoryPath = mockInventoryPath(scopeRoot, workflow.path);
       const fallbackKey = `local:${inventoryPath === "." ? "root" : inventoryPath}`;
       const marker = mockCanonicalIdentity(workflow.definitionSlug);
+      const evidence = evidenceByPath[workflow.path];
+      const hasPersistedSourceName =
+        evidence !== undefined &&
+        Object.prototype.hasOwnProperty.call(evidence, "sourceDefinitionName");
+      const sourceName = hasPersistedSourceName
+        ? mockCanonicalIdentity(evidence.sourceDefinitionName ?? null)
+        : null;
+      const sourceIsAuthoritative =
+        evidence?.kind === "source" ||
+        (evidence?.kind === "unknown" && hasPersistedSourceName);
+      // `unknown` may retain the last accepted syntax identity for continuity,
+      // but it can never make the graph ready until a fresh scan proves it.
+      const degraded =
+        evidence?.kind === "unknown" ||
+        (evidence?.kind === "source" && sourceName === null);
+      const canonical = sourceIsAuthoritative
+        ? sourceName !== null
+        : evidence?.kind === "not-agent"
+          ? false
+          : marker !== null;
       return {
         workflow,
         inventoryPath,
         fallbackKey,
-        candidateKey: marker ?? fallbackKey,
+        candidateKey: sourceIsAuthoritative
+          ? (sourceName ?? fallbackKey)
+          : (marker ?? fallbackKey),
+        canonical,
+        degraded,
       };
     })
     .sort(
@@ -1469,17 +1506,22 @@ export function projectMockSystemGraphInventory(
           samePath(candidate.workflow.path, row.workflow.path),
         ) === index,
     );
-  const candidateCounts = new Map<string, number>();
+  const canonicalCounts = new Map<string, number>();
+  const provisionalCounts = new Map<string, number>();
   for (const row of rows) {
-    candidateCounts.set(
-      row.candidateKey,
-      (candidateCounts.get(row.candidateKey) ?? 0) + 1,
-    );
+    const counts = row.canonical ? canonicalCounts : provisionalCounts;
+    counts.set(row.candidateKey, (counts.get(row.candidateKey) ?? 0) + 1);
   }
   const used = new Set<string>();
   const projected = rows.map((row) => {
-    const duplicated = (candidateCounts.get(row.candidateKey) ?? 0) > 1;
-    const base = duplicated ? row.fallbackKey : row.candidateKey;
+    const canonicalCount = canonicalCounts.get(row.candidateKey) ?? 0;
+    const provisionalCount = provisionalCounts.get(row.candidateKey) ?? 0;
+    const ambiguous = row.canonical
+      ? canonicalCount > 1
+      : canonicalCount === 0 && provisionalCount > 1;
+    const shadowedByCanonical = !row.canonical && canonicalCount > 0;
+    const base =
+      ambiguous || shadowedByCanonical ? row.fallbackKey : row.candidateKey;
     let agentKey = base;
     let suffix = 2;
     while (used.has(agentKey)) {
@@ -1494,12 +1536,18 @@ export function projectMockSystemGraphInventory(
     };
   });
   projected.sort((left, right) => codeUnitOrder(left.agentKey, right.agentKey));
-  const duplicateCandidates = [...candidateCounts]
-    .filter(
-      ([candidateKey, count]) =>
-        count > 1 && mockCanonicalIdentity(candidateKey) !== null,
-    )
-    .map(([candidateKey]) => candidateKey)
+  const duplicateCandidates = [
+    ...new Set([...canonicalCounts.keys(), ...provisionalCounts.keys()]),
+  ]
+    .filter((candidateKey) => {
+      const canonicalCount = canonicalCounts.get(candidateKey) ?? 0;
+      const provisionalCount = provisionalCounts.get(candidateKey) ?? 0;
+      return (
+        (canonicalCount > 1 ||
+          (canonicalCount === 0 && provisionalCount > 1)) &&
+        mockCanonicalIdentity(candidateKey) !== null
+      );
+    })
     .sort(codeUnitOrder);
   return {
     nodes: projected.map(({ agentKey, label }) => ({
@@ -1516,7 +1564,8 @@ export function projectMockSystemGraphInventory(
       agentKey: candidateKey,
       message: `Multiple agents use ${candidateKey}; kept each with a local identity.`,
     })),
-    degraded: duplicateCandidates.length > 0,
+    degraded:
+      duplicateCandidates.length > 0 || rows.some((row) => row.degraded),
   };
 }
 
@@ -1615,6 +1664,21 @@ export class MockApi implements HarnessApi {
         ...MOCK_WORKFLOWS,
         ...(isSearchFixturesEnabled() ? MOCK_SEARCH_WORKFLOWS : []),
       ].map((workflow) => ({ ...workflow }));
+  /** Mock-only equivalent of the server's private accepted identity sidecar. */
+  private workflowIdentityEvidenceStore: Record<
+    string,
+    MockWorkflowIdentityEvidence
+  > = Object.fromEntries(
+    this.workflowsStore
+      .filter(
+        (workflow) =>
+          workflow.path === `${MOCK_POLSIA_ROOT}/backend/src/agents/outreach`,
+      )
+      .map((workflow) => [
+        workflow.path,
+        { kind: "source", sourceDefinitionName: "outreach" } as const,
+      ]),
+  );
 
   /*
    * Every read of the fixtures goes through the move log (`mockMoves`), so a
@@ -1634,6 +1698,31 @@ export class MockApi implements HarnessApi {
   private set workflows(next: WorkflowInfo[]) {
     this.workflowsStore = next;
     this.invalidateSystemGraphProjections();
+  }
+
+  private get workflowIdentityEvidence(): MockWorkflowIdentityEvidenceByPath {
+    if (mockMoves.length === 0) return this.workflowIdentityEvidenceStore;
+    return Object.fromEntries(
+      Object.entries(this.workflowIdentityEvidenceStore).map(
+        ([workflowPath, evidence]) => [replayMockMoves(workflowPath), evidence],
+      ),
+    );
+  }
+
+  /**
+   * Mock/test mutation seam for the syntax-discovery lifecycle. It keeps the
+   * private proof sidecar out of WorkflowInfo while exercising the same rail
+   * event plus revisioned graph invalidation as production add/edit/delete.
+   */
+  replaceSourceDiscoveredWorkflows(
+    workflows: readonly WorkflowInfo[],
+    evidenceByPath: MockWorkflowIdentityEvidenceByPath,
+  ): void {
+    this.workflowIdentityEvidenceStore = { ...evidenceByPath };
+    this.workflows = workflows.map((workflow) => ({ ...workflow }));
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "workflows.changed" });
+    });
   }
 
   private allocateSystemGraphRevision(workspaceKey: WorkspaceKey): number {
@@ -1935,6 +2024,7 @@ export class MockApi implements HarnessApi {
     const projection = projectMockSystemGraphInventory(
       selectedScope.cwd,
       this.workflows,
+      this.workflowIdentityEvidence,
     );
     const graph = samePath(selectedScope.cwd, "/Users/demo/acme-app")
       ? fixtureGraph
