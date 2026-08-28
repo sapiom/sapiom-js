@@ -170,13 +170,14 @@ workspace / Add all** at it. That is not a failure mode; it is the design in §4
 
 ### If the new agent is its own git repository
 
-It is still registered. The marker is inspected _before_ the repository boundary
-is considered (`stopsAtRepositoryBoundary`, `agent-project-discovery.ts:420`, is
-reached only after `onDirectory` has already declined to stop), so
-"one git repo per agent" works exactly as it did. What the boundary declines to
-enter is a checkout that merely _contains_ agents. Verified against a real
-server: a scaffold that runs `git init` in its own new directory registers
-within the same second as one that does not.
+A valid marker is inspected _before_ the repository boundary is considered, so
+a marker-backed agent in a nested checkout is still registered by the containing
+workspace scan. Static source discovery deliberately does not enter a foreign
+checkout: select a markerless agent repository as its own workspace to prove it.
+If a source-only folder previously discovered by its parent later runs
+`git init`, the next parent scan retires that parent-owned row until the new
+repository is selected directly. This asymmetry keeps syntax reads confined to
+the selected repository while preserving the established marker behavior.
 
 ---
 
