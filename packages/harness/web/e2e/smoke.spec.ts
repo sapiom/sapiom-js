@@ -127,7 +127,9 @@ test("rail: the Create-new CTA sits below Search and opens the composer", async 
 }) => {
   const cta = page.getByTestId("rail-create-new");
   await expect(cta).toBeVisible();
-  await expect(cta).toContainText("Create new");
+  // Says WHAT it creates. Bare "Create new" named nothing, and "project" would
+  // be false — this opens the composer, which scaffolds an agent.
+  await expect(cta).toContainText("Create new agent");
 
   // It opens the composer-first "new session" home — the primary creative
   // action, reachable straight from the nav.

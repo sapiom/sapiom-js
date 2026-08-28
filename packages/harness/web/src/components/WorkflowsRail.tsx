@@ -705,13 +705,22 @@ export function WorkflowsRail({
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
           data-testid="rail-create-new"
           aria-label="Create a new agent"
+          data-tooltip="Describe an agent and this scaffolds it"
           onClick={() => {
             setHistoryOpen(false);
             onNewSession();
           }}
         >
           <Icon name="Plus" size={14} />
-          <span>Create new</span>
+          {/* "Create new AGENT", not "Create new" and not "Create new project".
+              Bare "Create new" never said what it made. "Project" would be
+              false: this opens the composer, which scaffolds an AGENT — and
+              adding a project is already the header's folder-plus, so calling
+              this one "project" would give two controls the same name for
+              different jobs. The related complaint, that it drops the agent
+              somewhere arbitrary, is not a naming problem: the fix is a create
+              affordance on each project row, which this does not replace. */}
+          <span>Create new agent</span>
         </button>
 
         <button
@@ -761,12 +770,15 @@ export function WorkflowsRail({
           disclosure of its own. Its two buttons ask two different questions:
           `+` adds a project, the ellipsis opens the rail's settings. */}
       <div className="rail-header">
-        {/* The header names what the list is FILED BY, so it changes with the
-            axis. A header reading "Projects" over a list of relationship
-            clusters would describe the wrong thing. */}
-        <span className="rail-header-label">
-          {axis === "group" ? "Groups" : "Projects"}
-        </span>
+        {/* ALWAYS "Projects". This used to swap to "Groups" on the group axis,
+            on the reasoning that a header should name what the list is filed
+            by. That reads the tree wrong: the rail lists PROJECTS either way,
+            and the axis only changes how they are arranged — so swapping the
+            title announced a different subject when the subject had not
+            changed, and "Groups" over a list still full of project rows was the
+            more misleading of the two. The axis is already stated, on the face
+            of the Group-by control that set it. */}
+        <span className="rail-header-label">Projects</span>
         <div className="rail-header-actions">
           {/* ADD sits to the LEFT OF THE ELLIPSIS, both in the trailing group.
               The label owns the leading edge: putting a control there made the

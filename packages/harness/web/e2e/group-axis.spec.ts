@@ -28,7 +28,10 @@ async function openGroupAxis(page: Page): Promise<void> {
   await page.getByTestId("history-trigger").click();
   await page.getByTestId("filing-group-by").selectOption("group");
   await page.keyboard.press("Escape");
-  await expect(page.locator(".rail-header-label")).toHaveText("Groups");
+  // The title stays "Projects" on BOTH axes: the rail lists projects either
+  // way and the axis only changes their arrangement, so swapping it announced
+  // a subject that had not changed. The axis is stated on the Group-by control.
+  await expect(page.locator(".rail-header-label")).toHaveText("Projects");
   // The create row appears only once this project's stored arrangement AND the
   // launch edges have loaded, so it is the honest "ready" signal.
   await expect(page.getByTestId("group-create-polsia")).toBeVisible();
@@ -379,7 +382,10 @@ test.describe("persistence", () => {
 
   test("the axis choice itself survives a reload", async ({ page }) => {
     await page.reload();
-    await expect(page.locator(".rail-header-label")).toHaveText("Groups");
+    // The title stays "Projects" on BOTH axes: the rail lists projects either
+  // way and the axis only changes their arrangement, so swapping it announced
+  // a subject that had not changed. The axis is stated on the Group-by control.
+  await expect(page.locator(".rail-header-label")).toHaveText("Projects");
     await page.getByTestId("history-trigger").click();
     await expect(page.getByTestId("filing-group-by")).toHaveValue("group");
   });

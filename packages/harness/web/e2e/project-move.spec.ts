@@ -257,7 +257,10 @@ test.describe("the Group axis", () => {
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
-    await expect(page.locator(".rail-header-label")).toHaveText("Groups");
+    // The title stays "Projects" on BOTH axes: the rail lists projects either
+  // way and the axis only changes their arrangement, so swapping it announced
+  // a subject that had not changed. The axis is stated on the Group-by control.
+  await expect(page.locator(".rail-header-label")).toHaveText("Projects");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
 
     const before = await pathsOnScreen(page);

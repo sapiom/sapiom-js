@@ -10437,7 +10437,13 @@ button.system-graph-node.is-navigable:focus-visible {
 }
 
 .rail-add-row:hover {
-  background: var(--accent);
+  /* THE SAME NEUTRAL HOVER AS EVERY OTHER RAIL ROW (`--bg-hover`). This was
+     `var(--accent)`, and `--accent` is `var(--brand)` — full brand green — so
+     hovering "New group" painted the whole row solid green. `--accent` reads
+     like a subtle accent surface and is not one; `--accent-dim`
+     (`var(--brand-wash)`) is the wash. A create row is not a brand moment, it
+     is a row, so it hovers like one. */
+  background: var(--bg-hover);
   color: var(--text);
 }
 
@@ -10464,7 +10470,11 @@ button.system-graph-node.is-navigable:focus-visible {
    only once it is actually about to happen — a permanently red row in the tree
    would read as a warning about the list rather than about one action. */
 .rail-reset-row.is-armed {
-  background: var(--accent);
+  /* A RED WASH, which is what the comment above always described. This was
+     `var(--accent)` — full brand GREEN — under red text: a destructive
+     confirmation rendered in the success colour, which is the opposite of the
+     signal intended. Same token confusion as `.rail-add-row:hover` above. */
+  background: color-mix(in srgb, var(--red) 12%, transparent);
   color: var(--red-text, var(--red));
 }
 
