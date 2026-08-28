@@ -594,9 +594,24 @@ export interface ProjectRootSources {
  * that would swallow it, or opening one agent silently opens the user's home
  * directory over the top of it.
  *
- * The union is deliberately WIDER than the rail's derived roots. Every extra
- * entry can only make the swallow guard refuse more often, and refusing is the
- * safe direction: the agent's own folder is opened instead.
+ * AGENT DIRECTORIES ARE FILTERED OUT, because the rail's list never contains
+ * one: `projectRoots` skips `isAgentDir` in both of the loops that build `kept`,
+ * so its swallow guard only ever measures PROJECTS. The raw union does not have
+ * that property. An agent no project contains boots its sessions in its own
+ * folder (`session-scope.projectRootForAgent` falls back to the agent path, and
+ * the scaffold door passes the new agent folder as cwd), so `sessionCwds`
+ * routinely holds agent directories, and siblings put several under one parent.
+ * Left in, opening `~/work/alpha` finds `~/work/alpha` strictly under `~/work`,
+ * calls that a swallowed project, refuses, and hands back the agent folder:
+ * `scanWorkflows` then walks the agent instead of the folder holding it,
+ * `rememberProjectDir` writes an agent directory into the 8-capped `recentDirs`
+ * (the exact category error rule 1 exists to stop), and the rail declines to
+ * draw the row. That is the silent no-op this function was added to remove,
+ * arriving through its own guard.
+ *
+ * So "wider can only make it refuse more often, and refusing is safe" is FALSE,
+ * and it was the reasoning that shipped this bug: refusing IS the no-op. The
+ * union has to be the same KIND of list the rail passes, not merely a superset.
  */
 export function projectToOpen(
   requested: string,
@@ -616,10 +631,13 @@ export function projectToOpen(
     (path) => canonical(path) === canonical(requested),
   );
   if (!isAgentDir) return requested;
+  const agentDirs = new Set(agentPaths.map(canonical));
   return (
     holdingProjectFor(requested, {
       agentPaths,
-      projects: [...recentDirs, ...pendingCwds, ...sessionCwds],
+      projects: [...recentDirs, ...pendingCwds, ...sessionCwds].filter(
+        (dir) => !agentDirs.has(canonical(dir)),
+      ),
     }) ?? requested
   );
 }

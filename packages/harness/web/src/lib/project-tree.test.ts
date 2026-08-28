@@ -593,6 +593,43 @@ describe("projectToOpen", () => {
   it("refuses a filesystem root rather than opening the whole disk", () => {
     expect(open("/solo", { agentPaths: ["/solo"] })).toBe("/solo");
   });
+
+  /* THE AGENT'S OWN FOLDER IS NOT A PROJECT THE GUARD MAY COUNT.
+     An agent no project contains boots its sessions in its OWN folder, so
+     `sessionCwds` routinely holds agent directories. Counting them, the guard
+     found `~/work/alpha` "under" `~/work`, called it a swallowed project, and
+     refused, handing back the agent folder: the silent no-op this function
+     exists to remove, arriving through its own guard. The rail never had this
+     problem because `projectRoots` skips agent dirs when it builds the list the
+     guard measures. Both shapes are asserted: the agent's own cwd, and a
+     sibling agent's, which is what makes it look like a populated parent. */
+  it("does not let an agent's own session cwd block the hop", () => {
+    expect(
+      open("/w/work/alpha", {
+        agentPaths: ["/w/work/alpha"],
+        sessionCwds: ["/w/work/alpha"],
+      }),
+    ).toBe("/w/work");
+  });
+
+  it("does not let a SIBLING agent's folder block it either", () => {
+    expect(
+      open("/w/work/alpha", {
+        agentPaths: ["/w/work/alpha", "/w/work/beta"],
+        sessionCwds: ["/w/work/alpha", "/w/work/beta"],
+        recentDirs: ["/w/work/beta"],
+      }),
+    ).toBe("/w/work");
+  });
+
+  it("still refuses when a REAL project sits under the parent", () => {
+    expect(
+      open("/w/work/alpha", {
+        agentPaths: ["/w/work/alpha"],
+        sessionCwds: ["/w/work/acme-app"],
+      }),
+    ).toBe("/w/work/alpha");
+  });
 });
 
 describe("projectRoots", () => {

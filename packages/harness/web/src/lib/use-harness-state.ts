@@ -1682,18 +1682,12 @@ export function useHarnessState(): HarnessStateHook {
          that has to be true of agent folders too, and the honest form of it is
          that you get the project the agent lives in.
 
-         One level, and only when the parent exists: an agent at a filesystem
-         root has nothing to open instead, so it keeps its own folder and the
-         rail renders it as the one row it can. */
-      const isAgentDir = workflowsRef.current.some((workflow) =>
-        samePath(workflow.path, requested),
-      );
-      /* THE SAME QUESTION THE RAIL ASKS, not just the same function.
-         Round 3 caught this hop having no guards; round 4 caught it passing
-         `recentDirs` alone, where the rail passes its derived roots, so the
-         swallow guard saw no projects while the rail saw several and opening an
-         agent could still reach HOME. Both were the argument, not the rule.
-         `projectToOpen` owns the argument now and a unit test pins it. */
+         THE SAME QUESTION THE RAIL ASKS, not merely the same function. This hop
+         broke three times and never once in the rule: no guards, then the
+         guards fed `recentDirs` alone, then the guards fed a union that still
+         held agent directories. `projectToOpen` owns the whole argument now,
+         including which entries are eligible to be counted, and its own tests
+         pin it. */
       const root = projectToOpen(requested, {
         agentPaths: workflowsRef.current.map((workflow) => workflow.path),
         recentDirs: settingsRef.current?.recentDirs ?? [],
