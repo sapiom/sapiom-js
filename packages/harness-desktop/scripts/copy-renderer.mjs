@@ -77,7 +77,9 @@ async function resolveDesignSystemDir() {
     // Published Harness tarballs contain only dist/, so an intentionally pinned
     // desktop rollback cannot read the fallback's source files through that
     // package. Packaging still runs from this repository; use and explicitly
-    // validate its committed neutral layer for the desktop-owned windows.
+    // validate the token anchor in its committed neutral layer for the
+    // desktop-owned windows. The packaged smoke test below this build layer is
+    // what verifies the full theme and font set resolves.
     const workspaceFallback = join(
       root,
       "..",

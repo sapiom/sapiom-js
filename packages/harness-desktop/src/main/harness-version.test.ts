@@ -1,14 +1,26 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 const script = fileURLToPath(
   new URL("../../scripts/assert-harness-version.mjs", import.meta.url),
 );
+const desktopPackage = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+) as { desktopHarnessVersion?: string };
+const workspaceHarnessPackage = JSON.parse(
+  readFileSync(
+    new URL("../../../harness/package.json", import.meta.url),
+    "utf8",
+  ),
+) as { version: string };
+const expectedVersion =
+  desktopPackage.desktopHarnessVersion ?? workspaceHarnessPackage.version;
+const differentVersion = expectedVersion === "0.9.0" ? "0.8.9" : "0.9.0";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -26,23 +38,30 @@ function manifestWith(version: string): string {
 }
 
 describe("desktop Harness version guard", () => {
+  it("resolves the installed Harness manifest through the real development path", () => {
+    const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`@sapiom/harness ${expectedVersion}`);
+  });
+
   it("accepts the explicitly expected Harness version", () => {
     const result = spawnSync(
       process.execPath,
-      [script, manifestWith("0.8.9")],
+      [script, manifestWith(expectedVersion)],
       {
         encoding: "utf8",
       },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("@sapiom/harness 0.8.9");
+    expect(result.stdout).toContain(`@sapiom/harness ${expectedVersion}`);
   });
 
   it("fails before packaging a different Harness version", () => {
     const result = spawnSync(
       process.execPath,
-      [script, manifestWith("0.9.0")],
+      [script, manifestWith(differentVersion)],
       {
         encoding: "utf8",
       },
@@ -50,7 +69,7 @@ describe("desktop Harness version guard", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
-      "must use @sapiom/harness 0.8.9, resolved 0.9.0",
+      `must use @sapiom/harness ${expectedVersion}, resolved ${differentVersion}`,
     );
   });
 });

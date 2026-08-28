@@ -21,6 +21,8 @@ onlyBuiltDependencies:
 overrides:
   "@electron/rebuild": ^3.7.0
   # Temporary SAP-2906 release split: keep stable Desktop on the pre-graph
-  # Harness, then remove this override after tagging 0.3.7 and before packaging
-  # 0.3.8-beta.1. The rest of the monorepo stays on the current implementation.
+  # Harness. After tagging 0.3.7, remove BOTH this override and Desktop's
+  # desktopHarnessVersion field for 0.3.8-beta.1. With both absent, its dev
+  # preparation builds Harness from the workspace and its packer checks that
+  # deployed workspace version. The rest of the monorepo stays current.
   "@sapiom/harness-desktop>@sapiom/harness": 0.8.9

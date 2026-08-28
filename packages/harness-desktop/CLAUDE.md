@@ -74,6 +74,16 @@ touching this package, and how to tell whether a change actually works on the OS
 
 ### All platforms
 
+**Desktop can temporarily pin a published Harness for a stable/beta release split.** A non-empty
+`desktopHarnessVersion` in this package's `package.json` means development asserts that installed
+version instead of rebuilding the workspace Harness, and `pack.mjs` asserts the same version in the
+materialized deploy directory before electron-builder runs. The matching selective override lives
+in the root `pnpm-workspace.yaml`. End a pin with **both edits in the same change**: remove that
+override and remove `desktopHarnessVersion`. With the field absent, the inline development
+preparation rebuilds `@sapiom/harness`, and packaging checks the deployed dependency against the
+workspace Harness version. Removing only one side deliberately fails rather than silently shipping
+the wrong application.
+
 **`pnpm dist` does NOT rebuild the workspace packages it bundles.** It runs *this* package's `build`
 and then packs, and `pnpm deploy --prod` copies `@sapiom/harness`'s **`dist/`** — so a harness-side fix
 you have not built is silently absent from the artifact, and the app runs the old code. This is not
