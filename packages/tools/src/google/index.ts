@@ -57,3 +57,54 @@ export async function token(
     { method: "POST" },
   );
 }
+
+/**
+ * The minimal structural shape a googleapis / google-auth-library `AuthClient`
+ * satisfies — the client libraries call `getRequestHeaders()` before each request to
+ * attach the bearer. Declared structurally (no `googleapis` import, no runtime
+ * dependency) so our object type-checks where an `AuthClient` is expected, by
+ * duck-typing at the call site. Returns exactly `{ Authorization: "Bearer <token>" }`.
+ */
+export interface AuthClientLike {
+  getRequestHeaders(): Promise<{ Authorization: string }>;
+}
+
+/**
+ * Refresh a cached credential this many ms BEFORE its `expiresAt`, so a token is
+ * never served on the edge of expiry (clock skew + in-flight request time).
+ */
+const REFRESH_SKEW_MS = 60_000;
+
+/**
+ * A googleapis-style auth client backed by server-side credential materialization.
+ * `getRequestHeaders()` returns a `Bearer` header for the tenant's Google connector,
+ * CACHING the last `LiveCredential` and only re-calling {@link token} when the cache
+ * is within {@link REFRESH_SKEW_MS} of its `expiresAt` — or on every call when the
+ * credential carries no `expiresAt`. This lets a long-running Google client survive a
+ * token refresh WITHOUT a materialize round-trip per request, and without serving a
+ * token past its expiry. The raw token is returned to the caller only — never logged,
+ * persisted, or written to env; the cache lives only in this object's closure.
+ *
+ * `now` is injectable purely for deterministic tests; production uses `Date.now`.
+ */
+export function authClient(
+  transport: Transport = defaultTransport(),
+  baseUrl: string = DEFAULT_BASE_URL,
+  now: () => number = Date.now,
+): AuthClientLike {
+  let cached: LiveCredential | undefined;
+
+  const isFresh = (cred: LiveCredential | undefined): cred is LiveCredential =>
+    cred !== undefined &&
+    typeof cred.expiresAt === "string" &&
+    Date.parse(cred.expiresAt) - now() > REFRESH_SKEW_MS;
+
+  return {
+    async getRequestHeaders() {
+      const current = isFresh(cached)
+        ? cached
+        : (cached = await token(transport, baseUrl));
+      return { Authorization: `Bearer ${current.value}` };
+    },
+  };
+}

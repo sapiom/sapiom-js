@@ -92,3 +92,73 @@ describe("google.token()", () => {
     await expect(google.token(transport, BASE)).rejects.toThrow(/400/);
   });
 });
+
+describe("google.authClient()", () => {
+  // Comfortably beyond the 60s refresh skew regardless of the real clock.
+  const FAR_FUTURE = "2999-01-01T00:00:00.000Z";
+
+  it("fetches once and returns a Bearer header", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ kind: "bearer", value: "tok-1", expiresAt: FAR_FUTURE }),
+    ]);
+
+    const client = google.authClient(transport, BASE);
+    const headers = await client.getRequestHeaders();
+
+    expect(headers).toEqual({ Authorization: "Bearer tok-1" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${BASE}/connectors/v1/google/materialize`);
+  });
+
+  it("reuses the cached credential while it is well before expiresAt (no second materialize)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ kind: "bearer", value: "tok-1", expiresAt: FAR_FUTURE }),
+    ]);
+
+    const client = google.authClient(transport, BASE);
+    await client.getRequestHeaders();
+    const second = await client.getRequestHeaders();
+
+    expect(second).toEqual({ Authorization: "Bearer tok-1" });
+    expect(calls).toHaveLength(1); // served from cache — a long run does not thrash materialize
+  });
+
+  it("re-materializes once the cached credential is within the refresh skew of expiresAt", async () => {
+    let fetches = 0;
+    const { transport, calls } = makeTransport([
+      () => {
+        fetches += 1;
+        // 1st credential expires 30s out (inside the 60s skew at `now`); 2nd is far-future.
+        return jsonResponse(
+          fetches === 1
+            ? { kind: "bearer", value: "tok-1", expiresAt: "2026-08-28T00:00:30.000Z" }
+            : { kind: "bearer", value: "tok-2", expiresAt: FAR_FUTURE },
+        );
+      },
+    ]);
+    const now = () => Date.parse("2026-08-28T00:00:00.000Z"); // fixed clock
+
+    const client = google.authClient(transport, BASE, now);
+    const first = await client.getRequestHeaders();
+    const second = await client.getRequestHeaders();
+
+    expect(first).toEqual({ Authorization: "Bearer tok-1" });
+    expect(second).toEqual({ Authorization: "Bearer tok-2" }); // refreshed near expiry
+    expect(calls).toHaveLength(2);
+  });
+
+  it("fetches every call when the credential carries no expiresAt", async () => {
+    let n = 0;
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ kind: "bearer", value: `tok-${(n += 1)}` }),
+    ]);
+
+    const client = google.authClient(transport, BASE);
+    const a = await client.getRequestHeaders();
+    const b = await client.getRequestHeaders();
+
+    expect(a).toEqual({ Authorization: "Bearer tok-1" });
+    expect(b).toEqual({ Authorization: "Bearer tok-2" });
+    expect(calls).toHaveLength(2); // absent expiresAt → never cached
+  });
+});

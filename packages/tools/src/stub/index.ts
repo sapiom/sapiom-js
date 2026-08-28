@@ -119,7 +119,7 @@ import type {
   ActiveSession,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
-import type { LiveCredential } from "../google/index.js";
+import type { LiveCredential, AuthClientLike } from "../google/index.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -1906,6 +1906,16 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             baseUrl: "https://www.googleapis.com",
           })) as LiveCredential,
         ),
+      // Shape-faithful auth client: `getRequestHeaders()` returns the same fake
+      // bearer, so an offline run drives a googleapis-style client without a network
+      // call. The `Authorization` value is an obvious placeholder, never usable.
+      authClient: () =>
+        r("google.authClient", [], () => ({
+          getRequestHeaders: () =>
+            Promise.resolve({
+              Authorization: "Bearer ya29.stub-google-token",
+            }),
+        })) as AuthClientLike,
     },
     speech: {
       textToSpeech: {

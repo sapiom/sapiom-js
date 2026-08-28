@@ -83,6 +83,7 @@ describe("@sapiom/tools public surface", () => {
 
     expect(typeof sapiom.google).toBe("object");
     expect(typeof sapiom.google.token).toBe("function");
+    expect(typeof sapiom.google.authClient).toBe("function");
 
     expect(typeof sapiom.withAttribution).toBe("function");
   });

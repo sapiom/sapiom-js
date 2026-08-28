@@ -168,7 +168,7 @@ import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
 import * as google from "./google/index.js";
-import type { LiveCredential } from "./google/index.js";
+import type { LiveCredential, AuthClientLike } from "./google/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -471,11 +471,18 @@ export interface Sapiom {
    * pulls a short-lived bearer from the connectors gateway ON DEMAND — the OAuth
    * token never lives in the run env or on disk, and the refresh happens
    * server-side. The raw token is returned to the caller only; never log or persist
-   * it. (`authClient()` — a googleapis-style self-refreshing wrapper — is added in E4 T2.)
+   * it. `authClient()` wraps `token()` as a googleapis-style self-refreshing client.
    */
   readonly google: {
     /** Pull a fresh Google `LiveCredential` (server-side refresh). Throws 404 when no Google connector is connected. */
     token(): Promise<LiveCredential>;
+    /**
+     * A googleapis-style auth client that refreshes itself: `getRequestHeaders()`
+     * returns `{ Authorization: "Bearer <token>" }`, caching the credential and
+     * re-materializing only near its `expiresAt` — pass it where a Google client
+     * library expects an `AuthClient`.
+     */
+    authClient(): AuthClientLike;
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -693,6 +700,7 @@ function bind(transport: Transport): Sapiom {
     },
     google: {
       token: () => google.token(transport),
+      authClient: () => google.authClient(transport),
     },
     speech: {
       textToSpeech: {
