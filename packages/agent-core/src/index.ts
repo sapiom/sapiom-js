@@ -187,3 +187,7 @@ export type {
   LocalStepTraceSink,
   LogEntry,
 } from "./local/dispatcher.js";
+export { packSource } from './pack-source.js';
+export type { SourcePackage } from './pack-source.js';
+export { createTarGz } from './tar.js';
+export type { TarFile } from './tar.js';

@@ -83,6 +83,22 @@ export class GatewayClient {
   }
 
   /**
+   * POST raw bytes as `application/gzip` — the source-archive upload
+   * (AGENT-289). `path` is relative to `/v1/workflows`.
+   *
+   * Routed through {@link send} rather than a bare `fetch` so it inherits the one
+   * NETWORK / HTTP_* / 401-hint mapping. A separate method rather than a flag on
+   * {@link post}: a caller must state that it is sending an opaque body, never
+   * have it inferred from the value's runtime type.
+   *
+   * The shared request timeout applies unchanged: a source archive measures in
+   * kilobytes, so this is still a short round-trip.
+   */
+  postArchive<T = unknown>(path: string, archive: Uint8Array): Promise<T> {
+    return this.send<T>('POST', `${this.base}${path}`, archive, 'application/gzip');
+  }
+
+  /**
    * The single JSON request path — every method above funnels here so the
    * NETWORK / HTTP_* / 401-hint mapping is defined exactly once.
    *
@@ -95,13 +111,24 @@ export class GatewayClient {
    * deploy.ts's pollBuild — and streams go through openStream, which is
    * deliberately NOT bounded this way), so one generous cap fits all.
    */
-  private async send<T>(method: string, url: string, body?: unknown): Promise<T> {
+  private async send<T>(
+    method: string,
+    url: string,
+    body?: unknown,
+    /** Non-JSON media type; the body is then sent verbatim rather than stringified. */
+    contentType = 'application/json',
+  ): Promise<T> {
     let res: Response;
     try {
       res = await fetch(url, {
         method,
-        headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        headers: { 'x-api-key': this.apiKey, 'content-type': contentType },
+        body:
+          body === undefined
+            ? undefined
+            : contentType === 'application/json'
+              ? JSON.stringify(body)
+              : (body as Uint8Array),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {

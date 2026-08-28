@@ -210,7 +210,7 @@ async function runHappyFlow(gatewayHost: string) {
   const client = createClient({ host: gatewayHost, apiKey: "sk_test" });
   const linked = await link({ name: "my-workflow" }, client);
   const deployed = await deploy(
-    { projectDir: "/tmp/fake-project", definitionId: linked.definitionId },
+    { projectDir: "/tmp/fake-project", definitionId: linked.definitionId, transport: "git" },
     client,
   );
   const started = await run({ definitionId: linked.definitionId }, client);

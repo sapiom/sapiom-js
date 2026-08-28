@@ -11,6 +11,7 @@ import path from "node:path";
 
 import { getOrchestrationAnalytics, telemetryErrorCode } from "./analytics.js";
 import { bundleForDeploy } from "./bundle.js";
+import { packSource } from "./pack-source.js";
 import { GatewayClient } from "./client.js";
 import { AgentOperationError } from "./errors.js";
 import { assertDeployable, pushHead, pushSynthesizedTree } from "./git.js";
@@ -51,8 +52,22 @@ export interface DeployOptions {
   projectDir: string;
   /** Server-side definition ID (from sapiom.json or resolved by the caller). */
   definitionId: string;
-  /** Branch to push to; defaults to 'main'. */
+  /** Branch to push to; defaults to 'main'. Only used by the git transport. */
   branch?: string;
+  /**
+   * Version label recorded against this deploy (AGENT-289). What version history
+   * shows instead of the hardcoded `deploy` every push produced.
+   */
+  message?: string;
+  /**
+   * Force a transport instead of auto-selecting.
+   *
+   * Default behaviour tries `archive` and falls back to `git` when the server
+   * says archives are not enabled. Deliberately server-driven: a client-side
+   * flag would be a second source of truth that could disagree with the engine's
+   * own switch. Set explicitly only to pin one path — tests, or a rollback.
+   */
+  transport?: "archive" | "git";
 }
 
 export interface DeployResult {
@@ -104,6 +119,64 @@ export async function deploy(
 
 /** The operation body — unchanged from before the analytics wrapper. */
 async function deployOperation(
+  opts: DeployOptions,
+  client: GatewayClient,
+): Promise<DeployResult> {
+  const { definitionId, transport } = opts;
+
+  // Archive first unless pinned to git. A 409 from the upload route means the
+  // engine has archives switched off (or not configured), which is the ONE
+  // signal that decides the transport — so there is no client flag to drift out
+  // of step with the server.
+  if (transport !== "git") {
+    try {
+      return await deployArchive(opts, client);
+    } catch (err) {
+      const disabled = err instanceof AgentOperationError && err.code === "HTTP_409";
+      if (transport === "archive" || !disabled) throw err;
+      // else: fall through to the git path below
+    }
+  }
+
+  return deployGitPush(opts, client);
+}
+
+/**
+ * Git-free deploy: pack the raw source, upload it, build the exact digest.
+ *
+ * No git repository, no push credential, no force-push. The digest is returned
+ * by the server, not asserted by us — it decides where the bytes are stored and
+ * becomes the version identity, so the server computes it from what it actually
+ * received.
+ */
+async function deployArchive(
+  opts: DeployOptions,
+  client: GatewayClient,
+): Promise<DeployResult> {
+  const { projectDir, definitionId, message } = opts;
+
+  const { archive } = await packSource(projectDir);
+  const { digest } = await client.postArchive<{ digest: string }>(
+    `/definitions/${definitionId}/source`,
+    archive,
+  );
+
+  const triggered = await client.post<BuildRun>(`/definitions/${definitionId}/builds`, {
+    digest,
+    ...(message ? { message } : {}),
+  });
+  const buildRunId = triggered.buildRunId ?? triggered.id;
+  if (!buildRunId) {
+    throw new AgentOperationError({
+      code: "BUILD_NO_ID",
+      message: "The build was triggered but no build id was returned.",
+    });
+  }
+  return settleBuild(client, definitionId, buildRunId);
+}
+
+/** The original push-a-synthesized-tree deploy, retained for rollback and older engines. */
+async function deployGitPush(
   opts: DeployOptions,
   client: GatewayClient,
 ): Promise<DeployResult> {
@@ -174,6 +247,15 @@ async function deployOperation(
     });
   }
 
+  return settleBuild(client, definitionId, buildRunId);
+}
+
+/** Poll to terminal and translate a non-ready outcome. Shared by both transports. */
+async function settleBuild(
+  client: GatewayClient,
+  definitionId: string,
+  buildRunId: string,
+): Promise<DeployResult> {
   const final = await pollBuild(client, definitionId, buildRunId);
   if (final.status !== "ready") {
     if (final.status === "superseded") {

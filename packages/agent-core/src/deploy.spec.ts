@@ -107,7 +107,7 @@ describe('deploy — push retry on auth failure', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     const result = await deploy(
-      { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+      { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main', transport: 'git' },
       client as unknown as GatewayClient,
     );
 
@@ -143,7 +143,7 @@ describe('deploy — push retry on auth failure', () => {
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
-        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main', transport: 'git' },
         client as unknown as GatewayClient,
       ),
     ).rejects.toMatchObject({ code: 'GIT', hint: expect.stringContaining('rejected') });
@@ -185,7 +185,7 @@ describe('deploy — push retry on auth failure', () => {
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
-        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main', transport: 'git' },
         client as unknown as GatewayClient,
       ),
     ).rejects.toMatchObject({ code: 'GIT', hint: expect.stringContaining('retry') });
@@ -223,7 +223,7 @@ describe('deploy — superseded build messaging', () => {
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
-        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main', transport: 'git' },
         client as unknown as GatewayClient,
       ),
     ).rejects.toMatchObject({
@@ -242,7 +242,7 @@ describe('deploy — superseded build messaging', () => {
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
-        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main', transport: 'git' },
         client as unknown as GatewayClient,
       ),
     ).rejects.toMatchObject({
@@ -261,7 +261,7 @@ describe('deploy — superseded build messaging', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     const result = await deploy(
-      { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+      { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main', transport: 'git' },
       client as unknown as GatewayClient,
     );
     expect(result.status).toBe('ready');
