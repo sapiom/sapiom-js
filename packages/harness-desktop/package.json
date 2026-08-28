@@ -13,7 +13,7 @@
   "desktopHarnessVersion": "0.8.9",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-renderer.mjs",
-    "dev": "node scripts/assert-harness-version.mjs && pnpm run build && electron . --dev",
+    "dev": "node scripts/assert-harness-version.mjs --build && pnpm run build && electron . --dev",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "pnpm run build && node scripts/pack.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

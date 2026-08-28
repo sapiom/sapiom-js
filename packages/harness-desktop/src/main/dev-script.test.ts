@@ -10,7 +10,7 @@ describe("desktop development build", () => {
 
     expect(packageJson.scripts?.predev).toBeUndefined();
     expect(packageJson.scripts?.dev).toBe(
-      "node scripts/assert-harness-version.mjs && pnpm run build && electron . --dev",
+      "node scripts/assert-harness-version.mjs --build && pnpm run build && electron . --dev",
     );
   });
 });

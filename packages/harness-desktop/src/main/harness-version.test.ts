@@ -38,7 +38,7 @@ function manifestWith(version: string): string {
 }
 
 describe("desktop Harness version guard", () => {
-  it("resolves the installed Harness manifest through the real development path", () => {
+  it("resolves the installed Harness manifest without build side effects", () => {
     const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
 
     expect(result.status, result.stderr).toBe(0);
