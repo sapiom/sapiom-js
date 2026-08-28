@@ -18,6 +18,7 @@ import {
   growLeftward,
   projectInitial,
   projectIsEmpty,
+  holdingProjectFor,
   projectRoots,
   unrootedAgents,
 } from "./project-tree";
@@ -395,6 +396,40 @@ describe("growLeftward", () => {
  * "filters correctly" is one nobody can audit on a later pass. Every clause here
  * is mutation-verified: stub it out and these fail.
  */
+/**
+ * ONE ANSWER, two callers. These are asserted on the helper directly rather than
+ * only through `projectRoots`, because the second caller (`openProject`) is what
+ * shipped a copy of this hop WITHOUT these guards: it would have opened a user's
+ * home directory as a project, un-closed every removed project under it, and
+ * scanned the whole tree.
+ */
+describe("holdingProjectFor", () => {
+  const of = (dir: string, agentPaths: string[], projects: string[] = []): string | null =>
+    holdingProjectFor(dir, { agentPaths, projects });
+
+  it("answers the folder that holds the agent", () => {
+    expect(of("/w/loose/one", ["/w/loose/one"])).toBe("/w/loose");
+  });
+
+  it("walks past an agent nested inside another agent", () => {
+    expect(of("/w/outer/inner", ["/w/outer", "/w/outer/inner"])).toBe("/w");
+  });
+
+  it("REFUSES a filesystem root: `parentOf('/solo')` is `/`, not null, so the naive hop opens the whole disk", () => {
+    expect(of("/solo", ["/solo"])).toBeNull();
+  });
+
+  it("REFUSES a home directory that holds another project, which is opening HOME as a project", () => {
+    expect(of("/Users/demo/my-agent", ["/Users/demo/my-agent"], ["/Users/demo/acme-app"])).toBeNull();
+  });
+
+  it("allows the hop when the parent holds no other project", () => {
+    expect(of("/Users/demo/proj/my-agent", ["/Users/demo/proj/my-agent"], ["/elsewhere"])).toBe(
+      "/Users/demo/proj",
+    );
+  });
+});
+
 describe("projectRoots", () => {
   const at = (
     cwd: string,

@@ -116,7 +116,7 @@ describe("brand-coloured surfaces", () => {
     // The single-line rule form the file uses in a few places:
     // `.sel { background: var(--x); }` all on one line.
     for (const match of css.matchAll(
-      /^\s*([.:#a-zA-Z[][^{}\n]*?)\s*\{\s*background:\s*var\(--(?:brand|accent|green)\)\s*;\s*\}/gm,
+      /^\s*([.:#a-zA-Z[][^{}\n]*?)\s*\{\s*background(?:-color)?:\s*var\(--(?:brand|accent|green)\)(?:\s+[^;}]*)?;\s*\}/gm,
     )) {
       const sel = match[1]!.trim();
       if (!ALLOWED.has(sel)) offenders.push(`${sel} → single-line rule`);

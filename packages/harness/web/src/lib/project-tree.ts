@@ -513,6 +513,60 @@ export interface ProjectRootSources {
 }
 
 /**
+ * THE FOLDER THAT HOLDS AN AGENT, or null when nothing better than the agent's
+ * own directory exists.
+ *
+ * ONE ANSWER, because there are two callers and they must not disagree. The
+ * rail's derivation asks it to decide which row to draw; `openProject` asks it
+ * to decide what the picker actually opens when you point it at an agent. A
+ * second copy of this hop shipped without either guard below and would have
+ * opened a user's HOME DIRECTORY as a project: `rememberProjectDir` takes an
+ * explicit choice at its word, so no derivation guard downstream can decline
+ * it, `reopenProjects` then un-closes every removed project underneath it, and
+ * the follow-up scan walks the whole tree. For an agent at `/solo` the same
+ * path yields `/`.
+ *
+ * Null means REFUSE, and refusing is safe: the agent's own folder stays the
+ * root and renders as a project with that agent inside, which is what opening
+ * an agent's folder honestly means.
+ *
+ * Two reasons to refuse:
+ *
+ *  1. **A filesystem root.** `paths.parentOf` answers `/` (and `C:\`) rather
+ *     than null there, deliberately, so that every result stays a listable
+ *     path. Taken literally it turns an agent at `/solo` into a project called
+ *     `/` holding the entire disk, and the swallow guard below cannot catch it
+ *     because at that point there is no other project to swallow yet.
+ *  2. **It would contain another project.** Without this, the clean demo
+ *     fixture, whose roots are agent folders sitting beside an ordinary project
+ *     under one home directory, promoted them all to `/Users/demo` and produced
+ *     a single project holding every other project, with every agent inside it
+ *     rendered twice. That is the duplicate-agent rendering this rule exists to
+ *     remove, re-created by the repair.
+ *
+ * KNOWN LIMIT, stated rather than papered over: a directory holding nothing but
+ * agent folders and no other project DOES become the project. That is right
+ * everywhere except a home directory, and a home directory in practice always
+ * holds another project, which is what makes the guard fire. A depth floor was
+ * considered and rejected, because every threshold that saves `/Users/demo`
+ * also breaks a legitimate two-segment root.
+ */
+export function holdingProjectFor(
+  agentDir: string,
+  { agentPaths, projects }: { agentPaths: readonly string[]; projects: readonly string[] },
+): string | null {
+  const agentDirs = new Set(agentPaths.map(canonical));
+  let parent = parentOf(agentDir);
+  // An agent nested inside another agent walks up until it clears them all.
+  while (parent && agentDirs.has(canonical(parent))) parent = parentOf(parent);
+  if (parent === null || parentOf(parent) === null) return null;
+  const swallowsAProject = projects.some(
+    (held) => isUnder(held, parent!) && canonical(held) !== canonical(parent!),
+  );
+  return swallowsAProject ? null : parent;
+}
+
+/**
  * THE ORDERED LIST OF PROJECT ROOTS.
  *
  * One sentence governs this whole function:
@@ -657,39 +711,7 @@ export function projectRoots({
   for (const dir of candidates) {
     if (!isAgentDir(dir)) continue;
     if (kept.some((root) => isUnder(dir, root) && canonical(root) !== canonical(dir))) continue;
-    let parent = parentOf(dir);
-    while (parent && isAgentDir(parent)) parent = parentOf(parent);
-    // NEVER PROMOTE INTO A FILESYSTEM ROOT. `paths.parentOf` answers `/` (and
-    // `C:\`) rather than null there, deliberately, so that every result stays
-    // a listable path. Taken literally here it turns an agent at `/solo` into a
-    // project called `/` holding the entire disk, which is the swallowing case
-    // in its most extreme form and is not caught by the guard below, because at
-    // that point there is no other project to swallow yet.
-    if (parent !== null && parentOf(parent) === null) parent = null;
-    /* A PROMOTION MAY NOT CREATE A PROJECT THAT CONTAINS ANOTHER PROJECT.
-       Without this guard the clean demo fixture, whose roots are agent folders
-       sitting beside an ordinary project under one home directory, promoted
-       them all to `/Users/demo` and produced a single project called `demo`
-       holding every other project, with every agent inside it rendered twice.
-       That is the duplicate-agent rendering this rule exists to remove,
-       re-created by the repair.
-       Refusing is safe: the folder stays its own root and renders as a project
-       with its agent nested inside, which is what opening an agent's folder
-       honestly means. Only a promotion that gathers genuinely scattered agents
-       survives, which on the captured install was one folder holding eight.
-       KNOWN LIMIT, stated rather than papered over: a directory holding nothing
-       but agent folders and no other project DOES become the project. That is
-       right everywhere except a home directory, and a home directory in
-       practice always holds another project, which is what makes the guard
-       fire. A depth floor was considered and rejected, because every threshold
-       that saves `/Users/demo` also breaks a legitimate two-segment root. */
-    const swallowsAProject =
-      parent !== null &&
-      kept.some((held) => isUnder(held, parent!) && canonical(held) !== canonical(parent!));
-    // An agent at the filesystem root has nothing to be promoted into. Keeping
-    // it is the honest answer: the alternative is an agent that exists and
-    // nothing shows.
-    const root = parent === null || swallowsAProject ? dir : parent;
+    const root = holdingProjectFor(dir, { agentPaths, projects: kept }) ?? dir;
     if (holds(root)) continue;
     kept.push(root);
     from.set(canonical(root), dir);

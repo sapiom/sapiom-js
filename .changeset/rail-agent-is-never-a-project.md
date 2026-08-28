@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 ---
 
 Studio rail: an agent is never a project, and a row that is both opens the agent.

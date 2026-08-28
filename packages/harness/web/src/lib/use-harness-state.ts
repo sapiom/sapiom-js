@@ -36,7 +36,8 @@ import {
   type WorkflowScanOutcome,
 } from "./api";
 import { type ConnectivityErrorInput } from "./connectivity";
-import { isWithinDir, parentOf, samePath } from "./paths";
+import { isWithinDir, samePath } from "./paths";
+import { holdingProjectFor } from "./project-tree";
 import {
   agentNeedsOwnProject,
   applyProjectRemoval,
@@ -1678,7 +1679,21 @@ export function useHarnessState(): HarnessStateHook {
       const isAgentDir = workflowsRef.current.some((workflow) =>
         samePath(workflow.path, requested),
       );
-      const root = (isAgentDir ? parentOf(requested) : null) ?? requested;
+      /* THE SAME ANSWER THE RAIL USES, not a second copy of the hop. A private
+         `parentOf(requested)` here shipped without either of the derivation's
+         guards, and `rememberProjectDir` takes an explicit choice at its word,
+         so nothing downstream could decline it: opening a registered agent at
+         `~/my-agent` would have opened HOME as a project, un-closed every
+         removed project underneath it, and scanned the whole tree. At `/solo`
+         it would have been `/`. `holdingProjectFor` refuses both, and refusing
+         means the agent's own folder is opened, which is the honest fallback. */
+      const root =
+        (isAgentDir
+          ? holdingProjectFor(requested, {
+              agentPaths: workflowsRef.current.map((workflow) => workflow.path),
+              projects: settingsRef.current?.recentDirs ?? [],
+            })
+          : null) ?? requested;
       const swallowed = closedProjectsRef.current.filter((closed) =>
         rootContains(root, closed),
       );
