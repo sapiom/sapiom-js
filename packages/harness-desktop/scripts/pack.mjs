@@ -16,6 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as os from "node:os";
 
+import { assertHarnessVersion } from "./harness-version.mjs";
+
 const pkgDir = dirname(dirname(fileURLToPath(import.meta.url))); // packages/harness-desktop
 const repoRoot = dirname(dirname(pkgDir)); // sapiom-js
 const outputDir = join(pkgDir, "release");
@@ -28,7 +30,8 @@ const outputDir = join(pkgDir, "release");
  * then `scripts/smoke.sh`) could not work on macOS: dist errored out, and smoke
  * then looked for a `release/mac-arm64/Sapiom.app` nothing had built.
  */
-const HOST_PLATFORM_FLAG = { darwin: "--mac", win32: "--win" }[process.platform] ?? "--linux";
+const HOST_PLATFORM_FLAG =
+  { darwin: "--mac", win32: "--win" }[process.platform] ?? "--linux";
 const platform = process.argv[2] ?? HOST_PLATFORM_FLAG;
 // Anything after the platform flag goes straight to electron-builder. Signing
 // and notarization are switched on this way (`-c.mac.notarize=true`) rather than
@@ -57,13 +60,17 @@ const isWindows = process.platform === "win32";
 // `{}` for the env, deliberately: SAPIOM_UPDATE_CHANNEL is a per-machine RUNTIME
 // override for a tester, and letting it leak from a developer's shell into what
 // gets packaged would build a beta-channel artifact by accident.
-const { version } = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+const { version } = JSON.parse(
+  readFileSync(join(pkgDir, "package.json"), "utf8"),
+);
 const { resolveUpdateChannel } = await import(
   pathToFileURL(join(pkgDir, "dist", "main", "update-policy.js")).href
 );
 const { channel } = resolveUpdateChannel(version, {});
 // An explicit caller flag still wins — the passthrough args land after ours.
-const channelFlag = passthrough.some((arg) => arg.startsWith("-c.publish.channel"))
+const channelFlag = passthrough.some((arg) =>
+  arg.startsWith("-c.publish.channel"),
+)
   ? []
   : [`-c.publish.channel=${channel}`];
 
@@ -79,7 +86,10 @@ const channelFlag = passthrough.some((arg) => arg.startsWith("-c.publish.channel
 //    while os.tmpdir() is on `C:` — a C: base corrupts the symlink targets
 //    (`D:\…\harness-desktop\C:\Users\…`). Relocate to the repo's drive.
 let tmpBase = realpathSync(os.tmpdir());
-if (isWindows && tmpBase.slice(0, 2).toLowerCase() !== repoRoot.slice(0, 2).toLowerCase()) {
+if (
+  isWindows &&
+  tmpBase.slice(0, 2).toLowerCase() !== repoRoot.slice(0, 2).toLowerCase()
+) {
   tmpBase = join(`${repoRoot.slice(0, 2)}\\`, "sapiom-tmp");
 }
 const deployDir = join(tmpBase, "sapiom-harness-desktop-pack");
@@ -97,15 +107,40 @@ rmSync(deployDir, { recursive: true, force: true });
 // --legacy: deploy without inject-workspace-packages (pnpm v10 default gate).
 // --prod: drop devDeps (electron/electron-builder) — electronVersion is pinned
 // in electron-builder.yml so the version is known without the devDep present.
-run("pnpm", ["--filter", "@sapiom/harness-desktop", "deploy", "--prod", "--legacy", deployDir], repoRoot);
+run(
+  "pnpm",
+  [
+    "--filter",
+    "@sapiom/harness-desktop",
+    "deploy",
+    "--prod",
+    "--legacy",
+    deployDir,
+  ],
+  repoRoot,
+);
+
+// The stable rollback is deliberately pinned through pnpm's workspace override,
+// rather than the package dependency Changesets owns. Assert the MATERIALIZED
+// dependency before electron-builder sees it: losing that temporary override
+// must fail the release instead of silently shipping the graph on stable again.
+assertHarnessVersion(
+  join(deployDir, "node_modules", "@sapiom", "harness", "package.json"),
+  "deployed desktop bundle",
+);
 
 // `pnpm deploy` honors .gitignore, which excludes dist/ + release/. Copy the
 // built app output, the builder config, and assets into the deploy dir.
 cpSync(join(pkgDir, "dist"), join(deployDir, "dist"), { recursive: true });
-cpSync(join(pkgDir, "electron-builder.yml"), join(deployDir, "electron-builder.yml"));
+cpSync(
+  join(pkgDir, "electron-builder.yml"),
+  join(deployDir, "electron-builder.yml"),
+);
 cpSync(join(pkgDir, "assets"), join(deployDir, "assets"), { recursive: true });
 
-console.log(`[pack] electron-builder ${platform} → ${outputDir} (v${version}, channel "${channel}")`);
+console.log(
+  `[pack] electron-builder ${platform} → ${outputDir} (v${version}, channel "${channel}")`,
+);
 // The `.bin` entry is `electron-builder.cmd` on Windows, `electron-builder` on POSIX.
 const electronBuilder = join(
   pkgDir,

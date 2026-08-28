@@ -20,6 +20,7 @@ onlyBuiltDependencies:
 # cross-platform rebuild HANG that the bare node-gyp override caused.
 overrides:
   "@electron/rebuild": ^3.7.0
-  # Keep the stable desktop rollback on the pre-graph Harness while the rest of
-  # the monorepo continues to develop and publish the beta implementation.
+  # Temporary SAP-2906 release split: keep stable Desktop on the pre-graph
+  # Harness, then remove this override after tagging 0.3.7 and before packaging
+  # 0.3.8-beta.1. The rest of the monorepo stays on the current implementation.
   "@sapiom/harness-desktop>@sapiom/harness": 0.8.9

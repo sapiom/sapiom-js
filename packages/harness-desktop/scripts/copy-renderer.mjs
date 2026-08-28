@@ -1,9 +1,12 @@
 // Copies the renderer windows' static assets into dist/renderer.
 // tsc emits only the .js from src/renderer; the .html/.css must be copied.
 //
-// We ALSO resolve and copy the design-system token layer, so the onboarding
-// window reads the SAME token values as the SPA instead of carrying its own
-// snapshot of them (a snapshot silently drifts the moment a token changes).
+// We ALSO resolve and copy the design-system token layer for the desktop-owned
+// onboarding and update windows. A normal workspace build reads the SAME source
+// as the SPA. A stable rollback may instead package an older published Harness,
+// whose tarball contains the bundled SPA but omits these source-only token files;
+// that explicit case uses this checkout's committed neutral layer for the two
+// desktop windows. The packaged smoke test verifies its tokens and fonts resolve.
 //
 // The resolution mirrors `packages/harness/web/vite.config.ts`'s
 // `designSystemAlias()`: prefer the private `@sapiom/design-system` package when
@@ -73,10 +76,28 @@ async function resolveDesignSystemDir() {
 
     // Published Harness tarballs contain only dist/, so an intentionally pinned
     // desktop rollback cannot read the fallback's source files through that
-    // package. Packaging still runs from this repository, where the canonical
-    // committed fallback is available beside harness-desktop.
+    // package. Packaging still runs from this repository; use and explicitly
+    // validate its committed neutral layer for the desktop-owned windows.
+    const workspaceFallback = join(
+      root,
+      "..",
+      "harness",
+      "web",
+      "src",
+      "styles",
+      "ds-neutral",
+    );
+    try {
+      await stat(join(workspaceFallback, "tokens.css"));
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      throw new Error(
+        `workspace ds-neutral fallback is missing tokens.css at ${workspaceFallback}`,
+        { cause: err },
+      );
+    }
     return {
-      dir: join(root, "..", "harness", "web", "src", "styles", "ds-neutral"),
+      dir: workspaceFallback,
       seam: "workspace ds-neutral fallback",
     };
   }
