@@ -5,24 +5,16 @@
  *
  * This is the OFFLINE FALLBACK: at startup the server fetches the live copy from
  * `GET {apiURL}/v1/mcp/instructions` (see instructions-fetch.ts) and serves that;
- * this constant is served only when the fetch fails. KEEP IT IDENTICAL to the
- * server's live-fetched copy (a private companion repo) — the two are one
- * canonical text.
- *
- * That rule has a machine check now, not just this comment: instructions.test.ts pins
- * the sha-256 of this string, and the server-side spec pins the same value against its
- * own current copy — so a content release there reddens a spec that names this pin,
- * and an in-place edit here reddens ours. Neither can block a merge in the other
- * repository; what the pair removes is the path where nobody notices. The guard exists
- * because the rule failed silently for two content releases (SAP-2959): this fallback
- * still described a Sapiom without App Links, which offline sessions — the only ones
- * that read it — were then told did not exist. Changing the primer now means moving
- * both copies and both pins together.
+ * this constant is served only when that fetch fails, so it is kept identical to the
+ * served text rather than maintained separately.
  *
  * Kept intentionally short — it stays in the model's context for the whole session.
  * Deep authoring guidance lives in the scaffold-shipped `sapiom-agent-authoring`
  * skill and `AGENTS.md`, and the full reference on docs.sapiom.ai; this primer
  * points there rather than restating them.
+ *
+ * Maintainers: the sync rule, the digest that enforces it, and what that digest can
+ * and cannot catch are documented in instructions.test.ts, which is not published.
  */
 export const AUTHORING_INSTRUCTIONS = `# Sapiom local authoring MCP
 

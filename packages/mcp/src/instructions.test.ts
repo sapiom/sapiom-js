@@ -95,19 +95,57 @@ describe("server instructions", () => {
     );
   });
 
-  it("teaches the LLM call-surface rule (SAP-2775)", () => {
-    // Stops an authored agent from misusing a one-shot LLM call as an agent loop (or
-    // vice versa) and from string-parsing JSON out of a `thinking`-capable response.
+  it("teaches the LLM call-surface rule (SAP-2775) — kept byte-identical to the backend copy", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.llm.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.models.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
+    // The internal `workflows`-service naming must never reach this customer-facing
+    // primer — the per-step debugging endpoint lives in the docs guide, not spelled
+    // out here verbatim (matches this package's own scaffold terminology guard).
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
+    // Structured/forced-tool output has no `text` block — the reply lives in the
+    // `tool_use` block's `input`. Reading only `type === 'text'` there returns
+    // `undefined` and invites exactly the string-parsing fallback this rule bans.
+    expect(AUTHORING_INSTRUCTIONS).toContain("tool_use");
+    // `output` is sugar for a forced tool call — one mechanism, one payload location.
+    expect(AUTHORING_INSTRUCTIONS).toContain("it forces a tool");
+    // The disclosure claim stays scoped: coding runs report honest nulls, and older
+    // servers omit the fields entirely — never a flat "always on the result" promise.
+    expect(AUTHORING_INSTRUCTIONS).toContain("treat missing as unknown");
+    expect(AUTHORING_INSTRUCTIONS).toContain("reports both as `null` today");
+    // "Pin the `smart` label" was a no-op (smart IS the default) and wrong-field on
+    // the sessions surface — it must not come back.
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("If you must pin");
+  });
+
+  it("carries the served primer's one-line ctx.shared contract (SAP-2959)", () => {
+    // This file used to assert an 11-line `ctx.shared` quota contract: the inclusive
+    // 256 KiB / 262,144-byte limit, compact-`JSON.stringify` measurement, setter-time
+    // validation, no `delete()`, structural guards over `instanceof`. That paragraph
+    // was in THIS fallback and not in the served primer, so online sessions — the vast
+    // majority — never saw it. Syncing to the served text drops it here too.
+    //
+    // That is a consequence of the sync, not an oversight, and it is the direction the
+    // rule requires: the two copies are one canonical text, and the digest below cannot
+    // hold if they differ by a paragraph. The contract still reaches authors through
+    // packages/agent/README.md and the scaffold-shipped `sapiom-agent-authoring` skill.
+    // Putting it back in the primer is a server-side content release, not an edit here.
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "Cross-step state: `ctx.shared` — the entry input reaches only the entry step.",
+    );
   });
 
   it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
+    // THE SYNC RULE, which lives here rather than in instructions.ts because that
+    // file's JSDoc is emitted into dist/instructions.d.ts and published to npm, where
+    // none of this is actionable for a consumer: AUTHORING_INSTRUCTIONS is duplicated
+    // verbatim from the server's canonical primer (a private companion repo). The
+    // package must work offline, so it cannot import it. The two are one canonical
+    // text — KEEP THEM IDENTICAL whenever either changes.
+    //
     // The `contain` assertions above are what let this copy fall two content
     // releases behind the server without anything going red: each one still
     // passed against the older text. This digest is what actually binds the two
