@@ -5,20 +5,44 @@ import { requireConfig } from '../../lib/config.js';
 import { CliError, isJsonMode, ok } from '../../lib/output.js';
 
 /**
- * `sapiom agents deploy` — mint push credentials, push the current
- * commit, trigger a build, and wait for it to finish.
+ * `sapiom agents deploy` — package the current local source, build it, and wait
+ * for the build to finish.
  *
- * Note: the backend tenant deploy routes (POST definitions, push-credentials,
- * builds) are being added in a parallel effort and are not yet merged. Until
- * those land, deploy end-to-end will return 404 from the backend.
+ * No git repository is required. The source is uploaded as an archive; a server
+ * that has archives switched off falls back to the old push transparently, so
+ * this command behaves the same either way (AGENT-289).
  */
-export async function runDeploy(opts: { branch?: string; host?: string; target?: CliTarget }): Promise<void> {
+export async function runDeploy(opts: {
+  branch?: string;
+  message?: string;
+  transport?: string;
+  host?: string;
+  target?: CliTarget;
+}): Promise<void> {
   try {
     const dir = process.cwd();
     const cfg = requireConfig(dir);
     const client = makeClient({ projectHost: cfg.host, flagHost: opts.host, flagTarget: opts.target });
 
-    const result = await deploy({ projectDir: dir, definitionId: cfg.definitionId, branch: opts.branch }, client);
+    if (opts.transport !== undefined && opts.transport !== "archive" && opts.transport !== "git") {
+      // Rejected here rather than passed through: an unrecognised value would
+      // silently take the default path, which is the opposite of pinning one.
+      throw new CliError({
+        code: "BAD_TRANSPORT",
+        message: `--transport must be 'archive' or 'git' (got '${opts.transport}').`,
+      });
+    }
+
+    const result = await deploy(
+      {
+        projectDir: dir,
+        definitionId: cfg.definitionId,
+        branch: opts.branch,
+        ...(opts.message ? { message: opts.message } : {}),
+        ...(opts.transport ? { transport: opts.transport as "archive" | "git" } : {}),
+      },
+      client,
+    );
 
     if (isJsonMode()) {
       ok({ definitionId: result.definitionId, buildRunId: result.buildRunId, status: result.status });

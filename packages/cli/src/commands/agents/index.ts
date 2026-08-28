@@ -62,7 +62,11 @@ export function registerAgentsCommands(program: Command): void {
         ),
     ),
   )
-    .option("-b, --branch <branch>", "branch to push to", "main")
+    .option("-b, --branch <branch>", "branch to push to (git transport only)", "main")
+    .option("-m, --message <message>", "label this version in the history")
+    // Escape hatch, not a routine choice: the transport is normally decided by
+    // the server, so this exists for a rollback or for reproducing an issue.
+    .option("--transport <transport>", "force 'archive' or 'git'")
     .action(action(runDeploy));
 
   withHostFlags(
