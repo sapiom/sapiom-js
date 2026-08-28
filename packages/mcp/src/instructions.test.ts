@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -40,10 +41,50 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/agents");
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
-    // The two-MCP frame: agents learn the remote MCP exists for direct tool calls
-    expect(AUTHORING_INSTRUCTIONS).toContain("remote MCP");
-    expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
+  });
+
+  it("keeps local authoring and hosted direct access on distinct aliases", () => {
+    // Two-MCP frame: this server authors agents under the local `sapiom` alias; the
+    // hosted capability MCP answers one-off calls under the distinct `sapiom-direct`
+    // alias. The 2.6-era copy conflated them onto one `sapiom` alias, which is why
+    // the negative assertions below exist.
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "`sapiom-dev` is this package's MCP server identity",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "supported local alias `sapiom` with `claude mcp add sapiom -- npx -y @sapiom/mcp`",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain("tool_discover");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "claude mcp add sapiom --transport http",
+    );
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("it exposes every capability");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "# Sapiom dev MCP (sapiom-dev)",
+    );
+  });
+
+  it("points the preview path at App Links for durable sharing (SAP-2923)", () => {
+    // A preview URL dies with its sandbox. Without a named durable successor here,
+    // App Links are undiscoverable from the one surface every session reads on
+    // connect — and this fallback is the copy served when the live fetch fails,
+    // i.e. the path with no other source of truth.
+    expect(AUTHORING_INSTRUCTIONS).toContain("App Link");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_app_publish");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://docs.sapiom.ai/capabilities/app-links",
+    );
+    // The local one-call path, version-gated: the backend live-fetches this text to
+    // every install, including clients on an older @sapiom/mcp whose server never
+    // advertised the tool. The gate is the part that keeps naming it honest.
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_publish");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
@@ -54,55 +95,37 @@ describe("server instructions", () => {
     );
   });
 
-  it("teaches the LLM call-surface rule (SAP-2775) — kept byte-identical to the backend copy", () => {
+  it("teaches the LLM call-surface rule (SAP-2775)", () => {
+    // Stops an authored agent from misusing a one-shot LLM call as an agent loop (or
+    // vice versa) and from string-parsing JSON out of a `thinking`-capable response.
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.llm.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.models.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
-    // The internal `workflows`-service naming must never reach this customer-facing
-    // primer — the per-step debugging endpoint lives in the docs guide, not spelled
-    // out here verbatim (matches this package's own scaffold terminology guard).
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
-    // Structured/forced-tool output has no `text` block — the reply lives in the
-    // `tool_use` block's `input`. Reading only `type === 'text'` there returns
-    // `undefined` and invites exactly the string-parsing fallback this rule bans.
-    expect(AUTHORING_INSTRUCTIONS).toContain("tool_use");
-    // `output` is sugar for a forced tool call — one mechanism, one payload location.
-    expect(AUTHORING_INSTRUCTIONS).toContain("it forces a tool");
-    // The disclosure claim stays scoped: coding runs report honest nulls, and older
-    // servers omit the fields entirely — never a flat "always on the result" promise.
-    expect(AUTHORING_INSTRUCTIONS).toContain("treat missing as unknown");
-    expect(AUTHORING_INSTRUCTIONS).toContain("reports both as `null` today");
-    // "Pin the `smart` label" was a no-op (smart IS the default) and wrong-field on
-    // the sessions surface — it must not come back.
-    expect(AUTHORING_INSTRUCTIONS).not.toContain("If you must pin");
   });
 
-  it("documents the complete ctx.shared quota contract", () => {
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "inclusive 256 KiB (262,144-byte) quota",
-    );
-    expect(AUTHORING_INSTRUCTIONS).toContain("measured as compact");
-    expect(AUTHORING_INSTRUCTIONS).toContain("`JSON.stringify` UTF-8 bytes");
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "IDs/references here instead of bulk state",
-    );
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "`ctx.shared.set()` validates the complete candidate synchronously",
-    );
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "construct this SDK version's `InMemoryContextStore`",
-    );
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "snapshot unchanged after an oversized or unserializable write",
-    );
-    expect(AUTHORING_INSTRUCTIONS).toContain("structural payload guards");
-    expect(AUTHORING_INSTRUCTIONS).toContain("than `instanceof`");
-    expect(AUTHORING_INSTRUCTIONS).toContain("Hosts that have not adopted");
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "There is no `delete()` operation",
+  it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
+    // The `contain` assertions above are what let this copy fall two content
+    // releases behind the server without anything going red: each one still
+    // passed against the older text. This is the guard that actually binds the
+    // two copies — the digest is the same frozen value the server-side spec pins
+    // for the matching content release, so a one-sided edit reddens one repo or
+    // the other, with no network call from either test suite.
+    //
+    // To change the primer: ship the server-side content release, copy its new
+    // body here verbatim, and update both digests in the same pair of PRs. Never
+    // re-point this digest on its own — that just re-blesses the drift the guard
+    // exists to catch.
+    //
+    // Current release: 2.8 (App Links + `sapiom_dev_app_publish`).
+    const sha256 = createHash("sha256")
+      .update(AUTHORING_INSTRUCTIONS, "utf8")
+      .digest("hex");
+    expect(sha256).toBe(
+      "7f518d9c4a80122e51d45e9e28dc5f6cacfd3b05f4101aa1a5b8ae5d4494c0df",
     );
   });
 });
