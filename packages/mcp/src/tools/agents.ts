@@ -338,7 +338,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_deploy",
-    "Deploy the linked agent: bundle the current local source (including uncommitted source), push a synthesized build tree, trigger a metered cloud build, and wait for it to finish. The project must be linked (sapiom.json) and a git repo with at least one commit.",
+    "Deploy the linked agent: package the current local source (including uncommitted source), upload it, trigger a metered cloud build, and wait for it to finish. The project must be linked (sapiom.json). No git repository is required.",
     {
       dir: z
         .string()
@@ -349,9 +349,15 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       branch: z
         .string()
         .optional()
-        .describe("Branch to push to (default 'main')."),
+        .describe("Branch to push to (default 'main'). Only used if the server falls back to the git transport."),
+      message: z
+        .string()
+        .optional()
+        .describe(
+          "Label this version in the agent's history. Without it the version shows no description.",
+        ),
     },
-    async ({ dir, branch }) => {
+    async ({ dir, branch, message }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
@@ -359,7 +365,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         const cfg = requireConfig(projectDir);
         return ok(
           await deploy(
-            { projectDir, definitionId: cfg.definitionId, branch },
+            {
+              projectDir,
+              definitionId: cfg.definitionId,
+              branch,
+              ...(message ? { message } : {}),
+            },
             client,
           ),
         );
