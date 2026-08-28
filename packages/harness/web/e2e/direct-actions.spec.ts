@@ -5,7 +5,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { focusRfqAgentThroughProjectGraph } from "./mock-navigation";
+import { focusRfqAgent } from "./mock-navigation";
 
 type HarnessHook = {
   lastDirectAction?: { action: string; req: Record<string, unknown> };
@@ -106,7 +106,7 @@ test("Deploy remains a direct, de-duplicated build stream", async ({ page }) => 
 });
 
 test("a draft agent disables only Cloud while Local remains runnable", async ({ page }) => {
-  await focusRfqAgentThroughProjectGraph(page);
+  await focusRfqAgent(page);
   await page.getByTestId("open-agent-start-session").click();
   await expect(page.getByTestId("session-step-local")).toHaveAccessibleName("Run using Local");
 

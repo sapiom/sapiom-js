@@ -520,8 +520,9 @@ export function WorkflowsRail({
   );
 
   // The PROJECT axis: root folders the user opened > directories that actually
-  // branch > agents. There is no migration — every recentDirs entry and every
-  // session cwd becomes a project, so nothing a user already had disappears.
+  // branch > agents. Which folders qualify is `projectRoots`, one sentence: a
+  // project is a directory you chose that holds agents. Nothing a user had
+  // disappears, because the rule is derivational and `recentDirs` is untouched.
   const pendingCwds = pendingWorkspaces.map((pending) => pending.cwd);
   // A REMOVED project takes its whole subtree with it (SAP-2932): its own row,
   // its agents — which would otherwise reappear as strays — and the session
@@ -537,6 +538,9 @@ export function WorkflowsRail({
     recentDirs,
     sessions,
     pendingCwds,
+    // Hidden agents are deliberately NOT passed. A removed project's agents are
+    // not on screen, so they cannot be the reason a folder is filed away.
+    agentPaths: visibleWorkflows.map((workflow) => workflow.path),
     sort,
   }).filter(shown);
   const projects = buildProjectTree(visibleWorkflows, roots, sort);
@@ -1157,6 +1161,79 @@ export function WorkflowsRail({
                           <Icon name="Sparkles" size={13} />
                         </button>
                       ) : null}
+                      {/* THE MAP, when the row's click is spoken for.
+                          A merged root-agent row now opens the AGENT, which is
+                          the whole of the B4 fix, so the project's graph needs
+                          somewhere else to live on exactly those rows. An
+                          unmerged project row keeps the graph on its label and
+                          renders no glyph here: one control per question, and a
+                          second door to the same place on a row that already
+                          leads there would be the duplicate this rail keeps
+                          removing. */}
+                      {project.rootAgent &&
+                        !showGroups &&
+                        workspaceScope?.workspaceKey != null && (
+                          <button
+                            type="button"
+                            className="workspace-row-action"
+                            data-testid={`project-map-${project.label}`}
+                            aria-label={`Open dependency graph for ${project.label}`}
+                            aria-pressed={
+                              workspaceScope.workspaceKey === selectedWorkspaceKey
+                            }
+                            data-tooltip="Open dependency graph"
+                            onClick={() =>
+                              onSelectWorkspace(
+                                workspaceScope.workspaceKey,
+                                project.root,
+                                project.label,
+                              )
+                            }
+                          >
+                            <Icon name="Waypoints" size={13} />
+                          </button>
+                        )}
+                      {/* CREATE AN AGENT IN THIS FOLDER.
+                          `onScaffoldSession` was wired at exactly one place, the
+                          EMPTY-project branch below, so a project that already
+                          held an agent offered no way to add a second one: "how
+                          do I make a new agent in this folder" had no answer on
+                          screen. The header CTA does not replace it, because it
+                          targets no project and the composer drops the result
+                          wherever it decides, which was the other half of the
+                          same complaint.
+
+                          Hover-revealed, deliberately reversing the note this
+                          row used to carry ("hover-only made the one action a
+                          project row offered invisible at rest"). That held when
+                          it was the ONLY action. It is now one of a pair with
+                          Remove, both hover-revealed and both keyboard
+                          reachable, which is the pattern every other row in the
+                          rail already uses, and a standing `+` on every project
+                          row would be the loudest thing in the list. */}
+                      {!creating && bare == null && (
+                        <button
+                          type="button"
+                          className="workspace-row-action"
+                          data-testid={`project-create-agent-${project.label}`}
+                          aria-label={`Create an agent in ${project.label}`}
+                          data-tooltip="Create an agent here"
+                          onClick={() => {
+                            void onScaffoldSession(
+                              project.root,
+                              preferredHarness(),
+                            ).catch((err: unknown) => {
+                              onToast(
+                                err instanceof Error
+                                  ? err.message
+                                  : `Couldn't start an agent in ${project.label}.`,
+                              );
+                            });
+                          }}
+                        >
+                          <Icon name="Plus" size={13} />
+                        </button>
+                      )}
                       {/* REMOVE PROJECT. An `X`, not a trash can: this closes a
                           project and ends its sessions, and never touches a
                           file — a bin glyph would say the opposite of the copy

@@ -61,15 +61,15 @@ test("rail opens as a drawer and closes on opening a workflow or a scrim tap", a
   expect(box?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(375);
   await page.screenshot({ path: "web/e2e/screenshots/mobile-drawer.png" });
 
-  // This row is both a Project root and an agent. Its Project action opens the
-  // graph and closes the drawer; the graph card is the separate agent door.
+  // This row is both a Project root and an agent, and the row IS the agent:
+  // opening it focuses that agent and closes the drawer. It used to take the
+  // long way round, opening a one-node dependency graph and then clicking the
+  // node, because the Project action won the row's click unconditionally.
   await page
     .getByTestId("workflow-rfq")
-    .locator(".workflow-item-trigger")
+    .locator(".workspace-row-main")
     .click();
   await expect(rail).toHaveCount(0);
-  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
-  await page.getByTestId("system-graph-node-local:rfq-agent").click();
   await expect(page.getByTestId("open-agent-empty")).toContainText(
     "No running session for rfq",
   );

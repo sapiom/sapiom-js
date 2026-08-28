@@ -122,9 +122,15 @@ test.describe("the header + opens a project", () => {
       "This is an agent project",
     );
     await page.getByTestId("open-project").click();
-    // The root IS the agent, so this is ONE row wearing the agent's testid —
-    // never a folder row with an identically-named child under it.
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(2);
+    /* AN AGENT'S OWN FOLDER DOES NOT BECOME A PROJECT, so the agent stays the
+       ONE row it already was under `acme-app`. This asserted 2 before: opening
+       `leasing` minted a second root for the agent's own directory and the same
+       agent appeared twice, once nested and once at top level, because an agent
+       is deliberately filed under every root that contains it. That pairing was
+       the accumulation itself, and on a real install it had produced three
+       agents on screen twice over. `projectRoots` now drops an agent-rooted
+       entry a project already shows. */
+    await expect(page.getByTestId("workflow-leasing")).toHaveCount(1);
     await expect(page.getByTestId("project-row-leasing")).toHaveCount(0);
   });
 });
@@ -234,9 +240,16 @@ test.describe("round trip: removed, then back", () => {
     await page.getByTestId("open-project").click();
 
     await expect(page.getByTestId("project-row-demo")).toBeVisible();
-    // Two rows on purpose: an agent files under EVERY root that contains it,
-    // and `~/demo` and `~/demo/acme-app` are two real contexts.
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(2);
+    /* ONE row, and the hole is still closed. The invariant this test exists for
+       is that `leasing` is rendered SOMEWHERE once `~/demo` is open, and it is:
+       under `~/demo`.
+       It asserted 2 before, on the rule that an agent files under every root
+       that contains it. That rule is intact, but it takes two CHOSEN roots, and
+       after the removal above `acme-app` is not one: the user closed it, and it
+       survives only as the cwd of some exited sessions. Rendering it again as a
+       project would resurrect a folder they just removed, and print its agent
+       twice to do it. */
+    await expect(page.getByTestId("workflow-leasing")).toHaveCount(1);
     expect(
       await page.evaluate(
         () =>

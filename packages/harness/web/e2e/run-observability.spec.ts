@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { focusRfqAgentThroughProjectGraph } from "./mock-navigation";
+import { focusRfqAgent } from "./mock-navigation";
 
 type DirectAction = { action: string; req: Record<string, unknown> };
 type ProductEvent = { event: string; properties?: Record<string, unknown> };
@@ -282,7 +282,7 @@ test.describe("unified run entry", () => {
       );
     }, rfqPath);
 
-    await focusRfqAgentThroughProjectGraph(page);
+    await focusRfqAgent(page);
     await page.getByTestId("open-agent-start-session").click();
     const main = page.getByTestId("session-step-local");
     await expect(main).toHaveAccessibleName("Run using Local");

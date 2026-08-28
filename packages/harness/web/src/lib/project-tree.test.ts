@@ -21,6 +21,7 @@ import {
   projectRoots,
   unrootedAgents,
 } from "./project-tree";
+import type { RailSort } from "./project-tree";
 
 const agent = (path: string, name = path.split("/").pop() ?? path): WorkflowInfo => ({
   name,
@@ -384,102 +385,234 @@ describe("growLeftward", () => {
   });
 });
 
+/**
+ * The one sentence this block exists to pin:
+ *
+ *     A PROJECT IS A DIRECTORY YOU CHOSE THAT HOLDS AGENTS.
+ *
+ * Each case names the row it stops the rail from drawing, because a test called
+ * "filters correctly" is one nobody can audit on a later pass. Every clause here
+ * is mutation-verified: stub it out and these fail.
+ */
 describe("projectRoots", () => {
   const at = (cwd: string, createdAt: string): { cwd: string; createdAt: string } => ({
     cwd,
     createdAt,
   });
-
-  it("takes every recentDirs entry AND every session cwd — there is no migration", () => {
-    const roots = projectRoots({
-      recentDirs: ["/a/one"],
-      sessions: [at("/a/two", "2026-01-01T00:00:00.000Z")],
-      pendingCwds: [],
-      sort: "recent",
+  const roots = (over: {
+    recentDirs?: string[];
+    sessions?: { cwd: string; createdAt: string }[];
+    pendingCwds?: string[];
+    agentPaths?: string[];
+    sort?: RailSort;
+  }): string[] =>
+    projectRoots({
+      recentDirs: over.recentDirs ?? [],
+      sessions: over.sessions ?? [],
+      pendingCwds: over.pendingCwds ?? [],
+      agentPaths: over.agentPaths ?? [],
+      sort: over.sort ?? "recent",
     });
-    expect(roots).toEqual(["/a/one", "/a/two"]);
+
+  describe("a directory you CHOSE", () => {
+    it("keeps a chosen folder that holds agents", () => {
+      expect(roots({ recentDirs: ["/a/acme"], agentPaths: ["/a/acme/leasing"] })).toEqual([
+        "/a/acme",
+      ]);
+    });
+
+    it("keeps a chosen folder with NO agents: opening an empty folder to build the first agent in it is the whole point of that row", () => {
+      expect(roots({ recentDirs: ["/a/blank"] })).toEqual(["/a/blank"]);
+    });
+
+    it("keeps a folder mid-creation, which has no agent yet by definition", () => {
+      expect(roots({ pendingCwds: ["/a/new"] })).toEqual(["/a/new"]);
+    });
+
+    it("drops a folder known only because a session ran there and holding no agent", () => {
+      expect(roots({ sessions: [at("/a/visited", "2026-01-01T00:00:00.000Z")] })).toEqual([]);
+    });
+
+    it("keeps a session-only folder once it actually holds an agent", () => {
+      expect(
+        roots({
+          sessions: [at("/a/real", "2026-01-01T00:00:00.000Z")],
+          agentPaths: ["/a/real/ads"],
+        }),
+      ).toEqual(["/a/real"]);
+    });
+
+    it("drops a session-only folder whose agents a chosen project already shows, rather than printing them twice", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/acme"],
+          sessions: [at("/a/acme/services", "2026-01-01T00:00:00.000Z")],
+          agentPaths: ["/a/acme/services/ads"],
+        }),
+      ).toEqual(["/a/acme"]);
+    });
+
+    it("takes the OUTERMOST session folder that explains an agent, whatever order the candidates arrive in", () => {
+      expect(
+        roots({
+          sessions: [
+            at("/a/repo/deep/inner", "2026-02-01T00:00:00.000Z"),
+            at("/a/repo", "2026-01-01T00:00:00.000Z"),
+          ],
+          agentPaths: ["/a/repo/deep/inner/ads"],
+        }),
+      ).toEqual(["/a/repo"]);
+    });
   });
 
-  it("keeps recentDirs order under 'recent' (it is the MRU list)", () => {
-    const roots = projectRoots({
-      recentDirs: ["/a/three", "/a/one", "/a/two"],
-      sessions: [],
-      pendingCwds: [],
-      sort: "recent",
+  describe("an agent's own directory is not a project", () => {
+    it("drops an agent-rooted entry an open project already contains, the row that renders the agent TWICE", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/acme", "/a/acme/leasing"],
+          agentPaths: ["/a/acme/leasing"],
+        }),
+      ).toEqual(["/a/acme"]);
     });
-    expect(roots).toEqual(["/a/three", "/a/one", "/a/two"]);
-  });
 
-  it("falls back to newest session activity for folders recentDirs has not recorded", () => {
-    const roots = projectRoots({
-      recentDirs: [],
-      sessions: [at("/a/old", "2026-01-01T00:00:00.000Z"), at("/a/new", "2026-02-01T00:00:00.000Z")],
-      pendingCwds: [],
-      sort: "recent",
+    it("promotes an agent-rooted entry nothing else contains, so its siblings gather into one project", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/loose/one"],
+          agentPaths: ["/a/loose/one", "/a/loose/two"],
+        }),
+      ).toEqual(["/a/loose"]);
     });
-    expect(roots).toEqual(["/a/new", "/a/old"]);
-  });
 
-  it("ranks a recentDirs entry above one only session activity knows", () => {
-    const roots = projectRoots({
-      recentDirs: ["/a/known"],
-      sessions: [at("/a/seen", "2099-01-01T00:00:00.000Z")],
-      pendingCwds: [],
-      sort: "recent",
+    it("walks past an agent nested inside another agent rather than promoting into one", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/outer/inner"],
+          agentPaths: ["/a/outer", "/a/outer/inner"],
+        }),
+      ).toEqual(["/a"]);
     });
-    expect(roots).toEqual(["/a/known", "/a/seen"]);
-  });
 
-  it("sorts A–Z by basename under 'name'", () => {
-    const roots = projectRoots({
-      recentDirs: ["/z/beta", "/a/alpha"],
-      sessions: [],
-      pendingCwds: [],
-      sort: "name",
-    });
-    expect(roots).toEqual(["/a/alpha", "/z/beta"]);
-  });
-
-  it("floats a folder mid-creation above every real project, on either sort", () => {
-    for (const sort of ["recent", "name"] as const) {
-      const roots = projectRoots({
-        recentDirs: ["/a/aaa"],
-        sessions: [],
-        pendingCwds: ["/z/zzz"],
-        sort,
+    /* The exact shape of a clean demo fixture, which is how this was found: an
+       ordinary project beside two agent folders under one home directory.
+       Promoting either produced a single project called `demo` holding every
+       other project, with the agents inside it rendered twice. Written from the
+       fixture rather than simplified, because the simplified version (no
+       ordinary project present) does NOT reproduce it and passes either way. */
+    it("REFUSES a promotion that would swallow another project", () => {
+      const out = roots({
+        recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq", "/Users/demo/onboarding"],
+        agentPaths: ["/Users/demo/acme-app/leasing", "/Users/demo/rfq", "/Users/demo/onboarding"],
       });
-      expect(roots[0]).toBe("/z/zzz");
-    }
+      expect(out).not.toContain("/Users/demo");
+      expect(out).toHaveLength(3);
+    });
+
+    /* Stated because it is a real limit, not a covered case. The guard asks
+       "would this swallow a project", so a directory holding only agent folders
+       and no other project DOES become the project. Right everywhere except a
+       home directory, and a home directory in practice always holds another
+       project, which is what makes the guard fire. A depth floor was considered
+       and rejected: every threshold that saves `/Users/demo` also breaks a
+       legitimate two-segment root. */
+    it("does promote into a bare parent when there is no project to swallow, the known limit of the guard", () => {
+      expect(roots({ recentDirs: ["/a/x", "/a/y"], agentPaths: ["/a/x", "/a/y"] })).toEqual(["/a"]);
+    });
+
+    it("keeps an agent at the filesystem root: an agent that exists and nothing shows is the worse answer", () => {
+      expect(roots({ recentDirs: ["/solo"], agentPaths: ["/solo"] })).toEqual(["/solo"]);
+    });
   });
 
-  it("keeps several pending folders in creation order, newest first", () => {
-    const roots = projectRoots({
-      recentDirs: [],
-      sessions: [],
-      pendingCwds: ["/a/second", "/a/first"],
-      sort: "name",
+  describe("order", () => {
+    it("keeps recentDirs order under 'recent' (it is the MRU list)", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/three", "/a/one", "/a/two"],
+          agentPaths: ["/a/three/x", "/a/one/x", "/a/two/x"],
+        }),
+      ).toEqual(["/a/three", "/a/one", "/a/two"]);
     });
-    expect(roots).toEqual(["/a/second", "/a/first"]);
-  });
 
-  it("does not render one folder twice because two sources spell it differently", () => {
-    const roots = projectRoots({
-      recentDirs: ["/a/one"],
-      sessions: [at("/a/one/", "2026-01-01T00:00:00.000Z")],
-      pendingCwds: [],
-      sort: "recent",
+    it("falls back to newest session activity for folders recentDirs has not recorded", () => {
+      expect(
+        roots({
+          sessions: [
+            at("/a/old", "2026-01-01T00:00:00.000Z"),
+            at("/a/new", "2026-02-01T00:00:00.000Z"),
+          ],
+          agentPaths: ["/a/old/x", "/a/new/x"],
+        }),
+      ).toEqual(["/a/new", "/a/old"]);
     });
-    expect(roots).toEqual(["/a/one"]);
-  });
 
-  it("keeps a nested root alongside its parent — two roots are two contexts", () => {
-    const roots = projectRoots({
-      recentDirs: ["/a/one", "/a/one/services/workers"],
-      sessions: [],
-      pendingCwds: [],
-      sort: "recent",
+    it("ranks a recentDirs entry above one only session activity knows", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/known"],
+          sessions: [at("/a/seen", "2099-01-01T00:00:00.000Z")],
+          agentPaths: ["/a/known/x", "/a/seen/x"],
+        }),
+      ).toEqual(["/a/known", "/a/seen"]);
     });
-    expect(roots).toEqual(["/a/one", "/a/one/services/workers"]);
+
+    it("sorts A-Z by basename under 'name'", () => {
+      expect(
+        roots({
+          recentDirs: ["/z/beta", "/a/alpha"],
+          agentPaths: ["/z/beta/x", "/a/alpha/x"],
+          sort: "name",
+        }),
+      ).toEqual(["/a/alpha", "/z/beta"]);
+    });
+
+    it("floats a folder mid-creation above every real project, on either sort", () => {
+      for (const sort of ["recent", "name"] as const) {
+        expect(
+          roots({
+            recentDirs: ["/a/aaa"],
+            pendingCwds: ["/z/zzz"],
+            agentPaths: ["/a/aaa/x"],
+            sort,
+          })[0],
+        ).toBe("/z/zzz");
+      }
+    });
+
+    it("keeps several pending folders in creation order, newest first", () => {
+      expect(roots({ pendingCwds: ["/a/second", "/a/first"], sort: "name" })).toEqual([
+        "/a/second",
+        "/a/first",
+      ]);
+    });
+
+    it("a PROMOTED row inherits the recency of the entry that produced it", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/newer/agent", "/a/older"],
+          agentPaths: ["/a/newer/agent", "/a/older/x"],
+        }),
+      ).toEqual(["/a/newer", "/a/older"]);
+    });
+
+    it("does not render one folder twice because two sources spell it differently", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/one"],
+          sessions: [at("/a/one/", "2026-01-01T00:00:00.000Z")],
+          agentPaths: ["/a/one/x"],
+        }),
+      ).toEqual(["/a/one"]);
+    });
+
+    it("keeps a nested root alongside its parent when BOTH were chosen: two contexts", () => {
+      expect(
+        roots({
+          recentDirs: ["/a/one", "/a/one/services/workers"],
+          agentPaths: ["/a/one/x", "/a/one/services/workers/y"],
+        }),
+      ).toEqual(["/a/one", "/a/one/services/workers"]);
+    });
   });
 });
 

@@ -174,7 +174,17 @@ test.describe("the root-agent merge", () => {
       "workflow-dashboard-keeper",
     );
     await expect(row).toHaveClass(/workflow-item/);
+    /* THE ROW IS THE AGENT, so its own click focuses the agent. This used to
+       assert `is-selected`, the PROJECT selection, because `workspaceKey` won
+       the onClick unconditionally: a root-agent row always opened a dependency
+       graph that had exactly one node in it, and the only way to reach the
+       agent was to click that node. "I have to click that in order to see my
+       agent" was this line. */
     await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(row).toHaveClass(/is-focused/);
+    // The graph is not lost, it moves to its own control on the same row, which
+    // renders only where the row's click is spoken for.
+    await page.getByTestId("project-map-dashboard-keeper").click();
     await expect(row).toHaveClass(/is-selected/);
     await expect(
       page.getByTestId("system-graph-node-dashboard-keeper"),

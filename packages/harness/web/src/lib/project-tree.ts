@@ -495,26 +495,84 @@ export interface ProjectRootSources {
    *  newest first, already deduped and pruned of dead paths at every boot. */
   recentDirs: readonly string[];
   /** Session cwds widen the candidate set for folders `recentDirs` has not yet
-   *  recorded, and carry the recency signal for them. */
-  sessions: readonly { cwd: string; createdAt: string }[];
+   *  recorded, and carry the recency signal for them. `status` separates the
+   *  two very different claims a cwd can make: see rule 2. */
+  sessions: readonly { cwd: string; createdAt: string; status?: string }[];
   /** Folders whose agent is mid-creation: known before any session or agent
    *  exists under them. */
   pendingCwds: readonly string[];
+  /**
+   * Every registered agent's OWN directory.
+   *
+   * Required, not optional. The rule below cannot be stated without it, and a
+   * caller that forgets it would silently get the old accumulating behaviour
+   * back with every test still green.
+   */
+  agentPaths: readonly string[];
   sort: RailSort;
 }
 
 /**
- * The ordered list of project roots.
+ * THE ORDERED LIST OF PROJECT ROOTS.
  *
- * There is NO migration: every existing `recentDirs` entry and session cwd
- * becomes a project on upgrade. Nothing is silently discarded and no first-run
- * flow is needed — the answer to accumulation is a normal "remove project"
- * affordance, not a one-time cleanup nobody can audit.
+ * One sentence governs this whole function:
+ *
+ *     A PROJECT IS A DIRECTORY YOU CHOSE THAT HOLDS AGENTS.
+ *
+ * Two clauses, and dropping either one is what filled a real rail. Measured
+ * against a captured `~/.sapiom/harness` (`org-dogfood.json` in the design
+ * prototype: 75 agents, 8 recentDirs, 41 distinct session cwds), the sources
+ * below offer 41 candidate roots and this function returns 8.
+ *
+ * RULE 1, "you chose": an agent's OWN directory is not a project. The project
+ * is the directory that HOLDS agents; the agent is the thing inside it. A root
+ * that is itself a registered agent is a category error, and it is the single
+ * cause of both symptoms a real install shows. Its dependency graph has exactly
+ * one node, because nothing else is inside it. And it renders the agent TWICE
+ * whenever some other open project also contains it, once correctly nested and
+ * once again at top level under a different label, because `buildProjectTree`
+ * deliberately files an agent under EVERY root that contains it. Three agents
+ * were on screen twice this way on one real machine. So an agent-rooted entry
+ * whose agent another project already shows is dropped, and one nothing shows
+ * is replaced by its nearest non-agent ancestor.
+ *
+ * This is not a new rule. `project-membership.agentNeedsOwnProject` has
+ * enforced it on every NEW registration since the accumulation was diagnosed:
+ * "an agent an open project already contains needs nothing remembered". It was
+ * simply never applied to the entries already in the list, so the guard stopped
+ * the bleeding and left the wound. Applying one rule in one direction only is
+ * why SAP-2927 looked complete while the rail still looked broken.
+ *
+ * RULE 2, "that holds agents": a folder known ONLY because a session ran there
+ * earns a row only if it holds an agent no other project already shows, OR a
+ * session is LIVE in it. "A session ran here once and exited" and "something is
+ * running here right now" are different claims, and collapsing them cost a real
+ * case immediately: a bare scaffold session, a live session in a folder with no
+ * agent yet, is exactly how you start an agent in an empty folder, and dropping
+ * its row makes a running session unreachable from the rail.
+ * `recentDirs` is chosen and capped at 8; session cwds are neither, which is
+ * why the second list has to earn its rows and the first does not. Two failures
+ * collapse into that one clause. A visited folder with no agent is not a
+ * project, while an empty project you OPENED keeps its row, because opening a
+ * folder in order to build the first agent in it is the whole point of that
+ * row. And a visited folder INSIDE a project you already opened is not a second
+ * context: `~/polsia` and `~/polsia/services/workers` are two useful views of
+ * one agent when you opened both, and the same agent printed twice when the
+ * inner row is merely where a session happened to start.
+ *
+ * NOTHING IS DELETED. Both rules are derivational: `recentDirs` on disk is
+ * untouched and any folder is one "Add a project" away from coming back. That
+ * is what makes this safe to apply to an install nobody audited, and why it
+ * needs no migration, no first-run flow and no undo. The design's original "no
+ * migration, every entry becomes a project" rule is kept in spirit and dropped
+ * in letter: nothing a user had disappears, but residue of a fixed bug stops
+ * being rendered as a choice they made.
  */
 export function projectRoots({
   recentDirs,
   sessions,
   pendingCwds,
+  agentPaths,
   sort,
 }: ProjectRootSources): string[] {
   // Newest activity per directory, for folders `recentDirs` has not heard of.
@@ -537,24 +595,123 @@ export function projectRoots({
     candidates.push(dir);
   }
 
+  const agentDirs = new Set(agentPaths.map(canonical));
+  const isAgentDir = (dir: string): boolean => agentDirs.has(canonical(dir));
+  // A folder mid-creation is as deliberate an act as opening one, and its agent
+  // does not exist yet, so it can never be an agent directory either. A folder
+  // with a LIVE session counts too: you are working in it right now, which is a
+  // stronger claim than any list of remembered paths.
+  const liveCwds = sessions
+    .filter((session) => session.status !== undefined && session.status !== "exited")
+    .map((session) => session.cwd);
+  const chosen = new Set([...pendingCwds, ...recentDirs, ...liveCwds].map(canonical));
+  const wasChosen = (dir: string): boolean => chosen.has(canonical(dir));
+  const agentsUnder = (root: string): string[] =>
+    agentPaths.filter((path) => isUnder(path, root) && canonical(path) !== canonical(root));
+
+  /** What each surviving root was DERIVED FROM, so a promoted row inherits the
+   *  recency of the entry that produced it rather than sorting as an unknown. */
+  const from = new Map<string, string>();
+  const kept: string[] = [];
+  const holds = (root: string): boolean => kept.some((held) => canonical(held) === canonical(root));
+
+  // The folders the user CHOSE, unconditionally and in order. `recentDirs` is a
+  // list of deliberate acts; second-guessing it is how a rail starts hiding a
+  // project somebody opened on purpose.
+  for (const dir of candidates) {
+    if (!wasChosen(dir) || isAgentDir(dir)) continue;
+    kept.push(dir);
+    from.set(canonical(dir), dir);
+  }
+
+  /* RULE 2, over the session-only folders, SHALLOWEST FIRST.
+     The order is load-bearing, not tidiness. Taken in candidate order an inner
+     folder is reached before the outer one that would have explained it, and so
+     keeps a row it does not need: a captured install kept
+     `harness-e2e/projects/research-micro-site-<hash>` as its own project and
+     then added `harness-e2e` above it, printing both of its agents twice.
+     Shallowest first means the outermost folder that explains an agent wins and
+     every folder below it is measured against a list that already holds it. */
+  const sessionOnly = candidates
+    .filter((dir) => !wasChosen(dir) && !isAgentDir(dir))
+    .sort(
+      (a, b) =>
+        canonical(a).split("/").length - canonical(b).split("/").length ||
+        a.localeCompare(b),
+    );
+  for (const dir of sessionOnly) {
+    const under = agentsUnder(dir);
+    if (under.length === 0) continue;
+    if (under.every((path) => kept.some((root) => isUnder(path, root)))) continue;
+    kept.push(dir);
+    from.set(canonical(dir), dir);
+  }
+
+  // RULE 1, over the agent-rooted entries, in candidate order so the result is
+  // deterministic. `kept` grows as promotions land, so a later entry can be
+  // absorbed by an earlier one's promotion.
+  for (const dir of candidates) {
+    if (!isAgentDir(dir)) continue;
+    if (kept.some((root) => isUnder(dir, root) && canonical(root) !== canonical(dir))) continue;
+    let parent = parentOf(dir);
+    while (parent && isAgentDir(parent)) parent = parentOf(parent);
+    // NEVER PROMOTE INTO A FILESYSTEM ROOT. `paths.parentOf` answers `/` (and
+    // `C:\`) rather than null there, deliberately, so that every result stays
+    // a listable path. Taken literally here it turns an agent at `/solo` into a
+    // project called `/` holding the entire disk, which is the swallowing case
+    // in its most extreme form and is not caught by the guard below, because at
+    // that point there is no other project to swallow yet.
+    if (parent !== null && parentOf(parent) === null) parent = null;
+    /* A PROMOTION MAY NOT CREATE A PROJECT THAT CONTAINS ANOTHER PROJECT.
+       Without this guard the clean demo fixture, whose roots are agent folders
+       sitting beside an ordinary project under one home directory, promoted
+       them all to `/Users/demo` and produced a single project called `demo`
+       holding every other project, with every agent inside it rendered twice.
+       That is the duplicate-agent rendering this rule exists to remove,
+       re-created by the repair.
+       Refusing is safe: the folder stays its own root and renders as a project
+       with its agent nested inside, which is what opening an agent's folder
+       honestly means. Only a promotion that gathers genuinely scattered agents
+       survives, which on the captured install was one folder holding eight.
+       KNOWN LIMIT, stated rather than papered over: a directory holding nothing
+       but agent folders and no other project DOES become the project. That is
+       right everywhere except a home directory, and a home directory in
+       practice always holds another project, which is what makes the guard
+       fire. A depth floor was considered and rejected, because every threshold
+       that saves `/Users/demo` also breaks a legitimate two-segment root. */
+    const swallowsAProject =
+      parent !== null &&
+      kept.some((held) => isUnder(held, parent!) && canonical(held) !== canonical(parent!));
+    // An agent at the filesystem root has nothing to be promoted into. Keeping
+    // it is the honest answer: the alternative is an agent that exists and
+    // nothing shows.
+    const root = parent === null || swallowsAProject ? dir : parent;
+    if (holds(root)) continue;
+    kept.push(root);
+    from.set(canonical(root), dir);
+  }
+
   const pendingRank = new Map(pendingCwds.map((cwd, index) => [canonical(cwd), index]));
   const recentRank = new Map(recentDirs.map((dir, index) => [canonical(dir), index]));
+  /** Rank and recency are asked of the ENTRY a row came from, so a promoted
+   *  parent sorts where the agent that produced it sorted. */
+  const source = (root: string): string => from.get(canonical(root)) ?? root;
 
   const byRecency = (a: string, b: string): number => {
-    const ia = recentRank.get(canonical(a)) ?? -1;
-    const ib = recentRank.get(canonical(b)) ?? -1;
+    const ia = recentRank.get(canonical(source(a))) ?? -1;
+    const ib = recentRank.get(canonical(source(b))) ?? -1;
     if (ia >= 0 && ib >= 0) return ia - ib;
     if (ia >= 0 || ib >= 0) return ia >= 0 ? -1 : 1;
-    return (newestByCwd.get(canonical(b)) ?? "").localeCompare(
-      newestByCwd.get(canonical(a)) ?? "",
+    return (newestByCwd.get(canonical(source(b))) ?? "").localeCompare(
+      newestByCwd.get(canonical(source(a))) ?? "",
     );
   };
 
-  return candidates.sort((a, b) => {
+  return kept.sort((a, b) => {
     // A folder mid-creation outranks everything, on either sort — the user's
     // attention is on it. Among several pending folders, newest first.
-    const ra = pendingRank.get(canonical(a));
-    const rb = pendingRank.get(canonical(b));
+    const ra = pendingRank.get(canonical(source(a)));
+    const rb = pendingRank.get(canonical(source(b)));
     if (ra !== undefined || rb !== undefined) {
       if (ra !== undefined && rb !== undefined) return ra - rb;
       return ra !== undefined ? -1 : 1;
@@ -601,6 +758,17 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
   };
   return (root: string): string => {
     const parent = parentOf(root);
+    /* NOT ELIDED, deliberately, and this is B2 left open rather than fixed.
+       A project three levels inside another reads
+       `harness/projects/cold-outreach-engine`, which is this rule working as
+       specified and unreadable at that depth: 4 of the 5 clipped rows measured
+       on a captured install were this label. `abbreviate` is the obvious fix
+       and it was reverted, because the rail derives testids from the label
+       (`workspace-group-${label}`, `project-row-`, `project-select-`,
+       `project-disclosure-`), so shortening a label silently renames four
+       testids and broke six specs. The label wants fixing WITH a stable row
+       identity, not before one, and bundling that into this change would hide
+       it inside a rename. Filed. */
     if (parent) return `${basenameOf(parent)}/${segmentsBetween(parent, root).join("/")}`;
     const base = basenameOf(root);
     if ((counts.get(base) ?? 0) < 2) return base;

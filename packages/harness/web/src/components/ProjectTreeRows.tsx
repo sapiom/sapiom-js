@@ -420,33 +420,45 @@ export function ProjectRow({
           "workspace-row-main" + (rootAgent ? " workflow-item-trigger" : "")
         }
         data-testid={mainTestid ?? `project-select-${label}`}
+        /* THE MORE SPECIFIC IDENTITY WINS. `workspaceKey` used to be tested
+           first, so a row whose root IS an agent ALWAYS opened the project
+           graph and never the agent, and that graph had exactly one node
+           because nothing else lives in that folder. "I have to click that in
+           order to see my agent" was this expression, and one operator ordering
+           is the whole of it: the two behaviours were both already built and
+           only one was reachable.
+           A row that names an agent opens that agent. A row that names only a
+           project opens the project's graph, which is the one case where the
+           graph is the more specific answer. The map stays reachable on a
+           merged row through the trailing control the rail passes, so nothing
+           is lost, and the two subjects stop competing for one click. */
         onClick={
-          workspaceKey
-            ? () => onSelectProject(workspaceKey, root, label)
-            : focusTarget
-              ? () => onFocusAgent(focusTarget)
+          focusTarget
+            ? () => onFocusAgent(focusTarget)
+            : workspaceKey
+              ? () => onSelectProject(workspaceKey, root, label)
               : undefined
         }
         /* The ABSOLUTE path, matching every other row. The row shows what it
            is; the title answers where it lives. */
         title={root}
         aria-pressed={
-          workspaceKey ? selected : focusTarget && !busy ? isFocused : undefined
+          focusTarget ? (busy ? undefined : isFocused) : workspaceKey ? selected : undefined
         }
         aria-busy={busy ? true : undefined}
         aria-label={
-          workspaceKey
-            ? `Open dependency graph for ${label}`
-            : focusTarget
-              ? `Focus ${label}`
+          focusTarget
+            ? `Focus ${label}`
+            : workspaceKey
+              ? `Open dependency graph for ${label}`
               : undefined
         }
         data-tooltip={
           tooltip ??
-          (workspaceKey
-            ? "Open dependency graph"
-            : focusTarget
-              ? "Focus this agent"
+          (focusTarget
+            ? "Focus this agent"
+            : workspaceKey
+              ? "Open dependency graph"
               : undefined)
         }
       >
@@ -459,10 +471,6 @@ export function ProjectRow({
             its lifecycle is: the right pane's Draft/Deployed pill. */}
       </button>
       {trailing}
-      {/* No per-project `+`. It was hover-only, so the one action a project row
-          offered was invisible at rest — and once sessions are project-scoped,
-          opening a project IS the request. Starting another session is the tab
-          strip's trailing `+`; adding a project is the header's. */}
     </div>
   );
 }

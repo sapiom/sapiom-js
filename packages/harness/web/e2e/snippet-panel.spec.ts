@@ -12,7 +12,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { focusRfqAgentThroughProjectGraph } from "./mock-navigation";
+import { focusRfqAgent } from "./mock-navigation";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
@@ -42,7 +42,7 @@ test.describe("the Code tab follows the BOUND workflow's deploy state", () => {
     // say "no running session for rfq", which described the session rather than
     // the question the tab answers. Selecting it reveals a real board, so the
     // pane is already open.
-    await focusRfqAgentThroughProjectGraph(page);
+    await focusRfqAgent(page);
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
     await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");
 

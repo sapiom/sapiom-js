@@ -12,7 +12,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 import {
-  focusRfqAgentThroughProjectGraph,
+  focusRfqAgent,
   selectMockSessionFromPalette,
 } from "./mock-navigation";
 
@@ -320,7 +320,7 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   // Focusing "rfq" (no live session) does NOT rebind the boot session or start
   // one silently — the main panel shows the honest "start a session" state, so
   // there is no action bar to gate yet.
-  await focusRfqAgentThroughProjectGraph(page);
+  await focusRfqAgent(page);
   await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
   await expect(page.getByTestId("open-agent-empty")).toContainText(
     "No running session for rfq",
@@ -1092,7 +1092,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // rfq-agent has no live session in the fixtures, so focusing rfq cannot
     // render a board (the canvas is served per session). The workbench names
     // the absence and offers the one move; no tab strip renders.
-    await focusRfqAgentThroughProjectGraph(page);
+    await focusRfqAgent(page);
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
     // No session controls render for an agent with no live session.
     await expect(page.getByTestId("session-menu")).toHaveCount(0);
@@ -1153,7 +1153,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
     // Focus rfq and start its session: all four move together to rfq.
-    await focusRfqAgentThroughProjectGraph(page);
+    await focusRfqAgent(page);
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
     await expect(page.getByTestId("workflow-leasing")).not.toHaveClass(
@@ -2024,7 +2024,7 @@ test("a mock session without a bundled canvas doc shows the empty state and neve
 
   // Open rfq and start a session: same-workspace, so it starts in
   // rfq-agent — a session with NO bundled demo document.
-  await focusRfqAgentThroughProjectGraph(page);
+  await focusRfqAgent(page);
   await page.getByTestId("open-agent-start-session").click();
   await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
@@ -2175,7 +2175,7 @@ test.describe("background-task canvas states", () => {
     // ...and switching the subject mid-run (open rfq, then start its session)
     // hides it again: the rfq session's pane must not show leasing's
     // enrichment progress.
-    await focusRfqAgentThroughProjectGraph(page);
+    await focusRfqAgent(page);
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toContainText(
       "rfq",
@@ -2389,7 +2389,7 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
   test("undeployed workflow: no deployed pill, Deploy is primary, and Run is gated with the deploy reason", async ({
     page,
   }) => {
-    await focusRfqAgentThroughProjectGraph(page);
+    await focusRfqAgent(page);
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toContainText(
       "rfq",
