@@ -1,4 +1,4 @@
-import type { WorkflowInfo } from "@shared/types";
+import type { SessionStatus, WorkflowInfo } from "@shared/types";
 
 import { displayAgentName } from "./agent-name";
 import { basenameOf, isWithinDir, joinPath, parentOf, stripTrailingSep } from "./paths";
@@ -497,7 +497,7 @@ export interface ProjectRootSources {
   /** Session cwds widen the candidate set for folders `recentDirs` has not yet
    *  recorded, and carry the recency signal for them. `status` separates the
    *  two very different claims a cwd can make: see rule 2. */
-  sessions: readonly { cwd: string; createdAt: string; status?: string }[];
+  sessions: readonly { cwd: string; createdAt: string; status?: SessionStatus }[];
   /** Folders whose agent is mid-creation: known before any session or agent
    *  exists under them. */
   pendingCwds: readonly string[];
@@ -601,8 +601,12 @@ export function projectRoots({
   // does not exist yet, so it can never be an agent directory either. A folder
   // with a LIVE session counts too: you are working in it right now, which is a
   // stronger claim than any list of remembered paths.
+  // `status !== "exited"` is the SAME reading `bareSessionAt` uses, so the row
+  // the rail keeps and the session it offers cannot disagree. An absent status
+  // reads as not live: the only callers that omit it name a folder's recency,
+  // and a missing field must never silently keep a row.
   const liveCwds = sessions
-    .filter((session) => session.status !== undefined && session.status !== "exited")
+    .filter((session) => session.status != null && session.status !== "exited")
     .map((session) => session.cwd);
   const chosen = new Set([...pendingCwds, ...recentDirs, ...liveCwds].map(canonical));
   const wasChosen = (dir: string): boolean => chosen.has(canonical(dir));

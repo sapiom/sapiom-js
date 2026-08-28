@@ -4,8 +4,8 @@ import { expect, type Page } from "@playwright/test";
  * A project whose root is also an agent has one rail row, and that row IS the
  * agent: clicking it focuses the agent.
  *
- * This helper used to be called `focusRfqAgent`, and the
- * name was the defect's own fingerprint. The row's click used to belong to the
+ * This helper used to be called `focusRfqAgentThroughProjectGraph`,
+ * and the name was the defect's own fingerprint. The row's click used to belong to the
  * Project axis unconditionally, so it opened a dependency graph that had
  * exactly one node in it, and the only way to reach the agent was to click that
  * node. Eleven specs went the long way round, which is how a user-visible bug

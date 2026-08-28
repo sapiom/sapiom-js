@@ -28,22 +28,28 @@ const FIX_ORCHESTRATION = "/Users/demo/design-eng-fix/ari/orchestration";
 const unrootedTestids = (page: Page): Promise<string[]> =>
   page
     .locator('[data-testid^="unrooted-agent-"]')
-    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid") ?? ""));
+    .evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-testid") ?? ""),
+    );
 
 /** Every unrooted row's rendered label — prefix and name as the user reads it. */
 const unrootedLabels = (page: Page): Promise<string[]> =>
-  page.locator('[data-testid^="unrooted-agent-"]').evaluateAll((nodes) =>
-    nodes.map(
-      (node) =>
-        `${node.querySelector(".tree-row-prefix")?.textContent ?? ""}/${
-          node.querySelector(".tree-row-label")?.textContent ?? ""
-        }`,
-    ),
-  );
+  page
+    .locator('[data-testid^="unrooted-agent-"]')
+    .evaluateAll((nodes) =>
+      nodes.map(
+        (node) =>
+          `${node.querySelector(".tree-row-prefix")?.textContent ?? ""}/${
+            node.querySelector(".tree-row-label")?.textContent ?? ""
+          }`,
+      ),
+    );
 
 const expand = async (page: Page): Promise<void> => {
   await page.getByTestId("unrooted-header").click();
-  await expect(page.locator('[data-testid^="unrooted-agent-"]').first()).toBeVisible();
+  await expect(
+    page.locator('[data-testid^="unrooted-agent-"]').first(),
+  ).toBeVisible();
 };
 
 test.beforeEach(async ({ page }) => {
@@ -53,29 +59,43 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("(d) the section is BOUNDED", () => {
-  test("it is closed by default and names how many it is holding", async ({ page }) => {
+  test("it is closed by default and names how many it is holding", async ({
+    page,
+  }) => {
     await expect(page.getByTestId("unrooted-count")).toHaveText("24");
-    await expect(page.locator('[data-testid^="unrooted-agent-"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="unrooted-agent-"]')).toHaveCount(
+      0,
+    );
   });
 
   test("it renders LAST — after every project", async ({ page }) => {
     await expand(page);
     const order = await page
-      .locator('.rail-list [data-testid^="project-row-"], .rail-list [data-testid="unrooted-section"]')
-      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid") ?? ""));
+      .locator(
+        '.rail-list [data-testid^="project-row-"], .rail-list [data-testid="unrooted-section"]',
+      )
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute("data-testid") ?? ""),
+      );
     expect(order.length).toBeGreaterThan(1);
     expect(order[order.length - 1]).toBe("unrooted-section");
   });
 
-  test("the fold survives a reload, in its own key namespace", async ({ page }) => {
+  test("the fold survives a reload, in its own key namespace", async ({
+    page,
+  }) => {
     await expand(page);
     await page.reload();
-    await expect(page.locator('[data-testid^="unrooted-agent-"]').first()).toBeVisible();
+    await expect(
+      page.locator('[data-testid^="unrooted-agent-"]').first(),
+    ).toBeVisible();
     expect(
       await page.evaluate(
         () =>
           (
-            JSON.parse(localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}") as {
+            JSON.parse(
+              localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}",
+            ) as {
               collapsedKeys?: string[];
             }
           ).collapsedKeys ?? [],
@@ -99,7 +119,9 @@ test.describe("(d) the section is BOUNDED", () => {
    * the flood have to be on screen together, which is the shape the real
    * install had and no round-1 fixture did.
    */
-  test("switching to the Group axis changes the VISIBLE rail", async ({ page }) => {
+  test("switching to the Group axis changes the VISIBLE rail", async ({
+    page,
+  }) => {
     const visible = (): Promise<string[]> =>
       page.evaluate(() => {
         const list = document.querySelector(".rail-list");
@@ -120,15 +142,15 @@ test.describe("(d) the section is BOUNDED", () => {
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
-    // The title stays "Projects" on BOTH axes: the rail lists projects either
-  // way and the axis only changes their arrangement, so swapping it announced
-  // a subject that had not changed. The axis is stated on the Group-by control.
-  await expect(page.locator(".rail-header-label")).toHaveText("Projects");
+    // "Projects" on both axes. Rationale at group-axis.spec.ts's openGroupAxis.
+    await expect(page.locator(".rail-header-label")).toHaveText("Projects");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
 
     const after = await visible();
     expect(after).not.toEqual(before);
-    expect(after.filter((id) => id.startsWith("group-row-")).length).toBeGreaterThan(0);
+    expect(
+      after.filter((id) => id.startsWith("group-row-")).length,
+    ).toBeGreaterThan(0);
   });
 
   /**
@@ -140,7 +162,9 @@ test.describe("(d) the section is BOUNDED", () => {
    * inside `Ungrouped` — the unrooted section's failure, in a different
    * section, from the same missing rule.
    */
-  test("group-axis rows disambiguate two agents that share a name", async ({ page }) => {
+  test("group-axis rows disambiguate two agents that share a name", async ({
+    page,
+  }) => {
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
@@ -166,9 +190,15 @@ test.describe("(d) the section is BOUNDED", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
     const order = await page
-      .locator('.rail-list [data-testid^="group-row-"], .rail-list [data-testid="unrooted-section"]')
-      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid") ?? ""));
-    expect(order.filter((id) => id.startsWith("group-row-")).length).toBeGreaterThan(0);
+      .locator(
+        '.rail-list [data-testid^="group-row-"], .rail-list [data-testid="unrooted-section"]',
+      )
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute("data-testid") ?? ""),
+      );
+    expect(
+      order.filter((id) => id.startsWith("group-row-")).length,
+    ).toBeGreaterThan(0);
     expect(order[order.length - 1]).toBe("unrooted-section");
   });
 });
@@ -192,18 +222,26 @@ test.describe("(a) every row's absolute path is reachable by HOVER", () => {
     await expect(page.locator(".app-tooltip")).toHaveText(ORCHESTRATION);
   });
 
-  test("and the title attribute is the absolute path on EVERY unrooted row", async ({ page }) => {
+  test("and the title attribute is the absolute path on EVERY unrooted row", async ({
+    page,
+  }) => {
     await expand(page);
     const titles = await page
       .locator('[data-testid^="unrooted-agent-"] [title]')
-      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("title") ?? ""));
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute("title") ?? ""),
+      );
     expect(titles).toHaveLength(24);
-    expect(titles.every((title) => title.startsWith("/Users/demo/"))).toBe(true);
+    expect(titles.every((title) => title.startsWith("/Users/demo/"))).toBe(
+      true,
+    );
   });
 });
 
 test.describe("(b) same-named rows are told apart", () => {
-  test("24 rows, 24 distinct labels — the six worktrees grow leftward", async ({ page }) => {
+  test("24 rows, 24 distinct labels — the six worktrees grow leftward", async ({
+    page,
+  }) => {
     await expand(page);
     const labels = await unrootedLabels(page);
     expect(labels).toHaveLength(24);
@@ -213,7 +251,9 @@ test.describe("(b) same-named rows are told apart", () => {
     expect(labels).toContain("design-agent-port-pin/ari/ari-grade-repo");
   });
 
-  test("only the colliding rows pay: a unique name keeps ONE parent segment", async ({ page }) => {
+  test("only the colliding rows pay: a unique name keeps ONE parent segment", async ({
+    page,
+  }) => {
     await expand(page);
     expect(await unrootedLabels(page)).toContain("pkg1/filler-1");
   });
@@ -225,15 +265,21 @@ test.describe("(b) same-named rows are told apart", () => {
     expect(labels).toContain("other-tools/slack-notifier");
   });
 
-  test("24 rows, 24 distinct testids — a test can address the row it means", async ({ page }) => {
+  test("24 rows, 24 distinct testids — a test can address the row it means", async ({
+    page,
+  }) => {
     await expand(page);
     const ids = await unrootedTestids(page);
     expect(ids).toHaveLength(24);
     expect(new Set(ids).size).toBe(24);
     // Round 1 gave all six `workflow-ari-grade-repo`, so `getByTestId` was
     // strict-mode-ambiguous or silently resolved to whichever came first.
-    await expect(page.getByTestId(`unrooted-agent-${ORCHESTRATION}`)).toHaveCount(1);
-    await expect(page.getByTestId(`unrooted-agent-${FIX_ORCHESTRATION}`)).toHaveCount(1);
+    await expect(
+      page.getByTestId(`unrooted-agent-${ORCHESTRATION}`),
+    ).toHaveCount(1);
+    await expect(
+      page.getByTestId(`unrooted-agent-${FIX_ORCHESTRATION}`),
+    ).toHaveCount(1);
   });
 
   test("the prefix and the name are ONE flex child, separator outside the truncating span", async ({
@@ -242,8 +288,12 @@ test.describe("(b) same-named rows are told apart", () => {
     // [SEEN] rule 2. A clipped prefix that loses its separator reads as one
     // word where there were two things.
     await expand(page);
-    const row = page.getByTestId(`unrooted-agent-${ORCHESTRATION}`).locator(".tree-row-name");
-    const shape = await row.evaluate((node) => [...node.children].map((child) => child.className));
+    const row = page
+      .getByTestId(`unrooted-agent-${ORCHESTRATION}`)
+      .locator(".tree-row-name");
+    const shape = await row.evaluate((node) =>
+      [...node.children].map((child) => child.className),
+    );
     expect(shape).toEqual([
       "tree-row-prefix",
       // `-loose`: `ari-grade-repo` lives in a folder called `orchestration`, so
@@ -263,7 +313,9 @@ test.describe("(b) same-named rows are told apart", () => {
    * `prefix/name` is only a real path tail when the agent's folder is named for
    * the agent — so the slash appears only then.
    */
-  test("the separator is a slash ONLY when prefix + name is a real path", async ({ page }) => {
+  test("the separator is a slash ONLY when prefix + name is a real path", async ({
+    page,
+  }) => {
     await expand(page);
     // `slack-notifier` lives in a folder called `slack-notifier`: a real tail.
     await expect(
@@ -273,40 +325,57 @@ test.describe("(b) same-named rows are told apart", () => {
     ).toHaveText("/");
     // `ari-grade-repo` lives in `orchestration`: not a path, so not a slash.
     await expect(
-      page.getByTestId(`unrooted-agent-${ORCHESTRATION}`).locator(".tree-row-sep"),
+      page
+        .getByTestId(`unrooted-agent-${ORCHESTRATION}`)
+        .locator(".tree-row-sep"),
     ).toHaveText("·");
   });
 });
 
 test.describe("(c) there is a way OUT", () => {
-  test("the folder chooser names each candidate and how many agents it takes", async ({ page }) => {
+  test("the folder chooser names each candidate and how many agents it takes", async ({
+    page,
+  }) => {
     await expand(page);
     await page.getByTestId(`unrooted-open-${ORCHESTRATION}`).click();
     const choices = await page
       .locator('[data-testid^="unrooted-open-choice-"]')
-      .evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).innerText.replace(/\n/g, " ")));
+      .evaluateAll((nodes) =>
+        nodes.map((node) =>
+          (node as HTMLElement).innerText.replace(/\n/g, " "),
+        ),
+      );
     // The agent's OWN folder leads — the honest default, and the one
     // `projectRootForAgent` falls back to. The count is what makes the wider
     // choices decidable rather than a guess.
     expect(choices[0]).toContain("orchestration");
     expect(choices[0]).toContain("1 agent");
-    expect(choices.some((choice) => choice.includes("design-eng") && choice.includes("2 agents"))).toBe(
-      true,
-    );
+    expect(
+      choices.some(
+        (choice) =>
+          choice.includes("design-eng") && choice.includes("2 agents"),
+      ),
+    ).toBe(true);
   });
 
-  test("opening a folder files the agents under it and shrinks the section", async ({ page }) => {
+  test("opening a folder files the agents under it and shrinks the section", async ({
+    page,
+  }) => {
     await expand(page);
     await expect(page.getByTestId("unrooted-count")).toHaveText("24");
 
     await page.getByTestId(`unrooted-open-${ORCHESTRATION}`).click();
-    await page.getByTestId("unrooted-open-choice-/Users/demo/design-eng").click();
+    await page
+      .getByTestId("unrooted-open-choice-/Users/demo/design-eng")
+      .click();
 
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
     // `ari-grade-repo` AND `brain-agent` both live under `design-eng`, so both
     // leave the section — which is the point of choosing the wider folder.
     await expect(page.getByTestId("unrooted-count")).toHaveText("22");
-    await expect(page.getByTestId(`unrooted-agent-${ORCHESTRATION}`)).toHaveCount(0);
+    await expect(
+      page.getByTestId(`unrooted-agent-${ORCHESTRATION}`),
+    ).toHaveCount(0);
   });
 
   /**
@@ -323,7 +392,9 @@ test.describe("(c) there is a way OUT", () => {
   test("the new project is remembered, not just rendered", async ({ page }) => {
     await expand(page);
     await page.getByTestId(`unrooted-open-${ORCHESTRATION}`).click();
-    await page.getByTestId("unrooted-open-choice-/Users/demo/design-eng").click();
+    await page
+      .getByTestId("unrooted-open-choice-/Users/demo/design-eng")
+      .click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
 
     await page.getByTestId("history-trigger").click();
@@ -338,10 +409,14 @@ test.describe("(c) there is a way OUT", () => {
    * move from one state to the other" is the user's own description of the
    * defect, and a removal with no way back is a data-loss shape in the UI.
    */
-  test("project → removed → outside your projects → project again", async ({ page }) => {
+  test("project → removed → outside your projects → project again", async ({
+    page,
+  }) => {
     await expand(page);
     await page.getByTestId(`unrooted-open-${ORCHESTRATION}`).click();
-    await page.getByTestId("unrooted-open-choice-/Users/demo/design-eng").click();
+    await page
+      .getByTestId("unrooted-open-choice-/Users/demo/design-eng")
+      .click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
     await expect(page.getByTestId("unrooted-count")).toHaveText("22");
 
@@ -353,7 +428,9 @@ test.describe("(c) there is a way OUT", () => {
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("project-row-design-eng")).toHaveCount(0);
     await expect(page.getByTestId("unrooted-count")).toHaveText("22");
-    await expect(page.getByTestId(`unrooted-agent-${ORCHESTRATION}`)).toHaveCount(0);
+    await expect(
+      page.getByTestId(`unrooted-agent-${ORCHESTRATION}`),
+    ).toHaveCount(0);
 
     // …and back in, from the header `+` on the very folder that was removed.
     // This is the assertion that matters most: `hiddenByClosedProject` refuses
@@ -370,7 +447,9 @@ test.describe("(c) there is a way OUT", () => {
       await page.evaluate(
         () =>
           (
-            JSON.parse(localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}") as {
+            JSON.parse(
+              localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}",
+            ) as {
               closedProjects?: string[];
             }
           ).closedProjects ?? [],

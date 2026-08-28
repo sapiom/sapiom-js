@@ -382,10 +382,8 @@ test.describe("persistence", () => {
 
   test("the axis choice itself survives a reload", async ({ page }) => {
     await page.reload();
-    // The title stays "Projects" on BOTH axes: the rail lists projects either
-  // way and the axis only changes their arrangement, so swapping it announced
-  // a subject that had not changed. The axis is stated on the Group-by control.
-  await expect(page.locator(".rail-header-label")).toHaveText("Projects");
+    // "Projects" on both axes. Rationale at openGroupAxis, above.
+    await expect(page.locator(".rail-header-label")).toHaveText("Projects");
     await page.getByTestId("history-trigger").click();
     await expect(page.getByTestId("filing-group-by")).toHaveValue("group");
   });

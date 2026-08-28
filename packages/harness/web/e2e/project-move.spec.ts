@@ -43,7 +43,11 @@ test.beforeEach(async ({ page }) => {
  * `page.dragTo` moves a mouse and carries no dataTransfer, which is where this
  * feature's whole payload lives.
  */
-async function dragAgent(page: Page, source: Locator, target: Locator): Promise<void> {
+async function dragAgent(
+  page: Page,
+  source: Locator,
+  target: Locator,
+): Promise<void> {
   const sourceHandle = await source.elementHandle();
   const targetHandle = await target.elementHandle();
   expect(sourceHandle, "drag source is on screen").not.toBeNull();
@@ -72,17 +76,25 @@ async function dragAgent(page: Page, source: Locator, target: Locator): Promise<
 async function pathsOnScreen(page: Page): Promise<string[]> {
   const titles = await page
     .locator(".rail-list [title]")
-    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("title") ?? ""));
-  return [...new Set(titles.filter((title) => title.startsWith("/Users/demo")))].sort();
+    .evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("title") ?? ""),
+    );
+  return [
+    ...new Set(titles.filter((title) => title.startsWith("/Users/demo"))),
+  ].sort();
 }
 
 /** Every move the rail actually DISPATCHED to the mover this page load. */
-const dispatchedMoves = (page: Page): Promise<Array<{ from: string; to: string }>> =>
+const dispatchedMoves = (
+  page: Page,
+): Promise<Array<{ from: string; to: string }>> =>
   page
     .evaluate(
       () =>
-        (window as unknown as { __HARNESS_TEST__?: { agentMoves?: unknown } }).__HARNESS_TEST__
-          ?.agentMoves as Array<{ from: string; to: string }> | undefined,
+        (window as unknown as { __HARNESS_TEST__?: { agentMoves?: unknown } })
+          .__HARNESS_TEST__?.agentMoves as
+          | Array<{ from: string; to: string }>
+          | undefined,
     )
     .then((moves) => moves ?? []);
 
@@ -104,24 +116,44 @@ test.describe("a move", () => {
     expect(before).toContain(`${ROOT}/scripts/tools/rollup`);
     // Its whole unbranched chain is compacted onto its own row as the prefix
     // `tools`, which is the context that has to CHANGE when it moves.
-    await expect(page.getByTestId("workflow-prefix-/Users/demo/polsia/scripts/tools/rollup")).toHaveText("tools");
+    await expect(
+      page.getByTestId(
+        "workflow-prefix-/Users/demo/polsia/scripts/tools/rollup",
+      ),
+    ).toHaveText("tools");
 
-    await dragAgent(page, rowIn(page, "rollup"), page.getByTestId("dir-row-services"));
+    await dragAgent(
+      page,
+      rowIn(page, "rollup"),
+      page.getByTestId("dir-row-services"),
+    );
 
     // The row now says it lives somewhere else — the `title` IS the path.
-    await expect(pathOf(page, "rollup")).toHaveAttribute("title", `${ROOT}/services/rollup`, {
-      timeout: 5_000,
-    });
+    await expect(pathOf(page, "rollup")).toHaveAttribute(
+      "title",
+      `${ROOT}/services/rollup`,
+      {
+        timeout: 5_000,
+      },
+    );
     // And the tree re-derived rather than relabelling: `services` owns its own
     // directory row, so the agent under it needs no prefix at all, and the
     // three-segment `scripts/tools` chain is simply gone from the rail.
-    await expect(page.getByTestId("workflow-prefix-/Users/demo/polsia/scripts/tools/rollup")).toHaveCount(0);
+    await expect(
+      page.getByTestId(
+        "workflow-prefix-/Users/demo/polsia/scripts/tools/rollup",
+      ),
+    ).toHaveCount(0);
     const after = await pathsOnScreen(page);
     expect(after).not.toContain(`${ROOT}/scripts/tools/rollup`);
     expect(after).toContain(`${ROOT}/services/rollup`);
     // Exactly one path changed. Nothing else moved, appeared or vanished.
-    expect(after.filter((p) => !before.includes(p))).toEqual([`${ROOT}/services/rollup`]);
-    expect(before.filter((p) => !after.includes(p))).toEqual([`${ROOT}/scripts/tools/rollup`]);
+    expect(after.filter((p) => !before.includes(p))).toEqual([
+      `${ROOT}/services/rollup`,
+    ]);
+    expect(before.filter((p) => !after.includes(p))).toEqual([
+      `${ROOT}/scripts/tools/rollup`,
+    ]);
 
     // The mover was asked for exactly that move, once.
     expect(await dispatchedMoves(page)).toEqual([
@@ -132,19 +164,31 @@ test.describe("a move", () => {
     await expect(page.getByTestId("toast")).toHaveCount(0);
   });
 
-  test("dropping onto the PROJECT row moves the agent to the project root", async ({ page }) => {
+  test("dropping onto the PROJECT row moves the agent to the project root", async ({
+    page,
+  }) => {
     // The root is a directory like any other, so it is a drop target too —
     // without it there is no way to drag an agent back out to the top level.
-    await dragAgent(page, rowIn(page, "rollup"), page.getByTestId("project-row-polsia"));
-    await expect(pathOf(page, "rollup")).toHaveAttribute("title", `${ROOT}/rollup`, {
-      timeout: 5_000,
-    });
+    await dragAgent(
+      page,
+      rowIn(page, "rollup"),
+      page.getByTestId("project-row-polsia"),
+    );
+    await expect(pathOf(page, "rollup")).toHaveAttribute(
+      "title",
+      `${ROOT}/rollup`,
+      {
+        timeout: 5_000,
+      },
+    );
     expect(await pathsOnScreen(page)).toContain(`${ROOT}/rollup`);
   });
 });
 
 test.describe("a refusal", () => {
-  test("a move onto an EXISTING name is refused with a reason, not a clobber", async ({ page }) => {
+  test("a move onto an EXISTING name is refused with a reason, not a clobber", async ({
+    page,
+  }) => {
     // The branch no fixture could reach until one grew two `ads` directories.
     // `services/workers/ads` dragged into `backend/src/agents`, which already
     // holds an `ads`.
@@ -171,12 +215,19 @@ test.describe("a refusal", () => {
     page,
   }) => {
     const before = await pathsOnScreen(page);
-    await dragAgent(page, rowIn(page, "ads"), page.getByTestId("dir-row-backend/src/agents"));
+    await dragAgent(
+      page,
+      rowIn(page, "ads"),
+      page.getByTestId("dir-row-backend/src/agents"),
+    );
 
     // Silence is the correct feedback: the user let go somewhere harmless.
     // Waited out rather than asserted instantly, so "no toast" cannot pass just
     // by being read before the toast would have rendered.
-    await expect(pathOf(page, "ads")).toHaveAttribute("title", `${ROOT}/backend/src/agents/ads`);
+    await expect(pathOf(page, "ads")).toHaveAttribute(
+      "title",
+      `${ROOT}/backend/src/agents/ads`,
+    );
     await expect(page.getByTestId("toast")).toHaveCount(0);
     expect(await dispatchedMoves(page)).toEqual([]);
     expect(await pathsOnScreen(page)).toEqual(before);
@@ -188,26 +239,36 @@ test.describe("a refusal", () => {
     // synthesized straight onto the drop target with the agent's own path — the
     // same shape a keyboard move or a stale row would produce.
     const before = await pathsOnScreen(page);
-    const target = await page.getByTestId("dir-row-backend/src/agents").elementHandle();
+    const target = await page
+      .getByTestId("dir-row-backend/src/agents")
+      .elementHandle();
     await page.evaluate(
       ([to, agentPath, mime]) => {
         const transfer = new DataTransfer();
         transfer.setData(mime as string, agentPath as string);
-        const init = { dataTransfer: transfer, bubbles: true, cancelable: true };
+        const init = {
+          dataTransfer: transfer,
+          bubbles: true,
+          cancelable: true,
+        };
         // The drop target is `backend/src/agents`, and the payload claims the
         // dragged agent IS that directory's parent chain — a drop inside itself.
         (to as Element).dispatchEvent(new DragEvent("drop", init));
       },
       [target, `${ROOT}/backend/src`, MOVE_MIME] as const,
     );
-    await expect(page.getByTestId("toast")).toContainText("inside itself", { timeout: 5_000 });
+    await expect(page.getByTestId("toast")).toContainText("inside itself", {
+      timeout: 5_000,
+    });
     expect(await dispatchedMoves(page)).toEqual([]);
     expect(await pathsOnScreen(page)).toEqual(before);
   });
 });
 
 test.describe("the payload", () => {
-  test("rides in dataTransfer, and the hover highlight keys on `types`", async ({ page }) => {
+  test("rides in dataTransfer, and the hover highlight keys on `types`", async ({
+    page,
+  }) => {
     const source = rowIn(page, "rollup");
     await expect(source).toHaveAttribute("draggable", "true");
     const target = page.getByTestId("dir-row-services");
@@ -215,7 +276,11 @@ test.describe("the payload", () => {
     const carried = await page.evaluate(
       ([from, to, mime]) => {
         const transfer = new DataTransfer();
-        const init = { dataTransfer: transfer, bubbles: true, cancelable: true };
+        const init = {
+          dataTransfer: transfer,
+          bubbles: true,
+          cancelable: true,
+        };
         (from as Element).dispatchEvent(new DragEvent("dragstart", init));
         // Read on the transfer, not from any component state: `dragstart` and
         // `drop` can land in the same tick, and a state setter has not
@@ -225,7 +290,11 @@ test.describe("the payload", () => {
         (to as Element).dispatchEvent(new DragEvent("dragover", init));
         return { path, types: [...transfer.types] };
       },
-      [await source.elementHandle(), await target.elementHandle(), MOVE_MIME] as const,
+      [
+        await source.elementHandle(),
+        await target.elementHandle(),
+        MOVE_MIME,
+      ] as const,
     );
 
     expect(carried.path).toBe(`${ROOT}/scripts/tools/rollup`);
@@ -233,7 +302,9 @@ test.describe("the payload", () => {
     await expect(target).toHaveClass(/is-drop-target/);
   });
 
-  test("a foreign drag highlights nothing and moves nothing", async ({ page }) => {
+  test("a foreign drag highlights nothing and moves nothing", async ({
+    page,
+  }) => {
     // Without the type check, any dragged file or text selection would light up
     // the tree and imply a move the row cannot perform.
     const target = page.getByTestId("dir-row-services");
@@ -241,7 +312,11 @@ test.describe("the payload", () => {
       ([to]) => {
         const transfer = new DataTransfer();
         transfer.setData("text/plain", "/etc/passwd");
-        const init = { dataTransfer: transfer, bubbles: true, cancelable: true };
+        const init = {
+          dataTransfer: transfer,
+          bubbles: true,
+          cancelable: true,
+        };
         (to as Element).dispatchEvent(new DragEvent("dragover", init));
         (to as Element).dispatchEvent(new DragEvent("drop", init));
       },
@@ -253,19 +328,21 @@ test.describe("the payload", () => {
 });
 
 test.describe("the Group axis", () => {
-  test("moves nothing on disk — its drag carries no move payload at all", async ({ page }) => {
+  test("moves nothing on disk — its drag carries no move payload at all", async ({
+    page,
+  }) => {
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
-    // The title stays "Projects" on BOTH axes: the rail lists projects either
-  // way and the axis only changes their arrangement, so swapping it announced
-  // a subject that had not changed. The axis is stated on the Group-by control.
-  await expect(page.locator(".rail-header-label")).toHaveText("Projects");
+    // "Projects" on both axes. Rationale at group-axis.spec.ts's openGroupAxis.
+    await expect(page.locator(".rail-header-label")).toHaveText("Projects");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
 
     const before = await pathsOnScreen(page);
     const project = page.getByTestId(POLSIA);
-    const source = project.getByTestId("group-section-gateway").getByTestId("group-agent-queue");
+    const source = project
+      .getByTestId("group-section-gateway")
+      .getByTestId("group-agent-queue");
     const target = project.getByTestId("group-row-mailer");
 
     // What its `dragstart` puts on the transfer: an agent and a source group,
@@ -275,7 +352,11 @@ test.describe("the Group axis", () => {
       ([from]) => {
         const transfer = new DataTransfer();
         (from as Element).dispatchEvent(
-          new DragEvent("dragstart", { dataTransfer: transfer, bubbles: true, cancelable: true }),
+          new DragEvent("dragstart", {
+            dataTransfer: transfer,
+            bubbles: true,
+            cancelable: true,
+          }),
         );
         return [...transfer.types];
       },
@@ -288,7 +369,9 @@ test.describe("the Group axis", () => {
     // The drop DID something — membership changed, so this is not a green test
     // over a drag that never happened.
     await expect(
-      project.getByTestId("group-section-mailer").getByTestId("group-agent-queue"),
+      project
+        .getByTestId("group-section-mailer")
+        .getByTestId("group-agent-queue"),
     ).toBeVisible();
     // And nothing on disk moved.
     expect(await dispatchedMoves(page)).toEqual([]);

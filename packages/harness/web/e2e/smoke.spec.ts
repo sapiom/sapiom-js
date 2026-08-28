@@ -11,10 +11,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import {
-  focusRfqAgent,
-  selectMockSessionFromPalette,
-} from "./mock-navigation";
+import { focusRfqAgent, selectMockSessionFromPalette } from "./mock-navigation";
 
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
@@ -664,7 +661,8 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     const subject = page.getByTestId("system-graph-subject");
     const reset = page.getByTestId("system-graph-zoom-reset");
     const viewportBounds = await viewport.boundingBox();
-    if (!viewportBounds) throw new Error("Missing system graph viewport bounds");
+    if (!viewportBounds)
+      throw new Error("Missing system graph viewport bounds");
 
     await viewport.focus();
     await expect(viewport).toBeFocused();

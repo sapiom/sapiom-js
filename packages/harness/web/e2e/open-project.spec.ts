@@ -132,6 +132,13 @@ test.describe("the header + opens a project", () => {
        entry a project already shows. */
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(1);
     await expect(page.getByTestId("project-row-leasing")).toHaveCount(0);
+    /* AND THE PRESS DID SOMETHING. Opening an agent's own folder opens the
+       folder that HOLDS it (`openProject` in use-harness-state), so the project
+       here is `acme-app`. Without that the button was a silent no-op: the
+       picker said "This is an agent project", the user pressed Open, and the
+       rail was unchanged, which is also what would have made the row removal
+       irreversible for exactly these folders. */
+    await expect(page.getByTestId("project-row-acme-app")).toBeVisible();
   });
 });
 

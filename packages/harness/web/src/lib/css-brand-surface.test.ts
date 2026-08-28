@@ -45,7 +45,19 @@ const ALLOWED = new Set([
   ".run-workspace-pending",
   '.run-timeline-row[data-status="running"] .run-timeline-track > span',
   // A focus affordance drawn as a bar, not a surface.
+  /* The 2px resize grabber, in all four of its states. Only the last of these
+     was listed before, because the scanner credited a one-per-line selector
+     group to its final member: the other three were carrying a full-brand
+     background this file could not see. They are the same 2px line and the
+     same indicator; listing them is the honest bookkeeping, and the scanner
+     now reads the whole group. */
+  ".canvas-overview-resize:hover::before",
+  ".canvas-overview-resize:active::before",
+  ".canvas-overview.is-resizing .canvas-overview-resize::before",
   ".canvas-overview-resize:focus-visible::before",
+  /* A 7px status dot, the same kind of glyph as `.session-busy` above, and
+     invisible to the scanner for the same grouping reason. */
+  ".run-workspace-pulse",
   // The project MARK is a badge, not the row. Scoped away from
   // `project-mark-none`, which is the stray-agents header and has no project.
   ".workspace-row.is-selected .project-mark:not(.project-mark-none)",
@@ -58,25 +70,51 @@ describe("brand-coloured surfaces", () => {
     const css = readFileSync(path.resolve(__dirname, "..", "styles.css"), "utf8");
     const lines = css.split("\n");
 
-    // Track the nearest preceding selector line, which is how these rules are
-    // written throughout the file (`selector {` on its own line).
+    /* EVERY MEMBER OF A SELECTOR GROUP, not just the last one.
+       This used to keep the nearest line ending in `{`, so a group written one
+       selector per line recorded only its final member. `.run-workspace-pulse,`
+       / `.run-workspace-pending {` was credited entirely to the allowlisted
+       second name, which means the first already carried a full-brand
+       background this lint could not see, and adding a fifth offender was a
+       one-line insertion above an allowlisted selector. A lint that a one-line
+       edit walks around lets bug five ship the way the first four did. */
     const offenders: string[] = [];
-    let selector = "(top of file)";
+    let group: string[] = ["(top of file)"];
+    let pending: string[] = [];
     for (const raw of lines) {
       const line = raw.trim();
+      const continues = /^([.:#a-zA-Z[][^{}]*?),$/.exec(line);
+      if (continues) {
+        pending.push(continues[1]!.trim());
+        continue;
+      }
       const opens = /^([.:#a-zA-Z[][^{}]*?)\s*\{$/.exec(line);
-      if (opens) selector = opens[1]!.trim();
+      if (opens) {
+        group = [...pending, opens[1]!.trim()];
+        pending = [];
+      } else if (line !== "" && !line.startsWith("/*") && !line.startsWith("*")) {
+        // Anything that is neither a continuation nor an opening brace ends a
+        // half-collected group, so a stray comma cannot leak into the next rule.
+        if (pending.length > 0) pending = [];
+      }
 
-      // Only FULL-strength: `var(--brand)`, `var(--accent)`, `var(--green)` with
-      // no color-mix around them. A wash is exactly the correct fix, so it must
-      // not trip this.
-      if (!/^background:\s*var\(--(?:brand|accent|green)\)\s*;$/.test(line)) continue;
-      // One-liner form: `.sel { background: var(--x); }` on a single line.
-      if (ALLOWED.has(selector)) continue;
-      offenders.push(`${selector} → ${line}`);
+      /* FULL-STRENGTH ONLY, and in every form the file writes it.
+         `background` and `background-color` are the same visual bug, and
+         `var(--brand) no-repeat` is still a solid brand fill, so the shorthand
+         may carry trailing tokens. A `color-mix(...)` wash never matches,
+         because it is the correct fix and must not trip this. */
+      if (
+        !/^background(?:-color)?:\s*var\(--(?:brand|accent|green)\)(?:\s+[^;]*)?;$/.test(line)
+      ) {
+        continue;
+      }
+      const unlisted = group.filter((sel) => !ALLOWED.has(sel));
+      if (unlisted.length === 0) continue;
+      offenders.push(`${unlisted.join(", ")} → ${line}`);
     }
 
-    // Also catch the single-line rule form the file uses in a few places.
+    // The single-line rule form the file uses in a few places:
+    // `.sel { background: var(--x); }` all on one line.
     for (const match of css.matchAll(
       /^\s*([.:#a-zA-Z[][^{}\n]*?)\s*\{\s*background:\s*var\(--(?:brand|accent|green)\)\s*;\s*\}/gm,
     )) {

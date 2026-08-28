@@ -366,9 +366,8 @@ export function ProjectRow({
   drag?: RailDrag;
 }): JSX.Element {
   const agentPath = rootAgent?.workflow.path ?? null;
-  // Project selection takes precedence over the merged root-agent identity:
-  // the row names the project boundary, and its label opens that boundary's
-  // graph. The graph card remains the door into the root agent itself.
+  // The row's identity, and the click that follows from it, are settled at the
+  // onClick below: the more specific subject wins. Nothing here decides it.
   const isFocused =
     (agentPath != null && agentPath === focusedAgentPath) ||
     (focusable && root === focusedAgentPath);

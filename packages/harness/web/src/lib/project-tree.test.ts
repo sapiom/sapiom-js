@@ -21,6 +21,7 @@ import {
   projectRoots,
   unrootedAgents,
 } from "./project-tree";
+import type { SessionStatus } from "@shared/types";
 import type { RailSort } from "./project-tree";
 
 const agent = (path: string, name = path.split("/").pop() ?? path): WorkflowInfo => ({
@@ -395,13 +396,18 @@ describe("growLeftward", () => {
  * is mutation-verified: stub it out and these fail.
  */
 describe("projectRoots", () => {
-  const at = (cwd: string, createdAt: string): { cwd: string; createdAt: string } => ({
+  const at = (
+    cwd: string,
+    createdAt: string,
+    status: SessionStatus = "exited",
+  ): { cwd: string; createdAt: string; status: SessionStatus } => ({
     cwd,
     createdAt,
+    status,
   });
   const roots = (over: {
     recentDirs?: string[];
-    sessions?: { cwd: string; createdAt: string }[];
+    sessions?: { cwd: string; createdAt: string; status?: SessionStatus }[];
     pendingCwds?: string[];
     agentPaths?: string[];
     sort?: RailSort;
@@ -431,6 +437,24 @@ describe("projectRoots", () => {
 
     it("drops a folder known only because a session ran there and holding no agent", () => {
       expect(roots({ sessions: [at("/a/visited", "2026-01-01T00:00:00.000Z")] })).toEqual([]);
+    });
+
+    /* THE LIVE CLAUSE. A bare scaffold session, a live session in a folder with
+       no agent yet, is exactly how you start an agent in an empty folder, and
+       dropping its row makes a running session unreachable from the rail. Both
+       halves are asserted because only the pair pins the distinction: "a
+       session ran here once" and "something is running here now" are different
+       claims about the same cwd. */
+    it("keeps a folder with no agent when a session is LIVE in it", () => {
+      expect(
+        roots({ sessions: [at("/a/bare", "2026-01-01T00:00:00.000Z", "running")] }),
+      ).toEqual(["/a/bare"]);
+    });
+
+    it("drops that same folder once its session has exited", () => {
+      expect(
+        roots({ sessions: [at("/a/bare", "2026-01-01T00:00:00.000Z", "exited")] }),
+      ).toEqual([]);
     });
 
     it("keeps a session-only folder once it actually holds an agent", () => {
