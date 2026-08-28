@@ -10,6 +10,7 @@ no durable-sharing paragraph, no `sapiom_dev_app_publish`, no hosted or REST pub
 surface. It also still described the older single-alias framing of the hosted
 capability MCP, which now lives under its own `sapiom-direct` alias.
 
-The two copies are now byte-identical, and a frozen sha-256 in `instructions.test.ts`
-— the same digest the server-side spec pins for this content release — fails CI on a
-one-sided edit instead of letting them drift silently a third time.
+The two copies are now byte-identical, and `instructions.test.ts` pins their sha-256.
+The server-side spec pins the same value against its own copy, so the next content
+release reddens a spec that names this pin rather than letting the two drift silently
+a third time.

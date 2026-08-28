@@ -9,13 +9,15 @@
  * server's live-fetched copy (a private companion repo) — the two are one
  * canonical text.
  *
- * That rule is now enforced rather than merely stated: instructions.test.ts pins the
- * sha-256 of this string, and the server-side spec freezes the same digest for the
- * matching content release, so editing either copy alone reddens one repo's CI. The
- * guard exists because the rule failed silently for two content releases (SAP-2959):
- * this fallback still described a Sapiom without App Links, which offline sessions —
- * the only ones that read it — were then told did not exist. Changing the primer now
- * means moving both copies and both digests together.
+ * That rule has a machine check now, not just this comment: instructions.test.ts pins
+ * the sha-256 of this string, and the server-side spec pins the same value against its
+ * own current copy — so a content release there reddens a spec that names this pin,
+ * and an in-place edit here reddens ours. Neither can block a merge in the other
+ * repository; what the pair removes is the path where nobody notices. The guard exists
+ * because the rule failed silently for two content releases (SAP-2959): this fallback
+ * still described a Sapiom without App Links, which offline sessions — the only ones
+ * that read it — were then told did not exist. Changing the primer now means moving
+ * both copies and both pins together.
  *
  * Kept intentionally short — it stays in the model's context for the whole session.
  * Deep authoring guidance lives in the scaffold-shipped `sapiom-agent-authoring`

@@ -110,15 +110,21 @@ describe("server instructions", () => {
   it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
     // The `contain` assertions above are what let this copy fall two content
     // releases behind the server without anything going red: each one still
-    // passed against the older text. This is the guard that actually binds the
-    // two copies — the digest is the same frozen value the server-side spec pins
-    // for the matching content release, so a one-sided edit reddens one repo or
-    // the other, with no network call from either test suite.
+    // passed against the older text. This digest is what actually binds the two
+    // copies, and it works from both ends: the server-side spec pins this same
+    // value against ITS current primer, so a content release there reddens that
+    // spec and forces its author onto this pin, while an in-place edit here
+    // reddens this one. Neither suite makes a network call.
+    //
+    // Be honest about the limit: neither pin can block a merge in the other
+    // repository, and an author can still move one side alone. What the pair
+    // removes is the silent path — drifting now takes a deliberate edit to a line
+    // that says what it is for.
     //
     // To change the primer: ship the server-side content release, copy its new
-    // body here verbatim, and update both digests in the same pair of PRs. Never
-    // re-point this digest on its own — that just re-blesses the drift the guard
-    // exists to catch.
+    // body here verbatim, and update both pins to the new digest in the same pair
+    // of PRs. Never re-point this digest on its own — that just re-blesses the
+    // drift the guard exists to catch.
     //
     // Current release: 2.8 (App Links + `sapiom_dev_app_publish`).
     const sha256 = createHash("sha256")
