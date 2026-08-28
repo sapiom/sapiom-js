@@ -119,7 +119,12 @@ import type {
   ActiveSession,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
-import type { LiveCredential, AuthClientLike } from "../google/index.js";
+import type {
+  LiveCredential,
+  AuthClientLike,
+  DrivePermission,
+  DriveFile,
+} from "../google/index.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -1916,6 +1921,27 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               Authorization: "Bearer ya29.stub-google-token",
             }),
         })) as AuthClientLike,
+      // Drive methods run server-side in the gateway in production; the stub returns
+      // shape-faithful, obviously-fake results so an offline run can exercise the call
+      // graph without a Google connector or network call.
+      drive: {
+        shareFile: (args) =>
+          Promise.resolve(
+            r("google.drive.shareFile", [args], () => ({
+              id: "stub-permission-id",
+              type: "user",
+              role: "reader",
+            })) as DrivePermission,
+          ),
+        uploadFile: (args) =>
+          Promise.resolve(
+            r("google.drive.uploadFile", [args], () => ({
+              id: "stub-file-id",
+              name: "stub-file.txt",
+              mimeType: "text/plain",
+            })) as DriveFile,
+          ),
+      },
     },
     speech: {
       textToSpeech: {

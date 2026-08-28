@@ -108,3 +108,70 @@ export function authClient(
     },
   };
 }
+
+/**
+ * Google Drive server-side methods (AGENT-312 / Path 2). Each posts the args to the
+ * gateway's method-dispatch route on the run credential (`x-sapiom-api-key`); the
+ * gateway resolves the tenant's Google credential INTERNALLY and calls Drive — the
+ * Google token NEVER crosses this boundary, only the Drive result comes back. Non-2xx
+ * throws (Transport.request), carrying the gateway body: 404 connector_not_found (connect
+ * Google first), 400 connector_method_invalid_args, 502 connector_method_upstream_failed.
+ */
+export interface DriveShareFileArgs {
+  fileId: string;
+  role: "reader" | "writer" | "commenter" | "owner";
+  type: "user" | "group" | "domain" | "anyone";
+  emailAddress?: string;
+  domain?: string;
+  sendNotificationEmail?: boolean;
+}
+
+export interface DriveUploadFileArgs {
+  name: string;
+  content: string;
+  mimeType?: string;
+  parents?: string[];
+  contentEncoding?: "utf8" | "base64";
+}
+
+export interface DrivePermission {
+  id: string;
+  type: string;
+  role: string;
+}
+
+export interface DriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+}
+
+/** Share a Drive file (Permissions: create), executed server-side in the gateway. */
+export async function driveShareFile(
+  args: DriveShareFileArgs,
+  transport: Transport = defaultTransport(),
+  baseUrl: string = DEFAULT_BASE_URL,
+): Promise<DrivePermission> {
+  return transport.request<DrivePermission>(
+    `${baseUrl}/connectors/v1/google/methods/shareFile`,
+    {
+      method: "POST",
+      body: JSON.stringify(args),
+    },
+  );
+}
+
+/** Upload a new Drive file (Files: create, multipart), executed server-side in the gateway. */
+export async function driveUploadFile(
+  args: DriveUploadFileArgs,
+  transport: Transport = defaultTransport(),
+  baseUrl: string = DEFAULT_BASE_URL,
+): Promise<DriveFile> {
+  return transport.request<DriveFile>(
+    `${baseUrl}/connectors/v1/google/methods/uploadFile`,
+    {
+      method: "POST",
+      body: JSON.stringify(args),
+    },
+  );
+}

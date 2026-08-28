@@ -168,7 +168,14 @@ import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
 import * as google from "./google/index.js";
-import type { LiveCredential, AuthClientLike } from "./google/index.js";
+import type {
+  AuthClientLike,
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  LiveCredential,
+} from "./google/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -483,6 +490,16 @@ export interface Sapiom {
      * library expects an `AuthClient`.
      */
     authClient(): AuthClientLike;
+    /**
+     * Google Drive server-side methods (Path 2). The gateway resolves the tenant's
+     * Google credential internally and calls Drive — the token never reaches the run.
+     */
+    readonly drive: {
+      /** Share a Drive file. Throws 404 when no Google connector is connected. */
+      shareFile(args: DriveShareFileArgs): Promise<DrivePermission>;
+      /** Upload a new Drive file. */
+      uploadFile(args: DriveUploadFileArgs): Promise<DriveFile>;
+    };
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -701,6 +718,10 @@ function bind(transport: Transport): Sapiom {
     google: {
       token: () => google.token(transport),
       authClient: () => google.authClient(transport),
+      drive: {
+        shareFile: (args) => google.driveShareFile(args, transport),
+        uploadFile: (args) => google.driveUploadFile(args, transport),
+      },
     },
     speech: {
       textToSpeech: {

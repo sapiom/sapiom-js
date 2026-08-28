@@ -162,3 +162,87 @@ describe("google.authClient()", () => {
     expect(calls).toHaveLength(2); // absent expiresAt → never cached
   });
 });
+
+describe("google.drive", () => {
+  it("shareFile POSTs methods/shareFile on x-sapiom-api-key with the args body, returns the permission", async () => {
+    const permission = { id: "perm-1", type: "user", role: "writer" };
+    const { transport, calls } = makeTransport([() => jsonResponse(permission)]);
+
+    const args = {
+      fileId: "file-1",
+      role: "writer",
+      type: "user",
+      emailAddress: "a@b.com",
+    } as const;
+    const result = await google.driveShareFile(args, transport, BASE);
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/google/methods/shareFile`,
+    );
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("sat_run-token");
+    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
+    expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual(args);
+    expect(result).toEqual(permission);
+  });
+
+  it("uploadFile POSTs methods/uploadFile with the args body, returns the file", async () => {
+    const file = { id: "file-9", name: "notes.txt", mimeType: "text/plain" };
+    const { transport, calls } = makeTransport([() => jsonResponse(file)]);
+
+    const args = {
+      name: "notes.txt",
+      content: "hello",
+      mimeType: "text/plain",
+    } as const;
+    const result = await google.driveUploadFile(args, transport, BASE);
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/google/methods/uploadFile`,
+    );
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual(args);
+    expect(result).toEqual(file);
+  });
+
+  it("surfaces a 404 (no Google connector) from shareFile", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ error: "connector_not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ]);
+    await expect(
+      google.driveShareFile(
+        { fileId: "f", role: "reader", type: "anyone" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toThrow(/404/);
+    await expect(
+      google.driveShareFile(
+        { fileId: "f", role: "reader", type: "anyone" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toThrow(/connector_not_found/);
+  });
+
+  it("surfaces a 502 (upstream Drive failure) from uploadFile", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(
+          JSON.stringify({ error: "connector_method_upstream_failed" }),
+          {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    ]);
+    await expect(
+      google.driveUploadFile({ name: "x", content: "y" }, transport, BASE),
+    ).rejects.toThrow(/502/);
+  });
+});

@@ -174,4 +174,11 @@ export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
 
 export * as google from "./google/index.js";
-export type { LiveCredential, AuthClientLike } from "./google/index.js";
+export type {
+  AuthClientLike,
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  LiveCredential,
+} from "./google/index.js";
