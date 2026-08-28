@@ -167,6 +167,8 @@ import type {
 import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
+import * as google from "./google/index.js";
+import type { LiveCredential } from "./google/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -464,6 +466,17 @@ export interface Sapiom {
   readonly keys: {
     mintScoped(input: MintScopedInput): Promise<ScopedKey>;
   };
+  /**
+   * A live, tenant-scoped Google credential for in-run code (AGENT-311). `token()`
+   * pulls a short-lived bearer from the connectors gateway ON DEMAND — the OAuth
+   * token never lives in the run env or on disk, and the refresh happens
+   * server-side. The raw token is returned to the caller only; never log or persist
+   * it. (`authClient()` — a googleapis-style self-refreshing wrapper — is added in E4 T2.)
+   */
+  readonly google: {
+    /** Pull a fresh Google `LiveCredential` (server-side refresh). Throws 404 when no Google connector is connected. */
+    token(): Promise<LiveCredential>;
+  };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
     /** Generate speech audio from text. */
@@ -677,6 +690,9 @@ function bind(transport: Transport): Sapiom {
     },
     keys: {
       mintScoped: (input) => keys.mintScoped(input, transport),
+    },
+    google: {
+      token: () => google.token(transport),
     },
     speech: {
       textToSpeech: {

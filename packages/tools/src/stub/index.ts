@@ -119,6 +119,7 @@ import type {
   ActiveSession,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
+import type { LiveCredential } from "../google/index.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -1890,6 +1891,20 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 ? [input.scope]
                 : ["org.transactions.write"],
           })) as ScopedKey,
+        ),
+    },
+    // A live Google credential is fetched server-side in production; the stub returns
+    // a clearly-fake, shape-faithful bearer so an offline run can exercise the call
+    // graph. The `value` is an obvious placeholder, never a usable token.
+    google: {
+      token: () =>
+        Promise.resolve(
+          r("google.token", [], () => ({
+            kind: "bearer" as const,
+            value: "ya29.stub-google-token",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+            baseUrl: "https://www.googleapis.com",
+          })) as LiveCredential,
         ),
     },
     speech: {

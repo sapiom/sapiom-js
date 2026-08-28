@@ -172,3 +172,6 @@ export { VaultHttpError } from "./vault/index.js";
 export * as keys from "./keys/index.js";
 export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
+
+export * as google from "./google/index.js";
+export type { LiveCredential } from "./google/index.js";
