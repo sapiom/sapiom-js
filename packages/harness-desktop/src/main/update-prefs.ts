@@ -35,6 +35,10 @@ export interface UpdatePrefs {
    * silently fails to take it is indistinguishable from a broken updater. That
    * cost a real debugging session. `SAPIOM_UPDATE_CHANNEL` still wins over this
    * when set, so the escape hatch keeps working for one-off checks.
+   *
+   * NOT yet settable from the UI: this release lands the mechanism and the
+   * persistence, and the control that writes it is a follow-up. Until then the
+   * ways to turn it on are hand-editing this file or the env var.
    */
   preRelease: boolean;
 }

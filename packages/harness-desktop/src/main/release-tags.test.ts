@@ -78,6 +78,17 @@ describe("desktop release tag namespace", () => {
     expect(workflow).toMatch(/is not valid semver/);
   });
 
+  it("gates the release job on `v*` too, not just the push trigger", () => {
+    // The trigger and this gate are TWO filters, and changing only the first is
+    // silent in the worst way: prepare passes, all three OS legs build (~40min of
+    // macOS notarization), and then `release` is skipped. Green workflow, no
+    // GitHub Release, no installers, no channel manifests, nothing to update onto
+    // — the same silent-success failure this file exists to prevent. Caught in
+    // review on the very PR that renamed the namespace.
+    expect(workflow).toContain("startsWith(github.ref, 'refs/tags/v')");
+    expect(workflow).not.toContain("refs/tags/harness-desktop-v");
+  });
+
   it("still mirrors stable manifests onto the beta channel", () => {
     // NOT redundant with generateUpdatesFilesForAllChannels — see the file
     // header. Removing this silently strands beta installs.
@@ -91,6 +102,14 @@ describe("isSemverParseableTag", () => {
     for (const version of ["0.3.9", "0.3.9-beta.1", "1.0.0", "0.3.9-beta.10", "0.3.9+ci.44"]) {
       expect(isSemverParseableTag(`v${version}`)).toBe(true);
     }
+  });
+
+  it("rejects a leading-zero version, matching semver.valid and the CI guard", () => {
+    // `01.2.3` is not valid semver, so a release tagged from it would be skipped
+    // by pre-release resolution exactly like the old namespace was. The workflow's
+    // grep uses the same (0|[1-9][0-9]*) form; these must not drift apart.
+    expect(isSemverParseableTag("v01.2.3")).toBe(false);
+    expect(workflow).toContain("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)");
   });
 
   it("rejects every tag the old namespace produced — final and pre-release alike", () => {

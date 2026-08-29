@@ -35,7 +35,7 @@ deploy/run, and a live canvas for previews.
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | [@sapiom/agent-studio](./packages/agent-studio)     | [![npm](https://img.shields.io/npm/v/@sapiom/agent-studio)](https://www.npmjs.com/package/@sapiom/agent-studio)     | Agent Studio launcher — `npx @sapiom/agent-studio@latest`                                       |
 | [@sapiom/harness](./packages/harness)               | [![npm](https://img.shields.io/npm/v/@sapiom/harness)](https://www.npmjs.com/package/@sapiom/harness)               | The Agent Studio implementation — a CLI-launched local web app                                  |
-| [@sapiom/harness-desktop](./packages/harness-desktop) | [![GitHub release](https://img.shields.io/github/v/release/sapiom/sapiom-js?filter=harness-desktop-v*)](https://github.com/sapiom/sapiom-js/releases) | **Sapiom Studio** desktop app (Electron) — ships as signed installers, not to npm               |
+| [@sapiom/harness-desktop](./packages/harness-desktop) | [![GitHub release](https://img.shields.io/github/v/release/sapiom/sapiom-js?filter=v*)](https://github.com/sapiom/sapiom-js/releases) | **Sapiom Studio** desktop app (Electron) — ships as signed installers, not to npm               |
 
 ### Runtime internals
 

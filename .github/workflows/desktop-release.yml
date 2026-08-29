@@ -5,7 +5,8 @@ name: Desktop Release
 # @sapiom/harness NPM package via OIDC) — desktop installers are a different
 # artifact type with a different toolchain (electron-builder + a native
 # node-pty rebuild per platform), so they get their own workflow and their own
-# tag namespace (`harness-desktop-v*`) that never triggers the npm publish.
+# tag namespace (`v*`). That never triggers the npm publish either: publish.yml
+# subscribes to pushes on `main`, not to tags at all.
 #
 # Phase 4 = UNSIGNED multi-OS build. macOS is the required shipping target, so
 # it's exercised here early (on a hosted macos-14 runner) rather than deferred:
@@ -14,10 +15,10 @@ name: Desktop Release
 # Phases 5–6 and layer on top of this same build.
 #
 # Trigger, and the tag convention that drives the update channel:
-#   - `harness-desktop-v1.2.3`        → FINAL release, `latest` channel. Every user
+#   - `v1.2.3`                        → FINAL release, `latest` channel. Every user
 #                                       gets it, and it becomes the target of the
 #                                       permanent /releases/latest/download/… links.
-#   - `harness-desktop-v1.2.3-beta.1` → PRE-release, `beta` channel. Only installs
+#   - `v1.2.3-beta.1`                 → PRE-release, `beta` channel. Only installs
 #                                       already following betas are offered it.
 #   - workflow_dispatch (manual)      → build all OSes, artifacts only
 #                                       (no tag ⇒ no Release; download them from
@@ -117,8 +118,8 @@ jobs:
           # isn't. A tag that fails here publishes fine and then cannot be
           # installed by anyone on a pre-release channel — the exact failure that
           # made `harness-desktop-v0.3.8-beta.1` undiscoverable. This is the cheap
-          # guard; the unit tests in update-policy.test.ts cover the same contract.
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+          # guard; release-tags.test.ts asserts the same pattern from the other side.
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
             echo "::error::Version '${version}' is not valid semver, so the release tag would be invisible to pre-release update checks. Fix packages/harness-desktop/package.json."
             exit 1
           fi
@@ -459,7 +460,7 @@ jobs:
   # on a real tag push (workflow_dispatch has no tag, so it stops at Artifacts).
   release:
     needs: [prepare, build]
-    if: startsWith(github.ref, 'refs/tags/harness-desktop-v')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write # create/update the GitHub Release and upload assets

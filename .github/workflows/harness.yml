@@ -121,7 +121,7 @@ jobs:
   # Desktop app: does the PACKAGED bundle still launch?
   #
   # Split from desktop-release.yml on purpose. That workflow BUILDS installers
-  # for three OSes and only runs on a `harness-desktop-v*` tag (plus a temporary
+  # for three OSes and only runs on a `v*` tag (plus a temporary
   # feature-branch trigger) — releases, not feedback. But the bugs it catches are
   # packaging bugs: asar path resolution, a native module against the wrong ABI, a
   # dependency that wasn't unpacked, a mangled package.json. Waiting for a tag to

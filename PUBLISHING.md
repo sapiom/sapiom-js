@@ -34,8 +34,8 @@ trigger the npm publish above:
 
 | Tag | Release | Update channel |
 | --- | --- | --- |
-| `harness-desktop-v1.2.3` | final | `latest` — every user |
-| `harness-desktop-v1.2.3-beta.1` | pre-release | `beta` — testers only |
+| `v1.2.3` | final | `latest` — every user |
+| `v1.2.3-beta.1` | pre-release | `beta` — testers only |
 
 Bump `packages/harness-desktop/package.json` **first**: the tag must match it
 exactly or the build fails, by design — that field names the artifacts and drives

@@ -1,6 +1,6 @@
 ---
 name: release-desktop
-description: How to cut a Sapiom Studio desktop release (@sapiom/harness-desktop) in this repo. The release is TRIGGERED BY PUSHING A GIT TAG on main — `harness-desktop-vX.Y.Z` — after versions are bumped via changesets. Use whenever asked to "release", "cut/make a release", "ship a new version", "publish/tag the desktop app", "do a release", or asked whether something "is ready to release / version bumped".
+description: How to cut a Sapiom Studio desktop release (@sapiom/harness-desktop) in this repo. The release is TRIGGERED BY PUSHING A GIT TAG on main — `vX.Y.Z` — after versions are bumped via changesets. Use whenever asked to "release", "cut/make a release", "ship a new version", "publish/tag the desktop app", "do a release", or asked whether something "is ready to release / version bumped".
 ---
 
 # Releasing the Sapiom Studio desktop app
@@ -11,7 +11,7 @@ Linux, nsis on Windows), NOT to npm. A release is cut by **pushing a git tag on
 
 ## The invariant that governs everything
 The tag **must equal** `packages/harness-desktop/package.json`'s `version`
-exactly (e.g. tag `harness-desktop-v0.2.4` ⇔ version `0.2.4`). The
+exactly (e.g. tag `v0.2.4` ⇔ version `0.2.4`). The
 `desktop-release.yml` `prepare` job fails fast on a mismatch. `package.json` — not
 the tag — is the source of truth for the artifact names and the app's self-reported
 version and update channel.
@@ -19,8 +19,8 @@ version and update channel.
 ## Tag conventions (drive the update channel)
 | Tag | Release | Channel |
 | --- | --- | --- |
-| `harness-desktop-v1.2.3` | final | `latest` (everyone) |
-| `harness-desktop-v1.2.3-beta.1` | pre-release | `beta` (opted-in only) |
+| `v1.2.3` | final | `latest` (everyone) |
+| `v1.2.3-beta.1` | pre-release | `beta` (opted-in only) |
 
 `workflow_dispatch` (manual run of desktop-release.yml) builds artifacts only — no
 tag, no publish. Useful to smoke a build without releasing.
@@ -83,15 +83,15 @@ tag, no publish. Useful to smoke a build without releasing.
    ```bash
    git checkout main && git pull
    v=$(node -p "require('./packages/harness-desktop/package.json').version")   # e.g. 0.2.4
-   git tag "harness-desktop-v$v"          # add a -beta.N suffix for a beta
-   git push origin "harness-desktop-v$v"
+   git tag "v$v"                          # add a -beta.N suffix for a beta
+   git push origin "v$v"
    ```
    From a worktree (don't touch the user's main checkout), the equivalent is
    tagging main's HEAD directly:
    ```bash
    git fetch origin main
    v=$(git show origin/main:packages/harness-desktop/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
-   git tag "harness-desktop-v$v" origin/main && git push origin "harness-desktop-v$v"
+   git tag "v$v" origin/main && git push origin "v$v"
    ```
    This starts `desktop-release.yml`: `prepare` (version/channel + tag match) →
    one build job per OS (sign + notarize on macOS) → uploads the installers +
@@ -103,7 +103,7 @@ tag, no publish. Useful to smoke a build without releasing.
 
 ## Answering "is the version bumped / ready to release?"
 - Current version: `node -p "require('./packages/harness-desktop/package.json').version"`.
-- Existing tags: `git tag --list 'harness-desktop-v*' | tail`.
+- Existing tags: `git tag --list 'v*' | tail`.
 - Pending changesets (what the NEXT bump will include): `ls .changeset/*.md`.
 - If `package.json` still equals the latest tag, the version is **not yet bumped** —
   the "chore: version packages" PR (step 3–4) must merge before you can tag.

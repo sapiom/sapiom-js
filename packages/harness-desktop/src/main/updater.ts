@@ -536,9 +536,13 @@ function startUpdater(deps: UpdaterDeps): void {
       // async-after-sync shape as the toggle above and safe for the same reason:
       // the first check is FIRST_CHECK_DELAY_MS (30s) out, and this read takes
       // milliseconds. Re-assigning `channel` with a string is fine — the setter
-      // only rejects a non-string once a channel has been set — though note it
-      // also flips `allowDowngrade` to true, which is what we want for a machine
-      // moving onto betas.
+      // only rejects a non-string once a channel has been set. Assigning it also
+      // flips `allowDowngrade` to true, but that was already true from the
+      // startup assignment, so nothing changes here. Note what does NOT protect
+      // the user from a downgrade: `allowDowngrade` is permissive, and the actual
+      // guarantee is upstream — a beta install reads `beta*.yml`, and the release
+      // job mirrors every final's manifest onto that channel, so the newest thing
+      // it can ever be offered is a newer version.
       const withPrefs = resolveUpdateChannel(app.getVersion(), process.env, prefs);
       if (withPrefs.channel !== decision.channel) {
         autoUpdater.channel = withPrefs.channel;
