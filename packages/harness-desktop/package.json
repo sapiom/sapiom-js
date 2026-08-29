@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/harness-desktop",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": true,
   "description": "Agent Studio desktop app — a one-click native host for running Claude Code or Codex in a Sapiom-configured environment. The npx CLI (@sapiom/harness) remains the backup host over the same startServer().",
   "homepage": "https://sapiom.ai",

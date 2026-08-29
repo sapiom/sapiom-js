@@ -1,5 +1,12 @@
 # @sapiom/harness-desktop
 
+## 0.3.8
+
+### Patch Changes
+
+- Updated dependencies [f26d2cd]
+  - @sapiom/harness@0.10.0
+
 ## 0.3.7
 
 ### Patch Changes
