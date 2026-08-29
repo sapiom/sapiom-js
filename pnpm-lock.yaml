@@ -6,7 +6,6 @@ settings:
 
 overrides:
   '@electron/rebuild': ^3.7.0
-  '@sapiom/harness-desktop>@sapiom/harness': 0.8.9
 
 importers:
 
@@ -467,8 +466,8 @@ importers:
   packages/harness-desktop:
     dependencies:
       '@sapiom/harness':
-        specifier: 0.8.9
-        version: 0.8.9(@cfworker/json-schema@4.1.1)
+        specifier: workspace:^
+        version: link:../harness
       electron-updater:
         specifier: ^6.8.9
         version: 6.8.9
@@ -1121,7 +1120,7 @@ packages:
     engines: {node: '>=12'}
 
   '@electron/node-gyp@https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2':
-    resolution: {gitHosted: true, integrity: sha512-MXgzlTDEEndJB3TBbvd5uFQO/8gaINo1Hfen8vef5rq/VHVPeB63uuv/uO5+8GFsAJ/rauu6XB79S6K4+aXc+w==, tarball: https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2}
     version: 10.2.0-electron.1
     engines: {node: '>=12.13.0'}
     hasBin: true
@@ -2040,44 +2039,6 @@ packages:
     resolution: {integrity: sha512-5L+T1fMX4RIEBoZzT0+sQ0PhTS36NULFmMXtl1TZo44TMAROIMHbZufSOjVWt/Y622BtxgxtaNOokbTDvfsrZA==}
     cpu: [x64]
     os: [win32]
-
-  '@sapiom/agent-core@0.13.2':
-    resolution: {integrity: sha512-uFL2c1BWoANoVrpTAMx+IM3ytogO3slrKh3V/T5hxHITMoDzL5MUiHVuPMf2D+6IoCzJC/qTWQwHMUU7UQvl4g==}
-    engines: {node: '>=18.0.0'}
-
-  '@sapiom/agent-runtime@0.7.0':
-    resolution: {integrity: sha512-lQTF7PRIZuP0BepLpW90QE3yAGkwTs0HzeoxkMm0ddVuTPqKni/V2/867Tet/SzT4VnQ0MbuZ86+dhACuWy4ng==}
-    engines: {node: '>=18.0.0'}
-    peerDependencies:
-      zod: ^4.1.0
-
-  '@sapiom/agent@0.12.2':
-    resolution: {integrity: sha512-Ptq10gyrEGzcOLQb0c0S56Hc6EmhzrnEeinY81G0vC+u/T2QEPylsXme0x4iY+wlrGJ5R+aXEggQwkYBFkROsQ==}
-    engines: {node: '>=18.0.0'}
-    peerDependencies:
-      zod: ^3.25.76 || ^4.0.0
-
-  '@sapiom/analytics-core@0.2.1':
-    resolution: {integrity: sha512-IZaSdegheySbLxSwmrvcKFKpog3+Ef8IP/hkd7Qjp7uxgo7pfwkmjy9nFH9lXDH4ALeW5+Fhs717+RKwkW1EJA==}
-    engines: {node: '>=18.0.0'}
-
-  '@sapiom/harness@0.8.9':
-    resolution: {integrity: sha512-fJ9jZvVEe1ChhYmrh+qO19tuplv5fhmZ9w56agT2JVk/LisDFeGDqoQIt3YcLZSJcfYYRJ3RND7rXZSSXHNN6g==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
-
-  '@sapiom/mcp@0.13.0':
-    resolution: {integrity: sha512-f9SppXl1GAwRa/yMks0Ng1FSOimonk9C5DyC+RHI2Iv6xKyy+VEGKIGuE/Q+8LOs4y77Ezk+ca97mTdLKh3p3Q==}
-    engines: {node: '>=18.0.0'}
-    hasBin: true
-
-  '@sapiom/sandbox-preview@0.1.19':
-    resolution: {integrity: sha512-bxjSACOSNyxNmnCQ01mA/BQqK/iEiOxaDwnV3/c96lMdhQy9LrHJjMlMSlk7CrT6+84cNoMEGMbafSKHqd/UyQ==}
-    engines: {node: '>=18.0.0'}
-
-  '@sapiom/tools@0.33.0':
-    resolution: {integrity: sha512-eJKAuiM1yKPPAAuIJRXdC/uOFB4CEggAvzftHCB6YjJYXGKtee47A9rAnyBVm7PbRL8PJXudhaDyG7mHkSRN6Q==}
-    engines: {node: '>=18.0.0'}
 
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
@@ -7002,68 +6963,6 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.62.0':
     optional: true
-
-  '@sapiom/agent-core@0.13.2(zod@3.25.76)':
-    dependencies:
-      '@sapiom/agent': 0.12.2(zod@3.25.76)
-      '@sapiom/agent-runtime': 0.7.0(zod@3.25.76)
-      '@sapiom/analytics-core': 0.2.1
-      '@sapiom/tools': 0.33.0
-      esbuild: 0.28.1
-    transitivePeerDependencies:
-      - zod
-
-  '@sapiom/agent-runtime@0.7.0(zod@3.25.76)':
-    dependencies:
-      '@sapiom/agent': 0.12.2(zod@3.25.76)
-      ajv: 8.20.0
-      zod: 3.25.76
-
-  '@sapiom/agent@0.12.2(zod@3.25.76)':
-    dependencies:
-      '@sapiom/tools': 0.33.0
-      zod: 3.25.76
-
-  '@sapiom/analytics-core@0.2.1': {}
-
-  '@sapiom/harness@0.8.9(@cfworker/json-schema@4.1.1)':
-    dependencies:
-      '@sapiom/agent': 0.12.2(zod@3.25.76)
-      '@sapiom/agent-core': 0.13.2(zod@3.25.76)
-      '@sapiom/analytics-core': 0.2.1
-      '@sapiom/mcp': 0.13.0(@cfworker/json-schema@4.1.1)
-      ajv: 8.20.0
-      express: 4.22.2
-      express-rate-limit: 7.5.1(express@4.22.2)
-      node-pty: 1.1.0
-      open: 10.2.0
-      ws: 8.21.0
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@sapiom/mcp@0.13.0(@cfworker/json-schema@4.1.1)':
-    dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
-      '@sapiom/agent-core': 0.13.2(zod@3.25.76)
-      '@sapiom/analytics-core': 0.2.1
-      '@sapiom/sandbox-preview': 0.1.19
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - supports-color
-
-  '@sapiom/sandbox-preview@0.1.19':
-    dependencies:
-      '@sapiom/tools': 0.33.0
-      zod: 3.25.76
-
-  '@sapiom/tools@0.33.0':
-    dependencies:
-      '@sapiom/analytics-core': 0.2.1
 
   '@sec-ant/readable-stream@0.4.1': {}
 

@@ -10,7 +10,6 @@
   },
   "type": "module",
   "main": "./dist/main/index.js",
-  "desktopHarnessVersion": "0.8.9",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-renderer.mjs",
     "dev": "node scripts/assert-harness-version.mjs --build && pnpm run build && electron . --dev",
