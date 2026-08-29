@@ -185,12 +185,35 @@ Tag conventions, which drive everything downstream:
 
 | Tag | Release | Channel | Who gets it |
 | --- | --- | --- | --- |
-| `harness-desktop-v1.2.3` | final | `latest` | everyone, and `/releases/latest/download/…` resolves |
-| `harness-desktop-v1.2.3-beta.1` | pre-release | `beta` | only installs already following betas |
+| `v1.2.3` | final | `latest` | everyone, and `/releases/latest/download/…` resolves |
+| `v1.2.3-beta.1` | pre-release | `beta` | only installs following betas |
 
-The tag **must** equal `package.json`'s version. `prepare` enforces it, because that field is what
-names every artifact and what the app reports as its own version; a mismatch publishes a manifest
-advertising a version no asset matches, and clients then re-offer the same update forever.
+The tag **must** equal `package.json`'s version, prefixed with `v`. `prepare` enforces it, because
+that field is what names every artifact and what the app reports as its own version; a mismatch
+publishes a manifest advertising a version no asset matches, and clients then re-offer the same
+update forever.
+
+`prepare` **also** rejects a version that isn't semver-parseable, and that guard is not decoration.
+The namespace used to be `harness-desktop-v*`, which broke the beta channel outright and silently:
+electron-updater's `GitHubProvider.getLatestVersion()` runs `semver.valid(tag)` over every
+`releases.atom` entry when resolving a pre-release channel and skips the failures, so every release
+was skipped and a beta install threw `No published versions on GitHub`. `harness-desktop-v0.3.8-beta.1`
+was published, correct in every other respect, and installable by nobody. A leading `v` is the only
+prefix semver tolerates. `latest` never noticed because it takes a different branch entirely
+(`getLatestTagName()` → `/releases/latest`), which treats the tag as an opaque string — which is why
+this survived from the first release to 0.3.8 with CI green. `src/main/release-tags.test.ts` pins it.
+
+**Cutting a beta.** `harness-desktop` is `private: true` and never published to npm, so a beta does
+not need changesets pre-mode (which would drag every package in the monorepo into it). Branch off
+`main`, hand-set the version to `x.y.z-beta.N`, tag `vx.y.z-beta.N`, push the tag, delete the branch.
+`detectUpdateChannel` infers `beta` from the suffix, so the build emits `beta*.yml` only and stable
+installs never see it. Promote by shipping the final `x.y.z` from `main` as usual.
+
+**Do not add `generateUpdatesFilesForAllChannels`** and do not delete the release job's
+"Mirror stable manifests onto the beta channel" step. The option is a **no-op for the GitHub
+provider** — `computeChannelNames()` short-circuits on `publishConfig.provider === "github"` and
+returns a single channel — so the mirror is the workaround that lets a beta install be pulled
+forward onto a newer final, not redundancy. Removing it strands every beta tester.
 
 ## Auto-update
 

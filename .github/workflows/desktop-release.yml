@@ -30,7 +30,13 @@ name: Desktop Release
 on:
   push:
     tags:
-      - "harness-desktop-v*"
+      # `v*`, NOT `harness-desktop-v*`. electron-updater's GitHubProvider runs
+      # `semver.valid(tag)` on every releases.atom entry when resolving a
+      # pre-release channel, and skips the ones that fail — `harness-desktop-v0.3.8`
+      # is not valid semver, so under the old namespace EVERY release was skipped
+      # and a beta install threw "No published versions on GitHub". A leading `v`
+      # is the only prefix semver tolerates. See SAP-2965.
+      - "v*"
   workflow_dispatch:
 
 # Minimal token scope, declared at the top so it is the DEFAULT every job
@@ -99,11 +105,22 @@ jobs:
           # We have already tagged v0.1.0 against a package that later became
           # 0.1.1 — this is a mistake we've made, not one we're imagining.
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            expected="harness-desktop-v${version}"
+            expected="v${version}"
             if [ "${{ github.ref_name }}" != "$expected" ]; then
               echo "::error::Tag '${{ github.ref_name }}' does not match packages/harness-desktop/package.json (${version}). Expected '${expected}'. Bump the package version or retag."
               exit 1
             fi
+          fi
+
+          # The tag must ALSO be semver-parseable, because electron-updater's
+          # pre-release resolution silently skips any releases.atom entry that
+          # isn't. A tag that fails here publishes fine and then cannot be
+          # installed by anyone on a pre-release channel — the exact failure that
+          # made `harness-desktop-v0.3.8-beta.1` undiscoverable. This is the cheap
+          # guard; the unit tests in update-policy.test.ts cover the same contract.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Version '${version}' is not valid semver, so the release tag would be invisible to pre-release update checks. Fix packages/harness-desktop/package.json."
+            exit 1
           fi
 
           echo "version=$version"       >> "$GITHUB_OUTPUT"

@@ -532,9 +532,23 @@ function startUpdater(deps: UpdaterDeps): void {
   void loadUpdatePrefs(updatePrefsFile())
     .then((prefs) => {
       autoUpdater.autoInstallOnAppQuit = prefs.autoUpdate;
+      // Re-resolve the channel now that the persisted opt-in is known. Same
+      // async-after-sync shape as the toggle above and safe for the same reason:
+      // the first check is FIRST_CHECK_DELAY_MS (30s) out, and this read takes
+      // milliseconds. Re-assigning `channel` with a string is fine — the setter
+      // only rejects a non-string once a channel has been set — though note it
+      // also flips `allowDowngrade` to true, which is what we want for a machine
+      // moving onto betas.
+      const withPrefs = resolveUpdateChannel(app.getVersion(), process.env, prefs);
+      if (withPrefs.channel !== decision.channel) {
+        autoUpdater.channel = withPrefs.channel;
+        autoUpdater.allowPrerelease = withPrefs.allowPrerelease;
+        active = active ? { ...active, channel: withPrefs.channel } : active;
+        log(`channel → "${withPrefs.channel}" (pre-release opt-in ${prefs.preRelease ? "on" : "off"})`);
+      }
     })
     .catch(() => {
-      /* keep the default */
+      /* keep the defaults — prefs are a convenience, never load-bearing */
     });
   // Only when forced on from an unpackaged build: read dev-app-update.yml
   // instead of the app-update.yml that only packaging writes.

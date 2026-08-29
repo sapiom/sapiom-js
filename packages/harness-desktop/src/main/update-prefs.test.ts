@@ -61,27 +61,32 @@ describe("load / save round-trip", () => {
   });
 
   it("returns defaults (never throws) on a corrupt file", async () => {
-    await saveUpdatePrefs({ autoUpdate: false, skippedVersions: ["9.9.9"] }, prefsPath);
+    await saveUpdatePrefs({ autoUpdate: false, skippedVersions: ["9.9.9"], preRelease: false }, prefsPath);
     const { writeFileSync } = await import("node:fs");
     writeFileSync(prefsPath, "{ not json");
     expect(await loadUpdatePrefs(prefsPath)).toEqual(DEFAULT_UPDATE_PREFS);
   });
 
-  it("persists and reloads both fields", async () => {
-    await saveUpdatePrefs({ autoUpdate: false, skippedVersions: ["1.2.3"] }, prefsPath);
-    expect(await loadUpdatePrefs(prefsPath)).toEqual({ autoUpdate: false, skippedVersions: ["1.2.3"] });
+  it("persists and reloads every field", async () => {
+    await saveUpdatePrefs({ autoUpdate: false, skippedVersions: ["1.2.3"], preRelease: true }, prefsPath);
+    expect(await loadUpdatePrefs(prefsPath)).toEqual({
+      autoUpdate: false,
+      skippedVersions: ["1.2.3"],
+      preRelease: true,
+    });
   });
 });
 
 describe("addSkippedVersion", () => {
   it("appends and dedupes without disturbing autoUpdate", async () => {
-    await saveUpdatePrefs({ autoUpdate: false, skippedVersions: [] }, prefsPath);
+    await saveUpdatePrefs({ autoUpdate: false, skippedVersions: [], preRelease: false }, prefsPath);
     await addSkippedVersion("1.0.0", prefsPath);
     await addSkippedVersion("1.0.0", prefsPath); // dupe — no-op
     await addSkippedVersion("2.0.0", prefsPath);
     expect(await loadUpdatePrefs(prefsPath)).toEqual({
       autoUpdate: false,
       skippedVersions: ["1.0.0", "2.0.0"],
+      preRelease: false,
     });
   });
 
@@ -93,9 +98,9 @@ describe("addSkippedVersion", () => {
 
 describe("clearSkippedVersions", () => {
   it("empties the list but keeps autoUpdate", async () => {
-    await saveUpdatePrefs({ autoUpdate: true, skippedVersions: ["1.0.0", "2.0.0"] }, prefsPath);
+    await saveUpdatePrefs({ autoUpdate: true, skippedVersions: ["1.0.0", "2.0.0"], preRelease: false }, prefsPath);
     await clearSkippedVersions(prefsPath);
-    expect(await loadUpdatePrefs(prefsPath)).toEqual({ autoUpdate: true, skippedVersions: [] });
+    expect(await loadUpdatePrefs(prefsPath)).toEqual({ autoUpdate: true, skippedVersions: [], preRelease: false });
   });
 
   it("does not create a file when there is nothing to clear", async () => {

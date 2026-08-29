@@ -82,6 +82,41 @@ describe("resolveUpdateChannel", () => {
     expect(resolveUpdateChannel("0.1.2", { [CHANNEL_ENV_VAR]: "  " }).ignoredOverride).toBeUndefined();
   });
 
+  it("moves a stable install onto betas via the persisted opt-in", () => {
+    // The whole point of the toggle: no env var, no launchctl, no relaunch ritual.
+    const decision = resolveUpdateChannel("0.3.9", {}, { preRelease: true });
+    expect(decision.channel).toBe("beta");
+    expect(decision.allowPrerelease).toBe(true);
+  });
+
+  it("leaves a stable install alone when the opt-in is off or absent", () => {
+    expect(resolveUpdateChannel("0.3.9", {}, { preRelease: false }).channel).toBe("latest");
+    expect(resolveUpdateChannel("0.3.9", {}).channel).toBe("latest");
+  });
+
+  it("never uses the opt-in to drag a pre-release build back onto stable", () => {
+    // Offering `latest` to a machine running 0.3.9-beta.2 would present a
+    // DOWNGRADE as an update. The toggle can only move an install onto betas.
+    expect(resolveUpdateChannel("0.3.9-beta.2", {}, { preRelease: false }).channel).toBe("beta");
+  });
+
+  it("lets the env override beat the persisted opt-in, in both directions", () => {
+    // The env var is the one-off debugging escape hatch, so it sits above the
+    // stored setting: someone who exported it is asking a more specific question.
+    expect(resolveUpdateChannel("0.3.9", { SAPIOM_UPDATE_CHANNEL: "latest" }, { preRelease: true }).channel).toBe(
+      "latest",
+    );
+    expect(resolveUpdateChannel("0.3.9", { SAPIOM_UPDATE_CHANNEL: "beta" }, { preRelease: false }).channel).toBe(
+      "beta",
+    );
+  });
+
+  it("falls back to the opt-in when the env override is unusable", () => {
+    const decision = resolveUpdateChannel("0.3.9", { SAPIOM_UPDATE_CHANNEL: "canary" }, { preRelease: true });
+    expect(decision.channel).toBe("beta");
+    expect(decision.ignoredOverride).toBe("canary");
+  });
+
   it("treats an unparseable version as stable rather than throwing", () => {
     // app.getVersion() is whatever package.json says; a bad value must not be
     // able to stop the app from starting.

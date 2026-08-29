@@ -26,6 +26,17 @@ export interface UpdatePrefs {
   autoUpdate: boolean;
   /** Versions the user picked "Skip this version" for — never re-offered. */
   skippedVersions: string[];
+  /**
+   * Opt in to pre-release (`beta`) builds — the internal-dogfooding switch.
+   *
+   * Persisted rather than env-only because `SAPIOM_UPDATE_CHANNEL` is unusable as
+   * a user-facing control on macOS: a Finder or Dock launch inherits no shell
+   * environment, so it needs `launchctl setenv` plus a full quit, and when it
+   * silently fails to take it is indistinguishable from a broken updater. That
+   * cost a real debugging session. `SAPIOM_UPDATE_CHANNEL` still wins over this
+   * when set, so the escape hatch keeps working for one-off checks.
+   */
+  preRelease: boolean;
 }
 
 export const DEFAULT_UPDATE_PREFS: UpdatePrefs = {
@@ -35,6 +46,9 @@ export const DEFAULT_UPDATE_PREFS: UpdatePrefs = {
   // the updater's former hardcoded `autoInstallOnAppQuit = false` (see updater.ts).
   autoUpdate: true,
   skippedVersions: [],
+  // Off by default: a pre-release is precisely the build nobody has validated yet,
+  // so following it is always a deliberate act.
+  preRelease: false,
 };
 
 /**
@@ -60,6 +74,7 @@ export function sanitizeUpdatePrefs(raw: unknown): UpdatePrefs {
   return {
     autoUpdate: typeof obj.autoUpdate === "boolean" ? obj.autoUpdate : DEFAULT_UPDATE_PREFS.autoUpdate,
     skippedVersions: skipped,
+    preRelease: typeof obj.preRelease === "boolean" ? obj.preRelease : DEFAULT_UPDATE_PREFS.preRelease,
   };
 }
 

@@ -57,6 +57,18 @@ export const FORCE_ENV_VAR = "SAPIOM_FORCE_UPDATER";
 const CHANNELS: readonly UpdateChannel[] = ["latest", "beta"];
 
 /**
+ * The slice of the persisted update preferences that affects channel choice.
+ *
+ * Structural rather than importing `UpdatePrefs` from update-prefs.ts: this module
+ * is the pure policy layer and gains nothing from knowing about the prefs file's
+ * shape, its skip list, or its IO.
+ */
+export interface UpdateChannelPrefs {
+  /** The user opted this install into pre-release builds. */
+  preRelease: boolean;
+}
+
+/**
  * True when the version carries a semver pre-release component (`0.1.2-beta.1`),
  * which is how a beta artifact is distinguished from a final one.
  *
@@ -92,14 +104,27 @@ function hasPrereleaseTag(version: string): boolean {
  * UI — a tester who hits a bug we already fixed can get the fix today, and it
  * costs a restart with an env var rather than a release.
  */
-export function resolveUpdateChannel(version: string, env: NodeJS.ProcessEnv): ChannelDecision {
+export function resolveUpdateChannel(
+  version: string,
+  env: NodeJS.ProcessEnv,
+  prefs?: UpdateChannelPrefs,
+): ChannelDecision {
   const fromVersion: UpdateChannel = hasPrereleaseTag(version) ? "beta" : "latest";
 
   const raw = env[CHANNEL_ENV_VAR];
   const requested = raw?.trim().toLowerCase();
   const override = CHANNELS.find((c) => c === requested);
 
-  const channel = override ?? fromVersion;
+  // The persisted opt-in can only move an install ONTO betas, never off them: a
+  // build that is itself a pre-release follows betas whatever the toggle says,
+  // because the alternative is offering `latest` to a machine running `-beta.2`
+  // and calling a downgrade an update.
+  const fromPrefs: UpdateChannel | undefined = prefs?.preRelease ? "beta" : undefined;
+
+  // Env beats the toggle beats the version. The env var stays the top of the
+  // chain deliberately — it is the one-off debugging escape hatch, and someone
+  // who exported it is asking a more specific question than the stored setting.
+  const channel = override ?? fromPrefs ?? fromVersion;
   const decision: ChannelDecision = {
     channel,
     // A beta install must accept pre-releases or the channel name is inert.
