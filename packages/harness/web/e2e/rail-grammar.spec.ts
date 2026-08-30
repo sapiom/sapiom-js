@@ -75,17 +75,36 @@ test.describe("project row grammar", () => {
   }) => {
     // The menu changed what the control SAYS. What it does is unchanged, and a
     // grammar fix that quietly broke the action would be the worse bug.
+    //
+    // THE REQUEST, not a tab count. This spec first counted
+    // `[data-testid^='session-tab-']` and was worthless: `/?seed=0` renders two
+    // session tabs plus `session-tab-new` before anything is clicked, so the
+    // assertion held with the handler stubbed to a no-op — a spec that cannot
+    // fail, guarding the one behaviour this PR promises it did not change.
+    // A COUNT TAKEN BEFORE, then the newest call — not `lastCreateSession.cwd`
+    // on its own, because the boot session is already rooted at
+    // `/Users/demo/acme-app` (`MOCK_LAUNCH_DIR`) and a value the click is
+    // supposed to produce may already be sitting there. Mutation-checked:
+    // stubbing `create.run()` to a no-op fails this spec.
+    const calls = (): Promise<{ n: number; cwd: string | null }> =>
+      page.evaluate(() => {
+        const state = (
+          window as unknown as {
+            __HARNESS_TEST__?: {
+              createSessionCalls?: Array<{ req?: { cwd?: string } }>;
+            };
+          }
+        ).__HARNESS_TEST__;
+        const list = state?.createSessionCalls ?? [];
+        return { n: list.length, cwd: list[list.length - 1]?.req?.cwd ?? null };
+      });
+    const before = await calls();
+
     await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     await expect(page.getByTestId("project-menu-card-acme-app")).toHaveCount(0);
-    await expect
-      .poll(async () =>
-        page.evaluate(() =>
-          Array.from(document.querySelectorAll("[data-testid^='session-tab-']"))
-            .length,
-        ),
-      )
-      .toBeGreaterThan(0);
+    await expect.poll(async () => (await calls()).n).toBe(before.n + 1);
+    expect((await calls()).cwd).toBe("/Users/demo/acme-app");
   });
 });
 
@@ -124,20 +143,31 @@ test.describe("double-click toggles disclosure", () => {
     await expect(row).toHaveClass(/is-selected/);
   });
 
+});
+
+test.describe("double-click on a folder row", () => {
+  // THE DEEP FIXTURE, because the default mock has no branching directory row
+  // and this spec used to `test.skip` on it unconditionally. A permanent skip
+  // is not a pending test, it is an absent one — and the third-toggle trick is
+  // the subtlest thing in this change, with the quietest failure mode: nothing
+  // happens. `?mockFixtures=deep` is the same fixture `project-axis.spec.ts`
+  // uses, and it carries `polsia/services` as a real branch point.
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/?mockFixtures=deep");
+    await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
+  });
+
   test("a folder row's double-click lands where its single click does", async ({
     page,
   }) => {
     // Two clicks toggled twice and cancelled out, so double-clicking a folder
     // did visibly nothing — the same absent convention, one level down.
-    const dir = page.locator("[data-testid^='dir-disclosure-']").first();
-    const count = await dir.count();
-    test.skip(count === 0, "fixture has no branching directory row");
-    const dirRow = page
-      .locator("[data-testid^='dir-row-']")
-      .first();
+    const dirRow = page.getByTestId("dir-row-services");
     await expect(dirRow).not.toHaveClass(/is-collapsed/);
     await dirRow.locator(".workspace-row-main").dblclick();
     await expect(dirRow).toHaveClass(/is-collapsed/);
+    await dirRow.locator(".workspace-row-main").dblclick();
+    await expect(dirRow).not.toHaveClass(/is-collapsed/);
   });
 });
 

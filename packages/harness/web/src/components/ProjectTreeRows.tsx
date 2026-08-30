@@ -459,7 +459,17 @@ export function ProjectRow({
 
            Nothing here when the row has nothing to disclose: `disclosable` is
            false for a project with no rows under it, and a fold that changes
-           nothing is the small lie `RowDisclosure` already declines to tell. */
+           nothing is the small lie `RowDisclosure` already declines to tell.
+
+           A GROUP ROW STILL RENAMES on double-click (`GroupRow.tsx`), and that
+           is not the inconsistency it looks like. The two rows differ in what
+           their SINGLE click already does: a group label folds on one click, so
+           its fold needs no second gesture and the double is free; a project
+           label's one click is spoken for — it selects the project — so the
+           fold has nowhere else to live. Each row's double-click is the fold's
+           only remaining home, or it is not, and the gesture goes where the
+           row has room for it. (A rename gesture on a project row would also
+           be a lie: the row is named by a folder on disk.) */
         onDoubleClick={disclosable ? onToggleCollapsed : undefined}
         /* The ABSOLUTE path, matching every other row. The row shows what it
            is; the title answers where it lives. */

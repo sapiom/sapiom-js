@@ -73,7 +73,7 @@ function markHelpSeen(): void {
  * unconditional first-run card would open a full-screen scrim over ~40 specs
  * that have nothing to do with it — the fixture would be testing this card
  * instead of what it came for. `?help=1` opts a mock page back into the real
- * behaviour, which is how the auto-show is proven in `help-overlay.spec.ts`;
+ * behaviour, which is how the auto-show is proven in `rail-grammar.spec.ts`;
  * it does NOT force the card open, so "dismiss, reload, still gone" is the
  * same code path there as in a real install.
  */

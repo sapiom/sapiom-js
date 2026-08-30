@@ -2128,7 +2128,7 @@ button.rail-footer-card:hover {
 
 /* ---- Project row ⋮ menu ---------------------------------------------- */
 /* Wide enough for the longest item to state its subject on one line — the
-   whole point of the menu is that "Remove team-bots from the rail" is read,
+   whole point of the menu is that "Remove acme-app from the rail" is read,
    not inferred from a glyph, and a wrapped or ellipsed label gives that back. */
 .project-row-menu {
   min-width: 248px;
