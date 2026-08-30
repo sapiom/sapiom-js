@@ -4067,13 +4067,15 @@ button.rail-footer-card:hover {
   min-width: 0;
 }
 
-/* V0 workspace dependency graph -----------------------------------------
-   A folder is a full-main destination, while the agent workbench remains
-   mounted behind CSS. The field and cards use the design repository's flow
-   geometry and existing Studio tokens; V0 intentionally has no legend,
-   metrics, status treatments, inspector, or grouping chrome. */
+/* Workspace dependency map ----------------------------------------------
+   The project's altitude of the ONE canvas — it fills the right pane beside
+   the conversation, not the whole shell. It was a full-main destination, which
+   made selecting a project a mode switch: your chat vanished to show you a
+   picture of it. The field and cards use the design repository's flow geometry
+   and existing Studio tokens; there is deliberately no legend, metrics, status
+   treatment, inspector, or grouping chrome. */
 .workspace-graph-view {
-  grid-column: 1 / -1;
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -5980,81 +5982,81 @@ button.system-graph-node.is-navigable:focus-visible {
   border-radius: var(--radius);
 }
 
-/* ---- Ship area: "Trigger from your code" snippet panel ------------------ */
-/* Docked under the canvas subheader once the bound agent is deployed: the
-   copy-paste doorway (SDK + cURL) into the deployed agent's executions
-   endpoint. Ported from upstream feat/harness-snippets, re-expressed on the
-   studio's tokens. */
-/* ---- Code tab (right pane) --------------------------------------------- */
-/* The bound agent's integration projection, matching the
-   sibling tabs' anatomy exactly: the shared subheader (title left, status
-   right) over a --pane-pad-x body. The snippets render as one card filling
-   the body's width; empty states center like every other right-pane state. */
-.code-panel {
-  flex: 1;
-  min-height: 0;
+/* ---- "Trigger from your code" on the DEPLOY surface --------------------- */
+/* The copy-paste doorway (SDK + cURL) into a deployed agent's executions
+   endpoint. It had a permanent right-pane tab of its own, which spent standing
+   IA on a question asked once, just after a deploy — so it now sits on the
+   Steps surface, disclosed, directly under the deploy banner that reports the
+   build that made the agent callable. */
+.steps-snippets {
   display: flex;
   flex-direction: column;
-}
-
-/* The empty states (no agent bound, or a draft) fill the pane and centre,
-   the same way every sibling right-pane empty state does — flex:1 in the
-   flex-column parent (.right-pane-panel for the unbound case, .code-panel for
-   the draft case), then the shared .empty-state centring takes over. */
-.code-panel-empty {
-  flex: 1;
-  min-height: 0;
-}
-
-/* The deployed body is a SCROLL SURFACE, matching .canvas-steps-surface (the
-   Steps body) exactly: the snippet card flows from the top and the surface
-   scrolls, rather than a flex column that stranded a large void below a
-   fixed-height card. */
-.code-panel-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--sp2) var(--pane-pad-x) var(--sp4);
-}
-
-/* Status rides the subheader's right edge (title left, status right — the
-   same pattern Steps uses for its run chip). */
-.code-panel-header .workflow-deployed-tag,
-.code-panel-draft-tag {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-/* Inside the tab the snippets are ONE card filling the body width — not the
-   docked strip it was under the canvas subheader. Rows re-inset to the
-   card's own well. */
-.code-panel .snippet-panel {
   border: 1px solid var(--ui-line);
-  border-bottom: 1px solid var(--ui-line);
   border-radius: var(--radius-md);
   background: var(--bg-1);
+  overflow: hidden;
+}
+
+.steps-snippets-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  padding: var(--sp2) var(--sp3);
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.steps-snippets-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.steps-snippets-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* The label takes the slack so the chevron stays pinned right. */
+.steps-snippets-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--type-label);
+  font-weight: 590;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steps-snippets .snippet-panel {
+  border-top: 1px solid var(--ui-line);
   padding-top: var(--sp1);
   padding-bottom: var(--sp1);
 }
 
-.code-panel .snippet-panel-header,
-.code-panel .snippet-slug-row,
-.code-panel .snippet-slug-inferred,
-.code-panel .snippet-tabs,
-.code-panel .snippet-hint {
+.steps-snippets :is(
+    .snippet-panel-header,
+    .snippet-slug-row,
+    .snippet-slug-inferred,
+    .snippet-tabs,
+    .snippet-hint
+  ) {
   padding-left: var(--sp3);
   padding-right: var(--sp3);
 }
 
-.code-panel .snippet-code-wrap {
+.steps-snippets .snippet-code-wrap {
   margin-left: var(--sp3);
   margin-right: var(--sp3);
 }
 
-/* The dedicated tab has room the docked strip never had — let the code
-   breathe before it scrolls. */
-.code-panel .snippet-code {
-  max-height: 24rem;
+/* Let the code breathe before it scrolls — the surface below it scrolls too,
+   so a tall block would push the step list out of reach. */
+.steps-snippets .snippet-code {
+  max-height: 18rem;
 }
 
 .snippet-panel {
@@ -8288,9 +8290,67 @@ button.system-graph-node.is-navigable:focus-visible {
 }
 
 /* The canvas-pane child panel must fill the slot fully. */
-.right-pane-panel > .canvas-pane {
+:is(.right-pane-panel, .right-pane-altitude) > .canvas-pane {
   flex: 1;
   min-height: 0;
+}
+
+/* BOARD altitude, wrapped so it can be hidden while the project's map is on
+   screen WITHOUT unmounting — CanvasPane keeps its probe state, reload key and
+   background-task tracking across a trip up to the project and back. */
+.right-pane-altitude {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.right-pane-altitude.is-hidden {
+  display: none;
+}
+
+/* The way back UP to the project map, at the head of the tab row. Reads as a
+   breadcrumb, not a tab: no pill, and it gives up its label before the tabs
+   give up theirs in a narrow pane. */
+.right-pane-up {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  padding: 3px 6px 3px 2px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--type-label);
+  cursor: pointer;
+}
+
+.right-pane-up:hover {
+  color: var(--text-dim);
+  background: var(--bg-hover);
+}
+
+.right-pane-up:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.right-pane-up-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Below the pane's own narrow breakpoint the label goes before the tabs do —
+   the glyph still says "up", and Canvas/Steps must stay readable. */
+@container rightpane (max-width: 400px) {
+  .right-pane-up-label {
+    display: none;
+  }
 }
 
 /* Scrollbars — thin thumb-only styling, matching the product's own
@@ -8810,10 +8870,7 @@ button.system-graph-node.is-navigable:focus-visible {
    stretch cards to the full monitor. */
 .app.is-browsing > .center-pane,
 .app.is-browsing > .right-pane,
-.app.is-browsing > .pane-resize-handle,
-.app.is-workspace-graph > .center-pane,
-.app.is-workspace-graph > .right-pane,
-.app.is-workspace-graph > .pane-resize-handle {
+.app.is-browsing > .pane-resize-handle {
   display: none;
 }
 

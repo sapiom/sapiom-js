@@ -19,6 +19,8 @@ import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 import { RunWorkspace } from "./RunWorkspace";
+import { SnippetPanel } from "./SnippetPanel";
+import { isWorkflowRunnable } from "../lib/workflow-deployment";
 import { track as trackProduct } from "../lib/analytics/events";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -160,8 +162,22 @@ interface CanvasPaneProps {
   deployState: DeployProgress | null;
   /** Dismiss the deploy banner (clears the workflow's deploy progress). */
   onDismissDeploy: () => void;
-  /** Switch the right pane to the Code tab — the deploy banner's "Trigger from
-   *  your code" jumps there, where the integration snippet lives. */
+  /**
+   * The Agents API base URL (from AppState) — the executions host the
+   * integration snippets target. Undefined on servers that predate the field
+   * (and in mocks), where `generateSnippet` falls back to the SDK's default.
+   */
+  agentsBaseUrl?: string;
+  /**
+   * Bring the integration snippets into view.
+   *
+   * They used to live behind a permanent `Code` tab, which spent standing IA on
+   * a question asked once, just after a deploy. They now live on the DEPLOY
+   * surface — beside the banner that reports the build that made them callable
+   * — so the deploy banner's "Trigger from your code" opens the disclosure
+   * here and asks the shell (this prop) to make sure the Steps surface is the
+   * one on screen.
+   */
   onOpenCode: () => void;
   /** Registry workflows — launched-workflow nodes navigate to theirs. */
   workflows: WorkflowInfo[];
@@ -222,6 +238,7 @@ export function CanvasPane({
   preview,
   deployState,
   onDismissDeploy,
+  agentsBaseUrl,
   onOpenCode,
   workflows,
   onOpenWorkflow,
@@ -579,6 +596,9 @@ export function CanvasPane({
   // full detail (Agent run, IO/logs, contract, lineage) renders INSIDE its
   // expansion — clicking a step is a dropdown, not a separate slide-in view.
   const [expandedStepId, setExpandedStepId] = useState<string | null>(null);
+  // Which agent's integration snippets are disclosed on the deploy surface —
+  // a path, not a flag, so the section closes itself when the subject changes.
+  const [snippetsOpenFor, setSnippetsOpenFor] = useState<string | null>(null);
   useEffect(() => {
     const onMessage = (event: MessageEvent): void => {
       const data = event.data as {
@@ -974,6 +994,18 @@ export function CanvasPane({
   // in flight/just landed) and the run summary card (if a run has been
   // observed). Rendered at the top of every steps-surface path so Run/Test/Deploy
   // each show progress + the relevant final data the moment the pane opens here.
+  //
+  // It is also where the integration snippets now live. "How do I call this"
+  // is a post-deploy question, asked once — a permanent tab was too much IA for
+  // it, and the honest place to answer it is next to the deploy that made the
+  // agent callable. Only a READY cloud build has anything to copy, which is the
+  // same guard the tab's four empty states were spelling out.
+  const snippetSubject =
+    subjectWorkflow && isWorkflowRunnable(subjectWorkflow) ? subjectWorkflow : null;
+  // Keyed by path rather than a boolean, so the disclosure does not stay open
+  // over the NEXT agent you select — that agent has different snippets, and a
+  // section the user never opened would be showing them.
+  const snippetsOpen = snippetSubject != null && snippetsOpenFor === snippetSubject.path;
   const stepsHeader = (
     <>
       {deployState && (
@@ -981,8 +1013,35 @@ export function CanvasPane({
           deployState={deployState}
           workflow={subjectWorkflow}
           onDismiss={onDismissDeploy}
-          onOpenCode={onOpenCode}
+          onOpenCode={() => {
+            if (snippetSubject) setSnippetsOpenFor(snippetSubject.path);
+            onOpenCode();
+          }}
         />
+      )}
+      {snippetSubject && (
+        <section className="steps-snippets" data-testid="steps-snippets">
+          <button
+            type="button"
+            className="steps-snippets-toggle"
+            data-testid="steps-snippets-toggle"
+            aria-expanded={snippetsOpen}
+            onClick={() =>
+              setSnippetsOpenFor(snippetsOpen ? null : snippetSubject.path)
+            }
+          >
+            <Icon name="Code" size={13} />
+            <span className="steps-snippets-title">Trigger from your code</span>
+            <Icon name={snippetsOpen ? "ChevronUp" : "ChevronDown"} size={13} />
+          </button>
+          {snippetsOpen && (
+            <SnippetPanel
+              key={snippetSubject.path}
+              boundWorkflow={snippetSubject}
+              agentsBaseUrl={agentsBaseUrl}
+            />
+          )}
+        </section>
       )}
     </>
   );
@@ -1130,14 +1189,21 @@ export function CanvasPane({
           <span className="canvas-task-spinner" aria-hidden="true" />
           <p className="canvas-empty-hint">{surface === "steps" ? "Loading steps…" : "Loading canvas…"}</p>
         </div>
-      ) : !showsContent && surface === "steps" && (run || deployState) ? (
-        /* No diagram yet, but a run was observed or a deploy is landing: the
-           live per-step data (or the deploy banner) renders instead of the
-           "No steps yet" empty state. */
+      ) : !showsContent && surface === "steps" && (run || deployState || snippetSubject) ? (
+        /* No diagram yet, but the surface still has something true to say: a
+           run was observed, a deploy is landing, or the agent has a ready cloud
+           build and therefore snippets to copy.
+           `snippetSubject` is in that list because the alternative was losing
+           "how do I call this" while tidying the IA: a deployed agent whose
+           board has never rendered would fall straight through to "No steps
+           yet", and its snippets — the whole reason the Code tab is safe to
+           remove — would be unreachable. The empty state is kept BELOW the
+           header rather than replaced, so the honest "no steps" claim survives
+           alongside the things that are not steps. */
         <div className="canvas-frame-wrap" data-view="steps">
           <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
             {stepsHeader}
-            {run && (
+            {run ? (
               <RunWorkspace
                 run={run}
                 target={runTarget}
@@ -1148,6 +1214,17 @@ export function CanvasPane({
                 onInspectionOpened={() => trackProduct("run.inspection_opened", { target: runTarget ?? "unknown" })}
                 onArtifactViewed={() => trackProduct("run.artifact_viewed", { target: runTarget ?? "unknown" })}
                 onDashboardOpened={() => trackProduct("run.dashboard_opened", { target: runTarget ?? "unknown" })}
+              />
+            ) : deployState ? null : (
+              <EmptyState
+                className="canvas-empty"
+                testId={routeEmptyState?.testId ?? "canvas-empty-steps"}
+                icon={routeEmptyState?.icon ?? "Workflow"}
+                title={routeEmptyState?.title ?? "No steps yet"}
+                body={
+                  routeEmptyState?.body ??
+                  "Steps are read from the bound agent's diagram — generated automatically from its code."
+                }
               />
             )}
           </div>

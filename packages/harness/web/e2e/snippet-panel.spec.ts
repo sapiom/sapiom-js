@@ -1,14 +1,18 @@
 /**
- * Code tab — "Trigger from your code" snippets, mock-mode UI tests,
- * same fixtures as smoke.spec.ts:
+ * "Trigger from your code" snippets, on the DEPLOY surface — mock-mode UI
+ * tests, same fixtures as smoke.spec.ts:
  *   - "leasing" → deployed (definitionId: 4821, definitionSlug: "leasing"), the
- *     boot session's binding, so opening the Code tab shows the snippet panel.
- *     The re-vendored contract carries definitionSlug, so the slug is the one
- *     the server resolved from the deployment (no inferred fallback).
- *   - "rfq" → undeployed (definitionId: null) — binding it swaps the tab to
- *     its honest "deploy first" empty state.
- * The tab is the bound agent's integration projection (docs/IA.md: the right
- * pane is Canvas | Steps | Code | Skills); the Canvas tab stays a pure board.
+ *     boot session's binding, so the Steps surface offers the disclosure. The
+ *     re-vendored contract carries definitionSlug, so the slug is the one the
+ *     server resolved from the deployment (no inferred fallback).
+ *   - "rfq" → undeployed (definitionId: null) — only a READY cloud build has
+ *     anything to copy, so the disclosure is simply not offered for it.
+ *
+ * SAP-2980 removed the Code tab. The snippets were NOT removed with it: a
+ * permanent tab spent standing IA on a question asked once, just after a
+ * deploy, so they moved to where that question is actually asked — the Steps
+ * surface, directly under the deploy banner that reports the build that made
+ * the agent callable. The Canvas tab stays a pure board.
  */
 import { expect, test } from "@playwright/test";
 
@@ -18,58 +22,62 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
-  await page.getByTestId("right-tab-code").click();
+  await page.getByTestId("right-tab-steps").click();
+  await page.getByTestId("steps-snippets-toggle").click();
 });
 
-test.describe("the Code tab follows the BOUND workflow's deploy state", () => {
-  test("shows the snippet panel when the bound workflow is deployed", async ({ page }) => {
+test.describe("the snippets follow the SUBJECT's deploy state", () => {
+  test("the Code tab is gone, and the snippets are not gone with it", async ({ page }) => {
+    await expect(page.getByTestId("right-tab-code")).toHaveCount(0);
+    await expect(page.getByTestId("right-panel-code")).toHaveCount(0);
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
-    // Same subheader anatomy as Canvas/Steps: agent name left, the one
-    // server-provable status right.
-    const header = page.getByTestId("code-panel-header");
-    await expect(header.locator(".workflow-actions-name")).toHaveText("leasing");
-    await expect(header.getByTestId("code-panel-status")).toContainText("Deployed");
+    await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
-  test("an undeployed binding swaps to the deploy-first empty state; a deployed one brings the panel back", async ({
+  test("only a READY cloud build offers them — an undeployed agent has nothing to copy", async ({
     page,
   }) => {
-    // Opening rfq (no session in its workspace) swaps the tab to rfq's own
-    // deploy-first state — no other agent's snippets leak in. Since SAP-2931
-    // the tab follows the rail SELECTION, not the binding: how you trigger an
-    // agent from code has nothing to do with which session is live, so an
-    // unsessioned undeployed agent reads the same as a bound one. It used to
-    // say "no running session for rfq", which described the session rather than
-    // the question the tab answers. Selecting it reveals a real board, so the
-    // pane is already open.
+    // Opening rfq (no session in its workspace) drops the disclosure entirely:
+    // no other agent's snippets leak in, and a snippet for an agent with no
+    // ready build could only produce a 404 call. Since SAP-2931 this follows
+    // the rail SELECTION, not the binding — how you trigger an agent from code
+    // has nothing to do with which session is live.
     await focusRfqAgent(page);
+    await page.getByTestId("right-tab-steps").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
-    await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");
+    await expect(page.getByTestId("steps-snippets")).toHaveCount(0);
 
     // Opening leasing again switches back to its most-recent deployed session.
     // Wait for that session transition before inspecting the pane: its board
-    // may collapse the pane, while a preserved Code tab may leave it open.
+    // may collapse the pane.
     await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
       "sess-leasing-2",
     );
-    if (await page.getByTestId("right-expand").isVisible()) {
-      await page.getByTestId("right-expand").click();
-    }
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    // The disclosure is keyed to the AGENT, not to a flag, so leasing's own
+    // section comes back open exactly as it was left. Asserted on the DOM
+    // rather than on visibility: an empty board auto-collapses the pane, and
+    // whether that lands before or after this line is a race that says nothing
+    // about the snippets.
+    await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(page.getByTestId("snippet-panel")).toHaveCount(1);
   });
 
-  test("the snippets live in the Code tab only — Canvas stays a pure board and Steps a pure list", async ({
+  test("they live on the Steps surface only — Canvas stays a pure board", async ({
     page,
   }) => {
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
     await page.getByTestId("right-tab-canvas").click();
     await expect(page.getByTestId("snippet-panel")).not.toBeVisible();
     await page.getByTestId("right-tab-steps").click();
-    await expect(page.getByTestId("snippet-panel")).not.toBeVisible();
-    await page.getByTestId("right-tab-code").click();
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
   });
 });

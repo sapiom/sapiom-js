@@ -186,7 +186,7 @@ test.describe("cost-removed guard", () => {
 
     // Navigate through every inspectable surface
     await page.getByTestId("right-tab-steps").click();
-    await page.getByTestId("right-tab-code").click();
+    await page.getByTestId("steps-snippets-toggle").click();
     await page.getByTestId("right-tab-canvas").click();
 
     // Settings
@@ -336,10 +336,13 @@ test.describe("cost-removed guard", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Surface 5: Code tab — snippet panel (leasing is deployed)
+  // Surface 5: the deploy surface's snippet panel (leasing is deployed).
+  // It lived behind a Code tab until SAP-2980 rehomed it onto Steps, beside
+  // the deploy banner that reports the build that made the agent callable.
   // -------------------------------------------------------------------------
   test("snippet panel has no cost affordances", async ({ page }) => {
-    await page.getByTestId("right-tab-code").click();
+    await page.getByTestId("right-tab-steps").click();
+    await page.getByTestId("steps-snippets-toggle").click();
 
     const snippetPanel = page.getByTestId("snippet-panel");
     await expect(snippetPanel).toBeVisible();
@@ -454,8 +457,8 @@ test.describe("cost-removed guard", () => {
     await assertNoDollarInChrome(stepsPane, "steps tab — e2e");
     await assertNoCostAffordance(stepsPane, "steps tab — e2e");
 
-    // Code tab: snippet panel
-    await page.getByTestId("right-tab-code").click();
+    // Deploy surface: snippet panel (Steps, disclosed)
+    await page.getByTestId("steps-snippets-toggle").click();
     const snippetPanel = page.getByTestId("snippet-panel");
     await expect(snippetPanel).toBeVisible();
     await assertNoDollarInChrome(snippetPanel, "snippet panel — e2e");

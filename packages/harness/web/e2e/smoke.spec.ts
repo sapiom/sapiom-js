@@ -432,9 +432,15 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     });
   });
 
-  test("a folder label opens a full-main cached workspace graph while preserving the agent view", async ({
+  test("a folder label FILLS the workbench: the conversation stays, the map draws beside it", async ({
     page,
   }) => {
+    /* SAP-2980 E3.1/E3.6. This test used to assert the opposite — a full-main
+       destination with both panes hidden and inert — a pattern the graph
+       inherited from the template gallery by analogy. Browsing a gallery is a
+       detour; looking at your project's shape while talking to it is not, and
+       the centre pane vanishing on a project click was a mode switch where a
+       view change had been asked for. */
     const sessionContext = page.getByTestId("session-context");
     await expect(sessionContext).toHaveAttribute(
       "data-session-id",
@@ -443,16 +449,16 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("workflow-leasing")).toBeVisible();
 
-    // The right-pane arrangement is agent state, not workspace-graph state.
-    // Leave it on Steps and prove the folder destination does not rewrite it.
+    // The right-pane arrangement is held across altitudes: leave it on Steps
+    // and prove the trip up to the project and back restores it.
     await page.getByTestId("right-tab-steps").click();
     await expect(page.getByTestId("right-tab-steps")).toHaveAttribute(
       "aria-selected",
       "true",
     );
 
-    // The label owns graph selection; it does not fold the folder, navigate
-    // the session, or mount the graph in the right sidebar.
+    // The label owns the project selection; it does not fold the folder or
+    // navigate the session.
     await page.getByTestId("project-select-acme-app").click();
     await expect(page.getByTestId("project-row-acme-app")).toHaveClass(
       /is-selected/,
@@ -460,20 +466,46 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("workflow-leasing")).toBeVisible();
     await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
     await expect(page.getByTestId("system-graph-canvas")).toBeVisible();
-    await expect(page.locator(".center-pane")).toBeHidden();
-    await expect(page.locator(".center-pane")).toHaveCount(1);
-    await expect(page.locator(".right-pane")).toBeHidden();
-    await expect(page.locator(".right-pane")).toHaveCount(1);
-    await expect(page.locator(".harness-terminal")).toBeHidden();
-    await expect(page.locator(".harness-terminal")).toHaveCount(1);
-    await expect(page.locator(".canvas-iframe")).toBeHidden();
-    await expect(page.locator(".canvas-iframe")).toHaveCount(1);
+    // BOTH panes stay live. Neither is hidden, and neither is inert — the
+    // conversation is still typeable while its project's map is on screen.
+    await expect(page.locator(".center-pane")).toBeVisible();
+    await expect(page.locator(".center-pane")).not.toHaveAttribute("inert", "");
+    await expect(page.locator(".right-pane")).toBeVisible();
+    await expect(page.locator(".right-pane")).not.toHaveAttribute("inert", "");
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    // The board's slot is HIDDEN, never unmounted — CanvasPane keeps its mount
+    // (probe state, reload key, task tracking) across the trip up. Its
+    // DOCUMENT follows the subject, and at map altitude the subject is a
+    // project, so no agent's board is drawn behind the map.
+    const board = page.getByTestId("right-panel-board");
+    await expect(board).toHaveCount(1);
+    await expect(board).toBeHidden();
+    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
 
-    const destinationBounds = await page
+    // E3.9: Steps are an AGENT's steps, so the tab says why it cannot answer
+    // for a whole project rather than silently showing the last agent's list.
+    const steps = page.getByTestId("right-tab-steps");
+    await expect(steps).toBeDisabled();
+    await expect(steps).toHaveAttribute(
+      "data-tooltip",
+      "Steps belong to one agent — select an agent to see them",
+    );
+    await expect(steps).toHaveAttribute("aria-selected", "false");
+    await expect(page.getByTestId("right-tab-canvas")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // E3.10: the Code tab is gone; its snippets live on the deploy surface.
+    await expect(page.getByTestId("right-tab-code")).toHaveCount(0);
+
+    // The map fills the right pane's panel, not the whole shell.
+    const mapBounds = await page
       .getByTestId("workspace-graph-view")
       .boundingBox();
+    const paneBounds = await page.getByTestId("right-panel-canvas").boundingBox();
+    expect(mapBounds).toEqual(paneBounds);
     const appBounds = await page.locator(".app").boundingBox();
-    expect(destinationBounds).toEqual(appBounds);
+    expect(mapBounds?.width ?? 0).toBeLessThan(appBounds?.width ?? 0);
 
     await expect(page.getByTestId("system-graph-node-leasing")).toContainText(
       "Leasing",
@@ -571,21 +603,39 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
       )
       .toBe(1);
 
-    // A navigable graph card uses the ordinary agent-focus path and restores
-    // the exact terminal/session/right-tab arrangement that was underneath.
+    // E3.7: a graph card DRILLS to that agent's board — the ordinary
+    // agent-focus path — and the held Steps arrangement comes back with it.
     await page.getByTestId("system-graph-node-leasing").click();
     await expect(page.getByTestId("system-graph-canvas")).toHaveCount(0);
     await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(
       /is-focused/,
     );
+    // E3.8: one selection — the project row lets go the moment an agent is it.
+    await expect(page.getByTestId("project-row-acme-app")).not.toHaveClass(
+      /is-selected/,
+    );
     await expect(sessionContext).toHaveAttribute(
       "data-session-id",
       "sess-boot",
     );
+    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
     await expect(page.getByTestId("right-tab-steps")).toHaveAttribute(
       "aria-selected",
       "true",
+    );
+
+    // ...and the way back UP is there, so the map is no longer a one-way door.
+    const up = page.getByTestId("canvas-altitude-up");
+    await expect(up).toHaveAttribute("aria-label", "Back to the acme-app map");
+    await up.click();
+    await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+    await expect(page.getByTestId("project-row-acme-app")).toHaveClass(
+      /is-selected/,
+    );
+    await expect(sessionContext).toHaveAttribute(
+      "data-session-id",
+      "sess-boot",
     );
   });
 
@@ -746,9 +796,15 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     );
   });
 
-  test("a persisted workspace graph is viewable with no active session", async ({
+  test("a project with no live session is GIVEN one, and its map draws beside it", async ({
     page,
   }) => {
+    /* SAP-2980 E3.2. The graph itself was always session-independent, and this
+       test used to prove exactly that — a full-main destination over a
+       no-session agent view. Now the project IS the conversation's subject, so
+       selecting one that has nothing running opens its first session at the
+       project root; a project you can select but not talk to is the failure
+       this criterion names. */
     await page.goto("/?seed=0&mockNoLiveSessions=1");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await expect(page.getByTestId("open-agent-empty")).toContainText(
@@ -763,14 +819,29 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
 
     await expect(page.getByTestId("system-graph-canvas")).toBeVisible();
     await expect(page.getByTestId("system-graph-node-research")).toBeVisible();
-    // The graph is session-independent. The no-session agent view stays
-    // mounted underneath and returns unchanged when its card is selected.
-    await expect(page.getByTestId("open-agent-empty")).toBeHidden();
-    await expect(page.getByTestId("open-agent-empty")).toHaveCount(1);
-    await page.getByTestId("system-graph-node-leasing").click();
-    await expect(page.getByTestId("open-agent-empty")).toContainText(
-      "No running session for leasing",
+    // A live session, rooted at the project (SAP-2927), with the terminal
+    // beside the map rather than replaced by it.
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      /^sess-mock-/,
     );
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("open-agent-empty")).toHaveCount(0);
+
+    // E3.4: drilling to a sibling moves the right pane only — that session
+    // already reaches every agent in its project, so it does not hand over.
+    const sessionId = await page
+      .getByTestId("session-context")
+      .getAttribute("data-session-id");
+    await page.getByTestId("system-graph-node-leasing").click();
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
+      /is-focused/,
+    );
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      sessionId!,
+    );
+    await expect(page.getByTestId("open-agent-empty")).toHaveCount(0);
   });
 
   test("a failed workspace projection retries instead of poisoning the cache", async ({

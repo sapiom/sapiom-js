@@ -24,8 +24,9 @@ interface WorkspaceGraphViewProps {
   workflows: readonly WorkflowInfo[];
   workspaceScopes: readonly WorkspaceScopeSummary[];
   lastMessage: BusMessage | null;
+  /** Drill from a map node into that agent's board — a CUT to the other
+   *  altitude, which also moves the rail selection so the two agree. */
   onOpenAgent: (path: string) => void;
-  onExpandRail?: () => void;
 }
 
 export function WorkspaceGraphView({
@@ -36,7 +37,6 @@ export function WorkspaceGraphView({
   workspaceScopes,
   lastMessage,
   onOpenAgent,
-  onExpandRail,
 }: WorkspaceGraphViewProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<SystemGraphSnapshot | null>(() =>
     systemGraphLoader.peek(workspaceKey),
@@ -140,23 +140,15 @@ export function WorkspaceGraphView({
   );
 
   return (
+    /* The MAP altitude of the right pane (`lib/canvas-altitude.ts`) — a
+       project's agents and the edges between them, drawn beside the
+       conversation rather than instead of it. */
     <section
       className="workspace-graph-view"
       data-testid="workspace-graph-view"
       aria-label="Workspace dependencies"
     >
       <header className="workspace-graph-bar">
-        {onExpandRail && (
-          <button
-            type="button"
-            className="theme-toggle"
-            data-testid="workspace-graph-rail-expand"
-            aria-label="Expand workspace panel"
-            onClick={onExpandRail}
-          >
-            <Icon name="PanelLeftOpen" size={15} />
-          </button>
-        )}
         <Icon name="Folder" size={15} />
         <span
           className="workspace-graph-title"

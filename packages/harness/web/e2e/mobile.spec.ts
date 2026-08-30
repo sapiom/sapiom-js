@@ -104,21 +104,33 @@ test("right pane opens as a bottom sheet and dismisses from its own collapse con
   await expect(pane).toHaveCount(1);
 });
 
-test("a workspace graph is the main destination, never the right bottom sheet", async ({
+test("a workspace graph opens in the right sheet, over a workbench that is still there", async ({
   page,
 }) => {
+  // It used to be a full-main destination that hid BOTH panes — the mode
+  // switch SAP-2980 removes. On mobile the map is the right pane's map, so it
+  // arrives in the sheet, and the conversation is one dismissal away rather
+  // than gone.
   await page.getByTestId("rail-expand").click();
   await page.getByTestId("project-select-acme-app").click();
 
   const graph = page.getByTestId("workspace-graph-view");
   await expect(graph).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expect(page.getByTestId("right-sheet-scrim")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toBeHidden();
-  await expect(page.locator(".right-pane")).toHaveCount(1);
-  await expect(page.locator(".center-pane")).toBeHidden();
+  await expect(page.locator(".right-pane")).toBeVisible();
+  // A sheet, so it brings the sheet's own scrim — the tap-out back to the
+  // conversation, which a full-main destination could not offer.
+  await expect(page.getByTestId("right-sheet-scrim")).toBeVisible();
   await expect(page.locator(".center-pane")).toHaveCount(1);
 
+  // Sheet anatomy, same as the board's: full width, anchored to the bottom,
+  // one header height of the page left visible above as context.
+  await settled(page.locator(".right-pane"));
+  const sheet = await page.locator(".right-pane").boundingBox();
+  expect(sheet?.x).toBe(0);
+  expect(sheet?.width).toBe(375);
+  expect((sheet?.y ?? 0) + (sheet?.height ?? 0)).toBe(812);
+  expect(sheet?.y ?? 0).toBeGreaterThan(0);
   const bounds = await graph.boundingBox();
   expect(bounds?.x).toBe(0);
   expect(bounds?.width).toBe(375);
@@ -140,7 +152,10 @@ test("a workspace graph is the main destination, never the right bottom sheet", 
     path: "web/e2e/screenshots/mobile-workspace-graph.png",
   });
 
+  // Drilling into a node cuts to board altitude; the sheet's own collapse
+  // control then hands the whole screen back to the conversation.
   await page.getByTestId("system-graph-node-leasing").click();
   await expect(graph).toHaveCount(0);
+  await page.getByTestId("right-collapse").click();
   await expect(page.locator(".center-pane")).toBeVisible();
 });
