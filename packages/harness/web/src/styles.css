@@ -2135,8 +2135,15 @@ button.rail-footer-card:hover {
 }
 
 /* The destructive item, marked on hover the way the session menu's is. A wash
-   (`color-mix`), never a full-strength surface. */
-.project-row-menu-danger:hover {
+   (`color-mix`), never a full-strength surface.
+
+   The `.session-dropdown-item` qualifier is load-bearing, not decoration: the
+   menu items wear that class for their anatomy, its own `:hover` rule ties
+   this one on specificity, and it is declared LATER in this file — so the
+   neutral hover won and the destructive item marked itself in text colour
+   alone. Measured, not guessed: the computed background came back
+   `rgba(17, 17, 20, 0.04)`. */
+.session-dropdown-item.project-row-menu-danger:hover {
   color: var(--red-text);
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
@@ -10159,6 +10166,14 @@ button.system-graph-node.is-navigable:focus-visible {
 .help-overlay-note strong {
   color: var(--text);
   font-weight: var(--fw-strong, 600);
+}
+
+/* The card takes focus on open so a screen reader lands inside the dialog.
+   It is not itself a control, so it draws no ring — the ring belongs to the
+   things you can press. */
+.help-overlay-card:focus,
+.help-overlay-card:focus-visible {
+  outline: none;
 }
 
 /* One action, right-aligned: the card teaches and then gets out of the way. */

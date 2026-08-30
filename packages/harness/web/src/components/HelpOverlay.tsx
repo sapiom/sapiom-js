@@ -85,7 +85,7 @@ function shouldAutoOpen(): boolean {
 
 export function HelpOverlay(): JSX.Element | null {
   const [open, setOpen] = useState(shouldAutoOpen);
-  const dismissRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onOpen = (): void => setOpen(true);
@@ -99,9 +99,11 @@ export function HelpOverlay(): JSX.Element | null {
       if (e.key === "Escape") dismiss();
     };
     window.addEventListener("keydown", onKey);
-    // The primary action takes focus, so Enter dismisses and a screen reader
-    // lands on the way out rather than on the scrim.
-    dismissRef.current?.focus();
+    // FOCUS THE CARD, not the button inside it. A screen reader has to land on
+    // the dialog rather than on the scrim behind it, but focusing "Got it"
+    // put a 2px focus ring on the way OUT of a card the reader has not read
+    // yet — the loudest thing on a first-run screen, pointing at the exit.
+    cardRef.current?.focus();
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -128,7 +130,7 @@ export function HelpOverlay(): JSX.Element | null {
         if (e.target === e.currentTarget) dismiss();
       }}
     >
-      <div className="overview-modal-card">
+      <div className="overview-modal-card help-overlay-card" ref={cardRef} tabIndex={-1}>
         <button
           type="button"
           className="theme-toggle overview-modal-close"
@@ -195,7 +197,6 @@ export function HelpOverlay(): JSX.Element | null {
 
           <div className="help-overlay-actions">
             <button
-              ref={dismissRef}
               type="button"
               className="btn-primary"
               data-testid="help-overlay-dismiss"
