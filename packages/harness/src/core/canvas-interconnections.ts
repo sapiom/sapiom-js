@@ -17,7 +17,7 @@
  * claim about what a step calls.
  *
  * This deliberately does not create a Program or TypeChecker. Supported direct
- * calls are syntax-accurate (comments and strings cannot become relationships),
+ * calls are syntax-accurate (comments and strings cannot become invocations),
  * while dynamic targets are returned as explicit extraction warnings.
  */
 import { constants as fsConstants } from "node:fs";
@@ -53,7 +53,7 @@ const CAPABILITY_CALL_PATTERN =
 
 // Async launches already render as launched-agent nodes on the per-agent
 // Canvas. Keep blocking `agents.run` in that Canvas's existing capability-chip
-// projection until it gains a blocking relationship node of its own.
+// projection until it gains a blocking invocation node of its own.
 const NON_CAPABILITY_CALLS = new Set([
   "agents.launch",
   "orchestrations.launch",
@@ -190,7 +190,7 @@ export async function listSourceFilesWithObservations(
         observedPaths.push(candidate);
       } else if (entry.isSymbolicLink()) {
         // A symlink may hide a directory of project sources. Never follow it,
-        // and keep the relationship projection explicitly degraded.
+        // and keep the invocation projection explicitly degraded.
         complete = false;
       }
     }

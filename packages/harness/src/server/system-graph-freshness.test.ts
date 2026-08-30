@@ -115,7 +115,7 @@ describe("workspace graph freshness wiring", () => {
   });
 
   it(
-    "refreshes source relationships and agent inventory without a session",
+    "refreshes source invocations and agent inventory without a session",
     { retry: 1, timeout: 30_000 },
     async () => {
       const researchRoot = await scaffoldAgent(workspaceRoot, "research");

@@ -124,7 +124,7 @@ function parseEdge(value: unknown): SystemGraphEdge | null {
     typeof value.from !== "string" ||
     typeof value.to !== "string" ||
     value.kind !== "invokes" ||
-    value.basis !== "static" ||
+    value.basis !== "static-invocation" ||
     (value.mode !== "blocking" && value.mode !== "async")
   ) {
     return null;
@@ -133,7 +133,7 @@ function parseEdge(value: unknown): SystemGraphEdge | null {
     from: value.from,
     to: value.to,
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: value.mode,
   };
 }
@@ -185,7 +185,7 @@ const compareIds = (left: string, right: string): number =>
   left === right ? 0 : left < right ? -1 : 1;
 
 /** Public graph data retains one record per mode. The V0 Canvas draws one
- * connector per endpoint pair so dual-mode relationships never overlap. */
+ * connector per endpoint pair so dual-mode invocations never overlap. */
 export function groupSystemGraphEdges(
   edges: readonly SystemGraphEdge[],
 ): VisibleSystemGraphEdge[] {

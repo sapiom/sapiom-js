@@ -5,15 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentInventoryItem } from "./system-graph-inventory.js";
 import {
-  CachedAgentRelationshipProvider,
-  SourceAgentRelationshipProvider,
-  type AgentRelationshipProvider,
-  type AgentRelationshipProviderResult,
+  CachedAgentInvocationProvider,
+  SourceAgentInvocationProvider,
+  type AgentInvocationProvider,
+  type AgentInvocationProviderResult,
 } from "./system-graph-relationships.js";
 
 const temporaryRoots: string[] = [];
-const EMPTY_RESULT: AgentRelationshipProviderResult = {
-  relationships: [],
+const EMPTY_RESULT: AgentInvocationProviderResult = {
+  invocations: [],
   warnings: [],
 };
 
@@ -33,7 +33,7 @@ function deferred<T>(): {
 
 async function callerWithSource(source: string): Promise<AgentInventoryItem> {
   const sourceRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "system-graph-relationships-test-"),
+    path.join(os.tmpdir(), "system-graph-invocations-test-"),
   );
   temporaryRoots.push(sourceRoot);
   await fs.writeFile(path.join(sourceRoot, "index.ts"), source);
@@ -59,7 +59,7 @@ afterEach(async () => {
   );
 });
 
-describe("SourceAgentRelationshipProvider", () => {
+describe("SourceAgentInvocationProvider", () => {
   it("aggregates evidence by target and mode while preserving distinct modes", async () => {
     const caller = await callerWithSource(`
 ctx.sapiom.agents.run({ definition: "growth" });
@@ -68,10 +68,11 @@ ctx.sapiom.agents.launch({ definition: "growth" });
 ctx.sapiom.agents.launch({ definition: dynamicTarget });
 `);
 
-    const result =
-      await new SourceAgentRelationshipProvider().listRelationships(caller);
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      caller,
+    );
 
-    expect(result.relationships).toEqual([
+    expect(result.invocations).toEqual([
       {
         target: "growth",
         mode: "blocking",
@@ -95,14 +96,51 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
     ]);
   });
 
-  it("returns identical relationship semantics for unchanged caller input", async () => {
+  it("reports only the coordinator's direct invocations without inferring output data flow", async () => {
+    const caller = {
+      ...(await callerWithSource(`
+import { agents } from "@sapiom/tools";
+
+const research = await agents.run({
+  definition: "research",
+});
+
+const summary = formatResearch(research.output);
+
+await agents.run({
+  definition: "growth",
+  input: { summary },
+});
+`)),
+      agentKey: "coordinator",
+      definitionSlug: "coordinator",
+      label: "Coordinator",
+      resolutionAliases: ["coordinator"],
+    };
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      caller,
+    );
+    const directInvocations = result.invocations.map(({ target }) => [
+      caller.agentKey,
+      target,
+    ]);
+
+    expect(directInvocations).toEqual([
+      ["coordinator", "research"],
+      ["coordinator", "growth"],
+    ]);
+    expect(directInvocations).not.toContainEqual(["research", "growth"]);
+  });
+
+  it("returns identical invocation semantics for unchanged caller input", async () => {
     const caller = await callerWithSource(
       'ctx.sapiom.agents.run({ definition: "growth" });\n',
     );
-    const provider = new SourceAgentRelationshipProvider();
+    const provider = new SourceAgentInvocationProvider();
 
-    const first = await provider.listRelationships(caller);
-    const second = await provider.listRelationships(caller);
+    const first = await provider.listInvocations(caller);
+    const second = await provider.listInvocations(caller);
 
     expect(second).toEqual(first);
   });
@@ -110,7 +148,7 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
   it("does not follow a TypeScript symlink outside the workflow", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
     const external = await fs.mkdtemp(
-      path.join(os.tmpdir(), "system-graph-relationships-external-"),
+      path.join(os.tmpdir(), "system-graph-invocations-external-"),
     );
     temporaryRoots.push(external);
     await fs.writeFile(
@@ -123,11 +161,11 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
     );
     const onBytesRead = vi.fn();
 
-    const result = await new SourceAgentRelationshipProvider({
+    const result = await new SourceAgentInvocationProvider({
       onBytesRead,
-    }).listRelationships(caller);
+    }).listInvocations(caller);
 
-    expect(result.relationships).toEqual([]);
+    expect(result.invocations).toEqual([]);
     expect(result.complete).toBe(false);
     expect(onBytesRead).toHaveBeenCalledTimes(1);
     expect(onBytesRead).toHaveBeenCalledWith(
@@ -140,7 +178,7 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
     );
   });
 
-  it("rejects an ancestor swap before reading relationship source bytes", async () => {
+  it("rejects an ancestor swap before reading invocation source bytes", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
     const inside = path.join(caller.sourceRoot, "inside");
     await fs.mkdir(inside);
@@ -149,7 +187,7 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
       'ctx.sapiom.agents.run({ definition: "inside" });\n',
     );
     const external = await fs.mkdtemp(
-      path.join(os.tmpdir(), "system-graph-relationships-swap-"),
+      path.join(os.tmpdir(), "system-graph-invocations-swap-"),
     );
     temporaryRoots.push(external);
     await fs.writeFile(
@@ -159,7 +197,7 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
     const onBytesRead = vi.fn();
     let swapped = false;
 
-    const result = await new SourceAgentRelationshipProvider({
+    const result = await new SourceAgentInvocationProvider({
       beforeOpen: async (file) => {
         if (!file.endsWith(`${path.sep}inside${path.sep}edge.ts`) || swapped) {
           return;
@@ -169,9 +207,9 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
         await fs.symlink(external, inside, "dir");
       },
       onBytesRead,
-    }).listRelationships(caller);
+    }).listInvocations(caller);
 
-    expect(result.relationships).toEqual([]);
+    expect(result.invocations).toEqual([]);
     expect(result.complete).toBe(false);
     expect(onBytesRead).not.toHaveBeenCalledWith(
       path.join(external, "edge.ts"),
@@ -180,33 +218,33 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
   });
 });
 
-describe("CachedAgentRelationshipProvider", () => {
+describe("CachedAgentInvocationProvider", () => {
   it("coalesces and reuses unchanged caller extraction", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi.fn(async () => ({
-        relationships: [],
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi.fn(async () => ({
+        invocations: [],
         warnings: [],
       })),
     };
     const fingerprint = vi.fn(async () => "fingerprint-one");
-    const provider = new CachedAgentRelationshipProvider(inner, fingerprint);
+    const provider = new CachedAgentInvocationProvider(inner, fingerprint);
 
-    const first = provider.listRelationships(caller);
-    await expect(provider.listRelationships(caller)).resolves.toEqual(
+    const first = provider.listInvocations(caller);
+    await expect(provider.listInvocations(caller)).resolves.toEqual(
       await first,
     );
-    await provider.listRelationships(caller);
+    await provider.listInvocations(caller);
 
-    expect(inner.listRelationships).toHaveBeenCalledTimes(1);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(1);
     expect(fingerprint).toHaveBeenCalledTimes(3);
   });
 
   it("rescans only after the caller fingerprint changes", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi.fn(async () => ({
-        relationships: [],
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi.fn(async () => ({
+        invocations: [],
         warnings: [],
       })),
     };
@@ -214,61 +252,61 @@ describe("CachedAgentRelationshipProvider", () => {
       .fn()
       .mockResolvedValueOnce("one")
       .mockResolvedValueOnce("two");
-    const provider = new CachedAgentRelationshipProvider(inner, fingerprint);
+    const provider = new CachedAgentInvocationProvider(inner, fingerprint);
 
-    await provider.listRelationships(caller);
-    await provider.listRelationships(caller);
+    await provider.listInvocations(caller);
+    await provider.listInvocations(caller);
 
-    expect(inner.listRelationships).toHaveBeenCalledTimes(2);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(2);
   });
 
   it("does not retain a failed caller result", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi
         .fn()
         .mockRejectedValueOnce(new Error("not installed"))
-        .mockResolvedValueOnce({ relationships: [], warnings: [] }),
+        .mockResolvedValueOnce({ invocations: [], warnings: [] }),
     };
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "same",
     );
 
-    await expect(provider.listRelationships(caller)).rejects.toThrow(
+    await expect(provider.listInvocations(caller)).rejects.toThrow(
       "not installed",
     );
-    await expect(provider.listRelationships(caller)).resolves.toEqual({
-      relationships: [],
+    await expect(provider.listInvocations(caller)).resolves.toEqual({
+      invocations: [],
       warnings: [],
     });
-    expect(inner.listRelationships).toHaveBeenCalledTimes(2);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(2);
   });
 
   it("evicts removed callers while preserving retained callers", async () => {
     const first = await callerWithSource("export const first = 1;\n");
     const second = await callerWithSource("export const second = 1;\n");
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi.fn(async () => ({
-        relationships: [],
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi.fn(async () => ({
+        invocations: [],
         warnings: [],
       })),
     };
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "same",
     );
-    await provider.listRelationships(first);
-    await provider.listRelationships(second);
+    await provider.listInvocations(first);
+    await provider.listInvocations(second);
 
     provider.retainCallers([second]);
-    await provider.listRelationships(first);
-    await provider.listRelationships(second);
+    await provider.listInvocations(first);
+    await provider.listInvocations(second);
 
-    expect(inner.listRelationships).toHaveBeenCalledTimes(3);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(3);
   });
 
-  it("runs background relationship extraction with a fixed concurrency cap", async () => {
+  it("runs background invocation extraction with a fixed concurrency cap", async () => {
     const callers = await Promise.all(
       Array.from({ length: 9 }, (_, index) =>
         callerWithSource(`export const value = ${index};\n`),
@@ -278,8 +316,8 @@ describe("CachedAgentRelationshipProvider", () => {
     let active = 0;
     let maxActive = 0;
     const onChange = vi.fn();
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi.fn(async () => {
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi.fn(async () => {
         active += 1;
         maxActive = Math.max(maxActive, active);
         await new Promise<void>((resolve) => releases.push(resolve));
@@ -287,15 +325,15 @@ describe("CachedAgentRelationshipProvider", () => {
         return EMPTY_RESULT;
       }),
     };
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "unused",
       { concurrency: 4, onChange },
     );
 
-    provider.startRelationships(callers);
+    provider.startInvocations(callers);
     await vi.waitFor(() => {
-      expect(inner.listRelationships).toHaveBeenCalledTimes(4);
+      expect(inner.listInvocations).toHaveBeenCalledTimes(4);
     });
     expect(maxActive).toBe(4);
 
@@ -304,26 +342,26 @@ describe("CachedAgentRelationshipProvider", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     await vi.waitFor(() => {
-      expect(inner.listRelationships).toHaveBeenCalledTimes(9);
+      expect(inner.listInvocations).toHaveBeenCalledTimes(9);
       expect(onChange).toHaveBeenCalledTimes(1);
     });
     expect(maxActive).toBe(4);
     expect(
       callers.every(
-        (caller) => provider.peekRelationships(caller)?.status === "ready",
+        (caller) => provider.peekInvocations(caller)?.status === "ready",
       ),
     ).toBe(true);
   });
 
   it("discards a superseded result and runs the fresh generation afterward", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
-    const first = deferred<AgentRelationshipProviderResult>();
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi
+    const first = deferred<AgentInvocationProviderResult>();
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi
         .fn()
         .mockImplementationOnce(() => first.promise)
         .mockResolvedValueOnce({
-          relationships: [
+          invocations: [
             {
               target: "fresh",
               mode: "blocking",
@@ -334,20 +372,20 @@ describe("CachedAgentRelationshipProvider", () => {
         }),
     };
     const onChange = vi.fn();
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "unused",
       { concurrency: 1, onChange },
     );
 
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     await vi.waitFor(() =>
-      expect(inner.listRelationships).toHaveBeenCalledTimes(1),
+      expect(inner.listInvocations).toHaveBeenCalledTimes(1),
     );
     provider.invalidateSource(caller.sourceRoot);
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     first.resolve({
-      relationships: [
+      invocations: [
         {
           target: "stale",
           mode: "blocking",
@@ -358,9 +396,9 @@ describe("CachedAgentRelationshipProvider", () => {
     });
 
     await vi.waitFor(() => {
-      expect(inner.listRelationships).toHaveBeenCalledTimes(2);
+      expect(inner.listInvocations).toHaveBeenCalledTimes(2);
       expect(
-        provider.peekRelationships(caller)?.result.relationships[0]?.target,
+        provider.peekInvocations(caller)?.result.invocations[0]?.target,
       ).toBe("fresh");
     });
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -368,53 +406,53 @@ describe("CachedAgentRelationshipProvider", () => {
 
   it("keeps failures stable until explicit Retry rearms them", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi
         .fn()
         .mockRejectedValueOnce(new Error("transient"))
         .mockResolvedValueOnce(EMPTY_RESULT),
     };
-    const provider = new CachedAgentRelationshipProvider(inner);
+    const provider = new CachedAgentInvocationProvider(inner);
 
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     await vi.waitFor(() => {
-      expect(provider.peekRelationships(caller)?.status).toBe("failed");
+      expect(provider.peekInvocations(caller)?.status).toBe("failed");
     });
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(inner.listRelationships).toHaveBeenCalledTimes(1);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(1);
 
     provider.retryFailed(caller.sourceRoot);
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     await vi.waitFor(() => {
-      expect(provider.peekRelationships(caller)?.status).toBe("ready");
+      expect(provider.peekInvocations(caller)?.status).toBe("ready");
     });
-    expect(inner.listRelationships).toHaveBeenCalledTimes(2);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(2);
   });
 
   it("rearms an incomplete bounded scan only on explicit Retry", async () => {
     const caller = await callerWithSource("export const value = 1;\n");
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi
         .fn()
         .mockResolvedValueOnce({ ...EMPTY_RESULT, complete: false })
         .mockResolvedValueOnce({ ...EMPTY_RESULT, complete: true }),
     };
-    const provider = new CachedAgentRelationshipProvider(inner);
+    const provider = new CachedAgentInvocationProvider(inner);
 
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     await vi.waitFor(() => {
-      expect(provider.peekRelationships(caller)?.result.complete).toBe(false);
+      expect(provider.peekInvocations(caller)?.result.complete).toBe(false);
     });
-    provider.startRelationships([caller]);
-    expect(inner.listRelationships).toHaveBeenCalledTimes(1);
+    provider.startInvocations([caller]);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(1);
 
     provider.retryFailed(caller.sourceRoot);
-    provider.startRelationships([caller]);
+    provider.startInvocations([caller]);
     await vi.waitFor(() => {
-      expect(provider.peekRelationships(caller)?.result.complete).toBe(true);
+      expect(provider.peekInvocations(caller)?.result.complete).toBe(true);
     });
-    expect(inner.listRelationships).toHaveBeenCalledTimes(2);
+    expect(inner.listInvocations).toHaveBeenCalledTimes(2);
   });
 
   it("caps retained watcher observations fairly and degrades overflow", async () => {
@@ -422,8 +460,8 @@ describe("CachedAgentRelationshipProvider", () => {
       callerWithSource("export const first = 1;\n"),
       callerWithSource("export const second = 2;\n"),
     ]);
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi.fn(async (caller) => ({
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi.fn(async (caller) => ({
         ...EMPTY_RESULT,
         complete: true,
         observedPaths: Array.from({ length: 6_000 }, (_, index) =>
@@ -431,18 +469,18 @@ describe("CachedAgentRelationshipProvider", () => {
         ),
       })),
     };
-    const provider = new CachedAgentRelationshipProvider(inner);
+    const provider = new CachedAgentInvocationProvider(inner);
 
-    provider.startRelationships(callers);
+    provider.startInvocations(callers);
     await vi.waitFor(() => {
       expect(
         callers.every(
           (caller) =>
-            provider.peekRelationships(caller)?.result.complete === false,
+            provider.peekInvocations(caller)?.result.complete === false,
         ),
       ).toBe(true);
     });
-    const observations = provider.sourceObservations();
+    const observations = provider.invocationObservations();
 
     expect(observations).toHaveLength(2);
     expect(observations.map((entry) => entry.paths.length)).toEqual([
@@ -455,8 +493,8 @@ describe("CachedAgentRelationshipProvider", () => {
       callerWithSource("export const first = 1;\n"),
       callerWithSource("export const second = 2;\n"),
     ]);
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi.fn(async (caller) => ({
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi.fn(async (caller) => ({
         ...EMPTY_RESULT,
         complete: true,
         observedPaths: Array.from({ length: 6_000 }, (_, index) =>
@@ -465,31 +503,29 @@ describe("CachedAgentRelationshipProvider", () => {
       })),
     };
     const onChange = vi.fn();
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "unused",
       { onChange },
     );
 
-    provider.startRelationships([callers[0]!]);
+    provider.startInvocations([callers[0]!]);
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(provider.peekRelationships(callers[0]!)?.result.complete).toBe(true);
+    expect(provider.peekInvocations(callers[0]!)?.result.complete).toBe(true);
     onChange.mockClear();
 
-    provider.startRelationships(callers);
+    provider.startInvocations(callers);
     await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(onChange.mock.calls.flat(2)).toEqual(
       expect.arrayContaining(callers.map((caller) => caller.sourceRoot)),
     );
-    expect(provider.peekRelationships(callers[0]!)?.result.complete).toBe(
-      false,
-    );
+    expect(provider.peekInvocations(callers[0]!)?.result.complete).toBe(false);
     onChange.mockClear();
 
     provider.retainCallers([callers[0]!]);
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
     expect(onChange).toHaveBeenCalledWith([callers[0]!.sourceRoot]);
-    expect(provider.peekRelationships(callers[0]!)?.result.complete).toBe(true);
+    expect(provider.peekInvocations(callers[0]!)?.result.complete).toBe(true);
   });
 
   it("does not notify for a settled result invalidated before its batch flush", async () => {
@@ -497,23 +533,23 @@ describe("CachedAgentRelationshipProvider", () => {
       callerWithSource("export const fast = 1;\n"),
       callerWithSource("export const slow = 2;\n"),
     ]);
-    const slow = deferred<AgentRelationshipProviderResult>();
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi
+    const slow = deferred<AgentInvocationProviderResult>();
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi
         .fn()
         .mockResolvedValueOnce(EMPTY_RESULT)
         .mockImplementationOnce(() => slow.promise),
     };
     const onChange = vi.fn();
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "unused",
       { concurrency: 2, onChange, changeBatchMs: 50 },
     );
 
-    provider.startRelationships(callers);
+    provider.startInvocations(callers);
     await vi.waitFor(() => {
-      expect(provider.peekRelationships(callers[0]!)?.status).toBe("ready");
+      expect(provider.peekInvocations(callers[0]!)?.status).toBe("ready");
     });
     provider.invalidateScope(os.tmpdir());
     slow.resolve(EMPTY_RESULT);
@@ -527,26 +563,26 @@ describe("CachedAgentRelationshipProvider", () => {
       callerWithSource("export const quick = 1;\n"),
       callerWithSource("export const held = 2;\n"),
     ]);
-    const held = deferred<AgentRelationshipProviderResult>();
-    const inner: AgentRelationshipProvider = {
-      listRelationships: vi
+    const held = deferred<AgentInvocationProviderResult>();
+    const inner: AgentInvocationProvider = {
+      listInvocations: vi
         .fn()
         .mockResolvedValueOnce(EMPTY_RESULT)
         .mockImplementationOnce(() => held.promise),
     };
     const onChange = vi.fn();
-    const provider = new CachedAgentRelationshipProvider(
+    const provider = new CachedAgentInvocationProvider(
       inner,
       async () => "unused",
       { concurrency: 2, onChange },
     );
 
-    provider.startRelationships(callers);
+    provider.startInvocations(callers);
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
 
     expect(onChange).toHaveBeenLastCalledWith([callers[0]!.sourceRoot]);
-    expect(provider.peekRelationships(callers[0]!)?.status).toBe("ready");
-    expect(provider.peekRelationships(callers[1]!)).toBeUndefined();
+    expect(provider.peekInvocations(callers[0]!)?.status).toBe("ready");
+    expect(provider.peekInvocations(callers[1]!)).toBeUndefined();
 
     held.resolve(EMPTY_RESULT);
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(2));

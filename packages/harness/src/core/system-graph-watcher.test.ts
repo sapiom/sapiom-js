@@ -79,7 +79,7 @@ describe("SystemGraphWatcherManager", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("refreshes source relationships without reporting inventory churn", async () => {
+  it("refreshes source invocations without reporting inventory churn", async () => {
     const agentRoot = await scaffoldAgent("research");
     await scaffoldAgent("growth");
     await manager.start(scope);

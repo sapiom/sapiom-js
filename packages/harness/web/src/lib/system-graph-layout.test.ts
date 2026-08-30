@@ -19,7 +19,13 @@ const edge = (
   from: string,
   to: string,
   mode: AgentInvocationMode = "blocking",
-): SystemGraphEdge => ({ from, to, kind: "invokes", basis: "static", mode });
+): SystemGraphEdge => ({
+  from,
+  to,
+  kind: "invokes",
+  basis: "static-invocation",
+  mode,
+});
 
 function graph(nodeIds: string[], edges: SystemGraphEdge[]): SystemGraph {
   return {

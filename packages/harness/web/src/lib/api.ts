@@ -1339,63 +1339,63 @@ const MOCK_POLSIA_ROOT = "/Users/demo/polsia";
  * A compact Polsia-style direct-call topology for the deep Project fixture.
  * Two source records for Outreach -> Mailer deliberately collapse into one
  * combined connector in the renderer. Rollup stays disconnected so inventory
- * coverage is tested independently of relationship extraction.
+ * coverage is tested independently of direct invocation extraction.
  */
 const MOCK_POLSIA_GRAPH_EDGES: SystemGraph["edges"] = [
   {
     from: "agent:outreach",
     to: "agent:mailer",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "blocking",
   },
   {
     from: "agent:outreach",
     to: "agent:mailer",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "async",
   },
   {
     from: "agent:ads",
     to: "agent:gateway",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "blocking",
   },
   {
     from: "agent:gateway",
     to: "agent:ads-worker",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "async",
   },
   {
     from: "agent:gateway",
     to: "agent:queue",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "blocking",
   },
   {
     from: "agent:ads-worker",
     to: "agent:queue",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "async",
   },
   {
     from: "agent:queue",
     to: "agent:sender",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "blocking",
   },
   {
     from: "agent:sender",
     to: "agent:gateway",
     kind: "invokes",
-    basis: "static",
+    basis: "static-invocation",
     mode: "async",
   },
 ];
@@ -1983,41 +1983,41 @@ export class MockApi implements HarnessApi {
           from: "agent:research",
           to: "agent:growth",
           kind: "invokes",
-          basis: "static",
+          basis: "static-invocation",
           mode: "blocking",
         },
         {
           from: "agent:research",
           to: "agent:growth",
           kind: "invokes",
-          basis: "static",
+          basis: "static-invocation",
           mode: "async",
         },
         {
           from: "agent:research",
           to: "agent:leasing",
           kind: "invokes",
-          basis: "static",
+          basis: "static-invocation",
           mode: "async",
         },
         {
           from: "agent:growth",
           to: "agent:research",
           kind: "invokes",
-          basis: "static",
+          basis: "static-invocation",
           mode: "async",
         },
         {
           from: "agent:reporting",
           to: "agent:leasing",
           kind: "invokes",
-          basis: "static",
+          basis: "static-invocation",
           mode: "blocking",
         },
       ],
       warnings: [],
     };
-    // Keep the original relationship-rich graph for acme-app's graph behavior
+    // Keep the original invocation-rich graph for acme-app's graph behavior
     // specs. Every other mock project is an honest inventory projection of the
     // agents beneath that exact root, which lets Project-axis tests prove parent
     // and nested projects expose the same membership as the rail.

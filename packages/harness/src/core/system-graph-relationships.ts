@@ -11,9 +11,9 @@ import { fingerprintWorkflowSources } from "./canvas-cache.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
 import type { AgentInventoryItem } from "./system-graph-inventory.js";
 
-export const RELATIONSHIP_OBSERVATION_MAX_PATHS = 10_000;
+export const INVOCATION_OBSERVATION_MAX_PATHS = 10_000;
 
-export interface AgentRelationshipCandidate {
+export interface AgentInvocationCandidate {
   /** Inventory key or definition slug to resolve after extraction. */
   target: string;
   mode: AgentInvocationMode;
@@ -21,64 +21,67 @@ export interface AgentRelationshipCandidate {
   evidence: SourceEvidence[];
 }
 
-export type AgentRelationshipWarning = AgentInvocationDetectionWarning;
+export type AgentInvocationWarning = AgentInvocationDetectionWarning;
 
-export interface AgentRelationshipProviderResult {
-  relationships: AgentRelationshipCandidate[];
-  warnings: AgentRelationshipWarning[];
+export interface AgentInvocationProviderResult {
+  invocations: AgentInvocationCandidate[];
+  warnings: AgentInvocationWarning[];
   /** Confined files considered by this bounded extraction generation. */
   observedPaths?: readonly string[];
   /** False when an opaque path or work cap prevented a complete scan. */
   complete?: boolean;
 }
 
-export interface AgentRelationshipSnapshot {
+export interface AgentInvocationSnapshot {
   status: "ready" | "failed";
-  result: AgentRelationshipProviderResult;
+  result: AgentInvocationProviderResult;
 }
 
-export interface AgentRelationshipObservation {
+export interface AgentInvocationObservation {
   candidateRoot: string;
   workspaceRoot: string;
   paths: readonly string[];
 }
 
-/** Replaceable per-caller boundary consumed by the workspace graph projector. */
-export interface AgentRelationshipProvider {
-  listRelationships(
+/**
+ * Replaceable per-caller boundary for literal direct invocations consumed by
+ * the workspace graph projector. The caller is always the source endpoint.
+ */
+export interface AgentInvocationProvider {
+  listInvocations(
     caller: AgentInventoryItem,
-  ): Promise<AgentRelationshipProviderResult>;
+  ): Promise<AgentInvocationProviderResult>;
   /** Optional lifecycle hook for providers that retain per-caller state. */
   retainCallers?(callers: readonly AgentInventoryItem[]): void;
   /** Cache-only projection used by the first graph phase. */
-  peekRelationships?(
+  peekInvocations?(
     caller: AgentInventoryItem,
-  ): AgentRelationshipSnapshot | undefined;
+  ): AgentInvocationSnapshot | undefined;
   /** Starts bounded work only after the inventory-only graph is committed. */
-  startRelationships?(callers: readonly AgentInventoryItem[]): void;
-  /** Accepted/current relationship metadata consumed by polling watchers. */
-  sourceObservations?(): readonly AgentRelationshipObservation[];
+  startInvocations?(callers: readonly AgentInventoryItem[]): void;
+  /** Accepted/current invocation metadata consumed by polling watchers. */
+  invocationObservations?(): readonly AgentInvocationObservation[];
 }
 
-interface CachedRelationshipEntry {
+interface CachedInvocationEntry {
   fingerprint: string;
-  result: Promise<AgentRelationshipProviderResult>;
+  result: Promise<AgentInvocationProviderResult>;
 }
 
-interface RelationshipTask {
+interface InvocationTask {
   sourceRoot: string;
   caller: AgentInventoryItem;
   generation: number;
   scopeEpoch: number;
 }
 
-interface BackgroundRelationshipEntry {
+interface BackgroundInvocationEntry {
   generation: number;
   scopeEpoch: number;
-  snapshot?: AgentRelationshipSnapshot;
+  snapshot?: AgentInvocationSnapshot;
 }
 
-export interface CachedAgentRelationshipProviderOptions {
+export interface CachedAgentInvocationProviderOptions {
   concurrency?: number;
   onChange?: (sourceRoots: readonly string[]) => void | Promise<void>;
   /** Small testable coalescing window; settled scopes never await global idle. */
@@ -86,15 +89,15 @@ export interface CachedAgentRelationshipProviderOptions {
 }
 
 /**
- * Successful per-caller relationship extraction behind the same cheap source
+ * Successful per-caller invocation extraction behind the same cheap source
  * fingerprint used by Canvas. Projection can therefore rebuild against a new
  * inventory without re-walking unchanged caller trees.
  */
-export class CachedAgentRelationshipProvider implements AgentRelationshipProvider {
-  private readonly entries = new Map<string, CachedRelationshipEntry>();
-  private readonly background = new Map<string, BackgroundRelationshipEntry>();
-  private readonly queued: RelationshipTask[] = [];
-  private readonly active = new Map<string, RelationshipTask>();
+export class CachedAgentInvocationProvider implements AgentInvocationProvider {
+  private readonly entries = new Map<string, CachedInvocationEntry>();
+  private readonly background = new Map<string, BackgroundInvocationEntry>();
+  private readonly queued: InvocationTask[] = [];
+  private readonly active = new Map<string, InvocationTask>();
   private readonly pendingChanges = new Set<string>();
   private readonly invalidatedScopes = new Map<string, number>();
   private nextGeneration = 1;
@@ -104,16 +107,16 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
   private changeFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
-    private readonly inner: AgentRelationshipProvider = new SourceAgentRelationshipProvider(),
+    private readonly inner: AgentInvocationProvider = new SourceAgentInvocationProvider(),
     private readonly fingerprint: (
       sourceRoot: string,
     ) => Promise<string> = fingerprintWorkflowSources,
-    private readonly options: CachedAgentRelationshipProviderOptions = {},
+    private readonly options: CachedAgentInvocationProviderOptions = {},
   ) {}
 
-  async listRelationships(
+  async listInvocations(
     caller: AgentInventoryItem,
-  ): Promise<AgentRelationshipProviderResult> {
+  ): Promise<AgentInvocationProviderResult> {
     const key = canonicalGraphPath(caller.sourceRoot);
     let fingerprint: string;
     try {
@@ -126,9 +129,9 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     const hit = this.entries.get(key);
     if (hit?.fingerprint === fingerprint) return hit.result;
 
-    let result: Promise<AgentRelationshipProviderResult>;
+    let result: Promise<AgentInvocationProviderResult>;
     try {
-      result = Promise.resolve(this.inner.listRelationships(caller));
+      result = Promise.resolve(this.inner.listInvocations(caller));
     } catch (error) {
       result = Promise.reject(error);
     }
@@ -223,9 +226,9 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     this.observationsTruncated = false;
   }
 
-  peekRelationships(
+  peekInvocations(
     caller: AgentInventoryItem,
-  ): AgentRelationshipSnapshot | undefined {
+  ): AgentInvocationSnapshot | undefined {
     const sourceRoot = canonicalGraphPath(caller.sourceRoot);
     const entry = this.background.get(sourceRoot);
     if (entry?.scopeEpoch !== this.scopeEpochForSource(sourceRoot)) {
@@ -244,7 +247,7 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     return entry.snapshot;
   }
 
-  startRelationships(callers: readonly AgentInventoryItem[]): void {
+  startInvocations(callers: readonly AgentInventoryItem[]): void {
     for (const caller of callers) {
       const sourceRoot = canonicalGraphPath(caller.sourceRoot);
       let entry = this.background.get(sourceRoot);
@@ -276,7 +279,7 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     this.drain();
   }
 
-  sourceObservations(): readonly AgentRelationshipObservation[] {
+  invocationObservations(): readonly AgentInvocationObservation[] {
     const entries = [...this.background.entries()]
       .filter(
         ([sourceRoot, entry]) =>
@@ -285,7 +288,7 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
       )
       .sort(([left], [right]) => left.localeCompare(right));
     const selected = new Map<string, string[]>();
-    let remaining = RELATIONSHIP_OBSERVATION_MAX_PATHS;
+    let remaining = INVOCATION_OBSERVATION_MAX_PATHS;
     let round = 0;
     while (remaining > 0) {
       let added = false;
@@ -309,7 +312,7 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     }));
   }
 
-  private current(task: RelationshipTask): boolean {
+  private current(task: InvocationTask): boolean {
     const entry = this.background.get(task.sourceRoot);
     return (
       entry?.generation === task.generation &&
@@ -343,7 +346,7 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     for (const [sourceRoot, entry] of this.background) {
       if (entry.scopeEpoch !== this.scopeEpochForSource(sourceRoot)) continue;
       count += entry.snapshot?.result.observedPaths?.length ?? 0;
-      if (count > RELATIONSHIP_OBSERVATION_MAX_PATHS) {
+      if (count > INVOCATION_OBSERVATION_MAX_PATHS) {
         truncated = true;
         break;
       }
@@ -396,17 +399,17 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     }
   }
 
-  private async run(task: RelationshipTask): Promise<void> {
-    let snapshot: AgentRelationshipSnapshot;
+  private async run(task: InvocationTask): Promise<void> {
+    let snapshot: AgentInvocationSnapshot;
     try {
       snapshot = {
         status: "ready",
-        result: await this.inner.listRelationships(task.caller),
+        result: await this.inner.listInvocations(task.caller),
       };
     } catch {
       snapshot = {
         status: "failed",
-        result: { relationships: [], warnings: [] },
+        result: { invocations: [], warnings: [] },
       };
     }
     if (!this.current(task)) return;
@@ -444,7 +447,7 @@ export class CachedAgentRelationshipProvider implements AgentRelationshipProvide
     void Promise.resolve()
       .then(() => this.options.onChange?.(changed))
       .catch(() => {
-        // Refresh hints cannot invalidate current relationship evidence.
+        // Refresh hints cannot invalidate current invocation evidence.
       });
   }
 }
@@ -462,40 +465,45 @@ const MODE_ORDER: Record<AgentInvocationMode, number> = {
   async: 1,
 };
 
-/** V0 filesystem adapter. It remains syntax-only and has no inventory target
- * resolution, renderer, transport, deployment, or session dependencies. */
-export class SourceAgentRelationshipProvider implements AgentRelationshipProvider {
+/**
+ * V0 per-agent filesystem adapter for literal direct invocations.
+ *
+ * It scans only the caller's inventoried source root. It remains syntax-only
+ * and has no inventory target resolution, input-provenance analysis, package
+ * router scan, renderer, transport, deployment, or session dependencies.
+ */
+export class SourceAgentInvocationProvider implements AgentInvocationProvider {
   constructor(private readonly readHooks: WorkflowSourceReadHooks = {}) {}
 
-  async listRelationships(
+  async listInvocations(
     caller: AgentInventoryItem,
-  ): Promise<AgentRelationshipProviderResult> {
+  ): Promise<AgentInvocationProviderResult> {
     const scan = await detectAgentInvocations(
       caller.sourceRoot,
       new Set(),
       this.readHooks,
     );
-    const grouped = new Map<string, AgentRelationshipCandidate>();
+    const grouped = new Map<string, AgentInvocationCandidate>();
 
-    for (const invocation of scan.invocations) {
-      const key = `${invocation.slug}\0${invocation.mode}`;
-      const relationship = grouped.get(key);
-      if (relationship) {
-        relationship.evidence.push(invocation.evidence);
+    for (const detectedInvocation of scan.invocations) {
+      const key = `${detectedInvocation.slug}\0${detectedInvocation.mode}`;
+      const candidate = grouped.get(key);
+      if (candidate) {
+        candidate.evidence.push(detectedInvocation.evidence);
       } else {
         grouped.set(key, {
-          target: invocation.slug,
-          mode: invocation.mode,
-          evidence: [invocation.evidence],
+          target: detectedInvocation.slug,
+          mode: detectedInvocation.mode,
+          evidence: [detectedInvocation.evidence],
         });
       }
     }
 
-    const relationships = [...grouped.values()];
-    for (const relationship of relationships) {
-      relationship.evidence.sort(evidenceOrder);
+    const invocations = [...grouped.values()];
+    for (const candidate of invocations) {
+      candidate.evidence.sort(evidenceOrder);
     }
-    relationships.sort(
+    invocations.sort(
       (left, right) =>
         left.evidence[0]!.file.localeCompare(right.evidence[0]!.file) ||
         left.evidence[0]!.line - right.evidence[0]!.line ||
@@ -505,7 +513,7 @@ export class SourceAgentRelationshipProvider implements AgentRelationshipProvide
     );
 
     return {
-      relationships,
+      invocations,
       warnings: scan.warnings,
       observedPaths: scan.observedPaths,
       complete: scan.complete,

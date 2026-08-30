@@ -112,13 +112,15 @@ export interface SystemGraphNode {
 
 export type AgentInvocationMode = "blocking" | "async";
 
-export interface SystemGraphEdge {
+export interface StaticInvocationGraphEdge {
   from: string;
   to: string;
   kind: "invokes";
-  basis: "static";
+  basis: "static-invocation";
   mode: AgentInvocationMode;
 }
+
+export type SystemGraphEdge = StaticInvocationGraphEdge;
 
 export interface GraphWarning {
   code:

@@ -435,7 +435,7 @@ function categorize(input) {
     expect(caps).toEqual([{ capability: "rules.classify", fromStepId: null }]);
   });
 
-  it("keeps the blocking run chip until the per-agent Canvas can render it as a relationship", async () => {
+  it("keeps the blocking run chip until the per-agent Canvas can render it as an invocation", async () => {
     const dir = await tmpProject({
       "index.ts": `
 const kickoff = defineStep({

@@ -150,7 +150,7 @@ export async function removeStudioRailFile(root: string): Promise<void> {
  * Launch edges across every registered agent, as parent-name to child-slug.
  *
  * Uses the shared syntax-only extractor (`core/canvas-interconnections.ts`) —
- * the same detector the canvas and system graph use for agent relationships. A
+ * the same detector the canvas and system graph use for direct agent invocations. A
  * second edge detector would be a second answer to "what does this launch",
  * and the Group axis and system graph are supposed to read one graph.
  *

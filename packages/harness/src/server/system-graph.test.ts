@@ -28,7 +28,7 @@ const graph: SystemGraph = {
       from: "agent:research",
       to: "agent:growth",
       kind: "invokes",
-      basis: "static",
+      basis: "static-invocation",
       mode: "async",
     },
   ],

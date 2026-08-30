@@ -20,7 +20,7 @@ const valid: SystemGraph = {
       from: "agent:research",
       to: "agent:growth",
       kind: "invokes",
-      basis: "static",
+      basis: "static-invocation",
       mode: "async",
     },
   ],
@@ -30,6 +30,15 @@ const valid: SystemGraph = {
 describe("parseSystemGraph", () => {
   it("accepts the system graph contract", () => {
     expect(parseSystemGraph(valid)).toEqual(valid);
+  });
+
+  it("rejects the obsolete static invocation basis spelling", () => {
+    expect(() =>
+      parseSystemGraph({
+        ...valid,
+        edges: [{ ...valid.edges[0], basis: "static" }],
+      }),
+    ).toThrow("Invalid system graph response");
   });
 
   it("accepts scoped package display labels", () => {

@@ -433,7 +433,7 @@ six checkouts of one repo.
   context staging. Watcher races, overlapping roots, stale scans, and reverse
   browser responses cannot publish an older inventory over a newer one.
 - Known inventory renders from memory immediately in a degraded graph while
-  background discovery and bounded relationship extraction settle. No ordinary
+  background discovery and bounded direct invocation extraction settle. No ordinary
   GET waits on a filesystem scan, project execution, or remote metadata fetch.
 - Syntax-only/null-cloud rows never authorize automatic legacy Canvas or
   manifest extraction. Existing explicit valid-marker or cloud-link evidence
