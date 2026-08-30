@@ -84,8 +84,11 @@ function SnippetPanelInner({ boundWorkflow, agentsBaseUrl }: SnippetPanelProps):
       });
   };
 
-  // `object`, not `surface`: this renders inside CodePanel, whose
-  // `surface: "code_panel"` is the outer one and would win.
+  // `object`, not `surface`: this renders inside the canvas pane, whose
+  // `surface: "canvas"` is the outer one and would win. It used to sit in the
+  // Code tab, so snippet clicks moved from `surface=code_panel` to
+  // `surface=canvas` when that tab was removed (SAP-2980) — `object=snippet`
+  // is unchanged and is what a query should key on.
   return (
     <div className="snippet-panel" data-testid="snippet-panel" {...trackingAttrs({ object: "snippet" })}>
       <div className="snippet-panel-header">

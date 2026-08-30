@@ -20,7 +20,7 @@ import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 import { RunWorkspace } from "./RunWorkspace";
 import { SnippetPanel } from "./SnippetPanel";
-import { isWorkflowRunnable } from "../lib/workflow-deployment";
+import { isWorkflowRunnable, workflowDeploymentState } from "../lib/workflow-deployment";
 import { track as trackProduct } from "../lib/analytics/events";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -998,10 +998,27 @@ export function CanvasPane({
   // It is also where the integration snippets now live. "How do I call this"
   // is a post-deploy question, asked once — a permanent tab was too much IA for
   // it, and the honest place to answer it is next to the deploy that made the
-  // agent callable. Only a READY cloud build has anything to copy, which is the
-  // same guard the tab's four empty states were spelling out.
-  const snippetSubject =
-    subjectWorkflow && isWorkflowRunnable(subjectWorkflow) ? subjectWorkflow : null;
+  // agent callable.
+  //
+  // The section belongs to any LINKED agent, not only a ready one, and that is
+  // deliberate: the deploy banner's "Trigger from your code" appears the moment
+  // the phase reaches `ready`, which is set BEFORE the workflow refresh that
+  // updates `activeBuildRunStatus` (`use-harness-state.ts`). Gated on
+  // runnability alone, a click in that window switched to Steps and showed
+  // nothing at all — a live control with no target. So the section exists and
+  // says WHY there is nothing to copy yet, which is what the removed tab's four
+  // empty states were for. A draft (no `definitionId`) genuinely has nothing to
+  // say and gets no section.
+  const snippetSubject = subjectWorkflow?.definitionId != null ? subjectWorkflow : null;
+  const snippetsRunnable = snippetSubject != null && isWorkflowRunnable(snippetSubject);
+  // Same vocabulary the removed Code tab used, minus its local-deploy-error
+  // input: an error still in flight is already reported by the banner above.
+  const snippetsPendingReason =
+    snippetSubject == null || snippetsRunnable
+      ? null
+      : workflowDeploymentState(snippetSubject, null) === "building"
+        ? `${snippetSubject.name} is linked and building. The snippets appear once the cloud build is ready.`
+        : `${snippetSubject.name} is linked to Sapiom, but Studio cannot confirm a ready cloud build. Deploy it before integrating.`;
   // Keyed by path rather than a boolean, so the disclosure does not stay open
   // over the NEXT agent you select — that agent has different snippets, and a
   // section the user never opened would be showing them.
@@ -1013,10 +1030,16 @@ export function CanvasPane({
           deployState={deployState}
           workflow={subjectWorkflow}
           onDismiss={onDismissDeploy}
-          onOpenCode={() => {
-            if (snippetSubject) setSnippetsOpenFor(snippetSubject.path);
-            onOpenCode();
-          }}
+          onOpenCode={
+            // Null while there is no section to jump to — see the banner's own
+            // note. This is the pairing, stated in one place.
+            snippetSubject
+              ? () => {
+                  setSnippetsOpenFor(snippetSubject.path);
+                  onOpenCode();
+                }
+              : null
+          }
         />
       )}
       {snippetSubject && (
@@ -1034,13 +1057,18 @@ export function CanvasPane({
             <span className="steps-snippets-title">Trigger from your code</span>
             <Icon name={snippetsOpen ? "ChevronUp" : "ChevronDown"} size={13} />
           </button>
-          {snippetsOpen && (
-            <SnippetPanel
-              key={snippetSubject.path}
-              boundWorkflow={snippetSubject}
-              agentsBaseUrl={agentsBaseUrl}
-            />
-          )}
+          {snippetsOpen &&
+            (snippetsPendingReason ? (
+              <p className="steps-snippets-pending" data-testid="steps-snippets-pending">
+                {snippetsPendingReason}
+              </p>
+            ) : (
+              <SnippetPanel
+                key={snippetSubject.path}
+                boundWorkflow={snippetSubject}
+                agentsBaseUrl={agentsBaseUrl}
+              />
+            ))}
         </section>
       )}
     </>

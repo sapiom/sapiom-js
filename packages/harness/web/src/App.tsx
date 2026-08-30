@@ -589,7 +589,14 @@ export const App = (): JSX.Element => {
         const subject = conversationSubject(
           sessions.find((s) => s.id === harness.activeSessionId) ?? null,
           focusedAgentPath,
-          null,
+          // The SELECTED project, exactly as the strip passes it. Left null
+          // here, the two resolvers agree only while the active session is live
+          // and inside a known root — so a project selected over an exited
+          // session, or over one in a scaffold folder `recentDirs` has not
+          // recorded, gave the strip the project's tabs and this handler
+          // somebody else's list. Cmd+1 then activated a session that was not
+          // tab 1.
+          selectedProject?.root ?? null,
           knownRootsOf(harness.settings?.recentDirs, harness.state?.launchDir),
         );
         const tabs =
@@ -613,7 +620,12 @@ export const App = (): JSX.Element => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [harness.state?.sessions, harness.settings?.recentDirs, focusedAgentPath]);
+  }, [
+    harness.state?.sessions,
+    harness.settings?.recentDirs,
+    focusedAgentPath,
+    selectedProject,
+  ]);
 
   // Where NEW agent projects are created — ONE value, shared by every surface
   // that creates one (the template door and the idea door). They used to

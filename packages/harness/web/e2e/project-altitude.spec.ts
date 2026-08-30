@@ -319,6 +319,114 @@ test("E3.9/E3.10 — Steps says why it cannot answer for a project; Code is gone
   );
 });
 
+test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", async ({
+  page,
+}) => {
+  /* The key handler resolves the tab list a second time, and the two resolvers
+     have to be given the same inputs. Handed no selected project, they agree
+     only while the active session is live and inside a known root — so a
+     project selected over an EXITED session gave the strip the project's tabs
+     and the handler the exited session's own subject, and Cmd+1 activated a
+     session that was not tab 1. */
+  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
+  await page.evaluate(() => {
+    const publish = (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          publish?: (message: Record<string, unknown>) => void;
+        };
+      }
+    ).__HARNESS_TEST__?.publish;
+    const base = {
+      agentSessionId: null,
+      harness: "claude-code" as const,
+      cwd: "/Users/demo/polsia",
+      status: "running" as const,
+      ready: true,
+    };
+    publish?.({
+      type: "session.status",
+      session: {
+        ...base,
+        id: "sess-polsia-1",
+        boundWorkflowPath:
+          "/Users/demo/polsia/packages/harness/web/src/components/mailer",
+        title: "mailer",
+        createdAt: "2026-08-01T10:00:00.000Z",
+        lastActiveAt: "2026-08-01T10:00:00.000Z",
+      },
+    });
+    publish?.({
+      type: "session.status",
+      session: {
+        ...base,
+        id: "sess-polsia-2",
+        boundWorkflowPath: "/Users/demo/polsia/scripts/tools/rollup",
+        title: "rollup",
+        createdAt: "2026-08-01T11:00:00.000Z",
+        lastActiveAt: "2026-08-01T11:00:00.000Z",
+      },
+    });
+  });
+
+  await page.getByTestId("project-select-polsia").click();
+  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+
+  // Tab 2 in the strip is the newer session — and that is what Cmd+2 selects.
+  await page.keyboard.press("ControlOrMeta+2");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-polsia-2",
+  );
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-polsia-1",
+  );
+  // ...and the project is still the subject: a number key is a tab jump, not a
+  // navigation out of the project the tabs belong to.
+  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+
+  // The state where the two resolvers actually diverge: the ACTIVE session has
+  // exited, so it can no longer name the subject, and only the selected project
+  // can. Both of this project's remaining conversations are BOUND to its
+  // agents, so the agent rule finds none of them and Cmd+1 reaches nothing.
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          publish?: (message: Record<string, unknown>) => void;
+        };
+      }
+    ).__HARNESS_TEST__?.publish?.({
+      type: "session.status",
+      session: {
+        id: "sess-polsia-1",
+        agentSessionId: null,
+        harness: "claude-code",
+        cwd: "/Users/demo/polsia",
+        boundWorkflowPath:
+          "/Users/demo/polsia/packages/harness/web/src/components/mailer",
+        title: "mailer",
+        status: "exited",
+        exitCode: 0,
+        ready: false,
+        createdAt: "2026-08-01T10:00:00.000Z",
+        lastActiveAt: "2026-08-01T10:00:00.000Z",
+      },
+    });
+  });
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-polsia-2",
+  );
+});
+
 test("the tab + and a tab click stay INSIDE the project — the map does not close under them", async ({
   page,
 }) => {

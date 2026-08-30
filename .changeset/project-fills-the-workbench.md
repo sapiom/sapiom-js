@@ -29,6 +29,12 @@ centre and the map fills the right pane.
 - The active session's tab is kept in view when the strip's own width changes,
   so a newly created tab can no longer be stranded off-screen.
 
+An agent that is linked to Sapiom but has no ready cloud build yet gets the
+snippets section with the reason there is nothing to copy, rather than nothing
+at all. For anyone querying product analytics: clicks on the snippets now carry
+`surface=canvas` instead of `surface=code_panel`. `object=snippet` is unchanged
+and is the stable key.
+
 Membership stays derived from where an agent lives on disk. Nothing is stamped
 onto a session record, so moving an agent or removing a project cannot leave a
 second, staler answer behind.

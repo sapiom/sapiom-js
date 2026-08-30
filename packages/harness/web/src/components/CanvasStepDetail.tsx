@@ -210,6 +210,12 @@ function RunStatusGlyph({ status }: { status: RunView["status"] }): JSX.Element 
  * phase (linking → building) with a spinner, and on `ready` a completion banner
  * with the dashboard link + a jump to the integration snippet ("Trigger from
  * your code"). Dismissable; on error it surfaces the server's message.
+ *
+ * `onOpenCode` is NULLABLE, and the button is absent without it, because the
+ * phase reaches `ready` BEFORE the workflow refresh that publishes the build —
+ * so for a first deploy there is a window where this banner is complete and the
+ * snippets it points at do not exist yet. The caller owns that predicate; the
+ * button cannot outlive its target.
  */
 export function DeployStatusBanner({
   deployState,
@@ -220,7 +226,7 @@ export function DeployStatusBanner({
   deployState: DeployProgress;
   workflow: WorkflowInfo | null;
   onDismiss: () => void;
-  onOpenCode: () => void;
+  onOpenCode: (() => void) | null;
 }): JSX.Element {
   const dashboardUrl = workflow?.definitionId != null ? agentUrl(workflow.definitionId) : null;
   const inFlight = deployState.phase === "linking" || deployState.phase === "building";
@@ -272,15 +278,17 @@ export function DeployStatusBanner({
               Open in Sapiom
             </a>
           )}
-          <button
-            type="button"
-            className="status-tag status-tag-action"
-            data-testid="deploy-open-code"
-            onClick={onOpenCode}
-          >
-            <Icon name="Code" size={12} />
-            Trigger from your code
-          </button>
+          {onOpenCode && (
+            <button
+              type="button"
+              className="status-tag status-tag-action"
+              data-testid="deploy-open-code"
+              onClick={onOpenCode}
+            >
+              <Icon name="Code" size={12} />
+              Trigger from your code
+            </button>
+          )}
         </div>
       )}
     </section>

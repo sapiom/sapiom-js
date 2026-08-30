@@ -71,6 +71,26 @@ test.describe("the snippets follow the SUBJECT's deploy state", () => {
     await expect(page.getByTestId("snippet-panel")).toHaveCount(1);
   });
 
+  test("a deploy's \"Trigger from your code\" cannot outlive the section it points at", async ({
+    page,
+  }) => {
+    /* Two gates used to guard one affordance: the button appears the moment the
+       deploy phase reads `ready`, which is set BEFORE the workflow refresh that
+       publishes the build — so on a first deploy the button was live while the
+       snippets did not exist yet, and clicking it switched to Steps and showed
+       nothing at all. The pairing is now structural: the caller hands the banner
+       a handler only when there is a section to land on. */
+    await page.getByTestId("session-step-deploy").click();
+    const banner = page.getByTestId("deploy-status-banner");
+    await expect(banner).toHaveAttribute("data-phase", "ready", { timeout: 6_000 });
+    await page.getByTestId("deploy-open-code").click();
+    await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+  });
+
   test("they live on the Steps surface only — Canvas stays a pure board", async ({
     page,
   }) => {

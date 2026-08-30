@@ -6031,6 +6031,17 @@ button.system-graph-node.is-navigable:focus-visible {
   white-space: nowrap;
 }
 
+/* Linked but not yet callable: the reason there is nothing to copy, in the
+   place the snippets would be. The removed Code tab said this in a full empty
+   state; here it is one line under the disclosure that opened for it. */
+.steps-snippets-pending {
+  margin: 0;
+  padding: var(--sp2) var(--sp3) var(--sp3);
+  border-top: 1px solid var(--ui-line);
+  color: var(--text-dim);
+  font-size: var(--type-body);
+}
+
 .steps-snippets .snippet-panel {
   border-top: 1px solid var(--ui-line);
   padding-top: var(--sp1);
