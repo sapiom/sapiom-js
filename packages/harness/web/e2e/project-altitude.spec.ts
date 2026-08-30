@@ -427,6 +427,89 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
   );
 });
 
+test("Cmd/Ctrl+1..9 follows a TAB CLICK, the one activation that moves nothing else", async ({
+  page,
+}) => {
+  /* The key handler closes over its inputs, so it needs every input the strip
+     has — the active session included. Clicking a tab moves neither the focus
+     nor the project selection, so with `activeSessionId` missing from the
+     effect's deps the listener kept the previous active session and resolved a
+     different list, healing only on the next session event.
+
+     Overlapping roots is what makes those lists actually differ: `~/polsia` and
+     `~/polsia/services/workers` are both open, so the outer project's strip
+     lists the nested project's sessions (it genuinely contains them) while the
+     nested one lists only its own. */
+  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
+  await page.evaluate(() => {
+    const publish = (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          publish?: (message: Record<string, unknown>) => void;
+        };
+      }
+    ).__HARNESS_TEST__?.publish;
+    const base = {
+      agentSessionId: null,
+      harness: "claude-code" as const,
+      status: "running" as const,
+      ready: true,
+      boundWorkflowPath: null,
+    };
+    publish?.({
+      type: "session.status",
+      session: {
+        ...base,
+        id: "sess-outer",
+        cwd: "/Users/demo/polsia",
+        title: "polsia",
+        createdAt: "2026-08-01T10:00:00.000Z",
+        // Most recently worked in, so selecting the project lands here.
+        lastActiveAt: "2026-08-01T12:00:00.000Z",
+      },
+    });
+    publish?.({
+      type: "session.status",
+      session: {
+        ...base,
+        id: "sess-nested",
+        cwd: "/Users/demo/polsia/services/workers",
+        title: "workers",
+        createdAt: "2026-08-01T11:00:00.000Z",
+        lastActiveAt: "2026-08-01T11:00:00.000Z",
+      },
+    });
+  });
+
+  await page.getByTestId("project-select-polsia").click();
+  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-outer",
+  );
+  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+
+  // Click the NESTED project's tab. Nothing else moves: the rail selection and
+  // the focus are untouched, and the map stays open.
+  await page.getByTestId("session-tab-sess-nested").click();
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-nested",
+  );
+  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  // The strip re-keyed to the nested project, which holds only this session...
+  await expect(tabs).toHaveCount(1);
+  // ...so tab 1 is this session, and Cmd+1 must not reach past it into the
+  // outer project's list.
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-nested",
+  );
+});
+
 test("the tab + and a tab click stay INSIDE the project — the map does not close under them", async ({
   page,
 }) => {

@@ -1011,14 +1011,23 @@ export function CanvasPane({
   // say and gets no section.
   const snippetSubject = subjectWorkflow?.definitionId != null ? subjectWorkflow : null;
   const snippetsRunnable = snippetSubject != null && isWorkflowRunnable(snippetSubject);
-  // Same vocabulary the removed Code tab used, minus its local-deploy-error
-  // input: an error still in flight is already reported by the banner above.
+  // The removed Code tab's vocabulary, all three of its non-ready sentences:
+  // a build that FAILED is not the same fact as one Studio cannot confirm, and
+  // describing the first as the second sends the reader looking for a network
+  // problem instead of at their deploy. The local-deploy-error input is left
+  // out on purpose — an error still in flight is already reported by the banner
+  // directly above this.
   const snippetsPendingReason =
     snippetSubject == null || snippetsRunnable
       ? null
-      : workflowDeploymentState(snippetSubject, null) === "building"
-        ? `${snippetSubject.name} is linked and building. The snippets appear once the cloud build is ready.`
-        : `${snippetSubject.name} is linked to Sapiom, but Studio cannot confirm a ready cloud build. Deploy it before integrating.`;
+      : ((state) =>
+          state === "building"
+            ? `${snippetSubject.name} is linked and building. The snippets appear once the cloud build is ready.`
+            : state === "failed"
+              ? `The last deploy of ${snippetSubject.name} did not produce a ready build. Fix it and deploy again.`
+              : `${snippetSubject.name} is linked to Sapiom, but Studio cannot confirm a ready cloud build. Deploy it before integrating.`)(
+          workflowDeploymentState(snippetSubject, null),
+        );
   // Keyed by path rather than a boolean, so the disclosure does not stay open
   // over the NEXT agent you select — that agent has different snippets, and a
   // section the user never opened would be showing them.

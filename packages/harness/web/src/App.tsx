@@ -620,8 +620,17 @@ export const App = (): JSX.Element => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    // EVERY input the two resolvers share, `activeSessionId` included. The
+    // listener closes over its inputs, so an activation that moves neither the
+    // focus nor the selection — clicking a tab — left this one holding the
+    // previous active session while the strip had already recomputed. With
+    // overlapping roots that is a different list, not a stale copy of the same
+    // one: an outer project's strip lists a nested project's sessions, so
+    // clicking one re-keys the strip to the nested root while a number key
+    // still addressed the outer one, until the next session event healed it.
   }, [
     harness.state?.sessions,
+    harness.activeSessionId,
     harness.settings?.recentDirs,
     focusedAgentPath,
     selectedProject,
