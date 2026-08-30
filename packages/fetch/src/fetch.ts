@@ -120,7 +120,17 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
+    // Native Request cloning (`new Request(existingRequest, ...)`) does not
+    // preserve custom properties, so a `__sapiom` override set on a Request
+    // passed in as `input` would otherwise be silently dropped here. Capture
+    // it before cloning and re-attach it to the clone so the documented
+    // per-request override keeps working.
+    const inputMetadata =
+      input instanceof Request ? (input as any).__sapiom : undefined;
     let request = new Request(input, init);
+    if (inputMetadata !== undefined) {
+      (request as any).__sapiom = inputMetadata;
+    }
 
     const requestMetadata = (request as any).__sapiom || {};
     const userMetadata = { ...defaultMetadata, ...requestMetadata };
@@ -137,7 +147,11 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       if (identityHeaders["Sapiom-Identity"]) {
         const headers = new Headers(request.headers);
         headers.set("Sapiom-Identity", identityHeaders["Sapiom-Identity"]);
+        const metadataBeforeRewrap = (request as any).__sapiom;
         request = new Request(request, { headers });
+        if (metadataBeforeRewrap !== undefined) {
+          (request as any).__sapiom = metadataBeforeRewrap;
+        }
       }
     }
 
