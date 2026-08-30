@@ -227,7 +227,7 @@
     "id": "canvas-pane-icon-identifier",
     "path": "packages/harness/web/src/components/CanvasPane.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 5,
+    "occurrences": 6,
     "reason": "The design-system Workflow icon identifier is private and remains unchanged."
   },
   {
@@ -236,13 +236,6 @@
     "pattern": "^(?:launched-workflow|canvas-open-workflow-)$",
     "occurrences": 2,
     "reason": "Private Canvas node kinds and test IDs remain stable."
-  },
-  {
-    "id": "code-panel-private-css",
-    "path": "packages/harness/web/src/components/CodePanel.tsx",
-    "pattern": "workflow-(?:actions-(?:header|name)|deployed-tag|dot(?:-pinned)?)",
-    "occurrences": 5,
-    "reason": "Private CSS classes remain stable."
   },
   {
     "id": "command-palette-private-identifiers",
@@ -416,7 +409,7 @@
     "id": "styles-workflow-deployed-tag-selector",
     "path": "packages/harness/web/src/styles.css",
     "pattern": "(?<![a-z0-9_-])workflow-deployed-tag(?![a-z0-9_-])",
-    "occurrences": 2,
+    "occurrences": 1,
     "reason": "The private CSS selector remains stable with its React class name."
   },
   {

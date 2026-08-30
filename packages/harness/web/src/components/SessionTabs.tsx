@@ -57,11 +57,43 @@ export function SessionTabs({
 
   // A newly created session appends to the oldest-first list. Keep its tab in
   // view without moving the page or introducing a second header row.
+  //
+  // Also re-run when the STRIP's own width changes, not only when the list
+  // does. The strip shares its row with the agent action cluster, which appears
+  // and disappears with the selection — measured on the tab `+`, the strip is
+  // 412px wide while the new session is still unbound and 191px once its
+  // binding lands, and a tab scrolled into view against the wider box is
+  // stranded outside the narrower one with nothing left to trigger a re-scroll.
+  // A ResizeObserver is the honest dependency: the reason to scroll again is
+  // that the viewport moved, not that the list changed.
   useEffect(() => {
-    activeTabRef.current?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-    });
+    let frame = 0;
+    const reveal = (): void => {
+      activeTabRef.current?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
+      // Once more after the next paint. A resize is reported in the same frame
+      // the strip is re-laying out, so the tab's own box is still the old one
+      // when the first call reads it — scrolling to a position the tab has
+      // already left.
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() =>
+        activeTabRef.current?.scrollIntoView({
+          block: "nearest",
+          inline: "nearest",
+        }),
+      );
+    };
+    reveal();
+    const list = activeTabRef.current?.parentElement;
+    if (!list) return;
+    const observer = new ResizeObserver(reveal);
+    observer.observe(list);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [activeSessionId, sessions.length]);
 
   return (

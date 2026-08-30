@@ -320,12 +320,22 @@ test("long tab sets scroll internally while + and actions remain reachable", asy
   // Polled, not sampled: the containment is produced by a scroll-into-view
   // effect, so a single read races the commit that scrolls. The claim is that
   // the tab ENDS UP reachable inside the scrolling list.
+  //
+  // One pixel of tolerance, because the claim is "reachable", not "aligned to a
+  // whole device pixel". `scrollIntoView({inline:"nearest"})` stops the moment
+  // the element is in view, and the strip's fractional layout routinely leaves
+  // the last edge a fraction over — measured at tab.right 247.6 against
+  // list.right 247.3, a tab that is plainly on screen. Asserted exactly, this
+  // reports a sub-pixel as a stranded tab.
   await expect
     .poll(() =>
       page.locator(".session-tab.is-active").evaluate((tab) => {
         const tabRect = tab.getBoundingClientRect();
         const listRect = tab.parentElement!.getBoundingClientRect();
-        return tabRect.left >= listRect.left && tabRect.right <= listRect.right;
+        return (
+          tabRect.left >= listRect.left - 1 &&
+          tabRect.right <= listRect.right + 1
+        );
       }),
     )
     .toBe(true);
