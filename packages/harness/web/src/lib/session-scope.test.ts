@@ -4,7 +4,9 @@ import {
   canvasSourceFor,
   canvasSubject,
   lifecycleVerbGate,
+  conversationSubject,
   liveSessionsForFocus,
+  liveSessionsForProject,
   mergeSubjectRuns,
   OBSERVED_RUN_WINDOW,
   projectRootForAgent,
@@ -200,6 +202,102 @@ describe("liveSessionsForFocus", () => {
 
   it("is empty for no subject", () => {
     expect(liveSessionsForFocus([bound, inFolder], null)).toEqual([]);
+  });
+});
+
+describe("liveSessionsForProject: a session belongs to its PROJECT", () => {
+  const boundToAds = session({ id: "b", boundWorkflowPath: ADS, cwd: POLSIA });
+  const unbound = session({ id: "u", cwd: POLSIA });
+  const nested = session({ id: "n", cwd: `${POLSIA}/services/workers` });
+  const elsewhere = session({ id: "e", cwd: SIDEQUEST });
+  const dead = session({ id: "d", cwd: POLSIA, status: "exited" });
+
+  it("claims sessions bound to the project's agents, which the agent rule drops", () => {
+    // The whole reason this exists. Since SAP-2927 every session boots at the
+    // project root, so a project whose sessions are all bound to agents has an
+    // EMPTY strip under `liveSessionsForFocus` — a project you can select but
+    // cannot see your own conversations in.
+    expect(liveSessionsForFocus([boundToAds], POLSIA)).toEqual([]);
+    expect(liveSessionsForProject([boundToAds], POLSIA).map((s) => s.id)).toEqual(["b"]);
+  });
+
+  it("claims every live session inside the root and nothing outside it", () => {
+    expect(
+      liveSessionsForProject([boundToAds, unbound, nested, elsewhere, dead], POLSIA).map((s) => s.id),
+    ).toEqual(["b", "n", "u"]);
+  });
+
+  it("is asymmetric, exactly like sessionReachesFocus: the outer project contains the nested one's sessions, never the reverse", () => {
+    const workers = `${POLSIA}/services/workers`;
+    expect(liveSessionsForProject([nested], POLSIA).map((s) => s.id)).toEqual(["n"]);
+    expect(liveSessionsForProject([unbound], workers)).toEqual([]);
+  });
+
+  it("orders oldest first and stably, the same order the strip renders", () => {
+    const older = session({ id: "z", cwd: POLSIA, createdAt: "2026-08-01T09:00:00.000Z" });
+    const newer = session({ id: "a", cwd: POLSIA, createdAt: "2026-08-01T11:00:00.000Z" });
+    expect(liveSessionsForProject([newer, older], POLSIA).map((s) => s.id)).toEqual(["z", "a"]);
+  });
+
+  it("is empty for no project", () => {
+    expect(liveSessionsForProject([unbound], null)).toEqual([]);
+    // An empty root is not a root — left alone it prefixes every path and would
+    // swallow every session in the app.
+    expect(liveSessionsForProject([unbound], "")).toEqual([]);
+  });
+});
+
+describe("conversationSubject: the chat belongs to a project", () => {
+  const roots = [POLSIA, SIDEQUEST];
+
+  it("names the active session's project, so selecting a sibling agent cannot move the tabs", () => {
+    // E3.4 on screen, not merely in the session pointer: the agent selection is
+    // not an input here, so the strip is the SAME set before and after the click.
+    const active = session({ boundWorkflowPath: ADS, cwd: POLSIA });
+    expect(conversationSubject(active, ADS, null, roots)).toEqual({ kind: "project", root: POLSIA });
+    expect(conversationSubject(active, OUTREACH, null, roots)).toEqual({
+      kind: "project",
+      root: POLSIA,
+    });
+  });
+
+  it("prefers the ACTIVE session's project over the selected one, so the strip never empties under a running session", () => {
+    // The failure sessionStripSubject was extracted to prevent, restated for
+    // projects: keyed to the selection, the tabs vanish while the terminal
+    // below them keeps typing.
+    const active = session({ cwd: SIDEQUEST });
+    expect(conversationSubject(active, null, POLSIA, roots)).toEqual({
+      kind: "project",
+      root: SIDEQUEST,
+    });
+  });
+
+  it("names the SELECTED project when nothing is running, so a project you just picked is already the subject", () => {
+    expect(conversationSubject(null, ADS, POLSIA, roots)).toEqual({ kind: "project", root: POLSIA });
+    expect(
+      conversationSubject(session({ status: "exited", cwd: POLSIA }), ADS, POLSIA, roots),
+    ).toEqual({ kind: "project", root: POLSIA });
+  });
+
+  it("resolves the NEAREST project when roots overlap, matching where the session was rooted", () => {
+    const workers = `${POLSIA}/services/workers`;
+    const active = session({ cwd: workers });
+    expect(conversationSubject(active, null, null, [POLSIA, workers])).toEqual({
+      kind: "project",
+      root: workers,
+    });
+  });
+
+  it("falls back to the agent subject for a session outside every known root", () => {
+    // A scaffold folder not yet in recentDirs has no project. Inventing one
+    // from its cwd would give the strip a root no rail row corresponds to.
+    const loose = session({ cwd: `${HOME}/scratch`, boundWorkflowPath: `${HOME}/scratch/bot` });
+    expect(conversationSubject(loose, ADS, null, roots)).toEqual({
+      kind: "focus",
+      path: `${HOME}/scratch/bot`,
+    });
+    expect(conversationSubject(null, ADS, null, roots)).toEqual({ kind: "focus", path: ADS });
+    expect(conversationSubject(null, null, null, roots)).toEqual({ kind: "focus", path: null });
   });
 });
 

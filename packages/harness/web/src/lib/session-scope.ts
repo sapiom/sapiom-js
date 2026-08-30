@@ -135,6 +135,42 @@ export function liveSessionsForFocus<S extends ScopedSession>(
 }
 
 /**
+ * Live sessions belonging to a PROJECT, in the same tab order.
+ *
+ * The sibling above answers "whose session is this" for an AGENT, by binding
+ * or by an exact cwd match. A project cannot be asked that way: since SAP-2927
+ * every session boots at its project root, so the project's own sessions are
+ * the ones bound to its agents AND the unbound ones sitting at the root, and
+ * the binding clause would drop the first group on the floor — a project whose
+ * every session is bound to an agent would show an empty tab strip.
+ *
+ * So membership is CONTAINMENT, and deliberately the same containment
+ * `sessionForFocus` already uses to pick a project's session on a handover
+ * (`rootContains(focusRoot, session.cwd)`). Two functions answering "is this
+ * session in this project" differently is how a strip and a handover come to
+ * disagree — the failure `liveSessionsForFocus` was extracted to prevent.
+ *
+ * Downward only, like every other containment question here: with `~/polsia`
+ * and `~/polsia/services/workers` both open, the outer project lists the
+ * nested one's sessions (it genuinely contains them) and the nested one lists
+ * only its own.
+ *
+ * NOTE the membership is DERIVED, never stamped. A `projectId` on the session
+ * record would be wrong the moment a project is removed or `POST
+ * /api/agents/move` moves an agent, and a second, staler answer to the same
+ * question is exactly what this module exists to prevent.
+ */
+export function liveSessionsForProject<S extends ScopedSession>(
+  sessions: readonly S[],
+  projectRoot: string | null,
+): S[] {
+  if (!projectRoot) return [];
+  return sessions
+    .filter((s) => s.status !== "exited" && rootContains(projectRoot, s.cwd))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+/**
  * Whose session tabs the main panel shows: the ACTIVE session's own subject
  * (its bound agent, else its folder).
  *
@@ -150,6 +186,54 @@ export function sessionStripSubject(
 ): string | null {
   if (!active || active.status === "exited") return focusPath;
   return active.boundWorkflowPath ?? active.cwd;
+}
+
+/** What the CONVERSATION is about — the tab strip's subject. */
+export type ConversationSubject =
+  /** A project: the strip lists every live session inside it. */
+  | { kind: "project"; root: string }
+  /** One agent or bare folder: the strip lists that subject's own sessions. */
+  | { kind: "focus"; path: string | null };
+
+/**
+ * Whose sessions the tab strip shows, now that a session belongs to a PROJECT.
+ *
+ * SAP-2927 rooted every session at its project root; this is the other half —
+ * the chat is a project object, so the strip is the project's strip. Keyed to
+ * the ACTIVE session's project, never to the rail selection: a strip keyed to
+ * the selection empties itself while the session it belongs to is still typing
+ * below it, which is the failure `sessionStripSubject` was extracted to
+ * prevent and which this must not reintroduce.
+ *
+ * That keying is also what makes "selecting a sibling agent does not move the
+ * conversation" true on screen and not merely in the session pointer: the
+ * agent selection is not an input here, so the tabs are literally the same set
+ * before and after the click. Crossing to another project moves the session
+ * (`sessionForFocus`), and the strip follows it because the project did.
+ *
+ * `projectRoot` is the project the rail has selected, and it answers the one
+ * case the active session cannot: a project picked while nothing is running
+ * yet, whose strip must already name the project the session is being created
+ * in rather than the last agent that happened to be selected.
+ *
+ * A session outside every known root — a scaffold folder not yet recorded in
+ * `recentDirs` — has no project to belong to, and falls back to the agent
+ * subject verbatim. Inventing a project from its cwd would give the strip a
+ * root that no rail row corresponds to.
+ */
+export function conversationSubject(
+  active: ScopedSession | null,
+  focusPath: string | null,
+  projectRoot: string | null,
+  roots: readonly string[],
+): ConversationSubject {
+  const live = active && active.status !== "exited" ? active : null;
+  if (live) {
+    const owner = roots.find((root) => rootContains(root, live.cwd));
+    if (owner) return { kind: "project", root: projectRootForAgent(live.cwd, roots) };
+  }
+  if (projectRoot) return { kind: "project", root: projectRoot };
+  return { kind: "focus", path: sessionStripSubject(active, focusPath) };
 }
 
 /**
