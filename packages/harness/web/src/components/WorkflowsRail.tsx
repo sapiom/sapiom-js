@@ -1312,7 +1312,7 @@ export function WorkflowsRail({
                           glyphs, because the ambiguity was never in the icons:
                           it was in asking a 13px mark to carry a noun. Every
                           item here states its own subject in words — "Create an
-                          agent in team-bots", "Remove team-bots from the rail"
+                          agent in acme-app", "Remove acme-app from the rail"
                           — so there is nothing left to infer from adjacency.
 
                           What is left on the row is a `⋮` and, on a merged
