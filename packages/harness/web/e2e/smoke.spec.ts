@@ -11,7 +11,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { focusRfqAgent, selectMockSessionFromPalette } from "./mock-navigation";
+import { focusRfqAgent, openProjectMenu, selectMockSessionFromPalette } from "./mock-navigation";
 
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
@@ -393,7 +393,12 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // Project destination. Its existing session stays globally reachable,
     // while the trailing action can scaffold an agent into it.
     await expect(page.getByTestId("project-select-scratch")).toBeVisible();
+    // The scaffold action moved into the row's ⋮ with every other project
+    // action (SAP-2982): a Sparkles glyph acting on an AGENT sat adjacent to
+    // an `×` acting on the PROJECT, same size, same reveal.
+    await openProjectMenu(page, "scratch");
     await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect(page.getByTestId("workspace-focus-scratch")).toHaveCount(0);
 
     // Exactly one filled selection: the focused agent (leasing on load).

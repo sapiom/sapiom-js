@@ -22,6 +22,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { openProjectMenu } from "./mock-navigation";
+
 const ACME = "/Users/demo/acme-app";
 
 /** Every fixture the mock can serve, so "across every fixture" is literal. */
@@ -96,10 +98,12 @@ test.describe("Remove project", () => {
     // A destructive action standing at full strength on every project row
     // would be the loudest thing in the rail; invisible even to the keyboard
     // would be worse. Both halves are CSS, so both are asserted on screen.
+    // The control is now the row's ⋮ — Remove lives inside it (SAP-2982) — and
+    // the reveal contract it has to keep is the row's, unchanged.
     const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row");
-    const remove = page.getByTestId("project-remove-acme-app");
+    const menu = page.getByTestId("project-menu-acme-app");
     const opacity = (): Promise<string> =>
-      remove.evaluate((element) => getComputedStyle(element).opacity);
+      menu.evaluate((element) => getComputedStyle(element).opacity);
 
     expect(await opacity()).toBe("0");
     await row.hover();
@@ -107,13 +111,46 @@ test.describe("Remove project", () => {
 
     await page.mouse.move(0, 0);
     await expect.poll(opacity).toBe("0");
-    await remove.focus();
+    await menu.focus();
     await expect.poll(opacity).toBe("1");
+  });
+
+  test("an OPEN menu holds its trigger on screen after the pointer leaves", async ({ page }) => {
+    // The popover is anchored to the ⋮. Letting the trigger fade back to
+    // opacity 0 when the pointer leaves the row leaves a card floating beside
+    // nothing — the anchor is invisible and the menu looks unmoored.
+    const menu = page.getByTestId("project-menu-acme-app");
+    await menu.click();
+    await page.mouse.move(0, 0);
+    await expect(page.getByTestId("project-menu-card-acme-app")).toBeVisible();
+    await expect
+      .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+  });
+
+  test("a COLLAPSED project row does not grow a standing ⋮", async ({ page }) => {
+    // `.workspace-row.is-collapsed .workspace-row-action[aria-expanded]` tests
+    // only that the attribute is PRESENT, and a menu trigger always carries
+    // one — so without the exclusion in styles.css every collapsed project row
+    // wore a permanent ⋮, which is exactly the standing control the rail's
+    // hover-reveal exists to avoid.
+    await page.getByTestId("project-disclosure-acme-app").click();
+    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row");
+    await expect(row).toHaveClass(/is-collapsed/);
+    await page.mouse.move(0, 0);
+    await expect
+      .poll(() =>
+        page
+          .getByTestId("project-menu-acme-app")
+          .evaluate((element) => getComputedStyle(element).opacity),
+      )
+      .toBe("0");
   });
 
   test("the confirm NAMES the number of sessions it ends, and says nothing on disk is touched", async ({
     page,
   }) => {
+    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     const confirm = page.getByTestId("remove-project-confirm");
     await expect(confirm).toBeVisible();
@@ -130,6 +167,7 @@ test.describe("Remove project", () => {
   test("says so plainly when there is nothing to end", async ({ page }) => {
     // rfq-agent has one exited session and no live one. An abstract warning
     // here would be a lie in the only direction that matters.
+    await openProjectMenu(page, "rfq-agent");
     await page.getByTestId("project-remove-rfq-agent").click();
     await expect(page.getByTestId("remove-project-confirm-count")).toHaveText(
       "No running sessions to end.",
@@ -137,6 +175,7 @@ test.describe("Remove project", () => {
   });
 
   test("Keep project changes nothing", async ({ page }) => {
+    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByRole("button", { name: "Keep project" }).click();
     await expect(page.getByTestId("remove-project-confirm")).toHaveCount(0);
@@ -152,6 +191,7 @@ test.describe("Remove project", () => {
     await expect(page.getByTestId("workflow-leasing")).toBeVisible();
     expect(await recentDirPaths(page)).toContain(ACME);
 
+    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
 
@@ -195,6 +235,7 @@ test.describe("Remove project", () => {
     // into a hidden project would leave an agent that exists and nothing
     // shows; giving it a root of its own would mint `acme-app/leasing`, which
     // is the accumulation this ticket closes.
+    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
@@ -218,6 +259,7 @@ test.describe("Remove project", () => {
     // so it cannot be confused with the `workers` subdirectory row inside it.
     await expect(page.getByTestId("workspace-group-polsia/services/workers")).toBeVisible();
 
+    await openProjectMenu(page, "polsia");
     await page.getByTestId("project-remove-polsia").click();
     await page.getByTestId("remove-project-confirm-btn").click();
 

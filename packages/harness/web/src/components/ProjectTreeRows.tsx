@@ -266,6 +266,13 @@ export function ProjectTreeRows({
                 type="button"
                 className="workspace-row-main"
                 onClick={() => onToggleCollapsed(dirKey(dir.path))}
+                /* A THIRD toggle, so double-click lands where single-click
+                   does. A double-click already fires two clicks underneath,
+                   which on this row toggled twice and cancelled out — so
+                   double-clicking a folder did visibly nothing, the same
+                   "convention absent, reads as breakage" failure E5.2 names on
+                   the project row. One more toggle makes the odd number. */
+                onDoubleClick={() => onToggleCollapsed(dirKey(dir.path))}
                 /* The ABSOLUTE path. The row shows what it is — a compacted,
                    maybe elided chain; the title answers where it lives, and
                    only the absolute path answers that. */
@@ -438,6 +445,22 @@ export function ProjectRow({
               ? () => onSelectProject(workspaceKey, root, label)
               : undefined
         }
+        /* DOUBLE-CLICK TOGGLES DISCLOSURE — the platform convention for a
+           disclosure row, and its absence read as breakage: the chevron was
+           the only thing that folded a project, so double-clicking the label
+           looked like a row that had stopped responding.
+
+           It does not fight the single click. The two clicks underneath have
+           already fired by the time this runs, and both of the row's clicks
+           are idempotent — focusing the agent that is already focused, or
+           selecting the project already selected, is the same state twice — so
+           the pair costs nothing and the third event is the only one that
+           changes anything.
+
+           Nothing here when the row has nothing to disclose: `disclosable` is
+           false for a project with no rows under it, and a fold that changes
+           nothing is the small lie `RowDisclosure` already declines to tell. */
+        onDoubleClick={disclosable ? onToggleCollapsed : undefined}
         /* The ABSOLUTE path, matching every other row. The row shows what it
            is; the title answers where it lives. */
         title={root}

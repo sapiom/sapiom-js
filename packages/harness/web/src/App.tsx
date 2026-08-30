@@ -68,6 +68,7 @@ import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
+import { HelpOverlay } from "./components/HelpOverlay";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { WorkspaceGraphView } from "./components/WorkspaceGraphView";
@@ -2501,6 +2502,11 @@ export const App = (): JSX.Element => {
           onDismiss={() => setOverviewOpen(false)}
         />
       )}
+
+      {/* The one-time explainer. It owns its own visibility (first run, the
+          account menu's "How Studio is organised"), so the shell only has to
+          give it a place to mount beside the other card-on-top. */}
+      <HelpOverlay />
 
       {paletteOpen && (
         <CommandPalette

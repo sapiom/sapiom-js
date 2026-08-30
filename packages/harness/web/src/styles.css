@@ -2036,8 +2036,15 @@ button.rail-footer-card:hover {
 }
 
 /* A collapsed merged group keeps its caret button visible, matching the
-   inline caret's "there's more here" cue on plain headers. */
-.workspace-row.is-collapsed .workspace-row-action[aria-expanded] {
+   inline caret's "there's more here" cue on plain headers.
+
+   NOT the project row's ⋮. This selector tests only that `aria-expanded` is
+   PRESENT, and the row menu's trigger always carries it — so without the
+   exclusion every collapsed project row grew a standing ⋮, which is the
+   "loudest thing in the rail" the trailing actions are hover-revealed to
+   avoid. An open menu keeps its own trigger visible through the rule below. */
+.workspace-row.is-collapsed
+  .workspace-row-action[aria-expanded]:not(.project-row-menu-trigger) {
   opacity: 1;
 }
 
@@ -2106,13 +2113,32 @@ button.rail-footer-card:hover {
 }
 
 .workspace-row:hover .workspace-row-action,
-.workspace-row-action:focus-visible {
+.workspace-row-action:focus-visible,
+/* An OPEN menu holds its trigger on screen. The popover is anchored to this
+   button, so letting the trigger fade out when the pointer leaves the row
+   leaves a card floating beside nothing. */
+.workspace-row-action[aria-expanded="true"] {
   opacity: 1;
 }
 
 .workspace-row-action:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+/* ---- Project row ⋮ menu ---------------------------------------------- */
+/* Wide enough for the longest item to state its subject on one line — the
+   whole point of the menu is that "Remove team-bots from the rail" is read,
+   not inferred from a glyph, and a wrapped or ellipsed label gives that back. */
+.project-row-menu {
+  min-width: 248px;
+}
+
+/* The destructive item, marked on hover the way the session menu's is. A wash
+   (`color-mix`), never a full-strength surface. */
+.project-row-menu-danger:hover {
+  color: var(--red-text);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
 }
 
 .workspace-row-action:focus-visible {
@@ -10097,6 +10123,49 @@ button.system-graph-node.is-navigable:focus-visible {
   color: var(--text);
   border-color: var(--ui-line-strong);
   background: var(--surface-hover);
+}
+
+/* ---- First-run explainer -------------------------------------------- */
+/* The card itself wears `.overview-modal*` — same object, same recipe (see
+   HelpOverlay.tsx). Only the two parts Overview has no equivalent for are
+   defined here. */
+
+/* The upgrade line. A QUIET INSET, not a warning: it reports something that
+   already happened and is fine, so the alarm colours would make a reassurance
+   read as a problem. Aligned as icon + copy so the glyph sits on the first
+   line rather than centring against a two-line paragraph. */
+.help-overlay-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp2);
+  margin: 0;
+  padding: var(--sp3);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+}
+
+.help-overlay-note-icon {
+  display: flex;
+  flex: 0 0 auto;
+  /* The copy's own line height, so the glyph centres on line one. */
+  height: calc(var(--type-meta) * 1.5);
+  align-items: center;
+  color: var(--text-faint);
+}
+
+.help-overlay-note strong {
+  color: var(--text);
+  font-weight: var(--fw-strong, 600);
+}
+
+/* One action, right-aligned: the card teaches and then gets out of the way. */
+.help-overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--sp1);
 }
 
 .overview-modal-docs:focus-visible {

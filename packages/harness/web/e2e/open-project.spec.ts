@@ -21,6 +21,8 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { openProjectMenu } from "./mock-navigation";
+
 /* A folder that is NOTHING yet: no agent, no session, no recentDirs entry.
    `scratch` cannot play this part — it is the fixture's bare-session project,
    so it is already a row before the dialog opens. */
@@ -197,7 +199,8 @@ test.describe("round trip: removed, then back", () => {
     const before = await projectRows(page);
     expect(before).toContain("project-row-acme-app");
 
-    await page.getByTestId("project-remove-acme-app").click({ force: true });
+    await openProjectMenu(page, "acme-app");
+    await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("project-row-acme-app")).toHaveCount(0);
     // Removal takes the SUBTREE, agents included — it is not a relocation.
@@ -238,7 +241,8 @@ test.describe("round trip: removed, then back", () => {
   test("opening a folder ABOVE a removed project un-hides what is inside it", async ({
     page,
   }) => {
-    await page.getByTestId("project-remove-acme-app").click({ force: true });
+    await openProjectMenu(page, "acme-app");
+    await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
 

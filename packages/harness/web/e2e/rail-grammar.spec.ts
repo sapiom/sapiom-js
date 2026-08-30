@@ -1,0 +1,205 @@
+/**
+ * SAP-2982 — the rail's grammar, and the card that names the two nouns.
+ *
+ * Three defects, one theme: the rail was built on a Project/Agent distinction
+ * that it never said out loud.
+ *
+ *   1. `+` and `×` sat adjacent on a project row — same size, same
+ *      hover-reveal — while acting on different nouns. `+` created an AGENT
+ *      inside the project; `×` removed the PROJECT. The pair made `+` read as
+ *      "add project", and the `×` beside it confirmed the misreading.
+ *   2. Only the chevron folded a project. Double-clicking the label, the
+ *      platform convention for a disclosure row, did nothing — which reads as
+ *      a row that has stopped responding, not as a feature that is absent.
+ *   3. The taxonomy itself lived only in commit messages.
+ *
+ * These specs assert COMPUTED state, not presence: the reveal contract and the
+ * fold are both CSS, and a control that renders at opacity 0 forever passes
+ * every count-based assertion there is.
+ */
+import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
+
+import { openProjectMenu } from "./mock-navigation";
+
+const ROW = (page: Page, label: string) =>
+  page.getByTestId(`workspace-group-${label}`).locator(":scope > .workspace-row");
+
+test.describe("project row grammar", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/?seed=0");
+    await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
+  });
+
+  test("the row carries ONE action control, not a pair acting on two nouns", async ({
+    page,
+  }) => {
+    const row = ROW(page, "acme-app");
+    // Every trailing action button on the row. The defect was never "there is
+    // a `+`" — it was two same-sized adjacent glyphs whose subjects differ, so
+    // the assertion is on the SET of controls the row offers at once.
+    const actions = row.locator(".workspace-row-action");
+    await expect(actions).toHaveCount(1);
+    await expect(actions.first()).toHaveAttribute(
+      "data-testid",
+      "project-menu-acme-app",
+    );
+
+    // And the actions themselves state their subject in words.
+    await openProjectMenu(page, "acme-app");
+    await expect(page.getByTestId("project-create-agent-acme-app")).toHaveText(
+      "Create an agent in acme-app",
+    );
+    await expect(page.getByTestId("project-remove-acme-app")).toHaveText(
+      "Remove acme-app from the rail",
+    );
+  });
+
+  test("a bare project's scaffold action is in the same menu, not beside the ×", async ({
+    page,
+  }) => {
+    // `scratch` has live sessions and no agent. Its create affordance used to
+    // be a Sparkles glyph on the row — an AGENT action sitting next to the
+    // PROJECT's `×`, which is the same defect in its second costume.
+    const row = ROW(page, "scratch");
+    await expect(row.locator(".workspace-row-action")).toHaveCount(1);
+    await openProjectMenu(page, "scratch");
+    await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveText(
+      "Scaffold an agent in scratch",
+    );
+    await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
+  });
+
+  test("creating from the menu still starts a session rooted in THAT project", async ({
+    page,
+  }) => {
+    // The menu changed what the control SAYS. What it does is unchanged, and a
+    // grammar fix that quietly broke the action would be the worse bug.
+    await openProjectMenu(page, "acme-app");
+    await page.getByTestId("project-create-agent-acme-app").click();
+    await expect(page.getByTestId("project-menu-card-acme-app")).toHaveCount(0);
+    await expect
+      .poll(async () =>
+        page.evaluate(() =>
+          Array.from(document.querySelectorAll("[data-testid^='session-tab-']"))
+            .length,
+        ),
+      )
+      .toBeGreaterThan(0);
+  });
+});
+
+test.describe("double-click toggles disclosure", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/?seed=0");
+    await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
+  });
+
+  test("double-clicking a project label folds it, and again unfolds it", async ({
+    page,
+  }) => {
+    const row = ROW(page, "acme-app");
+    const label = page.getByTestId("project-select-acme-app");
+    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+
+    await label.dblclick();
+    await expect(row).toHaveClass(/is-collapsed/);
+    await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
+
+    await label.dblclick();
+    await expect(row).not.toHaveClass(/is-collapsed/);
+    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+  });
+
+  test("it does not fight the single click: the project is still selected", async ({
+    page,
+  }) => {
+    // A double-click fires two clicks underneath. Both of this row's clicks
+    // are idempotent — selecting the already-selected project is the same
+    // state twice — so the row must end up BOTH selected and folded, never one
+    // at the cost of the other.
+    const row = ROW(page, "acme-app");
+    await page.getByTestId("project-select-acme-app").dblclick();
+    await expect(row).toHaveClass(/is-collapsed/);
+    await expect(row).toHaveClass(/is-selected/);
+  });
+
+  test("a folder row's double-click lands where its single click does", async ({
+    page,
+  }) => {
+    // Two clicks toggled twice and cancelled out, so double-clicking a folder
+    // did visibly nothing — the same absent convention, one level down.
+    const dir = page.locator("[data-testid^='dir-disclosure-']").first();
+    const count = await dir.count();
+    test.skip(count === 0, "fixture has no branching directory row");
+    const dirRow = page
+      .locator("[data-testid^='dir-row-']")
+      .first();
+    await expect(dirRow).not.toHaveClass(/is-collapsed/);
+    await dirRow.locator(".workspace-row-main").dblclick();
+    await expect(dirRow).toHaveClass(/is-collapsed/);
+  });
+});
+
+test.describe("first-run explainer", () => {
+  test("shows once, stays gone after a reload, and re-opens from the account menu", async ({
+    page,
+  }) => {
+    // `?help=1` opts a mock page into the auto-show the real app does by
+    // default (see `shouldAutoOpen`). It does NOT force the card open, so the
+    // "already seen" path below is the same code a real install runs.
+    await page.goto("/?seed=0&help=1");
+    const card = page.getByTestId("help-overlay");
+    await expect(card).toBeVisible();
+
+    // It teaches exactly one thing, and names both nouns.
+    await expect(page.getByTestId("help-projects")).toContainText("Projects");
+    await expect(page.getByTestId("help-projects")).toContainText(
+      "Folders you chose that hold agents",
+    );
+    await expect(page.getByTestId("help-agents")).toContainText("Agents");
+    await expect(page.getByTestId("help-agents")).toContainText(
+      "What you run",
+    );
+    // The upgrade line: an existing user opens 0.4.0 to a rearranged rail.
+    await expect(page.getByTestId("help-upgrade-note")).toContainText(
+      "Your projects were rebuilt from the folders you opened",
+    );
+    await expect(page.getByTestId("help-upgrade-note")).toContainText(
+      "Nothing was deleted",
+    );
+    await expect(page.getByTestId("help-upgrade-note")).toContainText(
+      "Add a project",
+    );
+
+    await page.getByTestId("help-overlay-dismiss").click();
+    await expect(card).toHaveCount(0);
+
+    // ONCE means once. A card that returns on every load is not an explainer,
+    // it is an obstacle.
+    await page.reload();
+    await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
+    await expect(page.getByTestId("help-overlay")).toHaveCount(0);
+
+    // …and it is never lost: it sits beside Overview, which is where a user
+    // who wants the explanation back will look.
+    await page.getByTestId("brand-identity").click();
+    await expect(page.getByTestId("profile-menu")).toBeVisible();
+    await page.getByTestId("rail-help").click();
+    await expect(page.getByTestId("help-overlay")).toBeVisible();
+
+    // Esc is the same contract every card on top keeps.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("help-overlay")).toHaveCount(0);
+  });
+
+  test("does not raise itself over a page that has already seen it", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&help=1");
+    await page.getByTestId("help-overlay-dismiss").click();
+    await page.goto("/?seed=0&help=1");
+    await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
+    await expect(page.getByTestId("help-overlay")).toHaveCount(0);
+  });
+});

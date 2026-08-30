@@ -18,6 +18,7 @@ import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
+import { openHelpOverlay } from "./HelpOverlay";
 import { Icon } from "./Icon";
 import { StartDialog } from "./StartDialog";
 import type { StartMode } from "./StartDialog";
@@ -236,6 +237,119 @@ const SORT_LABELS: Record<RailSort, string> = {
   recent: "Recent activity",
   name: "Name",
 };
+
+/**
+ * The project row's ONE trailing action control.
+ *
+ * A `⋮` rather than a row of glyphs, because the actions a project row offers
+ * do not share a subject: creating an agent acts on an AGENT inside the
+ * project, removing acts on the PROJECT. Two adjacent 13px marks cannot say
+ * which noun they take, and side by side they claimed a symmetry that was not
+ * there — see the call site for the pair this replaces.
+ *
+ * Named items say it instead. Each carries the project's own label, so the
+ * subject is read rather than inferred, and the destructive one is last and
+ * marked.
+ *
+ * The trigger keeps its own open state and its own ref: `triggerRef` is what
+ * the remove confirmation returns focus to, and the menu item that opened it
+ * has unmounted by then.
+ */
+function ProjectRowMenu({
+  label,
+  create,
+  onRemove,
+}: {
+  label: string;
+  /** The create action this project currently offers, or null while one is
+   *  mid-creation and there is nothing to add to yet. A bare project (sessions,
+   *  no agent) scaffolds into its existing session; every other project starts
+   *  a new one rooted at the project. */
+  create: {
+    kind: "create" | "scaffold";
+    testid: string;
+    label: string;
+    run: () => void;
+  } | null;
+  onRemove: (trigger: HTMLButtonElement | null) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button
+        type="button"
+        ref={triggerRef}
+        className="workspace-row-action project-row-menu-trigger"
+        data-testid={`project-menu-${label}`}
+        aria-label={`Actions for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-tooltip="Project actions"
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <Icon name="EllipsisVertical" size={13} />
+      </button>
+      <AnchoredPopover
+        open={open}
+        anchorRef={triggerRef}
+        onDismiss={() => setOpen(false)}
+        placement="down-end"
+        className="menu-flyer"
+        testid={`project-menu-card-${label}`}
+      >
+        <div className="connect-card project-row-menu">
+          <div className="connect-card-body" role="menu">
+            {create && (
+              <button
+                type="button"
+                role="menuitem"
+                className="session-dropdown-item"
+                data-testid={create.testid}
+                onClick={() => {
+                  setOpen(false);
+                  create.run();
+                }}
+              >
+                <span className="session-item-icon">
+                  <Icon
+                    name={create.kind === "scaffold" ? "Sparkles" : "Plus"}
+                    size={13}
+                  />
+                </span>
+                <span className="session-item-copy">
+                  <span className="session-item-title">{create.label}</span>
+                </span>
+              </button>
+            )}
+            {/* REMOVE. An `X`, not a trash can: this closes a project and ends
+                its sessions, and never touches a file — a bin glyph would say
+                the opposite of the copy in the confirm. */}
+            <button
+              type="button"
+              role="menuitem"
+              className="session-dropdown-item project-row-menu-danger"
+              data-testid={`project-remove-${label}`}
+              onClick={() => {
+                setOpen(false);
+                onRemove(triggerRef.current);
+              }}
+            >
+              <span className="session-item-icon">
+                <Icon name="X" size={13} />
+              </span>
+              <span className="session-item-copy">
+                <span className="session-item-title">
+                  Remove {label} from the rail
+                </span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </AnchoredPopover>
+    </>
+  );
+}
 
 /**
  * Merged past-sessions row: exited registry sessions and history entries share
@@ -1144,23 +1258,12 @@ export function WorkflowsRail({
                   }
                   trailing={
                     <>
-                      {creating ? (
+                      {creating && (
                         <span
                           className="workspace-row-spinner"
                           aria-hidden="true"
                         />
-                      ) : bare ? (
-                        <button
-                          type="button"
-                          className="workspace-row-action"
-                          data-testid={`workspace-scaffold-${project.label}`}
-                          aria-label={`Scaffold an agent in ${project.label}`}
-                          data-tooltip="Scaffold an agent here"
-                          onClick={() => onScaffoldInSession(bare.id)}
-                        >
-                          <Icon name="Sparkles" size={13} />
-                        </button>
-                      ) : null}
+                      )}
                       {/* THE MAP, when the row's click is spoken for.
                           A merged root-agent row now opens the AGENT, which is
                           the whole of the B4 fix, so the project's graph needs
@@ -1193,70 +1296,70 @@ export function WorkflowsRail({
                             <Icon name="Waypoints" size={13} />
                           </button>
                         )}
-                      {/* CREATE AN AGENT IN THIS FOLDER.
-                          `onScaffoldSession` was wired at exactly one place, the
-                          EMPTY-project branch below, so a project that already
-                          held an agent offered no way to add a second one: "how
-                          do I make a new agent in this folder" had no answer on
-                          screen. The header CTA does not replace it, because it
-                          targets no project and the composer drops the result
-                          wherever it decides, which was the other half of the
-                          same complaint.
+                      {/* ONE CONTROL, and it opens a menu of NAMED actions.
+                          `+` and `×` used to sit here side by side: same size,
+                          same hover-reveal, adjacent — so they read as a
+                          matched pair operating on one subject. They never
+                          were. `+` created an AGENT inside the project; `×`
+                          removed the PROJECT from the rail. The pair made `+`
+                          read as "add project", and the `×` next to it
+                          confirmed the misreading rather than correcting it.
+                          The same defect had a second form on a bare project,
+                          where a Sparkles "scaffold an agent" glyph sat beside
+                          the same `×`.
 
-                          Hover-revealed, deliberately reversing the note this
-                          row used to carry ("hover-only made the one action a
-                          project row offered invisible at rest"). That held when
-                          it was the ONLY action. It is now one of a pair with
-                          Remove, both hover-revealed and both keyboard
-                          reachable, which is the pattern every other row in the
-                          rail already uses, and a standing `+` on every project
-                          row would be the loudest thing in the list. */}
-                      {!creating && bare == null && (
-                        <button
-                          type="button"
-                          className="workspace-row-action"
-                          data-testid={`project-create-agent-${project.label}`}
-                          aria-label={`Create an agent in ${project.label}`}
-                          data-tooltip="Create an agent here"
-                          onClick={() => {
-                            void onScaffoldSession(
-                              project.root,
-                              preferredHarness(),
-                            ).catch((err: unknown) => {
-                              onToast(
-                                err instanceof Error
-                                  ? err.message
-                                  : `Couldn't start an agent in ${project.label}.`,
-                              );
-                            });
-                          }}
-                        >
-                          <Icon name="Plus" size={13} />
-                        </button>
-                      )}
-                      {/* REMOVE PROJECT. An `X`, not a trash can: this closes a
-                          project and ends its sessions, and never touches a
-                          file — a bin glyph would say the opposite of the copy
-                          in the confirm. Hover-revealed like every other row
-                          action (and reachable by keyboard), because a standing
-                          destructive control on every project row would be the
-                          loudest thing in the rail. */}
-                      <button
-                        type="button"
-                        className="workspace-row-action"
-                        data-testid={`project-remove-${project.label}`}
-                        aria-label={`Remove ${project.label} from the rail`}
-                        data-tooltip="Remove project"
-                        onClick={(event) => {
-                          removeTriggerRef.current = event.currentTarget;
+                          A menu fixes the grammar rather than re-tuning the
+                          glyphs, because the ambiguity was never in the icons:
+                          it was in asking a 13px mark to carry a noun. Every
+                          item here states its own subject in words — "Create an
+                          agent in team-bots", "Remove team-bots from the rail"
+                          — so there is nothing left to infer from adjacency.
+
+                          What is left on the row is a `⋮` and, on a merged
+                          root-agent row, the map. Both speak for the project,
+                          so no pair on this row spans two nouns any more. */}
+                      <ProjectRowMenu
+                        label={project.label}
+                        create={
+                          creating
+                            ? null
+                            : bare
+                              ? {
+                                  kind: "scaffold",
+                                  testid: `workspace-scaffold-${project.label}`,
+                                  label: `Scaffold an agent in ${project.label}`,
+                                  run: () => onScaffoldInSession(bare.id),
+                                }
+                              : {
+                                  kind: "create",
+                                  testid: `project-create-agent-${project.label}`,
+                                  label: `Create an agent in ${project.label}`,
+                                  run: () => {
+                                    void onScaffoldSession(
+                                      project.root,
+                                      preferredHarness(),
+                                    ).catch((err: unknown) => {
+                                      onToast(
+                                        err instanceof Error
+                                          ? err.message
+                                          : `Couldn't start an agent in ${project.label}.`,
+                                      );
+                                    });
+                                  },
+                                }
+                        }
+                        onRemove={(trigger) => {
+                          // Focus returns to the ⋮, not to the menu item that
+                          // opened the dialog: that item unmounts with the
+                          // popover, and a `triggerRef` pointing at a detached
+                          // node restores focus to <body>.
+                          removeTriggerRef.current = trigger;
                           setRemoving({
                             root: project.root,
                             label: project.label,
                           });
                         }}
-                      >
-                        <Icon name="X" size={13} />
-                      </button>
+                      />
                     </>
                   }
                 />
@@ -1773,6 +1876,23 @@ function ProfileRow({
         >
           <Icon name="Info" size={13} />
           Overview
+        </button>
+        {/* BESIDE Overview, because they answer adjacent questions — "what is
+            this app" and "what are these rows" — and a user who has dismissed
+            the explainer and wants it back looks where the other explanation
+            is. It calls the card directly rather than through a prop: see
+            `openHelpOverlay`. */}
+        <button
+          role="menuitem"
+          className="profile-menu-item"
+          data-testid="rail-help"
+          onClick={() => {
+            openHelpOverlay();
+            closeMenu();
+          }}
+        >
+          <Icon name="BookOpen" size={13} />
+          How Studio is organised
         </button>
         <button
           role="menuitem"
