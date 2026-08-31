@@ -113,13 +113,63 @@ export { MANIFEST_PROTOCOL, agentManifestSchema } from './manifest.js';
 export type { AgentManifest, AgentStepManifest, ManifestTransition } from './manifest.js';
 
 // Multi-agent package inventory — separate from the single-agent build manifest.
-export { PACKAGE_INVENTORY_PROTOCOL, packageInventorySchema } from './package-inventory.js';
+export { PACKAGE_INVENTORY_PROTOCOL, packageInventorySchema, packageInventoryVersionSchema } from './package-inventory.js';
 export type {
   PackageInventory,
   PackageInventoryAgent,
   PackageInventoryIdentityIssue,
   PackageInventoryVersion,
 } from './package-inventory.js';
+
+// Package-scoped relationship evidence — separate from identity inventory.
+export {
+  PACKAGE_GRAPH_EVIDENCE_PROTOCOL,
+  advancePackageGraphStaticEvidenceState,
+  appendPackageGraphRuntimeEvidenceEvent,
+  canonicalPackageGraphEvidenceJson,
+  createPackageGraphEvidenceStaticResult,
+  createPackageGraphRuntimeEvidenceEvent,
+  packageGraphEvidenceCandidateSchema,
+  packageGraphEvidenceCoverageGapSchema,
+  packageGraphEvidenceCoverageSchema,
+  packageGraphEvidenceDiagnosticCodeSchema,
+  packageGraphEvidenceDiagnosticSchema,
+  packageGraphEvidenceProducerSchema,
+  packageGraphEvidenceQuarantineSchema,
+  packageGraphEvidenceRecordSchema,
+  packageGraphEvidenceReferenceSchema,
+  packageGraphEvidenceSha256,
+  packageGraphEvidenceStaticResultSchema,
+  packageGraphRuntimeEvidenceEventSchema,
+  projectPackageGraphEvidence,
+} from './package-graph-evidence.js';
+export type {
+  AppendPackageGraphRuntimeEvidenceEventResult,
+  CreatePackageGraphEvidenceStaticResultInput,
+  CreatePackageGraphRuntimeEvidenceEventResult,
+  PackageGraphEvidenceCandidate,
+  PackageGraphEvidenceConnector,
+  PackageGraphEvidenceCoverage,
+  PackageGraphEvidenceCoverageGap,
+  PackageGraphEvidenceDiagnostic,
+  PackageGraphEvidenceDiagnosticCode,
+  PackageGraphEvidenceDigest,
+  PackageGraphEvidenceProducer,
+  PackageGraphEvidenceProjectionSource,
+  PackageGraphEvidenceProjectedSupport,
+  PackageGraphEvidenceQuarantine,
+  PackageGraphEvidenceRecord,
+  PackageGraphEvidenceReference,
+  PackageGraphEvidenceReferenceProjection,
+  PackageGraphEvidenceStaticResult,
+  PackageGraphRuntimeEvidenceCandidate,
+  PackageGraphRuntimeEvidenceEvent,
+  PackageGraphRuntimeEvidenceRecord,
+  PackageGraphRuntimeEvidenceState,
+  PackageGraphStaticEvidenceCandidate,
+  PackageGraphStaticEvidenceRecord,
+  PackageGraphStaticEvidenceState,
+} from './package-graph-evidence.js';
 
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';

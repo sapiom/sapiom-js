@@ -56,6 +56,65 @@ A step declares the transitions it may take (`next` / `terminal` / `canFail` /
 undeclared transition is a compile error. The build reads those same declarations
 to render the orchestration graph without executing anything.
 
+## Package graph evidence
+
+`PackageInventory` answers which agents exist and where they live. The separately
+versioned package graph-evidence protocol answers why two inventory agents are
+connected. Protocol 1 admits four factual relation/basis pairs:
+
+| Relation  | Basis               | Evidence meaning                           |
+| --------- | ------------------- | ------------------------------------------ |
+| `invokes` | `static-invocation` | Source proves one agent starts another     |
+| `invokes` | `runtime-dispatch`  | The engine observed a caller/callee pair   |
+| `feeds`   | `static-dataflow`   | Source provenance reaches another input    |
+| `feeds`   | `runtime-handoff`   | Runtime lineage proves a supported handoff |
+
+Every accepted record names `fromAgentKey` and `toAgentKey` explicitly. Static
+results reuse the exact inventory version and additionally carry an analysis
+fingerprint, producer identity/version, coverage, deterministic diagnostics, and
+quarantine. Runtime evidence is an append-only bundle event keyed by an
+authoritative event ID. The helpers expose reference replacement/idempotency
+semantics only; persistence and production graph projection remain server concerns.
+
+```ts
+import {
+  createPackageGraphEvidenceStaticResult,
+  type PackageInventory,
+} from "@sapiom/agent";
+
+export function directInvocationEvidence(inventory: PackageInventory) {
+  return createPackageGraphEvidenceStaticResult(
+    {
+      scope: inventory.version,
+      producer: { id: "acme.direct-invocation", version: "1.0.0" },
+      analysisFingerprint:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      outcome: "success",
+      coverage: { status: "complete" },
+      candidates: [
+        {
+          fromAgentKey: "coordinator",
+          toAgentKey: "research",
+          relation: "invokes",
+          basis: "static-invocation",
+          mode: "blocking",
+          callsites: [
+            { kind: "source-callsite", ref: "callsite:coordinator.research" },
+          ],
+        },
+      ],
+    },
+    inventory,
+  );
+}
+```
+
+Evidence references are public-safe opaque handles. Absolute or relative paths,
+execution IDs, lineage IDs, prompts, reports, inputs, outputs, and tool payloads
+stay behind an authorized producer-owned resolver and must not be copied into a
+public graph DTO. Graph evidence is explanatory metadata only: it cannot change
+execution, routing, authorization, deployment, builds, or billing.
+
 ## The entry input contract
 
 A step's `inputSchema` (a zod schema, imported from `zod/v4`) types and validates that
@@ -175,7 +234,7 @@ Things to know:
     ctx.shared.set("codingRunId", run.runId); // readable from the resumed step
     return pauseUntilSignal(run, { resumeStep: "review" });
   }
-  ```
+```
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
 

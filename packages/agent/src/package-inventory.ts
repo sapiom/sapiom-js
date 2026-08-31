@@ -220,7 +220,7 @@ const packageInventoryAgentSchema = z
     }
   });
 
-const packageInventoryVersionSchema = z.discriminatedUnion("kind", [
+export const packageInventoryVersionSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("working-tree"),
