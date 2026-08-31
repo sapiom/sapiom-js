@@ -111,7 +111,7 @@ describe("agents runtime provenance v1", () => {
     expect(JSON.stringify(result)).not.toContain("signed.receipt");
   });
 
-  it("run forwards a receipt only when the exact SDK result is the next input", async () => {
+  it("run forwards a receipt when the exact SDK output is the next input", async () => {
     const server = agentServer({
       receiptVersion: "1",
       receipt: "signed.direct",
@@ -121,7 +121,7 @@ describe("agents runtime provenance v1", () => {
 
     await client.agents.run({
       definition: "consumer",
-      input: result as unknown as Record<string, unknown>,
+      input: result.output as Record<string, unknown>,
     });
 
     const secondLaunch = posts(server.calls)[1]!;
@@ -131,12 +131,14 @@ describe("agents runtime provenance v1", () => {
     expect(header(secondLaunch, AGENT_RUNTIME_LINEAGE_HEADER)).toBe(
       "signed.direct",
     );
-    expect(JSON.parse(String(secondLaunch.init.body)).input).toEqual(result);
+    expect(JSON.parse(String(secondLaunch.init.body)).input).toEqual(
+      result.output,
+    );
   });
 
   it.each([
-    ["a copied result", (result: object) => ({ ...result })],
-    ["a nested result", (result: object) => ({ result })],
+    ["a copied output", (result: object) => ({ ...result })],
+    ["a nested output", (result: object) => ({ result })],
     ["a transformed primitive", () => ({ value: "ok" })],
   ])("does not infer lineage through %s", async (_label, toInput) => {
     const server = agentServer({
@@ -148,7 +150,7 @@ describe("agents runtime provenance v1", () => {
 
     await client.agents.run({
       definition: "consumer",
-      input: toInput(result),
+      input: toInput(result.output as object),
     });
 
     const secondLaunch = posts(server.calls)[1]!;
@@ -167,12 +169,72 @@ describe("agents runtime provenance v1", () => {
     const result = await client.agents.run({ definition: "producer" });
     await client.agents.run({
       definition: "consumer",
-      input: result as unknown as Record<string, unknown>,
+      input: result.output as Record<string, unknown>,
     });
 
     expect(
       header(posts(server.calls)[1]!, AGENT_RUNTIME_LINEAGE_HEADER),
     ).toBeUndefined();
+  });
+
+  it("does not carry provenance through delayed dispatch", async () => {
+    const server = agentServer({
+      receiptVersion: "1",
+      receipt: "signed.queue",
+    });
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const result = await client.agents.run({ definition: "producer" });
+    const scheduled = carryAgentRuntimeProvenance(
+      {
+        definition: "consumer",
+        input: result.output as Record<string, unknown>,
+        at: "2026-09-01T00:00:00.000Z",
+      },
+      { version: 1, callsite: "callsite.delayed" },
+    );
+
+    await client.agents.launch(scheduled);
+
+    const delayedLaunch = posts(server.calls)[1]!;
+    expect(
+      header(delayedLaunch, AGENT_RUNTIME_CALLSITE_HEADER),
+    ).toBeUndefined();
+    expect(header(delayedLaunch, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
+    expect(
+      header(delayedLaunch, AGENT_RUNTIME_PROVENANCE_VERSION_HEADER),
+    ).toBeUndefined();
+  });
+
+  it("does not include private evidence in surfaced HTTP errors", async () => {
+    const calls: CapturedCall[] = [];
+    const fetch = (async (
+      input: string | URL | Request,
+      init: RequestInit = {},
+    ) => {
+      calls.push({ url: String(input), init });
+      return response({ message: "rejected" }, 400);
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+    const spec = carryAgentRuntimeProvenance(
+      { definition: "child" },
+      { version: 1, callsite: "callsite.must-stay-private" },
+    );
+
+    let error: unknown;
+    try {
+      await client.agents.launch(spec);
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("rejected");
+    expect((error as Error).message).not.toContain(
+      "callsite.must-stay-private",
+    );
+    expect(String(calls[0]!.init.body)).not.toContain(
+      "callsite.must-stay-private",
+    );
   });
 
   it("preserves legacy request and result behavior when provenance is absent", async () => {

@@ -287,6 +287,16 @@ export async function launch(
             error: d.error ?? null,
           };
           retainAgentRuntimeLineage(result, provenanceVersion, lineageReceipt);
+          // This exact output object is the author-facing value commonly handed
+          // to the next agent. Copies, nested values, and primitives remain
+          // deliberately unassociated.
+          if (d.output !== null && typeof d.output === "object") {
+            retainAgentRuntimeLineage(
+              d.output,
+              provenanceVersion,
+              lineageReceipt,
+            );
+          }
           return result;
         }
         if (Date.now() > deadline) {
