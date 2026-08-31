@@ -51,12 +51,13 @@ Instrumented bundles may associate an opaque v1 callsite token with an agent
 invocation through `@sapiom/tools/_internal/agent-runtime-provenance`. The token
 travels in dedicated request headers, never in `AgentRunSpec` or its JSON body.
 When a terminal response carries a supported server-signed lineage receipt, the
-SDK retains it in an object-identity sidecar on the returned result. The receipt
-is forwarded only when that exact result object is passed directly as the next
-agent's `input`; copies, nested values, transformed primitives, delayed queues,
-storage, and arbitrary objects do not inherit it. The SDK treats both values as
-opaque and exposes no caller, callee, bundle, or execution identity through this
-contract. Missing or unsupported metadata preserves the legacy behavior.
+SDK retains it in object-identity sidecars on the returned result and its exact
+object-valued `output`. The receipt is forwarded only when one of those exact
+objects is passed directly as the next agent's `input`; copies, nested values,
+transformed primitives, delayed queues, storage, and arbitrary objects do not
+inherit it. The SDK treats both values as opaque and exposes no caller, callee,
+bundle, or execution identity through this contract. Missing or unsupported
+metadata preserves the legacy behavior.
 
 - **Addressed by slug.** `definition` is the deployed agent's slug — its stable handle. `input` is passed to its entry step.
 
