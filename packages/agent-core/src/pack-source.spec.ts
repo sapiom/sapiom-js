@@ -97,23 +97,38 @@ describe("packSource", () => {
     expect(packed.files.some((f) => f.includes("node_modules"))).toBe(false);
   });
 
-  it("refuses source that escapes the project directory instead of silently dropping it", async () => {
-    // esbuild INLINED these for the push path, so the old transport handled them.
-    // A raw archive cannot: relative imports must still resolve after extraction,
-    // and the server looks for the entry at the archive root. Failing loudly beats
-    // building an agent whose shared code is missing.
-    const shared = path.join(root, "..", `shared-${path.basename(root)}`);
-    mkdirSync(shared, { recursive: true });
-    try {
-      writeFileSync(path.join(shared, "util.ts"), "export const util = 1;\n");
-      write("agent/index.ts", `import { util } from '${path.join(shared, "util.js")}';\nexport default util;\n`);
+  it("packs source from above the agent directory, rooting the archive at the common parent", async () => {
+    // Shared code outside the agent folder used to send the whole deploy to git.
+    // It is now archived like anything else: the archive is rooted at the lowest
+    // directory holding both, and the entry is declared relative to that root, so
+    // the relative import still resolves once the server extracts it.
+    write("shared/util.ts", "export const util = 1;\n");
+    write("agent/index.ts", "import { util } from '../shared/util.js';\nexport default util;\n");
 
-      await expect(packSource(path.join(root, "agent"))).rejects.toMatchObject({
-        code: "UNSUPPORTED_LAYOUT",
-      });
-    } finally {
-      rmSync(shared, { recursive: true, force: true });
-    }
+    const packed = await packSource(path.join(root, "agent"));
+
+    expect(packed.entry).toBe("agent/index.ts");
+    const contents = archived(packed.archive);
+    expect(Object.keys(contents).sort()).toEqual([
+      ".sapiom-source.json",
+      "agent/index.ts",
+      "package.json",
+      "shared/util.ts",
+    ]);
+    // The server reads the entry from here; without it the build would look for
+    // index.ts at the archive root and find nothing.
+    expect(JSON.parse(contents[".sapiom-source.json"])).toEqual({ entry: "agent/index.ts" });
+  });
+
+  it("writes no entry manifest for a flat agent, keeping its archive byte-identical", async () => {
+    // A redeploy of unchanged code must still hash the same and store nothing, so
+    // the manifest is added only where it is actually needed.
+    write("index.ts", "export default 1;\n");
+
+    const packed = await packSource(root);
+
+    expect(packed.entry).toBe("index.ts");
+    expect(Object.keys(archived(packed.archive))).not.toContain(".sapiom-source.json");
   });
 
   it("reports a missing entry as NO_ENTRY", async () => {

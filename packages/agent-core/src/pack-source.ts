@@ -42,7 +42,18 @@ export interface SourcePackage {
   files: string[];
   /** npm dependencies pinned to the author's installed versions. */
   dependencies: Record<string, string>;
+  /** Entry file, relative to the archive root. */
+  entry: string;
 }
+
+/**
+ * Manifest naming the entry, read by the server build.
+ *
+ * Written only when the entry is not `index.ts` at the archive root. Distinct
+ * from the author's `sapiom.json`, which is theirs and must not become something
+ * the build depends on.
+ */
+const SOURCE_MANIFEST = ".sapiom-source.json";
 
 /** Never archived: build output, VCS metadata, and installed packages. */
 const EXCLUDED_SEGMENTS = new Set(["node_modules", ".git", "dist", ".turbo"]);
@@ -50,9 +61,14 @@ const EXCLUDED_SEGMENTS = new Set(["node_modules", ".git", "dist", ".turbo"]);
 /**
  * Pack `<projectDir>` for upload.
  *
+ * Source that lives ABOVE the agent directory is packed too: the archive is
+ * rooted at the lowest directory containing everything the entry imports, and the
+ * entry is declared relative to that root. Shared code therefore deploys by
+ * upload like anything else, instead of falling back to git.
+ *
  * Throws `AgentOperationError` — `NO_ENTRY` when there is no `index.ts`,
- * `BUNDLE_FAILED` when the entry cannot be analysed, `UNSUPPORTED_LAYOUT` when
- * source escapes the project directory.
+ * `BUNDLE_FAILED` when the entry cannot be analysed, `UNSUPPORTED_LAYOUT` only
+ * when the imports have no common parent short of the filesystem root.
  */
 export async function packSource(projectDir: string): Promise<SourcePackage> {
   const root = path.resolve(projectDir);
@@ -67,29 +83,19 @@ export async function packSource(projectDir: string): Promise<SourcePackage> {
 
   const { inputs, dependencies } = await analyse(root, entryFile);
 
+  // Where the archive is rooted. Normally the agent directory; when the agent
+  // imports shared code from above it, the lowest directory that contains
+  // everything the entry reaches. Only the files esbuild actually named are
+  // packed either way — a higher root makes paths longer, never the archive
+  // bigger.
+  const absoluteInputs = inputs.map((input) => path.resolve(root, input));
+  const packRoot = resolvePackRoot(root, absoluteInputs);
+
   const files: TarFile[] = [];
-  const escaping: string[] = [];
-  for (const input of inputs) {
-    const absolute = path.resolve(root, input);
-    const relative = path.relative(root, absolute);
-    // `..` means the file sits above the project directory; an archive rooted at
-    // the project cannot represent it without breaking the import that reaches it.
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      escaping.push(relative);
-      continue;
-    }
+  for (const absolute of absoluteInputs) {
+    const relative = path.relative(packRoot, absolute);
     if (relative.split(path.sep).some((segment) => EXCLUDED_SEGMENTS.has(segment))) continue;
     files.push({ path: toPosix(relative), content: readFileSync(absolute, "utf8") });
-  }
-
-  if (escaping.length > 0) {
-    throw new AgentOperationError({
-      code: "UNSUPPORTED_LAYOUT",
-      message: `This agent imports code from outside its own directory: ${escaping.slice(0, 5).join(", ")}.`,
-      hint:
-        "Archive deploys require every imported file to live inside the agent directory. " +
-        "Move the shared code in, or keep using the git deploy path for this agent.",
-    });
   }
 
   // The generated manifest, not the author's: exact versions, so the server
@@ -104,7 +110,52 @@ export async function packSource(projectDir: string): Promise<SourcePackage> {
       ) + "\n",
   });
 
-  return { archive: createTarGz(files), files: files.map((f) => f.path).sort(), dependencies };
+  // Declare the entry ONLY when it is not `index.ts` at the archive root. The
+  // build falls back to that name, so staying silent in the common case keeps
+  // every existing agent's archive byte-identical — and therefore its digest
+  // stable, so redeploying unchanged code still stores nothing.
+  const entry = toPosix(path.relative(packRoot, entryFile));
+  if (entry !== "index.ts") {
+    files.push({ path: SOURCE_MANIFEST, content: JSON.stringify({ entry }, null, 2) + "\n" });
+  }
+
+  return { archive: createTarGz(files), files: files.map((f) => f.path).sort(), dependencies, entry };
+}
+
+/**
+ * The directory the archive is rooted at.
+ *
+ * Never deeper than the agent directory, so an agent whose files all sit in a
+ * subfolder keeps the layout it has today. Higher only when something the entry
+ * imports lives above the agent directory.
+ */
+function resolvePackRoot(projectDir: string, absoluteInputs: string[]): string {
+  const ancestor = commonAncestor(absoluteInputs);
+  if (ancestor === projectDir || ancestor.startsWith(projectDir + path.sep)) return projectDir;
+  if (ancestor === path.parse(ancestor).root) {
+    // Nothing shy of the filesystem root contains every input — two unrelated
+    // trees, or a symlink out. Packing from `/` would be absurd, so this stays a
+    // hard error rather than something the deploy silently does.
+    throw new AgentOperationError({
+      code: "UNSUPPORTED_LAYOUT",
+      message: "This agent's imports span unrelated directories, with no common parent short of the filesystem root.",
+      hint: "Keep the agent and the code it imports under one project directory.",
+    });
+  }
+  return ancestor;
+}
+
+/** Lowest directory containing every given file. */
+function commonAncestor(absolutePaths: string[]): string {
+  const segmentLists = absolutePaths.map((p) => path.dirname(p).split(path.sep));
+  const first = segmentLists[0] ?? [];
+  let shared = first.length;
+  for (const segments of segmentLists.slice(1)) {
+    let i = 0;
+    while (i < shared && i < segments.length && segments[i] === first[i]) i += 1;
+    shared = i;
+  }
+  return first.slice(0, shared).join(path.sep) || path.sep;
 }
 
 /**
