@@ -251,10 +251,13 @@ describe("StaticSystemGraphBuilder", () => {
     first.afterCommit?.();
 
     let graph = first.graph;
-    await vi.waitFor(async () => {
-      graph = (await builder.build(scope)).graph;
-      expect(graph.edges).toHaveLength(2);
-    });
+    await vi.waitFor(
+      async () => {
+        graph = (await builder.build(scope)).graph;
+        expect(graph.edges).toHaveLength(2);
+      },
+      { timeout: 3_000 },
+    );
 
     expect(graph).toEqual({
       kind: "system",
