@@ -157,6 +157,37 @@ export type {
   PackageGraphStaticEvidenceState,
 } from './package-graph-evidence.js';
 
+// Package-scoped AgentFacts — factual metadata keyed by inventory agentKey.
+export {
+  PACKAGE_AGENT_FACTS_PROTOCOL,
+  canonicalPackageAgentFactsJson,
+  createPackageAgentFactsSnapshot,
+  packageAgentFactsCompletenessSchema,
+  packageAgentFactsDiagnosticSchema,
+  packageAgentFactsDirectReferenceSchema,
+  packageAgentFactsEvidenceReferenceSchema,
+  packageAgentFactsProducerSchema,
+  packageAgentFactsRecordSchema,
+  packageAgentFactsSnapshotSchema,
+  packageAgentFactsSourceReferenceSchema,
+} from './package-agent-facts.js';
+export type {
+  CreatePackageAgentFactsSnapshotInput,
+  PackageAgentFactsCapabilityField,
+  PackageAgentFactsCompleteness,
+  PackageAgentFactsDiagnostic,
+  PackageAgentFactsDiagnosticCode,
+  PackageAgentFactsDigest,
+  PackageAgentFactsDirectReference,
+  PackageAgentFactsEvidenceReference,
+  PackageAgentFactsProducer,
+  PackageAgentFactsRecord,
+  PackageAgentFactsSchemaField,
+  PackageAgentFactsSnapshot,
+  PackageAgentFactsSourceReference,
+  PackageAgentFactsStringField,
+} from './package-agent-facts.js';
+
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';
 export type { GraphValidation } from './build-manifest.js';
