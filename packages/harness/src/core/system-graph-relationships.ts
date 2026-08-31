@@ -10,7 +10,6 @@ import {
   type SourceEvidence,
   type WorkflowSourceReadHooks,
 } from "./canvas-interconnections.js";
-import { fingerprintWorkflowSources } from "./canvas-cache.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
 import type { AgentInventoryItem } from "./system-graph-inventory.js";
 
@@ -123,7 +122,7 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
     private readonly inner: AgentInvocationProvider = new SourceAgentInvocationProvider(),
     private readonly fingerprint: (
       sourceRoot: string,
-    ) => Promise<string> = fingerprintWorkflowSources,
+    ) => Promise<string> = fingerprintSystemGraphPackageSources,
     private readonly options: CachedAgentInvocationProviderOptions = {},
   ) {}
 
@@ -577,6 +576,9 @@ type InvocationMethodAliasMap = ReadonlyMap<
   string,
   SystemGraphInvocationMethodResolution
 >;
+type InvocationMethodWrite =
+  | { kind: "method"; resolution: SystemGraphInvocationMethodResolution }
+  | { kind: "non-method" };
 
 interface PackageInvocation {
   target: string;
@@ -916,46 +918,66 @@ function invocationMethodFromName(
   return null;
 }
 
-function methodAliasFromExpression(
-  expression: ts.Expression,
-  checker: ts.TypeChecker,
-  methodAliases: InvocationMethodAliasMap,
-): SystemGraphInvocationMethodResolution | null {
-  const direct = directInvocationMethodResolution(expression, checker);
-  if (direct?.kind === "resolved") return direct;
-  const current = unwrapTsExpression(expression);
-  if (!ts.isIdentifier(current) && !ts.isPropertyAccessExpression(current)) {
-    return null;
-  }
-  const symbol = aliasedSymbol(checker, checker.getSymbolAtLocation(current));
-  const key = symbolKey(symbol);
-  const aliased = key ? methodAliases.get(key) ?? null : null;
-  return aliased?.kind === "resolved" ? aliased : null;
-}
-
-function addMethodAlias(
-  methodAliases: Map<string, SystemGraphInvocationMethodResolution>,
+function symbolWriteKey(
   checker: ts.TypeChecker,
   name: ts.Node,
-  resolution: SystemGraphInvocationMethodResolution | null,
-): void {
-  if (
-    !resolution ||
-    resolution.kind !== "resolved" ||
-    (!ts.isIdentifier(name) && !ts.isPropertyAccessExpression(name))
-  ) {
-    return;
+): string | null {
+  if (!ts.isIdentifier(name) && !ts.isPropertyAccessExpression(name)) {
+    return null;
   }
-  const key = symbolKey(
-    aliasedSymbol(checker, checker.getSymbolAtLocation(name)),
-  );
-  if (key) methodAliases.set(key, resolution);
+  return symbolKey(aliasedSymbol(checker, checker.getSymbolAtLocation(name)));
+}
+
+function methodWriteFromExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  resolvedAliases: InvocationMethodAliasMap,
+): InvocationMethodWrite {
+  const direct = directInvocationMethodResolution(expression, checker);
+  if (direct) return { kind: "method", resolution: direct };
+  const current = unwrapTsExpression(expression);
+  if (ts.isConditionalExpression(current)) {
+    const whenTrue = methodWriteFromExpression(
+      current.whenTrue,
+      checker,
+      resolvedAliases,
+    );
+    const whenFalse = methodWriteFromExpression(
+      current.whenFalse,
+      checker,
+      resolvedAliases,
+    );
+    return whenTrue.kind === "method" || whenFalse.kind === "method"
+      ? { kind: "method", resolution: { kind: "dynamic", modes: ["blocking", "async"] } }
+      : { kind: "non-method" };
+  }
+  if (!ts.isIdentifier(current) && !ts.isPropertyAccessExpression(current)) {
+    return { kind: "non-method" };
+  }
+  const key = symbolWriteKey(checker, current);
+  const aliased = key ? resolvedAliases.get(key) ?? null : null;
+  return aliased
+    ? { kind: "method", resolution: aliased }
+    : { kind: "non-method" };
+}
+
+function addMethodAliasWrite(
+  writes: Map<string, InvocationMethodWrite[]>,
+  checker: ts.TypeChecker,
+  name: ts.Node,
+  write: InvocationMethodWrite,
+): void {
+  const key = symbolWriteKey(checker, name);
+  if (!key) return;
+  const existing = writes.get(key) ?? [];
+  existing.push(write);
+  writes.set(key, existing);
 }
 
 function collectDestructuredMethodAliases(
   declaration: ts.VariableDeclaration,
   checker: ts.TypeChecker,
-  methodAliases: Map<string, SystemGraphInvocationMethodResolution>,
+  writes: Map<string, InvocationMethodWrite[]>,
 ): void {
   if (!declaration.initializer || !ts.isObjectBindingPattern(declaration.name)) {
     return;
@@ -973,11 +995,13 @@ function collectDestructuredMethodAliases(
       ? objectPropertyName(element.propertyName)
       : element.name.text;
     if (!method) continue;
-    addMethodAlias(
-      methodAliases,
+    const resolution = invocationMethodFromName(namespace, method);
+    if (!resolution) continue;
+    addMethodAliasWrite(
+      writes,
       checker,
       element.name,
-      invocationMethodFromName(namespace, method),
+      { kind: "method", resolution },
     );
   }
 }
@@ -986,16 +1010,17 @@ function collectInvocationMethodAliases(
   sourceFiles: readonly ts.SourceFile[],
   checker: ts.TypeChecker,
 ): InvocationMethodAliasMap {
+  const writes = new Map<string, InvocationMethodWrite[]>();
   const methodAliases = new Map<string, SystemGraphInvocationMethodResolution>();
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node)) {
-      collectDestructuredMethodAliases(node, checker, methodAliases);
+      collectDestructuredMethodAliases(node, checker, writes);
       if (node.initializer) {
-        addMethodAlias(
-          methodAliases,
+        addMethodAliasWrite(
+          writes,
           checker,
           node.name,
-          methodAliasFromExpression(node.initializer, checker, methodAliases),
+          methodWriteFromExpression(node.initializer, checker, methodAliases),
         );
       }
     } else if (
@@ -1004,17 +1029,33 @@ function collectInvocationMethodAliases(
     ) {
       const left = unwrapTsExpression(node.left);
       if (ts.isIdentifier(left) || ts.isPropertyAccessExpression(left)) {
-        addMethodAlias(
-          methodAliases,
+        addMethodAliasWrite(
+          writes,
           checker,
           left,
-          methodAliasFromExpression(node.right, checker, methodAliases),
+          methodWriteFromExpression(node.right, checker, methodAliases),
         );
       }
     }
     ts.forEachChild(node, visit);
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
+  for (const [key, symbolWrites] of writes) {
+    const methodWrites = symbolWrites.filter(
+      (write): write is Extract<InvocationMethodWrite, { kind: "method" }> =>
+        write.kind === "method",
+    );
+    if (methodWrites.length === 0) continue;
+    const hasNonMethodWrite = symbolWrites.some((write) => write.kind === "non-method");
+    methodAliases.set(
+      key,
+      methodWrites.length === 1 &&
+        !hasNonMethodWrite &&
+        methodWrites[0]!.resolution.kind === "resolved"
+        ? methodWrites[0]!.resolution
+        : { kind: "dynamic", modes: ["blocking", "async"] },
+    );
+  }
   return methodAliases;
 }
 
@@ -1191,22 +1232,31 @@ function owningCaller(
   );
 }
 
-function stableScanFingerprint(
-  files: readonly { file: string; content: string | null }[],
-  complete: boolean,
-): `sha256:${string}` {
-  const sources = files
-    .map(({ file, content }) => ({
-      file,
-      contentDigest:
-        content === null
-          ? null
-          : `sha256:${createHash("sha256").update(content).digest("hex")}`,
-    }))
-    .sort((left, right) => left.file.localeCompare(right.file));
-  return `sha256:${createHash("sha256")
-    .update(JSON.stringify({ protocol: 2, complete, sources }))
-    .digest("hex")}`;
+function lexicalAbsolutePath(fileName: string, base: string): string {
+  return path.normalize(
+    path.isAbsolute(fileName) ? fileName : path.resolve(base, fileName),
+  );
+}
+
+function containedLexicalPath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+function snapshotMemberPath(
+  snapshot: PackageSourceSnapshot,
+  fileName: string,
+): string | null {
+  const candidate = lexicalAbsolutePath(fileName, snapshot.packageRoot);
+  return containedLexicalPath(snapshot.packageRoot, candidate) &&
+    snapshot.files.has(candidate)
+    ? candidate
+    : null;
 }
 
 async function snapshotPackageSources(
@@ -1271,23 +1321,27 @@ function createPackageProgram(snapshot: PackageSourceSnapshot): ts.Program {
   };
   const host = ts.createCompilerHost(compilerOptions, true);
   const sourceFiles = snapshot.files;
-  const hostPath = (fileName: string): string =>
-    canonicalGraphPath(
-      path.isAbsolute(fileName)
-        ? fileName
-        : path.resolve(snapshot.packageRoot, fileName),
-    );
   const hasFile = (fileName: string): boolean =>
-    sourceFiles.has(hostPath(fileName));
+    snapshotMemberPath(snapshot, fileName) !== null;
   return ts.createProgram([...sourceFiles.keys()].sort(), compilerOptions, {
     ...host,
     getCurrentDirectory: () => snapshot.packageRoot,
-    getCanonicalFileName: hostPath,
+    getCanonicalFileName: (fileName) =>
+      lexicalAbsolutePath(fileName, snapshot.packageRoot),
     fileExists: hasFile,
-    readFile: (fileName) => sourceFiles.get(hostPath(fileName)),
-    realpath: hostPath,
+    readFile: (fileName) => {
+      const member = snapshotMemberPath(snapshot, fileName);
+      return member ? sourceFiles.get(member) : undefined;
+    },
+    realpath: (fileName) => lexicalAbsolutePath(fileName, snapshot.packageRoot),
     directoryExists: (directoryName) => {
-      const canonicalDirectory = hostPath(directoryName);
+      const canonicalDirectory = lexicalAbsolutePath(
+        directoryName,
+        snapshot.packageRoot,
+      );
+      if (!containedLexicalPath(snapshot.packageRoot, canonicalDirectory)) {
+        return false;
+      }
       return [...sourceFiles.keys()].some((fileName) => {
         const relative = path.relative(canonicalDirectory, fileName);
         return (
@@ -1299,7 +1353,13 @@ function createPackageProgram(snapshot: PackageSourceSnapshot): ts.Program {
       });
     },
     getDirectories: (directoryName) => {
-      const canonicalDirectory = hostPath(directoryName);
+      const canonicalDirectory = lexicalAbsolutePath(
+        directoryName,
+        snapshot.packageRoot,
+      );
+      if (!containedLexicalPath(snapshot.packageRoot, canonicalDirectory)) {
+        return [];
+      }
       const directories = new Set<string>();
       for (const fileName of sourceFiles.keys()) {
         const relative = path.relative(canonicalDirectory, fileName);
@@ -1317,16 +1377,17 @@ function createPackageProgram(snapshot: PackageSourceSnapshot): ts.Program {
       return [...directories].sort();
     },
     getSourceFile: (fileName, languageVersion) => {
-      const canonicalFile = hostPath(fileName);
-      const content = sourceFiles.get(canonicalFile);
+      const member = snapshotMemberPath(snapshot, fileName);
+      if (!member) return undefined;
+      const content = sourceFiles.get(member);
       return content === undefined
         ? undefined
         : ts.createSourceFile(
-            canonicalFile,
+            member,
             content,
             languageVersion,
             true,
-            path.extname(canonicalFile) === ".tsx"
+            path.extname(member) === ".tsx"
               ? ts.ScriptKind.TSX
               : ts.ScriptKind.TS,
           );
@@ -1337,15 +1398,40 @@ function createPackageProgram(snapshot: PackageSourceSnapshot): ts.Program {
 function packageSourceFingerprint(
   snapshot: PackageSourceSnapshot,
 ): `sha256:${string}` {
-  return stableScanFingerprint(
-    [...snapshot.files].map(([file, content]) => ({
+  const sources = [...snapshot.files]
+    .map(([file, content]) => ({
       file: path
         .relative(snapshot.packageRoot, file)
         .split(path.sep)
         .join(path.posix.sep),
-      content,
-    })),
-    snapshot.complete,
+      contentDigest: `sha256:${createHash("sha256")
+        .update(content)
+        .digest("hex")}`,
+    }))
+    .sort((left, right) => left.file.localeCompare(right.file));
+  const observedPaths = snapshot.observedPaths
+    .map((file) =>
+      path.relative(snapshot.packageRoot, file).split(path.sep).join(path.posix.sep),
+    )
+    .sort();
+  return `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify({
+        protocol: 3,
+        complete: snapshot.complete,
+        observedPaths,
+        sources,
+      }),
+    )
+    .digest("hex")}`;
+}
+
+export async function fingerprintSystemGraphPackageSources(
+  packageRoot: string,
+  readHooks: WorkflowSourceReadHooks = {},
+): Promise<`sha256:${string}`> {
+  return packageSourceFingerprint(
+    await snapshotPackageSources(packageRoot, readHooks),
   );
 }
 
@@ -1359,7 +1445,7 @@ export async function createSystemGraphPackageCompilerResult({
   const checker = program.getTypeChecker();
   const sourceFilesByPath = new Map(
     program.getSourceFiles().map((sourceFile) => [
-      canonicalGraphPath(sourceFile.fileName),
+      lexicalAbsolutePath(sourceFile.fileName, snapshot.packageRoot),
       sourceFile,
     ]),
   );

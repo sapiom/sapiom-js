@@ -11,6 +11,10 @@ import {
   type AgentInvocationProvider,
   type AgentInvocationProviderResult,
 } from "./system-graph-relationships.js";
+import {
+  clearCanonicalGraphPathCacheForTest,
+  setCanonicalGraphPathProbeForTest,
+} from "./canonical-graph-path.js";
 
 const temporaryRoots: string[] = [];
 const EMPTY_RESULT: AgentInvocationProviderResult = {
@@ -82,6 +86,7 @@ async function packageWithCallers(
 }
 
 afterEach(async () => {
+  clearCanonicalGraphPathCacheForTest();
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -393,6 +398,54 @@ await runNamed("research");
     );
   });
 
+  it("does not canonicalize external or symlink import candidates during Program resolution", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-host-boundary-test-"),
+    );
+    const external = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-host-external-test-"),
+    );
+    temporaryRoots.push(root, external);
+    await fs.mkdir(path.join(root, "agents", "coordinator"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(root, "shared"), { recursive: true });
+    await fs.writeFile(
+      path.join(external, "secret.ts"),
+      'ctx.sapiom.agents.run({ definition: "outside" });\n',
+    );
+    await fs.symlink(
+      path.join(external, "secret.ts"),
+      path.join(root, "shared", "link.ts"),
+    );
+    const externalSpecifier = path
+      .relative(path.join(root, "agents", "coordinator"), path.join(external, "secret"))
+      .split(path.sep)
+      .join(path.posix.sep);
+    await fs.writeFile(
+      path.join(root, "agents", "coordinator", "index.ts"),
+      `import "${externalSpecifier}";\nimport "../../shared/link";\n`,
+    );
+    const probed: string[] = [];
+    setCanonicalGraphPathProbeForTest((candidate) => probed.push(candidate));
+
+    const result = await createSystemGraphPackageCompilerResult({
+      packageRoot: root,
+    });
+    result.program.getSemanticDiagnostics();
+
+    expect(
+      probed.filter(
+        (candidate) =>
+          candidate.startsWith(external) ||
+          candidate.includes(`${path.sep}shared${path.sep}link`),
+      ),
+    ).toEqual([]);
+    expect([...result.sources.keys()]).not.toContain(
+      path.join(root, "shared", "link.ts"),
+    );
+  });
+
   it("resolves computed methods, method aliases, assignments, and destructuring", async () => {
     const [coordinator] = await packageWithCallers(
       {
@@ -461,6 +514,84 @@ agents[picked]({ definition: "never-guessed" });
         code: "dynamic-target",
         mode: "async",
         evidence: { file: "index.ts", line: 19, column: 1 },
+      },
+    ]);
+  });
+
+  it("degrades reassigned method aliases instead of applying the final write globally", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+let invoke = agents.run;
+invoke({ definition: "before" });
+invoke = agents.launch;
+invoke({ definition: "after" });
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 5, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: 5, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+    ]);
+  });
+
+  it("degrades method aliases reassigned to local values without guessing edges", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+const local = () => null;
+let invoke = agents.run;
+invoke = local;
+invoke({ definition: "not-an-agent-call" });
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: 7, column: 1 },
       },
     ]);
   });
@@ -636,6 +767,41 @@ export function route() {
 
     expect(first.invocations[0]?.target).toBe("first");
     expect(second.invocations[0]?.target).toBe("second");
+  });
+
+  it("invalidates cached package evidence when admitted tools declarations change", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "node_modules/@sapiom/tools/index.d.ts": `
+export declare const agents: {
+  run(spec: { definition: string }): Promise<unknown>;
+};
+`,
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+await agents.run({ definition: "research" });
+`,
+      },
+      ["coordinator"],
+    );
+    const provider = new CachedAgentInvocationProvider(
+      new SourceAgentInvocationProvider(),
+    );
+
+    const first = await provider.listInvocations(coordinator!);
+    await fs.writeFile(
+      path.resolve(coordinator!.sourceRoot, "../../node_modules/@sapiom/tools/index.d.ts"),
+      `
+export declare const agents: {
+  run(spec: { definition: string; version?: 2 }): Promise<unknown>;
+};
+`,
+    );
+    const second = await provider.listInvocations(coordinator!);
+
+    expect(second.invocations).toEqual(first.invocations);
+    expect(second.sourceFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(second.sourceFingerprint).not.toBe(first.sourceFingerprint);
   });
 
   it("does not retain a failed caller result", async () => {
