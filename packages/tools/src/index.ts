@@ -185,3 +185,6 @@ export type {
   SendEmailArgs,
   SendEmailResult,
 } from "./google/index.js";
+
+export * as github from "./github/index.js";
+export type { ListReposArgs, GitHubRepo } from "./github/index.js";

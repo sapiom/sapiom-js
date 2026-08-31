@@ -178,6 +178,8 @@ import type {
   SendEmailArgs,
   SendEmailResult,
 } from "./google/index.js";
+import * as github from "./github/index.js";
+import type { ListReposArgs, GitHubRepo } from "./github/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -514,6 +516,20 @@ export interface Sapiom {
       sendEmail(args: SendEmailArgs): Promise<SendEmailResult>;
     };
   };
+  /**
+   * GitHub server-side methods (AGENT-314 / Path 2). The gateway resolves the tenant's
+   * GitHub credential — a static Personal Access Token — internally and calls GitHub;
+   * the PAT never reaches the run. GitHub exercises the `static`/`injected` credential
+   * strategy (the contrast to Google's OAuth) through the identical dispatch path.
+   */
+  readonly github: {
+    /**
+     * List the tenant's GitHub repositories. All args are optional — call with none
+     * to list the first page of every repo the PAT can see. Throws 404 when no
+     * GitHub connector is connected.
+     */
+    listRepos(args?: ListReposArgs): Promise<GitHubRepo[]>;
+  };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
     /** Generate speech audio from text. */
@@ -738,6 +754,9 @@ function bind(transport: Transport): Sapiom {
       gmail: {
         sendEmail: (args) => google.gmailSendEmail(args, transport),
       },
+    },
+    github: {
+      listRepos: (args) => github.listRepos(args, transport),
     },
     speech: {
       textToSpeech: {

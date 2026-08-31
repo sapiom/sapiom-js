@@ -126,6 +126,7 @@ import type {
   DriveFile,
   SendEmailResult,
 } from "../google/index.js";
+import type { GitHubRepo } from "../github/index.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -1955,6 +1956,24 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as SendEmailResult,
           ),
       },
+    },
+    // GitHub methods run server-side in the gateway (the PAT is injected there) in
+    // production; the stub returns a shape-faithful, obviously-fake repo list so an
+    // offline run can exercise the call graph without a GitHub connector or network call.
+    github: {
+      listRepos: (args) =>
+        Promise.resolve(
+          r("github.listRepos", [args], () => [
+            {
+              id: 1,
+              name: "stub-repo",
+              fullName: "stub-org/stub-repo",
+              private: false,
+              htmlUrl: "https://github.com/stub-org/stub-repo",
+              description: "stub repository",
+            },
+          ]) as GitHubRepo[],
+        ),
     },
     speech: {
       textToSpeech: {
