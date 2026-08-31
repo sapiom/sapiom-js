@@ -1,7 +1,7 @@
 import * as path from "node:path";
 
 import {
-  detectAgentInvocations,
+  scanWorkflowSources,
   type AgentInvocationDetectionWarning,
   type AgentInvocationMode,
   type SourceEvidence,
@@ -30,6 +30,8 @@ export interface AgentInvocationProviderResult {
   observedPaths?: readonly string[];
   /** False when an opaque path or work cap prevented a complete scan. */
   complete?: boolean;
+  /** Stable content digest supplied by the authoritative source scan. */
+  sourceFingerprint?: `sha256:${string}`;
 }
 
 export interface AgentInvocationSnapshot {
@@ -478,7 +480,7 @@ export class SourceAgentInvocationProvider implements AgentInvocationProvider {
   async listInvocations(
     caller: AgentInventoryItem,
   ): Promise<AgentInvocationProviderResult> {
-    const scan = await detectAgentInvocations(
+    const scan = await scanWorkflowSources(
       caller.sourceRoot,
       new Set(),
       this.readHooks,
@@ -514,9 +516,10 @@ export class SourceAgentInvocationProvider implements AgentInvocationProvider {
 
     return {
       invocations,
-      warnings: scan.warnings,
+      warnings: scan.invocationWarnings,
       observedPaths: scan.observedPaths,
       complete: scan.complete,
+      sourceFingerprint: scan.sourceFingerprint,
     };
   }
 }

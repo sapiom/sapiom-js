@@ -94,6 +94,8 @@ ctx.sapiom.agents.launch({ definition: dynamicTarget });
         evidence: { file: "index.ts", line: 5, column: 1 },
       },
     ]);
+    expect(result.complete).toBe(true);
+    expect(result.sourceFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
   it("reports only the coordinator's direct invocations without inferring output data flow", async () => {
@@ -143,6 +145,24 @@ await agents.run({
     const second = await provider.listInvocations(caller);
 
     expect(second).toEqual(first);
+  });
+
+  it("uses source content, not mtimes or watcher paths, as analysis freshness", async () => {
+    const sourceText = 'ctx.sapiom.agents.run({ definition: "growth" });\n';
+    const caller = await callerWithSource(sourceText);
+    const provider = new SourceAgentInvocationProvider();
+    const entrypoint = path.join(caller.sourceRoot, "index.ts");
+
+    const first = await provider.listInvocations(caller);
+    await fs.utimes(entrypoint, new Date(1_000), new Date(2_000));
+    const touched = await provider.listInvocations(caller);
+    await fs.writeFile(entrypoint, `${sourceText}// source-only edit\n`);
+    const edited = await provider.listInvocations(caller);
+
+    expect(touched.sourceFingerprint).toBe(first.sourceFingerprint);
+    expect(edited.invocations).toEqual(first.invocations);
+    expect(edited.sourceFingerprint).not.toBe(first.sourceFingerprint);
+    expect(edited.sourceFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
   it("does not follow a TypeScript symlink outside the workflow", async () => {

@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 
-import { packageInventorySchema } from "@sapiom/agent";
+import {
+  packageInventorySchema,
+  type PackageGraphStaticEvidenceState,
+  type PackageInventory,
+} from "@sapiom/agent";
 
 import type {
   GraphWarning,
-  StaticInvocationGraphEdge,
   SystemGraph,
   SystemGraphNavigationTarget,
   WorkspaceKey,
@@ -19,6 +22,10 @@ import {
   type AgentInventoryWarning,
   type WorkspaceScope,
 } from "./system-graph-inventory.js";
+import {
+  adaptDirectInvocationsToGraphEvidence,
+  type DirectInvocationScan,
+} from "./system-graph-invocation-evidence.js";
 import {
   CachedAgentInvocationProvider,
   SourceAgentInvocationProvider,
@@ -238,6 +245,7 @@ function sanitizeInventoryWarnings(
 }
 
 interface ConsumedInventory {
+  inventory: PackageInventory;
   agents: AgentInventoryItem[];
   warnings: GraphWarning[];
   /** Every identity has finished resolving, however it resolved. */
@@ -300,6 +308,7 @@ function consumeInventory(
     };
   });
   return {
+    inventory,
     agents,
     warnings: sanitizeInventoryWarnings(
       result.warnings,
@@ -325,6 +334,10 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
     WorkspaceKey,
     readonly AgentInventoryItem[]
   >();
+  private readonly evidenceByWorkspace = new Map<
+    WorkspaceKey,
+    PackageGraphStaticEvidenceState
+  >();
 
   constructor(
     private readonly inventory: AgentInventoryProvider,
@@ -344,36 +357,6 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       agentKey: agent.agentKey,
       label: agent.label,
     }));
-    const canonicalTargets = new Map<string, AgentInventoryItem>();
-    const candidateTargets = new Map<string, AgentInventoryItem[]>();
-    const registerCandidate = (
-      key: string,
-      agent: AgentInventoryItem,
-    ): void => {
-      const candidates = candidateTargets.get(key) ?? [];
-      if (
-        !candidates.some((candidate) => candidate.agentKey === agent.agentKey)
-      ) {
-        candidates.push(agent);
-        candidateTargets.set(key, candidates);
-      }
-    };
-    for (const agent of agents) {
-      if (agent.identityStatus === "canonical") {
-        canonicalTargets.set(agent.agentKey, agent);
-      } else {
-        registerCandidate(agent.agentKey, agent);
-      }
-      for (const alias of agent.resolutionAliases) {
-        registerCandidate(alias, agent);
-      }
-    }
-
-    const edges: StaticInvocationGraphEdge[] = [];
-    const warnings: GraphWarning[] = [...consumed.warnings];
-    const seenEdges = new Set<string>();
-    let invocationsComplete = true;
-
     const supportsBackgroundInvocations =
       typeof this.invocations.peekInvocations === "function" &&
       typeof this.invocations.startInvocations === "function";
@@ -381,7 +364,7 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
     // then perform bounded invocation I/O after nodes/navigation are visible.
     // Legacy/test providers without the cache surface retain the old awaited
     // adapter behavior.
-    const scans = supportsBackgroundInvocations
+    const scans: DirectInvocationScan[] = supportsBackgroundInvocations
       ? agents.map((caller) => {
           const snapshot = this.invocations.peekInvocations!(caller);
           return {
@@ -419,91 +402,18 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
           }),
         );
 
-    for (const { caller, result, failed, pending } of scans) {
-      if (pending) {
-        invocationsComplete = false;
-        continue;
-      }
-      if (failed) {
-        invocationsComplete = false;
-        warnings.push({
-          code: "projection-failed",
-          agentKey: caller.agentKey,
-          message: `Could not inspect ${caller.label}.`,
-        });
-        continue;
-      }
-      if (result.complete === false) {
-        invocationsComplete = false;
-        warnings.push({
-          code: "projection-failed",
-          agentKey: caller.agentKey,
-          message: `Could not fully inspect ${caller.label}.`,
-        });
-      }
-
-      for (const warning of result.warnings) {
-        if (warning.code === "dynamic-target") {
-          warnings.push({
-            code: "dynamic-target",
-            agentKey: caller.agentKey,
-            message: `${caller.label} has a dynamic agent target that V0 cannot resolve.`,
-          });
-        }
-      }
-
-      for (const invocation of result.invocations) {
-        const exact = canonicalTargets.get(invocation.target);
-        const candidates = exact
-          ? [exact]
-          : (candidateTargets.get(invocation.target) ?? []);
-        if (candidates.length !== 1) {
-          const target = /^[A-Za-z0-9@_.:-]+$/.test(invocation.target)
-            ? invocation.target
-            : null;
-          warnings.push({
-            code: "unresolved-target",
-            agentKey: caller.agentKey,
-            message:
-              candidates.length === 0
-                ? target
-                  ? `${caller.label} invokes unknown agent ${target}.`
-                  : `${caller.label} invokes an invalid agent target.`
-                : `${caller.label} invokes ambiguous agent ${target ?? "target"}.`,
-          });
-          continue;
-        }
-        const target = candidates[0]!;
-        if (target.agentKey === caller.agentKey) continue;
-        const from = `agent:${caller.agentKey}`;
-        const to = `agent:${target.agentKey}`;
-        const edgeKey = `${from}\0${to}\0${invocation.mode}`;
-        if (invocation.evidence.length > 1 || seenEdges.has(edgeKey)) {
-          warnings.push({
-            code: "duplicate-edge",
-            agentKey: caller.agentKey,
-            message: `${caller.label} invokes ${target.label} more than once.`,
-          });
-        }
-        if (seenEdges.has(edgeKey)) continue;
-        seenEdges.add(edgeKey);
-        edges.push({
-          from,
-          to,
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: invocation.mode,
-        });
-      }
-    }
-
-    const modeOrder = { blocking: 0, async: 1 } as const;
-    edges.sort(
-      (left, right) =>
-        left.from.localeCompare(right.from) ||
-        left.to.localeCompare(right.to) ||
-        modeOrder[left.mode] - modeOrder[right.mode],
-    );
+    const adapted = adaptDirectInvocationsToGraphEvidence({
+      inventory: consumed.inventory,
+      agents,
+      scans,
+      previousState: this.evidenceByWorkspace.get(scope.workspaceKey),
+    });
+    this.evidenceByWorkspace.set(scope.workspaceKey, adapted.state);
+    const edges = adapted.edges;
+    const warnings: GraphWarning[] = [
+      ...consumed.warnings,
+      ...adapted.warnings,
+    ];
     const uniqueWarnings = [
       ...new Map(
         warnings.map((warning) => [
@@ -526,7 +436,7 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       cacheable:
         consumed.identitySettled &&
         consumed.discoveryComplete &&
-        invocationsComplete,
+        adapted.complete,
       graph: {
         kind: "system",
         scope: { kind: "working-tree", workspaceKey: scope.workspaceKey },
@@ -546,6 +456,7 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
     for (const workspaceKey of this.callersByWorkspace.keys()) {
       if (!workspaceKeys.has(workspaceKey)) {
         this.callersByWorkspace.delete(workspaceKey);
+        this.evidenceByWorkspace.delete(workspaceKey);
       }
     }
     try {

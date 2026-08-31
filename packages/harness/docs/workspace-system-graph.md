@@ -133,6 +133,25 @@ agent outputs through formatter/helper/router code, or scan arbitrary workspace
 router modules outside those roots. Cross-agent output-to-input analysis will
 use a separate package-level evidence provider.
 
+The caller-scoped scanner remains an internal extraction boundary. After the
+scanner returns, the Harness resolves each literal target against the selected
+package inventory and adapts `(caller.agentKey, resolvedTarget.agentKey)` into
+an explicit `invokes` / `static-invocation` package evidence record. That
+record is scoped to the exact inventory version and carries the typed call mode,
+producer/version, and an analysis fingerprint. Source locations become opaque
+`source-callsite` references; paths remain server-side. The public
+`StaticInvocationGraphEdge` above is derived from accepted evidence and is not
+used as the evidence store.
+
+Evidence freshness hashes the bounded source content that was actually
+analyzed. Watcher paths, mtimes, `observedPaths`, UI node IDs, path slugs, and
+the cheap `fingerprintWorkflowSources` cache key do not become canonical
+evidence identity. A complete refresh replaces the prior direct-invocation
+result, including retracting removed calls. Missing, pending, failed, dynamic,
+or otherwise incomplete caller analysis cannot be promoted to complete; the
+last complete result stays visible while the new attempt is diagnosed as
+partial or failed.
+
 Projection can remain useful while reporting warnings:
 
 | Warning code                  | Meaning                                                                                           |
@@ -160,11 +179,14 @@ while the snapshot is `ready`; an incomplete workspace walk, pending/retryable
 identity, or incomplete invocation scan keeps it `degraded`. Warnings and the
 Retry affordance remain visible without freezing evidence that may still change.
 
-Package inventory protocol 1 is deliberately limited to which agents exist,
-their stable identities, and their package-relative locations. It carries no
-agent-owned or opaque relationship payload. Future package-wide data-flow and
-cross-agent relationship evidence will use a separate versioned contract with
-its own deterministic provenance and validation.
+Package inventory protocol 1 remains deliberately limited to which agents
+exist, their stable identities, and their package-relative locations. It
+carries no agent-owned or opaque relationship payload. Relationship producers
+instead use the separately versioned package graph-evidence protocol, bound to
+one exact inventory version with deterministic provenance and validation.
+Future package-wide data-flow analysis can produce `feeds` /
+`static-dataflow` evidence through that contract without broadening this
+direct-invocation scanner.
 
 ## Freshness event
 

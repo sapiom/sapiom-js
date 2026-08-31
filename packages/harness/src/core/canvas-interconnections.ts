@@ -20,6 +20,7 @@
  * calls are syntax-accurate (comments and strings cannot become invocations),
  * while dynamic targets are returned as explicit extraction warnings.
  */
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -539,6 +540,8 @@ export interface WorkflowSourceScan {
   observedPaths: string[];
   /** False when an opaque path or work cap prevented a complete scan. */
   complete: boolean;
+  /** Stable identity of the source content supplied to this extraction. */
+  sourceFingerprint: `sha256:${string}`;
 }
 
 interface SupportedNamespaces {
@@ -885,9 +888,20 @@ export async function scanWorkflowSources(
   const invocationWarnings: AgentInvocationDetectionWarning[] = [];
   const capabilities: DetectedCapability[] = [];
   const sourceSet = await listSourceFilesWithObservations(root);
+  const fingerprintInputs: Array<{
+    file: string;
+    contentDigest: `sha256:${string}` | null;
+  }> = [];
   let complete = sourceSet.complete;
   for (const file of sourceSet.files) {
     const content = await readWorkflowSourceFile(root, file, readHooks);
+    fingerprintInputs.push({
+      file: path.relative(root, file).split(path.sep).join(path.posix.sep),
+      contentDigest:
+        content === null
+          ? null
+          : `sha256:${createHash("sha256").update(content).digest("hex")}`,
+    });
     if (content === null) {
       complete = false;
       continue;
@@ -923,6 +937,18 @@ export async function scanWorkflowSources(
   const launches = invocations
     .filter((invocation) => invocation.mode === "async")
     .map(({ slug, fromStepId }) => ({ slug, fromStepId }));
+  fingerprintInputs.sort((left, right) =>
+    left.file === right.file ? 0 : left.file < right.file ? -1 : 1,
+  );
+  const sourceFingerprint = `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify({
+        protocol: 1,
+        complete,
+        sources: fingerprintInputs,
+      }),
+    )
+    .digest("hex")}` as const;
   return {
     launches,
     invocations,
@@ -930,6 +956,7 @@ export async function scanWorkflowSources(
     capabilities,
     observedPaths: sourceSet.observedPaths,
     complete,
+    sourceFingerprint,
   };
 }
 

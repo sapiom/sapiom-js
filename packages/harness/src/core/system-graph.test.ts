@@ -49,13 +49,21 @@ function invocationProvider(
   ) => Promise<AgentInvocationProviderResult>,
 ): AgentInvocationProvider {
   return {
-    listInvocations: vi.fn((caller) => listInvocations(caller.sourceRoot)),
+    listInvocations: vi.fn(async (caller) => ({
+      complete: true,
+      sourceFingerprint: SOURCE_FINGERPRINT,
+      ...(await listInvocations(caller.sourceRoot)),
+    })),
   };
 }
 
+const SOURCE_FINGERPRINT = `sha256:${"b".repeat(64)}` as const;
+const EDITED_SOURCE_FINGERPRINT = `sha256:${"c".repeat(64)}` as const;
 const EMPTY_INVOCATIONS: AgentInvocationProviderResult = {
   invocations: [],
   warnings: [],
+  complete: true,
+  sourceFingerprint: SOURCE_FINGERPRINT,
 };
 
 const EVIDENCE = [{ file: "index.ts", line: 1, column: 1 }];
@@ -425,7 +433,43 @@ describe("StaticSystemGraphBuilder", () => {
     expect(JSON.stringify(graph)).not.toContain("/private/");
   });
 
-  it("projects dynamic extraction warnings without degrading cacheability or leaking evidence", async () => {
+  it("retains last-good edges across an incomplete refresh and retracts them after a complete refresh", async () => {
+    const resultWithAgents = inventoryResult(scope, [
+      { agentKey: "caller", label: "Caller" },
+      { agentKey: "target", label: "Target" },
+    ]);
+    let callerResult: AgentInvocationProviderResult = {
+      invocations: [{ target: "target", mode: "blocking", evidence: EVIDENCE }],
+      warnings: [],
+    };
+    const builder = new StaticSystemGraphBuilder(
+      { listAgents: async () => resultWithAgents },
+      invocationProvider(async (sourceRoot) =>
+        sourceRoot.endsWith("caller") ? callerResult : EMPTY_INVOCATIONS,
+      ),
+    );
+
+    const initial = await builder.build(scope);
+    expect(initial.cacheable).toBe(true);
+    expect(initial.graph.edges).toHaveLength(1);
+
+    callerResult = { invocations: [], warnings: [], complete: false };
+    const incomplete = await builder.build(scope);
+    expect(incomplete.cacheable).toBe(false);
+    expect(incomplete.graph.edges).toEqual(initial.graph.edges);
+
+    callerResult = {
+      invocations: [],
+      warnings: [],
+      complete: true,
+      sourceFingerprint: EDITED_SOURCE_FINGERPRINT,
+    };
+    const removed = await builder.build(scope);
+    expect(removed.cacheable).toBe(true);
+    expect(removed.graph.edges).toEqual([]);
+  });
+
+  it("projects dynamic extraction warnings as partial without leaking evidence", async () => {
     const inventory: AgentInventoryProvider = {
       listAgents: vi.fn(async () =>
         inventoryResult(scope, [
@@ -455,7 +499,7 @@ describe("StaticSystemGraphBuilder", () => {
       invocations,
     ).build(scope);
 
-    expect(built.cacheable).toBe(true);
+    expect(built.cacheable).toBe(false);
     expect(built.graph.edges).toEqual([]);
     expect(built.graph.warnings).toEqual([
       {
