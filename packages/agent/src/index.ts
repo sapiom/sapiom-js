@@ -11,7 +11,14 @@
  */
 
 // Directives — the load-bearing protocol contract
-export { DIRECTIVE_KIND, isContinue, isRetry, isPause, isTerminate, isFail } from './directives.js';
+export {
+  DIRECTIVE_KIND,
+  isContinue,
+  isRetry,
+  isPause,
+  isTerminate,
+  isFail,
+} from "./directives.js";
 export type {
   DirectiveKind,
   NextStepDirective,
@@ -20,16 +27,22 @@ export type {
   PauseUntilSignalDirective,
   TerminateDirective,
   FailDirective,
-} from './directives.js';
+} from "./directives.js";
 
 // Transition constructors + their branded types (the authoring surface)
-export { goto, terminate, fail, pauseUntilSignal, retry } from './directives.js';
-export type { Goto, Terminate, Fail, Pause, Retry } from './directives.js';
+export {
+  goto,
+  terminate,
+  fail,
+  pauseUntilSignal,
+  retry,
+} from "./directives.js";
+export type { Goto, Terminate, Fail, Pause, Retry } from "./directives.js";
 
 // Step authoring: defineStep + the derived `Allowed` return type + StepDefinition.
 // Step + StepResult are retained for the engine (deprecated for authoring).
-export { defineStep } from './step.js';
-export type { Step, StepResult, StepDefinition, Allowed } from './step.js';
+export { defineStep } from "./step.js";
+export type { Step, StepResult, StepDefinition, Allowed } from "./step.js";
 
 // Execution context — what a step's `run` receives (metadata + shared store + logger)
 export type {
@@ -39,18 +52,18 @@ export type {
   StepExecutionRecord,
   StepLogger,
   FinishedStepStatus,
-} from './context.js';
-export { InMemoryContextStore } from './context.js';
+} from "./context.js";
+export { InMemoryContextStore } from "./context.js";
 
 // Agent definition + defineAgent factory + brand guards (current + pre-rename legacy)
-export type { AgentDefinition } from './agent.js';
+export type { AgentDefinition } from "./agent.js";
 export {
   defineAgent,
   isAgentDefinition,
   AGENT_DEFINITION_BRAND,
   isLegacyOrchestrationDefinition,
   LEGACY_ORCHESTRATION_DEFINITION_BRAND,
-} from './agent.js';
+} from "./agent.js";
 
 // Errors that are part of the public contract surface
 export {
@@ -61,8 +74,8 @@ export {
   STEP_INPUT_VALIDATION_ERROR_CONTRACT,
   stepInputValidationErrorPayloadSchema,
   isStepInputValidationErrorPayload,
-} from './errors.js';
-export type { StepInputValidationErrorPayload } from './errors.js';
+} from "./errors.js";
+export type { StepInputValidationErrorPayload } from "./errors.js";
 
 // ctx.shared quota — the versioned cross-process size/error contract
 export {
@@ -73,13 +86,13 @@ export {
   findCtxSharedSizeViolation,
   isCtxSharedSizeLimitExceededPayload,
   measureCtxSharedSnapshotBytes,
-} from './ctx-shared-quota.js';
+} from "./ctx-shared-quota.js";
 export type {
   CtxSharedSizeLimitExceededErrorOptions,
   CtxSharedSizeLimitExceededPayload,
   CtxSharedSizeLimitPhase,
   CtxSharedSizeViolation,
-} from './ctx-shared-quota.js';
+} from "./ctx-shared-quota.js";
 
 // ctx.shared serialization — terminal JSON encoding failures at enforcement boundaries
 export {
@@ -87,39 +100,54 @@ export {
   CtxSharedSerializationError,
   ctxSharedSerializationErrorPayloadSchema,
   isCtxSharedSerializationErrorPayload,
-} from './ctx-shared-serialization.js';
+} from "./ctx-shared-serialization.js";
 export type {
   CtxSharedSerializationErrorOptions,
   CtxSharedSerializationErrorPayload,
   CtxSharedSerializationPhase,
-} from './ctx-shared-serialization.js';
+} from "./ctx-shared-serialization.js";
 
 // Closed platform retry-classification registry.
-export { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from './non-retryable-step-error.js';
-export type { NonRetryableStepErrorPayload } from './non-retryable-step-error.js';
+export {
+  isNonRetryableStepErrorPayload,
+  parseNonRetryableStepErrorPayload,
+} from "./non-retryable-step-error.js";
+export type { NonRetryableStepErrorPayload } from "./non-retryable-step-error.js";
 
 // Injected run configuration — the seam a step reads a chosen resource handle
 // from (the entry input the setup panel's settings / resource picker drive).
-export { resolveResourceHandle } from './config.js';
-export type { ResolveResourceHandleOptions } from './config.js';
+export { resolveResourceHandle } from "./config.js";
+export type { ResolveResourceHandleOptions } from "./config.js";
 
 // Introspection — zod→JSON-Schema conversion + step/workflow input contracts.
 // Shared by engine tooling and the build phase (runs outside the engine).
-export { zodToJsonSchema, exampleFromJsonSchema, stepInputContract, workflowInputContract } from './introspection.js';
-export type { StepInputContract, AgentInputContract } from './introspection.js';
+export {
+  zodToJsonSchema,
+  exampleFromJsonSchema,
+  stepInputContract,
+  workflowInputContract,
+} from "./introspection.js";
+export type { StepInputContract, AgentInputContract } from "./introspection.js";
 
 // Manifest types, Zod schema, and generator — the build→engine contract.
-export { MANIFEST_PROTOCOL, agentManifestSchema } from './manifest.js';
-export type { AgentManifest, AgentStepManifest, ManifestTransition } from './manifest.js';
+export { MANIFEST_PROTOCOL, agentManifestSchema } from "./manifest.js";
+export type {
+  AgentManifest,
+  AgentStepManifest,
+  ManifestTransition,
+} from "./manifest.js";
 
 // Multi-agent package inventory — separate from the single-agent build manifest.
-export { PACKAGE_INVENTORY_PROTOCOL, packageInventorySchema } from './package-inventory.js';
+export {
+  PACKAGE_INVENTORY_PROTOCOL,
+  packageInventorySchema,
+} from "./package-inventory.js";
 export type {
   PackageInventory,
   PackageInventoryAgent,
   PackageInventoryIdentityIssue,
   PackageInventoryVersion,
-} from './package-inventory.js';
+} from "./package-inventory.js";
 
 // Package-scoped relationship evidence — separate from identity inventory.
 export {
@@ -131,7 +159,7 @@ export {
   packageGraphEvidenceStaticResultSchema,
   packageGraphRuntimeEvidenceEventSchema,
   projectPackageGraphEvidence,
-} from './package-graph-evidence.js';
+} from "./package-graph-evidence.js";
 export type {
   AppendPackageGraphRuntimeEvidenceEventResult,
   CreatePackageGraphEvidenceStaticResultInput,
@@ -155,7 +183,7 @@ export type {
   PackageGraphRuntimeEvidenceState,
   PackageGraphStaticEvidenceCandidate,
   PackageGraphStaticEvidenceState,
-} from './package-graph-evidence.js';
+} from "./package-graph-evidence.js";
 
 // Package-scoped AgentFacts — factual metadata keyed by inventory agentKey.
 export {
@@ -170,7 +198,7 @@ export {
   packageAgentFactsRecordSchema,
   packageAgentFactsSnapshotSchema,
   packageAgentFactsSourceReferenceSchema,
-} from './package-agent-facts.js';
+} from "./package-agent-facts.js";
 export type {
   CreatePackageAgentFactsSnapshotInput,
   PackageAgentFactsCapabilityField,
@@ -186,8 +214,12 @@ export type {
   PackageAgentFactsSnapshot,
   PackageAgentFactsSourceReference,
   PackageAgentFactsStringField,
-} from './package-agent-facts.js';
+} from "./package-agent-facts.js";
 
 // Manifest generator + graph validation — called by the build phase.
-export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';
-export type { GraphValidation } from './build-manifest.js';
+export {
+  buildManifest,
+  validateGraph,
+  assertValidGraph,
+} from "./build-manifest.js";
+export type { GraphValidation } from "./build-manifest.js";

@@ -120,6 +120,20 @@ whether a permitted string contains a sensitive identifier. Graph evidence is
 explanatory metadata only: it cannot change execution, routing, authorization,
 deployment, builds, or billing.
 
+## Package AgentFacts
+
+`PackageInventory` is also the authority for per-agent factual metadata. The
+AgentFacts protocol emits one normalized record for every inventory `agentKey`;
+extractors must not rediscover, rename, or infer identity. Missing or partial
+cards become `unknown` or `partial` fields with diagnostics, not deleted agents.
+
+Supported facts are intentionally narrow: authored descriptions, exact
+input/output JSON Schemas, declared capabilities, observed capabilities from
+allowlisted structured capability-call observations, direct/source/evidence
+references, completeness, diagnostics, and deterministic template summaries.
+Unsupported observations are diagnosed and ignored, and semantic prose or
+relationships are never inferred from names or paths.
+
 ## The entry input contract
 
 A step's `inputSchema` (a zod schema, imported from `zod/v4`) types and validates that

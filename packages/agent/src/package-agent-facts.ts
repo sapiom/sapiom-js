@@ -104,15 +104,21 @@ const capabilitySchema = z
   );
 
 const stringOrNullFieldSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("known"), value: z.string().nullable() }).strict(),
+  z
+    .object({ status: z.literal("known"), value: z.string().nullable() })
+    .strict(),
   z.object({ status: z.literal("unknown") }).strict(),
 ]);
 const schemaFieldSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("known"), value: jsonObjectSchema.nullable() }).strict(),
+  z
+    .object({ status: z.literal("known"), value: jsonObjectSchema.nullable() })
+    .strict(),
   z.object({ status: z.literal("unknown") }).strict(),
 ]);
 const capabilityFieldSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("known"), values: z.array(capabilitySchema) }).strict(),
+  z
+    .object({ status: z.literal("known"), values: z.array(capabilitySchema) })
+    .strict(),
   z.object({ status: z.literal("unknown") }).strict(),
 ]);
 
@@ -189,9 +195,15 @@ const observedCapabilityObservationSchema = z
 const cardInputSchema = z
   .object({
     agentKey: z.string(),
-    sourceReferences: z.array(packageAgentFactsSourceReferenceSchema).optional(),
-    directReferences: z.array(packageAgentFactsDirectReferenceSchema).optional(),
-    evidenceReferences: z.array(packageAgentFactsEvidenceReferenceSchema).optional(),
+    sourceReferences: z
+      .array(packageAgentFactsSourceReferenceSchema)
+      .optional(),
+    directReferences: z
+      .array(packageAgentFactsDirectReferenceSchema)
+      .optional(),
+    evidenceReferences: z
+      .array(packageAgentFactsEvidenceReferenceSchema)
+      .optional(),
     description: z.string().nullable().optional(),
     inputSchema: jsonObjectSchema.nullable().optional(),
     outputSchema: jsonObjectSchema.nullable().optional(),
@@ -315,6 +327,16 @@ function compareText(left: string, right: string): number {
   return left === right ? 0 : left < right ? -1 : 1;
 }
 
+function scopeMatches(
+  left: PackageInventoryVersion,
+  right: PackageInventoryVersion,
+): boolean {
+  return (
+    canonicalPackageAgentFactsJson(left) ===
+    canonicalPackageAgentFactsJson(right)
+  );
+}
+
 function canonicalizeJsonObject<T>(value: T): T {
   return JSON.parse(canonicalPackageAgentFactsJson(value)) as T;
 }
@@ -323,7 +345,10 @@ function normalizeCapabilities(capabilities: readonly string[]): string[] {
   return [...new Set(capabilities)].sort(compareText);
 }
 
-function normalizeByCanonical<T>(values: readonly T[], parse: (value: T) => T): T[] {
+function normalizeByCanonical<T>(
+  values: readonly T[],
+  parse: (value: T) => T,
+): T[] {
   return [
     ...new Map(
       values
@@ -358,7 +383,9 @@ function normalizeDiagnostics(
   return [
     ...new Map(
       diagnostics
-        .map((diagnostic) => packageAgentFactsDiagnosticSchema.parse(diagnostic))
+        .map((diagnostic) =>
+          packageAgentFactsDiagnosticSchema.parse(diagnostic),
+        )
         .sort(compareDiagnostic)
         .map((diagnostic) => [
           canonicalPackageAgentFactsJson(diagnostic),
@@ -483,15 +510,24 @@ function recordFromCard(
       : { status: "unknown" };
   const inputSchema: PackageAgentFactsSchemaField =
     "inputSchema" in card
-      ? { status: "known", value: canonicalizeJsonObject(card.inputSchema ?? null) }
+      ? {
+          status: "known",
+          value: canonicalizeJsonObject(card.inputSchema ?? null),
+        }
       : { status: "unknown" };
   const outputSchema: PackageAgentFactsSchemaField =
     "outputSchema" in card
-      ? { status: "known", value: canonicalizeJsonObject(card.outputSchema ?? null) }
+      ? {
+          status: "known",
+          value: canonicalizeJsonObject(card.outputSchema ?? null),
+        }
       : { status: "unknown" };
   const declared: PackageAgentFactsCapabilityField =
     card.declaredCapabilities !== undefined
-      ? { status: "known", values: normalizeCapabilities(card.declaredCapabilities) }
+      ? {
+          status: "known",
+          values: normalizeCapabilities(card.declaredCapabilities),
+        }
       : { status: "unknown" };
   const observed: PackageAgentFactsCapabilityField =
     card.observed !== undefined
@@ -540,8 +576,8 @@ function snapshotWithoutId(
   ) as Omit<PackageAgentFactsSnapshot, "snapshotId">;
 }
 
-export const packageAgentFactsSnapshotSchema =
-  snapshotBaseSchema.superRefine((snapshot, context) => {
+export const packageAgentFactsSnapshotSchema = snapshotBaseSchema.superRefine(
+  (snapshot, context) => {
     const sortedAgents = [...snapshot.agents].sort((left, right) =>
       compareText(left.agentKey, right.agentKey),
     );
@@ -588,8 +624,9 @@ export const packageAgentFactsSnapshotSchema =
       }
     }
     if (
-      canonicalPackageAgentFactsJson(normalizeDiagnostics(snapshot.diagnostics)) !==
-      canonicalPackageAgentFactsJson(snapshot.diagnostics)
+      canonicalPackageAgentFactsJson(
+        normalizeDiagnostics(snapshot.diagnostics),
+      ) !== canonicalPackageAgentFactsJson(snapshot.diagnostics)
     ) {
       context.addIssue({
         code: "custom",
@@ -607,7 +644,8 @@ export const packageAgentFactsSnapshotSchema =
         message: "Snapshot ID does not match canonical snapshot content",
       });
     }
-  });
+  },
+);
 
 /**
  * Normalize factual per-agent metadata against one authoritative inventory.
@@ -622,11 +660,18 @@ export function createPackageAgentFactsSnapshot(
 ): PackageAgentFactsSnapshot {
   const parsedInput = createSnapshotInputSchema.parse(input);
   const inventory = packageInventorySchema.parse(inventoryInput);
+  if (!scopeMatches(parsedInput.scope, inventory.version)) {
+    throw new TypeError(
+      "AgentFacts snapshot scope must match the package inventory version",
+    );
+  }
   const cardsByAgentKey = new Map<string, PackageAgentFactsCardInput>();
   const diagnostics: PackageAgentFactsDiagnostic[] = [
     ...(parsedInput.diagnostics ?? []),
   ];
-  const inventoryKeys = new Set(inventory.agents.map((agent) => agent.agentKey));
+  const inventoryKeys = new Set(
+    inventory.agents.map((agent) => agent.agentKey),
+  );
 
   for (const rawCard of parsedInput.cards) {
     const parsed = cardInputSchema.safeParse(rawCard);
@@ -682,7 +727,9 @@ export function createPackageAgentFactsSnapshot(
     scope: parsedInput.scope,
     extractor: parsedInput.extractor,
     inventoryStatus: inventory.status,
-    agents: agents.sort((left, right) => compareText(left.agentKey, right.agentKey)),
+    agents: agents.sort((left, right) =>
+      compareText(left.agentKey, right.agentKey),
+    ),
     diagnostics: normalizeDiagnostics(diagnostics),
   };
   const snapshot = {
