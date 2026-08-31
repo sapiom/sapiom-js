@@ -42,6 +42,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -49,6 +50,7 @@ import { GatewayClient } from "./client.js";
 import { writeConfig } from "./config.js";
 import { AgentOperationError } from "./errors.js";
 import { cloneRepo as defaultCloneRepo, type CloneRepoOptions } from "./git.js";
+import { readTarGz } from "./tar.js";
 
 /** Response of `POST /v1/workflows/templates/:id/fork`. */
 interface ForkTemplateResponse {
@@ -134,14 +136,18 @@ export interface CloneResult {
    * already pre-linked (see {@link CloneOptions.definitionId}).
    */
   definitionId?: string;
-  /** Full repo name `owner/repo` of the cloned repo. */
-  repoFullName: string;
-  /** Default branch checked out. */
-  defaultBranch: string;
+  /**
+   * Full repo name `owner/repo` — ABSENT when the source came from the object
+   * store, which is the normal case for a deployed agent since AGENT-289: there
+   * is no repo, no branch and no clone token involved.
+   */
+  repoFullName?: string;
+  /** Default branch checked out. Absent for an archive clone. */
+  defaultBranch?: string;
   /** Local directory the repo was cloned into. */
   targetDir: string;
-  /** ISO-8601 expiry of the (now-discarded) clone token, for observability. */
-  tokenExpiresAt: string;
+  /** ISO-8601 expiry of the (now-discarded) clone token. Absent for an archive clone. */
+  tokenExpiresAt?: string;
 }
 
 /**
@@ -191,6 +197,22 @@ export async function clone(
         code: "DIR_NOT_EMPTY",
         message: `Target directory '${targetDir}' already exists and is not empty.`,
       });
+    }
+  }
+
+  // 0. A deployed agent's source lives in the object store, not in a repo. Read
+  // it from there first: since AGENT-289 a deploy uploads an archive and does not
+  // push, so the `ag-*` repo is empty or frozen at whatever was last committed —
+  // a git clone would hand back stale code without any error to notice.
+  //
+  // Falls back to the git clone when there is no archive (404): an agent that
+  // only ever deployed through the push path, or an engine older than the
+  // download route.
+  if (definitionId) {
+    const cloned = await cloneFromArchive(client, definitionId, targetDir);
+    if (cloned) {
+      writeConfig(targetDir, { definitionId });
+      return { definitionId, targetDir };
     }
   }
 
@@ -310,4 +332,61 @@ export async function clone(
     targetDir,
     tokenExpiresAt: token.expiresAt,
   };
+}
+
+/**
+ * Materialise a deployed agent from its stored source archive.
+ *
+ * Returns false when the agent has no archive to read (HTTP 404), which is the
+ * caller's signal to fall back to the git clone. Every other failure propagates:
+ * a 403 or a corrupt archive is a real error, and silently falling back would
+ * turn it into a stale checkout that looks like a success.
+ */
+async function cloneFromArchive(
+  client: GatewayClient,
+  definitionId: string,
+  targetDir: string,
+): Promise<boolean> {
+  let archive: Buffer;
+  try {
+    archive = await client.getArchive(`/definitions/${encodeURIComponent(definitionId)}/source`);
+  } catch (error) {
+    if (error instanceof AgentOperationError && error.code === "HTTP_404") return false;
+    throw error;
+  }
+
+  const files = readTarGz(archive);
+  if (files.length === 0) {
+    throw new AgentOperationError({
+      code: "EMPTY_SOURCE",
+      message: `The stored source for agent ${definitionId} contains no files.`,
+    });
+  }
+
+  // Staged in a sibling and moved, matching the git path: a failure part-way
+  // through must not leave a half-written checkout in the target, and Studio's
+  // existing `.sapiom/` has to survive.
+  const parent = path.dirname(path.resolve(targetDir));
+  mkdirSync(parent, { recursive: true });
+  const staged = mkdtempSync(path.join(parent, ".sapiom-clone-"));
+  try {
+    for (const file of files) {
+      if (file.path === ".sapiom" || file.path.startsWith(".sapiom/")) {
+        throw new AgentOperationError({
+          code: "STUDIO_STATE_CONFLICT",
+          message: "The stored source contains a reserved .sapiom path.",
+        });
+      }
+      const target = path.join(staged, file.path);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, file.content, "utf8");
+    }
+    mkdirSync(targetDir, { recursive: true });
+    for (const entry of readdirSync(staged)) {
+      renameSync(path.join(staged, entry), path.join(targetDir, entry));
+    }
+  } finally {
+    rmSync(staged, { recursive: true, force: true });
+  }
+  return true;
 }

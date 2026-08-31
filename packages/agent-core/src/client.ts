@@ -99,6 +99,52 @@ export class GatewayClient {
   }
 
   /**
+   * GET raw bytes — the source-archive download that backs `clone` (AGENT-289).
+   * `path` is relative to `/v1/workflows`.
+   *
+   * Deliberately NOT routed through {@link send}: that path reads the response as
+   * text and JSON-parses it, which would corrupt gzip. It repeats the timeout and
+   * the error mapping instead of threading a response-decoding mode through the
+   * shared path for one caller.
+   *
+   * The HTTP_* codes match {@link send} exactly, because `clone` decides whether
+   * to fall back to git by inspecting `HTTP_404`.
+   */
+  async getArchive(path: string): Promise<Buffer> {
+    const url = `${this.base}${path}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        headers: { 'x-api-key': this.apiKey },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      throw networkError(url, err);
+    }
+
+    if (!res.ok) {
+      // Body read as text: an error response is JSON even on this route.
+      const text = await res.text().catch(() => '');
+      const data = text ? safeParse(text) : undefined;
+      throw new AgentOperationError({
+        code: `HTTP_${res.status}`,
+        message: messageFrom(data) ?? `Request failed (${res.status} ${res.statusText}).`,
+        hint:
+          res.status === 401 || res.status === 403
+            ? 'Check your API key (`sapiom login` or SAPIOM_API_KEY) and that it has access to this agent.'
+            : undefined,
+      });
+    }
+
+    try {
+      return Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      throw networkError(url, err);
+    }
+  }
+
+  /**
    * The single JSON request path — every method above funnels here so the
    * NETWORK / HTTP_* / 401-hint mapping is defined exactly once.
    *

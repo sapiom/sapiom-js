@@ -4,17 +4,19 @@
  * WHY HAND-ROLLED rather than a dependency: this is a published SDK, so every
  * dependency is installed by every consumer of `@sapiom/cli` and
  * `@sapiom/harness`. Writing a ustar archive of regular files is a small,
- * well-specified job — and only the WRITE side is needed here, because the
- * server reads archives with a vetted library. Shelling out to the `tar` binary
- * was the other option and was rejected: it does not exist on a default Windows
- * install, which would make `sapiom deploy` platform-dependent.
+ * well-specified job. Shelling out to the `tar` binary was the other option and
+ * was rejected: it does not exist on a default Windows install, which would make
+ * `sapiom deploy` platform-dependent.
+ *
+ * The READ side exists for `clone`, which materialises a deployed agent from its
+ * stored archive rather than from a git repo the deploy no longer writes to.
  *
  * Scope is deliberately narrow: regular files, no symlinks, no directory
  * entries, no device nodes. That mirrors what the server accepts — it rejects
  * every one of those — so an archive this writer can produce is an archive the
  * server can ingest.
  */
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 /** One file in the archive. `path` is a relative POSIX path. */
 export interface TarFile {
@@ -107,4 +109,76 @@ function header(filePath: string, size: number): Buffer {
 /** Zero-padded octal, as every numeric tar field is encoded. */
 function octal(value: number, width: number): string {
   return value.toString(8).padStart(width, "0");
+}
+
+/**
+ * Read a gzipped ustar archive back into a file map.
+ *
+ * The inverse of {@link createTarGz}, and deliberately just as narrow: regular
+ * files only. Anything else in the stream — a symlink, a device node — is a
+ * signal that this did not come from our writer or our server, so it is refused
+ * rather than skipped. Directory entries are the one exception: `tar -czf … .`
+ * emits them, and they carry no content to mishandle.
+ *
+ * Paths are validated here, not by the caller. This output gets written to a
+ * developer's filesystem, so an absolute path or one containing `..` must never
+ * reach `writeFileSync`.
+ */
+export function readTarGz(archive: Uint8Array): TarFile[] {
+  const buffer = Buffer.from(gunzipSync(archive));
+  const files: TarFile[] = [];
+
+  for (let offset = 0; offset + BLOCK_SIZE <= buffer.length; ) {
+    const block = buffer.subarray(offset, offset + BLOCK_SIZE);
+    // A zero block marks end-of-archive; the writer emits two.
+    if (block.every((byte) => byte === 0)) break;
+
+    const name = field(block, 0, NAME_FIELD);
+    const prefix = field(block, 345, PREFIX_FIELD);
+    const size = Number.parseInt(field(block, 124, 12).trim() || "0", 8);
+    const typeFlag = String.fromCharCode(block[156] ?? 0).trim();
+    offset += BLOCK_SIZE;
+
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`readTarGz: entry '${name}' has an unreadable size field.`);
+    }
+
+    const fullPath = prefix ? `${prefix}/${name}` : name;
+    // '0' and '\0' are a regular file; '5' is a directory (no content).
+    const isFile = typeFlag === "0" || typeFlag === "";
+    const isDirectory = typeFlag === "5";
+    if (!isFile && !isDirectory) {
+      throw new Error(`readTarGz: entry '${fullPath}' is not a regular file (type '${typeFlag}').`);
+    }
+
+    if (isFile) {
+      assertSafePath(fullPath);
+      files.push({
+        path: fullPath,
+        content: buffer.subarray(offset, offset + size).toString("utf8"),
+      });
+    }
+    // Content is padded up to a block boundary.
+    offset += Math.ceil(size / BLOCK_SIZE) * BLOCK_SIZE;
+  }
+
+  return files;
+}
+
+/** Read a NUL-terminated ustar header field. */
+function field(block: Buffer, start: number, width: number): string {
+  const raw = block.subarray(start, start + width);
+  const end = raw.indexOf(0);
+  return raw.subarray(0, end === -1 ? raw.length : end).toString("utf8");
+}
+
+/** Refuse any path that would escape the extraction directory. */
+function assertSafePath(entryPath: string): void {
+  if (entryPath.length === 0) throw new Error("readTarGz: an entry has an empty path.");
+  if (entryPath.startsWith("/") || /^[A-Za-z]:/.test(entryPath)) {
+    throw new Error(`readTarGz: entry '${entryPath}' is an absolute path.`);
+  }
+  if (entryPath.split("/").some((segment) => segment === "..")) {
+    throw new Error(`readTarGz: entry '${entryPath}' escapes the archive root.`);
+  }
 }

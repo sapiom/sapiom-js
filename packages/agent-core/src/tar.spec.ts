@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { createTarGz } from "./tar";
+import { createTarGz, readTarGz } from "./tar";
 
 /** Extract with the SYSTEM tar and return path → content. */
 function extract(archive: Buffer): Record<string, string> {
@@ -93,5 +93,106 @@ describe("createTarGz", () => {
     // fails loudly instead.
     const unsplittable = `${"a".repeat(120)}.ts`;
     expect(() => createTarGz([{ path: unsplittable, content: "x" }])).toThrow(/too long/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reader
+//
+// Same interop standard as the writer: the archives read here are produced by
+// the SYSTEM tar, not by createTarGz, so a shared misunderstanding of the format
+// cannot make these pass. The round-trip case is the exception, and it is there
+// to pin the pair together.
+// ---------------------------------------------------------------------------
+
+/** Build an archive with the SYSTEM tar from a file map. */
+function packWithSystemTar(files: Record<string, string>, extraArgs: string[] = []): Buffer {
+  const dir = mkdtempSync(path.join(tmpdir(), "sapiom-tar-read-"));
+  try {
+    for (const [relative, content] of Object.entries(files)) {
+      const target = path.join(dir, relative);
+      execFileSync("mkdir", ["-p", path.dirname(target)]);
+      writeFileSync(target, content);
+    }
+    const archivePath = path.join(tmpdir(), `read-${path.basename(dir)}.tar.gz`);
+    execFileSync("tar", ["-czf", archivePath, "-C", dir, ...extraArgs, "."], { stdio: "pipe" });
+    const bytes = readFileSync(archivePath);
+    rmSync(archivePath, { force: true });
+    return bytes;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function asMap(files: { path: string; content: string }[]): Record<string, string> {
+  return Object.fromEntries(files.map((f) => [f.path.replace(/^\.\//, ""), f.content]));
+}
+
+describe("readTarGz", () => {
+  it("reads an archive the system tar produced, including nested paths", () => {
+    const archive = packWithSystemTar({
+      "index.ts": "export default 1;\n",
+      "shared/util.ts": "export const util = 2;\n",
+      ".sapiom-source.json": '{"entry":"index.ts"}\n',
+    });
+
+    expect(asMap(readTarGz(archive))).toEqual({
+      "index.ts": "export default 1;\n",
+      "shared/util.ts": "export const util = 2;\n",
+      ".sapiom-source.json": '{"entry":"index.ts"}\n',
+    });
+  });
+
+  it("round-trips whatever the writer produced", () => {
+    // `clone` reads what `deploy` wrote, so this pair has to agree exactly —
+    // including the long-path prefix split the writer performs.
+    const files = [
+      { path: "index.ts", content: "export default 1;\n" },
+      { path: `${"nested/".repeat(15)}deep.ts`, content: "export const deep = true;\n" },
+      { path: "kit/helper.ts", content: "export const help = () => 1;\n" },
+    ];
+
+    expect(asMap(readTarGz(createTarGz(files)))).toEqual({
+      "index.ts": "export default 1;\n",
+      [`${"nested/".repeat(15)}deep.ts`]: "export const deep = true;\n",
+      "kit/helper.ts": "export const help = () => 1;\n",
+    });
+  });
+
+  it("refuses a path that escapes the archive root", () => {
+    // This output is written to a developer's filesystem, so a traversal must not
+    // be extracted. `-P` stops tar sanitising the path it stores.
+    const dir = mkdtempSync(path.join(tmpdir(), "sapiom-tar-evil-"));
+    try {
+      writeFileSync(path.join(dir, "ok.ts"), "export default 1;\n");
+      const archivePath = path.join(dir, "evil.tar.gz");
+      execFileSync(
+        "tar",
+        ["-czf", archivePath, "-P", "-C", dir, "--transform=s|^\\./ok.ts|../escaped.ts|", "./ok.ts"],
+        { stdio: "pipe" },
+      );
+      expect(() => readTarGz(readFileSync(archivePath))).toThrow(/escapes the archive root/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlink rather than silently skipping it", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sapiom-tar-link-"));
+    try {
+      writeFileSync(path.join(dir, "real.ts"), "export default 1;\n");
+      execFileSync("ln", ["-s", "real.ts", path.join(dir, "link.ts")]);
+      // Outside `dir`: writing it inside means tar archives its own output and
+      // aborts with "file changed as we read it".
+      const archivePath = path.join(tmpdir(), `link-${path.basename(dir)}.tar.gz`);
+      try {
+        execFileSync("tar", ["-czf", archivePath, "-C", dir, "."], { stdio: "pipe" });
+        expect(() => readTarGz(readFileSync(archivePath))).toThrow(/not a regular file/);
+      } finally {
+        rmSync(archivePath, { force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

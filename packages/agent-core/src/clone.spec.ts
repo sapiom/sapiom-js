@@ -19,12 +19,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { createClient } from "./client";
+import { createTarGz } from "./tar";
 import { clone } from "./clone";
 import { CONFIG_FILE } from "./config";
 import { AgentOperationError } from "./errors";
 import type { CloneRepoOptions } from "./git";
 
-type MockResponse = { status: number; body: unknown };
+/** `archive` for the raw-bytes download route; `body` for every JSON route. */
+type MockResponse = { status: number; body?: unknown; archive?: Buffer };
 
 function mockFetch(responses: MockResponse[]): jest.SpyInstance {
   let i = 0;
@@ -36,7 +38,14 @@ function mockFetch(responses: MockResponse[]): jest.SpyInstance {
       status: r.status,
       statusText: r.status === 200 ? "OK" : "Error",
       text: async () => text,
-    } as Response;
+      arrayBuffer: async () => {
+        if (!r.archive) throw new Error("mockFetch: this response has no archive body.");
+        return r.archive.buffer.slice(
+          r.archive.byteOffset,
+          r.archive.byteOffset + r.archive.byteLength,
+        );
+      },
+    } as unknown as Response;
   }) as never);
 }
 
@@ -212,8 +221,16 @@ describe("clone", () => {
     }
   });
 
-  it("clones by definitionId directly (no fork step), and pre-links sapiom.json", async () => {
-    const spy = mockFetch([{ status: 200, body: DEFINITION_TOKEN_BODY }]);
+  it("clones a deployed agent from its stored archive, with no repo and no git", async () => {
+    // Since AGENT-289 a deploy uploads source and does not push, so the agent's
+    // repo is empty or frozen. Cloning must read the archive, or it hands back
+    // stale code with nothing to signal it.
+    const archive = createTarGz([
+      { path: "agent/index.ts", content: "export default 1;\n" },
+      { path: "shared/util.ts", content: "export const util = 2;\n" },
+      { path: ".sapiom-source.json", content: '{"entry":"agent/index.ts"}\n' },
+    ]);
+    const spy = mockFetch([{ status: 200, archive }]);
     const base = makeTmp();
     const target = path.join(base, "project");
     const rec = recordingClone();
@@ -223,9 +240,46 @@ describe("clone", () => {
         client,
       );
 
-      // Hits the definitions clone-token endpoint directly — no fork call.
+      // One request, to the source route. No fork, no clone-token, no credential.
+      const urls = spy.mock.calls.map((c) => (c as [string])[0]);
+      expect(urls).toEqual(["https://example.com/v1/workflows/definitions/253/source"]);
+      expect(rec.calls).toHaveLength(0);
+
+      // The nested layout is restored verbatim, so the relative import between
+      // the two files still resolves in the checkout.
+      expect(readFileSync(path.join(target, "agent", "index.ts"), "utf8")).toBe("export default 1;\n");
+      expect(readFileSync(path.join(target, "shared", "util.ts"), "utf8")).toBe("export const util = 2;\n");
+
+      // Pre-linked, and with no repo there is no repoFullName or branch to record.
+      expect(result).toEqual({ definitionId: "253", targetDir: target });
+      const cfg = JSON.parse(readFileSync(path.join(target, CONFIG_FILE), "utf8"));
+      expect(cfg).toEqual({ definitionId: "253" });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a git clone when the agent has no stored archive", async () => {
+    // An agent that only ever deployed through the push path, or an engine older
+    // than the download route: 404 means "no archive", so the git clone still
+    // runs and such an agent keeps cloning exactly as before.
+    const spy = mockFetch([
+      { status: 404, body: { message: "no source" } },
+      { status: 200, body: DEFINITION_TOKEN_BODY },
+    ]);
+    const base = makeTmp();
+    const target = path.join(base, "project");
+    const rec = recordingClone();
+    try {
+      const result = await clone(
+        { definitionId: "253", targetDir: target, cloneRepo: rec.fn },
+        client,
+      );
+
+      // Tries the archive first, then the clone-token — and never forks.
       const urls = spy.mock.calls.map((c) => (c as [string])[0]);
       expect(urls).toEqual([
+        "https://example.com/v1/workflows/definitions/253/source",
         "https://example.com/v1/workflows/definitions/253/clone-token",
       ]);
 
