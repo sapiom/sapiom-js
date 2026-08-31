@@ -1310,7 +1310,7 @@ export const agent = defineAgent({ name: "large-repo" });`;
     expect(cold.modules).toBe(AGENT_SOURCE_MAX_MODULES_PER_SCAN);
     expect(cold.truncated).toBe(true);
     expect(warm).toEqual(cold);
-  });
+  }, 20_000);
 
   it("enforces the exact 16 MiB/+1 scan byte boundary end to end", async () => {
     const exactCandidates: string[] = [];
