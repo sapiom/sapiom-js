@@ -2150,6 +2150,9 @@ export const startServer = async (
           systemGraphInventory.invalidateScope(scope.root);
           systemGraphInvocations.invalidateScope(scope.root);
         } else {
+          sourcePaths.forEach((sourcePath) =>
+            systemGraphInvocations.invalidateSource(sourcePath),
+          );
           for (const root of dirtyGraphSourceRoots(
             scope.root,
             workflowsCache.map((workflow) => workflow.path),
@@ -2178,6 +2181,9 @@ export const startServer = async (
           systemGraphInventory.invalidateScope(canonicalScope.root);
           systemGraphInvocations.invalidateScope(canonicalScope.root);
         } else {
+          sourcePaths.forEach((sourcePath) =>
+            systemGraphInvocations.invalidateSource(sourcePath),
+          );
           for (const workflowRoot of dirtyRoots) {
             systemGraphInventory.invalidateSource(workflowRoot);
             systemGraphInvocations.invalidateSource(workflowRoot);

@@ -7,6 +7,7 @@ import type { AgentInventoryItem } from "./system-graph-inventory.js";
 import {
   CachedAgentInvocationProvider,
   SourceAgentInvocationProvider,
+  createSystemGraphPackageCompilerResult,
   type AgentInvocationProvider,
   type AgentInvocationProviderResult,
 } from "./system-graph-relationships.js";
@@ -325,6 +326,145 @@ await runNamed("research");
     );
   });
 
+  it("keeps same-key retained callers independent across packages", async () => {
+    const [[first], [second]] = await Promise.all([
+      packageWithCallers(
+        {
+          "agents/router/index.ts":
+            'ctx.sapiom.agents.run({ definition: "first-target" });\n',
+        },
+        ["router"],
+      ),
+      packageWithCallers(
+        {
+          "agents/router/index.ts":
+            'ctx.sapiom.agents.run({ definition: "second-target" });\n',
+        },
+        ["router"],
+      ),
+    ]);
+    const provider = new SourceAgentInvocationProvider();
+    provider.retainCallers([first!, second!]);
+
+    await expect(provider.listInvocations(first!)).resolves.toMatchObject({
+      invocations: [{ target: "first-target", mode: "blocking" }],
+    });
+    await expect(provider.listInvocations(second!)).resolves.toMatchObject({
+      invocations: [{ target: "second-target", mode: "blocking" }],
+    });
+  });
+
+  it("keeps external imports outside the bounded compiler snapshot", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-package-boundary-test-"),
+    );
+    const external = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-external-import-test-"),
+    );
+    temporaryRoots.push(root, external);
+    await fs.mkdir(path.join(root, "agents", "coordinator"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(external, "secret.ts"),
+      'ctx.sapiom.agents.run({ definition: "outside" });\n',
+    );
+    const specifier = path
+      .relative(path.join(root, "agents", "coordinator"), path.join(external, "secret"))
+      .split(path.sep)
+      .join(path.posix.sep);
+    await fs.writeFile(
+      path.join(root, "agents", "coordinator", "index.ts"),
+      `import "${specifier}";\n`,
+    );
+    const onBytesRead = vi.fn();
+
+    const result = await createSystemGraphPackageCompilerResult({
+      packageRoot: root,
+      readHooks: { onBytesRead },
+    });
+
+    expect([...result.sources.keys()]).not.toContain(
+      path.join(external, "secret.ts"),
+    );
+    expect(onBytesRead).not.toHaveBeenCalledWith(
+      path.join(external, "secret.ts"),
+      expect.any(Number),
+    );
+  });
+
+  it("resolves computed methods, method aliases, assignments, and destructuring", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+const method = "run" as const;
+agents[method]({ definition: "computed" });
+
+const runAlias = agents.run;
+runAlias({ definition: "variable" });
+
+let launchAlias: typeof agents.launch;
+launchAlias = agents.launch;
+launchAlias({ definition: "assigned" });
+
+const { run, launch: kick } = agents;
+run({ definition: "destructured" });
+kick({ definition: "renamed" });
+
+const picked = Math.random() > 0.5 ? "run" : "bogus";
+agents[picked]({ definition: "never-guessed" });
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([
+      {
+        target: "computed",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 5, column: 1 }],
+      },
+      {
+        target: "variable",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 8, column: 1 }],
+      },
+      {
+        target: "assigned",
+        mode: "async",
+        evidence: [{ file: "index.ts", line: 12, column: 1 }],
+      },
+      {
+        target: "destructured",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 15, column: 1 }],
+      },
+      {
+        target: "renamed",
+        mode: "async",
+        evidence: [{ file: "index.ts", line: 16, column: 1 }],
+      },
+    ]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 19, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: 19, column: 1 },
+      },
+    ]);
+  });
+
   it("does not emit wrapper internals as duplicate evidence for the same basis", async () => {
     const [coordinator] = await packageWithCallers(
       {
@@ -350,6 +490,39 @@ await runResearch();
         target: "research",
         mode: "blocking",
         evidence: [{ file: "index.ts", line: 8, column: 7 }],
+      },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("uses wrapper parameter symbols instead of shadowed names", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+function runNamed(definition: string) {
+  {
+    const definition = "shadowed-local";
+    return agents.run({ definition });
+  }
+}
+
+await runNamed("argument-target");
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([
+      {
+        target: "shadowed-local",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 11, column: 7 }],
       },
     ]);
     expect(result.warnings).toEqual([]);
@@ -427,6 +600,42 @@ describe("CachedAgentInvocationProvider", () => {
     await provider.listInvocations(caller);
 
     expect(inner.listInvocations).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates cached package evidence when a shared helper changes", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "shared/router.ts": `
+import { agents } from "@sapiom/tools";
+export function route() {
+  return agents.run({ definition: "first" });
+}
+`,
+        "agents/coordinator/index.ts": `
+import { route } from "../../shared/router";
+await route();
+`,
+      },
+      ["coordinator"],
+    );
+    const provider = new CachedAgentInvocationProvider(
+      new SourceAgentInvocationProvider(),
+    );
+
+    const first = await provider.listInvocations(coordinator!);
+    await fs.writeFile(
+      path.resolve(coordinator!.sourceRoot, "../../shared/router.ts"),
+      `
+import { agents } from "@sapiom/tools";
+export function route() {
+  return agents.run({ definition: "second" });
+}
+`,
+    );
+    const second = await provider.listInvocations(coordinator!);
+
+    expect(first.invocations[0]?.target).toBe("first");
+    expect(second.invocations[0]?.target).toBe("second");
   });
 
   it("does not retain a failed caller result", async () => {

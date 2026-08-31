@@ -79,6 +79,7 @@ interface CachedInvocationEntry {
 }
 
 interface InvocationTask {
+  cacheKey: string;
   sourceRoot: string;
   caller: AgentInventoryItem;
   generation: number;
@@ -88,6 +89,7 @@ interface InvocationTask {
 interface BackgroundInvocationEntry {
   generation: number;
   scopeEpoch: number;
+  caller?: AgentInventoryItem;
   snapshot?: AgentInvocationSnapshot;
 }
 
@@ -110,6 +112,7 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   private readonly active = new Map<string, InvocationTask>();
   private readonly pendingChanges = new Set<string>();
   private readonly invalidatedScopes = new Map<string, number>();
+  private retainedCallers: readonly AgentInventoryItem[] = [];
   private nextGeneration = 1;
   private nextScopeEpoch = 1;
   private activeCount = 0;
@@ -127,10 +130,10 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   async listInvocations(
     caller: AgentInventoryItem,
   ): Promise<AgentInvocationProviderResult> {
-    const key = canonicalGraphPath(caller.sourceRoot);
+    const key = callerInvocationCacheKey(caller);
     let fingerprint: string;
     try {
-      fingerprint = await this.fingerprint(key);
+      fingerprint = await this.fingerprint(packageRootForCaller(caller));
     } catch (error) {
       this.entries.delete(key);
       throw error;
@@ -154,14 +157,45 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   }
 
   invalidateSource(sourceRoot: string): void {
-    const key = canonicalGraphPath(sourceRoot);
-    this.entries.delete(key);
-    this.background.set(key, {
-      generation: this.nextGeneration++,
-      scopeEpoch: this.scopeEpochForSource(key),
+    const changed = canonicalGraphPath(sourceRoot);
+    const candidateCallers = new Map<string, AgentInventoryItem>();
+    for (const caller of this.retainedCallers) {
+      candidateCallers.set(callerInvocationCacheKey(caller), caller);
+    }
+    for (const [key, entry] of this.background) {
+      if (entry.caller) candidateCallers.set(key, entry.caller);
+    }
+    const affected = [...candidateCallers.values()].filter((caller) => {
+      const callerRoot = canonicalGraphPath(caller.sourceRoot);
+      const packageRoot = packageRootForCaller(caller);
+      return (
+        callerRoot === changed ||
+        packageRoot === changed ||
+        this.scopeContainsSource(packageRoot, changed) ||
+        this.scopeContainsSource(changed, callerRoot)
+      );
     });
-    this.dropQueued(key);
-    this.pendingChanges.delete(key);
+    if (affected.length === 0) {
+      this.entries.delete(changed);
+      this.background.set(changed, {
+        generation: this.nextGeneration++,
+        scopeEpoch: this.scopeEpochForSource(changed),
+      });
+      this.dropQueued(changed);
+      this.pendingChanges.delete(changed);
+      return;
+    }
+    for (const caller of affected) {
+      const key = callerInvocationCacheKey(caller);
+      this.entries.delete(key);
+      this.background.set(key, {
+        generation: this.nextGeneration++,
+        scopeEpoch: this.scopeEpochForSource(caller.sourceRoot),
+        caller,
+      });
+      this.dropQueued(key);
+      this.pendingChanges.delete(caller.sourceRoot);
+    }
   }
 
   /** O(1) conservative invalidation for an ambiguous workspace event. */
@@ -175,7 +209,8 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   /** Explicit graph Retry re-arms terminal failures without read-loop churn. */
   retryFailed(scopeRoot: string): void {
     const root = canonicalGraphPath(scopeRoot);
-    for (const [sourceRoot, entry] of this.background) {
+    for (const [cacheKey, entry] of this.background) {
+      const sourceRoot = canonicalGraphPath(entry.caller?.sourceRoot ?? cacheKey);
       const relative = path.relative(root, sourceRoot);
       if (
         (entry.snapshot?.status !== "failed" &&
@@ -189,22 +224,27 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
       ) {
         continue;
       }
-      this.background.set(sourceRoot, {
+      this.background.set(cacheKey, {
         generation: this.nextGeneration++,
         scopeEpoch: this.scopeEpochForSource(sourceRoot),
+        ...(entry.caller ? { caller: entry.caller } : {}),
       });
-      this.dropQueued(sourceRoot);
+      this.dropQueued(cacheKey);
     }
   }
 
   retainCallers(callers: readonly AgentInventoryItem[]): void {
+    this.retainedCallers = [...callers].sort(
+      (left, right) =>
+        callerInvocationCacheKey(left).localeCompare(callerInvocationCacheKey(right)),
+    );
     try {
-      this.inner.retainCallers?.(callers);
+      this.inner.retainCallers?.(this.retainedCallers);
     } catch {
       // Inner cache pruning is an optimization and cannot affect projection.
     }
     const retained = new Set(
-      callers.map((caller) => canonicalGraphPath(caller.sourceRoot)),
+      this.retainedCallers.map(callerInvocationCacheKey),
     );
     for (const sourceRoot of this.entries.keys()) {
       if (!retained.has(sourceRoot)) this.entries.delete(sourceRoot);
@@ -217,8 +257,8 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
     }
     for (const scopeRoot of this.invalidatedScopes.keys()) {
       if (
-        [...retained].some((sourceRoot) =>
-          this.scopeContainsSource(scopeRoot, sourceRoot),
+        this.retainedCallers.some((caller) =>
+          this.scopeContainsSource(scopeRoot, caller.sourceRoot),
         )
       ) {
         continue;
@@ -244,9 +284,9 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   peekInvocations(
     caller: AgentInventoryItem,
   ): AgentInvocationSnapshot | undefined {
-    const sourceRoot = canonicalGraphPath(caller.sourceRoot);
-    const entry = this.background.get(sourceRoot);
-    if (entry?.scopeEpoch !== this.scopeEpochForSource(sourceRoot)) {
+    const key = callerInvocationCacheKey(caller);
+    const entry = this.background.get(key);
+    if (entry?.scopeEpoch !== this.scopeEpochForSource(caller.sourceRoot)) {
       return undefined;
     }
     if (
@@ -264,27 +304,29 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
 
   startInvocations(callers: readonly AgentInventoryItem[]): void {
     for (const caller of callers) {
+      const key = callerInvocationCacheKey(caller);
       const sourceRoot = canonicalGraphPath(caller.sourceRoot);
-      let entry = this.background.get(sourceRoot);
+      let entry = this.background.get(key);
       const scopeEpoch = this.scopeEpochForSource(sourceRoot);
       if (!entry || entry.scopeEpoch !== scopeEpoch) {
-        entry = { generation: this.nextGeneration++, scopeEpoch };
-        this.background.set(sourceRoot, entry);
-        this.dropQueued(sourceRoot);
+        entry = { generation: this.nextGeneration++, scopeEpoch, caller };
+        this.background.set(key, entry);
+        this.dropQueued(key);
       }
       if (entry.snapshot) continue;
       if (
-        this.active.get(sourceRoot)?.generation === entry.generation ||
+        this.active.get(key)?.generation === entry.generation ||
         this.queued.some(
           (task) =>
-            task.sourceRoot === sourceRoot &&
+            task.cacheKey === key &&
             task.generation === entry!.generation,
         )
       ) {
         continue;
       }
-      this.dropQueued(sourceRoot);
+      this.dropQueued(key);
       this.queued.push({
+        cacheKey: key,
         sourceRoot,
         caller,
         generation: entry.generation,
@@ -297,8 +339,9 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   invocationObservations(): readonly AgentInvocationObservation[] {
     const entries = [...this.background.entries()]
       .filter(
-        ([sourceRoot, entry]) =>
-          entry.scopeEpoch === this.scopeEpochForSource(sourceRoot) &&
+        ([, entry]) =>
+          entry.caller &&
+          entry.scopeEpoch === this.scopeEpochForSource(entry.caller.sourceRoot) &&
           (entry.snapshot?.result.observedPaths?.length ?? 0) > 0,
       )
       .sort(([left], [right]) => left.localeCompare(right));
@@ -320,15 +363,16 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
       if (!added) break;
       round += 1;
     }
-    return [...selected.entries()].map(([sourceRoot, paths]) => ({
-      candidateRoot: sourceRoot,
-      workspaceRoot: sourceRoot,
-      paths,
-    }));
+    return [...selected.entries()].flatMap(([key, paths]) => {
+      const caller = this.background.get(key)?.caller;
+      if (!caller) return [];
+      const packageRoot = packageRootForCaller(caller);
+      return [{ candidateRoot: packageRoot, workspaceRoot: packageRoot, paths }];
+    });
   }
 
   private current(task: InvocationTask): boolean {
-    const entry = this.background.get(task.sourceRoot);
+    const entry = this.background.get(task.cacheKey);
     return (
       entry?.generation === task.generation &&
       entry.scopeEpoch === task.scopeEpoch &&
@@ -358,7 +402,9 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   private refreshObservationCoverage(): void {
     let count = 0;
     let truncated = false;
-    for (const [sourceRoot, entry] of this.background) {
+    for (const [, entry] of this.background) {
+      const sourceRoot = entry.caller?.sourceRoot;
+      if (!sourceRoot) continue;
       if (entry.scopeEpoch !== this.scopeEpochForSource(sourceRoot)) continue;
       count += entry.snapshot?.result.observedPaths?.length ?? 0;
       if (count > INVOCATION_OBSERVATION_MAX_PATHS) {
@@ -371,8 +417,10 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
     // Coverage is part of every retained ready snapshot's effective
     // completeness. Crossing the global observation cap (in either direction)
     // therefore changes more than the task that happened to settle/retire.
-    for (const [sourceRoot, entry] of this.background) {
+    for (const [, entry] of this.background) {
+      const sourceRoot = entry.caller?.sourceRoot;
       if (
+        sourceRoot &&
         entry.snapshot &&
         entry.scopeEpoch === this.scopeEpochForSource(sourceRoot)
       ) {
@@ -382,9 +430,9 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
     this.scheduleChanges();
   }
 
-  private dropQueued(sourceRoot: string): void {
+  private dropQueued(cacheKey: string): void {
     for (let index = this.queued.length - 1; index >= 0; index -= 1) {
-      if (this.queued[index]!.sourceRoot === sourceRoot) {
+      if (this.queued[index]!.cacheKey === cacheKey) {
         this.queued.splice(index, 1);
       }
     }
@@ -397,16 +445,16 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
     const concurrency = Math.max(1, this.options.concurrency ?? 4);
     while (this.activeCount < concurrency) {
       const index = this.queued.findIndex(
-        (task) => !this.active.has(task.sourceRoot),
+        (task) => !this.active.has(task.cacheKey),
       );
       if (index === -1) break;
       const [task] = this.queued.splice(index, 1);
       if (!task || !this.current(task)) continue;
-      this.active.set(task.sourceRoot, task);
+      this.active.set(task.cacheKey, task);
       this.activeCount += 1;
       void this.run(task).finally(() => {
-        if (this.active.get(task.sourceRoot) === task) {
-          this.active.delete(task.sourceRoot);
+        if (this.active.get(task.cacheKey) === task) {
+          this.active.delete(task.cacheKey);
           this.activeCount -= 1;
         }
         this.drain();
@@ -428,9 +476,10 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
       };
     }
     if (!this.current(task)) return;
-    this.background.set(task.sourceRoot, {
+    this.background.set(task.cacheKey, {
       generation: task.generation,
       scopeEpoch: task.scopeEpoch,
+      caller: task.caller,
       snapshot,
     });
     this.refreshObservationCoverage();
@@ -450,7 +499,9 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
     if (this.pendingChanges.size === 0) return;
     const changed = [...this.pendingChanges]
       .filter((sourceRoot) => {
-        const entry = this.background.get(sourceRoot);
+        const entry = [...this.background.values()].find(
+          (candidate) => candidate.caller?.sourceRoot === sourceRoot,
+        );
         return (
           entry?.snapshot !== undefined &&
           entry.scopeEpoch === this.scopeEpochForSource(sourceRoot)
@@ -486,6 +537,46 @@ type TargetResult = { kind: "literal"; slug: string } | { kind: "dynamic" };
 type WrapperTargetResult =
   | TargetResult
   | { kind: "parameter"; index: number };
+export type SystemGraphInvocationMethodResolution =
+  | { kind: "resolved"; mode: AgentInvocationMode }
+  | { kind: "dynamic"; modes: readonly AgentInvocationMode[] };
+
+export type SystemGraphInvocationTargetResolution =
+  | { kind: "resolved"; mode: AgentInvocationMode; target: string }
+  | { kind: "dynamic-target"; mode: AgentInvocationMode }
+  | { kind: "dynamic-method"; modes: readonly AgentInvocationMode[] };
+
+export interface SystemGraphPackageSource {
+  path: string;
+  source: string;
+  sourceFile: ts.SourceFile;
+}
+
+export interface SystemGraphPackageCompilerResult {
+  packageKey: string;
+  packageRoot: string;
+  generation: number;
+  program: ts.Program;
+  checker: ts.TypeChecker;
+  sources: ReadonlyMap<string, SystemGraphPackageSource>;
+  observedPaths: readonly string[];
+  complete: boolean;
+  sourceFingerprint: `sha256:${string}`;
+  resolveInvocationTarget(
+    call: ts.CallExpression,
+  ): SystemGraphInvocationTargetResolution | null;
+}
+
+export interface SystemGraphPackageCompilerInput {
+  packageRoot: string;
+  generation?: number;
+  readHooks?: WorkflowSourceReadHooks;
+}
+
+type InvocationMethodAliasMap = ReadonlyMap<
+  string,
+  SystemGraphInvocationMethodResolution
+>;
 
 interface PackageInvocation {
   target: string;
@@ -502,30 +593,30 @@ interface PackageInvocationScan {
   sourceFingerprint: `sha256:${string}`;
 }
 
+interface PackageSourceSnapshot {
+  packageRoot: string;
+  files: ReadonlyMap<string, string>;
+  observedPaths: readonly string[];
+  complete: boolean;
+}
+
 function packageRootForCaller(caller: AgentInventoryItem): string {
   if (caller.path === ".") return canonicalGraphPath(caller.sourceRoot);
   const depth = caller.path.split("/").filter(Boolean).length;
   return canonicalGraphPath(
-    path.resolve(caller.sourceRoot, ...Array.from({ length: depth }, () => "..")),
+    path.resolve(
+      caller.sourceRoot,
+      ...Array.from({ length: depth }, () => ".."),
+    ),
   );
 }
 
-function commonSourceRoot(callers: readonly AgentInventoryItem[]): string {
-  const roots = callers
-    .map(packageRootForCaller)
-    .sort();
-  const [first] = roots;
-  if (!first) return process.cwd();
-  const segments = first.split(path.sep);
-  for (const root of roots.slice(1)) {
-    const candidate = root.split(path.sep);
-    let index = 0;
-    while (index < segments.length && segments[index] === candidate[index]) {
-      index += 1;
-    }
-    segments.length = index;
-  }
-  return segments.length === 0 ? path.parse(first).root : segments.join(path.sep);
+function callerInvocationCacheKey(caller: AgentInventoryItem): string {
+  return [
+    packageRootForCaller(caller),
+    caller.agentKey,
+    canonicalGraphPath(caller.sourceRoot),
+  ].join("\0");
 }
 
 function unwrapTsExpression(expression: ts.Expression): ts.Expression {
@@ -544,6 +635,17 @@ function unwrapTsExpression(expression: ts.Expression): ts.Expression {
 function propertyAccessName(expression: ts.Expression): string | null {
   const current = unwrapTsExpression(expression);
   return ts.isIdentifier(current) ? current.text : null;
+}
+
+function expressionPropertyName(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+): string | null {
+  const current = unwrapTsExpression(expression);
+  if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) {
+    return current.text;
+  }
+  return symbolStringLiteral(checker, current);
 }
 
 function objectPropertyName(name: ts.PropertyName): string | null {
@@ -609,6 +711,20 @@ function aliasedSymbol(
     : symbol;
 }
 
+function expressionValueSymbol(
+  checker: ts.TypeChecker,
+  expression: ts.Identifier | ts.PropertyAccessExpression,
+): ts.Symbol | undefined {
+  if (
+    ts.isIdentifier(expression) &&
+    ts.isShorthandPropertyAssignment(expression.parent) &&
+    expression.parent.name === expression
+  ) {
+    return checker.getShorthandAssignmentValueSymbol(expression.parent);
+  }
+  return checker.getSymbolAtLocation(expression);
+}
+
 function resolvesSapiomNamespace(
   expression: ts.Expression,
   checker: ts.TypeChecker,
@@ -667,18 +783,29 @@ function resolvesSapiomNamespace(
   return false;
 }
 
-function packageInvocationMode(
-  call: ts.CallExpression,
+function directInvocationMethodResolution(
+  expression: ts.Expression,
   checker: ts.TypeChecker,
-): AgentInvocationMode | null {
-  const expression = unwrapTsExpression(call.expression);
-  if (!ts.isPropertyAccessExpression(expression) || expression.questionDotToken) {
+): SystemGraphInvocationMethodResolution | null {
+  const current = unwrapTsExpression(expression);
+  let receiver: ts.Expression;
+  let method: string | null;
+  let dynamicMethod = false;
+
+  if (ts.isPropertyAccessExpression(current)) {
+    if (current.questionDotToken) return null;
+    receiver = unwrapTsExpression(current.expression);
+    method = current.name.text;
+  } else if (ts.isElementAccessExpression(current)) {
+    if (current.questionDotToken) return null;
+    receiver = unwrapTsExpression(current.expression);
+    method = expressionPropertyName(checker, current.argumentExpression);
+    dynamicMethod = method === null;
+  } else {
     return null;
   }
 
-  const method = expression.name.text;
-  if (method !== "run" && method !== "launch") return null;
-  const receiver = unwrapTsExpression(expression.expression);
+  if (method !== null && method !== "run" && method !== "launch") return null;
   if (ts.isPropertyAccessExpression(receiver) && receiver.name.text === "agents") {
     const context = unwrapTsExpression(receiver.expression);
     if (
@@ -686,16 +813,62 @@ function packageInvocationMode(
       context.name.text === "sapiom" &&
       propertyAccessName(context.expression) === "ctx"
     ) {
-      return method === "run" ? "blocking" : "async";
+      return dynamicMethod
+        ? { kind: "dynamic", modes: ["blocking", "async"] }
+        : { kind: "resolved", mode: method === "run" ? "blocking" : "async" };
     }
   }
   if (resolvesSapiomNamespace(receiver, checker, "agents")) {
-    return method === "run" ? "blocking" : "async";
+    return dynamicMethod
+      ? { kind: "dynamic", modes: ["blocking", "async"] }
+      : { kind: "resolved", mode: method === "run" ? "blocking" : "async" };
   }
-  if (method === "launch" && resolvesSapiomNamespace(receiver, checker, "orchestrations")) {
-    return "async";
+  if (resolvesSapiomNamespace(receiver, checker, "orchestrations")) {
+    if (dynamicMethod) return { kind: "dynamic", modes: ["async"] };
+    if (method === "launch") return { kind: "resolved", mode: "async" };
   }
   return null;
+}
+
+function packageInvocationMethodResolution(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  methodAliases: InvocationMethodAliasMap = new Map(),
+): SystemGraphInvocationMethodResolution | null {
+  const direct = directInvocationMethodResolution(call.expression, checker);
+  if (direct) return direct;
+  const expression = unwrapTsExpression(call.expression);
+  if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) {
+    return null;
+  }
+  const symbol = aliasedSymbol(checker, checker.getSymbolAtLocation(expression));
+  const key = symbolKey(symbol);
+  return key ? methodAliases.get(key) ?? null : null;
+}
+
+function packageInvocationMode(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  methodAliases: InvocationMethodAliasMap = new Map(),
+): AgentInvocationMode | null {
+  const resolution = packageInvocationMethodResolution(call, checker, methodAliases);
+  return resolution?.kind === "resolved" ? resolution.mode : null;
+}
+
+function resolvePackageInvocationTarget(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  methodAliases: InvocationMethodAliasMap,
+): SystemGraphInvocationTargetResolution | null {
+  const method = packageInvocationMethodResolution(call, checker, methodAliases);
+  if (!method) return null;
+  if (method.kind === "dynamic") {
+    return { kind: "dynamic-method", modes: [...method.modes].sort((left, right) => MODE_ORDER[left] - MODE_ORDER[right]) };
+  }
+  const target = staticDefinitionTarget(call, checker);
+  return target.kind === "literal"
+    ? { kind: "resolved", mode: method.mode, target: target.slug }
+    : { kind: "dynamic-target", mode: method.mode };
 }
 
 function symbolStringLiteral(
@@ -708,24 +881,141 @@ function symbolStringLiteral(
     return current.text;
   }
   if (!ts.isIdentifier(current)) return null;
-  const symbol = aliasedSymbol(checker, checker.getSymbolAtLocation(current));
+  const symbol = aliasedSymbol(checker, expressionValueSymbol(checker, current));
   if (!symbol || seen.has(symbol)) return null;
   seen.add(symbol);
   for (const declaration of symbol.declarations ?? []) {
     if (
       ts.isVariableDeclaration(declaration) &&
       declaration.initializer &&
-      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+      ts.isVariableDeclarationList(declaration.parent) &&
+      (declaration.parent.flags & ts.NodeFlags.Const) !== 0
     ) {
-          const resolved = symbolStringLiteral(
-            checker,
-            declaration.initializer,
-            seen,
-          );
+      const resolved = symbolStringLiteral(
+        checker,
+        declaration.initializer,
+        seen,
+      );
       if (resolved !== null) return resolved;
     }
   }
   return null;
+}
+
+function invocationMethodFromName(
+  namespace: "agents" | "orchestrations",
+  method: string,
+): SystemGraphInvocationMethodResolution | null {
+  if (namespace === "agents") {
+    if (method === "run") return { kind: "resolved", mode: "blocking" };
+    if (method === "launch") return { kind: "resolved", mode: "async" };
+  }
+  if (namespace === "orchestrations" && method === "launch") {
+    return { kind: "resolved", mode: "async" };
+  }
+  return null;
+}
+
+function methodAliasFromExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  methodAliases: InvocationMethodAliasMap,
+): SystemGraphInvocationMethodResolution | null {
+  const direct = directInvocationMethodResolution(expression, checker);
+  if (direct?.kind === "resolved") return direct;
+  const current = unwrapTsExpression(expression);
+  if (!ts.isIdentifier(current) && !ts.isPropertyAccessExpression(current)) {
+    return null;
+  }
+  const symbol = aliasedSymbol(checker, checker.getSymbolAtLocation(current));
+  const key = symbolKey(symbol);
+  const aliased = key ? methodAliases.get(key) ?? null : null;
+  return aliased?.kind === "resolved" ? aliased : null;
+}
+
+function addMethodAlias(
+  methodAliases: Map<string, SystemGraphInvocationMethodResolution>,
+  checker: ts.TypeChecker,
+  name: ts.Node,
+  resolution: SystemGraphInvocationMethodResolution | null,
+): void {
+  if (
+    !resolution ||
+    resolution.kind !== "resolved" ||
+    (!ts.isIdentifier(name) && !ts.isPropertyAccessExpression(name))
+  ) {
+    return;
+  }
+  const key = symbolKey(
+    aliasedSymbol(checker, checker.getSymbolAtLocation(name)),
+  );
+  if (key) methodAliases.set(key, resolution);
+}
+
+function collectDestructuredMethodAliases(
+  declaration: ts.VariableDeclaration,
+  checker: ts.TypeChecker,
+  methodAliases: Map<string, SystemGraphInvocationMethodResolution>,
+): void {
+  if (!declaration.initializer || !ts.isObjectBindingPattern(declaration.name)) {
+    return;
+  }
+  const initializer = unwrapTsExpression(declaration.initializer);
+  const namespace = resolvesSapiomNamespace(initializer, checker, "agents")
+    ? "agents"
+    : resolvesSapiomNamespace(initializer, checker, "orchestrations")
+      ? "orchestrations"
+      : null;
+  if (!namespace) return;
+  for (const element of declaration.name.elements) {
+    if (element.dotDotDotToken || !ts.isIdentifier(element.name)) continue;
+    const method = element.propertyName
+      ? objectPropertyName(element.propertyName)
+      : element.name.text;
+    if (!method) continue;
+    addMethodAlias(
+      methodAliases,
+      checker,
+      element.name,
+      invocationMethodFromName(namespace, method),
+    );
+  }
+}
+
+function collectInvocationMethodAliases(
+  sourceFiles: readonly ts.SourceFile[],
+  checker: ts.TypeChecker,
+): InvocationMethodAliasMap {
+  const methodAliases = new Map<string, SystemGraphInvocationMethodResolution>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)) {
+      collectDestructuredMethodAliases(node, checker, methodAliases);
+      if (node.initializer) {
+        addMethodAlias(
+          methodAliases,
+          checker,
+          node.name,
+          methodAliasFromExpression(node.initializer, checker, methodAliases),
+        );
+      }
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      const left = unwrapTsExpression(node.left);
+      if (ts.isIdentifier(left) || ts.isPropertyAccessExpression(left)) {
+        addMethodAlias(
+          methodAliases,
+          checker,
+          left,
+          methodAliasFromExpression(node.right, checker, methodAliases),
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const sourceFile of sourceFiles) visit(sourceFile);
+  return methodAliases;
 }
 
 function resolvedObjectLiteral(
@@ -743,7 +1033,8 @@ function resolvedObjectLiteral(
     if (
       ts.isVariableDeclaration(declaration) &&
       declaration.initializer &&
-      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+      ts.isVariableDeclarationList(declaration.parent) &&
+      (declaration.parent.flags & ts.NodeFlags.Const) !== 0
     ) {
       const resolved = resolvedObjectLiteral(
         checker,
@@ -798,13 +1089,21 @@ function staticDefinitionTarget(
 function parameterTarget(
   expression: ts.Expression,
   parameters: readonly ts.ParameterDeclaration[],
+  checker: ts.TypeChecker,
 ): WrapperTargetResult | null {
   const current = unwrapTsExpression(expression);
   if (!ts.isIdentifier(current)) return null;
-  const index = parameters.findIndex(
-    (parameter) =>
-      ts.isIdentifier(parameter.name) && parameter.name.text === current.text,
+  const expressionKey = symbolKey(
+    aliasedSymbol(checker, expressionValueSymbol(checker, current)),
   );
+  if (!expressionKey) return null;
+  const index = parameters.findIndex((parameter) => {
+    if (!ts.isIdentifier(parameter.name)) return false;
+    const parameterKey = symbolKey(
+      aliasedSymbol(checker, checker.getSymbolAtLocation(parameter.name)),
+    );
+    return parameterKey === expressionKey;
+  });
   return index === -1 ? null : { kind: "parameter", index };
 }
 
@@ -828,7 +1127,7 @@ function wrapperDefinitionTarget(
       continue;
     }
     if (ts.isShorthandPropertyAssignment(property)) {
-      const parameter = parameterTarget(property.name, parameters);
+      const parameter = parameterTarget(property.name, parameters, checker);
       if (parameter) {
         result = parameter;
         continue;
@@ -844,7 +1143,7 @@ function wrapperDefinitionTarget(
       result = { kind: "dynamic" };
       continue;
     }
-    const parameter = parameterTarget(property.initializer, parameters);
+    const parameter = parameterTarget(property.initializer, parameters, checker);
     if (parameter) {
       result = parameter;
       continue;
@@ -910,17 +1209,184 @@ function stableScanFingerprint(
     .digest("hex")}`;
 }
 
-function createPackageProgram(rootNames: readonly string[]): ts.Program {
-  return ts.createProgram([...rootNames], {
+async function snapshotPackageSources(
+  packageRoot: string,
+  readHooks: WorkflowSourceReadHooks,
+): Promise<PackageSourceSnapshot> {
+  const canonicalPackageRoot = canonicalGraphPath(packageRoot);
+  const sourceSet = await listSourceFilesWithObservations(canonicalPackageRoot);
+  const files = new Map<string, string>();
+  const observedPaths = new Set(sourceSet.observedPaths.map(canonicalGraphPath));
+  let complete = sourceSet.complete;
+  for (const file of sourceSet.files) {
+    const canonicalFile = canonicalGraphPath(file);
+    const content = await readWorkflowSourceFile(
+      canonicalPackageRoot,
+      canonicalFile,
+      readHooks,
+    );
+    if (content === null) {
+      complete = false;
+      continue;
+    }
+    files.set(canonicalFile, content);
+  }
+  const toolsDeclaration = canonicalGraphPath(
+    path.join(
+      canonicalPackageRoot,
+      "node_modules",
+      "@sapiom",
+      "tools",
+      "index.d.ts",
+    ),
+  );
+  const toolsDeclarationSource = await readWorkflowSourceFile(
+    canonicalPackageRoot,
+    toolsDeclaration,
+    readHooks,
+  );
+  if (toolsDeclarationSource !== null) {
+    files.set(toolsDeclaration, toolsDeclarationSource);
+    observedPaths.add(toolsDeclaration);
+  }
+  return {
+    packageRoot: canonicalPackageRoot,
+    files,
+    observedPaths: [...observedPaths].sort(),
+    complete,
+  };
+}
+
+function createPackageProgram(snapshot: PackageSourceSnapshot): ts.Program {
+  const compilerOptions: ts.CompilerOptions = {
     allowJs: false,
     esModuleInterop: true,
     jsx: ts.JsxEmit.ReactJSX,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noLib: true,
     noEmit: true,
     skipLibCheck: true,
     target: ts.ScriptTarget.ES2022,
+  };
+  const host = ts.createCompilerHost(compilerOptions, true);
+  const sourceFiles = snapshot.files;
+  const hostPath = (fileName: string): string =>
+    canonicalGraphPath(
+      path.isAbsolute(fileName)
+        ? fileName
+        : path.resolve(snapshot.packageRoot, fileName),
+    );
+  const hasFile = (fileName: string): boolean =>
+    sourceFiles.has(hostPath(fileName));
+  return ts.createProgram([...sourceFiles.keys()].sort(), compilerOptions, {
+    ...host,
+    getCurrentDirectory: () => snapshot.packageRoot,
+    getCanonicalFileName: hostPath,
+    fileExists: hasFile,
+    readFile: (fileName) => sourceFiles.get(hostPath(fileName)),
+    realpath: hostPath,
+    directoryExists: (directoryName) => {
+      const canonicalDirectory = hostPath(directoryName);
+      return [...sourceFiles.keys()].some((fileName) => {
+        const relative = path.relative(canonicalDirectory, fileName);
+        return (
+          relative !== "" &&
+          relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        );
+      });
+    },
+    getDirectories: (directoryName) => {
+      const canonicalDirectory = hostPath(directoryName);
+      const directories = new Set<string>();
+      for (const fileName of sourceFiles.keys()) {
+        const relative = path.relative(canonicalDirectory, fileName);
+        if (
+          relative === "" ||
+          relative === ".." ||
+          relative.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relative)
+        ) {
+          continue;
+        }
+        const [first] = relative.split(path.sep);
+        if (first) directories.add(first);
+      }
+      return [...directories].sort();
+    },
+    getSourceFile: (fileName, languageVersion) => {
+      const canonicalFile = hostPath(fileName);
+      const content = sourceFiles.get(canonicalFile);
+      return content === undefined
+        ? undefined
+        : ts.createSourceFile(
+            canonicalFile,
+            content,
+            languageVersion,
+            true,
+            path.extname(canonicalFile) === ".tsx"
+              ? ts.ScriptKind.TSX
+              : ts.ScriptKind.TS,
+          );
+    },
   });
+}
+
+function packageSourceFingerprint(
+  snapshot: PackageSourceSnapshot,
+): `sha256:${string}` {
+  return stableScanFingerprint(
+    [...snapshot.files].map(([file, content]) => ({
+      file: path
+        .relative(snapshot.packageRoot, file)
+        .split(path.sep)
+        .join(path.posix.sep),
+      content,
+    })),
+    snapshot.complete,
+  );
+}
+
+export async function createSystemGraphPackageCompilerResult({
+  packageRoot,
+  generation = 1,
+  readHooks = {},
+}: SystemGraphPackageCompilerInput): Promise<SystemGraphPackageCompilerResult> {
+  const snapshot = await snapshotPackageSources(packageRoot, readHooks);
+  const program = createPackageProgram(snapshot);
+  const checker = program.getTypeChecker();
+  const sourceFilesByPath = new Map(
+    program.getSourceFiles().map((sourceFile) => [
+      canonicalGraphPath(sourceFile.fileName),
+      sourceFile,
+    ]),
+  );
+  const sources = new Map<string, SystemGraphPackageSource>();
+  for (const [file, source] of snapshot.files) {
+    const sourceFile = sourceFilesByPath.get(file);
+    if (!sourceFile) continue;
+    sources.set(file, { path: file, source, sourceFile });
+  }
+  const methodAliases = collectInvocationMethodAliases(
+    [...sources.values()].map((entry) => entry.sourceFile),
+    checker,
+  );
+  const sourceFingerprint = packageSourceFingerprint(snapshot);
+  return {
+    packageKey: snapshot.packageRoot,
+    packageRoot: snapshot.packageRoot,
+    generation,
+    program,
+    checker,
+    sources,
+    observedPaths: snapshot.observedPaths,
+    complete: snapshot.complete,
+    sourceFingerprint,
+    resolveInvocationTarget: (call) =>
+      resolvePackageInvocationTarget(call, checker, methodAliases),
+  };
 }
 
 function symbolKey(symbol: ts.Symbol | undefined): string | null {
@@ -934,6 +1400,7 @@ function symbolKey(symbol: ts.Symbol | undefined): string | null {
 function directInvocationsInFunction(
   node: ts.Node,
   checker: ts.TypeChecker,
+  methodAliases: InvocationMethodAliasMap,
 ): Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }> {
   const invocations: Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }> = [];
   const body =
@@ -955,7 +1422,7 @@ function directInvocationsInFunction(
   const visit = (child: ts.Node): void => {
     if (child !== body && ts.isFunctionLike(child)) return;
     if (ts.isCallExpression(child)) {
-      const mode = packageInvocationMode(child, checker);
+      const mode = packageInvocationMode(child, checker, methodAliases);
       if (mode) {
         const target = wrapperDefinitionTarget(child, checker, parameters);
         invocations.push({ target, mode });
@@ -1029,227 +1496,235 @@ function resolveWrapperInvocationTarget(
 async function scanPackageInvocations(
   callers: readonly AgentInventoryItem[],
   readHooks: WorkflowSourceReadHooks,
+  generation = 1,
 ): Promise<Map<string, AgentInvocationProviderResult>> {
   const orderedCallers = [...callers].sort((left, right) =>
-    left.agentKey.localeCompare(right.agentKey),
+    callerInvocationCacheKey(left).localeCompare(callerInvocationCacheKey(right)),
   );
-  const byAgentKey = new Map<string, PackageInvocationScan>();
-  const rootNames: string[] = [];
-  const observed = new Set<string>();
-  let complete = true;
+  const groupedCallers = new Map<string, AgentInventoryItem[]>();
   for (const caller of orderedCallers) {
-    const sourceSet = await listSourceFilesWithObservations(caller.sourceRoot);
-    if (!sourceSet.complete) complete = false;
-    sourceSet.files.forEach((file) => rootNames.push(file));
-    sourceSet.observedPaths.forEach((path) => observed.add(path));
-    byAgentKey.set(caller.agentKey, {
-      invocations: [],
-      groupedInvocations: [],
-      warnings: [],
-      observedPaths: [...sourceSet.observedPaths],
-      complete: sourceSet.complete,
-      sourceFingerprint: `sha256:${"0".repeat(64)}`,
+    const packageRoot = packageRootForCaller(caller);
+    const group = groupedCallers.get(packageRoot) ?? [];
+    group.push(caller);
+    groupedCallers.set(packageRoot, group);
+  }
+
+  const results = new Map<string, AgentInvocationProviderResult>();
+  for (const [packageRoot, packageCallers] of [...groupedCallers].sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    const analysis = await createSystemGraphPackageCompilerResult({
+      packageRoot,
+      generation,
+      readHooks,
     });
-  }
-  const program = createPackageProgram([...new Set(rootNames)].sort());
-  const checker = program.getTypeChecker();
-  const workspaceRoot = commonSourceRoot(orderedCallers);
-  const sourceFiles = program
-    .getSourceFiles()
-    .filter(
-      (sourceFile) =>
-        !sourceFile.isDeclarationFile &&
-        PROGRAM_SOURCE_EXTENSIONS.has(path.extname(sourceFile.fileName)) &&
-        !sourceFile.fileName.includes(`${path.sep}node_modules${path.sep}`) &&
-        path.relative(workspaceRoot, sourceFile.fileName) !== ".." &&
-        !path
-          .relative(workspaceRoot, sourceFile.fileName)
-          .startsWith(`..${path.sep}`),
-    )
-    .sort((left, right) => left.fileName.localeCompare(right.fileName));
-  const contents = new Map<string, string | null>();
-  for (const sourceFile of sourceFiles) {
-    observed.add(sourceFile.fileName);
-    const owner = owningCaller(sourceFile.fileName, orderedCallers);
-    const content = owner
-      ? await readWorkflowSourceFile(
-          owner.sourceRoot,
-          sourceFile.fileName,
-          readHooks,
-        )
-      : sourceFile.text;
-    if (content === null) complete = false;
-    contents.set(sourceFile.fileName, content);
-  }
-
-  const wrappers = new Map<
-    string,
-    Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }>
-  >();
-  for (const sourceFile of sourceFiles) {
-    if (contents.get(sourceFile.fileName) === null) continue;
-    const visit = (node: ts.Node): void => {
-      const callable = functionLikeFromDeclaration(node as ts.Declaration);
-      if (callable) {
-        const symbol =
-          ts.isFunctionDeclaration(node) && node.name
-            ? checker.getSymbolAtLocation(node.name)
-            : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
-              ? checker.getSymbolAtLocation(node.name)
-              : undefined;
-        const key = symbolKey(aliasedSymbol(checker, symbol));
-        const invocations = directInvocationsInFunction(callable, checker);
-        if (key && invocations.length > 0) wrappers.set(key, invocations);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-  }
-
-  const invokedWrapperKeys = new Set<string>();
-  for (const sourceFile of sourceFiles) {
-    if (contents.get(sourceFile.fileName) === null) continue;
-    if (!owningCaller(sourceFile.fileName, orderedCallers)) continue;
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && !packageInvocationMode(node, checker)) {
-        const expression = unwrapTsExpression(node.expression);
-        const symbol =
-          ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)
-            ? aliasedSymbol(checker, checker.getSymbolAtLocation(expression))
-            : undefined;
-        const key = symbolKey(symbol);
-        if (key && wrappers.has(key)) invokedWrapperKeys.add(key);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-  }
-
-  for (const sourceFile of sourceFiles) {
-    if (contents.get(sourceFile.fileName) === null) continue;
-    const caller = owningCaller(sourceFile.fileName, orderedCallers);
-    if (!caller) continue;
-    const scan = byAgentKey.get(caller.agentKey)!;
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)) {
-        const mode = packageInvocationMode(node, checker);
-        const position = node.expression.getStart(sourceFile);
-        if (mode) {
-          if (containingWrapperKey(node, checker, invokedWrapperKeys, sourceFile)) {
-            ts.forEachChild(node, visit);
-            return;
-          }
-          const evidence = relativeProgramEvidence(
-            caller.sourceRoot,
-            sourceFile.fileName,
-            sourceFile,
-            position,
+    const byCallerKey = new Map<string, PackageInvocationScan>();
+    for (const caller of packageCallers) {
+      byCallerKey.set(callerInvocationCacheKey(caller), {
+        invocations: [],
+        groupedInvocations: [],
+        warnings: [],
+        observedPaths: [...analysis.observedPaths],
+        complete: analysis.complete,
+        sourceFingerprint: analysis.sourceFingerprint,
+      });
+    }
+    const sourceFiles = [...analysis.sources.values()]
+      .map((entry) => entry.sourceFile)
+      .filter(
+        (sourceFile) =>
+          !sourceFile.isDeclarationFile &&
+          PROGRAM_SOURCE_EXTENSIONS.has(path.extname(sourceFile.fileName)) &&
+          !sourceFile.fileName.includes(`${path.sep}node_modules${path.sep}`),
+      )
+      .sort((left, right) => left.fileName.localeCompare(right.fileName));
+    const methodAliases = collectInvocationMethodAliases(
+      sourceFiles,
+      analysis.checker,
+    );
+    const wrappers = new Map<
+      string,
+      Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }>
+    >();
+    for (const sourceFile of sourceFiles) {
+      const visit = (node: ts.Node): void => {
+        const callable = functionLikeFromDeclaration(node as ts.Declaration);
+        if (callable) {
+          const symbol =
+            ts.isFunctionDeclaration(node) && node.name
+              ? analysis.checker.getSymbolAtLocation(node.name)
+              : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
+                ? analysis.checker.getSymbolAtLocation(node.name)
+                : undefined;
+          const key = symbolKey(aliasedSymbol(analysis.checker, symbol));
+          const invocations = directInvocationsInFunction(
+            callable,
+            analysis.checker,
+            methodAliases,
           );
-          const target = staticDefinitionTarget(node, checker);
-          if (target.kind === "literal") {
-            scan.invocations.push({ target: target.slug, mode, evidence });
-          } else {
-            scan.warnings.push({ code: "dynamic-target", mode, evidence });
-          }
-        } else {
+          if (key && invocations.length > 0) wrappers.set(key, invocations);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+
+    const invokedWrapperKeys = new Set<string>();
+    for (const sourceFile of sourceFiles) {
+      if (!owningCaller(sourceFile.fileName, packageCallers)) continue;
+      const visit = (node: ts.Node): void => {
+        if (
+          ts.isCallExpression(node) &&
+          !analysis.resolveInvocationTarget(node)
+        ) {
           const expression = unwrapTsExpression(node.expression);
           const symbol =
             ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)
-              ? aliasedSymbol(checker, checker.getSymbolAtLocation(expression))
+              ? aliasedSymbol(
+                  analysis.checker,
+                  analysis.checker.getSymbolAtLocation(expression),
+                )
               : undefined;
-          const wrapper = wrappers.get(symbolKey(symbol) ?? "");
-          if (wrapper) {
+          const key = symbolKey(symbol);
+          if (key && wrappers.has(key)) invokedWrapperKeys.add(key);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+
+    for (const sourceFile of sourceFiles) {
+      const caller = owningCaller(sourceFile.fileName, packageCallers);
+      if (!caller) continue;
+      const scan = byCallerKey.get(callerInvocationCacheKey(caller))!;
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)) {
+          const resolution = analysis.resolveInvocationTarget(node);
+          const position = node.expression.getStart(sourceFile);
+          if (resolution) {
+            if (
+              containingWrapperKey(
+                node,
+                analysis.checker,
+                invokedWrapperKeys,
+                sourceFile,
+              )
+            ) {
+              ts.forEachChild(node, visit);
+              return;
+            }
             const evidence = relativeProgramEvidence(
               caller.sourceRoot,
               sourceFile.fileName,
               sourceFile,
               position,
             );
-            for (const invocation of wrapper) {
-              const target = resolveWrapperInvocationTarget(
-                invocation.target,
-                node,
-                checker,
+            if (resolution.kind === "resolved") {
+              scan.invocations.push({
+                target: resolution.target,
+                mode: resolution.mode,
+                evidence,
+              });
+            } else if (resolution.kind === "dynamic-target") {
+              scan.warnings.push({
+                code: "dynamic-target",
+                mode: resolution.mode,
+                evidence,
+              });
+            } else {
+              for (const mode of resolution.modes) {
+                scan.warnings.push({ code: "dynamic-target", mode, evidence });
+              }
+            }
+          } else {
+            const expression = unwrapTsExpression(node.expression);
+            const symbol =
+              ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)
+                ? aliasedSymbol(
+                    analysis.checker,
+                    analysis.checker.getSymbolAtLocation(expression),
+                  )
+                : undefined;
+            const wrapper = wrappers.get(symbolKey(symbol) ?? "");
+            if (wrapper) {
+              const evidence = relativeProgramEvidence(
+                caller.sourceRoot,
+                sourceFile.fileName,
+                sourceFile,
+                position,
               );
-              if (target === null) {
-                scan.warnings.push({
-                  code: "dynamic-target",
-                  mode: invocation.mode,
-                  evidence,
-                });
-              } else {
-                scan.invocations.push({
-                  target,
-                  mode: invocation.mode,
-                  evidence,
-                });
+              for (const invocation of wrapper) {
+                const target = resolveWrapperInvocationTarget(
+                  invocation.target,
+                  node,
+                  analysis.checker,
+                );
+                if (target === null) {
+                  scan.warnings.push({
+                    code: "dynamic-target",
+                    mode: invocation.mode,
+                    evidence,
+                  });
+                } else {
+                  scan.invocations.push({
+                    target,
+                    mode: invocation.mode,
+                    evidence,
+                  });
+                }
               }
             }
           }
         }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-  }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
 
-  const fingerprint = stableScanFingerprint(
-    sourceFiles.map((sourceFile) => ({
-      file: path.relative(workspaceRoot, sourceFile.fileName).split(path.sep).join(path.posix.sep),
-      content: contents.get(sourceFile.fileName) ?? sourceFile.text,
-    })),
-    complete,
-  );
-  for (const scan of byAgentKey.values()) {
-    scan.observedPaths = [
-      ...new Set([...scan.observedPaths, ...observed]),
-    ].sort();
-    scan.complete = scan.complete && complete;
-    scan.sourceFingerprint = fingerprint;
-    const grouped = new Map<string, AgentInvocationCandidate>();
-    for (const invocation of scan.invocations.sort((left, right) =>
-      evidenceOrder(left.evidence, right.evidence),
-    )) {
-      const key = `${invocation.target}\0${invocation.mode}`;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.evidence.push(invocation.evidence);
-      } else {
-        grouped.set(key, {
-          target: invocation.target,
-          mode: invocation.mode,
-          evidence: [invocation.evidence],
-        });
+    for (const [callerKey, scan] of byCallerKey) {
+      const grouped = new Map<string, AgentInvocationCandidate>();
+      for (const invocation of scan.invocations.sort((left, right) =>
+        evidenceOrder(left.evidence, right.evidence),
+      )) {
+        const key = `${invocation.target}\0${invocation.mode}`;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.evidence.push(invocation.evidence);
+        } else {
+          grouped.set(key, {
+            target: invocation.target,
+            mode: invocation.mode,
+            evidence: [invocation.evidence],
+          });
+        }
       }
-    }
-    scan.groupedInvocations = [...grouped.values()];
-    for (const candidate of scan.groupedInvocations) {
-      candidate.evidence.sort(evidenceOrder);
-    }
-    scan.groupedInvocations.sort(
-      (left, right) =>
-        left.evidence[0]!.file.localeCompare(right.evidence[0]!.file) ||
-        left.evidence[0]!.line - right.evidence[0]!.line ||
-        left.evidence[0]!.column - right.evidence[0]!.column ||
-        MODE_ORDER[left.mode] - MODE_ORDER[right.mode] ||
-        left.target.localeCompare(right.target),
-    );
-    scan.warnings.sort((left, right) =>
-      evidenceOrder(left.evidence, right.evidence),
-    );
-  }
-  return new Map(
-    [...byAgentKey].map(([agentKey, scan]) => [
-      agentKey,
-      {
+      scan.groupedInvocations = [...grouped.values()];
+      for (const candidate of scan.groupedInvocations) {
+        candidate.evidence.sort(evidenceOrder);
+      }
+      scan.groupedInvocations.sort(
+        (left, right) =>
+          left.evidence[0]!.file.localeCompare(right.evidence[0]!.file) ||
+          left.evidence[0]!.line - right.evidence[0]!.line ||
+          left.evidence[0]!.column - right.evidence[0]!.column ||
+          MODE_ORDER[left.mode] - MODE_ORDER[right.mode] ||
+          left.target.localeCompare(right.target),
+      );
+      scan.warnings.sort(
+        (left, right) =>
+          evidenceOrder(left.evidence, right.evidence) ||
+          MODE_ORDER[left.mode] - MODE_ORDER[right.mode],
+      );
+      results.set(callerKey, {
         invocations: scan.groupedInvocations,
         warnings: scan.warnings,
         observedPaths: scan.observedPaths,
         complete: scan.complete,
         sourceFingerprint: scan.sourceFingerprint,
-      },
-    ]),
-  );
+      });
+    }
+  }
+  return results;
 }
 /**
  * V0 per-agent filesystem adapter for literal direct invocations.
@@ -1262,6 +1737,7 @@ async function scanPackageInvocations(
  */
 export class SourceAgentInvocationProvider implements AgentInvocationProvider {
   private retainedCallers: readonly AgentInventoryItem[] = [];
+  private nextGeneration = 1;
   private inFlight:
     | {
         key: string;
@@ -1273,31 +1749,41 @@ export class SourceAgentInvocationProvider implements AgentInvocationProvider {
 
   retainCallers(callers: readonly AgentInventoryItem[]): void {
     this.retainedCallers = [...callers].sort((left, right) =>
-      left.agentKey.localeCompare(right.agentKey),
+      callerInvocationCacheKey(left).localeCompare(callerInvocationCacheKey(right)),
     );
   }
 
   async listInvocations(
     caller: AgentInventoryItem,
   ): Promise<AgentInvocationProviderResult> {
-    const callers = this.retainedCallers.some(
-      (candidate) => candidate.agentKey === caller.agentKey,
+    const callerKey = callerInvocationCacheKey(caller);
+    const packageRoot = packageRootForCaller(caller);
+    const retainedPackageCallers = this.retainedCallers.filter(
+      (candidate) => packageRootForCaller(candidate) === packageRoot,
+    );
+    const callers = retainedPackageCallers.some(
+      (candidate) => callerInvocationCacheKey(candidate) === callerKey,
     )
-      ? this.retainedCallers
+      ? retainedPackageCallers
       : [caller];
     const key = callers
-      .map((candidate) => `${candidate.agentKey}\0${candidate.sourceRoot}`)
+      .map(callerInvocationCacheKey)
       .sort()
       .join("\0");
     if (!this.inFlight || this.inFlight.key !== key) {
-      const result = scanPackageInvocations(callers, this.readHooks).finally(() => {
+      const generation = this.nextGeneration++;
+      const result = scanPackageInvocations(
+        callers,
+        this.readHooks,
+        generation,
+      ).finally(() => {
         if (this.inFlight?.key === key) this.inFlight = null;
       });
       this.inFlight = { key, result };
     }
     const packageResult = await this.inFlight.result;
     return (
-      packageResult.get(caller.agentKey) ?? {
+      packageResult.get(callerKey) ?? {
         invocations: [],
         warnings: [],
         observedPaths: [],

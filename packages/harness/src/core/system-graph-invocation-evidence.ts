@@ -30,7 +30,7 @@ import type { AgentInvocationProviderResult } from "./system-graph-relationships
 
 export const DIRECT_INVOCATION_EVIDENCE_PRODUCER = {
   id: "sapiom.harness.direct-invocation",
-  version: "1.0.0",
+  version: "2.0.0",
 } as const satisfies PackageGraphEvidenceProducer;
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
