@@ -528,6 +528,9 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(
       page.getByTestId("system-graph-node-standalone"),
     ).toContainText("Standalone");
+    await expect(page.getByTestId("system-graph-isolated-label")).toHaveText(
+      "1 agent · no detected relationships",
+    );
     await expect(
       page.getByTestId("system-graph-edge-agent:research-agent:growth"),
     ).toContainText("blocking + async");

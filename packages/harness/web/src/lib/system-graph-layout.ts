@@ -19,6 +19,7 @@ const LAYOUT_PADDING = 32;
 const PORT_LIMIT = 24;
 const PORT_STEP = 8;
 const LABEL_HEIGHT = 16;
+const ISOLATED_SECTION_LABEL_GAP = 12;
 
 /**
  * Inside a container, around everything it holds.
@@ -142,12 +143,23 @@ export interface SystemGraphLayoutEdge {
   crossesGroup: boolean;
 }
 
+export interface SystemGraphIsolatedSection {
+  /** The group whose isolated cards this label describes, or null when the
+   *  graph was laid out without group information. */
+  groupId: string | null;
+  count: number;
+  label: string;
+  labelBounds: SystemGraphLabelBounds;
+}
+
 export interface SystemGraphLayout {
   nodes: SystemGraphLayoutNode[];
   edges: SystemGraphLayoutEdge[];
   /** Empty when laid out without groups — the map draws no chrome it was not
    *  given a reason to draw. */
   groups: SystemGraphLayoutGroup[];
+  /** One labelled grid per region that contains globally degree-zero agents. */
+  isolatedSections: SystemGraphIsolatedSection[];
   bounds: { width: number; height: number };
 }
 
@@ -469,24 +481,43 @@ function shelfPack(
 }
 
 /**
- * Every component of one region, ranked internally and then shelf-packed.
+ * Every non-isolated component of one region, ranked internally and then
+ * shelf-packed, followed by one wrapped grid for the region's isolated nodes.
  *
- * Components are laid out at their own origin first because packing needs each
- * box's size up front — the vertical stack this replaces never had to know one.
+ * Isolation is classified against the WHOLE graph before regions are formed.
+ * An agent whose only edge crosses a group boundary still has a detected
+ * relationship and must never be filed under the isolated label.
  */
 function placeRegionNodes(
   topology: SystemGraphTopology,
   groupId: string | null,
+  globallyIsolatedNodeIds: ReadonlySet<string>,
 ): {
   nodes: SystemGraphLayoutNode[];
   componentBoxes: Map<string, ComponentBox>;
   componentByNode: Map<string, string>;
   strongByNode: Map<string, string>;
+  isolatedSection: SystemGraphIsolatedSection | null;
+  isolatedNodeIds: ReadonlySet<string>;
 } {
   const componentByNode = new Map<string, string>();
   const strongByNode = new Map<string, string>();
-
-  const laid = topology.components.map((component) => {
+  const isolatedNodes = topology.components
+    .flatMap((component) =>
+      component.stronglyConnected.flatMap((strong) =>
+        strong.nodeIds
+          .filter((id) => globallyIsolatedNodeIds.has(id))
+          .map((id) => ({ id, component })),
+      ),
+    )
+    .sort((left, right) => compareIds(left.id, right.id));
+  const isolatedNodeIds = new Set(isolatedNodes.map((node) => node.id));
+  // A degree-zero node is necessarily its own weak component, so removing its
+  // component cannot disturb the ranked geometry of any connected component.
+  const nonIsolatedComponents = topology.components.filter((component) =>
+    component.nodeIds.some((id) => !isolatedNodeIds.has(id)),
+  );
+  const laid = nonIsolatedComponents.map((component) => {
     const byRank = new Map<number, string[]>();
     for (const strong of component.stronglyConnected) {
       const rankNodes = byRank.get(strong.rank) ?? [];
@@ -547,8 +578,65 @@ function placeRegionNodes(
       maxY: at.y + entry.height,
     });
   });
+
+  let isolatedSection: SystemGraphIsolatedSection | null = null;
+  if (isolatedNodes.length > 0) {
+    const columnStride = SYSTEM_GRAPH_NODE_WIDTH + SYSTEM_GRAPH_SLOT_GAP;
+    const rowStride = SYSTEM_GRAPH_NODE_HEIGHT + SYSTEM_GRAPH_SLOT_GAP;
+    // Balance physical width and height (cards are much wider than tall) while
+    // retaining the map's landscape packing target. Keep the decision
+    // independent of the viewport so the layout is stable.
+    const columns = Math.min(
+      isolatedNodes.length,
+      Math.max(
+        2,
+        Math.ceil(
+          Math.sqrt(
+            (isolatedNodes.length * rowStride * SHELF_ASPECT) / columnStride,
+          ),
+        ),
+      ),
+    );
+    const gridWidth =
+      columns * SYSTEM_GRAPH_NODE_WIDTH +
+      Math.max(0, columns - 1) * SYSTEM_GRAPH_SLOT_GAP;
+    const label = isolatedSectionLabel(isolatedNodes.length);
+    const labelY = packed.height > 0 ? packed.height + COMPONENT_GAP : 0;
+    const gridY = labelY + LABEL_HEIGHT + ISOLATED_SECTION_LABEL_GAP;
+
+    isolatedNodes.forEach(({ id, component }, index) => {
+      nodes.push({
+        id,
+        x: (index % columns) * columnStride,
+        y: Math.floor(index / columns) * rowStride + gridY,
+        width: SYSTEM_GRAPH_NODE_WIDTH,
+        height: SYSTEM_GRAPH_NODE_HEIGHT,
+        componentId: component.id,
+        groupId,
+      });
+    });
+    isolatedSection = {
+      groupId,
+      count: isolatedNodes.length,
+      label,
+      labelBounds: {
+        x: 0,
+        y: labelY,
+        width: Math.max(gridWidth, labelWidth(label)),
+        height: LABEL_HEIGHT,
+      },
+    };
+  }
+
   nodes.sort((left, right) => compareIds(left.id, right.id));
-  return { nodes, componentBoxes, componentByNode, strongByNode };
+  return {
+    nodes,
+    componentBoxes,
+    componentByNode,
+    strongByNode,
+    isolatedSection,
+    isolatedNodeIds,
+  };
 }
 
 function spreadPortOffsets(
@@ -592,6 +680,10 @@ function spreadPortOffsets(
 
 function labelForModes(modes: readonly AgentInvocationMode[]): string {
   return modes.length === 2 ? "blocking + async" : modes[0]!;
+}
+
+function isolatedSectionLabel(count: number): string {
+  return `${count} ${count === 1 ? "agent" : "agents"} · no detected relationships`;
 }
 
 function labelWidth(label: string): number {
@@ -975,6 +1067,58 @@ const translateRouted = (
   },
 });
 
+const translateIsolatedSection = (
+  section: SystemGraphIsolatedSection,
+  dx: number,
+  dy: number,
+): SystemGraphIsolatedSection => ({
+  ...section,
+  labelBounds: {
+    ...section.labelBounds,
+    x: round(section.labelBounds.x + dx),
+    y: round(section.labelBounds.y + dy),
+  },
+});
+
+/** Keep the explanatory label below every routed primitive without allowing
+ * provisional isolated cards to influence edge-label placement. */
+function placeIsolatedSectionBelowEdges(
+  nodes: SystemGraphLayoutNode[],
+  edges: readonly RoutedEdge[],
+  isolatedSection: SystemGraphIsolatedSection | null,
+  isolatedNodeIds: ReadonlySet<string>,
+): {
+  nodes: SystemGraphLayoutNode[];
+  isolatedSection: SystemGraphIsolatedSection | null;
+} {
+  if (!isolatedSection || edges.length === 0) {
+    return { nodes, isolatedSection };
+  }
+  let routedBottom = Number.NEGATIVE_INFINITY;
+  for (const edge of edges) {
+    for (const point of edge.points) {
+      routedBottom = Math.max(routedBottom, point.y);
+    }
+    routedBottom = Math.max(
+      routedBottom,
+      edge.labelBounds.y + edge.labelBounds.height,
+    );
+  }
+  const targetY = Math.max(
+    isolatedSection.labelBounds.y,
+    routedBottom + COMPONENT_GAP,
+  );
+  const dy = round(targetY - isolatedSection.labelBounds.y);
+  if (dy === 0) return { nodes, isolatedSection };
+
+  return {
+    nodes: nodes.map((node) =>
+      isolatedNodeIds.has(node.id) ? translateNode(node, 0, dy) : node,
+    ),
+    isolatedSection: translateIsolatedSection(isolatedSection, 0, dy),
+  };
+}
+
 interface Region {
   id: string;
   /** null for the single implicit region of an ungrouped layout — the one case
@@ -1051,6 +1195,7 @@ interface LaidRegion extends Sized {
   label: string | null;
   nodes: SystemGraphLayoutNode[];
   edges: RoutedEdge[];
+  isolatedSection: SystemGraphIsolatedSection | null;
   insetX: number;
   insetY: number;
 }
@@ -1064,7 +1209,11 @@ interface LaidRegion extends Sized {
  * from the cards alone would let a cycle gutter or a displaced label spill into
  * the neighbouring system.
  */
-function layoutRegion(graph: SystemGraph, region: Region): LaidRegion {
+function layoutRegion(
+  graph: SystemGraph,
+  region: Region,
+  globallyIsolatedNodeIds: ReadonlySet<string>,
+): LaidRegion {
   const members = new Set(region.nodeIds);
   const subgraph: SystemGraph = {
     ...graph,
@@ -1076,20 +1225,30 @@ function layoutRegion(graph: SystemGraph, region: Region): LaidRegion {
   const placed = placeRegionNodes(
     analyzeSystemGraph(subgraph),
     region.label === null ? null : region.id,
+    globallyIsolatedNodeIds,
   );
   const labels: SystemGraphLabelBounds[] = [];
+  const connectedNodes = placed.nodes.filter(
+    (node) => !placed.isolatedNodeIds.has(node.id),
+  );
   const routed = routeEdges(
     groupSystemGraphEdges(subgraph.edges),
-    placed.nodes,
+    connectedNodes,
     placed.componentBoxes,
     placed.componentByNode,
     placed.strongByNode,
     labels,
   );
+  const settled = placeIsolatedSectionBelowEdges(
+    placed.nodes,
+    routed,
+    placed.isolatedSection,
+    placed.isolatedNodeIds,
+  );
 
   const xs: number[] = [];
   const ys: number[] = [];
-  for (const node of placed.nodes) {
+  for (const node of settled.nodes) {
     xs.push(node.x, node.x + node.width);
     ys.push(node.y, node.y + node.height);
   }
@@ -1101,6 +1260,18 @@ function layoutRegion(graph: SystemGraph, region: Region): LaidRegion {
     xs.push(edge.labelBounds.x, edge.labelBounds.x + edge.labelBounds.width);
     ys.push(edge.labelBounds.y, edge.labelBounds.y + edge.labelBounds.height);
   }
+  if (settled.isolatedSection) {
+    xs.push(
+      settled.isolatedSection.labelBounds.x,
+      settled.isolatedSection.labelBounds.x +
+        settled.isolatedSection.labelBounds.width,
+    );
+    ys.push(
+      settled.isolatedSection.labelBounds.y,
+      settled.isolatedSection.labelBounds.y +
+        settled.isolatedSection.labelBounds.height,
+    );
+  }
   const minX = Math.min(...xs);
   const minY = Math.min(...ys);
   const contentWidth = round(Math.max(...xs) - minX);
@@ -1109,8 +1280,11 @@ function layoutRegion(graph: SystemGraph, region: Region): LaidRegion {
   return {
     id: region.id,
     label: region.label,
-    nodes: placed.nodes.map((node) => translateNode(node, -minX, -minY)),
+    nodes: settled.nodes.map((node) => translateNode(node, -minX, -minY)),
     edges: routed.map((edge) => translateRouted(edge, -minX, -minY)),
+    isolatedSection: settled.isolatedSection
+      ? translateIsolatedSection(settled.isolatedSection, -minX, -minY)
+      : null,
     insetX: labelled ? GROUP_PADDING : 0,
     insetY: labelled ? GROUP_PADDING + GROUP_HEADER : 0,
     width: labelled ? contentWidth + GROUP_PADDING * 2 : contentWidth,
@@ -1124,6 +1298,7 @@ function shiftLayout(
   nodes: SystemGraphLayoutNode[],
   edges: RoutedEdge[],
   groups: SystemGraphLayoutGroup[],
+  isolatedSections: SystemGraphIsolatedSection[],
 ): SystemGraphLayout {
   const xs: number[] = [];
   const ys: number[] = [];
@@ -1143,8 +1318,24 @@ function shiftLayout(
     xs.push(edge.labelBounds.x, edge.labelBounds.x + edge.labelBounds.width);
     ys.push(edge.labelBounds.y, edge.labelBounds.y + edge.labelBounds.height);
   }
+  for (const isolatedSection of isolatedSections) {
+    xs.push(
+      isolatedSection.labelBounds.x,
+      isolatedSection.labelBounds.x + isolatedSection.labelBounds.width,
+    );
+    ys.push(
+      isolatedSection.labelBounds.y,
+      isolatedSection.labelBounds.y + isolatedSection.labelBounds.height,
+    );
+  }
   if (xs.length === 0 || ys.length === 0) {
-    return { nodes: [], edges: [], groups: [], bounds: { width: 0, height: 0 } };
+    return {
+      nodes: [],
+      edges: [],
+      groups: [],
+      isolatedSections: [],
+      bounds: { width: 0, height: 0 },
+    };
   }
   const minX = Math.min(...xs);
   const minY = Math.min(...ys);
@@ -1178,6 +1369,9 @@ function shiftLayout(
     nodes: shiftedNodes,
     edges: shiftedEdges,
     groups: shiftedGroups,
+    isolatedSections: isolatedSections.map((section) =>
+      translateIsolatedSection(section, dx, dy),
+    ),
     bounds: {
       width: round(maxX - minX + LAYOUT_PADDING * 2),
       height: round(maxY - minY + LAYOUT_PADDING * 2),
@@ -1191,10 +1385,24 @@ export function layoutSystemGraph(
 ): SystemGraphLayout {
   validateGraph(graph);
   if (graph.nodes.length === 0) {
-    return { nodes: [], edges: [], groups: [], bounds: { width: 0, height: 0 } };
+    return {
+      nodes: [],
+      edges: [],
+      groups: [],
+      isolatedSections: [],
+      bounds: { width: 0, height: 0 },
+    };
   }
+  const relatedNodeIds = new Set<string>();
+  for (const edge of graph.edges) {
+    relatedNodeIds.add(edge.from);
+    relatedNodeIds.add(edge.to);
+  }
+  const globallyIsolatedNodeIds = new Set(
+    graph.nodes.map((node) => node.id).filter((id) => !relatedNodeIds.has(id)),
+  );
   const laid = toRegions(graph, groups).map((region) =>
-    layoutRegion(graph, region),
+    layoutRegion(graph, region, globallyIsolatedNodeIds),
   );
   const packed = shelfPack(laid, GROUP_GAP);
 
@@ -1202,6 +1410,7 @@ export function layoutSystemGraph(
   const routed: RoutedEdge[] = [];
   const labels: SystemGraphLabelBounds[] = [];
   const boxes: SystemGraphLayoutGroup[] = [];
+  const isolatedSections: SystemGraphIsolatedSection[] = [];
   laid.forEach((region, index) => {
     const at = packed.offsets[index]!;
     const dx = at.x + region.insetX;
@@ -1210,6 +1419,11 @@ export function layoutSystemGraph(
     for (const edge of region.edges) {
       const moved = translateRouted(edge, dx, dy);
       routed.push(moved);
+      labels.push(moved.labelBounds);
+    }
+    if (region.isolatedSection) {
+      const moved = translateIsolatedSection(region.isolatedSection, dx, dy);
+      isolatedSections.push(moved);
       labels.push(moved.labelBounds);
     }
     if (region.label !== null) {
@@ -1232,7 +1446,7 @@ export function layoutSystemGraph(
   );
   routed.push(...routeCrossGroupEdges(crossing, nodes, labels));
 
-  return shiftLayout(nodes, routed, boxes);
+  return shiftLayout(nodes, routed, boxes, isolatedSections);
 }
 
 export function systemGraphNodeById(

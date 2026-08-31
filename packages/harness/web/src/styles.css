@@ -4291,6 +4291,19 @@ button.rail-footer-card:hover {
   white-space: nowrap;
 }
 
+.system-graph-isolated-label {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  margin: 0;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .system-graph-node {
   position: absolute;
   display: flex;

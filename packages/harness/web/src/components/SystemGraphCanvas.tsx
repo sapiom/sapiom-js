@@ -397,6 +397,25 @@ export function SystemGraphCanvas({
             ))}
           </svg>
 
+          {layout.isolatedSections.map((section) => (
+            <p
+              key={section.groupId ?? "implicit"}
+              className="system-graph-isolated-label"
+              data-testid="system-graph-isolated-label"
+              data-group-id={section.groupId ?? undefined}
+              style={
+                {
+                  left: section.labelBounds.x,
+                  top: section.labelBounds.y,
+                  width: section.labelBounds.width,
+                  height: section.labelBounds.height,
+                } satisfies CSSProperties
+              }
+            >
+              {section.label}
+            </p>
+          ))}
+
           {layout.nodes.map((placed) => {
             const graphNode = graphNodes.get(placed.id)!;
             const navigable = navigableAgentKeys.has(graphNode.agentKey);

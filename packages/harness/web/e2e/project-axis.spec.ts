@@ -232,6 +232,9 @@ test.describe("multi-root", () => {
     await expect(
       page.getByTestId("system-graph-node-ads-worker"),
     ).toBeVisible();
+    await expect(page.getByTestId("system-graph-isolated-label")).toHaveText(
+      "2 agents · no detected relationships",
+    );
     await expect(page.getByTestId("system-graph-node-gateway")).toHaveCount(0);
   });
 

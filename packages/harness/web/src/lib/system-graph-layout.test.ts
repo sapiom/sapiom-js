@@ -12,6 +12,7 @@ import {
   type SystemGraphLayout,
   type SystemGraphNodeGroup,
 } from "./system-graph-layout";
+import { fitSystemGraphView } from "./system-graph-viewport";
 
 const node = (id: string) => ({ id, agentKey: id, label: id.toUpperCase() });
 const edge = (
@@ -34,6 +35,11 @@ function byId(layout: SystemGraphLayout, id: string) {
   const placed = layout.nodes.find((candidate) => candidate.id === id);
   if (!placed) throw new Error(`Missing layout node ${id}`);
   return placed;
+}
+
+function onlyIsolatedSection(layout: SystemGraphLayout) {
+  expect(layout.isolatedSections).toHaveLength(1);
+  return layout.isolatedSections[0]!;
 }
 
 function rectanglesOverlap(
@@ -94,6 +100,7 @@ describe("layoutSystemGraph", () => {
 
     expect(byId(layout, "a").x).toBeLessThan(byId(layout, "b").x);
     expect(byId(layout, "b").x).toBeLessThan(byId(layout, "c").x);
+    expect(layout.isolatedSections).toEqual([]);
   });
 
   it("keeps fan-out targets together and fan-in targets after every caller", () => {
@@ -142,6 +149,9 @@ describe("layoutSystemGraph", () => {
   });
 
   it("keeps disconnected components and isolated agents exactly once", () => {
+    const connected = layoutSystemGraph(
+      graph(["a", "b", "x", "y"], [edge("a", "b"), edge("x", "y")]),
+    );
     const layout = layoutSystemGraph(
       graph(["isolated", "a", "b", "x", "y"], [edge("a", "b"), edge("x", "y")]),
     );
@@ -154,9 +164,104 @@ describe("layoutSystemGraph", () => {
       "y",
     ]);
     expect(
+      layout.nodes.filter((candidate) => candidate.id !== "isolated"),
+    ).toEqual(connected.nodes);
+    expect(layout.edges).toEqual(connected.edges);
+    expect(
       new Set(layout.nodes.map((candidate) => candidate.componentId)).size,
     ).toBe(3);
+    const isolatedSection = onlyIsolatedSection(layout);
+    expect(isolatedSection).toMatchObject({
+      groupId: null,
+      count: 1,
+      label: "1 agent · no detected relationships",
+    });
+    expect(isolatedSection.labelBounds.y).toBeGreaterThan(
+      Math.max(
+        byId(layout, "b").y + SYSTEM_GRAPH_NODE_HEIGHT,
+        byId(layout, "y").y + SYSTEM_GRAPH_NODE_HEIGHT,
+      ),
+    );
+    expect(byId(layout, "isolated").y).toBeGreaterThan(
+      isolatedSection.labelBounds.y + isolatedSection.labelBounds.height,
+    );
+    expect(
+      isolatedSection.labelBounds.x + isolatedSection.labelBounds.width,
+    ).toBeLessThanOrEqual(layout.bounds.width);
+    expect(
+      isolatedSection.labelBounds.y + isolatedSection.labelBounds.height,
+    ).toBeLessThanOrEqual(layout.bounds.height);
     expectNodesNotToOverlap(layout);
+  });
+
+  it("keeps a 77-agent, 4-edge graph bounded while preserving its connected layout", () => {
+    const nodeIds = Array.from(
+      { length: 77 },
+      (_, index) => `agent-${index.toString().padStart(2, "0")}`,
+    );
+    const connectedIds = nodeIds.slice(0, 5);
+    const edges = connectedIds
+      .slice(0, -1)
+      .map((id, index) => edge(id, connectedIds[index + 1]!));
+    const connected = layoutSystemGraph(graph(connectedIds, edges));
+    const sparse = layoutSystemGraph(graph(nodeIds, edges));
+
+    expect(sparse.nodes.map((candidate) => candidate.id)).toEqual(nodeIds);
+    expect(sparse.edges).toHaveLength(4);
+    expect(onlyIsolatedSection(sparse)).toMatchObject({
+      groupId: null,
+      count: 72,
+      label: "72 agents · no detected relationships",
+    });
+    expect(
+      sparse.nodes.filter((candidate) => connectedIds.includes(candidate.id)),
+    ).toEqual(connected.nodes);
+    expect(sparse.edges).toEqual(connected.edges);
+
+    const isolated = sparse.nodes.filter(
+      (candidate) => !connectedIds.includes(candidate.id),
+    );
+    expect(
+      new Set(isolated.map((candidate) => candidate.x)).size,
+    ).toBeGreaterThan(1);
+    expect(
+      new Set(isolated.map((candidate) => candidate.y)).size,
+    ).toBeGreaterThan(1);
+    expect(sparse.bounds.height).toBeLessThanOrEqual(1_200);
+    expect(
+      fitSystemGraphView(sparse.bounds, { width: 1_200, height: 800 }, 16).zoom,
+    ).toBeGreaterThanOrEqual(0.5);
+    expectNodesNotToOverlap(sparse);
+    expectEdgesNotToCrossCards(sparse);
+
+    expect(
+      layoutSystemGraph(graph([...nodeIds].reverse(), [...edges].reverse())),
+    ).toEqual(sparse);
+  });
+
+  it("keeps fallback edge labels above the isolated section without rerouting them", () => {
+    const connectedIds = Array.from(
+      { length: 5 },
+      (_, index) => `connected-${index}`,
+    );
+    const denseEdges = connectedIds.flatMap((from) =>
+      connectedIds.filter((to) => to !== from).map((to) => edge(from, to)),
+    );
+    const connected = layoutSystemGraph(graph(connectedIds, denseEdges));
+    const sparse = layoutSystemGraph(
+      graph([...connectedIds, "isolated"], denseEdges),
+    );
+
+    expect(
+      sparse.nodes.filter((candidate) => candidate.id !== "isolated"),
+    ).toEqual(connected.nodes);
+    expect(sparse.edges).toEqual(connected.edges);
+    const isolatedSection = onlyIsolatedSection(sparse);
+    expect(
+      sparse.edges.some((candidate) =>
+        rectanglesOverlap(candidate.labelBounds, isolatedSection.labelBounds),
+      ),
+    ).toBe(false);
   });
 
   it("groups dual-mode records into one connector with stable mode semantics", () => {
@@ -258,6 +363,7 @@ describe("layoutSystemGraph", () => {
         routed.labelBounds.y + routed.labelBounds.height,
       ).toBeLessThanOrEqual(layout.bounds.height);
     }
+    expect(layout.isolatedSections).toEqual([]);
   });
 
   it("is deeply deterministic when node and edge input order changes", () => {
@@ -374,6 +480,15 @@ describe("layoutSystemGraph with groups", () => {
         ).toBe(false);
       }
     }
+    const isolatedSection = onlyIsolatedSection(layout);
+    expect(isolatedSection).toMatchObject({
+      groupId: "group:ungrouped",
+      count: 1,
+      label: "1 agent · no detected relationships",
+    });
+    expect(
+      contains(boxOf(layout, "Ungrouped"), isolatedSection.labelBounds),
+    ).toBe(true);
     expectNodesNotToOverlap(layout);
   });
 
@@ -467,6 +582,7 @@ describe("layoutSystemGraph with groups", () => {
       crossesGroup: true,
     });
     expect(layout.edges[0]!.path).not.toContain("NaN");
+    expect(layout.isolatedSections).toEqual([]);
   });
 
   it("wraps a container of unconnected agents instead of stacking them", () => {
