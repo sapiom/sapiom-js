@@ -1,5 +1,144 @@
 # @sapiom/harness
 
+## 0.11.0
+
+### Minor Changes
+
+- fc231c9: Studio: creating an agent in a project is now a form that creates it, not a
+  message asking your coding agent to.
+
+  Every create door ended the same way — a session started and an English
+  sentence was typed into the terminal asking the coding agent to please call a
+  scaffold tool. Studio never created anything, so a failure arrived as a
+  confused model rather than an error, and "did it work?" could only be answered
+  by reading a terminal. On a project that already held agents it simply could
+  not work: the scaffold was aimed at the project folder, which is not empty, and
+  the reply was a paragraph asking you which subdirectory you meant.
+
+  - **Create an agent in {project}** opens a small dialog: a name, a starter, and
+    the project it lands in — stated, not asked again, because you clicked that
+    row. Submit and Studio creates the agent itself.
+  - **Creation completes before the chat starts.** The agent is on disk and in
+    your rail before a session opens on it, and the rail scrolls it into view. A
+    first instruction is optional, and the session opens on that instead of on a
+    request to scaffold.
+  - **A refusal is a sentence in the dialog.** A name already taken in that
+    project, a name that is not a folder name, a folder Studio does not show as a
+    project — each is refused with a reason you can act on, and nothing
+    half-created is left behind if the scaffold itself fails.
+  - **The bundled starters in the template gallery take the same path**, so the
+    two ways of starting from a starter cannot drift. Cloning a published
+    template still goes through your coding agent, which is a different operation
+    with a different failure mode.
+  - The empty-project row's **Create the first agent here** now responds to a
+    click; it had been unclickable.
+  - Starting from an idea on the home screen is unchanged: no project, no name,
+    and a folder that does not exist yet, so it stays a conversation.
+
+  New endpoint `POST /api/agents/scaffold` — `{ root, name, template? }` → the
+  created agent's path. It runs the same scaffold the CLI does and refuses on its
+  own findings rather than on the caller's word.
+
+- e72d172: Studio: selecting a project fills the workbench instead of replacing it — your
+  conversation stays, and the project's map draws beside it.
+
+  Picking a project used to collapse the shell to one column and take both panes
+  away: the map arrived as a full-width destination and the chat you were mid-
+  sentence in vanished. Browsing a template gallery is a detour; looking at your
+  project's shape while you talk to it is not. Now the conversation keeps the
+  centre and the map fills the right pane.
+
+  - **A project is somewhere you work.** Selecting one makes it the conversation's
+    subject: the tab strip shows that project's live sessions — including the ones
+    bound to its agents, which were invisible before — and a project with nothing
+    running is given a session at its root.
+  - **Selecting an agent inside the project changes only the right pane.** The
+    session already reaches every agent in its project, so the chat does not move.
+    Crossing to a different project still hands the conversation over.
+  - **The map and an agent's board are one canvas at two heights.** Clicking an
+    agent on the map drills into its board, and a control at the head of the tab
+    row cuts back up to the map — it used to be a one-way door. The rail selection
+    and the canvas always agree, driven from either side.
+  - **Tabs are now Canvas and Steps.** Steps is disabled at map altitude with the
+    reason, since a whole project has no step list. The **Code** tab is gone; its
+    "Trigger from your code" snippets moved to the Steps surface, under the deploy
+    banner — the moment that question is actually asked.
+  - The active session's tab is kept in view when the strip's own width changes,
+    so a newly created tab can no longer be stranded off-screen.
+
+  An agent that is linked to Sapiom but has no ready cloud build yet gets the
+  snippets section with the reason there is nothing to copy, rather than nothing
+  at all. Snippet clicks are now attributed to the canvas surface rather than a
+  Code-tab surface that no longer exists; `object=snippet` is unchanged.
+
+  Membership stays derived from where an agent lives on disk. Nothing is stamped
+  onto a session record, so moving an agent or removing a project cannot leave a
+  second, staler answer behind.
+
+- 5745707: Studio: the project map draws your groups as named containers, instead of one
+  endless column of agents.
+
+  A project map used to draw every agent it contained as one flat set, ignoring
+  the structure the rail was showing right beside it. Open a folder holding
+  several systems and you got a single vertical column — a folder holding a few
+  dozen agents came out thousands of pixels tall and one card wide, which no
+  amount of zooming out makes readable.
+
+  - **One labelled container per group.** The map now reads the same groups the
+    rail does, so a system you named in the rail is a system you can see on the
+    map, under exactly that name and in the same order. Rename or regroup in the
+    rail and the map follows immediately.
+  - **Ungrouped is a container too.** "No connections detected" is a real answer
+    about a project, not an absence, so it gets a labelled box rather than being
+    scattered loose. A project with one group renders as one group.
+  - **Agents with no connections wrap instead of stacking.** Inside a container,
+    unconnected agents fill the width and wrap, which is what replaces the column.
+  - **A connector between two containers is still drawn.** Splitting a system
+    across two groups does not make the link between the halves disappear; it is
+    drawn dotted, as a link between systems rather than wiring inside one.
+  - Container names stay readable as you zoom out, which is the moment you are
+    looking at the whole project and need to know which system is which.
+
+  Nothing about how groups are detected, edited, or stored has changed. The map is
+  a new reader of the arrangement your project already has; it never writes one.
+
+- e5af82b: Project rows in the rail now carry one action control instead of two glyphs that acted on different things. The `+` created an agent inside the project while the `×` removed the project itself — same size, side by side, so `+` read as "add project". Both now live behind the row's `⋮`, where each action names its own subject ("Create an agent in <project>", "Remove <project> from the rail").
+
+  Double-clicking a project or folder label now folds and unfolds it, the way the chevron always has. On a project row the single click still selects, so a double-click leaves the project both selected and folded.
+
+  A one-time card explains what projects and agents are and what happens to your rows on upgrade. It is dismissible, shown once, and re-openable from the account menu.
+
+### Patch Changes
+
+- 1d2ae02: Stop an agent that can never be named from holding a whole project's graph at
+  "Graph may be incomplete".
+
+  An agent that does not declare a name has its source read to recover one. If
+  even one agent in a project could not be read, the projection refused to cache,
+  so the project reopened as degraded under the "Graph may be incomplete" banner
+  every time. A companion package with no agent export in it has nothing to find
+  no matter how often it is re-read, and a single such directory was enough to
+  mark everything around it incomplete.
+
+  The cache now depends on whether the name lookup can still produce a different
+  answer, not on whether it found a name. Only one case is treated as final, the
+  one that can be proven: a project with no TypeScript in it has nothing for an
+  agent name to be declared in, and no install or re-run will invent one. Every
+  other failure still blocks caching, so that project keeps its banner and its
+  Retry button — the thing that clears it once dependencies are installed, or
+  after a check that ran out of time succeeds on a second attempt.
+
+  The affected agents keep their warnings either way. The graph stops calling
+  itself incomplete over agents it was never going to resolve; it does not go
+  quiet about what it could not resolve.
+
+  Also stops one agent being registered twice when Studio reaches the same
+  directory by two different paths — once as given and once with symlinks
+  resolved. The duplicate pair made every reference between agents ambiguous,
+  silently dropping those connections from the graph. This prevents new
+  duplicates; a workspace that already contains a pair from an earlier version
+  still needs them removed by hand.
+
 ## 0.10.0
 
 ### Minor Changes
