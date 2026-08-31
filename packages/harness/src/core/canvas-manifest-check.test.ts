@@ -51,4 +51,14 @@ describe("runManifestCheck", () => {
     // The deps-not-installed hint already names it; one mention, not two.
     expect(result.reason.split(dir).length - 1).toBe(1);
   });
+
+  it("preserves the NO_DEFINITION code for a valid unnamed module", async () => {
+    writeFileSync(path.join(dir, "index.ts"), "export const value = 1;\n");
+
+    const result = await runManifestCheck(dir);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("NO_DEFINITION");
+  });
 });

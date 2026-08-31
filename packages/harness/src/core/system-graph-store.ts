@@ -1,6 +1,8 @@
 import type {
   SystemGraph,
   SystemGraphLifecycleState,
+  SystemGraphNavigationResponse,
+  SystemGraphNavigationTarget,
   SystemGraphSnapshot,
   WorkspaceKey,
 } from "../shared/system-graph.js";
@@ -14,12 +16,42 @@ export interface SystemGraphStoreOptions {
 interface SystemGraphEntry {
   scope: WorkspaceScope;
   snapshot: SystemGraphSnapshot;
-  lastGood: SystemGraph | null;
+  navigation: SystemGraphNavigationResponse;
+  lastGood: {
+    graph: SystemGraph;
+    navigation: SystemGraphNavigationTarget[];
+  } | null;
   activeBuild: Promise<SystemGraphSnapshot> | null;
   generation: number;
   refreshPending: boolean;
   automaticRetryUsed: boolean;
   retired: boolean;
+}
+
+function visibleProjection(entry: SystemGraphEntry): {
+  graph: SystemGraph | null;
+  navigation: readonly SystemGraphNavigationTarget[];
+} {
+  return (
+    entry.lastGood ?? {
+      graph: entry.snapshot.graph,
+      navigation: entry.navigation.targets,
+    }
+  );
+}
+
+function sameNavigation(
+  left: readonly SystemGraphNavigationTarget[],
+  right: readonly SystemGraphNavigationTarget[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (target, index) =>
+        target.agentKey === right[index]?.agentKey &&
+        target.workflowPath === right[index]?.workflowPath,
+    )
+  );
 }
 
 /**
@@ -63,6 +95,20 @@ export class SystemGraphStore {
     return Promise.resolve(entry.snapshot);
   }
 
+  /**
+   * Cold-initialize resolver data without treating an existing degraded/stale
+   * projection as a later graph open. Navigation reads must be lifecycle
+   * side-effect-free for the exact revision the browser already displays.
+   */
+  ensureInitialized(scope: WorkspaceScope): Promise<SystemGraphSnapshot> {
+    const entry = this.entries.get(scope.workspaceKey);
+    if (!entry) return this.get(scope);
+    if (entry.activeBuild && entry.snapshot.graph === null) {
+      return entry.activeBuild;
+    }
+    return Promise.resolve(entry.snapshot);
+  }
+
   /** Marks a workspace dirty and starts (or queues) a background refresh. */
   requestRefresh(scope: WorkspaceScope): SystemGraphSnapshot {
     const entry = this.ensureEntry(scope);
@@ -82,6 +128,13 @@ export class SystemGraphStore {
     return this.entries.get(workspaceKey)?.snapshot ?? null;
   }
 
+  /** Resolver data stamped with the exact graph revision it accompanies. */
+  peekNavigation(
+    workspaceKey: WorkspaceKey,
+  ): SystemGraphNavigationResponse | null {
+    return this.entries.get(workspaceKey)?.navigation ?? null;
+  }
+
   /** Records a refresh prerequisite failure while preserving visible data. */
   reportRefreshFailure(scope: WorkspaceScope): SystemGraphSnapshot {
     const entry = this.ensureEntry(scope);
@@ -91,10 +144,16 @@ export class SystemGraphStore {
     // graph read rebuild from the stale inventory and relabel it ready; the
     // watcher retries the failed inventory callback instead.
     entry.automaticRetryUsed = true;
-    const visibleGraph = entry.lastGood ?? entry.snapshot.graph;
-    return visibleGraph === null
+    const visible = visibleProjection(entry);
+    return visible.graph === null
       ? this.transition(entry, "degraded", null)
-      : this.transition(entry, "stale", visibleGraph);
+      : this.transition(
+          entry,
+          "stale",
+          visible.graph,
+          false,
+          visible.navigation,
+        );
   }
 
   /** Retires projections for workspace scopes Studio no longer exposes. */
@@ -141,6 +200,11 @@ export class SystemGraphStore {
         state: "building",
         graph: null,
       },
+      navigation: {
+        workspaceKey: scope.workspaceKey,
+        revision: this.revisionFloors.get(scope.workspaceKey) ?? 0,
+        targets: [],
+      },
       lastGood: null,
       activeBuild: null,
       generation: 0,
@@ -159,12 +223,14 @@ export class SystemGraphStore {
     if (entry.retired) return null;
     entry.generation += 1;
     entry.refreshPending = true;
-    const visibleGraph = entry.lastGood ?? entry.snapshot.graph;
+    const visible = visibleProjection(entry);
     if (!preserveLifecycle) {
       this.transition(
         entry,
-        visibleGraph === null ? "building" : "stale",
-        visibleGraph,
+        visible.graph === null ? "building" : "stale",
+        visible.graph,
+        false,
+        visible.navigation,
       );
     }
     if (entry.activeBuild) return entry.activeBuild;
@@ -176,12 +242,14 @@ export class SystemGraphStore {
     if (entry.activeBuild) return entry.activeBuild;
     const generation = entry.generation;
     entry.refreshPending = false;
-    const visibleGraph = entry.lastGood ?? entry.snapshot.graph;
+    const visible = visibleProjection(entry);
     if (entry.snapshot.state !== "degraded") {
       this.transition(
         entry,
-        visibleGraph === null ? "building" : "stale",
-        visibleGraph,
+        visible.graph === null ? "building" : "stale",
+        visible.graph,
+        false,
+        visible.navigation,
       );
     }
 
@@ -205,16 +273,42 @@ export class SystemGraphStore {
     generation: number,
     result: Awaited<ReturnType<SystemGraphBuilder["build"]>>,
   ): SystemGraphSnapshot | Promise<SystemGraphSnapshot> {
+    // The superseded build can carry the only callback that starts identity
+    // enrichment. Arm it after the commit decision on both paths: before that
+    // decision a synchronous refresh could supersede the result being
+    // committed; omitting it from the losing path can leave identities pending
+    // forever with no follow-up queued.
     if (!this.canCommit(entry, generation)) {
-      return this.continueAfterSupersededBuild(entry);
+      const superseded = this.continueAfterSupersededBuild(entry);
+      this.afterCommit(result.afterCommit);
+      return superseded;
     }
     entry.activeBuild = null;
+    const navigation = (result.navigation ?? []).map((target) => ({
+      ...target,
+    }));
     if (result.cacheable) {
-      entry.lastGood = result.graph;
+      entry.lastGood = { graph: result.graph, navigation };
       entry.automaticRetryUsed = false;
-      return this.transition(entry, "ready", result.graph);
+      const snapshot = this.transition(
+        entry,
+        "ready",
+        result.graph,
+        false,
+        navigation,
+      );
+      this.afterCommit(result.afterCommit);
+      return snapshot;
     }
-    return this.transition(entry, "degraded", result.graph);
+    const snapshot = this.transition(
+      entry,
+      "degraded",
+      result.graph,
+      false,
+      navigation,
+    );
+    this.afterCommit(result.afterCommit);
+    return snapshot;
   }
 
   private finishFailure(
@@ -225,10 +319,16 @@ export class SystemGraphStore {
       return this.continueAfterSupersededBuild(entry);
     }
     entry.activeBuild = null;
-    const visibleGraph = entry.lastGood ?? entry.snapshot.graph;
-    return visibleGraph === null
+    const visible = visibleProjection(entry);
+    return visible.graph === null
       ? this.transition(entry, "degraded", null)
-      : this.transition(entry, "stale", visibleGraph, true);
+      : this.transition(
+          entry,
+          "stale",
+          visible.graph,
+          true,
+          visible.navigation,
+        );
   }
 
   private canCommit(entry: SystemGraphEntry, generation: number): boolean {
@@ -243,10 +343,7 @@ export class SystemGraphStore {
     entry: SystemGraphEntry,
   ): SystemGraphSnapshot | Promise<SystemGraphSnapshot> {
     entry.activeBuild = null;
-    if (
-      entry.retired ||
-      this.entries.get(entry.scope.workspaceKey) !== entry
-    ) {
+    if (entry.retired || this.entries.get(entry.scope.workspaceKey) !== entry) {
       this.retainBuilderWorkspaces();
       return entry.snapshot;
     }
@@ -270,11 +367,15 @@ export class SystemGraphStore {
     state: SystemGraphLifecycleState,
     graph: SystemGraph | null,
     forceRevision = false,
+    navigation: readonly SystemGraphNavigationTarget[] = graph === null
+      ? []
+      : entry.navigation.targets,
   ): SystemGraphSnapshot {
     if (
       !forceRevision &&
       entry.snapshot.state === state &&
-      entry.snapshot.graph === graph
+      entry.snapshot.graph === graph &&
+      sameNavigation(entry.navigation.targets, navigation)
     ) {
       return entry.snapshot;
     }
@@ -284,15 +385,26 @@ export class SystemGraphStore {
       state,
       graph,
     };
-    this.revisionFloors.set(
-      entry.scope.workspaceKey,
-      entry.snapshot.revision,
-    );
+    entry.navigation = {
+      workspaceKey: entry.scope.workspaceKey,
+      revision: entry.snapshot.revision,
+      targets: navigation.map((target) => ({ ...target })),
+    };
+    this.revisionFloors.set(entry.scope.workspaceKey, entry.snapshot.revision);
     try {
       this.options.onChange?.(entry.snapshot);
     } catch {
       // Observers (the event bus) cannot make graph refreshes fail.
     }
     return entry.snapshot;
+  }
+
+  private afterCommit(callback: (() => void) | undefined): void {
+    if (!callback) return;
+    try {
+      callback();
+    } catch {
+      // Background enrichment is a refresh hint, not part of the committed read.
+    }
   }
 }

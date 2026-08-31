@@ -112,6 +112,15 @@ export type { StepInputContract, AgentInputContract } from './introspection.js';
 export { MANIFEST_PROTOCOL, agentManifestSchema } from './manifest.js';
 export type { AgentManifest, AgentStepManifest, ManifestTransition } from './manifest.js';
 
+// Multi-agent package inventory — separate from the single-agent build manifest.
+export { PACKAGE_INVENTORY_PROTOCOL, packageInventorySchema } from './package-inventory.js';
+export type {
+  PackageInventory,
+  PackageInventoryAgent,
+  PackageInventoryIdentityIssue,
+  PackageInventoryVersion,
+} from './package-inventory.js';
+
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';
 export type { GraphValidation } from './build-manifest.js';

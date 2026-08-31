@@ -997,11 +997,15 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
         revision: 2,
         state: "stale",
       });
+      win.__HARNESS_TEST__?.publish?.({ type: "workflows.changed" });
     }, workspaceKey);
 
     await page.getByTestId("project-select-acme-app").click();
     await expect(page.getByTestId("system-graph-canvas")).toBeVisible();
     await expect(page.getByTestId("system-graph-refreshing")).toBeVisible();
+    await expect(page.getByTestId("system-graph-node-leasing")).not.toHaveClass(
+      /is-navigable/,
+    );
     await page.evaluate(() => {
       delete (window as unknown as { __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number })
         .__MOCK_SYSTEM_GRAPH_DELAY_MS__;
@@ -1076,6 +1080,38 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     });
     await page.waitForTimeout(250);
     expect(await requestCount()).toBe(5);
+
+    // React may batch adjacent event frames. A following unrelated frame must
+    // not overwrite the graph invalidation or leave old navigation clickable.
+    const leasingNode = page.getByTestId("system-graph-node-leasing");
+    await expect(leasingNode).toHaveClass(/is-navigable/);
+    await page.evaluate((key) => {
+      const win = window as unknown as {
+        __MOCK_SYSTEM_GRAPH_REVISION__?: number;
+        __MOCK_SYSTEM_GRAPH_STATE__?: string;
+        __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number;
+        __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+      };
+      win.__MOCK_SYSTEM_GRAPH_REVISION__ = 7;
+      win.__MOCK_SYSTEM_GRAPH_STATE__ = "ready";
+      win.__MOCK_SYSTEM_GRAPH_DELAY_MS__ = 3_000;
+      win.__HARNESS_TEST__?.publish?.({
+        type: "system-graph.changed",
+        workspaceKey: key,
+        revision: 7,
+        state: "stale",
+      });
+      win.__HARNESS_TEST__?.publish?.({ type: "workflows.changed" });
+    }, workspaceKey);
+    await expect(leasingNode).not.toHaveClass(/is-navigable/);
+    await expect(page.getByTestId("system-graph-refreshing")).toBeVisible();
+    await page.evaluate(() => {
+      delete (window as unknown as { __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number })
+        .__MOCK_SYSTEM_GRAPH_DELAY_MS__;
+    });
+    await expect.poll(requestCount).toBe(6);
+    await expect(page.getByTestId("system-graph-refreshing")).toHaveCount(0);
+    await expect(leasingNode).toHaveClass(/is-navigable/);
   });
 
   test("switching sessions makes the canvas follow the new session's content", async ({

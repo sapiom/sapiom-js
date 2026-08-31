@@ -66,6 +66,8 @@ export interface ExtractionFailure {
   ok: false;
   /** Human-readable, terminal-safe reason — shown verbatim in the degraded panel. */
   reason: string;
+  /** Stable agent-core failure code when extraction reached check(). */
+  code?: string;
 }
 
 export type ExtractionResult = ExtractionSuccess | ExtractionFailure;
@@ -244,7 +246,13 @@ export function mergeCapabilitiesIntoGraph(
  */
 export async function extractWorkflowGraph(sourceDir: string): Promise<ExtractionResult> {
   const result = await runManifestCheck(sourceDir);
-  if (!result.ok) return { ok: false, reason: result.reason };
+  if (!result.ok) {
+    return {
+      ok: false,
+      reason: result.reason,
+      ...(result.code ? { code: result.code } : {}),
+    };
+  }
   const graph = graphFromManifest(result.manifest as AgentManifest, result.warnings);
   const stepIds = new Set(graph.nodes.map((n) => n.id));
   // One walk over the sources yields both — halves the I/O on the auto-render

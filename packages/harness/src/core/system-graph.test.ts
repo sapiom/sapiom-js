@@ -2,12 +2,14 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
+import type { PackageInventoryAgent } from "@sapiom/agent";
 import type { WorkflowInfo } from "../shared/types.js";
 import {
   HarnessRegistryInventoryProvider,
   LocalWorkspaceScopeCatalog,
   StaticSystemGraphBuilder,
   type AgentInventoryProvider,
+  type AgentInventoryResult,
   type AgentRelationshipProvider,
   type AgentRelationshipProviderResult,
   type WorkspaceScope,
@@ -56,6 +58,110 @@ const EMPTY_RELATIONSHIPS: AgentRelationshipProviderResult = {
 };
 
 const EVIDENCE = [{ file: "index.ts", line: 1, column: 1 }];
+const REVISION = `sha256:${"a".repeat(64)}` as const;
+
+function inventoryResult(
+  scope: WorkspaceScope,
+  agents: Array<{
+    agentKey: string;
+    label: string;
+    sourceRoot?: string;
+    workflowPath?: string;
+    definitionId?: number | null;
+    definitionSlug?: string | null;
+    resolutionAliases?: string[];
+    provisional?: boolean;
+    identityIssue?:
+      | "identity-pending"
+      | "identity-unavailable"
+      | "identity-invalid"
+      | "duplicate-agent-key";
+    candidateAgentKey?: string;
+  }>,
+  options: {
+    warnings?: AgentInventoryResult["warnings"];
+    degraded?: boolean;
+    identitySettled?: boolean;
+  } = {},
+): AgentInventoryResult {
+  const records = agents.map((agent) => {
+    const sourceRoot =
+      agent.sourceRoot ?? path.join(scope.root, agent.agentKey);
+    const relative =
+      path.relative(scope.root, sourceRoot).split(path.sep).join("/") || ".";
+    const provisional =
+      agent.provisional ?? agent.agentKey.startsWith("local:");
+    let publicAgent: PackageInventoryAgent;
+    if (!provisional) {
+      publicAgent = {
+        agentKey: agent.agentKey,
+        identityStatus: "canonical",
+        path: relative,
+        entrypoint: "index.ts",
+      };
+    } else if (agent.identityIssue === "duplicate-agent-key") {
+      if (!agent.candidateAgentKey) {
+        throw new Error(
+          "Duplicate inventory fixtures require a candidate agent key",
+        );
+      }
+      publicAgent = {
+        agentKey: agent.agentKey,
+        identityStatus: "provisional",
+        identityIssue: "duplicate-agent-key",
+        candidateAgentKey: agent.candidateAgentKey,
+        path: relative,
+        entrypoint: "index.ts",
+      };
+    } else {
+      publicAgent = {
+        agentKey: agent.agentKey,
+        identityStatus: "provisional",
+        identityIssue: agent.identityIssue ?? "identity-unavailable",
+        path: relative,
+        entrypoint: "index.ts",
+      };
+    }
+    return {
+      public: publicAgent,
+      context: {
+        agentKey: agent.agentKey,
+        definitionId: agent.definitionId ?? null,
+        definitionSlug: agent.definitionSlug ?? null,
+        label: agent.label,
+        resolutionAliases: agent.resolutionAliases ?? [],
+        sourceRoot,
+        workflowPath: agent.workflowPath ?? sourceRoot,
+        path: relative,
+        entrypoint: "index.ts",
+      },
+    };
+  });
+  const degraded =
+    options.degraded ??
+    records.some((record) => record.public.identityStatus === "provisional");
+  return {
+    inventory: {
+      protocol: 1,
+      version: {
+        kind: "working-tree",
+        workspaceKey: scope.workspaceKey,
+        revision: REVISION,
+      },
+      status: degraded ? "degraded" : "complete",
+      agents: records.map((record) => record.public),
+    },
+    context: records.map((record) => record.context),
+    warnings: options.warnings ?? [],
+    identitySettled:
+      options.identitySettled ??
+      !records.some(
+        (record) =>
+          record.public.identityStatus === "provisional" &&
+          record.public.identityIssue === "identity-pending",
+      ),
+  };
+}
 
 describe("LocalWorkspaceScopeCatalog", () => {
   it("gives a canonical root a stable opaque key and rejects unknown keys", async () => {
@@ -103,12 +209,24 @@ describe("StaticSystemGraphBuilder", () => {
   };
 
   it("projects literal Research -> Growth blocking and async calls into the public contract", async () => {
-    const inventory = new HarnessRegistryInventoryProvider({
-      listWorkflows: () => [
-        workflow("Research", "research", "research"),
-        workflow("Growth", "growth", "growth"),
-      ],
-    });
+    const inventory: AgentInventoryProvider = {
+      listAgents: vi.fn(async () =>
+        inventoryResult(scope, [
+          {
+            agentKey: "growth",
+            label: "Growth",
+            sourceRoot: path.join(FIXTURE, "growth"),
+            resolutionAliases: ["growth"],
+          },
+          {
+            agentKey: "research",
+            label: "Research",
+            sourceRoot: path.join(FIXTURE, "research"),
+            resolutionAliases: ["research"],
+          },
+        ]),
+      ),
+    };
 
     const graph = await buildGraph(
       new StaticSystemGraphBuilder(inventory),
@@ -145,15 +263,14 @@ describe("StaticSystemGraphBuilder", () => {
 
   it("deduplicates by mode, retains dual-mode edges, and reports duplicate and unresolved targets", async () => {
     const inventory: AgentInventoryProvider = {
-      listAgents: vi.fn(async () => ({
-        agents: [
+      listAgents: vi.fn(async () =>
+        inventoryResult(scope, [
           {
             agentKey: "research",
             definitionId: 1,
             definitionSlug: "research",
             label: "Research",
             resolutionAliases: ["research"],
-            sourceRoot: "/private/research",
           },
           {
             agentKey: "growth",
@@ -161,12 +278,9 @@ describe("StaticSystemGraphBuilder", () => {
             definitionSlug: "growth",
             label: "Growth",
             resolutionAliases: ["growth"],
-            sourceRoot: "/private/growth",
           },
-        ],
-        cacheable: true,
-        warnings: [],
-      })),
+        ]),
+      ),
     };
     const relationships = relationshipProvider(async (root) =>
       root.endsWith("research")
@@ -223,20 +337,17 @@ describe("StaticSystemGraphBuilder", () => {
 
   it("projects dynamic extraction warnings without degrading cacheability or leaking evidence", async () => {
     const inventory: AgentInventoryProvider = {
-      listAgents: vi.fn(async () => ({
-        agents: [
+      listAgents: vi.fn(async () =>
+        inventoryResult(scope, [
           {
             agentKey: "research",
             definitionId: 1,
             definitionSlug: "research",
             label: "Research",
             resolutionAliases: ["research"],
-            sourceRoot: "/private/research",
           },
-        ],
-        cacheable: true,
-        warnings: [],
-      })),
+        ]),
+      ),
     };
     const relationships = relationshipProvider(async () => ({
       relationships: [],
@@ -267,13 +378,49 @@ describe("StaticSystemGraphBuilder", () => {
   });
 
   it("keeps duplicate definition slugs as unique nodes and reports ambiguous launches", async () => {
-    const inventory = new HarnessRegistryInventoryProvider({
-      listWorkflows: () => [
-        workflow("Caller", "caller", "caller"),
-        workflow("First copy", "growth", "shared"),
-        workflow("Second copy", "research", "shared"),
-      ],
-    });
+    const inventory: AgentInventoryProvider = {
+      listAgents: vi.fn(async () =>
+        inventoryResult(
+          scope,
+          [
+            {
+              agentKey: "caller",
+              label: "Caller",
+              resolutionAliases: ["caller"],
+            },
+            {
+              agentKey: "local:growth",
+              label: "First copy",
+              sourceRoot: path.join(FIXTURE, "growth"),
+              resolutionAliases: ["shared"],
+              provisional: true,
+              identityIssue: "duplicate-agent-key",
+              candidateAgentKey: "shared",
+            },
+            {
+              agentKey: "local:research",
+              label: "Second copy",
+              sourceRoot: path.join(FIXTURE, "research"),
+              resolutionAliases: ["shared"],
+              provisional: true,
+              identityIssue: "duplicate-agent-key",
+              candidateAgentKey: "shared",
+            },
+          ],
+          {
+            degraded: true,
+            warnings: [
+              {
+                code: "duplicate-agent-key",
+                agentKey: "shared",
+                message:
+                  "Multiple agents use shared; kept each with a local identity.",
+              },
+            ],
+          },
+        ),
+      ),
+    };
     const relationships = relationshipProvider(async (root) =>
       root.endsWith("caller")
         ? {
@@ -312,114 +459,343 @@ describe("StaticSystemGraphBuilder", () => {
     expect(JSON.stringify(graph)).not.toContain(FIXTURE);
   });
 
-  it("reasserts safe unique node identities for an arbitrary inventory provider", async () => {
-    const inventory: AgentInventoryProvider = {
-      listAgents: vi.fn(async () => ({
-        agents: [
-          {
-            agentKey: "alpha",
-            definitionId: null,
-            definitionSlug: "alpha",
-            label: "/private/first",
-            resolutionAliases: ["alpha"],
-            sourceRoot: path.join(FIXTURE, "growth"),
-          },
-          {
-            agentKey: "alpha",
-            definitionId: null,
-            definitionSlug: "alpha",
-            label: "C:\\Users\\Demo\\second",
-            resolutionAliases: ["alpha"],
-            sourceRoot: path.join(FIXTURE, "research"),
-          },
-          {
-            agentKey: "local:growth",
-            definitionId: null,
-            definitionSlug: null,
-            label: "Caller",
-            resolutionAliases: ["local:growth"],
-            sourceRoot: path.join(FIXTURE, "caller"),
-          },
-          {
-            agentKey: "/private/leaked-key",
-            definitionId: null,
-            definitionSlug: null,
-            label: "/private/leaked-label",
-            resolutionAliases: ["/private/leaked-alias"],
-            sourceRoot: "/outside/private-agent",
-          },
-        ],
-        cacheable: true,
-        warnings: [],
-      })),
-    };
-
+  it("synthesizes a duplicate warning from public identity evidence", async () => {
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "local:only",
+          label: "Only",
+          sourceRoot: path.join(FIXTURE, "only"),
+          provisional: true,
+          identityIssue: "duplicate-agent-key",
+          candidateAgentKey: "shared",
+          resolutionAliases: ["shared"],
+        },
+      ],
+      { degraded: true, warnings: [] },
+    );
     const graph = await buildGraph(
       new StaticSystemGraphBuilder(
-        inventory,
+        { listAgents: async () => result },
         relationshipProvider(async () => EMPTY_RELATIONSHIPS),
       ),
       scope,
     );
 
-    expect(graph.nodes).toHaveLength(4);
-    expect(new Set(graph.nodes.map((node) => node.id)).size).toBe(4);
-    const byKey = new Map(graph.nodes.map((node) => [node.agentKey, node]));
-    expect([...byKey.keys()]).toEqual(
-      expect.arrayContaining([
-        "local:caller",
-        "local:growth",
-        "local:research",
-      ]),
-    );
-    const hashedKey = [...byKey.keys()].find((key) =>
-      /^local:[a-f0-9]{16}$/.test(key),
-    );
-    expect(hashedKey).toBeDefined();
-    expect(byKey.get(hashedKey!)?.label).toBe(
-      hashedKey!.slice("local:".length),
-    );
-    expect(byKey.get("local:caller")?.label).toBe("Caller");
-    expect(byKey.get("local:growth")?.label).toBe("growth");
-    expect(byKey.get("local:research")?.label).toBe("research");
     expect(graph.warnings).toEqual([
       {
         code: "duplicate-agent-key",
-        agentKey: "alpha",
-        message: "Multiple agents use alpha; kept each with a local identity.",
-      },
-      {
-        code: "duplicate-agent-key",
-        agentKey: "local:growth",
-        message:
-          "Multiple agents use local:growth; kept each with a local identity.",
+        agentKey: "shared",
+        message: "Multiple agents use shared; kept each with a local identity.",
       },
     ]);
-    expect(JSON.stringify(graph)).not.toContain("/private/");
-    expect(JSON.stringify(graph)).not.toContain("C:\\Users");
+  });
+
+  it("deduplicates redundant provider duplicate warnings", async () => {
+    const duplicateWarning = {
+      code: "duplicate-agent-key" as const,
+      agentKey: "shared",
+      message: "provider-owned private wording",
+    };
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "local:only",
+          label: "Only",
+          sourceRoot: path.join(FIXTURE, "only"),
+          provisional: true,
+          identityIssue: "duplicate-agent-key",
+          candidateAgentKey: "shared",
+          resolutionAliases: ["shared"],
+        },
+      ],
+      {
+        degraded: true,
+        warnings: [duplicateWarning, duplicateWarning],
+      },
+    );
+    const graph = await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => result },
+        relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+      ),
+      scope,
+    );
+
+    expect(graph.warnings).toEqual([
+      {
+        code: "duplicate-agent-key",
+        agentKey: "shared",
+        message: "Multiple agents use shared; kept each with a local identity.",
+      },
+    ]);
+    expect(JSON.stringify(graph)).not.toContain("provider-owned");
+  });
+
+  it("rejects a provider duplicate warning without matching public evidence", async () => {
+    const result = inventoryResult(
+      scope,
+      [{ agentKey: "reporting", label: "Reporting" }],
+      {
+        warnings: [
+          {
+            code: "duplicate-agent-key",
+            agentKey: "unsupported",
+            message: "private",
+          },
+        ],
+      },
+    );
+
+    await expect(
+      buildGraph(
+        new StaticSystemGraphBuilder(
+          { listAgents: async () => result },
+          relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+        ),
+        scope,
+      ),
+    ).rejects.toThrow("inventory warning was invalid");
+  });
+
+  it("resolves an exact canonical key before a stale compatibility alias", async () => {
+    const inventory = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "caller",
+          label: "Caller",
+          sourceRoot: path.join(FIXTURE, "caller"),
+        },
+        {
+          agentKey: "payments",
+          label: "Payments",
+          sourceRoot: path.join(FIXTURE, "payments"),
+        },
+        {
+          agentKey: "local:pending",
+          label: "Pending",
+          sourceRoot: path.join(FIXTURE, "pending"),
+          provisional: true,
+          identityIssue: "identity-unavailable",
+          resolutionAliases: ["payments"],
+        },
+      ],
+      { degraded: true },
+    );
+    const graph = await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => inventory },
+        relationshipProvider(async (sourceRoot) =>
+          sourceRoot.endsWith("caller")
+            ? {
+                relationships: [
+                  { target: "payments", mode: "async", evidence: EVIDENCE },
+                ],
+                warnings: [],
+              }
+            : EMPTY_RELATIONSHIPS,
+        ),
+      ),
+      scope,
+    );
+
+    expect(graph.edges).toEqual([
+      {
+        from: "agent:caller",
+        to: "agent:payments",
+        kind: "invokes",
+        basis: "static",
+        mode: "async",
+      },
+    ]);
+  });
+
+  it("keeps a relationship ambiguous when only multiple aliases match", async () => {
+    const inventory = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "caller",
+          label: "Caller",
+          sourceRoot: path.join(FIXTURE, "caller"),
+        },
+        {
+          agentKey: "local:first",
+          label: "First",
+          sourceRoot: path.join(FIXTURE, "first"),
+          provisional: true,
+          resolutionAliases: ["legacy"],
+        },
+        {
+          agentKey: "local:second",
+          label: "Second",
+          sourceRoot: path.join(FIXTURE, "second"),
+          provisional: true,
+          resolutionAliases: ["legacy"],
+        },
+      ],
+      { degraded: true },
+    );
+    const graph = await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => inventory },
+        relationshipProvider(async (sourceRoot) =>
+          sourceRoot.endsWith("caller")
+            ? {
+                relationships: [
+                  { target: "legacy", mode: "async", evidence: EVIDENCE },
+                ],
+                warnings: [],
+              }
+            : EMPTY_RELATIONSHIPS,
+        ),
+      ),
+      scope,
+    );
+
+    expect(graph.edges).toEqual([]);
+    expect(graph.warnings).toContainEqual({
+      code: "unresolved-target",
+      agentKey: "caller",
+      message: "Caller invokes ambiguous agent legacy.",
+    });
+  });
+
+  it("keeps a provisional public key ambiguous with another agent's alias", async () => {
+    const inventory = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "caller",
+          label: "Caller",
+          sourceRoot: path.join(FIXTURE, "caller"),
+        },
+        {
+          agentKey: "legacy",
+          label: "Provisional",
+          sourceRoot: path.join(FIXTURE, "provisional"),
+          provisional: true,
+          identityIssue: "identity-unavailable",
+        },
+        {
+          agentKey: "current",
+          label: "Current",
+          sourceRoot: path.join(FIXTURE, "current"),
+          resolutionAliases: ["legacy"],
+        },
+      ],
+      { degraded: true },
+    );
+    const graph = await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => inventory },
+        relationshipProvider(async (sourceRoot) =>
+          sourceRoot.endsWith("caller")
+            ? {
+                relationships: [
+                  { target: "legacy", mode: "async", evidence: EVIDENCE },
+                ],
+                warnings: [],
+              }
+            : EMPTY_RELATIONSHIPS,
+        ),
+      ),
+      scope,
+    );
+
+    expect(graph.edges).toEqual([]);
+    expect(graph.warnings).toContainEqual({
+      code: "unresolved-target",
+      agentKey: "caller",
+      message: "Caller invokes ambiguous agent legacy.",
+    });
+  });
+
+  it("rejects an arbitrary provider that violates the public or private boundary", async () => {
+    const duplicate = inventoryResult(scope, [
+      { agentKey: "alpha", label: "Alpha" },
+      { agentKey: "beta", label: "Beta" },
+    ]);
+    duplicate.inventory = {
+      ...duplicate.inventory,
+      agents: duplicate.inventory.agents.map((agent) => ({
+        ...agent,
+        agentKey: "alpha",
+      })),
+    };
+    const inventory: AgentInventoryProvider = {
+      listAgents: vi.fn(async () => duplicate),
+    };
+
+    await expect(
+      buildGraph(
+        new StaticSystemGraphBuilder(
+          inventory,
+          relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+        ),
+        scope,
+      ),
+    ).rejects.toThrow();
+
+    const outside = inventoryResult(scope, [
+      {
+        agentKey: "alpha",
+        label: "Alpha",
+        sourceRoot: path.join(FIXTURE, "growth"),
+      },
+    ]);
+    outside.context[0]!.sourceRoot = "/outside/private-agent";
+    await expect(
+      buildGraph(
+        new StaticSystemGraphBuilder(
+          { listAgents: async () => outside },
+          relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+        ),
+        scope,
+      ),
+    ).rejects.toThrow("inventory context was invalid");
+
+    const mismatchedLocation = inventoryResult(scope, [
+      {
+        agentKey: "alpha",
+        label: "Alpha",
+        sourceRoot: path.join(FIXTURE, "alpha"),
+      },
+    ]);
+    mismatchedLocation.context[0]!.sourceRoot = path.join(FIXTURE, "growth");
+    mismatchedLocation.context[0]!.workflowPath = path.join(FIXTURE, "growth");
+    await expect(
+      buildGraph(
+        new StaticSystemGraphBuilder(
+          { listAgents: async () => mismatchedLocation },
+          relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+        ),
+        scope,
+      ),
+    ).rejects.toThrow("inventory context was invalid");
   });
 
   it("degrades a scanner failure into a path-free warning", async () => {
     const inventory: AgentInventoryProvider = {
-      listAgents: vi.fn(async () => ({
-        agents: [
+      listAgents: vi.fn(async () =>
+        inventoryResult(scope, [
           {
             agentKey: "research",
             definitionId: 1,
             definitionSlug: "research",
             label: "Research",
             resolutionAliases: ["research"],
-            sourceRoot: "/private/research",
           },
-        ],
-        cacheable: true,
-        warnings: [],
-      })),
+        ]),
+      ),
     };
     const built = await new StaticSystemGraphBuilder(
       inventory,
       relationshipProvider(async () => {
-        throw new Error("boom at /private/research");
+        throw new Error("boom at private source");
       }),
     ).build(scope);
     const graph = built.graph;
@@ -468,36 +844,319 @@ describe("StaticSystemGraphBuilder", () => {
     expect(JSON.stringify(graph)).not.toContain(FIXTURE);
   });
 
-  it("projects disconnected inventory nodes and merges inventory warnings", async () => {
-    const inventory: AgentInventoryProvider = {
-      listAgents: vi.fn(async () => ({
-        agents: [
-          {
-            agentKey: "research",
-            definitionId: 1,
-            definitionSlug: "research",
-            label: "Research",
-            resolutionAliases: ["research"],
-            sourceRoot: "/private/research",
-          },
-          {
-            agentKey: "local:reporting",
-            definitionId: null,
-            definitionSlug: null,
-            label: "Reporting",
-            resolutionAliases: [],
-            sourceRoot: "/private/reporting",
-          },
-        ],
-        cacheable: true,
+  it("keeps marker-resolved edges when source identity inspection fails", async () => {
+    const changed = vi.fn();
+    const inventory = new HarnessRegistryInventoryProvider({
+      listWorkflows: () => [
+        workflow("Caller", "caller", "caller-marker"),
+        workflow("Target", "target", "target-marker"),
+      ],
+      inspectManifestName: vi.fn(async () => ({
+        status: "failed" as const,
+        retryable: false,
+      })),
+      fingerprintSource: async (sourceRoot) => `fingerprint:${sourceRoot}`,
+      onIdentityChange: changed,
+    });
+    const builder = new StaticSystemGraphBuilder(
+      inventory,
+      relationshipProvider(async (sourceRoot) =>
+        sourceRoot.endsWith("caller")
+          ? {
+              relationships: [
+                {
+                  target: "target-marker",
+                  mode: "async",
+                  evidence: EVIDENCE,
+                },
+              ],
+              warnings: [],
+            }
+          : EMPTY_RELATIONSHIPS,
+      ),
+    );
+    const initial = await builder.build(scope);
+    initial.afterCommit?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+
+    const failed = await builder.build(scope);
+
+    expect(failed.graph.nodes.map((node) => node.agentKey)).toEqual([
+      "caller-marker",
+      "target-marker",
+    ]);
+    expect(failed.graph.edges).toEqual([
+      {
+        from: "agent:caller-marker",
+        to: "agent:target-marker",
+        kind: "invokes",
+        basis: "static",
+        mode: "async",
+      },
+    ]);
+    expect(failed.graph.warnings.map((warning) => warning.code)).toEqual([
+      "inventory-extraction-failed",
+      "inventory-extraction-failed",
+    ]);
+    expect(JSON.stringify(failed.graph)).not.toContain(FIXTURE);
+  });
+
+  it("sanitizes private labels and warning messages at an arbitrary provider boundary", async () => {
+    const leakedPath = "/private/provider-secret";
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "local:reporting",
+          label: `${leakedPath}\u0085`,
+          sourceRoot: path.join(FIXTURE, "reporting"),
+          provisional: true,
+        },
+      ],
+      {
+        degraded: true,
         warnings: [
           {
-            code: "inventory-extraction-failed" as const,
+            code: "inventory-extraction-failed",
             agentKey: "local:reporting",
-            message: "Could not inspect Reporting; using its local identity.",
+            message: `inspection failed at ${leakedPath}`,
           },
         ],
-      })),
+      },
+    );
+
+    const graph = await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => result },
+        relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+      ),
+      scope,
+    );
+
+    expect(graph.nodes).toEqual([
+      {
+        id: "agent:local:reporting",
+        agentKey: "local:reporting",
+        label: "reporting",
+      },
+    ]);
+    expect(graph.warnings).toEqual([
+      {
+        code: "inventory-extraction-failed",
+        agentKey: "local:reporting",
+        message:
+          "Could not resolve reporting's source identity; using its provisional identity.",
+      },
+    ]);
+    expect(JSON.stringify(graph)).not.toContain(leakedPath);
+    expect(JSON.stringify(graph)).not.toContain("\u0085");
+  });
+
+  it("preserves a scoped package display label without admitting path-shaped labels", async () => {
+    const result = inventoryResult(scope, [
+      {
+        agentKey: "reporting",
+        label: "@acme/proj-a",
+        sourceRoot: path.join(FIXTURE, "reporting"),
+      },
+    ]);
+
+    const graph = await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => result },
+        relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+      ),
+      scope,
+    );
+
+    expect(graph.nodes).toEqual([
+      {
+        id: "agent:reporting",
+        agentKey: "reporting",
+        label: "@acme/proj-a",
+      },
+    ]);
+  });
+
+  it("rejects a provider warning whose identity is not inventory-owned", async () => {
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "local:reporting",
+          label: "Reporting",
+          sourceRoot: path.join(FIXTURE, "reporting"),
+          provisional: true,
+        },
+      ],
+      {
+        degraded: true,
+        warnings: [
+          {
+            code: "inventory-extraction-failed",
+            agentKey: "/private/provider-secret",
+            message: "private",
+          },
+        ],
+      },
+    );
+
+    await expect(
+      buildGraph(
+        new StaticSystemGraphBuilder(
+          { listAgents: async () => result },
+          relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+        ),
+        scope,
+      ),
+    ).rejects.toThrow("inventory warning was invalid");
+  });
+
+  it("rejects extraction warnings unsupported by parsed identity evidence", async () => {
+    const unsupported = [
+      {
+        agentKey: "canonical",
+        result: inventoryResult(scope, [
+          { agentKey: "canonical", label: "Canonical" },
+        ]),
+      },
+      {
+        agentKey: "local:pending",
+        result: inventoryResult(
+          scope,
+          [
+            {
+              agentKey: "local:pending",
+              label: "Pending",
+              provisional: true,
+              identityIssue: "identity-pending",
+            },
+          ],
+          { degraded: true },
+        ),
+      },
+      {
+        agentKey: "local:duplicate",
+        result: inventoryResult(
+          scope,
+          [
+            {
+              agentKey: "local:duplicate",
+              label: "Duplicate",
+              provisional: true,
+              identityIssue: "duplicate-agent-key",
+              candidateAgentKey: "shared",
+            },
+          ],
+          { degraded: true },
+        ),
+      },
+    ];
+
+    for (const { agentKey, result } of unsupported) {
+      result.warnings = [
+        {
+          code: "inventory-extraction-failed",
+          agentKey,
+          message: "private",
+        },
+      ];
+      await expect(
+        buildGraph(
+          new StaticSystemGraphBuilder(
+            { listAgents: async () => result },
+            relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+          ),
+          scope,
+        ),
+      ).rejects.toThrow("inventory warning was invalid");
+    }
+  });
+
+  it.each([
+    ["path alias", ["private/agent"]],
+    ["control alias", ["agent\u0085name"]],
+    ["reserved local alias", ["local:agent"]],
+  ])("rejects an arbitrary provider %s", async (_case, resolutionAliases) => {
+    const result = inventoryResult(scope, [
+      {
+        agentKey: "reporting",
+        label: "Reporting",
+        sourceRoot: path.join(FIXTURE, "reporting"),
+        resolutionAliases,
+      },
+    ]);
+
+    await expect(
+      buildGraph(
+        new StaticSystemGraphBuilder(
+          { listAgents: async () => result },
+          relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+        ),
+        scope,
+      ),
+    ).rejects.toThrow("inventory context was invalid");
+  });
+
+  it("normalizes arbitrary provider aliases before relationship resolution", async () => {
+    const result = inventoryResult(scope, [
+      {
+        agentKey: "reporting",
+        label: "Reporting",
+        sourceRoot: path.join(FIXTURE, "reporting"),
+        resolutionAliases: ["zeta", "alpha", "zeta"],
+      },
+    ]);
+    const listRelationships = vi.fn<
+      AgentRelationshipProvider["listRelationships"]
+    >(async () => EMPTY_RELATIONSHIPS);
+
+    await buildGraph(
+      new StaticSystemGraphBuilder(
+        { listAgents: async () => result },
+        { listRelationships },
+      ),
+      scope,
+    );
+
+    expect(listRelationships.mock.calls[0]?.[0].resolutionAliases).toEqual([
+      "alpha",
+      "zeta",
+    ]);
+  });
+
+  it("projects disconnected inventory nodes and merges inventory warnings", async () => {
+    const inventory: AgentInventoryProvider = {
+      listAgents: vi.fn(async () =>
+        inventoryResult(
+          scope,
+          [
+            {
+              agentKey: "research",
+              definitionId: 1,
+              definitionSlug: "research",
+              label: "Research",
+              resolutionAliases: ["research"],
+            },
+            {
+              agentKey: "local:reporting",
+              label: "Reporting",
+              provisional: true,
+            },
+          ],
+          {
+            degraded: true,
+            warnings: [
+              {
+                code: "inventory-extraction-failed",
+                agentKey: "local:reporting",
+                message:
+                  "Could not inspect Reporting; using its local identity.",
+              },
+            ],
+          },
+        ),
+      ),
     };
 
     const graph = await buildGraph(
@@ -517,7 +1176,8 @@ describe("StaticSystemGraphBuilder", () => {
       {
         code: "inventory-extraction-failed",
         agentKey: "local:reporting",
-        message: "Could not inspect Reporting; using its local identity.",
+        message:
+          "Could not resolve Reporting's source identity; using its provisional identity.",
       },
     ]);
     expect(JSON.stringify(graph)).not.toContain("/private/");
@@ -525,11 +1185,20 @@ describe("StaticSystemGraphBuilder", () => {
 
   it("keeps degraded cache policy outside the public graph contract", async () => {
     const inventory: AgentInventoryProvider = {
-      listAgents: vi.fn(async () => ({
-        agents: [],
-        cacheable: false,
-        warnings: [],
-      })),
+      listAgents: vi.fn(async () =>
+        inventoryResult(
+          scope,
+          [
+            {
+              agentKey: "local:pending",
+              label: "Pending",
+              provisional: true,
+              identityIssue: "identity-pending",
+            },
+          ],
+          { degraded: true },
+        ),
+      ),
     };
 
     const built = await new StaticSystemGraphBuilder(
@@ -541,11 +1210,93 @@ describe("StaticSystemGraphBuilder", () => {
     expect(built.graph).toEqual({
       kind: "system",
       scope: { kind: "working-tree", workspaceKey: scope.workspaceKey },
-      nodes: [],
+      nodes: [
+        {
+          id: "agent:local:pending",
+          agentKey: "local:pending",
+          label: "Pending",
+        },
+      ],
       edges: [],
       warnings: [],
     });
     expect(built.graph).not.toHaveProperty("cacheable");
+  });
+
+  it("caches a settled provisional identity while preserving its warning", async () => {
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "local:dashboard",
+          label: "Dashboard",
+          provisional: true,
+          identityIssue: "identity-unavailable",
+        },
+      ],
+      {
+        degraded: true,
+        identitySettled: true,
+        warnings: [
+          {
+            code: "inventory-extraction-failed",
+            agentKey: "local:dashboard",
+            message: "private provider wording",
+          },
+        ],
+      },
+    );
+
+    const built = await new StaticSystemGraphBuilder(
+      { listAgents: async () => result },
+      relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+    ).build(scope);
+
+    expect(built.cacheable).toBe(true);
+    expect(built.graph.warnings).toEqual([
+      {
+        code: "inventory-extraction-failed",
+        agentKey: "local:dashboard",
+        message:
+          "Could not resolve Dashboard's source identity; using its provisional identity.",
+      },
+    ]);
+  });
+
+  it("uses the normalized inventory status even if a provider mutates its result", async () => {
+    let release!: () => void;
+    const relationshipsPending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "local:pending",
+          label: "Pending",
+          sourceRoot: path.join(FIXTURE, "pending"),
+          provisional: true,
+          identityIssue: "identity-pending",
+        },
+      ],
+      { degraded: true },
+    );
+    const listRelationships = vi.fn(async () => {
+      await relationshipsPending;
+      return EMPTY_RELATIONSHIPS;
+    });
+    const building = new StaticSystemGraphBuilder(
+      { listAgents: async () => result },
+      { listRelationships },
+    ).build(scope);
+    await vi.waitFor(() => expect(listRelationships).toHaveBeenCalledTimes(1));
+
+    (result.inventory as { status: "complete" | "degraded" }).status =
+      "complete";
+    release();
+    const built = await building;
+
+    expect(built.cacheable).toBe(false);
   });
 
   it("retains caller caches across active workspaces and prunes retired ones", async () => {
@@ -553,25 +1304,22 @@ describe("StaticSystemGraphBuilder", () => {
       workspaceKey: "workspace-second",
       root: "/private/second",
     };
+    const retainSources = vi.fn<(sources: ReadonlySet<string>) => void>();
     const inventory: AgentInventoryProvider = {
       listAgents: vi.fn(async (activeScope) => {
         const second = activeScope.workspaceKey === secondScope.workspaceKey;
         const agentKey = second ? "second" : "first";
-        return {
-          agents: [
-            {
-              agentKey,
-              definitionId: null,
-              definitionSlug: agentKey,
-              label: agentKey,
-              resolutionAliases: [agentKey],
-              sourceRoot: activeScope.root,
-            },
-          ],
-          cacheable: true,
-          warnings: [],
-        };
+        return inventoryResult(activeScope, [
+          {
+            agentKey,
+            definitionSlug: agentKey,
+            label: agentKey,
+            resolutionAliases: [agentKey],
+            sourceRoot: path.join(activeScope.root, agentKey),
+          },
+        ]);
       }),
+      retainSources,
     };
     const retainCallers = vi.fn();
     const relationships: AgentRelationshipProvider = {
@@ -594,5 +1342,8 @@ describe("StaticSystemGraphBuilder", () => {
         .at(-1)?.[0]
         .map((caller: { agentKey: string }) => caller.agentKey),
     ).toEqual(["second"]);
+    expect([...(retainSources.mock.calls.at(-1)?.[0] ?? [])]).toEqual([
+      "/private/second/second",
+    ]);
   });
 });

@@ -166,6 +166,30 @@ describe("createSystemGraphLoader", () => {
     expect(getSystemGraph).toHaveBeenCalledTimes(2);
   });
 
+  it("coalesces a Retry POST with the revision event it emits", async () => {
+    const pending = deferred<SystemGraphSnapshot>();
+    const getSystemGraph = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot(1, "degraded"))
+      .mockReturnValueOnce(pending.promise);
+    const loader = createSystemGraphLoader();
+    const source: SystemGraphSource = { getSystemGraph };
+    await loader.load(source, workspaceKey);
+
+    loader.invalidate(workspaceKey);
+    const retry = loader.load(source, workspaceKey);
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(2));
+    loader.invalidate(workspaceKey, 2);
+    const eventLoad = loader.load(source, workspaceKey);
+
+    expect(eventLoad).toBe(retry);
+    expect(getSystemGraph).toHaveBeenCalledTimes(2);
+    pending.resolve(snapshot(2));
+    await expect(retry).resolves.toEqual(snapshot(2));
+    await expect(eventLoad).resolves.toEqual(snapshot(2));
+    expect(loader.peek(workspaceKey)).toEqual(snapshot(2));
+  });
+
   it("never lets an older in-flight response overwrite a newer revision", async () => {
     const oldRequest = deferred<SystemGraphSnapshot>();
     const newRequest = deferred<SystemGraphSnapshot>();
@@ -205,6 +229,85 @@ describe("createSystemGraphLoader", () => {
     expect(getSystemGraph).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let an older explicit retry overwrite a newer retry", async () => {
+    const olderRetry = deferred<SystemGraphSnapshot>();
+    const newerRetry = deferred<SystemGraphSnapshot>();
+    const getSystemGraph = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot(1))
+      .mockReturnValueOnce(olderRetry.promise)
+      .mockReturnValueOnce(newerRetry.promise);
+    const loader = createSystemGraphLoader();
+    const source: SystemGraphSource = { getSystemGraph };
+    await loader.load(source, workspaceKey);
+
+    loader.invalidate(workspaceKey);
+    const older = loader.load(source, workspaceKey);
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(2));
+    loader.invalidate(workspaceKey);
+    const newer = loader.load(source, workspaceKey);
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(3));
+    newerRetry.resolve(snapshot(3));
+    await expect(newer).resolves.toEqual(snapshot(3));
+    olderRetry.resolve(snapshot(2));
+
+    await expect(older).resolves.toEqual(snapshot(3));
+    expect(loader.peek(workspaceKey)).toEqual(snapshot(3));
+  });
+
+  it("keeps a late event reload behind a newer explicit retry", async () => {
+    const eventReload = deferred<SystemGraphSnapshot>();
+    const explicitRetry = deferred<SystemGraphSnapshot>();
+    const getSystemGraph = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot(1))
+      .mockReturnValueOnce(eventReload.promise)
+      .mockReturnValueOnce(explicitRetry.promise);
+    const loader = createSystemGraphLoader();
+    const source: SystemGraphSource = { getSystemGraph };
+    await loader.load(source, workspaceKey);
+
+    loader.invalidate(workspaceKey, 2);
+    const announced = loader.load(source, workspaceKey);
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(2));
+    loader.invalidate(workspaceKey);
+    const retried = loader.load(source, workspaceKey);
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(3));
+    explicitRetry.resolve(snapshot(3));
+    await expect(retried).resolves.toEqual(snapshot(3));
+    eventReload.resolve(snapshot(2));
+
+    await expect(announced).resolves.toEqual(snapshot(3));
+    expect(loader.peek(workspaceKey)).toEqual(snapshot(3));
+  });
+
+  it("does not let an announced response consume an unclaimed explicit retry", async () => {
+    const announcedResponse = deferred<SystemGraphSnapshot>();
+    const explicitResponse = deferred<SystemGraphSnapshot>();
+    const getSystemGraph = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot(1))
+      .mockReturnValueOnce(announcedResponse.promise)
+      .mockReturnValueOnce(explicitResponse.promise);
+    const loader = createSystemGraphLoader();
+    const source: SystemGraphSource = { getSystemGraph };
+    await loader.load(source, workspaceKey);
+
+    loader.invalidate(workspaceKey, 2);
+    const announced = loader.load(source, workspaceKey);
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(2));
+    loader.invalidate(workspaceKey);
+    announcedResponse.resolve(snapshot(2));
+    await vi.waitFor(() => expect(getSystemGraph).toHaveBeenCalledTimes(3));
+    expect(getSystemGraph).toHaveBeenNthCalledWith(3, workspaceKey, {
+      refresh: true,
+    });
+    explicitResponse.resolve(snapshot(3));
+
+    await expect(announced).resolves.toEqual(snapshot(3));
+    expect(loader.peek(workspaceKey)).toEqual(snapshot(3));
+  });
+
   it("ignores old announcements and invalidates only their workspace", async () => {
     const otherKey = "workspace-other";
     let otherRevision = 3;
@@ -232,7 +335,7 @@ describe("createSystemGraphLoader", () => {
     expect(getSystemGraph).toHaveBeenCalledTimes(3);
   });
 
-  it("retires removed workspace snapshots and rejects their late responses", async () => {
+  it("retires removed workspace snapshots and does not retain late responses", async () => {
     const late = deferred<SystemGraphSnapshot>();
     const ready = snapshot(2);
     const getSystemGraph = vi

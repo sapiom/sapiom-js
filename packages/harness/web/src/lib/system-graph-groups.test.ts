@@ -30,11 +30,11 @@ const node = (name: string): SystemGraphNode => ({
   label: name,
 });
 
-/** The join `WorkspaceGraphView` hands over: agent key to registry row. */
+/** The server-owned navigation join: agent key to workflow path. */
 const navigationFor = (
   workflows: readonly WorkflowInfo[],
-): ReadonlyMap<AgentKey, WorkflowInfo> =>
-  new Map(workflows.map((workflow) => [workflow.name, workflow]));
+): ReadonlyMap<AgentKey, string> =>
+  new Map(workflows.map((workflow) => [workflow.name, workflow.path]));
 
 /** gateway launches queue and worker; mailer launches sender; loner nothing. */
 const WORKFLOWS = [
@@ -165,9 +165,8 @@ describe("systemGraphNodeGroups", () => {
   });
 
   it("files a node no row resolved into Ungrouped rather than losing it", () => {
-    /* Two agents sharing a `definitionSlug` are dropped from the navigation
-       join, because neither can be told from the other — which a real install
-       has. Their CARDS still exist, and a card outside every container is a
+    /* A graph node missing from the navigation sidecar cannot be joined to a
+       rail row. Its CARD still exists, and a card outside every container is a
        card the layout has nowhere to put. */
     const ambiguous = navigationFor(
       WORKFLOWS.filter((workflow) => workflow.name !== "sender"),

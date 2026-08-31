@@ -90,7 +90,7 @@ export function workspaceRelativeLocalKey(
     return null;
   }
   const relative = source.segments.slice(scope.segments.length);
-  const local = relative.join("/") || source.segments.at(-1) || "root";
+  const local = relative.join("/") || "root";
   return `local:${local}`;
 }
 
@@ -156,4 +156,17 @@ export interface SystemGraphSnapshot {
   state: SystemGraphLifecycleState;
   /** Null only before a usable projection exists. */
   graph: SystemGraph | null;
+}
+
+/** Protected local resolver payload. Paths remain separate from SystemGraph. */
+export interface SystemGraphNavigationTarget {
+  agentKey: AgentKey;
+  workflowPath: string;
+}
+
+export interface SystemGraphNavigationResponse {
+  workspaceKey: WorkspaceKey;
+  /** Must equal the displayed SystemGraphSnapshot revision before use. */
+  revision: number;
+  targets: SystemGraphNavigationTarget[];
 }

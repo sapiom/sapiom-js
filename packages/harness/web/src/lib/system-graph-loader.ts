@@ -36,13 +36,15 @@ export function createSystemGraphLoader(): SystemGraphLoader {
     {
       lifetime: WorkspaceLifetime;
       generation: number;
+      explicitRefresh: boolean;
+      inFlight: boolean;
       promise: Promise<SystemGraphSnapshot>;
     }
   >();
   const snapshots = new Map<WorkspaceKey, SystemGraphSnapshot>();
   const lifetimes = new Map<WorkspaceKey, WorkspaceLifetime>();
   const announcedRevisions = new Map<WorkspaceKey, number>();
-  const forcedReloads = new Set<WorkspaceKey>();
+  const forcedReloadGenerations = new Map<WorkspaceKey, number>();
   const retryableSeen = new Set<WorkspaceKey>();
   const retryConsumed = new Set<WorkspaceKey>();
 
@@ -75,15 +77,21 @@ export function createSystemGraphLoader(): SystemGraphLoader {
     if (
       cached &&
       cached.revision >= announcedRevision &&
-      !forcedReloads.has(workspaceKey) &&
+      !forcedReloadGenerations.has(workspaceKey) &&
       !shouldRetry
     ) {
       const promise = Promise.resolve(cached);
-      requests.set(workspaceKey, { lifetime, generation, promise });
+      requests.set(workspaceKey, {
+        lifetime,
+        generation,
+        explicitRefresh: false,
+        inFlight: false,
+        promise,
+      });
       return promise;
     }
     if (shouldRetry) retryConsumed.add(workspaceKey);
-    const explicitRefresh = forcedReloads.has(workspaceKey);
+    const explicitRefresh = forcedReloadGenerations.has(workspaceKey);
 
     let request!: Promise<SystemGraphSnapshot>;
     request = Promise.resolve()
@@ -93,6 +101,10 @@ export function createSystemGraphLoader(): SystemGraphLoader {
           : source.getSystemGraph(workspaceKey),
       )
       .then((snapshot) => {
+        const settledRequest = requests.get(workspaceKey);
+        if (settledRequest?.promise === request) {
+          settledRequest.inFlight = false;
+        }
         if (snapshot.workspaceKey !== workspaceKey) {
           throw new Error("Invalid system graph response");
         }
@@ -101,12 +113,27 @@ export function createSystemGraphLoader(): SystemGraphLoader {
           // may finish, but the response cannot repopulate browser state.
           return snapshot;
         }
+        const current = snapshots.get(workspaceKey);
+        if (current && snapshot.revision < current.revision) {
+          return current;
+        }
         const newestAnnouncement = announcedRevisions.get(workspaceKey) ?? -1;
+        const currentRequest = requests.get(workspaceKey);
+        const superseded = lifetime.generation !== generation;
+        const latestForcedGeneration =
+          forcedReloadGenerations.get(workspaceKey);
+        const coversOutstandingForcedReload =
+          latestForcedGeneration === undefined ||
+          (explicitRefresh && generation >= latestForcedGeneration);
+        const satisfiesUnclaimedAnnouncement =
+          superseded &&
+          currentRequest === undefined &&
+          coversOutstandingForcedReload &&
+          newestAnnouncement >= 0 &&
+          snapshot.revision >= newestAnnouncement;
         if (
           snapshot.revision < newestAnnouncement ||
-          (lifetime.generation !== generation &&
-            forcedReloads.has(workspaceKey) &&
-            !explicitRefresh)
+          (superseded && !satisfiesUnclaimedAnnouncement)
         ) {
           if (requests.get(workspaceKey)?.promise === request) {
             requests.delete(workspaceKey);
@@ -115,11 +142,8 @@ export function createSystemGraphLoader(): SystemGraphLoader {
         }
 
         snapshots.set(workspaceKey, snapshot);
-        forcedReloads.delete(workspaceKey);
-        if (
-          snapshot.state !== "ready" &&
-          !retryableSeen.has(workspaceKey)
-        ) {
+        forcedReloadGenerations.delete(workspaceKey);
+        if (snapshot.state !== "ready" && !retryableSeen.has(workspaceKey)) {
           retryableSeen.add(workspaceKey);
           // A later open gets one recovery attempt. Keep the snapshot itself
           // so the current view can continue showing loading, partial, or
@@ -133,7 +157,13 @@ export function createSystemGraphLoader(): SystemGraphLoader {
         }
         return snapshot;
       });
-    requests.set(workspaceKey, { lifetime, generation, promise: request });
+    requests.set(workspaceKey, {
+      lifetime,
+      generation,
+      explicitRefresh,
+      inFlight: true,
+      promise: request,
+    });
     void request.catch(() => {
       if (requests.get(workspaceKey)?.promise === request) {
         requests.delete(workspaceKey);
@@ -150,10 +180,29 @@ export function createSystemGraphLoader(): SystemGraphLoader {
         announcedRevisions.get(workspaceKey) ?? -1,
       );
       if (revision !== undefined && revision <= knownRevision) return false;
-      if (revision !== undefined)
+      const lifetime = lifetimeFor(workspaceKey);
+      const active = requests.get(workspaceKey);
+      const forcedGeneration = forcedReloadGenerations.get(workspaceKey);
+      const adoptsActiveExplicitRequest =
+        revision !== undefined &&
+        forcedGeneration !== undefined &&
+        active?.lifetime === lifetime &&
+        active.generation === lifetime.generation &&
+        active.generation >= forcedGeneration &&
+        active.explicitRefresh &&
+        active.inFlight;
+      if (adoptsActiveExplicitRequest) {
         announcedRevisions.set(workspaceKey, revision);
-      else forcedReloads.add(workspaceKey);
-      lifetimeFor(workspaceKey).generation += 1;
+        retryableSeen.delete(workspaceKey);
+        retryConsumed.delete(workspaceKey);
+        return true;
+      }
+      lifetime.generation += 1;
+      if (revision !== undefined) {
+        announcedRevisions.set(workspaceKey, revision);
+      } else {
+        forcedReloadGenerations.set(workspaceKey, lifetime.generation);
+      }
       requests.delete(workspaceKey);
       retryableSeen.delete(workspaceKey);
       retryConsumed.delete(workspaceKey);
@@ -165,7 +214,7 @@ export function createSystemGraphLoader(): SystemGraphLoader {
         ...snapshots.keys(),
         ...lifetimes.keys(),
         ...announcedRevisions.keys(),
-        ...forcedReloads,
+        ...forcedReloadGenerations.keys(),
         ...retryableSeen,
         ...retryConsumed,
       ]);
@@ -177,7 +226,7 @@ export function createSystemGraphLoader(): SystemGraphLoader {
         requests.delete(workspaceKey);
         snapshots.delete(workspaceKey);
         announcedRevisions.delete(workspaceKey);
-        forcedReloads.delete(workspaceKey);
+        forcedReloadGenerations.delete(workspaceKey);
         retryableSeen.delete(workspaceKey);
         retryConsumed.delete(workspaceKey);
       }

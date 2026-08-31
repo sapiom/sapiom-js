@@ -1,14 +1,224 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WorkflowInfo } from "@shared/types";
 
 import {
   createApi,
   isMockMode,
+  MockApi,
   parseNdjsonLine,
+  projectMockSystemGraphInventory,
   progressiveLeasingRun,
   PROGRESSIVE_STEP_MS,
   terminalDeployEvent,
   type DeployStreamEvent,
 } from "./api";
+
+describe("MockApi deterministic system graph identity and navigation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("assigns duplicate definition slugs distinct deterministic local identities", () => {
+    const workflows = [
+      {
+        name: "Second",
+        path: "/workspace/second",
+        definitionId: 2,
+        definitionSlug: "shared",
+        source: "scan" as const,
+      },
+      {
+        name: "First",
+        path: "/workspace/first",
+        definitionId: 1,
+        definitionSlug: "shared",
+        source: "scan" as const,
+      },
+    ];
+
+    const forward = projectMockSystemGraphInventory("/workspace", workflows);
+    const reversed = projectMockSystemGraphInventory(
+      "/workspace",
+      [...workflows].reverse(),
+    );
+
+    expect(forward).toEqual(reversed);
+    expect(forward.nodes.map((node) => node.agentKey)).toEqual([
+      "local:first",
+      "local:second",
+    ]);
+    expect(new Set(forward.nodes.map((node) => node.id)).size).toBe(2);
+    expect(forward.warnings).toEqual([
+      {
+        code: "duplicate-agent-key",
+        agentKey: "shared",
+        message: "Multiple agents use shared; kept each with a local identity.",
+      },
+    ]);
+    expect(forward.degraded).toBe(true);
+  });
+
+  it("suffixes colliding local fallbacks without duplicate warnings", () => {
+    const workflows = [
+      {
+        name: "Root",
+        path: "/workspace",
+        definitionId: null,
+        definitionSlug: null,
+        source: "scan" as const,
+      },
+      {
+        name: "Nested root",
+        path: "/workspace/root",
+        definitionId: null,
+        definitionSlug: null,
+        source: "scan" as const,
+      },
+      {
+        name: "Suffixed root",
+        path: "/workspace/root~2",
+        definitionId: null,
+        definitionSlug: null,
+        source: "scan" as const,
+      },
+    ];
+    const projection = projectMockSystemGraphInventory("/workspace", workflows);
+
+    expect(projection.nodes.map((node) => node.agentKey)).toEqual([
+      "local:root",
+      "local:root~2",
+      "local:root~2~2",
+    ]);
+    expect(projection.warnings).toEqual([]);
+    expect(projection.degraded).toBe(false);
+    expect(projection).toEqual(
+      projectMockSystemGraphInventory("/workspace", [...workflows].reverse()),
+    );
+  });
+
+  it("uses projection warnings and lifecycle for non-special mock graphs", async () => {
+    const api = new MockApi();
+    const scope = (await api.getState()).workspaceScopes?.find(
+      (candidate) => candidate.cwd !== "/Users/demo/acme-app",
+    );
+    expect(scope).toBeDefined();
+    const setWorkflows = (workflows: WorkflowInfo[]) => {
+      (api as unknown as { workflows: WorkflowInfo[] }).workflows = workflows;
+    };
+    setWorkflows([
+      {
+        name: "First",
+        path: `${scope!.cwd}/first`,
+        definitionId: 1,
+        definitionSlug: "shared",
+        source: "scan",
+      },
+      {
+        name: "Second",
+        path: `${scope!.cwd}/second`,
+        definitionId: 2,
+        definitionSlug: "shared",
+        source: "scan",
+      },
+    ]);
+
+    const duplicate = await api.getSystemGraph(scope!.workspaceKey);
+    expect(duplicate.state).toBe("degraded");
+    expect(duplicate.graph?.nodes.map((node) => node.agentKey)).toEqual([
+      "local:first",
+      "local:second",
+    ]);
+    expect(duplicate.graph?.warnings).toEqual([
+      {
+        code: "duplicate-agent-key",
+        agentKey: "shared",
+        message: "Multiple agents use shared; kept each with a local identity.",
+      },
+    ]);
+
+    setWorkflows([
+      {
+        name: "Unique",
+        path: `${scope!.cwd}/unique`,
+        definitionId: null,
+        definitionSlug: null,
+        source: "scan",
+      },
+    ]);
+    const unique = await api.getSystemGraph(scope!.workspaceKey);
+    expect(unique.state).toBe("ready");
+    expect(unique.graph?.warnings).toEqual([]);
+  });
+
+  it("caches ordinary graph reads and advances an explicit refresh", async () => {
+    const api = new MockApi();
+    const scope = (await api.getState()).workspaceScopes?.[0];
+    expect(scope).toBeDefined();
+
+    const first = await api.getSystemGraph(scope!.workspaceKey);
+    const cached = await api.getSystemGraph(scope!.workspaceKey);
+    const refreshed = await api.getSystemGraph(scope!.workspaceKey, {
+      refresh: true,
+    });
+
+    expect(cached).toBe(first);
+    expect(refreshed.revision).toBeGreaterThan(first.revision);
+  });
+
+  it("bypasses a cached graph for a directly announced mock revision", async () => {
+    const api = new MockApi();
+    const scope = (await api.getState()).workspaceScopes?.[0];
+    expect(scope).toBeDefined();
+    const first = await api.getSystemGraph(scope!.workspaceKey);
+    vi.stubGlobal("window", {
+      location: { search: "" },
+      __MOCK_SYSTEM_GRAPH_REVISION__: first.revision + 1,
+      __MOCK_SYSTEM_GRAPH_STATE__: "stale",
+    });
+
+    const announced = await api.getSystemGraph(scope!.workspaceKey);
+
+    expect(announced).toMatchObject({
+      revision: first.revision + 1,
+      state: "stale",
+    });
+    expect(announced).not.toBe(first);
+  });
+
+  it("rebuilds graph navigation atomically after a workflow move", async () => {
+    const api = new MockApi();
+    const state = await api.getState();
+    const scope = state.workspaceScopes?.find(
+      (candidate) => candidate.cwd === "/Users/demo/acme-app",
+    );
+    expect(scope).toBeDefined();
+
+    const before = await api.getSystemGraph(scope!.workspaceKey);
+    const oldNavigation = await api.getSystemGraphNavigation(
+      scope!.workspaceKey,
+    );
+    expect(
+      oldNavigation.targets.find((target) => target.agentKey === "leasing")
+        ?.workflowPath,
+    ).toBe("/Users/demo/acme-app/leasing");
+
+    await api.moveAgent(
+      "/Users/demo/acme-app/leasing",
+      "/Users/demo/acme-app/leasing-moved",
+    );
+    const navigation = await api.getSystemGraphNavigation(scope!.workspaceKey);
+
+    expect(navigation.revision).toBeGreaterThan(before.revision);
+    expect(
+      navigation.targets.find((target) => target.agentKey === "leasing")
+        ?.workflowPath,
+    ).toBe("/Users/demo/acme-app/leasing-moved");
+    expect(
+      oldNavigation.targets.find((target) => target.agentKey === "leasing")
+        ?.workflowPath,
+    ).toBe("/Users/demo/acme-app/leasing");
+  });
+});
 
 describe("RealApi.getSystemGraph", () => {
   afterEach(() => {
@@ -104,10 +314,42 @@ describe("RealApi.getSystemGraph", () => {
       }),
     );
   });
+
+  it("fetches and strictly parses the protected navigation sidecar", async () => {
+    if (isMockMode()) return;
+    vi.stubGlobal("window", {
+      __HARNESS__: { token: "test-token" },
+      location: { search: "" },
+    });
+    const navigation = {
+      workspaceKey: "workspace-test",
+      revision: 8,
+      targets: [{ agentKey: "research", workflowPath: "/private/research" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(navigation), { status: 200 }),
+        ),
+    );
+
+    await expect(
+      createApi().getSystemGraphNavigation("workspace-test"),
+    ).resolves.toEqual(navigation);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/workspaces/workspace-test/system-graph/navigation",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Harness-Token": "test-token" }),
+      }),
+    );
+  });
 });
 
 describe("progressiveLeasingRun", () => {
-  const at = (elapsed: number) => progressiveLeasingRun("exec-mock-prod-1", elapsed);
+  const at = (elapsed: number) =>
+    progressiveLeasingRun("exec-mock-prod-1", elapsed);
 
   it("starts with the first step running, the rest pending, and no latencies", () => {
     const run = at(0);
@@ -155,7 +397,12 @@ describe("terminalDeployEvent", () => {
   it("returns the terminal ready event", () => {
     const events: DeployStreamEvent[] = [
       { phase: "building", definitionId: "42" },
-      { phase: "ready", definitionId: "42", buildRunId: "b1", status: "succeeded" },
+      {
+        phase: "ready",
+        definitionId: "42",
+        buildRunId: "b1",
+        status: "succeeded",
+      },
     ];
     expect(terminalDeployEvent(events)).toEqual({
       phase: "ready",
@@ -170,14 +417,23 @@ describe("terminalDeployEvent", () => {
       { phase: "building", definitionId: "42" },
       { phase: "error", code: "BUILD_FAILED", message: "boom" },
     ];
-    expect(terminalDeployEvent(events)).toEqual({ phase: "error", code: "BUILD_FAILED", message: "boom" });
+    expect(terminalDeployEvent(events)).toEqual({
+      phase: "error",
+      code: "BUILD_FAILED",
+      message: "boom",
+    });
   });
 
   it("returns the LAST terminal event when more than one is present", () => {
     // Defensive: pick the final terminal line, not the first.
     const events: DeployStreamEvent[] = [
       { phase: "error", code: "A", message: "first" },
-      { phase: "ready", definitionId: "42", buildRunId: "b1", status: "succeeded" },
+      {
+        phase: "ready",
+        definitionId: "42",
+        buildRunId: "b1",
+        status: "succeeded",
+      },
     ];
     expect(terminalDeployEvent(events)).toMatchObject({ phase: "ready" });
   });
@@ -185,7 +441,9 @@ describe("terminalDeployEvent", () => {
   it("synthesizes an error when the stream carried no terminal line", () => {
     // A stream that only ever said "building" (server died mid-build) still
     // yields a definite failure outcome, never a building line.
-    const events: DeployStreamEvent[] = [{ phase: "building", definitionId: "42" }];
+    const events: DeployStreamEvent[] = [
+      { phase: "building", definitionId: "42" },
+    ];
     expect(terminalDeployEvent(events)).toEqual({
       phase: "error",
       code: "NO_OUTPUT",
@@ -194,7 +452,10 @@ describe("terminalDeployEvent", () => {
   });
 
   it("synthesizes an error for an empty stream", () => {
-    expect(terminalDeployEvent([])).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
+    expect(terminalDeployEvent([])).toMatchObject({
+      phase: "error",
+      code: "NO_OUTPUT",
+    });
   });
 
   it("treats a linking line as non-terminal", async () => {
@@ -204,7 +465,10 @@ describe("terminalDeployEvent", () => {
       { phase: "linking", name: "order-triage" },
       { phase: "building", definitionId: "42" },
     ];
-    expect(terminalDeployEvent(events)).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
+    expect(terminalDeployEvent(events)).toMatchObject({
+      phase: "error",
+      code: "NO_OUTPUT",
+    });
   });
 
   it("treats a warning line as non-terminal", async () => {
@@ -212,16 +476,26 @@ describe("terminalDeployEvent", () => {
     // written to sapiom.json) — it never closes the stream on its own.
     const events: DeployStreamEvent[] = [
       { phase: "linking", name: "order-triage" },
-      { phase: "warning", message: "Couldn't save the agent id to sapiom.json." },
+      {
+        phase: "warning",
+        message: "Couldn't save the agent id to sapiom.json.",
+      },
       { phase: "building", definitionId: "42" },
     ];
-    expect(terminalDeployEvent(events)).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
+    expect(terminalDeployEvent(events)).toMatchObject({
+      phase: "error",
+      code: "NO_OUTPUT",
+    });
   });
 });
 
 describe("parseNdjsonLine (deploy stream)", () => {
   it("parses a well-formed deploy event line", () => {
-    expect(parseNdjsonLine<DeployStreamEvent>('{"phase":"building","definitionId":"42"}')).toEqual({
+    expect(
+      parseNdjsonLine<DeployStreamEvent>(
+        '{"phase":"building","definitionId":"42"}',
+      ),
+    ).toEqual({
       phase: "building",
       definitionId: "42",
     });
@@ -235,6 +509,8 @@ describe("parseNdjsonLine (deploy stream)", () => {
 
   it("drops blank and non-JSON noise lines", () => {
     expect(parseNdjsonLine<DeployStreamEvent>("   ")).toBeUndefined();
-    expect(parseNdjsonLine<DeployStreamEvent>("Build succeeded in 12ms")).toBeUndefined();
+    expect(
+      parseNdjsonLine<DeployStreamEvent>("Build succeeded in 12ms"),
+    ).toBeUndefined();
   });
 });

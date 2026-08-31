@@ -79,6 +79,22 @@ describe("inspectManifestName", () => {
     });
   });
 
+  it("treats agent-core NO_DEFINITION as normal identity absence", async () => {
+    const extract = vi.fn().mockResolvedValue({
+      result: {
+        ok: false as const,
+        code: "NO_DEFINITION",
+        reason: "No defineAgent() call was found",
+      },
+      cached: false,
+      fingerprint: "1:1",
+    });
+
+    await expect(
+      inspectManifestName("/proj/unnamed", extract),
+    ).resolves.toEqual({ status: "absent" });
+  });
+
   it("reports a thrown extraction as failed", async () => {
     const extract = vi.fn().mockRejectedValue(new Error("boom"));
 

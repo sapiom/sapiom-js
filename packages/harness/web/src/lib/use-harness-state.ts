@@ -52,6 +52,12 @@ import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
 import { systemGraphLoader } from "./system-graph-loader";
+import {
+  retainSystemGraphAnnouncements,
+  systemGraphAnnouncementsAfterMessage,
+  type SystemGraphAnnouncement,
+} from "./system-graph-announcements";
+import type { WorkspaceKey } from "@shared/system-graph";
 import { track as trackProduct } from "./analytics/events";
 import {
   agentProvenance,
@@ -334,6 +340,8 @@ export interface HarnessStateHook {
   showToast: (message: string, tone?: ToastTone) => void;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
+  /** Latest monotonic graph invalidation per retained Project scope. */
+  systemGraphAnnouncements: ReadonlyMap<WorkspaceKey, SystemGraphAnnouncement>;
   /** The run each session's Steps tab is showing (the latest observed by
    *  default, or a past run picked via selectRun), with its target. */
   runsBySession: Map<string, ObservedRun>;
@@ -383,11 +391,18 @@ export interface HarnessStateHook {
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
+  const [systemGraphAnnouncements, setSystemGraphAnnouncements] = useState<
+    Map<WorkspaceKey, SystemGraphAnnouncement>
+  >(new Map());
 
   useEffect(() => {
     if (!state) return;
-    systemGraphLoader.retain(
-      new Set((state.workspaceScopes ?? []).map((scope) => scope.workspaceKey)),
+    const workspaceKeys = new Set(
+      (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey),
+    );
+    systemGraphLoader.retain(workspaceKeys);
+    setSystemGraphAnnouncements((current) =>
+      retainSystemGraphAnnouncements(current, workspaceKeys),
     );
   }, [state?.workspaceScopes]);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
@@ -1100,6 +1115,9 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     return subscribeEvents((message) => {
       setLastMessage(message);
+      setSystemGraphAnnouncements((current) =>
+        systemGraphAnnouncementsAfterMessage(current, message),
+      );
       if (message.type === "session.status") {
         setState((prev) => {
           if (!prev) return prev;
@@ -2224,6 +2242,7 @@ export function useHarnessState(): HarnessStateHook {
     directActionSettleSeq,
     listDir,
     lastMessage,
+    systemGraphAnnouncements,
     runsBySession,
     runsByExecution,
     runIdsBySession,

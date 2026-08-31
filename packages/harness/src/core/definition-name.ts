@@ -62,7 +62,11 @@ export async function inspectManifestName(
   try {
     const { result } = await extract(projectDir);
     if (!result.ok) {
-      return { status: "failed", retryable: await couldStillBeNamed(projectDir) };
+      if (result.code === "NO_DEFINITION") return { status: "absent" };
+      return {
+        status: "failed",
+        retryable: await couldStillBeNamed(projectDir),
+      };
     }
     const name = result.graph.manifestName.trim();
     return name === "" ? { status: "absent" } : { status: "found", name };

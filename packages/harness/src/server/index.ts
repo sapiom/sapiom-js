@@ -859,12 +859,31 @@ export const startServer = async (
   const systemGraphRelationships = new CachedAgentRelationshipProvider(
     new SourceAgentRelationshipProvider(),
   );
+  const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
+  const systemGraphInventory = new HarnessRegistryInventoryProvider({
+    listWorkflows: () => workflowsCache,
+    inspectManifestName,
+    onIdentityChange: (sourceRoots) => {
+      const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
+      for (const scope of activeSystemGraphScopes.values()) {
+        const canonicalScope = {
+          workspaceKey: scope.workspaceKey,
+          root: canonicalGraphPath(scope.root),
+        };
+        if (
+          systemGraphStore.peek(canonicalScope.workspaceKey) &&
+          canonicalSourceRoots.some((sourceRoot) =>
+            isWithinGraphPath(canonicalScope.root, sourceRoot),
+          )
+        ) {
+          systemGraphStore.requestRefresh(canonicalScope);
+        }
+      }
+    },
+  });
   const systemGraphStore = new SystemGraphStore(
     new StaticSystemGraphBuilder(
-      new HarnessRegistryInventoryProvider({
-        listWorkflows: () => workflowsCache,
-        inspectManifestName,
-      }),
+      systemGraphInventory,
       systemGraphRelationships,
     ),
     {
@@ -878,7 +897,6 @@ export const startServer = async (
       },
     },
   );
-  const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
 
   const refreshSystemGraphScopesForRoot = (
     changedRoot: string,
@@ -1296,6 +1314,7 @@ export const startServer = async (
       );
       if (dirtyRoots.length === 0) return;
       for (const workflowRoot of dirtyRoots) {
+        systemGraphInventory.invalidateSource(workflowRoot);
         systemGraphRelationships.invalidateSource(workflowRoot);
       }
       systemGraphStore.requestRefresh(canonicalScope);
@@ -1578,6 +1597,7 @@ export const startServer = async (
       },
       onScopeRefresh: async (scope) => {
         try {
+          systemGraphInventory.retryFailedInspections(scope);
           return await refreshSystemGraphInventory(scope);
         } catch {
           console.error("[harness] workspace graph manual refresh failed");
@@ -2129,6 +2149,7 @@ export const startServer = async (
       systemGraphWatcher.stopAll();
       activeSystemGraphScopes.clear();
       systemGraphRelationships.clear();
+      systemGraphInventory.clear();
       systemGraphStore.clear();
       installWatcher.stopAll();
       for (const tailer of codexTailers.values()) tailer.stop();

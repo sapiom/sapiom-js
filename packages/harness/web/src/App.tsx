@@ -2691,7 +2691,11 @@ export const App = (): JSX.Element => {
                   api={harness.api}
                   workflows={state.workflows}
                   workspaceScopes={workspaceScopes}
-                  lastMessage={harness.lastMessage}
+                  latestAnnouncement={
+                    harness.systemGraphAnnouncements.get(
+                      view.project.workspaceKey,
+                    ) ?? null
+                  }
                   onOpenAgent={handleFocusAgent}
                 />
               )}

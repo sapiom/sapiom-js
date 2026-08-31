@@ -1,5 +1,4 @@
 import type { AgentKey, SystemGraphNode } from "@shared/system-graph";
-import type { WorkflowInfo } from "@shared/types";
 
 import { UNGROUPED_ID, type GroupNode } from "./agent-groups";
 import {
@@ -29,23 +28,22 @@ import {
  * Containers for one graph, in the rail's own order, covering every node.
  *
  * `navigation` is the SAME map the drill-in uses (`system-graph-navigation.ts`):
- * public graph nodes carry no filesystem path, so an agent key is joined to a
- * registry row only where exactly one row claims it. Reusing it rather than
- * writing a second join keeps one invariant true — a node you can open is a
- * node whose group is known — and puts the ambiguous ones (two agents sharing a
- * `definitionSlug`, which a real install has) in `Ungrouped` rather than in a
- * guess.
+ * public graph nodes carry no filesystem path, so the server-owned sidecar
+ * joins an agent key to its workflow path for one exact graph revision.
+ * Reusing that join rather than recreating identity resolution in the browser
+ * keeps one invariant true — a node you can open is a node whose group is
+ * known — and puts unresolved nodes in `Ungrouped` rather than in a guess.
  */
 export function systemGraphNodeGroups(
   nodes: readonly SystemGraphNode[],
   groups: readonly GroupNode[],
-  navigation: ReadonlyMap<AgentKey, WorkflowInfo>,
+  navigation: ReadonlyMap<AgentKey, string>,
 ): SystemGraphNodeGroup[] {
   const nodeIdByAgentKey = new Map(nodes.map((node) => [node.agentKey, node.id]));
   const nodeIdByPath = new Map<string, string>();
-  for (const [agentKey, workflow] of navigation) {
+  for (const [agentKey, workflowPath] of navigation) {
     const nodeId = nodeIdByAgentKey.get(agentKey);
-    if (nodeId !== undefined) nodeIdByPath.set(workflow.path, nodeId);
+    if (nodeId !== undefined) nodeIdByPath.set(workflowPath, nodeId);
   }
 
   const claimed = new Set<string>();

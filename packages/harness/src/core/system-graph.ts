@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
-import * as path from "node:path";
+
+import { packageInventorySchema } from "@sapiom/agent";
 
 import type {
-  AgentKey,
   GraphWarning,
   SystemGraph,
   SystemGraphEdge,
+  SystemGraphNavigationTarget,
   WorkspaceKey,
   WorkspaceScopeSummary,
 } from "../shared/system-graph.js";
-import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
 import {
   canonicalGraphPath,
+  inventorySourceRoot,
   isWithinGraphPath,
   type AgentInventoryItem,
   type AgentInventoryProvider,
+  type AgentInventoryWarning,
   type WorkspaceScope,
 } from "./system-graph-inventory.js";
 import {
@@ -61,6 +63,10 @@ export interface SystemGraphBuildResult {
   /** Internal cache policy; only graph crosses the HTTP boundary. */
   cacheable: boolean;
   graph: SystemGraph;
+  /** Private resolver data committed atomically with the graph revision. */
+  navigation?: SystemGraphNavigationTarget[];
+  /** Starts non-blocking enrichment only after this result is visible. */
+  afterCommit?: () => void;
 }
 
 function workspaceKeyForRoot(root: string): WorkspaceKey {
@@ -111,151 +117,204 @@ function warningOrder(left: GraphWarning, right: GraphWarning): number {
   );
 }
 
-function fallbackAgentKey(scope: WorkspaceScope, sourceRoot: string): AgentKey {
-  const canonicalScope = canonicalGraphPath(scope.root);
-  const canonicalSource = canonicalGraphPath(sourceRoot);
-  if (isWithinGraphPath(canonicalScope, canonicalSource)) {
-    const localKey = workspaceRelativeLocalKey(canonicalScope, canonicalSource);
-    if (localKey) return localKey;
-  }
-  return `local:${createHash("sha256")
-    .update(canonicalSource)
-    .digest("hex")
-    .slice(0, 16)}`;
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0)!;
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  });
 }
 
-function safeAgentKey(value: string): AgentKey | null {
-  const key = value.trim();
-  if (
-    key === "" ||
-    /[\0\r\n]/.test(key) ||
-    path.posix.isAbsolute(key) ||
-    path.win32.isAbsolute(key) ||
-    key.includes("\\")
-  ) {
-    return null;
-  }
-  if (!key.startsWith("local:")) return key.includes("/") ? null : key;
-
-  const relative = key.slice("local:".length);
-  if (
-    relative === "" ||
-    path.posix.isAbsolute(relative) ||
-    path.win32.isAbsolute(relative) ||
-    relative
-      .split("/")
-      .some((segment) => segment === "" || segment === "." || segment === "..")
-  ) {
-    return null;
-  }
-  return key;
+function fallbackLabel(agentKey: string): string {
+  if (!agentKey.startsWith("local:")) return agentKey;
+  return agentKey.slice("local:".length).split("/").at(-1) ?? "Agent";
 }
 
-function safeLabel(value: string, agentKey: AgentKey): string {
-  const label = value.trim();
-  if (
-    label !== "" &&
-    !/[\0\r\n]/.test(label) &&
-    !path.posix.isAbsolute(label) &&
-    !path.win32.isAbsolute(label)
-  ) {
-    return label;
-  }
-  if (agentKey.startsWith("local:")) {
-    return agentKey.slice("local:".length) || "Local agent";
-  }
-  return agentKey;
+function isScopedPackageLabel(value: string): boolean {
+  return /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/.test(value);
 }
 
-interface PreparedInventoryItem {
-  agent: AgentInventoryItem;
-  candidateKey: AgentKey;
-  fallbackKey: AgentKey;
+function safeContextLabel(label: unknown, agentKey: string): string {
+  if (typeof label !== "string") return fallbackLabel(agentKey);
+  const trimmed = label.trim();
+  return trimmed === "" ||
+    hasControlCharacter(trimmed) ||
+    trimmed.includes("\\") ||
+    (trimmed.includes("/") && !isScopedPackageLabel(trimmed))
+    ? fallbackLabel(agentKey)
+    : trimmed;
+}
+
+function normalizeResolutionAliases(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error("System graph inventory context was invalid");
+  }
+  const aliases = value.map((alias) => {
+    if (
+      typeof alias !== "string" ||
+      alias === "" ||
+      alias !== alias.trim() ||
+      alias === "." ||
+      alias === ".." ||
+      alias.startsWith("local:") ||
+      hasControlCharacter(alias) ||
+      alias.includes("/") ||
+      alias.includes("\\")
+    ) {
+      throw new Error("System graph inventory context was invalid");
+    }
+    return alias;
+  });
+  return [...new Set(aliases)].sort((left, right) =>
+    left === right ? 0 : left < right ? -1 : 1,
+  );
+}
+
+function sanitizeInventoryWarnings(
+  warnings: readonly AgentInventoryWarning[],
+  publicAgents: ReturnType<typeof packageInventorySchema.parse>["agents"],
+  agents: readonly AgentInventoryItem[],
+): GraphWarning[] {
+  const agentsByKey = new Map(agents.map((agent) => [agent.agentKey, agent]));
+  const publicAgentsByKey = new Map(
+    publicAgents.map((agent) => [agent.agentKey, agent]),
+  );
+  const duplicateCandidates = new Set<string>();
+  for (const agent of publicAgents) {
+    if (
+      agent.identityStatus === "provisional" &&
+      agent.identityIssue === "duplicate-agent-key"
+    ) {
+      duplicateCandidates.add(agent.candidateAgentKey);
+    }
+  }
+
+  const sanitized: GraphWarning[] = [...duplicateCandidates].map(
+    (candidateAgentKey) => ({
+      code: "duplicate-agent-key",
+      agentKey: candidateAgentKey,
+      message: `Multiple agents use ${candidateAgentKey}; kept each with a local identity.`,
+    }),
+  );
+  const seenExtractionFailures = new Set<string>();
+  for (const warning of warnings) {
+    if (
+      !warning ||
+      typeof warning !== "object" ||
+      typeof warning.agentKey !== "string" ||
+      typeof warning.message !== "string"
+    ) {
+      throw new Error("System graph inventory warning was invalid");
+    }
+    if (warning.code === "duplicate-agent-key") {
+      if (!duplicateCandidates.has(warning.agentKey)) {
+        throw new Error("System graph inventory warning was invalid");
+      }
+      continue;
+    }
+    if (warning.code === "inventory-extraction-failed") {
+      const agent = agentsByKey.get(warning.agentKey);
+      const publicAgent = publicAgentsByKey.get(warning.agentKey);
+      if (
+        !agent ||
+        !publicAgent ||
+        publicAgent.identityStatus !== "provisional" ||
+        (publicAgent.identityIssue !== "identity-unavailable" &&
+          publicAgent.identityIssue !== "identity-invalid")
+      ) {
+        throw new Error("System graph inventory warning was invalid");
+      }
+      if (seenExtractionFailures.has(warning.agentKey)) continue;
+      seenExtractionFailures.add(warning.agentKey);
+      sanitized.push({
+        code: warning.code,
+        agentKey: warning.agentKey,
+        message: `Could not resolve ${agent.label}'s source identity; using its provisional identity.`,
+      });
+      continue;
+    }
+    throw new Error("System graph inventory warning was invalid");
+  }
+  return sanitized.sort(warningOrder);
+}
+
+interface ConsumedInventory {
+  agents: AgentInventoryItem[];
+  warnings: GraphWarning[];
+  /** Every identity has finished resolving, however it resolved. */
+  identitySettled: boolean;
+  startEnrichment?: () => void;
 }
 
 /**
- * The provider contract promises safe unique keys, but projection is the last
- * server-side boundary before serialization. Re-assert that invariant here so
- * a future provider cannot make the browser reject the whole graph payload.
+ * Re-parse the public contract and join private context at the last boundary
+ * before graph projection. A future adapter cannot bypass inventory safety or
+ * smuggle an outside navigation target into the resolver.
  */
-function normalizeInventory(
+function consumeInventory(
   scope: WorkspaceScope,
-  inventory: readonly AgentInventoryItem[],
-): { agents: AgentInventoryItem[]; warnings: GraphWarning[] } {
-  const prepared: PreparedInventoryItem[] = inventory
-    .map((agent) => {
-      const fallbackKey = fallbackAgentKey(scope, agent.sourceRoot);
-      return {
-        agent,
-        candidateKey: safeAgentKey(agent.agentKey) ?? fallbackKey,
-        fallbackKey,
-      };
-    })
-    .sort(
-      (left, right) =>
-        left.candidateKey.localeCompare(right.candidateKey) ||
-        left.agent.sourceRoot.localeCompare(right.agent.sourceRoot) ||
-        left.agent.label.localeCompare(right.agent.label),
-    );
-  const counts = new Map<AgentKey, number>();
-  for (const item of prepared) {
-    counts.set(item.candidateKey, (counts.get(item.candidateKey) ?? 0) + 1);
+  result: Awaited<ReturnType<AgentInventoryProvider["listAgents"]>>,
+): ConsumedInventory {
+  const inventory = packageInventorySchema.parse(result.inventory);
+  if (
+    inventory.version.kind !== "working-tree" ||
+    inventory.version.workspaceKey !== scope.workspaceKey
+  ) {
+    throw new Error("System graph received an inventory for another scope");
   }
-
-  const used = new Set<AgentKey>();
-  const duplicateKeys = new Set(
-    [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([candidateKey]) => candidateKey),
+  const canonicalScope = canonicalGraphPath(scope.root);
+  const context = new Map(
+    result.context.map((item) => [`${item.path}\0${item.entrypoint}`, item]),
   );
-  const agents = prepared.map(({ agent, candidateKey, fallbackKey }) => {
-    const duplicate = (counts.get(candidateKey) ?? 0) > 1;
-    let agentKey = duplicate ? fallbackKey : candidateKey;
-    if (used.has(agentKey)) {
-      duplicateKeys.add(agentKey);
-      agentKey = fallbackKey;
+  if (
+    context.size !== result.context.length ||
+    result.context.length !== inventory.agents.length
+  ) {
+    throw new Error(
+      "System graph inventory context did not match public locations",
+    );
+  }
+  const agents = inventory.agents.map((agent) => {
+    const key = `${agent.path}\0${agent.entrypoint}`;
+    const item = context.get(key);
+    const sourceRoot = item ? canonicalGraphPath(item.sourceRoot) : "";
+    const workflowPath = item ? canonicalGraphPath(item.workflowPath) : "";
+    const expectedSourceRoot = inventorySourceRoot(scope.root, agent.path);
+    if (
+      !item ||
+      item.agentKey !== agent.agentKey ||
+      !isWithinGraphPath(canonicalScope, sourceRoot) ||
+      !isWithinGraphPath(expectedSourceRoot, sourceRoot) ||
+      !isWithinGraphPath(sourceRoot, expectedSourceRoot) ||
+      !isWithinGraphPath(sourceRoot, workflowPath) ||
+      !isWithinGraphPath(workflowPath, sourceRoot)
+    ) {
+      throw new Error("System graph inventory context was invalid");
     }
-    const base = agentKey;
-    let suffix = 2;
-    while (used.has(agentKey)) {
-      duplicateKeys.add(base);
-      agentKey = `${base}~${suffix}`;
-      suffix += 1;
-    }
-    used.add(agentKey);
-
-    const resolutionAliases = [
-      ...new Set(
-        [
-          ...(agentKey !== candidateKey ? [candidateKey] : []),
-          ...agent.resolutionAliases,
-        ]
-          .map(safeAgentKey)
-          .filter((alias): alias is AgentKey => alias !== null),
-      ),
-    ];
     return {
-      ...agent,
-      agentKey,
-      label: safeLabel(agent.label, agentKey),
-      resolutionAliases,
+      ...item,
+      identityStatus: agent.identityStatus,
+      label: safeContextLabel(item.label, item.agentKey),
+      resolutionAliases: normalizeResolutionAliases(item.resolutionAliases),
     };
   });
-  agents.sort(
-    (left, right) =>
-      left.agentKey.localeCompare(right.agentKey) ||
-      left.sourceRoot.localeCompare(right.sourceRoot),
-  );
-
-  const warnings: GraphWarning[] = [];
-  for (const candidateKey of [...duplicateKeys].sort()) {
-    warnings.push({
-      code: "duplicate-agent-key",
-      agentKey: candidateKey,
-      message: `Multiple agents use ${candidateKey}; kept each with a local identity.`,
-    });
-  }
-  return { agents, warnings };
+  return {
+    agents,
+    warnings: sanitizeInventoryWarnings(
+      result.warnings,
+      inventory.agents,
+      agents,
+    ),
+    identitySettled:
+      result.identitySettled &&
+      !inventory.agents.some(
+        (agent) =>
+          agent.identityStatus === "provisional" &&
+          agent.identityIssue === "identity-pending",
+      ),
+    ...(typeof result.startEnrichment === "function"
+      ? { startEnrichment: result.startEnrichment }
+      : {}),
+  };
 }
 
 export class StaticSystemGraphBuilder implements SystemGraphBuilder {
@@ -273,8 +332,8 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
 
   async build(scope: WorkspaceScope): Promise<SystemGraphBuildResult> {
     const inventory = await this.inventory.listAgents(scope);
-    const normalized = normalizeInventory(scope, inventory.agents);
-    const agents = normalized.agents;
+    const consumed = consumeInventory(scope, inventory);
+    const agents = consumed.agents;
     this.callersByWorkspace.set(scope.workspaceKey, agents);
     this.retainRelationshipCallers();
     const nodes = agents.map((agent) => ({
@@ -282,28 +341,33 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       agentKey: agent.agentKey,
       label: agent.label,
     }));
-    const byTarget = new Map<string, AgentInventoryItem[]>();
-    const registerTarget = (key: string, agent: AgentInventoryItem): void => {
-      const candidates = byTarget.get(key) ?? [];
+    const canonicalTargets = new Map<string, AgentInventoryItem>();
+    const candidateTargets = new Map<string, AgentInventoryItem[]>();
+    const registerCandidate = (
+      key: string,
+      agent: AgentInventoryItem,
+    ): void => {
+      const candidates = candidateTargets.get(key) ?? [];
       if (
         !candidates.some((candidate) => candidate.agentKey === agent.agentKey)
       ) {
         candidates.push(agent);
-        byTarget.set(key, candidates);
+        candidateTargets.set(key, candidates);
       }
     };
     for (const agent of agents) {
-      registerTarget(agent.agentKey, agent);
+      if (agent.identityStatus === "canonical") {
+        canonicalTargets.set(agent.agentKey, agent);
+      } else {
+        registerCandidate(agent.agentKey, agent);
+      }
       for (const alias of agent.resolutionAliases) {
-        registerTarget(alias, agent);
+        registerCandidate(alias, agent);
       }
     }
 
     const edges: SystemGraphEdge[] = [];
-    const warnings: GraphWarning[] = [
-      ...inventory.warnings,
-      ...normalized.warnings,
-    ];
+    const warnings: GraphWarning[] = [...consumed.warnings];
     const seenEdges = new Set<string>();
     let relationshipsComplete = true;
 
@@ -352,7 +416,10 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       }
 
       for (const relationship of result.relationships) {
-        const candidates = byTarget.get(relationship.target) ?? [];
+        const exact = canonicalTargets.get(relationship.target);
+        const candidates = exact
+          ? [exact]
+          : (candidateTargets.get(relationship.target) ?? []);
         if (candidates.length !== 1) {
           const target = /^[A-Za-z0-9@_.:-]+$/.test(relationship.target)
             ? relationship.target
@@ -410,7 +477,7 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
     ].sort(warningOrder);
 
     return {
-      cacheable: inventory.cacheable && relationshipsComplete,
+      cacheable: consumed.identitySettled && relationshipsComplete,
       graph: {
         kind: "system",
         scope: { kind: "working-tree", workspaceKey: scope.workspaceKey },
@@ -418,6 +485,13 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
         edges,
         warnings: uniqueWarnings,
       },
+      navigation: agents.map(({ agentKey, workflowPath }) => ({
+        agentKey,
+        workflowPath,
+      })),
+      ...(consumed.startEnrichment
+        ? { afterCommit: consumed.startEnrichment }
+        : {}),
     };
   }
 
@@ -427,14 +501,24 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
         this.callersByWorkspace.delete(workspaceKey);
       }
     }
+    try {
+      this.inventory.retainSources?.(
+        new Set(
+          [...this.callersByWorkspace.values()]
+            .flat()
+            .map((caller) => caller.sourceRoot),
+        ),
+      );
+    } catch {
+      // Private cache pruning cannot make graph projection fail.
+    }
     this.retainRelationshipCallers();
   }
 
   private retainRelationshipCallers(): void {
+    const callers = [...this.callersByWorkspace.values()].flat();
     try {
-      this.relationships.retainCallers?.(
-        [...this.callersByWorkspace.values()].flat(),
-      );
+      this.relationships.retainCallers?.(callers);
     } catch {
       // Cache pruning is an optimization and cannot make projection fail.
     }

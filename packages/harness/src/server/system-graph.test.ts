@@ -53,15 +53,23 @@ describe("createSystemGraphRouter", () => {
       ),
     };
     const builder: SystemGraphBuilder = {
-      build: vi.fn(async () => ({ cacheable, graph })),
+      build: vi.fn(async () => ({
+        cacheable,
+        graph,
+        navigation: [
+          { agentKey: "research", workflowPath: "/private/workspace/research" },
+          { agentKey: "growth", workflowPath: "/private/workspace/growth" },
+        ],
+      })),
     };
+    const store = new SystemGraphStore(builder);
     const app = express();
     app.use("/api", createBootTokenMiddleware("test-token"));
     app.use(
       "/api",
       createSystemGraphRouter({
         scopeResolver,
-        store: new SystemGraphStore(builder),
+        store,
         onScopeAccess,
       }),
     );
@@ -71,6 +79,7 @@ describe("createSystemGraphRouter", () => {
       baseUrl: `http://127.0.0.1:${address.port}`,
       scopeResolver,
       builder,
+      store,
       onScopeAccess,
     };
   }
@@ -144,6 +153,140 @@ describe("createSystemGraphRouter", () => {
     expect(builder.build).toHaveBeenCalledTimes(2);
   });
 
+  it("serves a separately protected resolver stamped with the graph revision", async () => {
+    const { baseUrl, builder } = start();
+    const graphRoute = `${baseUrl}/api/workspaces/${workspaceKey}/system-graph`;
+    const navigationRoute = `${graphRoute}/navigation`;
+    const headers = { "X-Harness-Token": "test-token" };
+    const snapshot = (await (
+      await fetch(graphRoute, { headers })
+    ).json()) as SystemGraphSnapshot;
+
+    expect((await fetch(navigationRoute)).status).toBe(401);
+    const response = await fetch(navigationRoute, { headers });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      workspaceKey,
+      revision: snapshot.revision,
+      targets: [
+        {
+          agentKey: "research",
+          workflowPath: "/private/workspace/research",
+        },
+        {
+          agentKey: "growth",
+          workflowPath: "/private/workspace/growth",
+        },
+      ],
+    });
+    expect(builder.build).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves degraded navigation without consuming a graph recovery retry", async () => {
+    const { baseUrl, builder } = start(false);
+    const graphRoute = `${baseUrl}/api/workspaces/${workspaceKey}/system-graph`;
+    const headers = { "X-Harness-Token": "test-token" };
+    const snapshot = (await (
+      await fetch(graphRoute, { headers })
+    ).json()) as SystemGraphSnapshot;
+
+    const navigation = await fetch(`${graphRoute}/navigation`, { headers });
+
+    expect(navigation.status).toBe(200);
+    expect(await navigation.json()).toMatchObject({
+      workspaceKey,
+      revision: snapshot.revision,
+    });
+    expect(builder.build).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send a projection retired while its HTTP build is in flight", async () => {
+    let resolveBuild!: (
+      value: Awaited<ReturnType<SystemGraphBuilder["build"]>>,
+    ) => void;
+    const pending = new Promise<
+      Awaited<ReturnType<SystemGraphBuilder["build"]>>
+    >((resolve) => {
+      resolveBuild = resolve;
+    });
+    const builder: SystemGraphBuilder = {
+      build: vi.fn(() => pending),
+    };
+    const store = new SystemGraphStore(builder);
+    const scopeResolver: WorkspaceScopeResolver = {
+      resolve: vi.fn(async () => ({
+        workspaceKey,
+        root: "/private/workspace",
+      })),
+    };
+    const app = express();
+    app.use("/api", createBootTokenMiddleware("test-token"));
+    app.use("/api", createSystemGraphRouter({ scopeResolver, store }));
+    server = app.listen(0);
+    const address = server.address() as AddressInfo;
+    const response = fetch(
+      `http://127.0.0.1:${address.port}/api/workspaces/${workspaceKey}/system-graph`,
+      { headers: { "X-Harness-Token": "test-token" } },
+    );
+    await vi.waitFor(() => expect(builder.build).toHaveBeenCalledTimes(1));
+
+    store.retire(workspaceKey);
+    resolveBuild({
+      cacheable: true,
+      graph,
+      navigation: [],
+    });
+
+    expect((await response).status).toBe(404);
+  });
+
+  it("serves the current accepted revision when afterCommit immediately refreshes", async () => {
+    const builder: SystemGraphBuilder = {
+      build: vi
+        .fn()
+        .mockResolvedValueOnce({
+          cacheable: false,
+          graph,
+          navigation: [],
+          afterCommit: () =>
+            store.requestRefresh({
+              workspaceKey,
+              root: "/private/workspace",
+            }),
+        })
+        .mockResolvedValueOnce({ cacheable: true, graph, navigation: [] }),
+    };
+    const store = new SystemGraphStore(builder);
+    const app = express();
+    app.use("/api", createBootTokenMiddleware("test-token"));
+    app.use(
+      "/api",
+      createSystemGraphRouter({
+        scopeResolver: {
+          resolve: async () => ({
+            workspaceKey,
+            root: "/private/workspace",
+          }),
+        },
+        store,
+      }),
+    );
+    server = app.listen(0);
+    const address = server.address() as AddressInfo;
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/workspaces/${workspaceKey}/system-graph`,
+      { headers: { "X-Harness-Token": "test-token" } },
+    );
+    const body = (await response.json()) as SystemGraphSnapshot;
+
+    expect(response.status).toBe(200);
+    expect(body.revision).toBe(store.peek(workspaceKey)?.revision);
+    expect(body.revision).toBeGreaterThan(1);
+  });
+
   it("rejects an unknown opaque workspace key without scanning", async () => {
     const { baseUrl, builder } = start();
     const response = await fetch(
@@ -156,5 +299,13 @@ describe("createSystemGraphRouter", () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Workspace not found" });
     expect(builder.build).not.toHaveBeenCalled();
+    expect(
+      (
+        await fetch(
+          `${baseUrl}/api/workspaces/unknown/system-graph/navigation`,
+          { headers: { "X-Harness-Token": "test-token" } },
+        )
+      ).status,
+    ).toBe(404);
   });
 });

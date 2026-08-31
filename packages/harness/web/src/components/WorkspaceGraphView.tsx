@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
 import type {
-  AgentKey,
   SystemGraphLifecycleState,
+  SystemGraphNavigationResponse,
   SystemGraphSnapshot,
   WorkspaceKey,
   WorkspaceScopeSummary,
 } from "@shared/system-graph";
-import type { BusMessage, WorkflowInfo } from "@shared/types";
+import type { WorkflowInfo } from "@shared/types";
 
 import type { HarnessApi } from "../lib/api";
 import { systemGraphLoader } from "../lib/system-graph-loader";
 import { systemGraphNodeGroups } from "../lib/system-graph-groups";
-import { mapSystemGraphNavigation } from "../lib/system-graph-navigation";
+import type { SystemGraphAnnouncement } from "../lib/system-graph-announcements";
+import {
+  resolveSystemGraphNavigationForRevision,
+  systemGraphNavigationForSnapshot,
+} from "../lib/system-graph-navigation";
 import { useRailGroups } from "../lib/use-rail-groups";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
@@ -25,10 +29,31 @@ interface WorkspaceGraphViewProps {
   api: HarnessApi;
   workflows: readonly WorkflowInfo[];
   workspaceScopes: readonly WorkspaceScopeSummary[];
-  lastMessage: BusMessage | null;
+  latestAnnouncement: SystemGraphAnnouncement | null;
   /** Drill from a map node into that agent's board — a CUT to the other
    *  altitude, which also moves the rail selection so the two agree. */
   onOpenAgent: (path: string) => void;
+}
+
+export function workspaceGraphNavigationIsCurrent(input: {
+  snapshotRevision: number | null;
+  snapshotState: SystemGraphLifecycleState | null;
+  announcementRevision: number | null;
+  incomingRevision?: number | null;
+  loading: boolean;
+  error: boolean;
+}): boolean {
+  const newestAnnouncement = Math.max(
+    input.announcementRevision ?? -1,
+    input.incomingRevision ?? -1,
+  );
+  return (
+    !input.loading &&
+    !input.error &&
+    input.snapshotRevision !== null &&
+    (input.snapshotState === "ready" || input.snapshotState === "degraded") &&
+    newestAnnouncement <= input.snapshotRevision
+  );
 }
 
 export function WorkspaceGraphView({
@@ -37,7 +62,7 @@ export function WorkspaceGraphView({
   api,
   workflows,
   workspaceScopes,
-  lastMessage,
+  latestAnnouncement,
   onOpenAgent,
 }: WorkspaceGraphViewProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<SystemGraphSnapshot | null>(() =>
@@ -47,14 +72,39 @@ export function WorkspaceGraphView({
     revision: number;
     state: SystemGraphLifecycleState;
   } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [refreshSeq, setRefreshSeq] = useState(0);
+  const [navigationResponse, setNavigationResponse] =
+    useState<SystemGraphNavigationResponse | null>(null);
+  const incomingAnnouncement =
+    latestAnnouncement?.workspaceKey === workspaceKey
+      ? latestAnnouncement
+      : null;
+  const effectiveAnnouncement =
+    incomingAnnouncement &&
+    incomingAnnouncement.revision > (announcement?.revision ?? -1)
+      ? incomingAnnouncement
+      : announcement;
+  const navigationIsCurrent = workspaceGraphNavigationIsCurrent({
+    snapshotRevision: snapshot?.revision ?? null,
+    snapshotState: snapshot?.state ?? null,
+    announcementRevision: announcement?.revision ?? null,
+    incomingRevision: incomingAnnouncement?.revision ?? null,
+    loading,
+    error,
+  });
+  const navigationResponseMatchesSnapshot =
+    navigationIsCurrent &&
+    navigationResponse !== null &&
+    navigationResponse.workspaceKey === workspaceKey &&
+    navigationResponse.revision === snapshot?.revision;
 
   useEffect(() => {
     let active = true;
     setError(false);
     setLoading(true);
+    setNavigationResponse(null);
     void systemGraphLoader.load(api, workspaceKey).then(
       (next) => {
         if (!active) return;
@@ -68,7 +118,6 @@ export function WorkspaceGraphView({
       },
       () => {
         if (!active) return;
-        setAnnouncement(null);
         setError(true);
         setLoading(false);
       },
@@ -79,9 +128,50 @@ export function WorkspaceGraphView({
   }, [api, workspaceKey, refreshSeq]);
 
   useEffect(() => {
+    if (!snapshot?.graph || !navigationIsCurrent) {
+      setNavigationResponse(null);
+      return;
+    }
+    const revision = snapshot.revision;
+    let active = true;
+    const controller = new AbortController();
+    void (async () => {
+      const resolution = await resolveSystemGraphNavigationForRevision(
+        api,
+        workspaceKey,
+        revision,
+        controller.signal,
+      );
+      if (!active) return;
+      if (resolution.kind === "matched") {
+        setNavigationResponse(resolution.response);
+        return;
+      }
+      if (resolution.kind === "graph-behind") {
+        setNavigationResponse(null);
+        systemGraphLoader.invalidate(workspaceKey, resolution.revision);
+        setAnnouncement({
+          revision: resolution.revision,
+          state: "stale",
+        });
+        setError(false);
+        setRefreshSeq((value) => value + 1);
+        return;
+      }
+      setNavigationResponse(null);
+    })().catch(() => {
+      if (active) setNavigationResponse(null);
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [api, navigationIsCurrent, snapshot?.revision, workspaceKey]);
+
+  useEffect(() => {
     if (
-      lastMessage?.type !== "system-graph.changed" ||
-      lastMessage.workspaceKey !== workspaceKey
+      !latestAnnouncement ||
+      latestAnnouncement.workspaceKey !== workspaceKey
     ) {
       return;
     }
@@ -89,26 +179,33 @@ export function WorkspaceGraphView({
       snapshot?.revision ?? -1,
       announcement?.revision ?? -1,
     );
-    if (lastMessage.revision <= knownRevision) return;
+    if (latestAnnouncement.revision <= knownRevision) return;
     // The global event subscriber already invalidates the shared cache while
     // this destination is closed. Repeating it here keeps the view correct in
     // isolation and is a no-op for an already-observed revision.
-    systemGraphLoader.invalidate(workspaceKey, lastMessage.revision);
+    systemGraphLoader.invalidate(workspaceKey, latestAnnouncement.revision);
     setAnnouncement({
-      revision: lastMessage.revision,
-      state: lastMessage.state,
+      revision: latestAnnouncement.revision,
+      state: latestAnnouncement.state,
     });
+    setNavigationResponse(null);
     setError(false);
     setRefreshSeq((value) => value + 1);
-  }, [announcement?.revision, lastMessage, snapshot?.revision, workspaceKey]);
+  }, [
+    announcement?.revision,
+    latestAnnouncement,
+    snapshot?.revision,
+    workspaceKey,
+  ]);
 
   const graph = snapshot?.graph ?? null;
   const announcementIsNewer =
-    announcement !== null && announcement.revision > (snapshot?.revision ?? -1);
+    effectiveAnnouncement !== null &&
+    effectiveAnnouncement.revision > (snapshot?.revision ?? -1);
   let lifecycle: SystemGraphLifecycleState = snapshot?.state ?? "building";
   if (announcementIsNewer) {
     lifecycle =
-      announcement.state === "degraded"
+      effectiveAnnouncement.state === "degraded"
         ? "degraded"
         : graph
           ? "stale"
@@ -119,26 +216,22 @@ export function WorkspaceGraphView({
     !error &&
     graph !== null &&
     (loading ||
-      (announcementIsNewer && announcement?.state !== "degraded"));
+      (announcementIsNewer && effectiveAnnouncement?.state !== "degraded"));
 
   const retry = (): void => {
     systemGraphLoader.invalidate(workspaceKey);
     setAnnouncement(null);
+    setNavigationResponse(null);
     setError(false);
     setRefreshSeq((value) => value + 1);
   };
 
   const navigation = useMemo(
     () =>
-      graph
-        ? mapSystemGraphNavigation(
-            graph.nodes,
-            workspaceKey,
-            workflows,
-            workspaceScopes,
-          )
-        : new Map<AgentKey, WorkflowInfo>(),
-    [graph, workspaceKey, workflows, workspaceScopes],
+      navigationResponseMatchesSnapshot
+        ? systemGraphNavigationForSnapshot(navigationResponse, snapshot)
+        : new Map<string, string>(),
+    [navigationResponse, navigationResponseMatchesSnapshot, snapshot],
   );
 
   /* THE MAP READS THE RAIL'S GROUPS (SAP-2983).
@@ -179,7 +272,12 @@ export function WorkspaceGraphView({
        every agent in one `Ungrouped` container for a beat, and that is a real
        arrangement rather than a placeholder — it would read as this project's
        answer and then silently rearrange. */
-    if (!graph || projectRoot === null || !railGroups.hasSettled(projectRoot)) {
+    if (
+      !graph ||
+      !navigationResponseMatchesSnapshot ||
+      projectRoot === null ||
+      !railGroups.hasSettled(projectRoot)
+    ) {
       return undefined;
     }
     return systemGraphNodeGroups(
@@ -187,7 +285,13 @@ export function WorkspaceGraphView({
       railGroups.groupsFor(projectRoot, railGroups.agentsIn(projectRoot)),
       navigation,
     );
-  }, [graph, navigation, projectRoot, railGroups]);
+  }, [
+    graph,
+    navigation,
+    navigationResponseMatchesSnapshot,
+    projectRoot,
+    railGroups,
+  ]);
 
   return (
     /* The MAP altitude of the right pane (`lib/canvas-altitude.ts`) — a
@@ -320,8 +424,8 @@ export function WorkspaceGraphView({
             navigableAgentKeys={new Set(navigation.keys())}
             groups={groups}
             onOpenAgent={(agentKey) => {
-              const workflow = navigation.get(agentKey);
-              if (workflow) onOpenAgent(workflow.path);
+              const workflowPath = navigation.get(agentKey);
+              if (workflowPath) onOpenAgent(workflowPath);
             }}
           />
         )}

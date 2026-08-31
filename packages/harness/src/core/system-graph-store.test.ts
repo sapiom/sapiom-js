@@ -26,11 +26,12 @@ function graphFor(label: string): SystemGraph {
   };
 }
 
-function buildResult(
-  label: string,
-  cacheable = true,
-): SystemGraphBuildResult {
-  return { cacheable, graph: graphFor(label) };
+function buildResult(label: string, cacheable = true): SystemGraphBuildResult {
+  return {
+    cacheable,
+    graph: graphFor(label),
+    navigation: [{ agentKey: label, workflowPath: `/private/${label}` }],
+  };
 }
 
 function deferred<T>(): {
@@ -61,6 +62,11 @@ describe("SystemGraphStore", () => {
 
     const ready = await first;
     expect(ready).toMatchObject({ state: "ready", graph: graphFor("first") });
+    expect(store.peekNavigation(scope.workspaceKey)).toEqual({
+      workspaceKey: scope.workspaceKey,
+      revision: ready.revision,
+      targets: [{ agentKey: "first", workflowPath: "/private/first" }],
+    });
     await expect(store.get(scope)).resolves.toBe(ready);
     expect(builder.build).toHaveBeenCalledTimes(1);
   });
@@ -81,6 +87,10 @@ describe("SystemGraphStore", () => {
     const stale = store.requestRefresh(scope);
     expect(stale).toMatchObject({ state: "stale", graph: graphFor("first") });
     await expect(store.get(scope)).resolves.toBe(stale);
+    expect(store.peekNavigation(scope.workspaceKey)).toMatchObject({
+      revision: stale.revision,
+      targets: [{ agentKey: "first", workflowPath: "/private/first" }],
+    });
 
     refresh.resolve(buildResult("second"));
     await vi.waitFor(() => {
@@ -90,6 +100,28 @@ describe("SystemGraphStore", () => {
       });
     });
     expect(changes.map((change) => change.state)).toContain("stale");
+  });
+
+  it("does not let a builder mutate last-good navigation after commit", async () => {
+    const refresh = deferred<SystemGraphBuildResult>();
+    const navigation = [{ agentKey: "first", workflowPath: "/private/first" }];
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce({
+        cacheable: true,
+        graph: graphFor("first"),
+        navigation,
+      })
+      .mockReturnValueOnce(refresh.promise);
+    const store = new SystemGraphStore({ build });
+    await store.get(scope);
+
+    navigation[0]!.workflowPath = "/private/mutated";
+    store.requestRefresh(scope);
+
+    expect(store.peekNavigation(scope.workspaceKey)?.targets).toEqual([
+      { agentKey: "first", workflowPath: "/private/first" },
+    ]);
   });
 
   it("discards an older refresh and commits the newest edit", async () => {
@@ -140,6 +172,10 @@ describe("SystemGraphStore", () => {
         refreshing.revision,
       );
     });
+    expect(store.peekNavigation(scope.workspaceKey)).toMatchObject({
+      revision: store.peek(scope.workspaceKey)?.revision,
+      targets: [{ agentKey: "initial", workflowPath: "/private/initial" }],
+    });
 
     await store.get(scope);
     await vi.waitFor(() => {
@@ -183,6 +219,10 @@ describe("SystemGraphStore", () => {
       state: "stale",
       graph: graphFor("initial"),
     });
+    expect(store.peekNavigation(scope.workspaceKey)).toMatchObject({
+      revision: stale.revision,
+      targets: [{ agentKey: "initial", workflowPath: "/private/initial" }],
+    });
 
     pending.resolve(buildResult("obsolete"));
     await vi.waitFor(() => expect(build).toHaveBeenCalledTimes(2));
@@ -204,6 +244,22 @@ describe("SystemGraphStore", () => {
     expect(repeatedFailure).toBe(firstFailure);
     expect(firstFailure.state).toBe("stale");
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms background enrichment even when its build is superseded", async () => {
+    const pending = deferred<SystemGraphBuildResult>();
+    const startEnrichment = vi.fn();
+    const store = new SystemGraphStore({ build: vi.fn(() => pending.promise) });
+
+    const cold = store.get(scope);
+    store.reportRefreshFailure(scope);
+    pending.resolve({
+      ...buildResult("initial", false),
+      afterCommit: startEnrichment,
+    });
+    await cold;
+
+    expect(startEnrichment).toHaveBeenCalledTimes(1);
   });
 
   it("allows an explicit refresh after automatic recovery was exhausted", async () => {
@@ -233,6 +289,29 @@ describe("SystemGraphStore", () => {
     });
   });
 
+  it("starts enrichment only after its provisional graph and resolver commit", async () => {
+    const afterCommit = vi.fn(() => {
+      const snapshot = store.peek(scope.workspaceKey);
+      const navigation = store.peekNavigation(scope.workspaceKey);
+      expect(snapshot).toMatchObject({ state: "degraded" });
+      expect(navigation?.revision).toBe(snapshot?.revision);
+      expect(navigation?.targets).toEqual([
+        { agentKey: "pending", workflowPath: "/private/pending" },
+      ]);
+    });
+    const store = new SystemGraphStore({
+      build: vi.fn(async () => ({
+        ...buildResult("pending", false),
+        afterCommit,
+      })),
+    });
+
+    const snapshot = await store.get(scope);
+
+    expect(snapshot.state).toBe("degraded");
+    expect(afterCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("allows one later-open retry for a partial projection", async () => {
     const retry = deferred<SystemGraphBuildResult>();
     const build = vi
@@ -259,6 +338,38 @@ describe("SystemGraphStore", () => {
     await vi.waitFor(() => {
       expect(store.peek(scope.workspaceKey)?.state).toBe("ready");
     });
+  });
+
+  it("atomically publishes changed navigation from a same-graph degraded recovery", async () => {
+    const graph = graphFor("partial");
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce({
+        cacheable: false,
+        graph,
+        navigation: [{ agentKey: "partial", workflowPath: "/private/before" }],
+      })
+      .mockResolvedValueOnce({
+        cacheable: false,
+        graph,
+        navigation: [{ agentKey: "partial", workflowPath: "/private/after" }],
+      });
+    const onChange = vi.fn();
+    const store = new SystemGraphStore({ build }, { onChange });
+    const initial = await store.get(scope);
+    onChange.mockClear();
+
+    await store.get(scope);
+    await vi.waitFor(() =>
+      expect(store.peekNavigation(scope.workspaceKey)?.targets).toEqual([
+        { agentKey: "partial", workflowPath: "/private/after" },
+      ]),
+    );
+
+    expect(store.peek(scope.workspaceKey)?.revision).toBeGreaterThan(
+      initial.revision,
+    );
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it("does not publish or retain an in-flight build after scope retirement", async () => {

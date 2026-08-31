@@ -8,9 +8,13 @@ import {
   dirtyGraphSourceRoots,
   graphSourceRootsWithinScope,
   HarnessRegistryInventoryProvider,
+  inventorySourceRoot,
+  type AgentInventoryResult,
+  type HarnessRegistryInventoryProviderOptions,
   type WorkspaceScope,
 } from "./system-graph-inventory.js";
 import type { ManifestNameInspection } from "./definition-name.js";
+import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
 
 const WORKSPACE = "/private/workspaces/acme";
 const SCOPE: WorkspaceScope = {
@@ -26,7 +30,7 @@ function workflow(
 ): WorkflowInfo {
   return {
     name,
-    path: `${WORKSPACE}/${relativePath}`,
+    path: relativePath ? `${WORKSPACE}/${relativePath}` : WORKSPACE,
     definitionId: definitionSlug ? 1 : null,
     definitionSlug,
     source: "scan",
@@ -36,29 +40,933 @@ function workflow(
 
 function provider(
   workflows: readonly WorkflowInfo[],
-  options: {
-    inspectManifestName?: (
-      sourceRoot: string,
-    ) => Promise<ManifestNameInspection>;
-    manifestInspectionBudgetMs?: number;
-  } = {},
+  options: Partial<HarnessRegistryInventoryProviderOptions> = {},
 ): HarnessRegistryInventoryProvider {
   return new HarnessRegistryInventoryProvider({
     listWorkflows: () => workflows,
-    ...(options.inspectManifestName
-      ? { inspectManifestName: options.inspectManifestName }
-      : {}),
-    ...(options.manifestInspectionBudgetMs !== undefined
-      ? { manifestInspectionBudgetMs: options.manifestInspectionBudgetMs }
-      : {}),
+    fingerprintSource: async (sourceRoot) => `fingerprint:${sourceRoot}`,
+    ...options,
   });
 }
 
+async function enrich(
+  inventory: HarnessRegistryInventoryProvider,
+  initial: AgentInventoryResult,
+  changed: ReturnType<typeof vi.fn>,
+): Promise<AgentInventoryResult> {
+  initial.startEnrichment?.();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+  return inventory.listAgents(SCOPE);
+}
+
 describe("HarnessRegistryInventoryProvider", () => {
+  it("derives inventory roots using POSIX, drive, and UNC workspace flavor", () => {
+    expect(inventorySourceRoot("/workspace", "nested/agent")).toBe(
+      "/workspace/nested/agent",
+    );
+    expect(inventorySourceRoot("C:\\workspace", "nested/agent")).toBe(
+      "C:\\workspace\\nested\\agent",
+    );
+    expect(
+      inventorySourceRoot("\\\\server\\share\\workspace", "nested/agent"),
+    ).toBe("\\\\server\\share\\workspace\\nested\\agent");
+  });
+
+  it("uses a checkout-invariant shared local key for a scope-root agent", () => {
+    expect(workspaceRelativeLocalKey("/checkouts/one", "/checkouts/one")).toBe(
+      "local:root",
+    );
+    expect(
+      workspaceRelativeLocalKey("/different/name", "/different/name"),
+    ).toBe("local:root");
+  });
+
+  it("returns linked agents provisionally before source inspection starts", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspectManifestName = vi.fn(async () => {
+      await gate;
+      return { status: "found" as const, name: "SourceName" };
+    });
+    const changed = vi.fn();
+    const inventory = provider(
+      [workflow("Research package", "research", "old-marker")],
+      { inspectManifestName, onIdentityChange: changed },
+    );
+
+    const initial = await inventory.listAgents(SCOPE);
+
+    expect(inspectManifestName).not.toHaveBeenCalled();
+    expect(initial.identitySettled).toBe(false);
+    expect(initial.inventory).toMatchObject({
+      status: "degraded",
+      agents: [
+        {
+          agentKey: "old-marker",
+          identityStatus: "provisional",
+          identityIssue: "identity-pending",
+          path: "research",
+          entrypoint: "index.ts",
+        },
+      ],
+    });
+    expect(initial.context[0]).toMatchObject({
+      agentKey: "old-marker",
+      workflowPath: `${WORKSPACE}/research`,
+      resolutionAliases: ["old-marker"],
+    });
+
+    initial.startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(1),
+    );
+    release();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    const enriched = await inventory.listAgents(SCOPE);
+
+    expect(enriched.inventory).toMatchObject({
+      status: "complete",
+      agents: [
+        {
+          agentKey: "SourceName",
+          identityStatus: "canonical",
+        },
+      ],
+    });
+    expect(enriched.identitySettled).toBe(true);
+    expect(enriched.context[0]?.resolutionAliases).toEqual(["old-marker"]);
+  });
+
+  it("uses a renamed source identity while retaining the marker only as an alias", async () => {
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockResolvedValueOnce({ status: "found", name: "Before" })
+      .mockResolvedValueOnce({ status: "found", name: "After" });
+    const changed = vi.fn();
+    const inventory = provider([workflow("Package", "agent", "marker-name")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    const before = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+    expect(before.inventory.agents[0]?.agentKey).toBe("Before");
+
+    changed.mockClear();
+    inventory.invalidateSource(`${WORKSPACE}/agent`);
+    const pending = await inventory.listAgents(SCOPE);
+    expect(pending.inventory.agents[0]).toMatchObject({
+      agentKey: "marker-name",
+      identityIssue: "identity-pending",
+    });
+    const after = await enrich(inventory, pending, changed);
+
+    expect(after.inventory.agents[0]?.agentKey).toBe("After");
+    expect(after.context[0]?.resolutionAliases).toEqual(["marker-name"]);
+  });
+
+  it("does not call two unsettled marker identities a collision", async () => {
+    let release!: () => void;
+    const inspectionGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
+      await inspectionGate;
+      return {
+        status: "found" as const,
+        name: sourceRoot.endsWith("/first") ? "payments" : "billing",
+      };
+    });
+    const changed = vi.fn();
+    const inventory = provider(
+      [
+        workflow("First", "first", "shared-marker"),
+        workflow("Second", "second", "shared-marker"),
+      ],
+      { inspectManifestName, onIdentityChange: changed },
+    );
+
+    const pending = await inventory.listAgents(SCOPE);
+    expect(pending.identitySettled).toBe(false);
+    expect(pending.warnings).toEqual([]);
+    expect(
+      pending.inventory.agents.map((agent) => agent.identityIssue),
+    ).toEqual(["identity-pending", "identity-pending"]);
+
+    pending.startEnrichment?.();
+    release();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+    const settled = await inventory.listAgents(SCOPE);
+
+    expect(settled.identitySettled).toBe(true);
+    expect(settled.inventory.agents.map((agent) => agent.agentKey)).toEqual([
+      "billing",
+      "payments",
+    ]);
+    expect(settled.warnings).toEqual([]);
+  });
+
+  it("keeps duplicate source names as separate deterministic local identities", async () => {
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "shared",
+    }));
+    const changed = vi.fn();
+    const inventory = provider(
+      [
+        workflow("First", "first", "marker-first"),
+        workflow("Second", "second", "marker-second"),
+      ],
+      { inspectManifestName, onIdentityChange: changed },
+    );
+    const initial = await inventory.listAgents(SCOPE);
+    initial.startEnrichment?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    const result = await inventory.listAgents(SCOPE);
+
+    expect(result.inventory.agents).toEqual([
+      {
+        agentKey: "local:first",
+        identityStatus: "provisional",
+        identityIssue: "duplicate-agent-key",
+        candidateAgentKey: "shared",
+        path: "first",
+        entrypoint: "index.ts",
+      },
+      {
+        agentKey: "local:second",
+        identityStatus: "provisional",
+        identityIssue: "duplicate-agent-key",
+        candidateAgentKey: "shared",
+        path: "second",
+        entrypoint: "index.ts",
+      },
+    ]);
+    expect(result.context.map((item) => item.resolutionAliases)).toEqual([
+      ["marker-first", "shared"],
+      ["marker-second", "shared"],
+    ]);
+    expect(result.warnings).toEqual([
+      {
+        code: "duplicate-agent-key",
+        agentKey: "shared",
+        message: "Multiple agents use shared; kept each with a local identity.",
+      },
+    ]);
+  });
+
+  it("keeps a source-canonical identity above a colliding provisional marker", async () => {
+    const inspectManifestName = vi.fn(async (sourceRoot: string) =>
+      sourceRoot.endsWith("/canonical")
+        ? ({ status: "found", name: "payments" } as const)
+        : ({ status: "absent" } as const),
+    );
+    const changed = vi.fn();
+    const inventory = provider(
+      [
+        workflow("Canonical", "canonical", "old-payments"),
+        workflow("Pending", "pending", "payments"),
+      ],
+      { inspectManifestName, onIdentityChange: changed },
+    );
+    const initial = await inventory.listAgents(SCOPE);
+    initial.startEnrichment?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    const result = await inventory.listAgents(SCOPE);
+
+    expect(result.inventory.agents).toEqual([
+      {
+        agentKey: "local:pending",
+        identityStatus: "provisional",
+        identityIssue: "identity-unavailable",
+        path: "pending",
+        entrypoint: "index.ts",
+      },
+      {
+        agentKey: "payments",
+        identityStatus: "canonical",
+        path: "canonical",
+        entrypoint: "index.ts",
+      },
+    ]);
+    expect(
+      result.context.map((item) => [item.agentKey, item.resolutionAliases]),
+    ).toEqual([
+      ["local:pending", ["payments"]],
+      ["payments", ["old-payments"]],
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("preserves a provisional marker identity after inspection failure and retries only explicitly", async () => {
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockResolvedValueOnce({ status: "failed", retryable: true })
+      .mockResolvedValueOnce({ status: "found", name: "recovered" });
+    const changed = vi.fn();
+    const inventory = provider([workflow("Research", "research", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+    const failed = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+
+    expect(failed.inventory.agents[0]).toMatchObject({
+      agentKey: "marker",
+      identityStatus: "provisional",
+      identityIssue: "identity-unavailable",
+    });
+    expect(failed.warnings[0]?.code).toBe("inventory-extraction-failed");
+    expect(failed.identitySettled).toBe(false);
+    failed.startEnrichment?.();
+    await Promise.resolve();
+    expect(inspectManifestName).toHaveBeenCalledTimes(1);
+
+    inventory.retryFailedInspections(SCOPE);
+    changed.mockClear();
+    const retrying = await inventory.listAgents(SCOPE);
+    const recovered = await enrich(inventory, retrying, changed);
+    expect(inspectManifestName).toHaveBeenCalledTimes(2);
+    expect(recovered.inventory.agents[0]).toMatchObject({
+      agentKey: "recovered",
+      identityStatus: "canonical",
+    });
+  });
+
+  it("settles an unnameable identity without hiding its warning", async () => {
+    const changed = vi.fn();
+    const inventory = provider(
+      [workflow("Dashboard", "dashboard", null)],
+      {
+        inspectManifestName: async () => ({
+          status: "failed",
+          retryable: false,
+        }),
+        onIdentityChange: changed,
+      },
+    );
+
+    const result = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+
+    expect(result.inventory).toMatchObject({
+      status: "degraded",
+      agents: [
+        {
+          agentKey: "local:dashboard",
+          identityIssue: "identity-unavailable",
+        },
+      ],
+    });
+    expect(result.identitySettled).toBe(true);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        code: "inventory-extraction-failed",
+        agentKey: "local:dashboard",
+      }),
+    ]);
+  });
+
+  it("treats an absent source definition as normal unavailable identity", async () => {
+    const changed = vi.fn();
+    const inspectManifestName = vi.fn(async () => ({
+      status: "absent" as const,
+    }));
+    const inventory = provider([workflow("Research", "research", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+    const result = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+
+    expect(result.inventory.agents[0]).toMatchObject({
+      agentKey: "marker",
+      identityStatus: "provisional",
+      identityIssue: "identity-unavailable",
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.identitySettled).toBe(true);
+
+    inventory.retryFailedInspections(SCOPE);
+    const afterExplicitRetry = await inventory.listAgents(SCOPE);
+    expect(afterExplicitRetry.inventory.agents[0]).toMatchObject({
+      agentKey: "marker",
+      identityIssue: "identity-unavailable",
+    });
+    expect(inspectManifestName).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps invalid source names provisional without leaking the candidate", async () => {
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", "safe-marker")], {
+      inspectManifestName: async () => ({
+        status: "found",
+        name: "../unsafe",
+      }),
+      onIdentityChange: changed,
+    });
+    const result = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+
+    expect(result.inventory.agents[0]).toEqual({
+      agentKey: "safe-marker",
+      identityStatus: "provisional",
+      identityIssue: "identity-invalid",
+      path: "agent",
+      entrypoint: "index.ts",
+    });
+    expect(result.warnings).toEqual([
+      expect.objectContaining({ code: "inventory-extraction-failed" }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("../unsafe");
+  });
+
+  it("caps background source inspection concurrency at four", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let active = 0;
+    let maximum = 0;
+    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await gate;
+      active -= 1;
+      return { status: "found" as const, name: path.basename(sourceRoot) };
+    });
+    const changed = vi.fn();
+    const inventory = provider(
+      Array.from({ length: 7 }, (_, index) =>
+        workflow(`Agent ${index}`, `agent-${index}`, null),
+      ),
+      { inspectManifestName, onIdentityChange: changed },
+    );
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(4),
+    );
+    expect(maximum).toBe(4);
+    release();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect(changed).toHaveBeenCalledWith(
+      Array.from({ length: 7 }, (_, index) => `${WORKSPACE}/agent-${index}`),
+    );
+    expect(maximum).toBe(4);
+  });
+
+  it("surfaces settled identities within a bounded window while slower work continues", async () => {
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
+      if (sourceRoot.endsWith("/slow")) await slow;
+      return { status: "found" as const, name: path.basename(sourceRoot) };
+    });
+    const changed = vi.fn();
+    const inventory = provider(
+      [workflow("Fast", "fast", null), workflow("Slow", "slow", null)],
+      {
+        inspectManifestName,
+        onIdentityChange: changed,
+      },
+    );
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
+    expect(changed).toHaveBeenNthCalledWith(1, [`${WORKSPACE}/fast`]);
+
+    const partial = await inventory.listAgents(SCOPE);
+    expect(
+      partial.inventory.agents.find((agent) => agent.path === "fast"),
+    ).toMatchObject({ agentKey: "fast", identityStatus: "canonical" });
+    expect(
+      partial.inventory.agents.find((agent) => agent.path === "slow"),
+    ).toMatchObject({ identityIssue: "identity-pending" });
+
+    releaseSlow();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2), {
+      timeout: 5_000,
+    });
+    expect(changed).toHaveBeenNthCalledWith(2, [`${WORKSPACE}/slow`]);
+  });
+
+  it("drops a settled batch notification when its source is invalidated before the batch drains", async () => {
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
+      if (sourceRoot.endsWith("/slow")) await slow;
+      return { status: "found" as const, name: path.basename(sourceRoot) };
+    });
+    const changed = vi.fn();
+    const inventory = provider(
+      [workflow("Fast", "fast", null), workflow("Slow", "slow", null)],
+      {
+        inspectManifestName,
+        onIdentityChange: changed,
+        identityChangeCoalesceMs: 10_000,
+      },
+    );
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(async () => {
+      const snapshot = await inventory.listAgents(SCOPE);
+      expect(
+        snapshot.inventory.agents.find((agent) => agent.path === "fast")
+          ?.agentKey,
+      ).toBe("fast");
+      expect(
+        snapshot.inventory.agents.find((agent) => agent.path === "slow")
+          ?.identityIssue,
+      ).toBe("identity-pending");
+    });
+    inventory.invalidateSource(`${WORKSPACE}/fast`);
+    releaseSlow();
+
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect(changed).toHaveBeenCalledWith([`${WORKSPACE}/slow`]);
+  });
+
+  it("deduplicates in-flight inspection and prevents an invalidated result from winning", async () => {
+    let resolveBefore!: (value: ManifestNameInspection) => void;
+    let resolveAfter!: (value: ManifestNameInspection) => void;
+    const before = new Promise<ManifestNameInspection>((resolve) => {
+      resolveBefore = resolve;
+    });
+    const after = new Promise<ManifestNameInspection>((resolve) => {
+      resolveAfter = resolve;
+    });
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockReturnValueOnce(before)
+      .mockReturnValueOnce(after);
+    const changed = vi.fn();
+    const sourceRoot = `${WORKSPACE}/agent`;
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    const initial = await inventory.listAgents(SCOPE);
+    initial.startEnrichment?.();
+    initial.startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(1),
+    );
+
+    inventory.invalidateSource(sourceRoot);
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    resolveBefore({ status: "found", name: "Before" });
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(2),
+    );
+    expect(changed).not.toHaveBeenCalled();
+    resolveAfter({ status: "found", name: "After" });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0]?.agentKey,
+    ).toBe("After");
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces burst invalidations so one root cannot occupy every inspection slot", async () => {
+    let releaseOld!: (value: ManifestNameInspection) => void;
+    let releaseLatest!: (value: ManifestNameInspection) => void;
+    const oldInspection = new Promise<ManifestNameInspection>((resolve) => {
+      releaseOld = resolve;
+    });
+    const latestInspection = new Promise<ManifestNameInspection>((resolve) => {
+      releaseLatest = resolve;
+    });
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockReturnValueOnce(oldInspection)
+      .mockReturnValueOnce(latestInspection);
+    const changed = vi.fn();
+    const sourceRoot = `${WORKSPACE}/agent`;
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(1),
+    );
+    for (let index = 0; index < 6; index += 1) {
+      inventory.invalidateSource(sourceRoot);
+      (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    }
+    expect(inspectManifestName).toHaveBeenCalledTimes(1);
+
+    releaseOld({ status: "found", name: "Old" });
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(2),
+    );
+    expect(changed).not.toHaveBeenCalled();
+    releaseLatest({ status: "found", name: "Latest" });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0]?.agentKey,
+    ).toBe("Latest");
+  });
+
+  it("does not let an active inspection repopulate identity after clear", async () => {
+    let release!: (value: ManifestNameInspection) => void;
+    const inspection = new Promise<ManifestNameInspection>((resolve) => {
+      release = resolve;
+    });
+    const inspectManifestName = vi.fn(() => inspection);
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(1),
+    );
+    inventory.clear();
+    release({ status: "found", name: "Retired" });
+    await vi.waitFor(() => expect(changed).not.toHaveBeenCalled());
+
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0],
+    ).toMatchObject({
+      agentKey: "marker",
+      identityIssue: "identity-pending",
+    });
+  });
+
+  it("prunes settled identity state for a removed registry root", async () => {
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "Settled",
+    }));
+    const changed = vi.fn();
+    const sourceRoot = `${WORKSPACE}/agent`;
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+    await enrich(inventory, await inventory.listAgents(SCOPE), changed);
+
+    inventory.retainSources(new Set());
+    const readded = await inventory.listAgents(SCOPE);
+
+    expect(readded.inventory.agents[0]).toMatchObject({
+      agentKey: "marker",
+      identityIssue: "identity-pending",
+    });
+    expect(sourceRoot).toBe(readded.context[0]?.sourceRoot);
+  });
+
+  it("invalidates an in-flight inspection when its source root retires", async () => {
+    let release!: (value: ManifestNameInspection) => void;
+    const pending = new Promise<ManifestNameInspection>((resolve) => {
+      release = resolve;
+    });
+    const inspectManifestName = vi.fn(() => pending);
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      onIdentityChange: changed,
+    });
+
+    (await inventory.listAgents(SCOPE)).startEnrichment?.();
+    await vi.waitFor(() =>
+      expect(inspectManifestName).toHaveBeenCalledTimes(1),
+    );
+    inventory.retainSources(new Set());
+    release({ status: "found", name: "Retired" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(changed).not.toHaveBeenCalled();
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0],
+    ).toMatchObject({
+      agentKey: "marker",
+      identityIssue: "identity-pending",
+    });
+  });
+
+  it("serves a cached identity immediately and refreshes it after a missed edit", async () => {
+    let fingerprint = "v1";
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockResolvedValueOnce({ status: "found", name: "Before" })
+      .mockResolvedValueOnce({ status: "found", name: "After" });
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      fingerprintSource: async () => fingerprint,
+      onIdentityChange: changed,
+    });
+    const before = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+    expect(before.inventory.agents[0]?.agentKey).toBe("Before");
+
+    changed.mockClear();
+    fingerprint = "v2";
+    const immediate = await inventory.listAgents(SCOPE);
+    expect(immediate.inventory.agents[0]?.agentKey).toBe("Before");
+    immediate.startEnrichment?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0]?.agentKey,
+    ).toBe("After");
+  });
+
+  it("preserves a settled identity when background fingerprinting fails", async () => {
+    let fingerprintFails = false;
+    const fingerprintSource = vi.fn(async () => {
+      if (fingerprintFails) throw new Error("stat failed");
+      return "v1";
+    });
+    const inspectManifestName = vi.fn(async () => ({
+      status: "found" as const,
+      name: "Before",
+    }));
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      fingerprintSource,
+      onIdentityChange: changed,
+    });
+    await enrich(inventory, await inventory.listAgents(SCOPE), changed);
+
+    changed.mockClear();
+    fingerprintFails = true;
+    const cached = await inventory.listAgents(SCOPE);
+    expect(cached.inventory.agents[0]?.agentKey).toBe("Before");
+    cached.startEnrichment?.();
+    await vi.waitFor(() => expect(fingerprintSource).toHaveBeenCalledTimes(2));
+
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0]?.agentKey,
+    ).toBe("Before");
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("degrades when a changed fingerprint is observed but inspection fails", async () => {
+    let fingerprint = "v1";
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockResolvedValueOnce({ status: "found", name: "Before" })
+      .mockRejectedValueOnce(new Error("bundle failed"));
+    const changed = vi.fn();
+    const inventory = provider([workflow("Agent", "agent", "marker")], {
+      inspectManifestName,
+      fingerprintSource: async () => fingerprint,
+      onIdentityChange: changed,
+    });
+    await enrich(inventory, await inventory.listAgents(SCOPE), changed);
+
+    fingerprint = "v2";
+    changed.mockClear();
+    const cached = await inventory.listAgents(SCOPE);
+    cached.startEnrichment?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    const degraded = await inventory.listAgents(SCOPE);
+
+    expect(degraded.inventory.agents[0]).toMatchObject({
+      agentKey: "marker",
+      identityIssue: "identity-unavailable",
+    });
+    expect(degraded.warnings).toEqual([
+      expect.objectContaining({ code: "inventory-extraction-failed" }),
+    ]);
+  });
+
+  it("reinspects a retired root when it is later re-added", async () => {
+    const registered = workflow("Agent", "agent", "marker");
+    let workflows: WorkflowInfo[] = [registered];
+    let fingerprint = "v1";
+    const inspectManifestName = vi
+      .fn<() => Promise<ManifestNameInspection>>()
+      .mockResolvedValueOnce({ status: "found", name: "Before" })
+      .mockResolvedValueOnce({ status: "found", name: "After" });
+    const changed = vi.fn();
+    const inventory = new HarnessRegistryInventoryProvider({
+      listWorkflows: () => workflows,
+      inspectManifestName,
+      fingerprintSource: async () => fingerprint,
+      onIdentityChange: changed,
+    });
+    await enrich(inventory, await inventory.listAgents(SCOPE), changed);
+
+    workflows = [];
+    expect((await inventory.listAgents(SCOPE)).inventory.agents).toEqual([]);
+    fingerprint = "v2";
+    workflows = [registered];
+    changed.mockClear();
+    const readded = await inventory.listAgents(SCOPE);
+    expect(readded.inventory.agents[0]?.agentKey).toBe("marker");
+    readded.startEnrichment?.();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect(
+      (await inventory.listAgents(SCOPE)).inventory.agents[0]?.agentKey,
+    ).toBe("After");
+  });
+
+  it("computes an order- and checkout-invariant revision without private metadata", async () => {
+    const left = provider([
+      workflow("Zeta label", "zeta", "zeta", { definitionId: 1 }),
+      workflow("Alpha label", "alpha", "alpha", { definitionId: 2 }),
+    ]);
+    const otherRoot = "/different/checkout";
+    const right = provider([
+      {
+        ...workflow("Private label changed", "alpha", "alpha", {
+          definitionId: 999,
+        }),
+        path: `${otherRoot}/alpha`,
+      },
+      {
+        ...workflow("Other private label", "zeta", "zeta", {
+          definitionId: null,
+        }),
+        path: `${otherRoot}/zeta`,
+      },
+    ]);
+
+    const leftResult = await left.listAgents(SCOPE);
+    const rightResult = await right.listAgents({
+      workspaceKey: SCOPE.workspaceKey,
+      root: otherRoot,
+    });
+    expect(leftResult.inventory.agents.map((agent) => agent.agentKey)).toEqual([
+      "alpha",
+      "zeta",
+    ]);
+    expect(leftResult.inventory.version).toEqual(rightResult.inventory.version);
+  });
+
+  it("uses a checkout-invariant local identity for a markerless root agent", async () => {
+    const otherRoot = "/different/checkout";
+    const left = await provider([
+      workflow("Left checkout", "", null),
+    ]).listAgents(SCOPE);
+    const right = await provider([
+      {
+        ...workflow("Right checkout", "", null),
+        path: otherRoot,
+      },
+    ]).listAgents({ workspaceKey: SCOPE.workspaceKey, root: otherRoot });
+
+    expect(left.inventory.agents).toEqual([
+      expect.objectContaining({ agentKey: "local:root", path: "." }),
+    ]);
+    expect(left.inventory.version).toEqual(right.inventory.version);
+  });
+
+  it("resolves colliding local fallbacks without canonical duplicate metadata", async () => {
+    const workflows = [
+      workflow("Package root", "", null),
+      workflow("Root child", "root", null),
+      workflow("Suffix child", "root~2", null),
+    ];
+    const forward = await provider(workflows).listAgents(SCOPE);
+    const reversed = await provider([...workflows].reverse()).listAgents(SCOPE);
+
+    expect(forward.inventory).toEqual(reversed.inventory);
+    expect(forward.inventory.agents).toEqual([
+      expect.objectContaining({
+        agentKey: "local:root",
+        identityIssue: "identity-unavailable",
+        path: ".",
+      }),
+      expect.objectContaining({
+        agentKey: "local:root~2",
+        identityIssue: "identity-unavailable",
+        path: "root",
+      }),
+      expect.objectContaining({
+        agentKey: "local:root~2~2",
+        identityIssue: "identity-unavailable",
+        path: "root~2",
+      }),
+    ]);
+    expect(forward.warnings).toEqual([]);
+    expect(
+      forward.inventory.agents.every(
+        (agent) => agent.identityIssue !== "duplicate-agent-key",
+      ),
+    ).toBe(true);
+  });
+
+  it("deduplicates exact registry roots independently of registry order", async () => {
+    const alpha = workflow("Alpha", "agent", "alpha", { definitionId: 1 });
+    const zeta = workflow("Zeta", "agent", "zeta", { definitionId: 2 });
+    const forward = await provider([zeta, alpha]).listAgents(SCOPE);
+    const reversed = await provider([alpha, zeta]).listAgents(SCOPE);
+
+    expect(forward.inventory).toEqual(reversed.inventory);
+    expect(forward.inventory.agents).toEqual([
+      expect.objectContaining({ agentKey: "alpha", path: "agent" }),
+    ]);
+    expect(forward.inventory.version).toEqual(reversed.inventory.version);
+  });
+
+  it("includes nested agents in every containing selected project", async () => {
+    const workflows = [
+      workflow("Root", "", "root"),
+      workflow("Parent", "research", "research"),
+      workflow("Nested", "experiments/evaluator", "evaluator"),
+      {
+        ...workflow("Outside", "outside", "outside"),
+        path: `${WORKSPACE}-old/outside`,
+      },
+    ];
+    const parent = await provider(workflows).listAgents(SCOPE);
+    const nested = await provider(workflows).listAgents({
+      workspaceKey: "workspace-experiments",
+      root: `${WORKSPACE}/experiments`,
+    });
+
+    expect(parent.inventory.agents.map((agent) => agent.path)).toEqual([
+      "experiments/evaluator",
+      "research",
+      ".",
+    ]);
+    expect(nested.inventory.agents.map((agent) => agent.path)).toEqual([
+      "evaluator",
+    ]);
+  });
+
   it("matches canonical workflow roots beneath a symlinked workspace", async () => {
     if (process.platform === "win32") return;
     const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "system-graph-symlink-"),
+      path.join(os.tmpdir(), "inventory-symlink-"),
     );
     try {
       const workspaceRoot = path.join(tempRoot, "real-workspace");
@@ -72,409 +980,23 @@ describe("HarnessRegistryInventoryProvider", () => {
       ]);
       await fs.symlink(workspaceRoot, linkedRoot, "dir");
 
-      const canonicalAgentRoot = await fs.realpath(agentRoot);
-      const canonicalNestedRoot = await fs.realpath(nestedRoot);
       expect(
         graphSourceRootsWithinScope(linkedRoot, [
           agentRoot,
           nestedRoot,
           outsideRoot,
         ]),
-      ).toEqual([canonicalAgentRoot, canonicalNestedRoot]);
-      expect(
-        dirtyGraphSourceRoots(
-          linkedRoot,
-          [agentRoot, nestedRoot, outsideRoot],
-          [path.join(linkedRoot, "agent", "nested-agent", "index.ts")],
-        ),
-      ).toEqual([canonicalNestedRoot]);
+      ).toEqual([await fs.realpath(agentRoot), await fs.realpath(nestedRoot)]);
       expect(
         dirtyGraphSourceRoots(
           linkedRoot,
           [agentRoot, nestedRoot],
-          [path.join(linkedRoot, "unregistered", "index.ts")],
+          [path.join(linkedRoot, "agent", "nested-agent", "index.ts")],
         ),
-      ).toEqual([]);
+      ).toEqual([await fs.realpath(nestedRoot)]);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("returns every registry-known agent regardless of deployment, source, or relationships", async () => {
-    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
-      if (sourceRoot.endsWith("/growth")) {
-        return { status: "found" as const, name: "growth-manifest" };
-      }
-      return { status: "absent" as const };
-    });
-    const inventory = provider(
-      [
-        workflow("Research package", "research", "research", {
-          definitionId: 101,
-        }),
-        workflow("Growth package", "growth", null, { source: "connect" }),
-        workflow("Reporting package", "reporting", null),
-        {
-          ...workflow("Outside", "outside", "outside"),
-          path: `${WORKSPACE}-archive/outside`,
-        },
-      ],
-      { inspectManifestName },
-    );
-
-    await expect(inventory.listAgents(SCOPE)).resolves.toEqual({
-      agents: [
-        {
-          agentKey: "growth-manifest",
-          definitionId: null,
-          definitionSlug: null,
-          label: "Growth package",
-          resolutionAliases: ["growth-manifest"],
-          sourceRoot: `${WORKSPACE}/growth`,
-        },
-        {
-          agentKey: "local:reporting",
-          definitionId: null,
-          definitionSlug: null,
-          label: "Reporting package",
-          resolutionAliases: ["local:reporting"],
-          sourceRoot: `${WORKSPACE}/reporting`,
-        },
-        {
-          agentKey: "research",
-          definitionId: 101,
-          definitionSlug: "research",
-          label: "Research package",
-          resolutionAliases: ["research"],
-          sourceRoot: `${WORKSPACE}/research`,
-        },
-      ],
-      cacheable: true,
-      warnings: [],
-    });
-    expect(inspectManifestName).toHaveBeenCalledTimes(2);
-    expect(inspectManifestName).not.toHaveBeenCalledWith(
-      `${WORKSPACE}/research`,
-    );
-  });
-
-  it("bounds manifest inspection concurrency and keeps partial results", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started: string[] = [];
-    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
-      started.push(sourceRoot);
-      await gate;
-      if (sourceRoot.endsWith("/broken")) {
-        return { status: "failed" as const, retryable: false };
-      }
-      if (sourceRoot.endsWith("/thrown")) {
-        throw new Error(`unreadable ${sourceRoot}`);
-      }
-      return sourceRoot.endsWith("/named")
-        ? { status: "found" as const, name: "declared-name" }
-        : { status: "absent" as const };
-    });
-    const inventoryPromise = provider(
-      [
-        workflow("Named", "named", null),
-        workflow("Broken", "broken", null),
-        workflow("Thrown", "thrown", null),
-        workflow("Fallback", "fallback", null),
-        workflow("Extra A", "extra-a", null),
-        workflow("Extra B", "extra-b", null),
-      ],
-      { inspectManifestName },
-    ).listAgents(SCOPE);
-
-    await vi.waitFor(() => expect(started).toHaveLength(4));
-    await Promise.resolve();
-    expect(started).toHaveLength(4);
-    release();
-    const result = await inventoryPromise;
-
-    expect(result.agents.map((agent) => agent.agentKey)).toEqual([
-      "declared-name",
-      "local:broken",
-      "local:extra-a",
-      "local:extra-b",
-      "local:fallback",
-      "local:thrown",
-    ]);
-    expect(result.warnings).toEqual([
-      {
-        code: "inventory-extraction-failed",
-        agentKey: "local:broken",
-        message: "Could not inspect Broken; using its local identity.",
-      },
-      {
-        code: "inventory-extraction-failed",
-        agentKey: "local:thrown",
-        message: "Could not inspect Thrown; using its local identity.",
-      },
-    ]);
-    expect(inspectManifestName).toHaveBeenCalledTimes(6);
-    expect(result.cacheable).toBe(false);
-    expect(JSON.stringify(result.warnings)).not.toContain(WORKSPACE);
-  });
-
-  it("caches a project whose extraction failures have all settled", async () => {
-    // A companion package with no `defineAgent` export, or one whose
-    // dependencies were never installed, fails identically on every open.
-    // Letting it veto the cache pinned real workspaces to `degraded` and its
-    // "graph may be incomplete" banner permanently.
-    const inspectManifestName = vi.fn(async (sourceRoot: string) =>
-      sourceRoot.endsWith("/dashboard")
-        ? ({ status: "failed", retryable: false } as const)
-        : ({ status: "found", name: "growth-manifest" } as const),
-    );
-
-    const result = await provider(
-      [workflow("Growth", "growth", null), workflow("Dashboard", "dashboard", null)],
-      { inspectManifestName },
-    ).listAgents(SCOPE);
-
-    expect(result.cacheable).toBe(true);
-    // The graph becomes cacheable; it does not go quiet about what it could
-    // not resolve.
-    expect(result.warnings).toEqual([
-      {
-        code: "inventory-extraction-failed",
-        agentKey: "local:dashboard",
-        message: "Could not inspect Dashboard; using its local identity.",
-      },
-    ]);
-  });
-
-  it("keeps a project uncacheable when a failure is still clearable", async () => {
-    // "Run install first" is the one failure a later projection of the SAME
-    // unchanged source can clear, and nothing fires the watcher when
-    // `node_modules` lands. Caching it would strip the degraded banner that
-    // carries the only Retry button, freezing a `local:` label on screen.
-    const inspectManifestName = vi.fn(async (sourceRoot: string) =>
-      sourceRoot.endsWith("/needs-install")
-        ? ({ status: "failed", retryable: true } as const)
-        : ({ status: "found", name: "growth-manifest" } as const),
-    );
-
-    const result = await provider(
-      [
-        workflow("Growth", "growth", null),
-        workflow("Needs install", "needs-install", null),
-      ],
-      { inspectManifestName },
-    ).listAgents(SCOPE);
-
-    expect(result.cacheable).toBe(false);
-    expect(
-      result.warnings.map(({ code, agentKey }) => [code, agentKey]),
-    ).toEqual([["inventory-extraction-failed", "local:needs-install"]]);
-  });
-
-  it("keeps a project uncacheable while an inspection is still in flight", async () => {
-    // The budget cut this inspection off mid-read. Its name is still
-    // recoverable, so caching the provisional local label would freeze the
-    // wrong text on screen until the next source edit.
-    const started: string[] = [];
-    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
-      started.push(sourceRoot);
-      if (sourceRoot.endsWith("/settled")) {
-        return { status: "failed" as const, retryable: false };
-      }
-      await new Promise(() => {});
-      return { status: "absent" as const };
-    });
-
-    const result = await provider(
-      [workflow("Settled", "settled", null), workflow("Slow", "slow", null)],
-      { inspectManifestName, manifestInspectionBudgetMs: 20 },
-    ).listAgents(SCOPE);
-
-    expect(started).toEqual([`${WORKSPACE}/settled`, `${WORKSPACE}/slow`]);
-    expect(result.cacheable).toBe(false);
-  });
-
-  it("returns partial inventory when the enrichment budget expires", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started: string[] = [];
-    const inspectManifestName = vi.fn(async (sourceRoot: string) => {
-      started.push(sourceRoot);
-      if (sourceRoot.endsWith("/fast")) {
-        return { status: "found" as const, name: "fast-manifest" };
-      }
-      await gate;
-      return { status: "absent" as const };
-    });
-
-    const result = await provider(
-      [
-        workflow("Fast", "fast", null),
-        workflow("Slow A", "slow-a", null),
-        workflow("Slow B", "slow-b", null),
-        workflow("Slow C", "slow-c", null),
-        workflow("Slow D", "slow-d", null),
-        workflow("Slow E", "slow-e", null),
-      ],
-      { inspectManifestName, manifestInspectionBudgetMs: 20 },
-    ).listAgents(SCOPE);
-
-    expect(result.agents.map((agent) => agent.agentKey)).toEqual([
-      "fast-manifest",
-      "local:slow-a",
-      "local:slow-b",
-      "local:slow-c",
-      "local:slow-d",
-      "local:slow-e",
-    ]);
-    expect(
-      result.warnings.map(({ code, agentKey }) => [code, agentKey]),
-    ).toEqual([
-      ["inventory-extraction-failed", "local:slow-a"],
-      ["inventory-extraction-failed", "local:slow-b"],
-      ["inventory-extraction-failed", "local:slow-c"],
-      ["inventory-extraction-failed", "local:slow-d"],
-      ["inventory-extraction-failed", "local:slow-e"],
-    ]);
-    expect(started).toHaveLength(5);
-    expect(result.cacheable).toBe(false);
-
-    release();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(started).toHaveLength(5);
-  });
-
-  it("includes nested agents in every containing selected project", async () => {
-    const nestedRoot = `${WORKSPACE}/experiments`;
-    const workflows = [
-      workflow("Root agent", "", "root-agent"),
-      workflow("Parent agent", "research", "research"),
-      workflow("Nested agent", "experiments/evaluator", "evaluator"),
-      {
-        ...workflow("Prefix sibling", "sibling", "sibling"),
-        path: `${WORKSPACE}-archive/sibling`,
-      },
-    ];
-
-    const parent = await provider(workflows).listAgents(SCOPE);
-    const nested = await provider(workflows).listAgents({
-      workspaceKey: "workspace-experiments",
-      root: nestedRoot,
-    });
-
-    expect(parent.agents.map((agent) => agent.agentKey)).toEqual([
-      "evaluator",
-      "research",
-      "root-agent",
-    ]);
-    expect(nested.agents.map((agent) => agent.agentKey)).toEqual(["evaluator"]);
-  });
-
-  it("does not confuse same-basename roots or mixed Windows separators", async () => {
-    const windowsScope: WorkspaceScope = {
-      workspaceKey: "workspace-windows",
-      root: "C:\\Users\\Demo\\project",
-    };
-    const workflows: WorkflowInfo[] = [
-      {
-        ...workflow("Windows parent", "unused", "windows-parent"),
-        path: "c:/users/demo/project/main-agent",
-      },
-      {
-        ...workflow("Windows nested", "unused", "windows-nested"),
-        path: "C:\\Users\\Demo\\project\\experiments\\evaluator",
-      },
-      {
-        ...workflow("Prefix sibling", "unused", "prefix-sibling"),
-        path: "C:\\Users\\Demo\\project-old\\agent",
-      },
-      {
-        ...workflow("Other basename", "unused", "other"),
-        path: "D:\\Other\\project\\agent",
-      },
-    ];
-    const inventory = new HarnessRegistryInventoryProvider({
-      listWorkflows: () => workflows,
-    });
-
-    const result = await inventory.listAgents(windowsScope);
-
-    expect(result.agents.map((agent) => agent.agentKey)).toEqual([
-      "windows-nested",
-      "windows-parent",
-    ]);
-  });
-
-  it("preserves duplicate slugs with deterministic local identities and a warning", async () => {
-    const result = await provider([
-      workflow("First copy", "first", "shared"),
-      workflow("Second copy", "second", "shared", { source: "connect" }),
-    ]).listAgents(SCOPE);
-
-    expect(result.agents).toMatchObject([
-      {
-        agentKey: "local:first",
-        definitionSlug: "shared",
-        resolutionAliases: ["shared"],
-      },
-      {
-        agentKey: "local:second",
-        definitionSlug: "shared",
-        resolutionAliases: ["shared"],
-      },
-    ]);
-    expect(result.warnings).toEqual([
-      {
-        code: "duplicate-agent-key",
-        agentKey: "shared",
-        message: "Multiple agents use shared; kept each with a local identity.",
-      },
-    ]);
-    expect(JSON.stringify(result.warnings)).not.toContain(WORKSPACE);
-  });
-
-  it("keeps a duplicated local candidate ambiguous after suffixing its node ids", async () => {
-    const duplicate = workflow("Connected copy", "connected", null, {
-      source: "connect",
-    });
-
-    const result = await provider([duplicate, { ...duplicate }]).listAgents(
-      SCOPE,
-    );
-
-    expect(result.agents.map((agent) => agent.agentKey)).toEqual([
-      "local:connected",
-      "local:connected~2",
-    ]);
-    expect(result.agents.map((agent) => agent.resolutionAliases)).toEqual([
-      ["local:connected"],
-      ["local:connected"],
-    ]);
-    expect(result.warnings).toEqual([
-      {
-        code: "duplicate-agent-key",
-        agentKey: "local:connected",
-        message:
-          "Multiple agents use local:connected; kept each with a local identity.",
-      },
-    ]);
-  });
-
-  it("needs only the selected scope to build a cacheable inventory", async () => {
-    const inventory = new HarnessRegistryInventoryProvider({
-      listWorkflows: () => [workflow("Research", "research", "research")],
-    });
-
-    await expect(inventory.listAgents(SCOPE)).resolves.toMatchObject({
-      agents: [{ agentKey: "research" }],
-      cacheable: true,
-      warnings: [],
-    });
   });
 
   it("fails the provider call when the registry snapshot cannot be read", async () => {
@@ -483,7 +1005,6 @@ describe("HarnessRegistryInventoryProvider", () => {
         throw new Error("registry unavailable");
       },
     });
-
     await expect(inventory.listAgents(SCOPE)).rejects.toThrow(
       "registry unavailable",
     );

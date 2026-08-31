@@ -315,6 +315,13 @@
     "reason": "The internal session-binding route remains stable for existing clients."
   },
   {
+    "id": "web-system-graph-navigation-path-key",
+    "path": "packages/harness/web/src/lib/system-graph.ts",
+    "pattern": "^workflowPath$",
+    "occurrences": 1,
+    "reason": "The protected graph-navigation response key is a compatibility-sensitive private API contract."
+  },
+  {
     "id": "web-canvas-node-kind",
     "path": "packages/harness/web/src/lib/canvas-graph.ts",
     "pattern": "^launched-workflow$",

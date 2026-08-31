@@ -62,7 +62,11 @@ try {
   const result = await check({ sourceDir, typecheck: false });
   process.stdout.write(JSON.stringify({ ok: true, manifest: result.manifest, warnings: result.warnings }));
 } catch (err) {
-  process.stdout.write(JSON.stringify({ ok: false, reason: reasonFor(err) }));
+  process.stdout.write(JSON.stringify({
+    ok: false,
+    reason: reasonFor(err),
+    ...(err instanceof AgentOperationError ? { code: err.code } : {}),
+  }));
 }
 `;
 
@@ -75,6 +79,8 @@ export interface ManifestCheckSuccess {
 export interface ManifestCheckFailure {
   ok: false;
   reason: string;
+  /** Stable agent-core failure code when check() supplied one. */
+  code?: string;
 }
 
 export type ManifestCheckResult = ManifestCheckSuccess | ManifestCheckFailure;
@@ -149,6 +155,7 @@ export function runManifestCheck(
               : {
                   ok: false,
                   reason: withProjectContext(sourceDir, parsed.reason),
+                  ...(parsed.code ? { code: parsed.code } : {}),
                 },
           );
         } catch {

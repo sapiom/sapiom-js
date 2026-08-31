@@ -20,11 +20,15 @@ async function callerWithSource(source: string): Promise<AgentInventoryItem> {
   await fs.writeFile(path.join(sourceRoot, "index.ts"), source);
   return {
     agentKey: "research",
+    identityStatus: "canonical",
     definitionId: 1,
     definitionSlug: "research",
     label: "Research",
     resolutionAliases: ["research"],
     sourceRoot,
+    workflowPath: sourceRoot,
+    path: ".",
+    entrypoint: "index.ts",
   };
 }
 

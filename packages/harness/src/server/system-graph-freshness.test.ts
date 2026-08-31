@@ -23,6 +23,26 @@ async function scaffoldAgent(
   return agentRoot;
 }
 
+function installedAgentSource(name: string, target?: string): string {
+  const invocation = target
+    ? `await ctx.sapiom.agents.run({ definition: ${JSON.stringify(target)} });`
+    : "";
+  return `import { defineAgent, defineStep, terminate } from "@sapiom/agent";
+
+const run = defineStep({
+  name: "run",
+  next: [],
+  terminal: true,
+  async run(input, ctx) {
+    ${invocation}
+    return terminate({});
+  },
+});
+
+export default defineAgent({ name: ${JSON.stringify(name)}, entry: "run", steps: { run } });
+`;
+}
+
 describe("workspace graph freshness wiring", () => {
   let tempRoot: string;
   let stateRoot: string;
@@ -111,8 +131,24 @@ describe("workspace graph freshness wiring", () => {
         return JSON.parse(raw) as SystemGraphSnapshot;
       };
       const initial = await readGraph();
-      expect(initial).toMatchObject({ state: "ready" });
+      // These fixtures intentionally have no defineAgent export. The graph is
+      // useful immediately through their marker identities while background
+      // source inspection honestly leaves the inventory degraded.
+      expect(initial).toMatchObject({ state: "degraded" });
       expect(initial.graph?.edges).toEqual([]);
+      let absentSettled!: SystemGraphSnapshot;
+      await vi.waitFor(
+        async () => {
+          absentSettled = await readGraph();
+          expect(absentSettled.revision).toBeGreaterThan(initial.revision);
+          expect(
+            absentSettled.graph?.warnings.some(
+              (warning) => warning.code === "inventory-extraction-failed",
+            ),
+          ).toBe(false);
+        },
+        { timeout: 8_000, interval: 150 },
+      );
       graphEvents.length = 0;
 
       await fs.writeFile(
@@ -124,7 +160,7 @@ describe("workspace graph freshness wiring", () => {
         async () => {
           sourceRefresh = await readGraph();
           expect(sourceRefresh.revision).toBeGreaterThan(initial.revision);
-          expect(sourceRefresh.state).toBe("ready");
+          expect(sourceRefresh.state).toBe("degraded");
           expect(sourceRefresh.graph?.edges).toEqual([
             expect.objectContaining({
               from: "agent:research",
@@ -136,7 +172,9 @@ describe("workspace graph freshness wiring", () => {
         { timeout: 8_000, interval: 150 },
       );
       expect(graphEvents.some((event) => event.state === "stale")).toBe(true);
-      expect(graphEvents.some((event) => event.state === "ready")).toBe(true);
+      expect(graphEvents.some((event) => event.state === "degraded")).toBe(
+        true,
+      );
 
       await fs.writeFile(path.join(researchRoot, "index.ts"), "export {};\n");
       let sourceRemoved!: SystemGraphSnapshot;
@@ -233,6 +271,8 @@ describe("workspace graph freshness wiring", () => {
       expect(manualRetryResponse.status).toBe(200);
       const manualRetry =
         (await manualRetryResponse.json()) as SystemGraphSnapshot;
+      // Manual Retry does not unset identities already proven absent. It
+      // rebuilds the graph, but the settled inventory remains cacheable.
       expect(manualRetry).toMatchObject({ state: "ready" });
       expect(manualRetry.revision).toBeGreaterThan(beforeManualRetry.revision);
     },
@@ -247,12 +287,21 @@ describe("workspace graph freshness wiring", () => {
       // agent registered twice; the duplicates collided into `local:` fallback
       // keys and each cross-agent target became ambiguous, dropping its edge.
       // macOS hits this on any `os.tmpdir()` path (`/var` -> `/private/var`).
+      await fs.symlink(
+        path.join(process.cwd(), "node_modules"),
+        path.join(workspaceRoot, "node_modules"),
+        "dir",
+      );
       await scaffoldAgent(
         workspaceRoot,
         "research",
-        'ctx.sapiom.agents.run({ definition: "growth" });\n',
+        installedAgentSource("research", "growth"),
       );
-      await scaffoldAgent(workspaceRoot, "growth");
+      await scaffoldAgent(
+        workspaceRoot,
+        "growth",
+        installedAgentSource("growth"),
+      );
       const linkedRoot = path.join(tempRoot, "linked-workspace");
       await fs.symlink(workspaceRoot, linkedRoot, "dir");
       await fs.writeFile(
