@@ -15,12 +15,7 @@
  * a pausable handle). An orchestration is addressed by its **slug** (its stable handle).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
-import {
-  AGENT_RUNTIME_LINEAGE_HEADER,
-  AGENT_RUNTIME_PROVENANCE_VERSION_HEADER,
-  agentRuntimeProvenanceHeaders,
-  retainAgentRuntimeLineage,
-} from "../_internal/agent-runtime-provenance.js";
+import { takeAgentRuntimeCallsite } from "./runtime-callsite-store.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 const DEFAULT_BASE_URL =
@@ -44,6 +39,92 @@ export type ExecutionStatus =
   | "failed"
   | "cancelled";
 const TERMINAL = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
+
+const AGENT_RUNTIME_PROVENANCE_VERSION = 1 as const;
+const AGENT_RUNTIME_PROVENANCE_VERSION_HEADER =
+  "x-sapiom-runtime-provenance-version";
+const AGENT_RUNTIME_CALLSITE_HEADER = "x-sapiom-runtime-callsite-evidence";
+const AGENT_RUNTIME_LINEAGE_HEADER = "x-sapiom-runtime-lineage-receipt";
+const MAX_OPAQUE_TOKEN_LENGTH = 8_192;
+const RUNTIME_PROVENANCE_REDACTION = "[REDACTED runtime provenance]";
+
+interface LineageRecord {
+  readonly receipt: string;
+  active: boolean;
+  consumed: boolean;
+}
+
+const resultLineage = new WeakMap<object, LineageRecord>();
+
+function supportedOpaqueToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_OPAQUE_TOKEN_LENGTH &&
+    !/[\r\n]/.test(value)
+  );
+}
+
+function takeAgentRuntimeLineage(directInput: unknown): string | undefined {
+  if (directInput === null || typeof directInput !== "object") return undefined;
+  const record = resultLineage.get(directInput);
+  resultLineage.delete(directInput);
+  const receipt =
+    record?.active && !record.consumed ? record.receipt : undefined;
+  if (record) record.consumed = true;
+  return receipt;
+}
+
+function retainAgentRuntimeLineage(
+  targets: readonly object[],
+  version: string | null,
+  receipt: string | null,
+): void {
+  if (
+    version !== String(AGENT_RUNTIME_PROVENANCE_VERSION) ||
+    !supportedOpaqueToken(receipt)
+  ) {
+    return;
+  }
+  const record: LineageRecord = {
+    receipt: `${receipt}`,
+    active: true,
+    consumed: false,
+  };
+  for (const target of targets) resultLineage.set(target, record);
+  const timer = setTimeout(() => {
+    record.active = false;
+  }, 0);
+  timer.unref?.();
+}
+
+function redactAgentRuntimeProvenance(
+  text: string,
+  privateValues: readonly (string | null | undefined)[],
+): string {
+  let redacted = text;
+  const values = [...new Set(privateValues.filter(supportedOpaqueToken))].sort(
+    (left, right) => right.length - left.length,
+  );
+  for (const value of values) {
+    redacted = redacted.split(value).join(RUNTIME_PROVENANCE_REDACTION);
+  }
+  return redacted;
+}
+
+function redactedAgentRuntimeError(
+  error: unknown,
+  privateValues: readonly (string | null | undefined)[],
+): Error {
+  const redacted = new Error(
+    redactAgentRuntimeProvenance(
+      error instanceof Error ? error.message : String(error),
+      privateValues,
+    ),
+  );
+  if (error instanceof Error) redacted.name = error.name;
+  return redacted;
+}
 
 export interface AgentRunSpec {
   /** Slug of the deployed orchestration to run (its stable handle). */
@@ -184,6 +265,7 @@ interface ExecutionDoc {
  */
 async function launchScheduled(
   spec: AgentRunSpec,
+  input: Record<string, unknown>,
   transport: Transport,
   baseUrl: string,
 ): Promise<RunHandle> {
@@ -194,7 +276,7 @@ async function launchScheduled(
       body: JSON.stringify({
         kind: "schedule_once",
         at: spec.at,
-        input: spec.input ?? {},
+        input,
       }),
       headers: workflowResumeHeaders(transport.resumeToken),
     },
@@ -220,23 +302,46 @@ export async function launch(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<RunHandle> {
+  const input = spec.input ?? {};
+  const callsite = takeAgentRuntimeCallsite(spec);
+  // Always consume an exact input receipt at an observed agent boundary. It is
+  // forwarded only when this same invocation has trusted v1 build evidence.
+  const inputLineageReceipt = takeAgentRuntimeLineage(input);
   if (spec.at) {
-    return launchScheduled(spec, transport, baseUrl);
+    return launchScheduled(spec, input, transport, baseUrl);
   }
-  const res = await transport.request<StartResponse>(
-    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/executions`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        input: spec.input ?? {},
-        idempotencyKey: spec.idempotencyKey,
-      }),
-      headers: {
-        ...workflowResumeHeaders(transport.resumeToken),
-        ...agentRuntimeProvenanceHeaders(spec, spec.input),
+  const provenanceHeaders: Record<string, string> = {};
+  const privateProvenanceValues: string[] = [];
+  if (callsite) {
+    provenanceHeaders[AGENT_RUNTIME_PROVENANCE_VERSION_HEADER] = String(
+      AGENT_RUNTIME_PROVENANCE_VERSION,
+    );
+    provenanceHeaders[AGENT_RUNTIME_CALLSITE_HEADER] = callsite;
+    privateProvenanceValues.push(callsite);
+    if (inputLineageReceipt) {
+      provenanceHeaders[AGENT_RUNTIME_LINEAGE_HEADER] = inputLineageReceipt;
+      privateProvenanceValues.push(inputLineageReceipt);
+    }
+  }
+  let res: StartResponse;
+  try {
+    res = await transport.request<StartResponse>(
+      `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/executions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          input,
+          idempotencyKey: spec.idempotencyKey,
+        }),
+        headers: {
+          ...workflowResumeHeaders(transport.resumeToken),
+          ...provenanceHeaders,
+        },
       },
-    },
-  );
+    );
+  } catch (error) {
+    throw redactedAgentRuntimeError(error, privateProvenanceValues);
+  }
   const executionId = res.executionId;
 
   const fetchDoc = async (): Promise<{
@@ -245,21 +350,48 @@ export async function launch(
     lineageReceipt: string | null;
   }> => {
     const url = `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`;
-    const response = await transport.fetch(url, {
-      headers: { "content-type": "application/json" },
-    });
+    let response: Response;
+    try {
+      response = await transport.fetch(url, {
+        headers: { "content-type": "application/json" },
+      });
+    } catch (error) {
+      throw redactedAgentRuntimeError(error, privateProvenanceValues);
+    }
+    const provenanceVersion =
+      response.headers?.get?.(AGENT_RUNTIME_PROVENANCE_VERSION_HEADER) ?? null;
+    const lineageReceipt =
+      response.headers?.get?.(AGENT_RUNTIME_LINEAGE_HEADER) ?? null;
     if (!response.ok) {
+      let body: string;
+      try {
+        body = await response.text();
+      } catch (error) {
+        throw redactedAgentRuntimeError(error, [
+          ...privateProvenanceValues,
+          lineageReceipt,
+        ]);
+      }
       throw new Error(
-        `GET ${url} → ${response.status} ${await response.text()}`,
+        redactAgentRuntimeProvenance(
+          `GET ${url} → ${response.status} ${body}`,
+          [...privateProvenanceValues, lineageReceipt],
+        ),
       );
     }
+    let doc: ExecutionDoc;
+    try {
+      doc = (await response.json()) as ExecutionDoc;
+    } catch (error) {
+      throw redactedAgentRuntimeError(error, [
+        ...privateProvenanceValues,
+        lineageReceipt,
+      ]);
+    }
     return {
-      doc: (await response.json()) as ExecutionDoc,
-      provenanceVersion:
-        response.headers?.get?.(AGENT_RUNTIME_PROVENANCE_VERSION_HEADER) ??
-        null,
-      lineageReceipt:
-        response.headers?.get?.(AGENT_RUNTIME_LINEAGE_HEADER) ?? null,
+      doc,
+      provenanceVersion,
+      lineageReceipt,
     };
   };
 
@@ -286,22 +418,26 @@ export async function launch(
             output: d.output ?? null,
             error: d.error ?? null,
           };
-          retainAgentRuntimeLineage(result, provenanceVersion, lineageReceipt);
+          const lineageTargets: object[] = [result];
           // This exact output object is the author-facing value commonly handed
           // to the next agent. Copies, nested values, and primitives remain
           // deliberately unassociated.
           if (d.output !== null && typeof d.output === "object") {
-            retainAgentRuntimeLineage(
-              d.output,
-              provenanceVersion,
-              lineageReceipt,
-            );
+            lineageTargets.push(d.output);
           }
+          retainAgentRuntimeLineage(
+            lineageTargets,
+            provenanceVersion,
+            lineageReceipt,
+          );
           return result;
         }
         if (Date.now() > deadline) {
           throw new Error(
-            `orchestration ${executionId} timed out after ${timeoutMs}ms (last status: ${d.status})`,
+            redactAgentRuntimeProvenance(
+              `orchestration ${executionId} timed out after ${timeoutMs}ms (last status: ${d.status})`,
+              [...privateProvenanceValues, lineageReceipt],
+            ),
           );
         }
         await new Promise((r) => setTimeout(r, pollMs));

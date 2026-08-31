@@ -1,10 +1,11 @@
 import { createClient } from "../index.js";
-import {
-  AGENT_RUNTIME_CALLSITE_HEADER,
-  AGENT_RUNTIME_LINEAGE_HEADER,
-  AGENT_RUNTIME_PROVENANCE_VERSION_HEADER,
-  carryAgentRuntimeProvenance,
-} from "../_internal/agent-runtime-provenance.js";
+import { carryAgentRuntimeProvenance } from "../_internal/agent-runtime-provenance.js";
+import * as publicCarrier from "../_internal/agent-runtime-provenance.js";
+
+const AGENT_RUNTIME_PROVENANCE_VERSION_HEADER =
+  "x-sapiom-runtime-provenance-version";
+const AGENT_RUNTIME_CALLSITE_HEADER = "x-sapiom-runtime-callsite-evidence";
+const AGENT_RUNTIME_LINEAGE_HEADER = "x-sapiom-runtime-lineage-receipt";
 
 interface CapturedCall {
   url: string;
@@ -29,6 +30,7 @@ function agentServer(
   opts: {
     receiptVersion?: string;
     receipt?: string;
+    terminalStatus?: "completed" | "failed" | "cancelled";
   } = {},
 ): { fetch: typeof globalThis.fetch; calls: CapturedCall[] } {
   const calls: CapturedCall[] = [];
@@ -46,8 +48,14 @@ function agentServer(
         201,
       );
     }
+    const terminalStatus = opts.terminalStatus ?? "completed";
     return response(
-      { status: "completed", output: { ok: true }, error: null },
+      terminalStatus === "completed"
+        ? { status: terminalStatus, output: { ok: true }, error: null }
+        : {
+            status: terminalStatus,
+            error: { message: `${terminalStatus} privately` },
+          },
       200,
       {
         ...(opts.receiptVersion
@@ -74,6 +82,13 @@ function posts(calls: CapturedCall[]): CapturedCall[] {
 }
 
 describe("agents runtime provenance v1", () => {
+  it("publishes only the minimal build-facing carrier surface", () => {
+    expect(Object.keys(publicCarrier).sort()).toEqual([
+      "AGENT_RUNTIME_PROVENANCE_VERSION",
+      "carryAgentRuntimeProvenance",
+    ]);
+  });
+
   it("launch carries opaque callsite evidence out of band and wait retains a private receipt", async () => {
     const server = agentServer({
       receiptVersion: "1",
@@ -108,6 +123,21 @@ describe("agents runtime provenance v1", () => {
       "output",
       "error",
     ]);
+    expect(Reflect.ownKeys(result)).toEqual([
+      "executionId",
+      "status",
+      "output",
+      "error",
+    ]);
+    expect(Reflect.ownKeys(result.output as object)).toEqual(["ok"]);
+    for (const descriptor of [
+      ...Object.values(Object.getOwnPropertyDescriptors(result)),
+      ...Object.values(
+        Object.getOwnPropertyDescriptors(result.output as object),
+      ),
+    ]) {
+      expect(descriptor.value).not.toBe("signed.receipt");
+    }
     expect(JSON.stringify(result)).not.toContain("signed.receipt");
   });
 
@@ -119,10 +149,15 @@ describe("agents runtime provenance v1", () => {
     const client = createClient({ apiKey: "k", fetch: server.fetch });
     const result = await client.agents.run({ definition: "producer" });
 
-    await client.agents.run({
-      definition: "consumer",
-      input: result.output as Record<string, unknown>,
-    });
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "consumer",
+          input: result.output as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.consumer" },
+      ),
+    );
 
     const secondLaunch = posts(server.calls)[1]!;
     expect(header(secondLaunch, AGENT_RUNTIME_PROVENANCE_VERSION_HEADER)).toBe(
@@ -136,6 +171,241 @@ describe("agents runtime provenance v1", () => {
     );
   });
 
+  it("forwards the exact full SDK result and consumes the shared output alias", async () => {
+    const server = agentServer({
+      receiptVersion: "1",
+      receipt: "signed.full-result",
+    });
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const result = await client.agents.run({ definition: "producer" });
+
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "full-result-consumer",
+          input: result as unknown as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.full-result" },
+      ),
+    );
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "output-alias-replay",
+          input: result.output as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.output-replay" },
+      ),
+    );
+
+    const [, direct, replay] = posts(server.calls);
+    expect(header(direct!, AGENT_RUNTIME_LINEAGE_HEADER)).toBe(
+      "signed.full-result",
+    );
+    expect(header(replay!, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "retains a private receipt on a %s full result",
+    async (terminalStatus) => {
+      const server = agentServer({
+        receiptVersion: "1",
+        receipt: `signed.${terminalStatus}`,
+        terminalStatus,
+      });
+      const client = createClient({ apiKey: "k", fetch: server.fetch });
+      const result = await client.agents.run({ definition: "producer" });
+
+      await client.agents.run(
+        carryAgentRuntimeProvenance(
+          {
+            definition: "consumer",
+            input: result as unknown as Record<string, unknown>,
+          },
+          { version: 1, callsite: `callsite.${terminalStatus}` },
+        ),
+      );
+
+      expect(result.status).toBe(terminalStatus);
+      expect(
+        header(posts(server.calls)[1]!, AGENT_RUNTIME_LINEAGE_HEADER),
+      ).toBe(`signed.${terminalStatus}`);
+      expect(Reflect.ownKeys(result)).toEqual([
+        "executionId",
+        "status",
+        "output",
+        "error",
+      ]);
+    },
+  );
+
+  it("captures input once for both serialization and lineage lookup", async () => {
+    const server = agentServer({
+      receiptVersion: "1",
+      receipt: "signed.single-read",
+    });
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const result = await client.agents.run({ definition: "producer" });
+    let reads = 0;
+    const spec = carryAgentRuntimeProvenance(
+      {
+        definition: "consumer",
+        get input(): Record<string, unknown> {
+          reads += 1;
+          return reads === 1
+            ? (result.output as Record<string, unknown>)
+            : { swapped: true };
+        },
+      },
+      { version: 1, callsite: "callsite.single-read" },
+    );
+
+    await client.agents.run(spec);
+
+    const secondLaunch = posts(server.calls)[1]!;
+    expect(reads).toBe(1);
+    expect(JSON.parse(String(secondLaunch.init.body)).input).toEqual(
+      result.output,
+    );
+    expect(header(secondLaunch, AGENT_RUNTIME_LINEAGE_HEADER)).toBe(
+      "signed.single-read",
+    );
+  });
+
+  it("snapshots validated callsite scalars", async () => {
+    const server = agentServer();
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const provenance = { version: 1 as const, callsite: "callsite.safe" };
+    const spec = carryAgentRuntimeProvenance(
+      { definition: "consumer" },
+      provenance,
+    );
+    provenance.callsite = "callsite.mutated\r\nprivate";
+
+    await client.agents.launch(spec);
+
+    expect(header(posts(server.calls)[0]!, AGENT_RUNTIME_CALLSITE_HEADER)).toBe(
+      "callsite.safe",
+    );
+  });
+
+  it("requires a build-carried callsite and consumes lineage at an uninstrumented boundary", async () => {
+    const server = agentServer({
+      receiptVersion: "1",
+      receipt: "signed.consume",
+    });
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const result = await client.agents.run({ definition: "producer" });
+
+    await client.agents.run({
+      definition: "uninstrumented",
+      input: result.output as Record<string, unknown>,
+    });
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "replay",
+          input: result.output as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.replay" },
+      ),
+    );
+
+    const [, uninstrumented, replay] = posts(server.calls);
+    expect(
+      header(uninstrumented!, AGENT_RUNTIME_LINEAGE_HEADER),
+    ).toBeUndefined();
+    expect(header(replay!, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
+  });
+
+  it("consumes one carried callsite and lineage receipt once", async () => {
+    const server = agentServer({
+      receiptVersion: "1",
+      receipt: "signed.once",
+    });
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const result = await client.agents.run({ definition: "producer" });
+    const spec = carryAgentRuntimeProvenance(
+      {
+        definition: "consumer",
+        input: result.output as Record<string, unknown>,
+      },
+      { version: 1, callsite: "callsite.once" },
+    );
+
+    await client.agents.run(spec);
+    await client.agents.run(spec);
+
+    const [, first, replay] = posts(server.calls);
+    expect(header(first!, AGENT_RUNTIME_LINEAGE_HEADER)).toBe("signed.once");
+    expect(header(replay!, AGENT_RUNTIME_CALLSITE_HEADER)).toBeUndefined();
+    expect(header(replay!, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
+  });
+
+  it("does not forward an exact reference after a timer boundary", async () => {
+    const server = agentServer({
+      receiptVersion: "1",
+      receipt: "signed.timer",
+    });
+    const client = createClient({ apiKey: "k", fetch: server.fetch });
+    const result = await client.agents.run({ definition: "producer" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "consumer",
+          input: result.output as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.after-timer" },
+      ),
+    );
+
+    expect(
+      header(posts(server.calls)[1]!, AGENT_RUNTIME_LINEAGE_HEADER),
+    ).toBeUndefined();
+  });
+
+  it.each(["array", "map"] as const)(
+    "does not replay an exact reference from %s after an uninstrumented boundary",
+    async (container) => {
+      const server = agentServer({
+        receiptVersion: "1",
+        receipt: `signed.${container}`,
+      });
+      const client = createClient({ apiKey: "k", fetch: server.fetch });
+      const result = await client.agents.run({ definition: "producer" });
+      let exact: unknown;
+      if (container === "array") {
+        const stored = [result.output];
+        exact = stored[0];
+      } else {
+        const stored = new Map([["result", result.output]]);
+        exact = stored.get("result");
+      }
+
+      await client.agents.run({
+        definition: "queue-worker-uninstrumented",
+        input: exact as Record<string, unknown>,
+      });
+      await client.agents.run(
+        carryAgentRuntimeProvenance(
+          {
+            definition: "replay",
+            input: exact as Record<string, unknown>,
+          },
+          { version: 1, callsite: `callsite.${container}` },
+        ),
+      );
+
+      const [, uninstrumented, replay] = posts(server.calls);
+      expect(
+        header(uninstrumented!, AGENT_RUNTIME_LINEAGE_HEADER),
+      ).toBeUndefined();
+      expect(header(replay!, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
+    },
+  );
+
   it.each([
     ["a copied output", (result: object) => ({ ...result })],
     ["a nested output", (result: object) => ({ result })],
@@ -148,16 +418,21 @@ describe("agents runtime provenance v1", () => {
     const client = createClient({ apiKey: "k", fetch: server.fetch });
     const result = await client.agents.run({ definition: "producer" });
 
-    await client.agents.run({
-      definition: "consumer",
-      input: toInput(result.output as object),
-    });
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "consumer",
+          input: toInput(result.output as object),
+        },
+        { version: 1, callsite: `callsite.${_label.replace(/\s/g, "-")}` },
+      ),
+    );
 
     const secondLaunch = posts(server.calls)[1]!;
     expect(header(secondLaunch, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
-    expect(
-      header(secondLaunch, AGENT_RUNTIME_PROVENANCE_VERSION_HEADER),
-    ).toBeUndefined();
+    expect(header(secondLaunch, AGENT_RUNTIME_PROVENANCE_VERSION_HEADER)).toBe(
+      "1",
+    );
   });
 
   it("ignores an unsupported receipt version", async () => {
@@ -167,10 +442,15 @@ describe("agents runtime provenance v1", () => {
     });
     const client = createClient({ apiKey: "k", fetch: server.fetch });
     const result = await client.agents.run({ definition: "producer" });
-    await client.agents.run({
-      definition: "consumer",
-      input: result.output as Record<string, unknown>,
-    });
+    await client.agents.run(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "consumer",
+          input: result.output as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.unsupported" },
+      ),
+    );
 
     expect(
       header(posts(server.calls)[1]!, AGENT_RUNTIME_LINEAGE_HEADER),
@@ -194,8 +474,18 @@ describe("agents runtime provenance v1", () => {
     );
 
     await client.agents.launch(scheduled);
+    await client.agents.launch(
+      carryAgentRuntimeProvenance(
+        {
+          definition: "consumer-replay",
+          input: result.output as Record<string, unknown>,
+        },
+        { version: 1, callsite: "callsite.after-delayed" },
+      ),
+    );
 
     const delayedLaunch = posts(server.calls)[1]!;
+    const replay = posts(server.calls)[2]!;
     expect(
       header(delayedLaunch, AGENT_RUNTIME_CALLSITE_HEADER),
     ).toBeUndefined();
@@ -203,20 +493,52 @@ describe("agents runtime provenance v1", () => {
     expect(
       header(delayedLaunch, AGENT_RUNTIME_PROVENANCE_VERSION_HEADER),
     ).toBeUndefined();
+    expect(header(replay, AGENT_RUNTIME_LINEAGE_HEADER)).toBeUndefined();
   });
 
-  it("does not include private evidence in surfaced HTTP errors", async () => {
+  it("redacts reflected request provenance from invocation errors", async () => {
     const calls: CapturedCall[] = [];
+    const receipt = "signed.invocation-private";
+    let postCount = 0;
     const fetch = (async (
       input: string | URL | Request,
       init: RequestInit = {},
     ) => {
       calls.push({ url: String(input), init });
-      return response({ message: "rejected" }, 400);
+      if (init.method !== "POST") {
+        return response(
+          { status: "completed", output: { ok: true }, error: null },
+          200,
+          {
+            [AGENT_RUNTIME_PROVENANCE_VERSION_HEADER]: "1",
+            [AGENT_RUNTIME_LINEAGE_HEADER]: receipt,
+          },
+        );
+      }
+      postCount += 1;
+      if (postCount === 1) {
+        return response(
+          { status: "enqueued", executionId: "exec-producer" },
+          201,
+        );
+      }
+      const headers = init.headers as Record<string, string>;
+      return response(
+        {
+          message: `rejected ${headers[AGENT_RUNTIME_CALLSITE_HEADER] ?? ""} ${
+            headers[AGENT_RUNTIME_LINEAGE_HEADER] ?? ""
+          }`,
+        },
+        400,
+      );
     }) as typeof globalThis.fetch;
     const client = createClient({ apiKey: "k", fetch });
+    const result = await client.agents.run({ definition: "producer" });
     const spec = carryAgentRuntimeProvenance(
-      { definition: "child" },
+      {
+        definition: "child",
+        input: result.output as Record<string, unknown>,
+      },
       { version: 1, callsite: "callsite.must-stay-private" },
     );
 
@@ -232,9 +554,93 @@ describe("agents runtime provenance v1", () => {
     expect((error as Error).message).not.toContain(
       "callsite.must-stay-private",
     );
-    expect(String(calls[0]!.init.body)).not.toContain(
+    expect((error as Error).message).not.toContain(receipt);
+    expect(String(posts(calls)[1]!.init.body)).not.toContain(
       "callsite.must-stay-private",
     );
+    expect(String(posts(calls)[1]!.init.body)).not.toContain(receipt);
+  });
+
+  it("redacts reflected callsite and response receipt from status errors", async () => {
+    const receipt = "signed.status-private";
+    const callsite = "callsite.status-private";
+    const fetch = (async (
+      _input: string | URL | Request,
+      init: RequestInit = {},
+    ) => {
+      if (init.method === "POST") {
+        return response(
+          { status: "enqueued", executionId: "exec-status" },
+          201,
+        );
+      }
+      return response({ message: `reflected ${callsite} ${receipt}` }, 500, {
+        [AGENT_RUNTIME_PROVENANCE_VERSION_HEADER]: "1",
+        [AGENT_RUNTIME_LINEAGE_HEADER]: receipt,
+      });
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+    const handle = await client.agents.launch(
+      carryAgentRuntimeProvenance(
+        { definition: "child" },
+        { version: 1, callsite },
+      ),
+    );
+
+    let error: unknown;
+    try {
+      await handle.status();
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("reflected");
+    expect((error as Error).message).not.toContain(callsite);
+    expect((error as Error).message).not.toContain(receipt);
+  });
+
+  it("redacts known provenance from status parsing errors", async () => {
+    const receipt = "signed.parse-private";
+    const callsite = "callsite.parse-private";
+    const fetch = (async (
+      _input: string | URL | Request,
+      init: RequestInit = {},
+    ) => {
+      if (init.method === "POST") {
+        return response({ status: "enqueued", executionId: "exec-parse" }, 201);
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          [AGENT_RUNTIME_PROVENANCE_VERSION_HEADER]: "1",
+          [AGENT_RUNTIME_LINEAGE_HEADER]: receipt,
+        }),
+        json: async () => {
+          throw new Error(`invalid response ${callsite} ${receipt}`);
+        },
+      } as unknown as Response;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+    const handle = await client.agents.launch(
+      carryAgentRuntimeProvenance(
+        { definition: "child" },
+        { version: 1, callsite },
+      ),
+    );
+
+    let error: unknown;
+    try {
+      await handle.status();
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("invalid response");
+    expect((error as Error).message).not.toContain(callsite);
+    expect((error as Error).message).not.toContain(receipt);
   });
 
   it("preserves legacy request and result behavior when provenance is absent", async () => {
