@@ -15,6 +15,12 @@
  * a pausable handle). An orchestration is addressed by its **slug** (its stable handle).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import {
+  AGENT_RUNTIME_LINEAGE_HEADER,
+  AGENT_RUNTIME_PROVENANCE_VERSION_HEADER,
+  agentRuntimeProvenanceHeaders,
+  retainAgentRuntimeLineage,
+} from "../_internal/agent-runtime-provenance.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 const DEFAULT_BASE_URL =
@@ -107,9 +113,7 @@ export class AgentResultSchemaError extends Error {}
  * `output` itself is the child orchestration's contract, not validated here.
  */
 export const agentResultSchema = {
-  parse<TOutput = unknown>(
-    value: unknown,
-  ): AgentRunResultPayload<TOutput> {
+  parse<TOutput = unknown>(value: unknown): AgentRunResultPayload<TOutput> {
     const fail = (msg: string): never => {
       throw new AgentResultSchemaError(
         `invalid orchestration result payload: ${msg}`,
@@ -144,10 +148,7 @@ export interface RunHandle extends DispatchHandle {
   /** Fetch the current status without blocking. */
   status(): Promise<ExecutionStatus>;
   /** Poll to a terminal state and resolve the run result. */
-  wait(opts?: {
-    timeoutMs?: number;
-    pollMs?: number;
-  }): Promise<AgentRunResult>;
+  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<AgentRunResult>;
 }
 
 /**
@@ -181,12 +182,20 @@ interface ExecutionDoc {
  * engine stamps on the eventually-fired child, so the resume lands. Pause-only: there is no child
  * to poll until the scheduled time, so `status`/`wait` throw.
  */
-async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
+async function launchScheduled(
+  spec: AgentRunSpec,
+  transport: Transport,
+  baseUrl: string,
+): Promise<RunHandle> {
   const res = await transport.request<{ id: string }>(
     `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/triggers`,
     {
       method: "POST",
-      body: JSON.stringify({ kind: "schedule_once", at: spec.at, input: spec.input ?? {} }),
+      body: JSON.stringify({
+        kind: "schedule_once",
+        at: spec.at,
+        input: spec.input ?? {},
+      }),
       headers: workflowResumeHeaders(transport.resumeToken),
     },
   );
@@ -197,7 +206,10 @@ async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl
   };
   return {
     executionId: "", // no child execution exists until the schedule fires
-    dispatch: { correlationId: `trigger-${res.id}`, resultSignal: AGENTS_RESULT_SIGNAL },
+    dispatch: {
+      correlationId: `trigger-${res.id}`,
+      resultSignal: AGENTS_RESULT_SIGNAL,
+    },
     status: notAvailable,
     wait: notAvailable,
   };
@@ -219,15 +231,37 @@ export async function launch(
         input: spec.input ?? {},
         idempotencyKey: spec.idempotencyKey,
       }),
-      headers: workflowResumeHeaders(transport.resumeToken),
+      headers: {
+        ...workflowResumeHeaders(transport.resumeToken),
+        ...agentRuntimeProvenanceHeaders(spec, spec.input),
+      },
     },
   );
   const executionId = res.executionId;
 
-  const fetchDoc = () =>
-    transport.request<ExecutionDoc>(
-      `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`,
-    );
+  const fetchDoc = async (): Promise<{
+    doc: ExecutionDoc;
+    provenanceVersion: string | null;
+    lineageReceipt: string | null;
+  }> => {
+    const url = `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`;
+    const response = await transport.fetch(url, {
+      headers: { "content-type": "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `GET ${url} → ${response.status} ${await response.text()}`,
+      );
+    }
+    return {
+      doc: (await response.json()) as ExecutionDoc,
+      provenanceVersion:
+        response.headers?.get?.(AGENT_RUNTIME_PROVENANCE_VERSION_HEADER) ??
+        null,
+      lineageReceipt:
+        response.headers?.get?.(AGENT_RUNTIME_LINEAGE_HEADER) ?? null,
+    };
+  };
 
   return {
     executionId,
@@ -238,20 +272,22 @@ export async function launch(
       resultSignal: AGENTS_RESULT_SIGNAL,
     },
     async status() {
-      return (await fetchDoc()).status;
+      return (await fetchDoc()).doc.status;
     },
     async wait({ timeoutMs = 60 * 60_000, pollMs = 3_000 } = {}) {
       const deadline = Date.now() + timeoutMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        const d = await fetchDoc();
+        const { doc: d, provenanceVersion, lineageReceipt } = await fetchDoc();
         if (TERMINAL.has(d.status)) {
-          return {
+          const result: AgentRunResult = {
             executionId,
             status: d.status,
             output: d.output ?? null,
             error: d.error ?? null,
           };
+          retainAgentRuntimeLineage(result, provenanceVersion, lineageReceipt);
+          return result;
         }
         if (Date.now() > deadline) {
           throw new Error(

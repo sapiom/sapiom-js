@@ -45,6 +45,19 @@ const useResult = defineStep({
 
 - **Failure is data, not an exception.** The result is discriminated on `status` (`"completed" | "failed"`). A failed run resumes your step with `status: "failed"` and an `error` to branch on — it does not throw. Validate an incoming payload with `agents.agentResultSchema.parse(value)` if you want a runtime check.
 
+### Runtime provenance (internal)
+
+Instrumented bundles may associate an opaque v1 callsite token with an agent
+invocation through `@sapiom/tools/_internal/agent-runtime-provenance`. The token
+travels in dedicated request headers, never in `AgentRunSpec` or its JSON body.
+When a terminal response carries a supported server-signed lineage receipt, the
+SDK retains it in an object-identity sidecar on the returned result. The receipt
+is forwarded only when that exact result object is passed directly as the next
+agent's `input`; copies, nested values, transformed primitives, delayed queues,
+storage, and arbitrary objects do not inherit it. The SDK treats both values as
+opaque and exposes no caller, callee, bundle, or execution identity through this
+contract. Missing or unsupported metadata preserves the legacy behavior.
+
 - **Addressed by slug.** `definition` is the deployed agent's slug — its stable handle. `input` is passed to its entry step.
 
 - **`idempotencyKey` deduplicates.** Repeating a launch with the same key returns the existing run instead of starting a new one.

@@ -87,6 +87,11 @@
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",
       "require": "./dist/cjs/stub/index.js"
+    },
+    "./_internal/agent-runtime-provenance": {
+      "types": "./dist/cjs/_internal/agent-runtime-provenance.d.ts",
+      "import": "./dist/esm/_internal/agent-runtime-provenance.js",
+      "require": "./dist/cjs/_internal/agent-runtime-provenance.js"
     }
   },
   "files": [
