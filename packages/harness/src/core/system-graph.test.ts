@@ -524,7 +524,7 @@ describe("StaticSystemGraphBuilder", () => {
     expect(JSON.stringify(graph)).not.toContain("/private/");
   });
 
-  it("retains last-good edges across an incomplete refresh and retracts them after a complete refresh", async () => {
+  it("retains last-good edges across failure and refreshes them after settled scans", async () => {
     const resultWithAgents = inventoryResult(scope, [
       { agentKey: "caller", label: "Caller" },
       { agentKey: "target", label: "Target" },
@@ -533,21 +533,31 @@ describe("StaticSystemGraphBuilder", () => {
       invocations: [{ target: "target", mode: "blocking", evidence: EVIDENCE }],
       warnings: [],
     };
+    let callerFails = false;
     const builder = new StaticSystemGraphBuilder(
       { listAgents: async () => resultWithAgents },
-      invocationProvider(async (sourceRoot) =>
-        sourceRoot.endsWith("caller") ? callerResult : EMPTY_INVOCATIONS,
-      ),
+      invocationProvider(async (sourceRoot) => {
+        if (sourceRoot.endsWith("caller") && callerFails) {
+          throw new Error("held scanner failure");
+        }
+        return sourceRoot.endsWith("caller") ? callerResult : EMPTY_INVOCATIONS;
+      }),
     );
 
     const initial = await builder.build(scope);
     expect(initial.cacheable).toBe(true);
     expect(initial.graph.edges).toHaveLength(1);
 
+    callerFails = true;
+    const failed = await builder.build(scope);
+    expect(failed.cacheable).toBe(false);
+    expect(failed.graph.edges).toEqual(initial.graph.edges);
+
+    callerFails = false;
     callerResult = { invocations: [], warnings: [], complete: false };
-    const incomplete = await builder.build(scope);
-    expect(incomplete.cacheable).toBe(false);
-    expect(incomplete.graph.edges).toEqual(initial.graph.edges);
+    const settledPartial = await builder.build(scope);
+    expect(settledPartial.cacheable).toBe(false);
+    expect(settledPartial.graph.edges).toEqual([]);
 
     callerResult = {
       invocations: [],

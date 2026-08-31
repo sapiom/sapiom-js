@@ -17,6 +17,7 @@ import type {
 const REVISION = `sha256:${"a".repeat(64)}` as const;
 const SOURCE_A = `sha256:${"b".repeat(64)}` as const;
 const SOURCE_B = `sha256:${"c".repeat(64)}` as const;
+const SOURCE_C = `sha256:${"d".repeat(64)}` as const;
 
 interface AgentFixture {
   context: AgentInventoryItem;
@@ -302,7 +303,7 @@ describe("adaptDirectInvocationsToGraphEvidence", () => {
     expect(edited.edges).toEqual(first.edges);
   });
 
-  it("keeps last-good evidence for partial or failed refreshes and retracts it only after a complete refresh", () => {
+  it("keeps last-good evidence for pending or failed refreshes and retracts it after a complete refresh", () => {
     const caller = canonicalAgent("caller");
     const target = canonicalAgent("target");
     const fixtures = [caller, target];
@@ -317,16 +318,19 @@ describe("adaptDirectInvocationsToGraphEvidence", () => {
       scans: [scan(caller, result([directCall])), scan(target)],
     });
 
-    const partial = adaptDirectInvocationsToGraphEvidence({
+    const pending = adaptDirectInvocationsToGraphEvidence({
       inventory: inventory(fixtures),
       agents: contexts(fixtures),
-      scans: [scan(caller, result([], { complete: false })), scan(target)],
+      scans: [
+        scan(caller, result(), { failed: false, pending: true }),
+        scan(target),
+      ],
       previousState: initial.state,
     });
-    expect(partial.complete).toBe(false);
-    expect(partial.state.status).toBe("stale");
-    expect(partial.edges).toEqual(initial.edges);
-    expect(partial.latestResult.coverage.status).toBe("partial");
+    expect(pending.complete).toBe(false);
+    expect(pending.state.status).toBe("stale");
+    expect(pending.edges).toEqual(initial.edges);
+    expect(pending.latestResult.coverage.status).toBe("partial");
 
     const failed = adaptDirectInvocationsToGraphEvidence({
       inventory: inventory(fixtures),
@@ -334,7 +338,7 @@ describe("adaptDirectInvocationsToGraphEvidence", () => {
       scans: fixtures.map((fixture) =>
         scan(fixture, result(), { failed: true, pending: false }),
       ),
-      previousState: partial.state,
+      previousState: pending.state,
     });
     expect(failed.complete).toBe(false);
     expect(failed.state.status).toBe("stale");
@@ -354,6 +358,63 @@ describe("adaptDirectInvocationsToGraphEvidence", () => {
     expect(removed.state.status).toBe("ready");
     expect(removed.edges).toEqual([]);
     expect(removed.latestResult.evidence).toEqual([]);
+  });
+
+  it("refreshes the proven literal subset across consecutive settled partial scans", () => {
+    const caller = canonicalAgent("caller");
+    const target = canonicalAgent("target");
+    const fixtures = [caller, target];
+    const directCall = {
+      target: "target",
+      mode: "async" as const,
+      evidence: [source("src/caller.ts", 2)],
+    };
+    const first = adaptDirectInvocationsToGraphEvidence({
+      inventory: inventory(fixtures),
+      agents: contexts(fixtures),
+      scans: [
+        scan(caller, result([directCall], { complete: false })),
+        scan(target),
+      ],
+    });
+
+    expect(first.complete).toBe(false);
+    expect(first.cacheable).toBe(false);
+    expect(first.state.status).toBe("partial");
+    expect(first.edges).toHaveLength(1);
+
+    const removed = adaptDirectInvocationsToGraphEvidence({
+      inventory: inventory(fixtures),
+      agents: contexts(fixtures),
+      scans: [
+        scan(
+          caller,
+          result([], { complete: false, sourceFingerprint: SOURCE_B }),
+        ),
+        scan(target),
+      ],
+      previousState: first.state,
+    });
+    expect(removed.state.status).toBe("partial");
+    expect(removed.edges).toEqual([]);
+
+    const added = adaptDirectInvocationsToGraphEvidence({
+      inventory: inventory(fixtures),
+      agents: contexts(fixtures),
+      scans: [
+        scan(
+          caller,
+          result([directCall], {
+            complete: false,
+            sourceFingerprint: SOURCE_C,
+          }),
+        ),
+        scan(target),
+      ],
+      previousState: removed.state,
+    });
+    expect(added.state.status).toBe("partial");
+    expect(added.edges).toEqual(first.edges);
   });
 
   it("never upgrades missing, pending, incomplete, or freshness-less caller scans to complete", () => {

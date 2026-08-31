@@ -146,16 +146,15 @@ used as the evidence store.
 Evidence freshness hashes the bounded source content that was actually
 analyzed. Watcher paths, mtimes, `observedPaths`, UI node IDs, path slugs, and
 the cheap `fingerprintWorkflowSources` cache key do not become canonical
-evidence identity. A complete refresh replaces the prior direct-invocation
-result, including retracting removed calls. Missing, pending, failed, dynamic,
-or otherwise incomplete caller analysis cannot be promoted to complete; the
-last complete result stays visible while the new attempt is diagnosed as
-partial or failed. The initial cache-only phase does not seed last-good evidence:
-the first settled partial scan can still expose its proven static edges. A
-complete source scan with a dynamic target can atomically refresh its settled
-literal-edge subset while keeping topology coverage explicitly partial. Its
-warning remains visible, but the deterministic limitation alone does not make
-the graph retryable.
+evidence identity. Every settled bounded refresh atomically replaces the prior
+proven literal subset, including retracting removed calls. Dynamic targets or
+structural limits keep topology coverage explicitly partial without preventing
+that settled subset from refreshing. A dynamic-target limitation alone remains
+cacheable; a structurally incomplete scan remains non-cacheable and retryable.
+Pending, failed, missing, or inconsistent caller scans instead retain the prior
+accepted subset and diagnose the latest attempt. The initial cache-only phase
+does not seed last-good evidence, so the first settled partial scan can expose
+its proven static edges.
 
 Projection can remain useful while reporting warnings:
 

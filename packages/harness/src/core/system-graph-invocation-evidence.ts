@@ -438,6 +438,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
   const coverageGaps: PackageGraphEvidenceCoverageGap[] = [];
   const contexts = new Map<PackageGraphEvidenceDigest, DiagnosticContext>();
   const fingerprints: NormalizedScanFingerprint[] = [];
+  let settled = true;
   let cacheable = true;
   let complete = true;
 
@@ -454,6 +455,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
       (scanCountByAgentKey.get(scan.caller.agentKey) ?? 0) + 1,
     );
     if (expectedAgentKeys.has(scan.caller.agentKey)) continue;
+    settled = false;
     cacheable = false;
     complete = false;
     coverageGaps.push({ code: "opaque-boundary" });
@@ -466,6 +468,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
   )) {
     const count = scanCountByAgentKey.get(caller.agentKey) ?? 0;
     if (count === 1) continue;
+    settled = false;
     cacheable = false;
     complete = false;
     coverageGaps.push({ code: "opaque-boundary" });
@@ -494,6 +497,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
     const dynamicCallsites: NormalizedScanFingerprint["dynamicCallsites"] = [];
 
     if (scan.pending) {
+      settled = false;
       cacheable = false;
       complete = false;
       coverageGaps.push({ code: "other" });
@@ -501,6 +505,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
         status,
       });
     } else if (scan.failed) {
+      settled = false;
       cacheable = false;
       complete = false;
       coverageGaps.push({ code: "producer-failed" });
@@ -735,11 +740,11 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
     sameProducerSlot(input.previousState, input.inventory)
       ? input.previousState
       : undefined;
-  // A fully settled scan can atomically refresh the literal static subset even
-  // when a dynamic target keeps overall topology coverage partial. Transient
-  // partial/failed attempts still retain the last accepted result.
+  // A settled bounded scan can atomically refresh the proven literal subset
+  // even when structural limits or dynamic targets keep topology incomplete.
+  // Pending, failed, or inconsistent scan sets retain the last accepted result.
   const state = advancePackageGraphStaticEvidenceState(
-    cacheable && latestResult.outcome === "success" ? undefined : previousState,
+    settled && latestResult.outcome === "success" ? undefined : previousState,
     latestResult,
   );
 
