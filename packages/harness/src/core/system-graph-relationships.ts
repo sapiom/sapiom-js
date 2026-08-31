@@ -30,7 +30,12 @@ export interface AgentInvocationProviderResult {
   observedPaths?: readonly string[];
   /** False when an opaque path or work cap prevented a complete scan. */
   complete?: boolean;
-  /** Stable content digest supplied by the authoritative source scan. */
+  /**
+   * Stable content digest supplied by the authoritative source scan. A
+   * successful provider result without a valid full SHA-256 digest is treated
+   * as incomplete: the graph remains degraded and last-good evidence stays.
+   * Synthetic pending/failed snapshots may omit it.
+   */
   sourceFingerprint?: `sha256:${string}`;
 }
 

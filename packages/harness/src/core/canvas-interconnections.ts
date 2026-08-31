@@ -960,8 +960,12 @@ export async function scanWorkflowSources(
   };
 }
 
-/** Direct agent invocations plus deterministic warnings for supported calls
- * whose target is not a direct literal. */
+/**
+ * Test-only compatibility helper for direct invocation extraction. Production
+ * callers use `SourceAgentInvocationProvider`, which consumes the shared scan.
+ *
+ * @internal
+ */
 export async function detectAgentInvocations(
   root: string,
   knownStepIds: ReadonlySet<string>,

@@ -1,3 +1,9 @@
+/**
+ * Boundary adapter from caller-scoped, syntax-only invocation scans to the
+ * package-scoped graph-evidence protocol and the existing public graph DTO.
+ * Scanner cache state remains private input; only validated evidence is
+ * eligible for projection.
+ */
 import { createHash } from "node:crypto";
 
 import {

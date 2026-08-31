@@ -359,6 +359,76 @@ describe("StaticSystemGraphBuilder", () => {
     expect(enriched.cacheable).toBe(true);
   });
 
+  it("seeds proven edges from the first settled partial background scan", async () => {
+    const inventory: AgentInventoryProvider = {
+      listAgents: vi.fn(async () =>
+        inventoryResult(scope, [
+          {
+            agentKey: "growth",
+            label: "Growth",
+            resolutionAliases: ["growth"],
+          },
+          {
+            agentKey: "research",
+            label: "Research",
+            resolutionAliases: ["research"],
+          },
+        ]),
+      ),
+    };
+    const onChange = vi.fn();
+    const invocations = new CachedAgentInvocationProvider(
+      invocationProvider(async (root) =>
+        root.endsWith("research")
+          ? {
+              invocations: [
+                {
+                  target: "growth",
+                  mode: "blocking",
+                  evidence: EVIDENCE,
+                },
+              ],
+              warnings: [
+                {
+                  code: "dynamic-target",
+                  mode: "async",
+                  evidence: { file: "index.ts", line: 2, column: 1 },
+                },
+              ],
+            }
+          : EMPTY_INVOCATIONS,
+      ),
+      async () => "unused",
+      { onChange },
+    );
+    const builder = new StaticSystemGraphBuilder(inventory, invocations);
+
+    const cold = await builder.build(scope);
+    expect(cold.graph.edges).toEqual([]);
+    cold.afterCommit?.();
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    const enriched = await builder.build(scope);
+    expect(enriched.cacheable).toBe(false);
+    expect(enriched.graph.edges).toEqual([
+      {
+        from: "agent:research",
+        to: "agent:growth",
+        kind: "invokes",
+        basis: "static-invocation",
+        mode: "blocking",
+      },
+    ]);
+    expect(enriched.graph.warnings).toContainEqual({
+      code: "dynamic-target",
+      agentKey: "research",
+      message: "Research has a dynamic agent target that V0 cannot resolve.",
+    });
+
+    const repeated = await builder.build(scope);
+    expect(repeated.graph.edges).toEqual(enriched.graph.edges);
+  });
+
   it("deduplicates by mode, retains dual-mode edges, and reports duplicate and unresolved targets", async () => {
     const inventory: AgentInventoryProvider = {
       listAgents: vi.fn(async () =>

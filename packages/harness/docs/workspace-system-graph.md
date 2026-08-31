@@ -150,7 +150,10 @@ evidence identity. A complete refresh replaces the prior direct-invocation
 result, including retracting removed calls. Missing, pending, failed, dynamic,
 or otherwise incomplete caller analysis cannot be promoted to complete; the
 last complete result stays visible while the new attempt is diagnosed as
-partial or failed.
+partial or failed. The initial cache-only phase does not seed last-good evidence:
+the first settled partial scan can still expose its proven static edges. A
+dynamic target therefore preserves those proven edges and warning while keeping
+the graph snapshot degraded/retryable.
 
 Projection can remain useful while reporting warnings:
 

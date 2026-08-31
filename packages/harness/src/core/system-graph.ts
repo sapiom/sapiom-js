@@ -408,7 +408,17 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       scans,
       previousState: this.evidenceByWorkspace.get(scope.workspaceKey),
     });
-    this.evidenceByWorkspace.set(scope.workspaceKey, adapted.state);
+    const pendingOnlyPlaceholder =
+      scans.length > 0 &&
+      scans.every((scan) => scan.pending) &&
+      adapted.state.status === "partial";
+    // The cache-only cold phase is not a producer result. Do not let its empty
+    // placeholder occupy the last-good slot before a real scan can seed it.
+    if (pendingOnlyPlaceholder) {
+      this.evidenceByWorkspace.delete(scope.workspaceKey);
+    } else {
+      this.evidenceByWorkspace.set(scope.workspaceKey, adapted.state);
+    }
     const edges = adapted.edges;
     const warnings: GraphWarning[] = [
       ...consumed.warnings,
