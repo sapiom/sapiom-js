@@ -345,11 +345,11 @@ export class SystemGraphStore {
     generation: number,
     result: Awaited<ReturnType<SystemGraphBuilder["build"]>>,
   ): SystemGraphSnapshot | Promise<SystemGraphSnapshot> {
-    // The superseded build can carry the only callback that starts identity
-    // enrichment. Arm it after the commit decision on both paths: before that
-    // decision a synchronous refresh could supersede the result being
-    // committed; omitting it from the losing path can leave identities pending
-    // forever with no follow-up queued.
+    // The superseded build can carry the only callback that starts background
+    // identity or invocation enrichment. Arm it after the commit decision on
+    // both paths: before that decision a synchronous refresh could supersede
+    // the result being committed; omitting it from the losing path can leave
+    // enrichment pending forever with no follow-up queued.
     if (!this.canCommit(entry, generation)) {
       const superseded = this.continueAfterSupersededBuild(entry);
       this.afterCommit(result.afterCommit);

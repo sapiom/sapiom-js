@@ -113,6 +113,7 @@ describe("HarnessRegistryInventoryProvider", () => {
       ],
     });
     expect(result.context[0]?.resolutionAliases).toContain("old-marker");
+    expect(result.discoveryComplete).toBe(false);
     expect(result.startEnrichment).toBeUndefined();
     expect(inspectManifestName).not.toHaveBeenCalled();
   });
@@ -166,6 +167,7 @@ describe("HarnessRegistryInventoryProvider", () => {
     initial.startEnrichment?.();
     await vi.waitFor(() => expect(inspectManifestName).toHaveBeenCalledOnce());
     await expect(inventory.listAgents(SCOPE)).resolves.toMatchObject({
+      discoveryComplete: true,
       inventory: {
         agents: [{ agentKey: "CloudLinked", identityStatus: "canonical" }],
       },
@@ -609,16 +611,13 @@ describe("HarnessRegistryInventoryProvider", () => {
 
   it("settles an unnameable identity without hiding its warning", async () => {
     const changed = vi.fn();
-    const inventory = provider(
-      [workflow("Dashboard", "dashboard", null)],
-      {
-        inspectManifestName: async () => ({
-          status: "failed",
-          retryable: false,
-        }),
-        onIdentityChange: changed,
-      },
-    );
+    const inventory = provider([workflow("Dashboard", "dashboard", null)], {
+      inspectManifestName: async () => ({
+        status: "failed",
+        retryable: false,
+      }),
+      onIdentityChange: changed,
+    });
 
     const result = await enrich(
       inventory,
@@ -853,7 +852,7 @@ describe("HarnessRegistryInventoryProvider", () => {
         innerFingerprintEntered();
         await innerFingerprintGate;
         if (!(await options?.authorizeBeforeLaunch?.())) {
-          return { status: "failed" };
+          return { status: "failed", retryable: true };
         }
         actualExtractorLaunch();
         return { status: "found", name: "must-not-run" };

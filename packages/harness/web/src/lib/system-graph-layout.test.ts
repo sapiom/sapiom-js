@@ -553,7 +553,12 @@ describe("layoutSystemGraph with groups", () => {
     const layout = layoutSystemGraph(
       graph(
         ["a", "b", "c", "solo"],
-        [edge("a", "b"), edge("b", "c"), edge("c", "a", "async"), edge("a", "c")],
+        [
+          edge("a", "b"),
+          edge("b", "c"),
+          edge("c", "a", "async"),
+          edge("a", "c"),
+        ],
       ),
       [
         group("g:cyclic", "Cyclic", ["a", "b", "c"]),
@@ -577,10 +582,10 @@ describe("layoutSystemGraph with groups", () => {
     // A group is editable, so half a detected system can be pulled out. The
     // edge between the halves is still real; dropping it would make the map
     // claim two systems never touch.
-    const layout = layoutSystemGraph(
-      graph(["a", "b"], [edge("a", "b")]),
-      [group("g:one", "One", ["a"]), group("g:two", "Two", ["b"])],
-    );
+    const layout = layoutSystemGraph(graph(["a", "b"], [edge("a", "b")]), [
+      group("g:one", "One", ["a"]),
+      group("g:two", "Two", ["b"]),
+    ]);
     expect(layout.edges).toHaveLength(1);
     expect(layout.edges[0]).toMatchObject({
       from: "a",
@@ -617,9 +622,16 @@ describe("layoutSystemGraph with groups", () => {
        "Ungrouped", and matching on the label would drop the cards nothing
        claimed inside it and move it to the end of the map. */
     const layout = layoutSystemGraph(graph(["a", "b", "orphan"], []), [
-      { id: "g:named", label: "Ungrouped", nodeIds: ["a", "b"], isUngrouped: false },
+      {
+        id: "g:named",
+        label: "Ungrouped",
+        nodeIds: ["a", "b"],
+        isUngrouped: false,
+      },
     ]);
-    expect(layout.groups.map((candidate) => candidate.nodeCount)).toEqual([2, 1]);
+    expect(layout.groups.map((candidate) => candidate.nodeCount)).toEqual([
+      2, 1,
+    ]);
     expect(layout.groups[0]!.id).toBe("g:named");
     expect(byId(layout, "a").groupId).toBe("g:named");
     expect(byId(layout, "b").groupId).toBe("g:named");

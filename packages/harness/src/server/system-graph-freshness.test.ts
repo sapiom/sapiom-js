@@ -318,9 +318,9 @@ describe("workspace graph freshness wiring", () => {
       expect(manualRetryResponse.status).toBe(200);
       const manualRetry =
         (await manualRetryResponse.json()) as SystemGraphSnapshot;
-      // Manual Retry does not unset identities already proven absent. It
-      // rebuilds the graph, but the settled inventory remains cacheable.
-      expect(manualRetry).toMatchObject({ state: "ready" });
+      // Manual Retry rebuilds immediately from accepted inventory, then direct
+      // invocation extraction completes in the background.
+      expect(manualRetry).toMatchObject({ state: "degraded" });
       expect(manualRetry.revision).toBeGreaterThan(beforeManualRetry.revision);
     },
   );
@@ -1107,9 +1107,12 @@ export const agent = defineAgent({ name: "checkout-agent" });`,
 
       const readGraph = async (): Promise<SystemGraphSnapshot> =>
         (await (
-          await fetch(`${baseUrl}/api/workspaces/${workspaceKey}/system-graph`, {
-            headers,
-          })
+          await fetch(
+            `${baseUrl}/api/workspaces/${workspaceKey}/system-graph`,
+            {
+              headers,
+            },
+          )
         ).json()) as SystemGraphSnapshot;
 
       await vi.waitFor(

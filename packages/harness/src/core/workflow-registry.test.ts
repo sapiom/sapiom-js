@@ -594,7 +594,6 @@ describe("WorkflowRegistry path identity under symlinks", () => {
       path.join(real, "growth"),
     ]);
   });
-
 });
 
 describe("WorkflowRegistry scan rootedness (the 88-agent accumulation)", () => {

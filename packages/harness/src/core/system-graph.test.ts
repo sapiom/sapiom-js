@@ -83,6 +83,7 @@ function inventoryResult(
     warnings?: AgentInventoryResult["warnings"];
     degraded?: boolean;
     identitySettled?: boolean;
+    discoveryComplete?: boolean;
   } = {},
 ): AgentInventoryResult {
   const records = agents.map((agent) => {
@@ -161,6 +162,7 @@ function inventoryResult(
           record.public.identityStatus === "provisional" &&
           record.public.identityIssue === "identity-pending",
       ),
+    discoveryComplete: options.discoveryComplete ?? true,
   };
 }
 
@@ -1337,7 +1339,7 @@ describe("StaticSystemGraphBuilder", () => {
 
     const built = await new StaticSystemGraphBuilder(
       { listAgents: async () => result },
-      relationshipProvider(async () => EMPTY_RELATIONSHIPS),
+      invocationProvider(async () => EMPTY_INVOCATIONS),
     ).build(scope);
 
     expect(built.cacheable).toBe(true);
@@ -1351,7 +1353,31 @@ describe("StaticSystemGraphBuilder", () => {
     ]);
   });
 
-  it("uses the normalized inventory status even if a provider mutates its result", async () => {
+  it("does not cache a settled identity when workspace discovery was incomplete", async () => {
+    const result = inventoryResult(
+      scope,
+      [
+        {
+          agentKey: "dashboard",
+          label: "Dashboard",
+        },
+      ],
+      {
+        degraded: true,
+        identitySettled: true,
+        discoveryComplete: false,
+      },
+    );
+
+    const built = await new StaticSystemGraphBuilder(
+      { listAgents: async () => result },
+      invocationProvider(async () => EMPTY_INVOCATIONS),
+    ).build(scope);
+
+    expect(built.cacheable).toBe(false);
+  });
+
+  it("uses normalized identity state even if a provider mutates inventory status", async () => {
     let release!: () => void;
     const invocationsPending = new Promise<void>((resolve) => {
       release = resolve;

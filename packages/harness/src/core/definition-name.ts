@@ -30,8 +30,9 @@ export type ManifestNameInspection =
  * (core/canvas-cache.ts), so a re-run is free to succeed — and several causes
  * do resolve on their own terms: dependencies get installed, a check process
  * that crashed or timed out under load succeeds on the next attempt. None of
- * those fire the graph watcher, which only reacts to `.ts`/`.tsx` outside
- * ignored directories, so the caller must keep offering a manual retry.
+ * those fire the graph watcher, which only reacts to supported TypeScript
+ * source files outside ignored directories, so the caller must keep offering
+ * a manual retry.
  *
  * `reason` cannot answer this — it is free-form text assembled from an agent's
  * own error message, a stderr tail, or a timeout string — so the only claim

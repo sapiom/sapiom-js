@@ -1203,7 +1203,9 @@ function recordAgentMove(entry: { from: string; to: string }): void {
  */
 function recordCreateStep(kind: "scaffold" | "session", path: string): void {
   if (typeof window === "undefined") return;
-  const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+  const win = window as unknown as {
+    __HARNESS_TEST__?: Record<string, unknown>;
+  };
   const previous = (win.__HARNESS_TEST__?.createOrder as string[]) ?? [];
   win.__HARNESS_TEST__ = {
     ...(win.__HARNESS_TEST__ ?? {}),
@@ -2514,7 +2516,11 @@ export class MockApi implements HarnessApi {
     await delay(180);
     const refusal = refuseAgentName(name);
     if (refusal)
-      throw new ApiError(400, "POST /api/agents/scaffold \u2192 400 (mock)", refusal);
+      throw new ApiError(
+        400,
+        "POST /api/agents/scaffold \u2192 400 (mock)",
+        refusal,
+      );
     // THE ROOT BARRIER, and the reason it is here: the real route only writes
     // into a folder the rail can show, and this mock originally skipped that
     // guard — so `templates.spec.ts` asserted a scaffold into
