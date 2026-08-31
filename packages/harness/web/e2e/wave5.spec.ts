@@ -71,7 +71,7 @@ test.describe("add existing agents (detection-driven)", () => {
   test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
     await page.getByTestId("add-existing-agents").click();
     const modal = page.locator(".modal-start");
-    await modal.getByTestId("dir-picker-input").fill("/Users/demo");
+    await modal.getByTestId("folder-field-input").fill("/Users/demo");
 
     /* RE-POINTED IN ROUND 2, and this fixture is the defect in miniature.
        Detection sees TWO agent projects directly under /Users/demo (the third
@@ -80,22 +80,22 @@ test.describe("add existing agents (detection-driven)", () => {
        action that did the second. At real scale that mismatch was 1 vs 87, and
        those 87 rows are the flood this whole round is about.
 
-       So the count stays where it is true (the readout, which now says which
-       question it answered), the reach is stated in words, and the button
-       promises nothing it cannot keep. */
-    await expect(modal.getByTestId("aw-result")).toContainText(
-      "2 agent projects directly inside this folder",
+       So the count is not printed at all — the shallow probe cannot speak for
+       the deep scan in either direction — the reach is stated once in the
+       dialog's single hint line, and the button promises nothing. */
+    await expect(modal.getByTestId("start-hint")).toContainText(
+      "Adds every agent below this folder",
     );
-    await expect(modal.getByTestId("aw-scan-reach")).toContainText("searches the whole tree");
-    await expect(modal.getByTestId("aw-add-all")).toContainText("Add every agent under this folder");
+    await expect(modal.getByTestId("aw-add-all")).toContainText("Add agents");
 
-    /* And it takes TWO presses. The first arms and restates the consequence in
-       the terms that actually bit — one unconfirmed click is how 87 rows
-       arrived — and only the second registers anything. */
+    /* And it takes TWO presses. The first arms and the hint restates the
+       consequence in the terms that actually bit — one unconfirmed click is how
+       87 rows arrived — and only the second registers anything. */
     await modal.getByTestId("aw-add-all").click();
     await expect(modal).toBeVisible();
     await expect(modal.getByTestId("aw-add-all")).toHaveAttribute("data-armed", "true");
-    await expect(modal.getByTestId("aw-add-all")).toContainText("this can be a lot of rows");
+    await expect(modal.getByTestId("aw-add-all")).toContainText("Add them all");
+    await expect(modal.getByTestId("start-hint")).toContainText("Press again to confirm");
     await expect(page.locator(".toast")).toHaveCount(0);
 
     await modal.getByTestId("aw-add-all").click();
@@ -156,21 +156,24 @@ test("the Overview opens over the workbench and dismisses on click-out", async (
 });
 
 // ---------------------------------------------------------------------------
-// Directory picker error retry
+// Folder read failure
 // ---------------------------------------------------------------------------
 
-test("the directory picker's read failure carries its own Retry", async ({ page }) => {
+test("a folder that cannot be read says so, and the field stays the way out", async ({ page }) => {
   await page.goto("/?mockError=listDir");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
   await page.getByTestId("add-existing-agents").click();
+  const modal = page.locator(".modal-start");
 
-  const err = page.getByTestId("dir-picker-error");
+  const err = modal.locator(".modal-error");
   await expect(err).toBeVisible();
-  const retry = page.getByTestId("dir-picker-retry");
-  await expect(retry).toBeVisible();
+  await expect(err).toContainText("Couldn't read that directory");
 
-  // The fault persists, so retrying lands back on the same honest error.
-  await retry.click();
-  await expect(page.getByTestId("dir-picker-error")).toBeVisible();
+  /* RECOVERY IS THE FIELD. The in-app listing carried its own Retry button;
+     with the listing gone, re-pointing the field is what re-runs the read. The
+     fault persists here, so it lands back on the same honest error rather than
+     a blank dialog that looks like it worked. */
+  await modal.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
+  await expect(err).toBeVisible();
 });

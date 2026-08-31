@@ -277,7 +277,6 @@ body {
 .canvas-empty,
 .skills-empty,
 .skills-loading,
-.dir-picker-empty,
 .session-dropdown-empty,
 .command-palette-empty {
   color: var(--text-faint);
@@ -290,24 +289,17 @@ body {
 .skills-error,
 .modal-error,
 .welcome-error,
-.command-palette-error,
-.dir-picker-error {
+.command-palette-error {
   color: var(--red-text);
   font-size: var(--type-label, 12px);
   line-height: 1.5;
 }
 
 /* Inline list-surface errors read as machine output: mono + meta scale. */
-.command-palette-error,
-.dir-picker-error {
+.command-palette-error {
   padding: var(--sp2, 8px) var(--sp3, 12px);
   font-family: var(--font-mono);
   font-size: var(--type-meta, 11px);
-}
-
-/* Inside the full-bleed listing the rows own the dialog inset. */
-.dir-picker-error {
-  padding: var(--sp2, 8px) var(--sp5, 24px);
 }
 
 /* ---- Status dots: pulse for live/running ------------------------------- */

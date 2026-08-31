@@ -19,7 +19,7 @@
  *    belongs to the use-confirm dialog, which is where a commit is now asked
  *    for;
  *  - the destination folder is asked once, in that dialog, by the same
- *    DirectoryPicker the session and workspace flows use (`dir-picker-input`).
+ *    FolderField the session and workspace flows use (`folder-field-input`).
  *    It is therefore no longer a persistent field that can be hand-edited and
  *    carried across template switches — that behaviour is gone deliberately.
  */
@@ -233,7 +233,7 @@ test.describe("templates journey (from the composer)", () => {
 
     // The destination is asked once, and defaults to a new folder named after
     // the template under the resolved project root.
-    await expect(page.getByTestId("dir-picker-input")).toHaveValue(
+    await expect(page.getByTestId("folder-field-input")).toHaveValue(
       "/Users/demo/acme-app/projects/web-research-digest",
     );
     await page.getByTestId("template-use-confirm").click();
@@ -275,7 +275,7 @@ test.describe("templates journey (from the composer)", () => {
     // network is a different operation with a different failure mode.
     await open(page, "coding-pause");
     await page.getByTestId("template-use-btn").click();
-    await expect(page.getByTestId("dir-picker-input")).toHaveValue(
+    await expect(page.getByTestId("folder-field-input")).toHaveValue(
       "/Users/demo/acme-app/projects/coding-pause",
     );
     await page.getByTestId("template-use-confirm").click();
@@ -307,7 +307,7 @@ test.describe("templates journey (from the composer)", () => {
     await page.getByTestId("template-card-info-hello-agent").click();
     await page.getByTestId("template-facts-use-hello-agent").click();
     await expect(page.getByTestId("template-use-dialog")).toBeVisible();
-    await expect(page.getByTestId("dir-picker-input")).toHaveValue(
+    await expect(page.getByTestId("folder-field-input")).toHaveValue(
       "/Users/demo/acme-app/projects/hello-agent",
     );
   });

@@ -54,9 +54,10 @@ export function stripTrailingSlash(input: string): string {
 }
 
 /**
- * Classify `target`. `isNew` is the picker's own "this names a folder that doesn't
- * exist yet" signal (from `DirectoryPicker`'s `onResolve`), taken on trust because
- * it already did the listing that decides it.
+ * Classify `target`. `isNew` short-circuits to the not-yet-existing outcome for a
+ * caller that already knows; every caller in the app passes `false` and lets this
+ * decide, because it can — the resolved-path comparison below and the 404 fallback
+ * cover the real server and the mock alike.
  *
  * Throws `"Couldn't read that directory."` only when neither the target nor its
  * parent can be read — every other case is a normal outcome.

@@ -95,7 +95,7 @@ test.describe("Start dialog", () => {
     await page.getByTestId("add-existing-agents").click();
     await expect(page.locator(".modal-start")).toBeVisible();
 
-    await page.getByTestId("dir-picker-input").click();
+    await page.getByTestId("folder-field-input").click();
     await expect(page.locator(".modal-start")).toBeVisible();
 
     // The panel is centered, so the backdrop's top-left corner is outside it.

@@ -52,13 +52,17 @@ test.describe("the header + opens a project", () => {
     await expect(page.locator(".modal-start-title")).toHaveText(
       "Add a project",
     );
-    await page.getByTestId("dir-picker-input").fill(BLANK);
+    await page.getByTestId("folder-field-input").fill(BLANK);
 
-    // Detection still RUNS and still says what it found — it just no longer
-    // decides whether the folder can be opened.
-    await expect(page.getByTestId("aw-result")).toContainText(
-      "No agent directly inside this folder",
+    /* ONE LINE, ONE ACTION. Detection still runs — it decides whether the
+       folder EXISTS — but it no longer prints what it did or did not find, and
+       the primary is the only thing in the footer. */
+    await expect(page.getByTestId("start-hint")).toHaveText(
+      "Choose a folder to work in — any agents inside come with it.",
     );
+    await expect(page.getByTestId("aw-result")).toHaveCount(0);
+    await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
+    await expect(page.getByTestId("open-project")).toHaveText("Add project");
     await expect(page.getByTestId("open-project")).toBeEnabled();
     await page.getByTestId("open-project").click();
 
@@ -82,7 +86,7 @@ test.describe("the header + opens a project", () => {
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("dir-picker-input").fill(BLANK);
+    await page.getByTestId("folder-field-input").fill(BLANK);
     await page.getByTestId("open-project").click();
 
     const empty = page.getByTestId("project-empty-blank-slate");
@@ -118,11 +122,8 @@ test.describe("the header + opens a project", () => {
     // a decision worth asking twice.
     await page.getByTestId("rail-add-project").click();
     await page
-      .getByTestId("dir-picker-input")
+      .getByTestId("folder-field-input")
       .fill("/Users/demo/acme-app/leasing");
-    await expect(page.getByTestId("aw-result")).toContainText(
-      "This is an agent project",
-    );
     await page.getByTestId("open-project").click();
     /* AN AGENT'S OWN FOLDER DOES NOT BECOME A PROJECT, so the agent stays the
        ONE row it already was under `acme-app`. This asserted 2 before: opening
@@ -152,7 +153,7 @@ test.describe("the two questions stay two controls", () => {
     await expect(page.locator(".modal-start-title")).toHaveText(
       "Add existing agents",
     );
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-agent");
+    await page.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
     // Round 1's primary, unchanged.
     await expect(page.getByTestId("aw-add")).toBeVisible();
     await expect(page.getByTestId("open-project")).toHaveCount(0);
@@ -162,25 +163,37 @@ test.describe("the two questions stay two controls", () => {
     page,
   }) => {
     await page.getByTestId("add-existing-agents").click();
-    await page.getByTestId("dir-picker-input").fill(BLANK);
+    await page.getByTestId("folder-field-input").fill(BLANK);
     // The immediate-child probe has nothing to register, so its button is gone
     // rather than sitting there disabled.
     await expect(page.getByTestId("aw-add")).toHaveCount(0);
-    // But the other question is one press away rather than a closed dialog.
+    // But the other question is one press away rather than a closed dialog,
+    // and it is NAMED for the outcome so it cannot be mistaken for the primary.
+    await expect(page.getByTestId("open-project")).toHaveText("Open as project");
     await expect(page.getByTestId("open-project")).toBeEnabled();
     await page.getByTestId("open-project").click();
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
   });
 
-  test("a container of agents offers BOTH: open the folder, or add what is under it", async ({
+  /**
+   * THE COMPETING BUTTON IS GONE, and it was a duplicate rather than a choice.
+   * "Add a project" used to offer BOTH "Add every agent under this folder" and
+   * "Open project", with nothing on screen saying how they differed — because
+   * they did not: `openProject` (use-harness-state) scans the whole tree after
+   * remembering the root, so the folder's agents arrive either way.
+   */
+  test("Add a project offers ONE action, and it still brings the agents", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/acme-app");
+    await page.getByTestId("folder-field-input").fill("/Users/demo/acme-app");
+    await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
+    await expect(page.getByTestId("aw-add")).toHaveCount(0);
     await expect(page.getByTestId("open-project")).toBeEnabled();
-    await expect(page.getByTestId("aw-add-all")).toContainText(
-      "Add every agent under this folder",
-    );
+
+    await page.getByTestId("open-project").click();
+    await expect(page.getByTestId("project-row-acme-app")).toBeVisible();
+    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
   });
 });
 
@@ -207,7 +220,7 @@ test.describe("round trip: removed, then back", () => {
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
 
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/acme-app");
+    await page.getByTestId("folder-field-input").fill("/Users/demo/acme-app");
     await page.getByTestId("open-project").click();
 
     await expect(page.getByTestId("project-row-acme-app")).toBeVisible();
@@ -247,7 +260,7 @@ test.describe("round trip: removed, then back", () => {
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
 
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("dir-picker-input").fill("/Users/demo");
+    await page.getByTestId("folder-field-input").fill("/Users/demo");
     await page.getByTestId("open-project").click();
 
     await expect(page.getByTestId("project-row-demo")).toBeVisible();

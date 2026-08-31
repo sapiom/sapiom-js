@@ -71,6 +71,29 @@ describe("getDesktopBridge", () => {
     expect(typeof current?.onUpdateState).toBe("function");
   });
 
+  it("degrades chooseDirectory to undefined on an older desktop build or browser", () => {
+    /* THIS ONE CARRIES THE WHOLE FOLDER PICKER NOW. The SPA used to keep an
+       in-app directory listing beside it, so a missing `chooseDirectory` cost
+       only a shortcut. With that listing deleted, the browser host's fallback is
+       the field itself — so the caller MUST see `undefined` rather than a
+       method that rejects, which is how `FolderField` knows not to render a
+       Choose button that cannot work. */
+    const older = getDesktopBridge({
+      sapiomDesktop: { appVersion: "0.2.0", checkForUpdates: noop },
+    });
+    expect(older).not.toBeNull();
+    expect(older?.chooseDirectory).toBeUndefined();
+
+    const current = getDesktopBridge({
+      sapiomDesktop: {
+        appVersion: "0.3.0",
+        checkForUpdates: noop,
+        chooseDirectory: () => Promise.resolve("/Users/demo/acme-app"),
+      },
+    });
+    expect(typeof current?.chooseDirectory).toBe("function");
+  });
+
   it("degrades pathForFile to undefined on an older desktop build or browser", () => {
     // Without it a drop on the terminal simply does nothing — the bridge
     // itself must still be accepted.

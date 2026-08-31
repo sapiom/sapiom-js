@@ -161,13 +161,13 @@ describe("redaction gate — realistic clicks must not carry user names or paths
     );
   });
 
-  it("directory listing row (object=directory)", () => {
+  it("recent-folder chip (object=directory)", () => {
     expectNoLeak(
       beforeSend(
         capture({
           object: "directory",
           $el_text: FOLDER,
-          $elements_chain: `button.dir-picker-item:attr__class="dir-picker-item"attr__data-testid="dir-picker-item-${FOLDER}"text="${FOLDER}"nth-child="1"`,
+          $elements_chain: `button.recent-dir-chip:attr__class="recent-dir-chip"attr__title="${ABS_PATH}"text="${FOLDER}"nth-child="1"`,
         }),
       ),
     );

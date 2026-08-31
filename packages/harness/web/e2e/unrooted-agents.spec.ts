@@ -440,7 +440,7 @@ test.describe("(c) there is a way OUT", () => {
     // to let an EQUAL open entry un-close a root, so without a deliberate
     // reopen path the project could never come back at all.
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/design-eng");
+    await page.getByTestId("folder-field-input").fill("/Users/demo/design-eng");
     await page.getByTestId("open-project").click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
     // The TOMBSTONE is cleared, not merely out-voted by this render — it is the

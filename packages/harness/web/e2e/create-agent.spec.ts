@@ -65,7 +65,7 @@ test.describe("create an agent in a project", () => {
     await expect(dialog).toContainText(ROOT);
     // There is no folder picker here — asking "where" again is the subject
     // confusion this epic removes.
-    await expect(dialog.getByTestId("dir-picker-input")).toHaveCount(0);
+    await expect(dialog.getByTestId("folder-field-input")).toHaveCount(0);
 
     // AND NOTHING HAS HAPPENED YET. The old handler started a pty on this
     // click; a create that begins before you have named anything is the
@@ -192,7 +192,7 @@ test.describe("create an agent in a project", () => {
     // One create flow, not one per door: the empty project's CTA is the same
     // subject and must not be a second mechanism that drifts.
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/blank-slate");
+    await page.getByTestId("folder-field-input").fill("/Users/demo/blank-slate");
     await page.getByTestId("open-project").click();
     await page.getByTestId("project-empty-blank-slate").click();
 

@@ -686,7 +686,6 @@ input {
    -------------------------------------------------------------------------- */
 .theme-toggle,
 .macro-icon-btn,
-.dir-picker-up,
 .composer-attach,
 .composer-send {
   box-sizing: border-box;
@@ -2694,11 +2693,6 @@ button.rail-footer-card:hover {
   font-weight: 600;
 }
 
-
-.dir-picker-item.is-selected {
-  background: var(--surface-hover);
-  color: var(--text);
-}
 
 /* Subtle pulse — the active session produced output in roughly the last 3s. */
 .session-busy {
@@ -8033,140 +8027,41 @@ button.system-graph-node.is-navigable:focus-visible {
   z-index: 140;
 }
 
-/* Directory picker (new-session combobox) ------------------------------- */
+/* Folder field ----------------------------------------------------------- */
 
-/* Full-bleed input row: up | path | browse — one bar-height strip whose
-   edges (and any crop) sit at the dialog edge, not the inner padding. */
-.dir-picker-inputrow {
+/* One row: the path, and — on desktop only — the button that opens the OS
+   folder browser. There is no in-app listing to align with any more, so this is
+   an ordinary inset row rather than the full-bleed header band the old picker
+   needed. */
+.folder-field-row {
   display: flex;
   align-items: center;
   gap: var(--sp2);
-  height: var(--pane-header-h);
-  margin-inline: calc(-1 * var(--modal-pad-x, var(--sp5)));
-  padding-inline: var(--modal-pad-x, var(--sp5));
-  border-bottom: 1px solid var(--ui-line);
+  min-width: 0;
 }
 
-/* Matches Button variant="outline" size="icon": a 32px square icon button. */
-.dir-picker-up {
-  flex: 0 0 auto;
-  width: var(--control-h-xs);
-  height: var(--control-h-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
-  color: var(--text-dim);
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast),
-    color var(--transition-fast);
+/* .modal-body drops its top inset because the OLD picker's first row was a
+   full-bleed, bar-height band that had to sit flush against the header
+   hairline. This row is neither, so when it leads the body it puts that inset
+   back — without it the field is jammed against the header. */
+.modal-body > .folder-field:first-child {
+  padding-top: var(--sp3);
 }
 
-.dir-picker-up:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--ui-line-strong);
-  color: var(--text);
-}
-
-.dir-picker-up:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.dir-picker-up:disabled {
-  opacity: 0.42;
-  cursor: default;
-}
-
-.dir-picker-input {
-  flex: 1;
-  font-family: var(--font-mono);
-}
-
-/* Full-bleed rows: the listing stretches to the dialog's edges (escaping
-   the body inset); rows carry the inset themselves. */
-.dir-picker-listing {
-  margin: 0 calc(-1 * var(--modal-pad-x, var(--sp5)));
-  border-top: 0;
-  border-block: 1px solid var(--ui-line);
-  background: var(--surface-inset);
-  max-height: 180px;
-  overflow-y: auto;
-}
-
-.dir-picker-path {
-  position: sticky;
-  top: 0;
-  padding: var(--sp1) var(--modal-pad-x, var(--sp5));
-  font-size: var(--type-micro);
-  font-family: var(--font-mono);
-  color: var(--text-faint);
-  background: var(--bg-3);
-  border-bottom: 1px solid var(--border);
-}
-
-/* The typed tail names a directory that does not exist yet — a plan, not a
-   problem: quiet accent, not error red. */
-.dir-picker-newdir {
-  padding: var(--sp2) var(--modal-pad-x, var(--sp5));
-  font-size: var(--type-label);
-  color: var(--brand);
-}
-
-.dir-picker-empty {
-  padding: var(--sp2) var(--modal-pad-x, var(--sp5));
-  font-size: var(--type-label);
-  color: var(--text-faint);
-}
-
-/* Neutral wash on hover — consistent with the session/history menu. */
-.dir-picker-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  width: 100%;
-  height: var(--control-h-xs);
-  padding: 0 var(--modal-pad-x, var(--sp5));
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  color: var(--text-dim);
-  font-size: var(--type-ui);
-  text-align: left;
-  transition: background-color var(--transition-fast);
-}
-
-.dir-picker-item:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-/* The name takes the slack so the detection badge stays right-anchored. */
-.dir-picker-item-name {
+.folder-field-input {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-family: var(--font-mono);
 }
 
-/* "This folder is an agent project" — the signal that lets the add-workspace
-   flow offer one right action instead of every escape hatch at once. */
-.dir-picker-item-badge {
+/* Labelled, so it sizes to its text — the icon-square recipe above is for
+   icon-only controls. */
+.folder-field-choose {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: var(--sp1);
-  flex: 0 0 auto;
-  padding: 1px var(--sp2);
-  border: 1px solid color-mix(in srgb, var(--green) 38%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--green) 12%, transparent);
-  color: var(--green-text);
-  font-size: var(--type-micro);
+  gap: var(--sp2);
+  white-space: nowrap;
 }
 
 /* The ordinary floating card (design-eng widget spec): the same surface,
@@ -8660,66 +8555,6 @@ button.system-graph-node.is-navigable:focus-visible {
   white-space: nowrap;
 }
 
-/* Detection outcome. Scaffold / template / bulk-scan / MCP-setup all live
-   BEHIND this block — they are consequences of what we found, which is the
-   whole reason the dialog no longer shows them all at once. */
-.aw-result {
-  border-top: 1px solid var(--border);
-  padding: var(--sp3) var(--modal-pad-x);
-}
-
-.aw-result[data-tone="good"] {
-  background: color-mix(in srgb, var(--green) 8%, transparent);
-}
-
-.aw-result[data-tone="todo"] {
-  box-shadow: inset 2px 0 0 var(--amber);
-}
-
-.aw-result-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp2);
-}
-
-.aw-result-glyph {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
-.aw-result[data-tone="good"] .aw-result-glyph {
-  color: var(--green);
-}
-
-.aw-result[data-tone="todo"] .aw-result-glyph {
-  color: var(--amber);
-}
-
-.aw-result-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.aw-result-title {
-  font-size: var(--type-ui);
-}
-
-.aw-result-path {
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-result-change {
-  flex: 0 0 auto;
-}
-
 /* The MCP setup offer, shown ONLY in the "no agent project" outcome. One row
    plus a disclosure, where the old dialog had a permanent 5-wide button grid. */
 .aw-mcp {
@@ -8845,26 +8680,6 @@ button.system-graph-node.is-navigable:focus-visible {
 .recent-dirs[data-fade="both"] {
   -webkit-mask-image: linear-gradient(to right, transparent, black 32px, black calc(100% - 32px), transparent);
   mask-image: linear-gradient(to right, transparent, black 32px, black calc(100% - 32px), transparent);
-}
-
-/* the directory picker's read failure carries its own Retry — same
-   recovery contract as the canvas error card. */
-.dir-picker-error {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  padding: var(--sp2) var(--modal-pad-x, var(--sp5));
-  font-size: var(--type-label);
-  color: var(--red);
-}
-
-.dir-picker-error > span {
-  flex: 1;
-  min-width: 0;
-}
-
-.dir-picker-retry {
-  flex: 0 0 auto;
 }
 
 /* what the exited session's record actually knows — agent, runtime,
@@ -10831,18 +10646,6 @@ button.system-graph-node.is-navigable:focus-visible {
 .unrooted-item .workspace-row-action[aria-expanded="true"],
 .unrooted-item .workspace-row-action:focus-visible {
   opacity: 1;
-}
-
-/* The bulk scan's reach, stated where the count is — the count answers "what is
-   directly inside?" and this answers "what will adding do?", which round 1 let
-   the button imply. Sits under the path so the block reads finding, then place,
-   then consequence. */
-.aw-result-note {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-  line-height: 1.45;
 }
 
 /* Armed: the second press is the one that registers, so the control says so.

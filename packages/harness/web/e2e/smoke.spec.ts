@@ -281,7 +281,7 @@ test("creation IA: Add existing agents opens detection; the tab + starts a sibli
   await expect(modal).toBeVisible();
   await expect(page.getByTestId("add-menu")).toHaveCount(0);
   await expect(page.getByTestId("aw-doors")).toHaveCount(0);
-  await expect(modal.locator(".dir-picker")).toBeVisible();
+  await expect(modal.locator(".folder-field")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
 
@@ -1340,53 +1340,45 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 });
 
-test("Add existing agents: directory picker navigates and validates", async ({
+test("Add existing agents: the folder field seeds itself and drives the action", async ({
   page,
 }) => {
   await page.getByTestId("add-existing-agents").click();
   const modal = page.locator(".modal-start");
   await expect(modal).toBeVisible();
 
-  const primary = modal.locator(".modal-primary-cta");
-  const input = page.getByTestId("dir-picker-input");
+  const input = page.getByTestId("folder-field-input");
 
-  // Seeded from the project root (…/projects); browsing shows its subdirectories.
+  // Seeded from the project root (…/projects).
   await expect(input).toHaveValue("/Users/demo/acme-app/projects");
-  await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
 
-  // Type-ahead: an unrecognized tail filters the nearest real ancestor's children.
-  await input.fill("/Users/demo/rf");
-  await expect(page.getByTestId("dir-picker-item-rfq-agent")).toBeVisible();
-  await expect(page.getByTestId("dir-picker-item-onboarding-flow")).toHaveCount(
-    0,
-  );
-
-  // Clicking a listed directory drills into it.
-  await page.getByTestId("dir-picker-item-rfq-agent").click();
-  await expect(input).toHaveValue("/Users/demo/rfq-agent");
-  await expect(page.getByTestId("dir-picker-item-src")).toBeVisible();
-
-  // "Up" walks to the parent.
-  await page.getByTestId("dir-picker-up").click();
-  await expect(input).toHaveValue("/Users/demo");
-  await expect(page.getByTestId("dir-picker-item-acme-app")).toBeVisible();
+  /* NO IN-APP FILE BROWSER. The path bar, the up-one-level button and the
+     scrolling folder list are gone: on desktop the OS folder browser is the
+     picker, and this — a browser host — gets the field plus a native
+     `<datalist>`, which is the smallest fallback that still completes a path. */
+  await expect(modal.locator(".dir-picker-listing")).toHaveCount(0);
+  await expect(page.getByTestId("folder-field-options")).toHaveCount(1);
+  // And no Choose button here: a browser has no bridge, and a control that
+  // cannot work must never be shown.
+  await expect(page.getByTestId("folder-field-choose")).toHaveCount(0);
 
   await page.screenshot({
     path: "web/e2e/screenshots/add-existing-agents.png",
   });
 
-  // Only a folder that already holds an agent enables the action; a plain one
-  // (and an empty field) leave it disabled.
+  // A folder that already holds an agent gets the register action; a plain one
+  // gets the deep scan rather than a disabled button.
   await input.fill("/Users/demo/rfq-agent");
-  await expect(primary).toBeEnabled();
+  await expect(page.getByTestId("aw-add")).toBeEnabled();
   await input.fill("/Users/demo/scratch");
-  await expect(primary).toBeDisabled();
+  await expect(page.getByTestId("aw-add")).toHaveCount(0);
+  await expect(page.getByTestId("aw-add-all")).toBeEnabled();
 
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.locator(".modal-start")).toBeHidden();
 });
 
-test("Add existing agents: a failed directory read shows an error, not an empty listing", async ({
+test("Add existing agents: a failed directory read is reported, not swallowed", async ({
   page,
 }) => {
   // ?mockError=listDir makes the filesystem probe reject.
@@ -1394,15 +1386,17 @@ test("Add existing agents: a failed directory read shows an error, not an empty 
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
   await page.getByTestId("add-existing-agents").click();
-  await expect(page.locator(".modal-start")).toBeVisible();
+  const modal = page.locator(".modal-start");
+  await expect(modal).toBeVisible();
 
-  const err = page.getByTestId("dir-picker-error");
+  const err = modal.locator(".modal-error");
   await expect(err).toBeVisible({ timeout: 3_000 });
   await expect(err).toContainText("Couldn't read that directory");
 
-  // On error the listing shows neither directory items nor the "no
-  // subdirectories" empty — the error replaces both.
-  await expect(page.getByTestId("dir-picker-item-leasing")).toHaveCount(0);
+  // And the dialog offers nothing it cannot do: an unreadable folder yields no
+  // register action and no scan.
+  await expect(page.getByTestId("aw-add")).toHaveCount(0);
+  await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
 });
 
 test("command palette: a failed path read shows an error but still offers the typed path", async ({
@@ -2837,19 +2831,19 @@ test.describe("session menu copy path", () => {
   });
 });
 
-test("directory picker: arrow keys move the highlight and Enter drills into it", async ({
+test("folder field: Enter fires the dialog's primary action", async ({
   page,
 }) => {
+  // The in-app listing's arrow-key navigation went with the listing; Enter is
+  // no longer "drill into the highlighted row", it is "do the one thing this
+  // dialog is for".
   await page.getByTestId("add-existing-agents").click();
-  const input = page.getByTestId("dir-picker-input");
-  await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
+  const input = page.getByTestId("folder-field-input");
+  await input.fill("/Users/demo/rfq-agent");
+  await expect(page.getByTestId("aw-add")).toBeEnabled();
 
-  await input.press("ArrowDown");
-  await expect(page.getByTestId("dir-picker-item-src")).toHaveClass(
-    /is-selected/,
-  );
   await input.press("Enter");
-  await expect(input).toHaveValue("/Users/demo/acme-app/projects/src");
+  await expect(page.locator(".modal-start")).toBeHidden();
 });
 
 test("canvas controls: the board widget zooms; the subheader's expand lifts the pane to an overlay", async ({

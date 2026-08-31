@@ -1,36 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX, RefObject } from "react";
 
 import type { FsListResponse } from "../lib/api";
 import { classifyFolder, type FolderOutcome } from "../lib/detect-folder";
 import { useDismissable } from "../lib/use-dismissable";
-import { DirectoryPicker, type DirectoryResolution } from "./DirectoryPicker";
+import { FolderField } from "./FolderField";
 import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
- * One folder picker, TWO questions.
+ * One folder dialog, TWO questions.
  *
- * "Add a project" and "find agents under here" are different questions with
+ * "Add a project" and "add the agents under here" are different questions with
  * one shared input, and the design's "one `+` per question" rule means they
  * cannot be the same control. So they are two controls — the rail header's `+`
  * and the nav row's "Add existing agents" — pointing at this one dialog with
- * `mode` deciding which action is the PRIMARY and which is the secondary.
- * Splitting the picker in two instead would have meant two folder browsers
- * asking the identical question, which is the thing that rule is against.
+ * `mode` deciding what the single primary action does.
  *
- * Round 1 had only the detection flow, and the header `+` opened it. So
- * "add a project" was gated behind FINDING AN AGENT IN IT: point it at an empty
- * folder and the ink button stayed disabled, nothing was remembered, and no
- * project row appeared. But a project is a folder the user CHOSE — you open one
- * in order to build the first agent in it, and whether it currently holds an
- * agent is not the question being asked.
+ * `mode: "open"` — **Add project**, the only action. It is enabled for any
+ * folder that exists, because a project is a folder the user CHOSE: you open
+ * one in order to build the first agent in it, and whether it holds one already
+ * is not the question being asked.
  *
- * `mode: "open"` — primary is **Open project**, enabled for any folder that
- * resolves. If detection also found agents, "Add all N" stays as the secondary.
- * `mode: "detect"` — primary is the detection action (Add workspace / Add all
- * N), and "Open folder anyway" is the secondary, so a folder with nothing in it
- * is still a dead end you can walk out of.
+ * `mode: "detect"` — the primary is what detection found, and "Open as project"
+ * is the escape beside it, so a folder with nothing in it is still a dead end
+ * you can walk out of.
+ *
+ * ONE PRIMARY IN `open` MODE, and that is a deletion, not a compromise.
+ * A second ink action, "Add every agent under this folder", used to sit beside
+ * it. It did the same thing: `openProject` (use-harness-state.ts) scans the
+ * whole tree after remembering the root, so the folder's agents arrive either
+ * way. Two buttons, one outcome, and nothing on screen said how they differed.
  *
  * This dialog never scaffolds, starts a session, or opens templates — those
  * live on their own surfaces, which is why there is no agent picker and no
@@ -39,11 +39,10 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 export type StartMode = "open" | "detect";
 
 interface StartDialogProps {
-  /** Which question was asked. Decides the primary action, the title and the
-   *  subtitle; both modes offer both actions. */
+  /** Which question was asked. Decides the primary action and the title. */
   mode?: StartMode;
   recentDirs: string[];
-  /** Fallback for the folder the picker opens on, after the project root — the
+  /** Fallback for the folder the field opens on, after the project root — the
    *  harness home now that launchDir is pinned there. */
   launchDir?: string | null;
   projectRoot?: string | null;
@@ -51,7 +50,7 @@ interface StartDialogProps {
   onClose: () => void;
   /** Register an existing agent project (the `project` outcome). */
   onConnect: (cwd: string) => Promise<void>;
-  /** Bulk-register every project under a root (the `multi` outcome). */
+  /** Bulk-register every project under a root (the `multi`/`plain` outcome). */
   onScan: (root: string) => Promise<number>;
   /**
    * Remember the folder as a PROJECT — agents or not.
@@ -93,33 +92,32 @@ export function StartDialog({
   const panelRef = useRef<HTMLDivElement>(null);
   useDismissable(true, { onDismiss: onClose, containerRef: panelRef, triggerRef });
 
-  // A folder change means the current outcome is stale — show "Checking…" until
-  // the picker re-resolves and detection settles.
+  /**
+   * Classify the typed folder, debounced.
+   *
+   * `classifyFolder` needs no help from the field: it resolves "this folder
+   * doesn't exist yet" itself, from the real server's 404 and from the mock's
+   * resolve-to-nearest-ancestor alike (see its header). That is what let the
+   * in-app directory listing go — nothing but the listing ever needed the
+   * picker's own resolution.
+   */
+  const seqRef = useRef(0);
   useEffect(() => {
+    const target = cwd.trim();
+    const seq = ++seqRef.current;
     setChecking(true);
     // A new folder is a new question: the consent given for the last one does
     // not carry over to this one.
     setArmed(false);
-  }, [cwd]);
-
-  // Detection runs off the picker's own resolution (no "Continue", no second
-  // fetch): `classifyFolder` only needs the "is this new?" signal the picker
-  // already computed, plus one parent-listing for the is-it-a-project check.
-  const cwdRef = useRef(cwd);
-  cwdRef.current = cwd;
-  const seqRef = useRef(0);
-  const handleResolve = useCallback(
-    (resolution: DirectoryResolution) => {
-      const target = cwdRef.current.trim();
-      const seq = ++seqRef.current;
-      if (!target) {
-        setOutcome(null);
-        setChecking(false);
-        return;
-      }
-      classifyFolder(target, resolution.isNew, listDir)
+    if (!target) {
+      setOutcome(null);
+      setChecking(false);
+      return;
+    }
+    const handle = setTimeout(() => {
+      classifyFolder(target, false, listDir)
         .then((next) => {
-          if (seq !== seqRef.current) return; // a newer resolution won
+          if (seq !== seqRef.current) return; // a newer folder won
           setOutcome(next);
           setError(null);
         })
@@ -131,9 +129,9 @@ export function StartDialog({
         .finally(() => {
           if (seq === seqRef.current) setChecking(false);
         });
-    },
-    [listDir],
-  );
+    }, 150);
+    return () => clearTimeout(handle);
+  }, [cwd, listDir]);
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true);
@@ -152,16 +150,10 @@ export function StartDialog({
   /**
    * Whether the bulk scan is worth offering: any folder that EXISTS.
    *
-   * Round 1 offered it only for `multi` — a folder with an agent project as an
-   * immediate child. But detection probes exactly one level, and the scan walks
-   * eight, so `plain` does not mean "no agents here", it means "none in the one
-   * level I looked at". On the user's real install that refused `design-eng`
-   * outright, because its agent lives at `design-eng/ari/orchestration`.
-   *
-   * This is the same mismatch as the dishonest count, from the other side: one
-   * level's answer was being used to decide an eight-level action. Both are
-   * fixed by the same move — stop letting the shallow probe speak for the deep
-   * scan, in either direction.
+   * Detection probes exactly one level, and the scan walks eight, so `plain`
+   * does not mean "no agents here", it means "none in the one level I looked
+   * at". On the user's real install that refused `design-eng` outright, because
+   * its agent lives at `design-eng/ari/orchestration`.
    */
   const canScan = outcome != null && outcome.kind !== "new" && target !== "";
   // A folder that does not exist yet cannot be opened as a project: the rail
@@ -175,23 +167,10 @@ export function StartDialog({
    *
    * `POST /api/workflows/scan` walks the whole tree — eight levels, bounded by
    * a node budget — and registers everything it finds. The dialog cannot say
-   * how many that is: the only number it can compute is the folder's immediate
-   * children, and on a real install that read 1 while the click wrote 87
-   * registry rows. Those 87 are the "outside your projects" flood.
-   *
-   * A PREVIEW would be better than a warning, and it is not reachable from
-   * here. Computing one client-side means walking `GET /api/fs/list` ourselves,
-   * and that listing does not say which directories the scan IGNORES — it only
-   * applies the ignore rule to `hasAgentProject` on the entry itself. So a
-   * client walk descends into `node_modules` and counts every installed package
-   * carrying a `sapiom.json`, which the real scan skips entirely. That trades a
-   * number that is too small for one that is too large, which is not an
-   * improvement. An honest preview needs a DRY-RUN scan on the server, and that
-   * file belongs to the other half of this round — see the report.
-   *
-   * So: the press states the consequence in the terms that actually bit, and
-   * the second press is the consent. Not a confirm dialog — this is one action
-   * with two states, and a modal over a modal would be worse than the sentence.
+   * how many that is: the only number it could compute is the folder's
+   * immediate children, and on a real install that read 1 while the click wrote
+   * 87 registry rows. So the press states the consequence, and the second press
+   * is the consent — one action with two states, not a modal over a modal.
    */
   const armAddAll = (): void => {
     if (armed) {
@@ -225,7 +204,7 @@ export function StartDialog({
       if (outcome?.kind === "project") await onConnect(target);
     });
 
-  // Enter (from the picker) and ⌘↵ both fire the PRIMARY — which is the whole
+  // Enter (from the field) and ⌘↵ both fire the PRIMARY — which is the whole
   // point of `mode`: the control the user reached for decides what they meant.
   const submitPrimary = (): void => {
     if (busy || checking || !outcome || !target) return;
@@ -264,23 +243,25 @@ export function StartDialog({
         </div>
 
         <div className="modal-body">
-          <p className="modal-field-hint modal-start-sub">
-            {mode === "open"
-              ? "Pick a folder to work in. It doesn't need an agent yet — agents (sapiom.json) anywhere inside it appear under it automatically."
-              : "Add a folder that already holds an agent project."}
+          {/* ONE LINE, and it is the only body copy — a title, a line of
+              guidance, a folder, one action. What was here before spent three
+              sentences on how the scanner works (one level down versus the whole
+              tree) to justify a warning nobody could act on. */}
+          <p className="modal-field-hint" data-testid="start-hint" aria-live="polite">
+            {hintFor({ mode, outcome, checking, armed })}
           </p>
+
           <section className="modal-section">
-            <DirectoryPicker
+            <FolderField
               value={cwd}
               onChange={setCwd}
               onSubmit={submitPrimary}
+              /* No chips here: this dialog names a folder to ADD, and the
+                 recents are the folders it has already been given. */
               recentDirs={[]}
               listDir={listDir}
-              onResolve={handleResolve}
             />
           </section>
-
-          {outcome && <StatusReadout outcome={outcome} path={target} />}
 
           {error && <div className="modal-error">{error}</div>}
         </div>
@@ -308,74 +289,51 @@ export function StartDialog({
 }
 
 /**
- * State the finding; the footer offers the action it implies (or none). A
- * full-bleed hairline-separated block, not a floating card — the dialog's
- * anatomy is header / body / footer blocks.
+ * The dialog's single line of guidance.
+ *
+ * It says what pressing the primary will DO, and nothing about how the folder
+ * is inspected — no marker filenames, no "detection", no reach disclaimer. The
+ * one case where it stops being guidance and becomes a state is the folder that
+ * is not there, which is the only state a person can act on from here.
  */
-function StatusReadout({ outcome, path }: { outcome: FolderOutcome; path: string }): JSX.Element {
-  const good = outcome.kind === "project" || outcome.kind === "multi";
-  return (
-    <div className="aw-result" data-tone={good ? "good" : "todo"} data-testid="aw-result" aria-live="polite">
-      <div className="aw-result-head">
-        <span className="aw-result-glyph" aria-hidden="true">
-          <Icon name={good ? "Check" : "TriangleAlert"} size={14} />
-        </span>
-        <span className="aw-result-text">
-          <span className="aw-result-title">
-            {outcome.kind === "project" && "This is an agent project"}
-            {/* "DIRECTLY inside", not "under". The old copy said "under this
-                folder" over a number that only counted one level down, and the
-                button then promised that number for an action that walks eight.
-                On a real install the dialog said 1 and the click registered 87.
-                The count is still worth stating — it is a true fact about the
-                folder — but it has to say which question it answered. */}
-            {outcome.kind === "multi" &&
-              `${outcome.directChildren} agent ${
-                outcome.directChildren === 1 ? "project" : "projects"
-              } directly inside this folder`}
-            {/* "DIRECTLY inside", again. Detection probes exactly ONE level
-                down — that is all `GET /api/fs/list` reports — so "no agent in
-                this folder" was a claim it had not checked. On a real install
-                `design-eng` holds its agent at `design-eng/ari/orchestration`,
-                and round 1 answered "No agent in this folder" and DISABLED the
-                only action, which is the user's "there is no way to move from
-                one state to the other" in its most literal form. */}
-            {outcome.kind === "plain" && "No agent directly inside this folder"}
-            {outcome.kind === "new" && "This folder doesn't exist yet"}
-          </span>
-          <span className="aw-result-path" title={path}>
-            {path}
-          </span>
-          {/* THE SENTENCE THAT WAS MISSING. The count above answers "what is
-              directly inside?"; this answers "what will adding do?", and they
-              are not the same question. Round 1 printed only the first and let
-              the button imply it was the second. */}
-          {(outcome.kind === "multi" || outcome.kind === "plain") && (
-            <span className="aw-result-note" data-testid="aw-scan-reach">
-              Detection only looks one level down. Adding searches the whole tree
-              beneath this folder, so it can find agents this line cannot see —
-              and on a large folder, many more than it names.
-            </span>
-          )}
-        </span>
-      </div>
-    </div>
-  );
+function hintFor({
+  mode,
+  outcome,
+  checking,
+  armed,
+}: {
+  mode: StartMode;
+  outcome: FolderOutcome | null;
+  checking: boolean;
+  armed: boolean;
+}): string {
+  if (mode === "open") {
+    if (!checking && outcome?.kind === "new") return "That folder doesn't exist yet.";
+    return "Choose a folder to work in — any agents inside come with it.";
+  }
+  if (checking || !outcome) return "Choose a folder that already holds agents.";
+  switch (outcome.kind) {
+    case "new":
+      return "That folder doesn't exist yet.";
+    case "project":
+      return "This folder is an agent project.";
+    default:
+      return armed
+        ? "Press again to confirm — this adds every agent below this folder."
+        : "Adds every agent below this folder.";
+  }
 }
 
 /**
- * The footer: one ink PRIMARY chosen by `mode`, and — only when it has
- * something else to offer — the other question's action beside it as a ghost.
+ * The footer: one ink PRIMARY chosen by `mode`.
  *
- * In `open` mode the primary is always **Open project**, because the question
- * asked was "add a project" and every folder that exists is an answer to it.
- * Detection still runs, and when it found agents the ghost carries them in
- * (`Add all N`), so the two questions stay one press apart without either one
- * pretending to be the other.
+ * In `open` mode that is **Add project** and it is the only action, because
+ * every folder that exists is an answer to "add a project" and opening one
+ * already brings its agents with it.
  *
- * In `detect` mode the primary is what detection found, exactly as round 1 had
- * it, and the ghost is **Open folder anyway** — the escape from a folder with
- * no agent in it, which is otherwise a disabled button and nothing else.
+ * In `detect` mode the primary is what detection found, and **Open as project**
+ * sits beside it as a ghost — the escape from a folder with no agent in it,
+ * which is otherwise a disabled button and nothing else.
  */
 function PrimaryActions({
   mode,
@@ -402,10 +360,26 @@ function PrimaryActions({
   onScan: () => void;
   onOpen: () => void;
 }): JSX.Element {
+  if (mode === "open") {
+    return (
+      <button
+        className="btn-primary modal-primary-cta"
+        data-testid="open-project"
+        onClick={onOpen}
+        disabled={busy || checking || !canOpen}
+      >
+        {busy ? "Adding…" : checking ? "Checking…" : "Add project"}
+      </button>
+    );
+  }
+
   if (checking || !outcome) {
     return (
       <button className="btn-primary modal-primary-cta" data-testid="start-primary" disabled>
-        Checking…
+        {/* Not "Checking…" once the check has finished: an unreadable folder
+            settles with no outcome, and the dialog must not claim to still be
+            working on it. The error itself is reported in the body. */}
+        {checking ? "Checking…" : "Add agents"}
       </button>
     );
   }
@@ -415,57 +389,29 @@ function PrimaryActions({
    *
    * `Add all {n}` printed the number of agent projects DIRECTLY inside the
    * folder onto a control that registers everything eight levels down. On a
-   * real install it read `Add all 1` and the press wrote 87 registry rows — the
-   * whole of the user's "outside your projects" flood, from one click that
-   * promised one row.
-   *
-   * The number could not simply be corrected: the honest one is only knowable
-   * by running the scan (see `armAddAll` for why a client-side preview
-   * over-counts instead). A count is a promise, and this one cannot be kept
-   * cheaply — so the control stops making it and says what it will DO instead,
-   * with the consequence stated before the press that causes it.
+   * real install it read `Add all 1` and the press wrote 87 registry rows. A
+   * count is a promise, and this one cannot be kept cheaply — so the control
+   * says what it will DO, in a verb, and the consequence is stated in the one
+   * hint line above it before the press that causes it.
    */
   const addAll =
     canScan && outcome.kind !== "project" ? (
       <button
-        className={
-          (mode === "open" ? "btn-ghost" : "btn-primary modal-primary-cta") +
-          (armed ? " is-armed" : "")
-        }
+        className={"btn-primary modal-primary-cta" + (armed ? " is-armed" : "")}
         data-testid="aw-add-all"
         data-armed={armed ? "true" : "false"}
         onClick={onScan}
         disabled={busy}
       >
-        {busy
-          ? "Adding…"
-          : armed
-            ? "Add them — this can be a lot of rows"
-            : "Add every agent under this folder"}
+        {busy ? "Adding…" : armed ? "Add them all" : "Add agents"}
       </button>
     ) : null;
 
-  if (mode === "open") {
-    return (
-      <>
-        {addAll}
-        <button
-          className="btn-primary modal-primary-cta"
-          data-testid="open-project"
-          onClick={onOpen}
-          disabled={busy || !canOpen}
-        >
-          {busy ? "Opening…" : "Open project"}
-        </button>
-      </>
-    );
-  }
-
-  // `detect`: the folder that holds nothing still gets a way out, so the dialog
-  // is never a disabled button and no next step.
-  const openAnyway = canOpen ? (
+  // The folder that holds nothing still gets a way out, so the dialog is never
+  // a disabled button and no next step.
+  const openAsProject = canOpen ? (
     <button className="btn-ghost" data-testid="open-project" onClick={onOpen} disabled={busy}>
-      Open folder anyway
+      Open as project
     </button>
   ) : null;
 
@@ -473,26 +419,24 @@ function PrimaryActions({
     case "project":
       return (
         <button className="btn-primary modal-primary-cta" data-testid="aw-add" onClick={onConnect} disabled={busy}>
-          {busy ? "Adding…" : "Add workspace"}
+          {busy ? "Adding…" : "Add agent"}
         </button>
       );
     case "multi":
-      return addAll as JSX.Element;
     case "plain":
-      /* NOT a dead end any more. Round 1 rendered a disabled "Add workspace"
-         here on the strength of a ONE-LEVEL probe, so a folder whose agents sit
-         two levels down could not be added at all. The deep scan is the honest
-         answer to "are there agents under here?", so it is what this offers. */
+      /* NOT a dead end. A one-level probe cannot answer "are there agents under
+         here?", so the deep scan is what this offers, and the folder can always
+         be opened as a project instead. */
       return (
         <>
-          {openAnyway}
+          {openAsProject}
           {addAll}
         </>
       );
     case "new":
       return (
         <button className="btn-primary modal-primary-cta" data-testid="start-primary" disabled>
-          Add workspace
+          Add agents
         </button>
       );
   }

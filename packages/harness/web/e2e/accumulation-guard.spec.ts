@@ -241,7 +241,7 @@ test.describe("Remove project", () => {
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
 
     await page.getByTestId("add-existing-agents").click();
-    await page.getByTestId("dir-picker-input").fill(`${ACME}/leasing`);
+    await page.getByTestId("folder-field-input").fill(`${ACME}/leasing`);
     await page.getByTestId("aw-add").click();
 
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();

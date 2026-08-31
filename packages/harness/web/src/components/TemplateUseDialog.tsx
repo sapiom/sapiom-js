@@ -21,7 +21,7 @@ import type { JSX, RefObject } from "react";
 import { errorMessage, type FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
 import { useDismissable } from "../lib/use-dismissable";
-import { DirectoryPicker } from "./DirectoryPicker";
+import { FolderField } from "./FolderField";
 import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -78,7 +78,7 @@ export function TemplateUseDialog({
         role="dialog"
         aria-label={`Use ${template.name}`}
         // No `object: "template"` here: it would shadow the nested
-        // DirectoryPicker's `object: "directory"`, and that value is what makes
+        // FolderField's `object: "directory"`, and that value is what makes
         // before-send drop the user's folder names from click text.
         {...trackingAttrs({ dialog: "template_use" })}
         data-testid="template-use-dialog"
@@ -98,7 +98,7 @@ export function TemplateUseDialog({
         </div>
 
         <div className="modal-body">
-          <DirectoryPicker
+          <FolderField
             value={dest}
             onChange={setDest}
             onSubmit={() => void submit()}

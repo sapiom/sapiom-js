@@ -39,7 +39,7 @@ const MAX_EL_TEXT_LENGTH = 120;
  *
  *   - `data-testid={`workflow-${workflow.name}`}`   (WorkflowRow — the agent's name)
  *   - `data-testid={`workspace-group-${label}`}`    (WorkflowsRail — the folder name)
- *   - `data-testid={`dir-picker-item-${entry.name}`}` (DirectoryPicker)
+ *   - `data-testid={`project-row-${label}`}`          (WorkflowsRail — the folder name)
  *   - `title={isDirectory ? cwd : label}`           (WorkflowsRail — the ABSOLUTE PATH,
  *                                                    which contains the OS username)
  *

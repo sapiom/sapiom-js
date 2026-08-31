@@ -76,8 +76,8 @@ test.describe("first run", () => {
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
     // Pick a fixture folder that holds an agent project — detection is reactive.
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-agent");
-    await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");
+    await page.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
+    await expect(page.getByTestId("start-hint")).toHaveText("This folder is an agent project.");
     await page.getByTestId("aw-add").click();
 
     // The workspace joins the rail.
