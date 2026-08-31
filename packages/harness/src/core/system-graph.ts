@@ -446,7 +446,7 @@ export class StaticSystemGraphBuilder implements SystemGraphBuilder {
       cacheable:
         consumed.identitySettled &&
         consumed.discoveryComplete &&
-        adapted.complete,
+        adapted.cacheable,
       graph: {
         kind: "system",
         scope: { kind: "working-tree", workspaceKey: scope.workspaceKey },

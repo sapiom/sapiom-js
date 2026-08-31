@@ -50,6 +50,9 @@ export interface DirectInvocationEvidenceAdaptation {
   /** Existing path-free V0 projection derived only from accepted evidence. */
   edges: StaticInvocationGraphEdge[];
   warnings: GraphWarning[];
+  /** True when the analyzed static subset is settled and safe to cache. */
+  cacheable: boolean;
+  /** True only when no static topology path remains unresolved. */
   complete: boolean;
 }
 
@@ -435,6 +438,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
   const coverageGaps: PackageGraphEvidenceCoverageGap[] = [];
   const contexts = new Map<PackageGraphEvidenceDigest, DiagnosticContext>();
   const fingerprints: NormalizedScanFingerprint[] = [];
+  let cacheable = true;
   let complete = true;
 
   const orderedScans = [...input.scans].sort((left, right) =>
@@ -450,6 +454,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
       (scanCountByAgentKey.get(scan.caller.agentKey) ?? 0) + 1,
     );
     if (expectedAgentKeys.has(scan.caller.agentKey)) continue;
+    cacheable = false;
     complete = false;
     coverageGaps.push({ code: "opaque-boundary" });
     addIncompleteDiagnostic(diagnostics, contexts, scan.caller, "incomplete", {
@@ -461,6 +466,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
   )) {
     const count = scanCountByAgentKey.get(caller.agentKey) ?? 0;
     if (count === 1) continue;
+    cacheable = false;
     complete = false;
     coverageGaps.push({ code: "opaque-boundary" });
     addIncompleteDiagnostic(
@@ -488,12 +494,14 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
     const dynamicCallsites: NormalizedScanFingerprint["dynamicCallsites"] = [];
 
     if (scan.pending) {
+      cacheable = false;
       complete = false;
       coverageGaps.push({ code: "other" });
       addIncompleteDiagnostic(diagnostics, contexts, scan.caller, "pending", {
         status,
       });
     } else if (scan.failed) {
+      cacheable = false;
       complete = false;
       coverageGaps.push({ code: "producer-failed" });
       addIncompleteDiagnostic(diagnostics, contexts, scan.caller, "failed", {
@@ -501,6 +509,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
       });
     } else {
       if (scan.result.complete !== true) {
+        cacheable = false;
         complete = false;
         coverageGaps.push({ code: "opaque-boundary" });
         addIncompleteDiagnostic(
@@ -512,6 +521,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
         );
       }
       if (!validFingerprint) {
+        cacheable = false;
         complete = false;
         coverageGaps.push({ code: "opaque-boundary" });
         addIncompleteDiagnostic(
@@ -527,6 +537,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
         if (warning.code !== "dynamic-target") continue;
         complete = false;
         if (!validSourceEvidence(warning.evidence)) {
+          cacheable = false;
           coverageGaps.push({ code: "opaque-boundary" });
           addIncompleteDiagnostic(
             diagnostics,
@@ -569,6 +580,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
           validEvidence.length === 0 ||
           validEvidence.length !== suppliedEvidence.length
         ) {
+          cacheable = false;
           complete = false;
           coverageGaps.push({ code: "opaque-boundary" });
           addIncompleteDiagnostic(
@@ -723,8 +735,11 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
     sameProducerSlot(input.previousState, input.inventory)
       ? input.previousState
       : undefined;
+  // A fully settled scan can atomically refresh the literal static subset even
+  // when a dynamic target keeps overall topology coverage partial. Transient
+  // partial/failed attempts still retain the last accepted result.
   const state = advancePackageGraphStaticEvidenceState(
-    previousState,
+    cacheable && latestResult.outcome === "success" ? undefined : previousState,
     latestResult,
   );
 
@@ -733,6 +748,7 @@ export function adaptDirectInvocationsToGraphEvidence(input: {
     state,
     edges: projectEdges(input.inventory, state),
     warnings: projectionWarnings(latestResult, state, contexts, input.agents),
+    cacheable,
     complete,
   };
 }

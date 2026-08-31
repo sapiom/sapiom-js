@@ -377,26 +377,27 @@ describe("StaticSystemGraphBuilder", () => {
       ),
     };
     const onChange = vi.fn();
+    let researchResult: AgentInvocationProviderResult = {
+      invocations: [
+        {
+          target: "growth",
+          mode: "blocking",
+          evidence: EVIDENCE,
+        },
+      ],
+      warnings: [
+        {
+          code: "dynamic-target",
+          mode: "async",
+          evidence: { file: "index.ts", line: 2, column: 1 },
+        },
+      ],
+      complete: true,
+      sourceFingerprint: SOURCE_FINGERPRINT,
+    };
     const invocations = new CachedAgentInvocationProvider(
       invocationProvider(async (root) =>
-        root.endsWith("research")
-          ? {
-              invocations: [
-                {
-                  target: "growth",
-                  mode: "blocking",
-                  evidence: EVIDENCE,
-                },
-              ],
-              warnings: [
-                {
-                  code: "dynamic-target",
-                  mode: "async",
-                  evidence: { file: "index.ts", line: 2, column: 1 },
-                },
-              ],
-            }
-          : EMPTY_INVOCATIONS,
+        root.endsWith("research") ? researchResult : EMPTY_INVOCATIONS,
       ),
       async () => "unused",
       { onChange },
@@ -409,7 +410,7 @@ describe("StaticSystemGraphBuilder", () => {
     await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
 
     const enriched = await builder.build(scope);
-    expect(enriched.cacheable).toBe(false);
+    expect(enriched.cacheable).toBe(true);
     expect(enriched.graph.edges).toEqual([
       {
         from: "agent:research",
@@ -425,8 +426,28 @@ describe("StaticSystemGraphBuilder", () => {
       message: "Research has a dynamic agent target that V0 cannot resolve.",
     });
 
-    const repeated = await builder.build(scope);
-    expect(repeated.graph.edges).toEqual(enriched.graph.edges);
+    researchResult = {
+      invocations: [],
+      warnings: researchResult.warnings,
+      complete: true,
+      sourceFingerprint: EDITED_SOURCE_FINGERPRINT,
+    };
+    onChange.mockClear();
+    invocations.invalidateSource(path.join(FIXTURE, "research"));
+    const refreshing = await builder.build(scope);
+    expect(refreshing.cacheable).toBe(false);
+    expect(refreshing.graph.edges).toEqual(enriched.graph.edges);
+    refreshing.afterCommit?.();
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    const retracted = await builder.build(scope);
+    expect(retracted.cacheable).toBe(true);
+    expect(retracted.graph.edges).toEqual([]);
+    expect(retracted.graph.warnings).toContainEqual({
+      code: "dynamic-target",
+      agentKey: "research",
+      message: "Research has a dynamic agent target that V0 cannot resolve.",
+    });
   });
 
   it("deduplicates by mode, retains dual-mode edges, and reports duplicate and unresolved targets", async () => {
@@ -569,7 +590,7 @@ describe("StaticSystemGraphBuilder", () => {
       invocations,
     ).build(scope);
 
-    expect(built.cacheable).toBe(false);
+    expect(built.cacheable).toBe(true);
     expect(built.graph.edges).toEqual([]);
     expect(built.graph.warnings).toEqual([
       {

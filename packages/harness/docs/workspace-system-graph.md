@@ -152,8 +152,10 @@ or otherwise incomplete caller analysis cannot be promoted to complete; the
 last complete result stays visible while the new attempt is diagnosed as
 partial or failed. The initial cache-only phase does not seed last-good evidence:
 the first settled partial scan can still expose its proven static edges. A
-dynamic target therefore preserves those proven edges and warning while keeping
-the graph snapshot degraded/retryable.
+complete source scan with a dynamic target can atomically refresh its settled
+literal-edge subset while keeping topology coverage explicitly partial. Its
+warning remains visible, but the deterministic limitation alone does not make
+the graph retryable.
 
 Projection can remain useful while reporting warnings:
 

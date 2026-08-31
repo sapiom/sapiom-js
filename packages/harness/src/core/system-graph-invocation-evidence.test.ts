@@ -565,6 +565,7 @@ describe("adaptDirectInvocationsToGraphEvidence", () => {
     });
 
     expect(adapted.complete).toBe(false);
+    expect(adapted.cacheable).toBe(true);
     expect(adapted.latestResult.coverage.status).toBe("partial");
     expect(adapted.latestResult.diagnostics).toContainEqual(
       expect.objectContaining({
