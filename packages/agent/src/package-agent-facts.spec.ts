@@ -171,6 +171,34 @@ describe("package AgentFacts protocol 1", () => {
     });
   });
 
+  it("marks sparse cards partial instead of silently claiming complete extraction", () => {
+    const normalized = snapshot([
+      { agentKey: "coordinator" },
+      {
+        agentKey: "research",
+        description: "Reads source documents.",
+        inputSchema: null,
+        outputSchema: null,
+        declaredCapabilities: [],
+        observed: [],
+      },
+    ]);
+
+    expect(normalized.agents[0]?.completeness).toEqual({
+      status: "partial",
+      diagnostics: [
+        {
+          code: "incomplete-extraction",
+          severity: "warning",
+          agentKey: "coordinator",
+        },
+      ],
+    });
+    expect(normalized.agents[1]?.completeness).toEqual({
+      status: "complete",
+    });
+  });
+
   it("emits byte-identical normalized output for equivalent unordered inputs", () => {
     const first = snapshot([
       {
@@ -203,6 +231,53 @@ describe("package AgentFacts protocol 1", () => {
     expect(first.snapshotId).toBe(second.snapshotId);
   });
 
+  it("keeps conflicting duplicate cards order-independent by preserving the agent as unknown", () => {
+    const firstCard = {
+      agentKey: "research",
+      description: "First authored description.",
+      inputSchema: null,
+      outputSchema: null,
+      declaredCapabilities: [],
+      observed: [],
+    };
+    const secondCard = {
+      agentKey: "research",
+      description: "Second authored description.",
+      inputSchema: null,
+      outputSchema: null,
+      declaredCapabilities: [],
+      observed: [],
+    };
+    const first = snapshot([
+      { agentKey: "coordinator" },
+      firstCard,
+      secondCard,
+    ]);
+    const second = snapshot([
+      secondCard,
+      firstCard,
+      { agentKey: "coordinator" },
+    ]);
+
+    expect(canonicalPackageAgentFactsJson(first)).toBe(
+      canonicalPackageAgentFactsJson(second),
+    );
+    expect(first.agents[1]).toMatchObject({
+      agentKey: "research",
+      description: { status: "unknown" },
+      completeness: {
+        status: "unknown",
+        diagnostics: [
+          {
+            code: "duplicate-card",
+            severity: "warning",
+            agentKey: "research",
+          },
+        ],
+      },
+    });
+  });
+
   it("rejects or ignores unsupported observed facts without inventing capabilities", () => {
     const normalized = snapshot([
       {
@@ -225,6 +300,11 @@ describe("package AgentFacts protocol 1", () => {
     expect(normalized.diagnostics).toEqual([
       { code: "invalid-card", severity: "warning" },
       {
+        code: "incomplete-extraction",
+        severity: "warning",
+        agentKey: "coordinator",
+      },
+      {
         code: "invalid-observation",
         severity: "warning",
         agentKey: "coordinator",
@@ -238,6 +318,11 @@ describe("package AgentFacts protocol 1", () => {
         code: "unknown-agent-key",
         severity: "warning",
         agentKey: "ghost",
+      },
+      {
+        code: "incomplete-extraction",
+        severity: "warning",
+        agentKey: "research",
       },
     ]);
   });

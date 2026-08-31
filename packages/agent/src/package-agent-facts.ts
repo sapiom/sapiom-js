@@ -441,6 +441,36 @@ function normalizeCompleteness(
   };
 }
 
+function mergeIncompleteCompleteness(
+  agentKey: string,
+  completeness: PackageAgentFactsCompleteness | undefined,
+  diagnostics: readonly PackageAgentFactsDiagnostic[],
+): {
+  completeness: PackageAgentFactsCompleteness;
+  diagnostics: PackageAgentFactsDiagnostic[];
+} {
+  if (diagnostics.length === 0) {
+    return {
+      completeness: completeness ?? { status: "complete" },
+      diagnostics: [],
+    };
+  }
+  const partialDiagnostics = normalizeDiagnostics([
+    ...(completeness?.status === "partial" || completeness?.status === "unknown"
+      ? completeness.diagnostics
+      : []),
+    ...diagnostics,
+    { code: "incomplete-extraction", severity: "warning", agentKey },
+  ]);
+  return {
+    completeness: {
+      status: completeness?.status === "unknown" ? "unknown" : "partial",
+      diagnostics: partialDiagnostics,
+    },
+    diagnostics: partialDiagnostics,
+  };
+}
+
 function unknownRecord(
   agentKey: string,
   diagnostics: readonly PackageAgentFactsDiagnostic[],
@@ -569,9 +599,27 @@ function recordFromCard(
     card.observed !== undefined
       ? { status: "known", values: normalizeCapabilities(observedCapabilities) }
       : { status: "unknown" };
-  const completeness = normalizeCompleteness(
-    card.completeness ?? { status: "complete" },
+  const missingFieldDiagnostics = [
+    description,
+    inputSchema,
+    outputSchema,
+    declared,
+    observed,
+  ].some((field) => field.status === "unknown")
+    ? [
+        {
+          code: "incomplete-extraction",
+          severity: "warning",
+          agentKey,
+        } as const,
+      ]
+    : [];
+  const mergedCompleteness = mergeIncompleteCompleteness(
+    agentKey,
+    card.completeness,
+    [...missingFieldDiagnostics, ...diagnostics],
   );
+  const completeness = normalizeCompleteness(mergedCompleteness.completeness);
   const record = {
     agentKey,
     description,
@@ -601,7 +649,10 @@ function recordFromCard(
       observed,
     }),
   };
-  return { record: packageAgentFactsRecordSchema.parse(record), diagnostics };
+  return {
+    record: packageAgentFactsRecordSchema.parse(record),
+    diagnostics: mergedCompleteness.diagnostics,
+  };
 }
 
 function snapshotWithoutId(
@@ -701,7 +752,7 @@ export function createPackageAgentFactsSnapshot(
       "AgentFacts snapshot scope must match the package inventory version",
     );
   }
-  const cardsByAgentKey = new Map<string, PackageAgentFactsCardInput>();
+  const cardsByAgentKey = new Map<string, PackageAgentFactsCardInput[]>();
   const diagnostics: PackageAgentFactsDiagnostic[] = [
     ...(parsedInput.diagnostics ?? []),
   ];
@@ -724,21 +775,16 @@ export function createPackageAgentFactsSnapshot(
       });
       continue;
     }
-    if (cardsByAgentKey.has(card.agentKey)) {
-      diagnostics.push({
-        code: "duplicate-card",
-        severity: "warning",
-        agentKey: card.agentKey,
-      });
-      continue;
-    }
-    cardsByAgentKey.set(card.agentKey, card);
+    cardsByAgentKey.set(card.agentKey, [
+      ...(cardsByAgentKey.get(card.agentKey) ?? []),
+      card,
+    ]);
   }
 
   const agents: PackageAgentFactsRecord[] = [];
   for (const agent of inventory.agents) {
-    const card = cardsByAgentKey.get(agent.agentKey);
-    if (!card) {
+    const cards = cardsByAgentKey.get(agent.agentKey) ?? [];
+    if (cards.length === 0) {
       const missing = {
         code: "missing-card",
         severity: "warning",
@@ -748,9 +794,19 @@ export function createPackageAgentFactsSnapshot(
       agents.push(unknownRecord(agent.agentKey, [missing]));
       continue;
     }
+    if (cards.length > 1) {
+      const duplicate = {
+        code: "duplicate-card",
+        severity: "warning",
+        agentKey: agent.agentKey,
+      } as const;
+      diagnostics.push(duplicate);
+      agents.push(unknownRecord(agent.agentKey, [duplicate]));
+      continue;
+    }
     const { record, diagnostics: cardDiagnostics } = recordFromCard(
       agent.agentKey,
-      card,
+      cards[0]!,
     );
     diagnostics.push(...cardDiagnostics);
     agents.push(record);
