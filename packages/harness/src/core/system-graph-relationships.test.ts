@@ -51,6 +51,35 @@ async function callerWithSource(source: string): Promise<AgentInventoryItem> {
   };
 }
 
+async function packageWithCallers(
+  files: Record<string, string>,
+  agents: readonly string[],
+): Promise<AgentInventoryItem[]> {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "system-graph-package-invocations-test-"),
+  );
+  temporaryRoots.push(root);
+  for (const [name, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await fs.writeFile(path.join(root, name), content);
+  }
+  return agents.map((agentKey, index) => {
+    const sourceRoot = path.join(root, "agents", agentKey);
+    return {
+      agentKey,
+      identityStatus: "canonical",
+      definitionId: index + 1,
+      definitionSlug: agentKey,
+      label: agentKey,
+      resolutionAliases: [agentKey],
+      sourceRoot,
+      workflowPath: sourceRoot,
+      path: `agents/${agentKey}`,
+      entrypoint: "index.ts",
+    };
+  });
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryRoots
@@ -235,6 +264,126 @@ await agents.run({
       path.join(external, "edge.ts"),
       expect.any(Number),
     );
+  });
+
+  it("resolves re-exported namespaces and shared wrapper functions with one package program", async () => {
+    const [coordinator, research] = await packageWithCallers(
+      {
+        "node_modules/@sapiom/tools/index.d.ts": `
+export declare const agents: {
+  run(spec: { definition: string }): Promise<unknown>;
+  launch(spec: { definition: string }): Promise<unknown>;
+};
+`,
+        "shared/sapiom.ts": `
+export { agents as routedAgents } from "@sapiom/tools";
+`,
+        "shared/router.ts": `
+import { routedAgents } from "./sapiom";
+
+export function launchGrowth() {
+  return routedAgents.launch({ definition: "growth" });
+}
+
+export function runNamed(definition: string) {
+  return routedAgents.run({ definition });
+}
+`,
+        "agents/coordinator/index.ts": `
+import { launchGrowth, runNamed } from "../../shared/router";
+
+await launchGrowth();
+await runNamed("research");
+`,
+        "agents/research/index.ts": "export const idle = true;\n",
+      },
+      ["coordinator", "research"],
+    );
+    const provider = new SourceAgentInvocationProvider();
+    provider.retainCallers([coordinator!, research!]);
+
+    const coordinatorResult = await provider.listInvocations(coordinator!);
+    const researchResult = await provider.listInvocations(research!);
+
+    expect(coordinatorResult.invocations).toEqual([
+      {
+        target: "growth",
+        mode: "async",
+        evidence: [{ file: "index.ts", line: 4, column: 7 }],
+      },
+      {
+        target: "research",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 5, column: 7 }],
+      },
+    ]);
+    expect(coordinatorResult.warnings).toEqual([]);
+    expect(researchResult.invocations).toEqual([]);
+    expect(researchResult.warnings).toEqual([]);
+    expect(coordinatorResult.sourceFingerprint).toBe(
+      researchResult.sourceFingerprint,
+    );
+  });
+
+  it("does not emit wrapper internals as duplicate evidence for the same basis", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+function runResearch() {
+  return agents.run({ definition: "research" });
+}
+
+await runResearch();
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([
+      {
+        target: "research",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 8, column: 7 }],
+      },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("keeps dynamically invoked wrapper targets partial without guessing an edge", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+const target = Math.random() > 0.5 ? "research" : "growth";
+function runNamed(definition: string) {
+  return agents.run({ definition });
+}
+
+await runNamed(target);
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 9, column: 7 },
+      },
+    ]);
   });
 });
 

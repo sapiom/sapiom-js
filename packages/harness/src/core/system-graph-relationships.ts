@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import * as path from "node:path";
+import ts from "typescript";
 
 import {
-  scanWorkflowSources,
+  listSourceFilesWithObservations,
+  readWorkflowSourceFile,
   type AgentInvocationDetectionWarning,
   type AgentInvocationMode,
   type SourceEvidence,
@@ -195,6 +198,11 @@ export class CachedAgentInvocationProvider implements AgentInvocationProvider {
   }
 
   retainCallers(callers: readonly AgentInventoryItem[]): void {
+    try {
+      this.inner.retainCallers?.(callers);
+    } catch {
+      // Inner cache pruning is an optimization and cannot affect projection.
+    }
     const retained = new Set(
       callers.map((caller) => canonicalGraphPath(caller.sourceRoot)),
     );
@@ -472,45 +480,729 @@ const MODE_ORDER: Record<AgentInvocationMode, number> = {
   async: 1,
 };
 
-/**
- * V0 per-agent filesystem adapter for literal direct invocations.
- *
- * It scans only the caller's inventoried source root. It remains syntax-only
- * and has no inventory target resolution, input-provenance analysis, package
- * router scan, renderer, transport, deployment, or session dependencies.
- */
-export class SourceAgentInvocationProvider implements AgentInvocationProvider {
-  constructor(private readonly readHooks: WorkflowSourceReadHooks = {}) {}
+const PROGRAM_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
-  async listInvocations(
-    caller: AgentInventoryItem,
-  ): Promise<AgentInvocationProviderResult> {
-    const scan = await scanWorkflowSources(
-      caller.sourceRoot,
-      new Set(),
-      this.readHooks,
+type TargetResult = { kind: "literal"; slug: string } | { kind: "dynamic" };
+type WrapperTargetResult =
+  | TargetResult
+  | { kind: "parameter"; index: number };
+
+interface PackageInvocation {
+  target: string;
+  mode: AgentInvocationMode;
+  evidence: SourceEvidence;
+}
+
+interface PackageInvocationScan {
+  invocations: PackageInvocation[];
+  groupedInvocations: AgentInvocationCandidate[];
+  warnings: AgentInvocationDetectionWarning[];
+  observedPaths: string[];
+  complete: boolean;
+  sourceFingerprint: `sha256:${string}`;
+}
+
+function packageRootForCaller(caller: AgentInventoryItem): string {
+  if (caller.path === ".") return canonicalGraphPath(caller.sourceRoot);
+  const depth = caller.path.split("/").filter(Boolean).length;
+  return canonicalGraphPath(
+    path.resolve(caller.sourceRoot, ...Array.from({ length: depth }, () => "..")),
+  );
+}
+
+function commonSourceRoot(callers: readonly AgentInventoryItem[]): string {
+  const roots = callers
+    .map(packageRootForCaller)
+    .sort();
+  const [first] = roots;
+  if (!first) return process.cwd();
+  const segments = first.split(path.sep);
+  for (const root of roots.slice(1)) {
+    const candidate = root.split(path.sep);
+    let index = 0;
+    while (index < segments.length && segments[index] === candidate[index]) {
+      index += 1;
+    }
+    segments.length = index;
+  }
+  return segments.length === 0 ? path.parse(first).root : segments.join(path.sep);
+}
+
+function unwrapTsExpression(expression: ts.Expression): ts.Expression {
+  if (
+    ts.isParenthesizedExpression(expression) ||
+    ts.isAsExpression(expression) ||
+    ts.isTypeAssertionExpression(expression) ||
+    ts.isSatisfiesExpression(expression) ||
+    ts.isNonNullExpression(expression)
+  ) {
+    return unwrapTsExpression(expression.expression);
+  }
+  return expression;
+}
+
+function propertyAccessName(expression: ts.Expression): string | null {
+  const current = unwrapTsExpression(expression);
+  return ts.isIdentifier(current) ? current.text : null;
+}
+
+function objectPropertyName(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+  return null;
+}
+
+function moduleSpecifierText(declaration: ts.Node): string | null {
+  let statement: ts.Node | undefined = declaration;
+  while (
+    statement &&
+    !ts.isImportDeclaration(statement) &&
+    !ts.isExportDeclaration(statement) &&
+    !ts.isSourceFile(statement)
+  ) {
+    statement = statement.parent;
+  }
+  if (
+    statement &&
+    ts.isImportDeclaration(statement) &&
+    ts.isStringLiteral(statement.moduleSpecifier)
+  ) {
+    return statement.moduleSpecifier.text;
+  }
+  if (
+    statement &&
+    ts.isExportDeclaration(statement) &&
+    statement.moduleSpecifier &&
+    ts.isStringLiteral(statement.moduleSpecifier)
+  ) {
+    return statement.moduleSpecifier.text;
+  }
+  return null;
+}
+
+function importedName(declaration: ts.Declaration): string | null {
+  if (ts.isImportSpecifier(declaration) || ts.isExportSpecifier(declaration)) {
+    return declaration.propertyName?.text ?? declaration.name.text;
+  }
+  return null;
+}
+
+function declarationName(declaration: ts.Declaration): string | null {
+  const name = (declaration as { name?: ts.Node }).name;
+  return name && ts.isIdentifier(name) ? name.text : null;
+}
+
+function isSapiomToolsDeclaration(declaration: ts.Declaration): boolean {
+  return declaration
+    .getSourceFile()
+    .fileName.split(path.sep)
+    .join(path.posix.sep)
+    .includes("/node_modules/@sapiom/tools/");
+}
+
+function aliasedSymbol(
+  checker: ts.TypeChecker,
+  symbol: ts.Symbol | undefined,
+): ts.Symbol | undefined {
+  if (!symbol) return undefined;
+  return symbol.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+}
+
+function resolvesSapiomNamespace(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  expected: "agents" | "orchestrations",
+  seen = new Set<ts.Symbol>(),
+): boolean {
+  const current = unwrapTsExpression(expression);
+  if (ts.isPropertyAccessExpression(current)) {
+    const namespace = objectPropertyName(current.name);
+    if (namespace !== expected) return false;
+    const owner = unwrapTsExpression(current.expression);
+    if (!ts.isIdentifier(owner)) return false;
+    const ownerSymbol = aliasedSymbol(checker, checker.getSymbolAtLocation(owner));
+    return (
+      ownerSymbol?.declarations?.some(
+        (declaration) =>
+          ts.isNamespaceImport(declaration) &&
+          moduleSpecifierText(declaration) === "@sapiom/tools",
+      ) ?? false
     );
-    const grouped = new Map<string, AgentInvocationCandidate>();
+  }
+  if (!ts.isIdentifier(current)) return false;
 
-    for (const detectedInvocation of scan.invocations) {
-      const key = `${detectedInvocation.slug}\0${detectedInvocation.mode}`;
-      const candidate = grouped.get(key);
-      if (candidate) {
-        candidate.evidence.push(detectedInvocation.evidence);
+  const rawSymbol = checker.getSymbolAtLocation(current);
+  const candidates = [
+    rawSymbol,
+    rawSymbol ? aliasedSymbol(checker, rawSymbol) : undefined,
+  ].filter((symbol): symbol is ts.Symbol => symbol !== undefined);
+  for (const symbol of candidates) {
+    if (seen.has(symbol)) continue;
+    seen.add(symbol);
+    for (const declaration of symbol.declarations ?? []) {
+      if (
+        (ts.isImportSpecifier(declaration) ||
+          ts.isExportSpecifier(declaration)) &&
+        moduleSpecifierText(declaration) === "@sapiom/tools" &&
+        importedName(declaration) === expected
+      ) {
+        return true;
+      }
+      if (
+        isSapiomToolsDeclaration(declaration) &&
+        declarationName(declaration) === expected
+      ) {
+        return true;
+      }
+      if (
+        ts.isVariableDeclaration(declaration) &&
+        declaration.initializer &&
+        resolvesSapiomNamespace(declaration.initializer, checker, expected, seen)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function packageInvocationMode(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): AgentInvocationMode | null {
+  const expression = unwrapTsExpression(call.expression);
+  if (!ts.isPropertyAccessExpression(expression) || expression.questionDotToken) {
+    return null;
+  }
+
+  const method = expression.name.text;
+  if (method !== "run" && method !== "launch") return null;
+  const receiver = unwrapTsExpression(expression.expression);
+  if (ts.isPropertyAccessExpression(receiver) && receiver.name.text === "agents") {
+    const context = unwrapTsExpression(receiver.expression);
+    if (
+      ts.isPropertyAccessExpression(context) &&
+      context.name.text === "sapiom" &&
+      propertyAccessName(context.expression) === "ctx"
+    ) {
+      return method === "run" ? "blocking" : "async";
+    }
+  }
+  if (resolvesSapiomNamespace(receiver, checker, "agents")) {
+    return method === "run" ? "blocking" : "async";
+  }
+  if (method === "launch" && resolvesSapiomNamespace(receiver, checker, "orchestrations")) {
+    return "async";
+  }
+  return null;
+}
+
+function symbolStringLiteral(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  seen = new Set<ts.Symbol>(),
+): string | null {
+  const current = unwrapTsExpression(expression);
+  if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) {
+    return current.text;
+  }
+  if (!ts.isIdentifier(current)) return null;
+  const symbol = aliasedSymbol(checker, checker.getSymbolAtLocation(current));
+  if (!symbol || seen.has(symbol)) return null;
+  seen.add(symbol);
+  for (const declaration of symbol.declarations ?? []) {
+    if (
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+    ) {
+          const resolved = symbolStringLiteral(
+            checker,
+            declaration.initializer,
+            seen,
+          );
+      if (resolved !== null) return resolved;
+    }
+  }
+  return null;
+}
+
+function resolvedObjectLiteral(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  seen = new Set<ts.Symbol>(),
+): ts.ObjectLiteralExpression | null {
+  const current = unwrapTsExpression(expression);
+  if (ts.isObjectLiteralExpression(current)) return current;
+  if (!ts.isIdentifier(current)) return null;
+  const symbol = aliasedSymbol(checker, checker.getSymbolAtLocation(current));
+  if (!symbol || seen.has(symbol)) return null;
+  seen.add(symbol);
+  for (const declaration of symbol.declarations ?? []) {
+    if (
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+    ) {
+      const resolved = resolvedObjectLiteral(
+        checker,
+        declaration.initializer,
+        seen,
+      );
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+}
+
+function staticDefinitionTarget(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): TargetResult {
+  const argument = call.arguments[0];
+  if (!argument) return { kind: "dynamic" };
+  const object = resolvedObjectLiteral(checker, argument);
+  if (!object) return { kind: "dynamic" };
+
+  let result: TargetResult = { kind: "dynamic" };
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      result = { kind: "dynamic" };
+      continue;
+    }
+    if (!property.name || objectPropertyName(property.name) !== "definition") {
+      continue;
+    }
+    if (ts.isShorthandPropertyAssignment(property)) {
+      const resolved = symbolStringLiteral(checker, property.name);
+      result =
+        resolved === null
+          ? { kind: "dynamic" }
+          : { kind: "literal", slug: resolved };
+      continue;
+    }
+    if (!ts.isPropertyAssignment(property)) {
+      result = { kind: "dynamic" };
+      continue;
+    }
+    const resolved = symbolStringLiteral(checker, property.initializer);
+    result =
+      resolved === null
+        ? { kind: "dynamic" }
+        : { kind: "literal", slug: resolved };
+  }
+  return result;
+}
+
+function parameterTarget(
+  expression: ts.Expression,
+  parameters: readonly ts.ParameterDeclaration[],
+): WrapperTargetResult | null {
+  const current = unwrapTsExpression(expression);
+  if (!ts.isIdentifier(current)) return null;
+  const index = parameters.findIndex(
+    (parameter) =>
+      ts.isIdentifier(parameter.name) && parameter.name.text === current.text,
+  );
+  return index === -1 ? null : { kind: "parameter", index };
+}
+
+function wrapperDefinitionTarget(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  parameters: readonly ts.ParameterDeclaration[],
+): WrapperTargetResult {
+  const argument = call.arguments[0];
+  if (!argument) return { kind: "dynamic" };
+  const object = resolvedObjectLiteral(checker, argument);
+  if (!object) return { kind: "dynamic" };
+
+  let result: WrapperTargetResult = { kind: "dynamic" };
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      result = { kind: "dynamic" };
+      continue;
+    }
+    if (!property.name || objectPropertyName(property.name) !== "definition") {
+      continue;
+    }
+    if (ts.isShorthandPropertyAssignment(property)) {
+      const parameter = parameterTarget(property.name, parameters);
+      if (parameter) {
+        result = parameter;
+        continue;
+      }
+      const resolved = symbolStringLiteral(checker, property.name);
+      result =
+        resolved === null
+          ? { kind: "dynamic" }
+          : { kind: "literal", slug: resolved };
+      continue;
+    }
+    if (!ts.isPropertyAssignment(property)) {
+      result = { kind: "dynamic" };
+      continue;
+    }
+    const parameter = parameterTarget(property.initializer, parameters);
+    if (parameter) {
+      result = parameter;
+      continue;
+    }
+    const resolved = symbolStringLiteral(checker, property.initializer);
+    result =
+      resolved === null
+        ? { kind: "dynamic" }
+        : { kind: "literal", slug: resolved };
+  }
+  return result;
+}
+
+function relativeProgramEvidence(
+  root: string,
+  file: string,
+  sourceFile: ts.SourceFile,
+  position: number,
+): SourceEvidence {
+  const location = sourceFile.getLineAndCharacterOfPosition(position);
+  return {
+    file: path.relative(root, file).split(path.sep).join(path.posix.sep),
+    line: location.line + 1,
+    column: location.character + 1,
+  };
+}
+
+function owningCaller(
+  file: string,
+  callers: readonly AgentInventoryItem[],
+): AgentInventoryItem | null {
+  const matches = callers.filter((caller) => {
+    const relative = path.relative(caller.sourceRoot, file);
+    return (
+      relative !== "" &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  });
+  return (
+    matches.sort(
+      (left, right) => right.sourceRoot.length - left.sourceRoot.length,
+    )[0] ?? null
+  );
+}
+
+function stableScanFingerprint(
+  files: readonly { file: string; content: string | null }[],
+  complete: boolean,
+): `sha256:${string}` {
+  const sources = files
+    .map(({ file, content }) => ({
+      file,
+      contentDigest:
+        content === null
+          ? null
+          : `sha256:${createHash("sha256").update(content).digest("hex")}`,
+    }))
+    .sort((left, right) => left.file.localeCompare(right.file));
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify({ protocol: 2, complete, sources }))
+    .digest("hex")}`;
+}
+
+function createPackageProgram(rootNames: readonly string[]): ts.Program {
+  return ts.createProgram([...rootNames], {
+    allowJs: false,
+    esModuleInterop: true,
+    jsx: ts.JsxEmit.ReactJSX,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noEmit: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.ES2022,
+  });
+}
+
+function symbolKey(symbol: ts.Symbol | undefined): string | null {
+  const declarations = symbol?.declarations;
+  if (!declarations || declarations.length === 0) return null;
+  const declaration = declarations[0]!;
+  const sourceFile = declaration.getSourceFile();
+  return `${sourceFile.fileName}:${declaration.pos}:${declaration.end}`;
+}
+
+function directInvocationsInFunction(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+): Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }> {
+  const invocations: Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }> = [];
+  const body =
+    (ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isMethodDeclaration(node)) &&
+    node.body
+      ? node.body
+      : null;
+  if (!body) return invocations;
+  const parameters =
+    (ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isMethodDeclaration(node))
+      ? node.parameters
+      : [];
+  const visit = (child: ts.Node): void => {
+    if (child !== body && ts.isFunctionLike(child)) return;
+    if (ts.isCallExpression(child)) {
+      const mode = packageInvocationMode(child, checker);
+      if (mode) {
+        const target = wrapperDefinitionTarget(child, checker, parameters);
+        invocations.push({ target, mode });
+      }
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(body);
+  return invocations;
+}
+
+function functionLikeFromDeclaration(
+  declaration: ts.Declaration,
+): ts.Node | null {
+  if (ts.isFunctionDeclaration(declaration)) return declaration;
+  if (
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer &&
+    (ts.isArrowFunction(declaration.initializer) ||
+      ts.isFunctionExpression(declaration.initializer))
+  ) {
+    return declaration.initializer;
+  }
+  return null;
+}
+
+function containingWrapperKey(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  wrappers: ReadonlyMap<string, readonly { target: WrapperTargetResult; mode: AgentInvocationMode }[]>,
+  sourceFile: ts.SourceFile,
+): string | null {
+  for (let ancestor = node.parent; ancestor && ancestor !== sourceFile; ancestor = ancestor.parent) {
+    if (
+      ts.isFunctionDeclaration(ancestor) ||
+      ts.isFunctionExpression(ancestor) ||
+      ts.isArrowFunction(ancestor)
+    ) {
+      const declaration = ts.isArrowFunction(ancestor) || ts.isFunctionExpression(ancestor)
+        ? ancestor.parent
+        : ancestor;
+      const symbol =
+        ts.isFunctionDeclaration(declaration) && declaration.name
+          ? checker.getSymbolAtLocation(declaration.name)
+          : ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)
+            ? checker.getSymbolAtLocation(declaration.name)
+            : undefined;
+      const key = symbolKey(aliasedSymbol(checker, symbol));
+      if (key && wrappers.has(key)) return key;
+    }
+  }
+  return null;
+}
+
+function resolveWrapperInvocationTarget(
+  target: WrapperTargetResult,
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): string | null {
+  if (target.kind === "literal") return target.slug;
+  if (target.kind !== "parameter") return null;
+  const argument = call.arguments[target.index];
+  return argument ? symbolStringLiteral(checker, argument) : null;
+}
+
+async function scanPackageInvocations(
+  callers: readonly AgentInventoryItem[],
+  readHooks: WorkflowSourceReadHooks,
+): Promise<Map<string, AgentInvocationProviderResult>> {
+  const orderedCallers = [...callers].sort((left, right) =>
+    left.agentKey.localeCompare(right.agentKey),
+  );
+  const byAgentKey = new Map<string, PackageInvocationScan>();
+  const rootNames: string[] = [];
+  const observed = new Set<string>();
+  let complete = true;
+  for (const caller of orderedCallers) {
+    const sourceSet = await listSourceFilesWithObservations(caller.sourceRoot);
+    if (!sourceSet.complete) complete = false;
+    sourceSet.files.forEach((file) => rootNames.push(file));
+    sourceSet.observedPaths.forEach((path) => observed.add(path));
+    byAgentKey.set(caller.agentKey, {
+      invocations: [],
+      groupedInvocations: [],
+      warnings: [],
+      observedPaths: [...sourceSet.observedPaths],
+      complete: sourceSet.complete,
+      sourceFingerprint: `sha256:${"0".repeat(64)}`,
+    });
+  }
+  const program = createPackageProgram([...new Set(rootNames)].sort());
+  const checker = program.getTypeChecker();
+  const workspaceRoot = commonSourceRoot(orderedCallers);
+  const sourceFiles = program
+    .getSourceFiles()
+    .filter(
+      (sourceFile) =>
+        !sourceFile.isDeclarationFile &&
+        PROGRAM_SOURCE_EXTENSIONS.has(path.extname(sourceFile.fileName)) &&
+        !sourceFile.fileName.includes(`${path.sep}node_modules${path.sep}`) &&
+        path.relative(workspaceRoot, sourceFile.fileName) !== ".." &&
+        !path
+          .relative(workspaceRoot, sourceFile.fileName)
+          .startsWith(`..${path.sep}`),
+    )
+    .sort((left, right) => left.fileName.localeCompare(right.fileName));
+  const contents = new Map<string, string | null>();
+  for (const sourceFile of sourceFiles) {
+    observed.add(sourceFile.fileName);
+    const owner = owningCaller(sourceFile.fileName, orderedCallers);
+    const content = owner
+      ? await readWorkflowSourceFile(
+          owner.sourceRoot,
+          sourceFile.fileName,
+          readHooks,
+        )
+      : sourceFile.text;
+    if (content === null) complete = false;
+    contents.set(sourceFile.fileName, content);
+  }
+
+  const wrappers = new Map<
+    string,
+    Array<{ target: WrapperTargetResult; mode: AgentInvocationMode }>
+  >();
+  for (const sourceFile of sourceFiles) {
+    if (contents.get(sourceFile.fileName) === null) continue;
+    const visit = (node: ts.Node): void => {
+      const callable = functionLikeFromDeclaration(node as ts.Declaration);
+      if (callable) {
+        const symbol =
+          ts.isFunctionDeclaration(node) && node.name
+            ? checker.getSymbolAtLocation(node.name)
+            : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
+              ? checker.getSymbolAtLocation(node.name)
+              : undefined;
+        const key = symbolKey(aliasedSymbol(checker, symbol));
+        const invocations = directInvocationsInFunction(callable, checker);
+        if (key && invocations.length > 0) wrappers.set(key, invocations);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+
+  for (const sourceFile of sourceFiles) {
+    if (contents.get(sourceFile.fileName) === null) continue;
+    const caller = owningCaller(sourceFile.fileName, orderedCallers);
+    if (!caller) continue;
+    const scan = byAgentKey.get(caller.agentKey)!;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const mode = packageInvocationMode(node, checker);
+        const position = node.expression.getStart(sourceFile);
+        if (mode) {
+          if (containingWrapperKey(node, checker, wrappers, sourceFile)) {
+            ts.forEachChild(node, visit);
+            return;
+          }
+          const evidence = relativeProgramEvidence(
+            caller.sourceRoot,
+            sourceFile.fileName,
+            sourceFile,
+            position,
+          );
+          const target = staticDefinitionTarget(node, checker);
+          if (target.kind === "literal") {
+            scan.invocations.push({ target: target.slug, mode, evidence });
+          } else {
+            scan.warnings.push({ code: "dynamic-target", mode, evidence });
+          }
+        } else {
+          const expression = unwrapTsExpression(node.expression);
+          const symbol =
+            ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)
+              ? aliasedSymbol(checker, checker.getSymbolAtLocation(expression))
+              : undefined;
+          const wrapper = wrappers.get(symbolKey(symbol) ?? "");
+          if (wrapper) {
+            const evidence = relativeProgramEvidence(
+              caller.sourceRoot,
+              sourceFile.fileName,
+              sourceFile,
+              position,
+            );
+            for (const invocation of wrapper) {
+              const target = resolveWrapperInvocationTarget(
+                invocation.target,
+                node,
+                checker,
+              );
+              if (target === null) {
+                scan.warnings.push({
+                  code: "dynamic-target",
+                  mode: invocation.mode,
+                  evidence,
+                });
+              } else {
+                scan.invocations.push({
+                  target,
+                  mode: invocation.mode,
+                  evidence,
+                });
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+
+  const fingerprint = stableScanFingerprint(
+    sourceFiles.map((sourceFile) => ({
+      file: path.relative(workspaceRoot, sourceFile.fileName).split(path.sep).join(path.posix.sep),
+      content: contents.get(sourceFile.fileName) ?? sourceFile.text,
+    })),
+    complete,
+  );
+  for (const scan of byAgentKey.values()) {
+    scan.observedPaths = [
+      ...new Set([...scan.observedPaths, ...observed]),
+    ].sort();
+    scan.complete = scan.complete && complete;
+    scan.sourceFingerprint = fingerprint;
+    const grouped = new Map<string, AgentInvocationCandidate>();
+    for (const invocation of scan.invocations.sort((left, right) =>
+      evidenceOrder(left.evidence, right.evidence),
+    )) {
+      const key = `${invocation.target}\0${invocation.mode}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.evidence.push(invocation.evidence);
       } else {
         grouped.set(key, {
-          target: detectedInvocation.slug,
-          mode: detectedInvocation.mode,
-          evidence: [detectedInvocation.evidence],
+          target: invocation.target,
+          mode: invocation.mode,
+          evidence: [invocation.evidence],
         });
       }
     }
-
-    const invocations = [...grouped.values()];
-    for (const candidate of invocations) {
+    scan.groupedInvocations = [...grouped.values()];
+    for (const candidate of scan.groupedInvocations) {
       candidate.evidence.sort(evidenceOrder);
     }
-    invocations.sort(
+    scan.groupedInvocations.sort(
       (left, right) =>
         left.evidence[0]!.file.localeCompare(right.evidence[0]!.file) ||
         left.evidence[0]!.line - right.evidence[0]!.line ||
@@ -518,13 +1210,75 @@ export class SourceAgentInvocationProvider implements AgentInvocationProvider {
         MODE_ORDER[left.mode] - MODE_ORDER[right.mode] ||
         left.target.localeCompare(right.target),
     );
+    scan.warnings.sort((left, right) =>
+      evidenceOrder(left.evidence, right.evidence),
+    );
+  }
+  return new Map(
+    [...byAgentKey].map(([agentKey, scan]) => [
+      agentKey,
+      {
+        invocations: scan.groupedInvocations,
+        warnings: scan.warnings,
+        observedPaths: scan.observedPaths,
+        complete: scan.complete,
+        sourceFingerprint: scan.sourceFingerprint,
+      },
+    ]),
+  );
+}
+/**
+ * V0 per-agent filesystem adapter for literal direct invocations.
+ *
+ * It builds one package-wide TypeScript Program for the retained caller set so
+ * imports, re-exports, and simple static wrappers are resolved consistently.
+ * Inventory target resolution, input-provenance analysis, runtime dispatch,
+ * renderer, transport, deployment, and session dependencies stay outside this
+ * provider.
+ */
+export class SourceAgentInvocationProvider implements AgentInvocationProvider {
+  private retainedCallers: readonly AgentInventoryItem[] = [];
+  private inFlight:
+    | {
+        key: string;
+        result: Promise<Map<string, AgentInvocationProviderResult>>;
+      }
+    | null = null;
 
-    return {
-      invocations,
-      warnings: scan.invocationWarnings,
-      observedPaths: scan.observedPaths,
-      complete: scan.complete,
-      sourceFingerprint: scan.sourceFingerprint,
-    };
+  constructor(private readonly readHooks: WorkflowSourceReadHooks = {}) {}
+
+  retainCallers(callers: readonly AgentInventoryItem[]): void {
+    this.retainedCallers = [...callers].sort((left, right) =>
+      left.agentKey.localeCompare(right.agentKey),
+    );
+  }
+
+  async listInvocations(
+    caller: AgentInventoryItem,
+  ): Promise<AgentInvocationProviderResult> {
+    const callers = this.retainedCallers.some(
+      (candidate) => candidate.agentKey === caller.agentKey,
+    )
+      ? this.retainedCallers
+      : [caller];
+    const key = callers
+      .map((candidate) => `${candidate.agentKey}\0${candidate.sourceRoot}`)
+      .sort()
+      .join("\0");
+    if (!this.inFlight || this.inFlight.key !== key) {
+      const result = scanPackageInvocations(callers, this.readHooks).finally(() => {
+        if (this.inFlight?.key === key) this.inFlight = null;
+      });
+      this.inFlight = { key, result };
+    }
+    const packageResult = await this.inFlight.result;
+    return (
+      packageResult.get(caller.agentKey) ?? {
+        invocations: [],
+        warnings: [],
+        observedPaths: [],
+        complete: false,
+      }
+    );
   }
 }
