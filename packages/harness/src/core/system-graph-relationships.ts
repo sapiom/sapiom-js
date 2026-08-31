@@ -985,26 +985,31 @@ function functionLikeFromDeclaration(
 function containingWrapperKey(
   node: ts.Node,
   checker: ts.TypeChecker,
-  wrappers: ReadonlyMap<string, readonly { target: WrapperTargetResult; mode: AgentInvocationMode }[]>,
+  invokedWrapperKeys: ReadonlySet<string>,
   sourceFile: ts.SourceFile,
 ): string | null {
-  for (let ancestor = node.parent; ancestor && ancestor !== sourceFile; ancestor = ancestor.parent) {
+  for (
+    let ancestor = node.parent;
+    ancestor && ancestor !== sourceFile;
+    ancestor = ancestor.parent
+  ) {
     if (
       ts.isFunctionDeclaration(ancestor) ||
       ts.isFunctionExpression(ancestor) ||
       ts.isArrowFunction(ancestor)
     ) {
-      const declaration = ts.isArrowFunction(ancestor) || ts.isFunctionExpression(ancestor)
-        ? ancestor.parent
-        : ancestor;
+      const declaration =
+        ts.isArrowFunction(ancestor) || ts.isFunctionExpression(ancestor)
+          ? ancestor.parent
+          : ancestor;
       const symbol =
         ts.isFunctionDeclaration(declaration) && declaration.name
           ? checker.getSymbolAtLocation(declaration.name)
           : ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)
-            ? checker.getSymbolAtLocation(declaration.name)
-            : undefined;
+              ? checker.getSymbolAtLocation(declaration.name)
+              : undefined;
       const key = symbolKey(aliasedSymbol(checker, symbol));
-      if (key && wrappers.has(key)) return key;
+      if (key && invokedWrapperKeys.has(key)) return key;
     }
   }
   return null;
@@ -1101,6 +1106,25 @@ async function scanPackageInvocations(
     visit(sourceFile);
   }
 
+  const invokedWrapperKeys = new Set<string>();
+  for (const sourceFile of sourceFiles) {
+    if (contents.get(sourceFile.fileName) === null) continue;
+    if (!owningCaller(sourceFile.fileName, orderedCallers)) continue;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && !packageInvocationMode(node, checker)) {
+        const expression = unwrapTsExpression(node.expression);
+        const symbol =
+          ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)
+            ? aliasedSymbol(checker, checker.getSymbolAtLocation(expression))
+            : undefined;
+        const key = symbolKey(symbol);
+        if (key && wrappers.has(key)) invokedWrapperKeys.add(key);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+
   for (const sourceFile of sourceFiles) {
     if (contents.get(sourceFile.fileName) === null) continue;
     const caller = owningCaller(sourceFile.fileName, orderedCallers);
@@ -1111,7 +1135,7 @@ async function scanPackageInvocations(
         const mode = packageInvocationMode(node, checker);
         const position = node.expression.getStart(sourceFile);
         if (mode) {
-          if (containingWrapperKey(node, checker, wrappers, sourceFile)) {
+          if (containingWrapperKey(node, checker, invokedWrapperKeys, sourceFile)) {
             ts.forEachChild(node, visit);
             return;
           }
