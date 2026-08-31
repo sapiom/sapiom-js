@@ -445,7 +445,7 @@ describe("package AgentFacts protocol 1", () => {
       {
         agentKey: "coordinator",
         description: null,
-        inputSchema: { type: "strng" },
+        inputSchema: { properties: "not-an-object" },
         outputSchema: true,
         declaredCapabilities: [],
         observed: [],
@@ -454,7 +454,7 @@ describe("package AgentFacts protocol 1", () => {
         agentKey: "research",
         description: null,
         inputSchema: false,
-        outputSchema: null,
+        outputSchema: { required: "not-an-array" },
         declaredCapabilities: [],
         observed: [],
       },
@@ -463,7 +463,7 @@ describe("package AgentFacts protocol 1", () => {
     expect(normalized.agents[0]?.inputSchema).toEqual({
       status: "known",
       validation: "invalid",
-      value: { type: "strng" },
+      value: { properties: "not-an-object" },
     });
     expect(normalized.agents[0]?.outputSchema).toEqual({
       status: "known",
@@ -476,6 +476,11 @@ describe("package AgentFacts protocol 1", () => {
       status: "known",
       validation: "valid",
       value: false,
+    });
+    expect(normalized.agents[1]?.outputSchema).toEqual({
+      status: "known",
+      validation: "invalid",
+      value: { required: "not-an-array" },
     });
   });
 
@@ -512,6 +517,32 @@ describe("package AgentFacts protocol 1", () => {
         ],
       }),
     ).toThrow(/Capabilities must be unique/);
+  });
+
+  it("returns safeParse issues instead of throwing from nested snapshot invariants", () => {
+    const normalized = snapshot([
+      { agentKey: "coordinator", declaredCapabilities: ["a", "b"] },
+      { agentKey: "research" },
+    ]);
+    const parsed = packageAgentFactsSnapshotSchema.safeParse({
+      ...normalized,
+      agents: [
+        {
+          ...normalized.agents[0]!,
+          capabilities: {
+            ...normalized.agents[0]!.capabilities,
+            declared: { status: "known", values: ["b", "a", "b"] },
+          },
+        },
+        normalized.agents[1]!,
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+    if (parsed.success) throw new Error("expected invalid snapshot");
+    expect(parsed.error.issues.map((issue) => issue.message)).toContain(
+      "Capabilities must be unique and canonically ordered",
+    );
   });
 
   it("requires the exact package inventory version instead of remapping identity", () => {

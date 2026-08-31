@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import Ajv2020 from "ajv/dist/2020.js";
 import { z } from "zod/v4";
 
 import {
@@ -18,6 +19,10 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const OPAQUE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/;
 const PRODUCER_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/;
 const ZERO_DIGEST = `sha256:${"0".repeat(64)}` as const;
+const jsonSchemaMetaValidator = new Ajv2020({
+  allErrors: true,
+  strict: false,
+});
 
 const digestSchema = z
   .string()
@@ -395,35 +400,9 @@ function canonicalizeJsonObject<T>(value: T): T {
   return JSON.parse(canonicalPackageAgentFactsJson(value)) as T;
 }
 
-const JSON_SCHEMA_TYPES = new Set([
-  "array",
-  "boolean",
-  "integer",
-  "null",
-  "number",
-  "object",
-  "string",
-]);
-
 function jsonSchemaValidation(value: JsonSchemaOrNull): "valid" | "invalid" {
-  if (value === null || typeof value === "boolean") return "valid";
-  if (
-    !Object.prototype.hasOwnProperty.call(value, "type") ||
-    value.type === undefined
-  ) {
-    return "valid";
-  }
-  if (typeof value.type === "string") {
-    return JSON_SCHEMA_TYPES.has(value.type) ? "valid" : "invalid";
-  }
-  if (Array.isArray(value.type)) {
-    return value.type.every(
-      (item) => typeof item === "string" && JSON_SCHEMA_TYPES.has(item),
-    )
-      ? "valid"
-      : "invalid";
-  }
-  return "invalid";
+  if (value === null) return "valid";
+  return jsonSchemaMetaValidator.validateSchema(value) ? "valid" : "invalid";
 }
 
 function normalizeCapabilities(capabilities: readonly string[]): string[] {
@@ -780,7 +759,7 @@ export const packageAgentFactsSnapshotSchema = snapshotBaseSchema.superRefine(
       const agentDiagnostics = snapshot.diagnostics.filter(
         (diagnostic) => diagnostic.agentKey === agent.agentKey,
       );
-      const normalized = packageAgentFactsRecordSchema.parse({
+      const normalizedInput = {
         ...agent,
         references: {
           source: normalizeByCanonical(
@@ -797,9 +776,21 @@ export const packageAgentFactsSnapshotSchema = snapshotBaseSchema.superRefine(
           ),
         },
         completeness: normalizeCompleteness(agent.completeness),
-      });
+      };
+      const parsedNormalized =
+        packageAgentFactsRecordSchema.safeParse(normalizedInput);
+      if (!parsedNormalized.success) {
+        for (const issue of parsedNormalized.error.issues) {
+          context.addIssue({
+            code: "custom",
+            path: ["agents", index, ...issue.path],
+            message: issue.message,
+          });
+        }
+        continue;
+      }
       if (
-        canonicalPackageAgentFactsJson(normalized) !==
+        canonicalPackageAgentFactsJson(parsedNormalized.data) !==
         canonicalPackageAgentFactsJson(agent)
       ) {
         context.addIssue({
