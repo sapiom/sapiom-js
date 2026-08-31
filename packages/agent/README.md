@@ -109,11 +109,13 @@ export function directInvocationEvidence(inventory: PackageInventory) {
 }
 ```
 
-Evidence references are public-safe opaque handles. Absolute or relative paths,
-execution IDs, lineage IDs, prompts, reports, inputs, outputs, and tool payloads
-stay behind an authorized producer-owned resolver and must not be copied into a
-public graph DTO. Graph evidence is explanatory metadata only: it cannot change
-execution, routing, authorization, deployment, builds, or billing.
+Evidence producers must create opaque handles and keep absolute or relative
+paths, execution IDs, lineage IDs, prompts, reports, inputs, outputs, and tool
+payloads behind an authorized producer-owned resolver. The schema enforces a
+restricted public-safe character set for those handles; it cannot determine
+whether a permitted string contains a sensitive identifier. Graph evidence is
+explanatory metadata only: it cannot change execution, routing, authorization,
+deployment, builds, or billing.
 
 ## The entry input contract
 
@@ -234,7 +236,8 @@ Things to know:
     ctx.shared.set("codingRunId", run.runId); // readable from the resumed step
     return pauseUntilSignal(run, { resumeStep: "review" });
   }
-```
+  ```
+
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
 

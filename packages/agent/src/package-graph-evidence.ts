@@ -47,9 +47,11 @@ const executionReferenceSchema = referenceSchema("execution");
 const lineageReferenceSchema = referenceSchema("lineage");
 
 /**
- * Public-safe handle for evidence details retained behind an authorized
- * producer-owned resolver. Paths, execution IDs, lineage IDs, and payloads do
- * not enter the graph-evidence wire contract itself.
+ * Handle for evidence details retained behind an authorized producer-owned
+ * resolver. Producers must use opaque references and keep paths, execution
+ * IDs, lineage IDs, and payloads behind that resolver. The schema enforces a
+ * restricted public-safe character set; it cannot prove that a value is
+ * opaque or free of sensitive identifiers.
  */
 export const packageGraphEvidenceReferenceSchema = z.discriminatedUnion(
   "kind",
@@ -827,6 +829,18 @@ export const packageGraphEvidenceStaticResultSchema =
       });
     }
     for (const [index, record] of result.evidence.entries()) {
+      const candidate = candidateFromRecord(record);
+      if (
+        canonicalPackageGraphEvidenceJson(normalizeCandidate(candidate)) !==
+        canonicalPackageGraphEvidenceJson(candidate)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["evidence", index, "callsites"],
+          message:
+            "Set-like evidence references must be unique and canonically ordered",
+        });
+      }
       if (record.evidenceId !== expectedStaticEvidenceId(result, record)) {
         context.addIssue({
           code: "custom",
@@ -1158,6 +1172,22 @@ export function appendPackageGraphRuntimeEvidenceEvent(
   incomingInput: PackageGraphRuntimeEvidenceEvent,
 ): AppendPackageGraphRuntimeEvidenceEventResult {
   const incoming = packageGraphRuntimeEvidenceEventSchema.parse(incomingInput);
+  if (
+    current.events.some((event) => !scopeMatches(event.scope, incoming.scope))
+  ) {
+    const diagnostics = normalizeDiagnostics([
+      ...current.diagnostics,
+      {
+        code: "cross-scope",
+        severity: "error",
+        eventId: incoming.eventId,
+      },
+    ]);
+    return {
+      status: "conflict",
+      state: { events: current.events, diagnostics },
+    };
+  }
   const existing = current.events.find(
     (event) => event.eventId === incoming.eventId,
   );
@@ -1211,6 +1241,7 @@ export interface PackageGraphEvidenceReferenceProjection {
   readonly inventoryStatus: PackageInventory["status"];
   readonly nodes: readonly { readonly agentKey: string }[];
   readonly connectors: readonly PackageGraphEvidenceConnector[];
+  readonly diagnostics: readonly PackageGraphEvidenceDiagnostic[];
 }
 
 export type PackageGraphEvidenceProjectionSource =
@@ -1229,6 +1260,14 @@ export function projectPackageGraphEvidence(
   const inventoryKeys = new Set(
     inventory.agents.map((agent) => agent.agentKey),
   );
+  const ambiguousCandidates = new Set(
+    inventory.agents.flatMap((agent) =>
+      agent.identityIssue === "duplicate-agent-key" && agent.candidateAgentKey
+        ? [agent.candidateAgentKey]
+        : [],
+    ),
+  );
+  const diagnostics: PackageGraphEvidenceDiagnostic[] = [];
   const evidenceById = new Map<
     PackageGraphEvidenceDigest,
     PackageGraphEvidenceRecord
@@ -1245,6 +1284,9 @@ export function projectPackageGraphEvidence(
     }
     const records =
       parsed.kind === "static-result" ? parsed.evidence : [parsed.evidence];
+    if (parsed.kind === "static-result") {
+      diagnostics.push(...parsed.diagnostics);
+    }
     for (const record of records) {
       const existing = evidenceById.get(record.evidenceId);
       if (
@@ -1260,15 +1302,33 @@ export function projectPackageGraphEvidence(
 
   const groups = new Map<string, PackageGraphEvidenceRecord[]>();
   for (const record of evidenceById.values()) {
-    if (
-      !inventoryKeys.has(record.fromAgentKey) ||
-      !inventoryKeys.has(record.toAgentKey) ||
-      record.fromAgentKey === record.toAgentKey
-    ) {
-      throw new TypeError(
-        "Reference projection accepts validated evidence only",
-      );
+    let rejected = false;
+    for (const [endpoint, agentKey] of [
+      ["from", record.fromAgentKey],
+      ["to", record.toAgentKey],
+    ] as const) {
+      if (inventoryKeys.has(agentKey)) continue;
+      diagnostics.push({
+        code: ambiguousCandidates.has(agentKey)
+          ? "ambiguous-endpoint"
+          : packageInventoryKeyIsValid(agentKey)
+            ? "unknown-endpoint"
+            : "invalid-endpoint",
+        severity: "error",
+        evidenceId: record.evidenceId,
+        endpoint,
+      });
+      rejected = true;
     }
+    if (record.fromAgentKey === record.toAgentKey) {
+      diagnostics.push({
+        code: "illegal-self-relationship",
+        severity: "error",
+        evidenceId: record.evidenceId,
+      });
+      rejected = true;
+    }
+    if (rejected) continue;
     const key = `${record.fromAgentKey}\u0000${record.toAgentKey}\u0000${record.relation}`;
     const records = groups.get(key) ?? [];
     records.push(record);
@@ -1306,5 +1366,6 @@ export function projectPackageGraphEvidence(
     inventoryStatus: inventory.status,
     nodes: inventory.agents.map(({ agentKey }) => ({ agentKey })),
     connectors,
+    diagnostics: normalizeDiagnostics(diagnostics),
   };
 }

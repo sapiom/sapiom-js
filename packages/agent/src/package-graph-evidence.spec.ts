@@ -3,10 +3,8 @@ import {
   PACKAGE_INVENTORY_PROTOCOL,
   advancePackageGraphStaticEvidenceState,
   appendPackageGraphRuntimeEvidenceEvent,
-  canonicalPackageGraphEvidenceJson,
   createPackageGraphEvidenceStaticResult,
   createPackageGraphRuntimeEvidenceEvent,
-  packageGraphEvidenceCandidateSchema,
   packageGraphEvidenceStaticResultSchema,
   packageGraphRuntimeEvidenceEventSchema,
   projectPackageGraphEvidence,
@@ -15,12 +13,16 @@ import {
   type PackageGraphEvidenceDiagnostic,
   type PackageGraphEvidenceDigest,
   type PackageGraphEvidenceProducer,
-  type PackageGraphEvidenceRecord,
   type PackageGraphEvidenceStaticResult,
   type PackageGraphRuntimeEvidenceEvent,
   type PackageInventory,
   type PackageInventoryVersion,
 } from "./index.js";
+import {
+  canonicalPackageGraphEvidenceJson,
+  packageGraphEvidenceCandidateSchema,
+  packageGraphEvidenceSha256,
+} from "./package-graph-evidence.js";
 
 const SHA_A = `sha256:${"a".repeat(64)}` as const;
 const SHA_B = `sha256:${"b".repeat(64)}` as const;
@@ -73,10 +75,12 @@ function workingInventory(
   };
 }
 
-function bundleInventory(): PackageInventory {
+function bundleInventory(
+  bundleDigest: PackageGraphEvidenceDigest = SHA_B,
+): PackageInventory {
   return {
     ...workingInventory(),
-    version: { kind: "bundle", bundleDigest: SHA_B },
+    version: { kind: "bundle", bundleDigest },
   };
 }
 
@@ -143,15 +147,17 @@ function staticResult(
 function acceptedRuntime(
   eventId: string,
   candidate: unknown,
+  bundleDigest: PackageGraphEvidenceDigest = SHA_B,
 ): PackageGraphRuntimeEvidenceEvent {
+  const inventory = bundleInventory(bundleDigest);
   const created = createPackageGraphRuntimeEvidenceEvent(
     {
       eventId,
-      scope: { kind: "bundle", bundleDigest: SHA_B },
+      scope: { kind: "bundle", bundleDigest },
       producer: { id: "sapiom.engine", version: "1.0.0" },
       candidate,
     },
-    bundleInventory(),
+    inventory,
   );
   if (created.status !== "accepted") throw new Error("fixture was quarantined");
   return created.event;
@@ -283,6 +289,53 @@ describe("package graph evidence protocol 1", () => {
     );
   });
 
+  it.each([
+    [source("callsite:z"), source("callsite:a")],
+    [source("callsite:a"), source("callsite:a"), source("callsite:z")],
+  ])(
+    "rejects non-normalized callsite references even when their IDs match the wire content",
+    (...callsites) => {
+      const canonical = staticResult([
+        {
+          ...invocation("coordinator", "research"),
+          callsites: [source("callsite:a"), source("callsite:z")],
+        },
+      ]);
+      const candidate = {
+        ...invocation("coordinator", "research"),
+        callsites,
+      };
+      const evidenceId = packageGraphEvidenceSha256({
+        protocol: canonical.protocol,
+        scope: canonical.scope,
+        producer: canonical.producer,
+        analysisFingerprint: canonical.analysisFingerprint,
+        candidate,
+      });
+      const record = { ...candidate, evidenceId };
+      const draft = {
+        protocol: canonical.protocol,
+        kind: canonical.kind,
+        scope: canonical.scope,
+        producer: canonical.producer,
+        analysisFingerprint: canonical.analysisFingerprint,
+        outcome: canonical.outcome,
+        coverage: canonical.coverage,
+        evidence: [record],
+        diagnostics: canonical.diagnostics,
+        quarantine: canonical.quarantine,
+      };
+      const forged = {
+        ...draft,
+        resultId: packageGraphEvidenceSha256(draft),
+      };
+
+      expect(() =>
+        packageGraphEvidenceStaticResultSchema.parse(forged),
+      ).toThrow(/unique and canonically ordered/);
+    },
+  );
+
   it("keeps analysis freshness independent from inventory identity", () => {
     const first = staticResult([invocation("coordinator", "research")]);
     const changedAnalysis = staticResult(
@@ -332,6 +385,42 @@ describe("package graph evidence protocol 1", () => {
     expect(
       projectPackageGraphEvidence(inventory, [result]).inventoryStatus,
     ).toBe("degraded");
+  });
+
+  it("drops stale endpoints with diagnostics when identity changes at the same inventory version", () => {
+    const canonicalInventory = workingInventory();
+    const result = staticResult([invocation("coordinator", "research")], {
+      inventory: canonicalInventory,
+    });
+    const degradedInventory = workingInventory({
+      status: "degraded",
+      agents: [
+        canonicalInventory.agents[0]!,
+        canonicalInventory.agents[1]!,
+        {
+          agentKey: "local:agents/research",
+          identityStatus: "provisional",
+          identityIssue: "identity-unavailable",
+          path: "agents/research",
+          entrypoint: "index.ts",
+        },
+      ],
+    });
+
+    const projection = projectPackageGraphEvidence(degradedInventory, [result]);
+
+    expect(projection.connectors).toEqual([]);
+    expect(projection.nodes.map(({ agentKey }) => agentKey)).toEqual([
+      "coordinator",
+      "growth",
+      "local:agents/research",
+    ]);
+    expect(projection.diagnostics).toContainEqual({
+      code: "unknown-endpoint",
+      severity: "error",
+      evidenceId: result.evidence[0]!.evidenceId,
+      endpoint: "to",
+    });
   });
 
   it("quarantines unknown, invalid, ambiguous, self, and cross-scope candidates", () => {
@@ -609,6 +698,46 @@ describe("package graph evidence protocol 1", () => {
     ]);
   });
 
+  it("rejects runtime events from a different bundle before they enter state", () => {
+    const first = acceptedRuntime("dispatch:first", {
+      fromAgentKey: "coordinator",
+      toAgentKey: "research",
+      relation: "invokes",
+      basis: "runtime-dispatch",
+      callerExecution: execution("execution:coordinator"),
+      calleeExecution: execution("execution:research"),
+    });
+    const otherBundle = acceptedRuntime(
+      "dispatch:other-bundle",
+      {
+        fromAgentKey: "coordinator",
+        toAgentKey: "research",
+        relation: "invokes",
+        basis: "runtime-dispatch",
+        callerExecution: execution("execution:coordinator-other"),
+        calleeExecution: execution("execution:research-other"),
+      },
+      SHA_C,
+    );
+    const accepted = appendPackageGraphRuntimeEvidenceEvent(
+      { events: [], diagnostics: [] },
+      first,
+    );
+
+    const conflict = appendPackageGraphRuntimeEvidenceEvent(
+      accepted.state,
+      otherBundle,
+    );
+
+    expect(conflict.status).toBe("conflict");
+    expect(conflict.state.events).toEqual([first]);
+    expect(conflict.state.diagnostics).toContainEqual({
+      code: "cross-scope",
+      severity: "error",
+      eventId: "dispatch:other-bundle",
+    });
+  });
+
   it("keeps runtime and static envelopes distinct and runtime mode-free", () => {
     const runtime = acceptedRuntime("handoff:stable", {
       fromAgentKey: "research",
@@ -678,12 +807,12 @@ describe("package graph evidence protocol 1", () => {
     expect(() => canonicalPackageGraphEvidenceJson(cyclic)).toThrow(/cyclic/);
   });
 
-  it("exports the protocol and explicit record type surface", () => {
+  it("exports the protocol and top-level envelope type surface", () => {
     expect(PACKAGE_GRAPH_EVIDENCE_PROTOCOL).toBe(1);
-    const records: PackageGraphEvidenceRecord[] = staticResult([
+    const result: PackageGraphEvidenceStaticResult = staticResult([
       invocation("coordinator", "research"),
-    ]).evidence;
-    expect(records[0]).toMatchObject({
+    ]);
+    expect(result.evidence[0]).toMatchObject({
       fromAgentKey: "coordinator",
       toAgentKey: "research",
       relation: "invokes",
