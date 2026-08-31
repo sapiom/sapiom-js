@@ -192,7 +192,7 @@ const observedCapabilityObservationSchema = z
   })
   .strict();
 
-const cardInputSchema = z
+export const packageAgentFactsCardInputSchema = z
   .object({
     agentKey: z.string(),
     sourceReferences: z
@@ -213,7 +213,9 @@ const cardInputSchema = z
   })
   .strict();
 
-export type PackageAgentFactsCardInput = z.infer<typeof cardInputSchema>;
+export type PackageAgentFactsCardInput = z.infer<
+  typeof packageAgentFactsCardInputSchema
+>;
 
 export const packageAgentFactsRecordSchema = z
   .object({
@@ -708,7 +710,7 @@ export function createPackageAgentFactsSnapshot(
   );
 
   for (const rawCard of parsedInput.cards) {
-    const parsed = cardInputSchema.safeParse(rawCard);
+    const parsed = packageAgentFactsCardInputSchema.safeParse(rawCard);
     if (!parsed.success) {
       diagnostics.push({ code: "invalid-card", severity: "warning" });
       continue;

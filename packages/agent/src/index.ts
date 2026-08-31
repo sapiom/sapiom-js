@@ -190,7 +190,9 @@ export {
   PACKAGE_AGENT_FACTS_PROTOCOL,
   canonicalPackageAgentFactsJson,
   createPackageAgentFactsSnapshot,
+  packageAgentFactsCardInputSchema,
   packageAgentFactsCompletenessSchema,
+  packageAgentFactsDiagnosticCodeSchema,
   packageAgentFactsDiagnosticSchema,
   packageAgentFactsDirectReferenceSchema,
   packageAgentFactsEvidenceReferenceSchema,
@@ -201,6 +203,7 @@ export {
 } from "./package-agent-facts.js";
 export type {
   CreatePackageAgentFactsSnapshotInput,
+  PackageAgentFactsCardInput,
   PackageAgentFactsCapabilityField,
   PackageAgentFactsCompleteness,
   PackageAgentFactsDiagnostic,
