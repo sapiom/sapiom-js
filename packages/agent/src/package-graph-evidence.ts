@@ -1166,7 +1166,11 @@ export type AppendPackageGraphRuntimeEvidenceEventResult = {
   state: PackageGraphRuntimeEvidenceState;
 };
 
-/** Append by authoritative event ID; identical retries are no-ops, conflicts never replace. */
+/**
+ * Append by authoritative event ID; identical retries are no-ops and conflicts
+ * never replace. State is scoped to one immutable bundle: start a fresh state
+ * when the bundle digest changes.
+ */
 export function appendPackageGraphRuntimeEvidenceEvent(
   current: PackageGraphRuntimeEvidenceState,
   incomingInput: PackageGraphRuntimeEvidenceEvent,
@@ -1278,14 +1282,23 @@ export function projectPackageGraphEvidence(
         ? packageGraphEvidenceStaticResultSchema.parse(source)
         : packageGraphRuntimeEvidenceEventSchema.parse(source);
     if (!scopeMatches(parsed.scope, inventory.version)) {
-      throw new TypeError(
-        "Reference projection cannot mix inventory and evidence scopes",
-      );
+      diagnostics.push({
+        code: "cross-scope",
+        severity: "error",
+        ...(parsed.kind === "runtime-event"
+          ? { eventId: parsed.eventId }
+          : {}),
+      });
+      continue;
     }
     const records =
       parsed.kind === "static-result" ? parsed.evidence : [parsed.evidence];
     if (parsed.kind === "static-result") {
-      diagnostics.push(...parsed.diagnostics);
+      diagnostics.push(
+        ...parsed.diagnostics.map(({ quarantineId: _quarantineId, ...item }) =>
+          item,
+        ),
+      );
     }
     for (const record of records) {
       const existing = evidenceById.get(record.evidenceId);

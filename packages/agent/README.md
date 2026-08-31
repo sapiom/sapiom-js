@@ -73,8 +73,11 @@ Every accepted record names `fromAgentKey` and `toAgentKey` explicitly. Static
 results reuse the exact inventory version and additionally carry an analysis
 fingerprint, producer identity/version, coverage, deterministic diagnostics, and
 quarantine. Runtime evidence is an append-only bundle event keyed by an
-authoritative event ID. The helpers expose reference replacement/idempotency
-semantics only; persistence and production graph projection remain server concerns.
+authoritative event ID. Keep one runtime evidence state per immutable bundle and
+start a fresh state when the bundle digest changes; cross-bundle appends conflict
+and leave the existing state unchanged. The helpers expose reference
+replacement/idempotency semantics only; persistence and production graph
+projection remain server concerns.
 
 ```ts
 import {

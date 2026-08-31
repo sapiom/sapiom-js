@@ -471,6 +471,16 @@ describe("package graph evidence protocol 1", () => {
     expect(rejected.quarantine.every((item) => !("agentKey" in item))).toBe(
       true,
     );
+    const rejectedProjection = projectPackageGraphEvidence(
+      ambiguousInventory,
+      [rejected],
+    );
+    expect(rejectedProjection.diagnostics.length).toBeGreaterThan(0);
+    expect(
+      rejectedProjection.diagnostics.every(
+        (diagnostic) => !("quarantineId" in diagnostic),
+      ),
+    ).toBe(true);
 
     const otherScope = staticResult([invocation("coordinator", "research")], {
       scope: {
@@ -483,11 +493,14 @@ describe("package graph evidence protocol 1", () => {
     expect(otherScope.quarantine.map(({ code }) => code)).toEqual([
       "cross-scope",
     ]);
-    expect(() =>
-      projectPackageGraphEvidence(bundleInventory(), [
-        staticResult([invocation("coordinator", "research")]),
-      ]),
-    ).toThrow(/cannot mix inventory and evidence scopes/);
+    const crossScopeProjection = projectPackageGraphEvidence(bundleInventory(), [
+      staticResult([invocation("coordinator", "research")]),
+    ]);
+    expect(crossScopeProjection.connectors).toEqual([]);
+    expect(crossScopeProjection.diagnostics).toContainEqual({
+      code: "cross-scope",
+      severity: "error",
+    });
   });
 
   it("rejects old bundles and local/bundle mixing without mutating identities", () => {
