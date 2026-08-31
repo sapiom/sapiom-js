@@ -1160,6 +1160,22 @@ function writeMockHelpSeen(seen: boolean): void {
 }
 
 /**
+ * `?mockState=fresh` is a BRAND-NEW INSTALL, so the stand-in settings file
+ * starts empty. Cleared here, once, rather than by forcing `helpSeen: false`
+ * on the read.
+ *
+ * Two reasons for that shape. There is one settings file and several `MockApi`
+ * instances (`mockMoves` below makes the same argument about one disk), so the
+ * reset belongs to the page load, not to an instance — and running at module
+ * scope puts it before any construction, so it can never land after a dismiss.
+ * And clearing beats a forced read, which would silently throw away the write
+ * `updateSettings` still makes and break this key's whole contract — that a
+ * dismiss survives a reload — for the fixture most likely to want it: dismiss
+ * on a fresh install, reload as a returning user, stay dismissed.
+ */
+if (typeof window !== "undefined" && isFreshMockState()) writeMockHelpSeen(false);
+
+/**
  * Every rail-state write the mock has served this page load, newest last, for
  * Playwright to read back.
  *
@@ -1815,11 +1831,9 @@ export class MockApi implements HarnessApi {
           ...(this.promptedConsent ? { telemetryOptIn: true } : {}),
         }),
     // Seeded from the reload-surviving store rather than from the fixture —
-    // see MOCK_HELP_SEEN_KEY. `fresh` short-circuits it because that fixture
-    // means "brand-new install", and a brand-new install has no settings file
-    // to have recorded anything in: reading a dismissal a previous page in the
-    // same context left behind would make it a used one.
-    helpSeen: this.fresh ? false : readMockHelpSeen(),
+    // see MOCK_HELP_SEEN_KEY, which the `fresh` fixture has already emptied by
+    // the time any instance is built.
+    helpSeen: readMockHelpSeen(),
   };
 
   private workspaceKey(cwd: string): WorkspaceKey {
