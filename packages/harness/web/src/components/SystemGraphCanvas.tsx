@@ -43,6 +43,21 @@ import { Icon } from "./Icon";
 const viewportStore = createSystemGraphViewportStore();
 const PAN_THRESHOLD = 3;
 
+function viewportLayoutKey(
+  workspaceKey: WorkspaceKey,
+  groups: readonly SystemGraphNodeGroup[] | undefined,
+): WorkspaceKey {
+  const layoutIdentity =
+    groups === undefined
+      ? null
+      : groups.map(({ id, nodeIds, isUngrouped }) => [
+          id,
+          nodeIds,
+          isUngrouped,
+        ]);
+  return JSON.stringify([workspaceKey, layoutIdentity]);
+}
+
 interface SystemGraphCanvasProps {
   graph: SystemGraph;
   workspaceKey: WorkspaceKey;
@@ -85,8 +100,15 @@ export function SystemGraphCanvas({
   }, [graph, groups]);
   const layout = computed.layout;
   const graphNodes = useMemo(() => systemGraphNodeById(graph), [graph]);
+  /* Navigation and rail groups arrive after the graph's provisional layout.
+     Keep a view for each actual arrangement so the flat layout's coordinates
+     are never restored onto the grouped layout (or vice versa). */
+  const viewportKey = useMemo(
+    () => viewportLayoutKey(workspaceKey, groups),
+    [groups, workspaceKey],
+  );
   const [view, setView] = useState<SystemGraphView>(
-    () => viewportStore.get(workspaceKey) ?? resetSystemGraphView(),
+    () => viewportStore.get(viewportKey) ?? resetSystemGraphView(),
   );
   const [minZoom, setMinZoom] = useState(SYSTEM_GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
@@ -102,11 +124,11 @@ export function SystemGraphCanvas({
     ): void => {
       setView((current) => {
         const resolved = typeof next === "function" ? next(current) : next;
-        viewportStore.set(workspaceKey, resolved);
+        viewportStore.set(viewportKey, resolved);
         return resolved;
       });
     },
-    [workspaceKey],
+    [viewportKey],
   );
 
   const readViewportFit = useCallback(() => {
@@ -139,15 +161,15 @@ export function SystemGraphCanvas({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
-    const syncFloor = (): void => {
+    let initialized = false;
+    const syncView = (): void => {
       const measured = readViewportFit();
-      if (measured) setMinZoom(measured.fit.minZoom);
-    };
-    const existing = viewportStore.get(workspaceKey);
-    const measured = readViewportFit();
-    if (measured) {
+      if (!measured) return;
       const { fit, viewport: viewportSize } = measured;
       setMinZoom(fit.minZoom);
+      if (initialized) return;
+      initialized = true;
+      const existing = viewportStore.get(viewportKey);
       if (
         existing &&
         systemGraphViewIntersectsViewport(
@@ -163,15 +185,19 @@ export function SystemGraphCanvas({
         // explicit Fit may zoom up later. Containment wins when 100% crops.
         const initial = { ...fit, zoom: Math.min(1, fit.zoom) };
         const initialView = { zoom: initial.zoom, x: 0, y: 0 };
-        viewportStore.set(workspaceKey, initialView);
+        viewportStore.set(viewportKey, initialView);
         setView(initialView);
       }
-    }
+    };
+    // A newly opened right pane can still be width 0 during its slide. The
+    // first measurable ResizeObserver tick must finish the initialization that
+    // the layout effect could not, not merely update the zoom floor.
+    syncView();
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(syncFloor);
+    const observer = new ResizeObserver(syncView);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [layout, readViewportFit, workspaceKey]);
+  }, [layout, readViewportFit, viewportKey]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
