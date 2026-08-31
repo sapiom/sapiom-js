@@ -152,8 +152,9 @@ export function StartDialog({
    *
    * Detection probes exactly one level, and the scan walks eight, so `plain`
    * does not mean "no agents here", it means "none in the one level I looked
-   * at". On the user's real install that refused `design-eng` outright, because
-   * its agent lives at `design-eng/ari/orchestration`.
+   * at". Gating the scan on it refused any folder whose agent sits two levels
+   * down — a common real layout — with no way to move from one state to the
+   * other.
    */
   const canScan = outcome != null && outcome.kind !== "new" && target !== "";
   // A folder that does not exist yet cannot be opened as a project: the rail
@@ -168,9 +169,10 @@ export function StartDialog({
    * `POST /api/workflows/scan` walks the whole tree — eight levels, bounded by
    * a node budget — and registers everything it finds. The dialog cannot say
    * how many that is: the only number it could compute is the folder's
-   * immediate children, and on a real install that read 1 while the click wrote
-   * 87 registry rows. So the press states the consequence, and the second press
-   * is the consent — one action with two states, not a modal over a modal.
+   * immediate children, and a folder reported as holding one agent has been
+   * measured registering dozens. So the press states the consequence, and the
+   * second press is the consent — one action with two states, not a modal over
+   * a modal.
    */
   const armAddAll = (): void => {
     if (armed) {
@@ -388,11 +390,11 @@ function PrimaryActions({
    * NO COUNT ON THE BUTTON.
    *
    * `Add all {n}` printed the number of agent projects DIRECTLY inside the
-   * folder onto a control that registers everything eight levels down. On a
-   * real install it read `Add all 1` and the press wrote 87 registry rows. A
-   * count is a promise, and this one cannot be kept cheaply — so the control
-   * says what it will DO, in a verb, and the consequence is stated in the one
-   * hint line above it before the press that causes it.
+   * folder onto a control that registers everything eight levels down — it has
+   * been measured reading `Add all 1` over a press that wrote dozens of
+   * registry rows. A count is a promise, and this one cannot be kept cheaply —
+   * so the control says what it will DO, in a verb, and the consequence is
+   * stated in the one hint line above it before the press that causes it.
    */
   const addAll =
     canScan && outcome.kind !== "project" ? (

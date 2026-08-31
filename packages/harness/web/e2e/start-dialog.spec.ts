@@ -54,9 +54,9 @@ test.describe("detection drives the action", () => {
     // `leasing` is the one project inside; acme-app itself is not one.
     /* NO COUNT ANYWHERE. This asserted `Add all 1`, then a readout saying
        "1 agent project directly inside". Both were the shallow probe speaking
-       for the deep scan: on a real install the button read `Add all 1` and the
-       click wrote 87 registry rows. The button is a verb, and the one hint line
-       states the reach instead of apologising for the probe. */
+       for the deep scan — a button reading `Add all 1` over a click that
+       registered dozens. The button is a verb, and the one hint line states the
+       reach instead of apologising for the probe. */
     await expect(page.getByTestId("aw-add-all")).toHaveText("Add agents");
     await expect(page.getByTestId("start-hint")).toHaveText(
       "Adds every agent below this folder.",

@@ -3,7 +3,8 @@ import type { JSX } from "react";
 
 import type { FsListResponse } from "../lib/api";
 import { getDesktopBridge } from "../lib/desktop";
-import { middleTruncatePath, parentOf } from "../lib/paths";
+import { folderCompletions } from "../lib/folder-completions";
+import { middleTruncatePath } from "../lib/paths";
 import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -68,25 +69,15 @@ export function FolderField({
     updateChipsFade();
   }, [recentDirs]);
 
-  // Completion options for the browser fallback only. Failures are silent: a
-  // datalist with nothing in it is a field with no suggestions, and the host
-  // dialog is what reports an unreadable folder.
+  // Completion options for the browser fallback only — see `folderCompletions`,
+  // which owns the ancestor fallback and the silent-failure contract.
   useEffect(() => {
     if (chooseDirectory) return;
     let cancelled = false;
     const handle = setTimeout(() => {
-      // The real server 404s a path that does not exist yet, so a half-typed
-      // tail falls back to its nearest existing ancestor — which is exactly the
-      // listing that can complete it.
-      const up = parentOf(value);
-      listDir(value || undefined)
-        .catch(() => (up ? listDir(up) : Promise.reject(new Error("no parent"))))
-        .then((res) => {
-          if (!cancelled) setOptions(res.dirs.map((dir) => dir.path));
-        })
-        .catch(() => {
-          if (!cancelled) setOptions([]);
-        });
+      void folderCompletions(value, listDir).then((paths) => {
+        if (!cancelled) setOptions(paths);
+      });
     }, 150);
     return () => {
       cancelled = true;
