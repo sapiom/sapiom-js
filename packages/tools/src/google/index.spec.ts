@@ -246,3 +246,106 @@ describe("google.drive", () => {
     ).rejects.toThrow(/502/);
   });
 });
+
+describe("google.gmail", () => {
+  it("sendEmail POSTs methods/sendEmail on x-sapiom-api-key with a normalized-array body, returns { id, threadId }", async () => {
+    const sent = { id: "msg-1", threadId: "thread-1" };
+    const { transport, calls } = makeTransport([() => jsonResponse(sent)]);
+
+    const result = await google.gmailSendEmail(
+      { to: "a@b.com", cc: ["c@d.com", "e@f.com"], subject: "Hello", text: "Hi" },
+      transport,
+      BASE,
+    );
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/google/methods/sendEmail`,
+    );
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("sat_run-token");
+    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
+    expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
+    // to/cc/bcc are normalized to arrays before POST (the gateway is strict — arrays only).
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      to: ["a@b.com"],
+      cc: ["c@d.com", "e@f.com"],
+      subject: "Hello",
+      text: "Hi",
+    });
+    expect(result).toEqual(sent);
+  });
+
+  it("normalizes a single-string bcc and preserves html + attachments; omits absent recipients", async () => {
+    const sent = { id: "msg-2", threadId: "thread-2" };
+    const { transport, calls } = makeTransport([() => jsonResponse(sent)]);
+
+    await google.gmailSendEmail(
+      {
+        to: ["a@b.com"],
+        bcc: "hidden@x.com",
+        subject: "Report",
+        html: "<p>hi</p>",
+        attachments: [
+          {
+            filename: "r.pdf",
+            mimeType: "application/pdf",
+            content: "YmFzZTY0",
+          },
+        ],
+      },
+      transport,
+      BASE,
+    );
+
+    // Single-string bcc → array; no `cc` key emitted when absent.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      to: ["a@b.com"],
+      bcc: ["hidden@x.com"],
+      subject: "Report",
+      html: "<p>hi</p>",
+      attachments: [
+        { filename: "r.pdf", mimeType: "application/pdf", content: "YmFzZTY0" },
+      ],
+    });
+  });
+
+  it("surfaces a 404 (no Google connector) from sendEmail", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ error: "connector_not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ]);
+    await expect(
+      google.gmailSendEmail(
+        { to: "a@b.com", subject: "x" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toThrow(/404/);
+    await expect(
+      google.gmailSendEmail(
+        { to: "a@b.com", subject: "x" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toThrow(/connector_not_found/);
+  });
+
+  it("surfaces a 502 (upstream Gmail failure) from sendEmail", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(
+          JSON.stringify({ error: "connector_method_upstream_failed" }),
+          {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    ]);
+    await expect(
+      google.gmailSendEmail({ to: "a@b.com", subject: "x" }, transport, BASE),
+    ).rejects.toThrow(/502/);
+  });
+});

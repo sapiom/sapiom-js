@@ -175,6 +175,8 @@ import type {
   DriveShareFileArgs,
   DriveUploadFileArgs,
   LiveCredential,
+  SendEmailArgs,
+  SendEmailResult,
 } from "./google/index.js";
 
 export interface Sapiom {
@@ -500,6 +502,17 @@ export interface Sapiom {
       /** Upload a new Drive file. */
       uploadFile(args: DriveUploadFileArgs): Promise<DriveFile>;
     };
+    /**
+     * Google Gmail server-side methods (Path 2). The gateway resolves the tenant's
+     * Google credential internally and calls Gmail — the token never reaches the run.
+     */
+    readonly gmail: {
+      /**
+       * Send an email via Gmail. `to`/`cc`/`bcc` accept a single address or an
+       * array. Throws 404 when no Google connector is connected.
+       */
+      sendEmail(args: SendEmailArgs): Promise<SendEmailResult>;
+    };
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -721,6 +734,9 @@ function bind(transport: Transport): Sapiom {
       drive: {
         shareFile: (args) => google.driveShareFile(args, transport),
         uploadFile: (args) => google.driveUploadFile(args, transport),
+      },
+      gmail: {
+        sendEmail: (args) => google.gmailSendEmail(args, transport),
       },
     },
     speech: {

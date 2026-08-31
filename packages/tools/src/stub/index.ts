@@ -124,6 +124,7 @@ import type {
   AuthClientLike,
   DrivePermission,
   DriveFile,
+  SendEmailResult,
 } from "../google/index.js";
 
 /**
@@ -1940,6 +1941,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               name: "stub-file.txt",
               mimeType: "text/plain",
             })) as DriveFile,
+          ),
+      },
+      // Gmail methods run server-side in the gateway in production; the stub returns a
+      // shape-faithful, obviously-fake send result so an offline run can exercise the
+      // call graph without a Google connector or network call.
+      gmail: {
+        sendEmail: (args) =>
+          Promise.resolve(
+            r("google.gmail.sendEmail", [args], () => ({
+              id: "stub-message-id",
+              threadId: "stub-thread-id",
+            })) as SendEmailResult,
           ),
       },
     },

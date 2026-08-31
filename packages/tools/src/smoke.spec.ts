@@ -87,6 +87,8 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.google.drive).toBe("object");
     expect(typeof sapiom.google.drive.shareFile).toBe("function");
     expect(typeof sapiom.google.drive.uploadFile).toBe("function");
+    expect(typeof sapiom.google.gmail).toBe("object");
+    expect(typeof sapiom.google.gmail.sendEmail).toBe("function");
 
     expect(typeof sapiom.withAttribution).toBe("function");
   });

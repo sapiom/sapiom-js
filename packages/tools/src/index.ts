@@ -180,5 +180,8 @@ export type {
   DrivePermission,
   DriveShareFileArgs,
   DriveUploadFileArgs,
+  GmailAttachment,
   LiveCredential,
+  SendEmailArgs,
+  SendEmailResult,
 } from "./google/index.js";

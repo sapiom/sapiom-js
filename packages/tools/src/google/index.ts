@@ -175,3 +175,64 @@ export async function driveUploadFile(
     },
   );
 }
+
+/**
+ * Google Gmail server-side methods (AGENT-313 / Path 2). Mirrors the Drive methods
+ * above: the args are POSTed to the gateway's method-dispatch route on the run
+ * credential (`x-sapiom-api-key`); the gateway resolves the tenant's Google
+ * credential INTERNALLY and calls Gmail — the Google token NEVER crosses this
+ * boundary, only the send result comes back. Non-2xx throws (Transport.request),
+ * carrying the gateway body: 404 connector_not_found (connect Google first),
+ * 400 connector_method_invalid_args, 502 connector_method_upstream_failed.
+ */
+export interface GmailAttachment {
+  filename: string;
+  mimeType: string;
+  /** Base64-encoded attachment bytes. */
+  content: string;
+}
+
+/**
+ * Arguments for {@link gmailSendEmail}. `to`/`cc`/`bcc` accept a single address or
+ * an array for ergonomics; each is NORMALIZED to an array before POSTing because the
+ * gateway is strict — recipients cross the wire as arrays only.
+ */
+export interface SendEmailArgs {
+  to: string | string[];
+  cc?: string | string[];
+  bcc?: string | string[];
+  subject: string;
+  text?: string;
+  html?: string;
+  attachments?: GmailAttachment[];
+}
+
+export interface SendEmailResult {
+  id: string;
+  threadId: string;
+}
+
+/** Normalize a single address or address array to an array (gateway expects arrays). */
+const toRecipientArray = (value: string | string[]): string[] =>
+  Array.isArray(value) ? value : [value];
+
+/** Send an email via Gmail (Users.messages: send), executed server-side in the gateway. */
+export async function gmailSendEmail(
+  args: SendEmailArgs,
+  transport: Transport = defaultTransport(),
+  baseUrl: string = DEFAULT_BASE_URL,
+): Promise<SendEmailResult> {
+  const body = {
+    ...args,
+    to: toRecipientArray(args.to),
+    ...(args.cc !== undefined ? { cc: toRecipientArray(args.cc) } : {}),
+    ...(args.bcc !== undefined ? { bcc: toRecipientArray(args.bcc) } : {}),
+  };
+  return transport.request<SendEmailResult>(
+    `${baseUrl}/connectors/v1/google/methods/sendEmail`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
