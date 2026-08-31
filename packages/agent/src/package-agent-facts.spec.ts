@@ -254,6 +254,41 @@ describe("package AgentFacts protocol 1", () => {
     );
   });
 
+  it("rejects tampered summaries and non-normalized capability sets", () => {
+    const normalized = snapshot([
+      { agentKey: "coordinator", declaredCapabilities: ["a", "b"] },
+      { agentKey: "research" },
+    ]);
+
+    expect(() =>
+      packageAgentFactsSnapshotSchema.parse({
+        ...normalized,
+        agents: [
+          {
+            ...normalized.agents[0]!,
+            summary: "Research coordinator with inferred routing behavior.",
+          },
+          normalized.agents[1]!,
+        ],
+      }),
+    ).toThrow(/Summary does not match/);
+    expect(() =>
+      packageAgentFactsSnapshotSchema.parse({
+        ...normalized,
+        agents: [
+          {
+            ...normalized.agents[0]!,
+            capabilities: {
+              ...normalized.agents[0]!.capabilities,
+              declared: { status: "known", values: ["b", "a", "b"] },
+            },
+          },
+          normalized.agents[1]!,
+        ],
+      }),
+    ).toThrow(/Capabilities must be unique/);
+  });
+
   it("requires the exact package inventory version instead of remapping identity", () => {
     expect(() =>
       createPackageAgentFactsSnapshot(

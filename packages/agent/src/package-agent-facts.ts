@@ -237,7 +237,41 @@ export const packageAgentFactsRecordSchema = z
     completeness: packageAgentFactsCompletenessSchema,
     summary: z.string(),
   })
-  .strict();
+  .strict()
+  .superRefine((record, context) => {
+    for (const [field, capabilities] of [
+      ["declared", record.capabilities.declared],
+      ["observed", record.capabilities.observed],
+    ] as const) {
+      if (
+        capabilities.status === "known" &&
+        canonicalPackageAgentFactsJson(capabilities.values) !==
+          canonicalPackageAgentFactsJson(
+            normalizeCapabilities(capabilities.values),
+          )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["capabilities", field, "values"],
+          message: "Capabilities must be unique and canonically ordered",
+        });
+      }
+    }
+    const expectedSummary = summarizeAgentFacts(record.agentKey, {
+      description: record.description,
+      inputSchema: record.inputSchema,
+      outputSchema: record.outputSchema,
+      declared: record.capabilities.declared,
+      observed: record.capabilities.observed,
+    });
+    if (record.summary !== expectedSummary) {
+      context.addIssue({
+        code: "custom",
+        path: ["summary"],
+        message: "Summary does not match deterministic template content",
+      });
+    }
+  });
 export type PackageAgentFactsRecord = z.infer<
   typeof packageAgentFactsRecordSchema
 >;
