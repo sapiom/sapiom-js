@@ -1459,6 +1459,24 @@ export interface HarnessSettings {
    * picking their editor is the only signal we can trust.
    */
   editor?: EditorKind;
+  /**
+   * True once the user has dismissed the first-run "How Studio is organised"
+   * explainer (web/src/components/HelpOverlay.tsx).
+   *
+   * HERE RATHER THAN IN BROWSER STORAGE, and that is the whole point of the
+   * field (SAP-2991). "I have already been told what a project is" is a fact
+   * about this INSTALL, not about a browser origin — and the desktop app asks
+   * the OS for an ephemeral port on every boot, so every launch is a new
+   * origin with empty `localStorage`. A one-time card kept there opened every
+   * single time. This file is per-install and origin-independent, which is
+   * also why `telemetryNoticeDismissed` above lives in it.
+   *
+   * Still deliberately NOT part of the UI's `ui-prefs` blob: that is the
+   * ARRANGEMENT (folds, widths, filing) and a user may reasonably reset it.
+   * Having been taught the taxonomy is not an arrangement and must not come
+   * back when the arrangement does.
+   */
+  helpSeen?: boolean;
 }
 
 /**

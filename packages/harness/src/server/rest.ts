@@ -94,6 +94,13 @@ const bindWorkflowSchema = z.object({
   workflowPath: z.string().min(1).nullable(),
 }) satisfies z.ZodType<BindWorkflowRequest>;
 
+/**
+ * EVERY writable field has to be listed here. zod strips unknown keys, so a
+ * `HarnessSettings` field the client PATCHes but this schema omits is dropped
+ * silently — the request 200s, the response looks right, and nothing reaches
+ * disk. That is how `telemetryNoticeDismissed` came to be re-asked on every
+ * launch despite being written on every dismiss (found alongside SAP-2991).
+ */
 const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
   productAnalyticsOptIn: z.boolean().optional(),
@@ -101,6 +108,8 @@ const settingsPatchSchema = z.object({
   projectRoot: z.string().optional(),
   rollingSummary: z.boolean().optional(),
   editor: z.enum(EDITOR_KINDS).optional(),
+  telemetryNoticeDismissed: z.boolean().optional(),
+  helpSeen: z.boolean().optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
 
 const UI_EVENT_NAMES: readonly UiEventName[] = [

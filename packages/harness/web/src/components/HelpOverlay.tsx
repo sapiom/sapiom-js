@@ -21,14 +21,24 @@ import { Icon } from "./Icon";
  */
 
 /**
- * Its own key, deliberately NOT a field in `ui-prefs`.
+ * SEEN IS A SERVER FACT, and the component no longer stores anything itself
+ * (SAP-2991).
  *
- * `ui-prefs` is the UI's ARRANGEMENT — which rows are folded, how the rail is
- * filed, how wide the panes are — and it is a blob a user may reasonably want
- * to reset. "I have already been told what a project is" is not an arrangement
- * and must not come back when the arrangement does.
+ * It used to keep its own `localStorage` key, reasoning correctly that "I have
+ * already been told what a project is" is not part of `ui-prefs` (the UI's
+ * ARRANGEMENT — folds, filing, pane widths — a blob a user may reasonably
+ * reset), and then picking a store MORE volatile than `ui-prefs` rather than
+ * less. `localStorage` is keyed by origin, origin includes the port, and the
+ * desktop app asks the OS for an ephemeral port on every boot
+ * (harness-desktop/src/main/boot.ts) — so every launch was a fresh origin with
+ * empty storage and the one-time card opened every time.
+ *
+ * `HarnessSettings.helpSeen` is per-install, origin-independent, and survives
+ * a `ui-prefs` reset, which keeps the original reasoning intact. The read and
+ * the write are the shell's, handed in as props, because the shell already
+ * holds settings — a second fetch from inside the card would race the boot
+ * one and could only be a worse copy of it.
  */
-const SEEN_KEY = "sapiom-harness-help-seen";
 
 /**
  * `openHelpOverlay()` reaches the mounted overlay through a window event rather
@@ -46,45 +56,42 @@ export function openHelpOverlay(): void {
   window.dispatchEvent(new CustomEvent(OPEN_EVENT));
 }
 
-function hasSeenHelp(): boolean {
-  try {
-    return window.localStorage.getItem(SEEN_KEY) === "1";
-  } catch {
-    // Private mode / blocked storage: showing the card is the safe failure.
-    // The cost of the wrong answer here is one dismissal, not a broken shell.
-    return false;
-  }
-}
-
-function markHelpSeen(): void {
-  try {
-    window.localStorage.setItem(SEEN_KEY, "1");
-  } catch {
-    // Best-effort, exactly as `saveUiPrefs` is: the card is a courtesy and
-    // never a gate.
-  }
-}
-
 /**
  * Whether the card should raise itself on this load.
  *
  * Two conditions, and the second one is about the test suite rather than the
- * product. Under `VITE_MOCK` every e2e spec starts with empty storage, so an
- * unconditional first-run card would open a full-screen scrim over ~40 specs
- * that have nothing to do with it — the fixture would be testing this card
- * instead of what it came for. `?help=1` opts a mock page back into the real
- * behaviour, which is how the auto-show is proven in `rail-grammar.spec.ts`;
- * it does NOT force the card open, so "dismiss, reload, still gone" is the
- * same code path there as in a real install.
+ * product. Under `VITE_MOCK` every e2e spec starts from a fresh settings
+ * fixture, so an unconditional first-run card would open a full-screen scrim
+ * over ~40 specs that have nothing to do with it — the fixture would be
+ * testing this card instead of what it came for. `?help=1` opts a mock page
+ * back into the real behaviour, which is how the auto-show is proven in
+ * `rail-grammar.spec.ts`; it does NOT force the card open, so "dismiss,
+ * reload, still gone" is the same code path there as in a real install.
  */
-function shouldAutoOpen(): boolean {
-  if (hasSeenHelp()) return false;
+function shouldAutoOpen(seen: boolean): boolean {
+  if (seen) return false;
   if (!isMockMode()) return true;
   return new URLSearchParams(window.location.search).get("help") === "1";
 }
 
-export function HelpOverlay(): JSX.Element | null {
-  const [open, setOpen] = useState(shouldAutoOpen);
+export interface HelpOverlayProps {
+  /**
+   * `HarnessSettings.helpSeen`. False when the setting is absent AND when the
+   * shell could not read settings at all: showing the card is the safe
+   * failure, exactly as the old blocked-storage branch chose — the cost of the
+   * wrong answer is one dismissal, never a broken shell.
+   */
+  seen: boolean;
+  /** PATCHes `helpSeen: true`. Best-effort: see App's call site. */
+  onSeen: () => void;
+}
+
+export function HelpOverlay({ seen, onSeen }: HelpOverlayProps): JSX.Element | null {
+  // Decided once, at mount, from the value the shell already has. Safe as a
+  // lazy initializer because App renders this only after the boot fetch has
+  // settled (it returns the loading and error screens before reaching here),
+  // so `seen` is never a placeholder for "still loading".
+  const [open, setOpen] = useState(() => shouldAutoOpen(seen));
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -112,7 +119,7 @@ export function HelpOverlay(): JSX.Element | null {
   // the window was closed, the app crashed, they walked away — has not taught
   // anything, and "shown once" means once it has been read past.
   function dismiss(): void {
-    markHelpSeen();
+    onSeen();
     setOpen(false);
   }
 

@@ -2855,10 +2855,22 @@ export const App = (): JSX.Element => {
         />
       )}
 
-      {/* The one-time explainer. It owns its own visibility (first run, the
-          account menu's "How Studio is organised"), so the shell only has to
-          give it a place to mount beside the other card-on-top. */}
-      <HelpOverlay />
+      {/* The one-time explainer. It owns WHEN it shows (first run, the account
+          menu's "How Studio is organised"); the shell owns WHERE the "already
+          seen" fact lives, because that fact has to outlive a browser origin —
+          the desktop app boots on a new ephemeral port every launch, so a flag
+          in `localStorage` reopened the card every time (SAP-2991). */}
+      <HelpOverlay
+        // Absent settings reads as "not seen", which shows the card. That is
+        // the safe failure the card has always chosen over a broken shell.
+        seen={harness.settings?.helpSeen === true}
+        onSeen={() => {
+          // Best-effort, exactly as the old storage write was: a rejected
+          // PATCH costs one extra showing on the next launch, never a
+          // dismissal that refuses to dismiss.
+          void harness.updateSettings({ helpSeen: true }).catch(() => {});
+        }}
+      />
 
       {paletteOpen && (
         <CommandPalette

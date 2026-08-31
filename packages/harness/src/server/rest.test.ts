@@ -385,6 +385,33 @@ describe("createRestRouter", () => {
       expect(onTelemetryOptInChange).toHaveBeenCalledTimes(1);
     });
 
+    /**
+     * The one-time dismissals — the first-run explainer (SAP-2991) and the
+     * telemetry notice — are the fields whose ONLY job is to survive a
+     * restart, and they are the ones a missing schema entry breaks silently:
+     * zod strips unknown keys, so the PATCH 200s, the response looks right,
+     * and nothing reaches disk. `telemetryNoticeDismissed` shipped that way.
+     * Asserting the RE-READ, not the response, is what catches it.
+     */
+    it("persists the one-time dismissals across a re-read", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ helpSeen: true, telemetryNoticeDismissed: true }),
+      });
+      expect(await res.json()).toMatchObject({
+        helpSeen: true,
+        telemetryNoticeDismissed: true,
+      });
+
+      const reread = await fetch(`${baseUrl}/settings`);
+      expect(await reread.json()).toMatchObject({
+        helpSeen: true,
+        telemetryNoticeDismissed: true,
+      });
+    });
+
     it("rejects a malformed patch body", async () => {
       start();
       const res = await fetch(`${baseUrl}/settings`, {
