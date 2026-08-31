@@ -95,9 +95,11 @@ protected sidecar; they never enter `SystemGraph` JSON, lifecycle events, or
 browser-derived identity logic. The browser accepts a sidecar only when both
 its `workspaceKey` and `revision` exactly match the displayed snapshot. A
 malformed or mismatched response, a newer invalidation, or a snapshot in a
-loading, error, `building`, or `stale` state leaves graph cards inert. If the
-resolver is newer, the browser reloads the graph through the normal lifecycle
-and retries the join within a bounded loop.
+loading, error, or `building` state leaves graph cards inert. An exact-revision
+sidecar remains usable for a stale graph while its refresh runs, but a newer
+invalidation closes navigation immediately. If the resolver is newer, the
+browser reloads the graph through the normal lifecycle and retries the join
+within a bounded loop.
 
 ## Graph payload
 

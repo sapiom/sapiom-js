@@ -143,7 +143,7 @@ describe("WorkspaceGraphView navigation lifecycle", () => {
     ).toBe(false);
   });
 
-  it("keeps a matching stale sidecar inert until projection settles", () => {
+  it("keeps an exact-revision stale sidecar active until a newer invalidation", () => {
     const snapshot = (revision: number, state: "stale" | "degraded") =>
       ({
         workspaceKey: "workspace-test",
@@ -177,7 +177,17 @@ describe("WorkspaceGraphView navigation lifecycle", () => {
     const staleNavigation = staleCurrent
       ? systemGraphNavigationForSnapshot(response(8), stale)
       : new Map();
-    expect(staleNavigation.size).toBe(0);
+    expect([...staleNavigation]).toEqual([["a", "/private/a"]]);
+
+    expect(
+      workspaceGraphNavigationIsCurrent({
+        snapshotRevision: stale.revision,
+        snapshotState: stale.state,
+        announcementRevision: 9,
+        loading: false,
+        error: false,
+      }),
+    ).toBe(false);
 
     const degraded = snapshot(9, "degraded");
     const degradedCurrent = workspaceGraphNavigationIsCurrent({

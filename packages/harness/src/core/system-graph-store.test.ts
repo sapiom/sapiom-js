@@ -204,6 +204,44 @@ describe("SystemGraphStore", () => {
     });
   });
 
+  it("keeps the newest partial graph visible during its next refresh", async () => {
+    const recovery = deferred<SystemGraphBuildResult>();
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce(buildResult("initial"))
+      .mockResolvedValueOnce(buildResult("partial", false))
+      .mockReturnValueOnce(recovery.promise);
+    const store = new SystemGraphStore({ build });
+    await store.get(scope);
+
+    store.requestRefresh(scope);
+    await vi.waitFor(() => {
+      expect(store.peek(scope.workspaceKey)).toMatchObject({
+        state: "degraded",
+        graph: graphFor("partial"),
+      });
+    });
+
+    const refreshing = store.requestRefresh(scope);
+    expect(refreshing).toMatchObject({
+      state: "stale",
+      graph: graphFor("partial"),
+    });
+    expect(store.peekNavigation(scope.workspaceKey)).toEqual({
+      workspaceKey: scope.workspaceKey,
+      revision: refreshing.revision,
+      targets: [{ agentKey: "partial", workflowPath: "/private/partial" }],
+    });
+
+    recovery.resolve(buildResult("recovered"));
+    await vi.waitFor(() => {
+      expect(store.peek(scope.workspaceKey)).toMatchObject({
+        state: "ready",
+        graph: graphFor("recovered"),
+      });
+    });
+  });
+
   it("keeps last-good data stale after a failed inventory refresh", async () => {
     const pending = deferred<SystemGraphBuildResult>();
     const build = vi

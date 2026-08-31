@@ -32,12 +32,13 @@ function visibleProjection(entry: SystemGraphEntry): {
   graph: SystemGraph | null;
   navigation: readonly SystemGraphNavigationTarget[];
 } {
-  return (
-    entry.lastGood ?? {
+  if (entry.snapshot.graph !== null) {
+    return {
       graph: entry.snapshot.graph,
       navigation: entry.navigation.targets,
-    }
-  );
+    };
+  }
+  return entry.lastGood ?? { graph: null, navigation: [] };
 }
 
 function sameNavigation(

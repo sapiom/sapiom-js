@@ -51,7 +51,9 @@ export function workspaceGraphNavigationIsCurrent(input: {
     !input.loading &&
     !input.error &&
     input.snapshotRevision !== null &&
-    (input.snapshotState === "ready" || input.snapshotState === "degraded") &&
+    (input.snapshotState === "ready" ||
+      input.snapshotState === "stale" ||
+      input.snapshotState === "degraded") &&
     newestAnnouncement <= input.snapshotRevision
   );
 }
