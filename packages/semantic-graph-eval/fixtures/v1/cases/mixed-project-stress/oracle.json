@@ -1,0 +1,32 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "mixed-project-stress",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "research",
+      "targetAgentId": "segmenter"
+    },
+    {
+      "sourceAgentId": "segmenter",
+      "targetAgentId": "outreach"
+    }
+  ],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "research",
+      "targetAgentId": "billing",
+      "category": "unrelated-agents"
+    },
+    {
+      "sourceAgentId": "outreach",
+      "targetAgentId": "billing",
+      "category": "unrelated-agents"
+    },
+    {
+      "sourceAgentId": "billing",
+      "targetAgentId": "outreach",
+      "category": "unrelated-agents"
+    }
+  ]
+}

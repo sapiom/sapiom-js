@@ -1,0 +1,100 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "unrelated-agents",
+  "role": "holdout",
+  "categories": [
+    "negative",
+    "unrelated-agents"
+  ],
+  "project": {
+    "projectId": "project:unrelated-agents",
+    "projectSnapshotDigest": "sha256:0623dd63981a43ff0901e5646003d2c43bce09ee5033e248dae5f481e5952bc7"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:4cd1d6938f10689cfca88b14ea42cb4779b75d2d6f0e42df4c57a6d6d86cc1c4"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "invoice",
+        "identityStatus": "canonical",
+        "path": "agents/invoice",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "newsletter",
+        "identityStatus": "canonical",
+        "path": "agents/newsletter",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:035c6568c0101e61ef0d9b3ac9c8677cbad991fcf1df53c8145b0f170ea4f638",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:4cd1d6938f10689cfca88b14ea42cb4779b75d2d6f0e42df4c57a6d6d86cc1c4"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:e9b0838d33118e117472d76f5e2ee98cf03c090c9e3c8045952b3a93747fa006",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "invoice",
+      "name": "Invoice",
+      "facts": [
+        {
+          "ref": "fact:invoice:responsibility",
+          "kind": "responsibility",
+          "text": "Reconciles invoice totals."
+        }
+      ]
+    },
+    {
+      "agentId": "newsletter",
+      "name": "Newsletter",
+      "facts": [
+        {
+          "ref": "fact:newsletter:responsibility",
+          "kind": "responsibility",
+          "text": "Drafts a public newsletter."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:unrelated-agents:0",
+      "code": "other",
+      "agentIds": [],
+      "description": "No uncovered cross-agent evidence exists."
+    }
+  ],
+  "sourceExcerpts": []
+}

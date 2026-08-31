@@ -1,0 +1,134 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "external-handoff",
+  "role": "calibration",
+  "categories": [
+    "external-handoff",
+    "positive"
+  ],
+  "project": {
+    "projectId": "project:external-handoff",
+    "projectSnapshotDigest": "sha256:2132a52399a222ce23901ffab582ca3c781214dce57fbeecb0090d088bdeb147"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:f7dabca0becc5a342d697a303716e9cf99188c777669061ae0b5fe90d3c1037e"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "fulfillment",
+        "identityStatus": "canonical",
+        "path": "agents/fulfillment",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "intake",
+        "identityStatus": "canonical",
+        "path": "agents/intake",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:28a900de0303ac976c4891170ab1d4be931e0baa5684ebe07591c79dae19e3f5",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:f7dabca0becc5a342d697a303716e9cf99188c777669061ae0b5fe90d3c1037e"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:6064f878cacba623a890257bff1aa5c377e924fdf06beddf0b4aa9f342313d78",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "fulfillment",
+      "name": "Fulfillment",
+      "facts": [
+        {
+          "ref": "fact:fulfillment:input:0",
+          "kind": "input",
+          "text": "Qualified CRM record."
+        },
+        {
+          "ref": "fact:fulfillment:responsibility",
+          "kind": "responsibility",
+          "text": "Creates fulfillment work from CRM-qualified records."
+        }
+      ]
+    },
+    {
+      "agentId": "intake",
+      "name": "Intake",
+      "facts": [
+        {
+          "ref": "fact:intake:output:0",
+          "kind": "output",
+          "text": "Qualified CRM record."
+        },
+        {
+          "ref": "fact:intake:responsibility",
+          "kind": "responsibility",
+          "text": "Qualifies requests and writes the result to the CRM."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [
+    {
+      "ref": "context:external-handoff:0",
+      "kind": "shared-context",
+      "text": "The CRM is an external handoff boundary."
+    }
+  ],
+  "coverageGaps": [
+    {
+      "ref": "gap:external-handoff:0",
+      "code": "external-handoff",
+      "agentIds": [
+        "fulfillment",
+        "intake"
+      ],
+      "description": "The handoff occurs through CRM webhooks outside the package."
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "ref": "source:fulfillment:webhook",
+      "agentId": "fulfillment",
+      "language": "typescript",
+      "path": "agents/fulfillment/index.ts",
+      "content": "const qualifiedRecord = event.crmRecord;"
+    },
+    {
+      "ref": "source:intake:crm-write",
+      "agentId": "intake",
+      "language": "typescript",
+      "path": "agents/intake/index.ts",
+      "content": "await crm.upsert(request.id, qualifiedRecord);"
+    }
+  ]
+}

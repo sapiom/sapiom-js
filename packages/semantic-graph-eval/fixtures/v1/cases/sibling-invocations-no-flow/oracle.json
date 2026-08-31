@@ -1,0 +1,18 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "sibling-invocations-no-flow",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "research",
+      "targetAgentId": "growth",
+      "category": "sibling-invocations"
+    },
+    {
+      "sourceAgentId": "growth",
+      "targetAgentId": "research",
+      "category": "sibling-invocations"
+    }
+  ]
+}

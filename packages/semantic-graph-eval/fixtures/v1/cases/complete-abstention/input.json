@@ -1,0 +1,100 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "complete-abstention",
+  "role": "calibration",
+  "categories": [
+    "abstention",
+    "negative"
+  ],
+  "project": {
+    "projectId": "project:complete-abstention",
+    "projectSnapshotDigest": "sha256:321d4f58f09312aa02365920bca69ce37f57b51fc6b508534b3d72f464ab43d3"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:f9eecc46342ce36ef3a677940bdd43a900eb5591f87da3273e46952c57f10f07"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "archiver",
+        "identityStatus": "canonical",
+        "path": "agents/archiver",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "notifier",
+        "identityStatus": "canonical",
+        "path": "agents/notifier",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:1238ddd82a14f5916c5f467ca1fea13537d0200c631a7fbcc6691565f591441b",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:f9eecc46342ce36ef3a677940bdd43a900eb5591f87da3273e46952c57f10f07"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:2d139baa8b2f464863b7e2c3aad1061bf6d0ee37d43adda24ea15d3274edb45f",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "archiver",
+      "name": "Archiver",
+      "facts": [
+        {
+          "ref": "fact:archiver:responsibility",
+          "kind": "responsibility",
+          "text": "Archives expired synthetic records."
+        }
+      ]
+    },
+    {
+      "agentId": "notifier",
+      "name": "Notifier",
+      "facts": [
+        {
+          "ref": "fact:notifier:responsibility",
+          "kind": "responsibility",
+          "text": "Sends scheduled synthetic reminders."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:complete-abstention:0",
+      "code": "other",
+      "agentIds": [],
+      "description": "Insufficient evidence is intentionally supplied."
+    }
+  ],
+  "sourceExcerpts": []
+}

@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "opaque-store-reload",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "collector",
+      "targetAgentId": "writer"
+    }
+  ],
+  "forbiddenFeeds": []
+}

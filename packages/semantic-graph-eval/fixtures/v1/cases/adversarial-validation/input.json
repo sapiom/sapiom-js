@@ -1,0 +1,137 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "adversarial-validation",
+  "role": "calibration",
+  "categories": [
+    "adversarial",
+    "validation"
+  ],
+  "project": {
+    "projectId": "project:adversarial-validation",
+    "projectSnapshotDigest": "sha256:5bbe371cea6a7dc0891ba11fb4275996c363ae49c88cbfa3ad8beea6765456b2"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:4edbd4f602e189f6d767d5571145a70423bd4f295e5ad635b6833879ac81ceb4"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "alpha",
+        "identityStatus": "canonical",
+        "path": "agents/alpha",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "beta",
+        "identityStatus": "canonical",
+        "path": "agents/beta",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "gamma",
+        "identityStatus": "canonical",
+        "path": "agents/gamma",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:2c5843e2ba94eff9f8de71f85164f9bcb1e72f9a003055b931debfb5c138b130",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:4edbd4f602e189f6d767d5571145a70423bd4f295e5ad635b6833879ac81ceb4"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:eedf936ee628335376e2ff1e96e0fb31053d72cc872b1dceb0c9652b715e1584",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "fromAgentKey": "alpha",
+        "toAgentKey": "beta",
+        "relation": "feeds",
+        "basis": "static-dataflow",
+        "source": {
+          "kind": "source-callsite",
+          "ref": "callsite:adversarial-validation:alpha:output"
+        },
+        "destination": {
+          "kind": "source-callsite",
+          "ref": "callsite:adversarial-validation:beta:input"
+        },
+        "path": [],
+        "evidenceId": "sha256:dc67ebcc1dd64f14bacfc7050cd55ff9a6dc7a591d6d8fc50acf2b64a0e55b03"
+      }
+    ],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "alpha",
+      "name": "Alpha",
+      "facts": [
+        {
+          "ref": "fact:alpha:responsibility",
+          "kind": "responsibility",
+          "text": "Produces facts."
+        }
+      ]
+    },
+    {
+      "agentId": "beta",
+      "name": "Beta",
+      "facts": [
+        {
+          "ref": "fact:beta:responsibility",
+          "kind": "responsibility",
+          "text": "Transforms facts."
+        }
+      ]
+    },
+    {
+      "agentId": "gamma",
+      "name": "Gamma",
+      "facts": [
+        {
+          "ref": "fact:gamma:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes transformed facts."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:adversarial-validation:0",
+      "code": "transformation",
+      "agentIds": [
+        "beta",
+        "gamma"
+      ],
+      "description": "Only Beta to Gamma remains a semantic residual."
+    }
+  ],
+  "sourceExcerpts": []
+}

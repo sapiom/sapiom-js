@@ -1,0 +1,128 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "truncated-context",
+  "role": "holdout",
+  "categories": [
+    "positive",
+    "truncated-context"
+  ],
+  "project": {
+    "projectId": "project:truncated-context",
+    "projectSnapshotDigest": "sha256:6cd1d845b3adedfe88f01feb03f294c2f8c44164b520d0fca2092975c81ddf29"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:fba1642bd8b3a1148a51bb56f7e4e5db13f32ab377c1eec9087542fc3ad74560"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "consumer",
+        "identityStatus": "canonical",
+        "path": "agents/consumer",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "producer",
+        "identityStatus": "canonical",
+        "path": "agents/producer",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:f7906bfbd56acdebbe1dca568e7789dbfe9d4d6a7a89e87459d7c5511b34e88b",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:fba1642bd8b3a1148a51bb56f7e4e5db13f32ab377c1eec9087542fc3ad74560"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:1542557d3e6fd97818f84a7af6ca3705e80f385f11467ca051909f28606d0a92",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "consumer",
+      "name": "Consumer",
+      "facts": [
+        {
+          "ref": "fact:consumer:input:0",
+          "kind": "input",
+          "text": "Signed digest."
+        },
+        {
+          "ref": "fact:consumer:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes a synthetic signed digest."
+        }
+      ]
+    },
+    {
+      "agentId": "producer",
+      "name": "Producer",
+      "facts": [
+        {
+          "ref": "fact:producer:output:0",
+          "kind": "output",
+          "text": "Signed digest."
+        },
+        {
+          "ref": "fact:producer:responsibility",
+          "kind": "responsibility",
+          "text": "Produces a synthetic signed digest."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:truncated-context:0",
+      "code": "truncated-context",
+      "agentIds": [
+        "consumer",
+        "producer"
+      ],
+      "description": "The decisive source line occurs after a long irrelevant prelude."
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "ref": "source:consumer:load",
+      "agentId": "consumer",
+      "language": "typescript",
+      "path": "agents/consumer/index.ts",
+      "content": "const signedDigest = await shared.get(runId);"
+    },
+    {
+      "ref": "source:producer:long",
+      "agentId": "producer",
+      "language": "typescript",
+      "path": "agents/producer/index.ts",
+      "content": "// Synthetic audit note 0: no cross-agent fact here.\n// Synthetic audit note 1: no cross-agent fact here.\n// Synthetic audit note 2: no cross-agent fact here.\n// Synthetic audit note 3: no cross-agent fact here.\n// Synthetic audit note 4: no cross-agent fact here.\n// Synthetic audit note 5: no cross-agent fact here.\n// Synthetic audit note 6: no cross-agent fact here.\n// Synthetic audit note 7: no cross-agent fact here.\n// Synthetic audit note 8: no cross-agent fact here.\n// Synthetic audit note 9: no cross-agent fact here.\n// Synthetic audit note 10: no cross-agent fact here.\n// Synthetic audit note 11: no cross-agent fact here.\n// Synthetic audit note 12: no cross-agent fact here.\n// Synthetic audit note 13: no cross-agent fact here.\n// Synthetic audit note 14: no cross-agent fact here.\n// Synthetic audit note 15: no cross-agent fact here.\n// Synthetic audit note 16: no cross-agent fact here.\n// Synthetic audit note 17: no cross-agent fact here.\n// Synthetic audit note 18: no cross-agent fact here.\n// Synthetic audit note 19: no cross-agent fact here.\n// Synthetic audit note 20: no cross-agent fact here.\n// Synthetic audit note 21: no cross-agent fact here.\n// Synthetic audit note 22: no cross-agent fact here.\n// Synthetic audit note 23: no cross-agent fact here.\n// Synthetic audit note 24: no cross-agent fact here.\n// Synthetic audit note 25: no cross-agent fact here.\n// Synthetic audit note 26: no cross-agent fact here.\n// Synthetic audit note 27: no cross-agent fact here.\n// Synthetic audit note 28: no cross-agent fact here.\n// Synthetic audit note 29: no cross-agent fact here.\n// Synthetic audit note 30: no cross-agent fact here.\n// Synthetic audit note 31: no cross-agent fact here.\n// Synthetic audit note 32: no cross-agent fact here.\n// Synthetic audit note 33: no cross-agent fact here.\n// Synthetic audit note 34: no cross-agent fact here.\n// Synthetic audit note 35: no cross-agent fact here.\n// Synthetic audit note 36: no cross-agent fact here.\n// Synthetic audit note 37: no cross-agent fact here.\n// Synthetic audit note 38: no cross-agent fact here.\n// Synthetic audit note 39: no cross-agent fact here.\n// Synthetic audit note 40: no cross-agent fact here.\n// Synthetic audit note 41: no cross-agent fact here.\n// Synthetic audit note 42: no cross-agent fact here.\n// Synthetic audit note 43: no cross-agent fact here.\n// Synthetic audit note 44: no cross-agent fact here.\n// Synthetic audit note 45: no cross-agent fact here.\n// Synthetic audit note 46: no cross-agent fact here.\n// Synthetic audit note 47: no cross-agent fact here.\n// Synthetic audit note 48: no cross-agent fact here.\n// Synthetic audit note 49: no cross-agent fact here.\n// Synthetic audit note 50: no cross-agent fact here.\n// Synthetic audit note 51: no cross-agent fact here.\n// Synthetic audit note 52: no cross-agent fact here.\n// Synthetic audit note 53: no cross-agent fact here.\n// Synthetic audit note 54: no cross-agent fact here.\n// Synthetic audit note 55: no cross-agent fact here.\n// Synthetic audit note 56: no cross-agent fact here.\n// Synthetic audit note 57: no cross-agent fact here.\n// Synthetic audit note 58: no cross-agent fact here.\n// Synthetic audit note 59: no cross-agent fact here.\n// Synthetic audit note 60: no cross-agent fact here.\n// Synthetic audit note 61: no cross-agent fact here.\n// Synthetic audit note 62: no cross-agent fact here.\n// Synthetic audit note 63: no cross-agent fact here.\n// Synthetic audit note 64: no cross-agent fact here.\n// Synthetic audit note 65: no cross-agent fact here.\n// Synthetic audit note 66: no cross-agent fact here.\n// Synthetic audit note 67: no cross-agent fact here.\n// Synthetic audit note 68: no cross-agent fact here.\n// Synthetic audit note 69: no cross-agent fact here.\n// Synthetic audit note 70: no cross-agent fact here.\n// Synthetic audit note 71: no cross-agent fact here.\n// Synthetic audit note 72: no cross-agent fact here.\n// Synthetic audit note 73: no cross-agent fact here.\n// Synthetic audit note 74: no cross-agent fact here.\n// Synthetic audit note 75: no cross-agent fact here.\n// Synthetic audit note 76: no cross-agent fact here.\n// Synthetic audit note 77: no cross-agent fact here.\n// Synthetic audit note 78: no cross-agent fact here.\n// Synthetic audit note 79: no cross-agent fact here.\n// Synthetic audit note 80: no cross-agent fact here.\n// Synthetic audit note 81: no cross-agent fact here.\n// Synthetic audit note 82: no cross-agent fact here.\n// Synthetic audit note 83: no cross-agent fact here.\n// Synthetic audit note 84: no cross-agent fact here.\n// Synthetic audit note 85: no cross-agent fact here.\n// Synthetic audit note 86: no cross-agent fact here.\n// Synthetic audit note 87: no cross-agent fact here.\n// Synthetic audit note 88: no cross-agent fact here.\n// Synthetic audit note 89: no cross-agent fact here.\n// Synthetic audit note 90: no cross-agent fact here.\n// Synthetic audit note 91: no cross-agent fact here.\n// Synthetic audit note 92: no cross-agent fact here.\n// Synthetic audit note 93: no cross-agent fact here.\n// Synthetic audit note 94: no cross-agent fact here.\n// Synthetic audit note 95: no cross-agent fact here.\n// Synthetic audit note 96: no cross-agent fact here.\n// Synthetic audit note 97: no cross-agent fact here.\n// Synthetic audit note 98: no cross-agent fact here.\n// Synthetic audit note 99: no cross-agent fact here.\n// Synthetic audit note 100: no cross-agent fact here.\n// Synthetic audit note 101: no cross-agent fact here.\n// Synthetic audit note 102: no cross-agent fact here.\n// Synthetic audit note 103: no cross-agent fact here.\n// Synthetic audit note 104: no cross-agent fact here.\n// Synthetic audit note 105: no cross-agent fact here.\n// Synthetic audit note 106: no cross-agent fact here.\n// Synthetic audit note 107: no cross-agent fact here.\n// Synthetic audit note 108: no cross-agent fact here.\n// Synthetic audit note 109: no cross-agent fact here.\n// Synthetic audit note 110: no cross-agent fact here.\n// Synthetic audit note 111: no cross-agent fact here.\n// Synthetic audit note 112: no cross-agent fact here.\n// Synthetic audit note 113: no cross-agent fact here.\n// Synthetic audit note 114: no cross-agent fact here.\n// Synthetic audit note 115: no cross-agent fact here.\n// Synthetic audit note 116: no cross-agent fact here.\n// Synthetic audit note 117: no cross-agent fact here.\n// Synthetic audit note 118: no cross-agent fact here.\n// Synthetic audit note 119: no cross-agent fact here.\n// Synthetic audit note 120: no cross-agent fact here.\n// Synthetic audit note 121: no cross-agent fact here.\n// Synthetic audit note 122: no cross-agent fact here.\n// Synthetic audit note 123: no cross-agent fact here.\n// Synthetic audit note 124: no cross-agent fact here.\n// Synthetic audit note 125: no cross-agent fact here.\n// Synthetic audit note 126: no cross-agent fact here.\n// Synthetic audit note 127: no cross-agent fact here.\n// Synthetic audit note 128: no cross-agent fact here.\n// Synthetic audit note 129: no cross-agent fact here.\n// Synthetic audit note 130: no cross-agent fact here.\n// Synthetic audit note 131: no cross-agent fact here.\n// Synthetic audit note 132: no cross-agent fact here.\n// Synthetic audit note 133: no cross-agent fact here.\n// Synthetic audit note 134: no cross-agent fact here.\n// Synthetic audit note 135: no cross-agent fact here.\n// Synthetic audit note 136: no cross-agent fact here.\n// Synthetic audit note 137: no cross-agent fact here.\n// Synthetic audit note 138: no cross-agent fact here.\n// Synthetic audit note 139: no cross-agent fact here.\n// Synthetic audit note 140: no cross-agent fact here.\n// Synthetic audit note 141: no cross-agent fact here.\n// Synthetic audit note 142: no cross-agent fact here.\n// Synthetic audit note 143: no cross-agent fact here.\n// Synthetic audit note 144: no cross-agent fact here.\n// Synthetic audit note 145: no cross-agent fact here.\n// Synthetic audit note 146: no cross-agent fact here.\n// Synthetic audit note 147: no cross-agent fact here.\n// Synthetic audit note 148: no cross-agent fact here.\n// Synthetic audit note 149: no cross-agent fact here.\n// Synthetic audit note 150: no cross-agent fact here.\n// Synthetic audit note 151: no cross-agent fact here.\n// Synthetic audit note 152: no cross-agent fact here.\n// Synthetic audit note 153: no cross-agent fact here.\n// Synthetic audit note 154: no cross-agent fact here.\n// Synthetic audit note 155: no cross-agent fact here.\n// Synthetic audit note 156: no cross-agent fact here.\n// Synthetic audit note 157: no cross-agent fact here.\n// Synthetic audit note 158: no cross-agent fact here.\n// Synthetic audit note 159: no cross-agent fact here.\n// Synthetic audit note 160: no cross-agent fact here.\n// Synthetic audit note 161: no cross-agent fact here.\n// Synthetic audit note 162: no cross-agent fact here.\n// Synthetic audit note 163: no cross-agent fact here.\n// Synthetic audit note 164: no cross-agent fact here.\n// Synthetic audit note 165: no cross-agent fact here.\n// Synthetic audit note 166: no cross-agent fact here.\n// Synthetic audit note 167: no cross-agent fact here.\n// Synthetic audit note 168: no cross-agent fact here.\n// Synthetic audit note 169: no cross-agent fact here.\n// Synthetic audit note 170: no cross-agent fact here.\n// Synthetic audit note 171: no cross-agent fact here.\n// Synthetic audit note 172: no cross-agent fact here.\n// Synthetic audit note 173: no cross-agent fact here.\n// Synthetic audit note 174: no cross-agent fact here.\n// Synthetic audit note 175: no cross-agent fact here.\n// Synthetic audit note 176: no cross-agent fact here.\n// Synthetic audit note 177: no cross-agent fact here.\n// Synthetic audit note 178: no cross-agent fact here.\n// Synthetic audit note 179: no cross-agent fact here.\nawait shared.put(runId, signedDigest);"
+    }
+  ]
+}

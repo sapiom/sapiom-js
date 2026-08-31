@@ -1,0 +1,18 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "unsupported-cycle",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "planner",
+      "targetAgentId": "reviewer",
+      "category": "unsupported-cycle"
+    },
+    {
+      "sourceAgentId": "reviewer",
+      "targetAgentId": "planner",
+      "category": "unsupported-cycle"
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "provider-failure",
+  "role": "calibration",
+  "categories": [
+    "provider-failure",
+    "resilience"
+  ],
+  "project": {
+    "projectId": "project:provider-failure",
+    "projectSnapshotDigest": "sha256:bfe78bb08e900007b22d60509c8ea66f514be20226a38be6e61cffe0a05025b3"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:416809ae7346972294aa5ab7e89de6e29d8f2740ca111690db37841dbe70b6f6"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "alpha",
+        "identityStatus": "canonical",
+        "path": "agents/alpha",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "beta",
+        "identityStatus": "canonical",
+        "path": "agents/beta",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:e1e947dcf139caacd4c8ef20827838beb95c522b4d1211c2f2f728352908d422",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:416809ae7346972294aa5ab7e89de6e29d8f2740ca111690db37841dbe70b6f6"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:1b86606371e60f67824ea579fe0154fd29f0377282c1eee54c7fd4df7cb976c1",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "alpha",
+      "name": "Alpha",
+      "facts": [
+        {
+          "ref": "fact:alpha:responsibility",
+          "kind": "responsibility",
+          "text": "Produces facts."
+        }
+      ]
+    },
+    {
+      "agentId": "beta",
+      "name": "Beta",
+      "facts": [
+        {
+          "ref": "fact:beta:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes facts."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:provider-failure:0",
+      "code": "other",
+      "agentIds": [
+        "alpha",
+        "beta"
+      ],
+      "description": "The provider fails before returning a response."
+    }
+  ],
+  "sourceExcerpts": []
+}

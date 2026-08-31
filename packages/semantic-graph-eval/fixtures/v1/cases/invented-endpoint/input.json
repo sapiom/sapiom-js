@@ -1,0 +1,103 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "invented-endpoint",
+  "role": "calibration",
+  "categories": [
+    "adversarial",
+    "invented-endpoint"
+  ],
+  "project": {
+    "projectId": "project:invented-endpoint",
+    "projectSnapshotDigest": "sha256:de5b7c1a427be2b0536669c8d3bdefc7c476218934f044d29e6b38f578cb8523"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:51acf8149fb8572334c5099373d31d18ee7ce545867bb57bebba327e02354650"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "collector",
+        "identityStatus": "canonical",
+        "path": "agents/collector",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "writer",
+        "identityStatus": "canonical",
+        "path": "agents/writer",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:72743dfebe443f06c661b2a4ed8d04ee1801d7a87f5f8484cf22c734f31bd173",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:51acf8149fb8572334c5099373d31d18ee7ce545867bb57bebba327e02354650"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:85719136d7ea1bee4109486cededaa2561d477744640f8744f13126eff665a2c",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "collector",
+      "name": "Collector",
+      "facts": [
+        {
+          "ref": "fact:collector:responsibility",
+          "kind": "responsibility",
+          "text": "Collects synthetic facts."
+        }
+      ]
+    },
+    {
+      "agentId": "writer",
+      "name": "Writer",
+      "facts": [
+        {
+          "ref": "fact:writer:responsibility",
+          "kind": "responsibility",
+          "text": "Writes from supplied facts."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:invented-endpoint:0",
+      "code": "other",
+      "agentIds": [
+        "collector",
+        "writer"
+      ],
+      "description": "The model must not invent a third endpoint."
+    }
+  ],
+  "sourceExcerpts": []
+}

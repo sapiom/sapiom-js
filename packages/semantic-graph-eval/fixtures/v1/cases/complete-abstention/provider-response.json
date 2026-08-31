@@ -1,0 +1,66 @@
+{
+  "protocol": "semantic-graph-eval.mock-provider/1",
+  "fixtureId": "complete-abstention",
+  "responses": {
+    "facts-only.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 300,
+        "outputTokens": 40,
+        "costUsd": 0,
+        "latencyMs": 10,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "bounded-source.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 600,
+        "outputTokens": 80,
+        "costUsd": 0,
+        "latencyMs": 20,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "bounded-source.v2": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 600,
+        "outputTokens": 80,
+        "costUsd": 0,
+        "latencyMs": 20,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "context-pressure.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 900,
+        "outputTokens": 120,
+        "costUsd": 0,
+        "latencyMs": 30,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    }
+  }
+}

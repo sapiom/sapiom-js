@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "external-handoff",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "intake",
+      "targetAgentId": "fulfillment"
+    }
+  ],
+  "forbiddenFeeds": []
+}

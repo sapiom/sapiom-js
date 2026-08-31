@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "transformed-information",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "scorer",
+      "targetAgentId": "outreach"
+    }
+  ],
+  "forbiddenFeeds": []
+}

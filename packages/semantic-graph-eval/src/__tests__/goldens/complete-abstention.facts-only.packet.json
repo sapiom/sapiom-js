@@ -1,0 +1,77 @@
+{
+  "protocol": "semantic-graph-eval.packet/1",
+  "fixtureId": "complete-abstention",
+  "project": {
+    "projectId": "project:complete-abstention",
+    "projectSnapshotDigest": "sha256:321d4f58f09312aa02365920bca69ce37f57b51fc6b508534b3d72f464ab43d3"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:f9eecc46342ce36ef3a677940bdd43a900eb5591f87da3273e46952c57f10f07"
+    },
+    "status": "complete"
+  },
+  "configuration": {
+    "id": "facts-only.v1",
+    "promptId": "semantic-feeds.prompt.v1",
+    "policyId": "semantic-feeds.precision-first.v1",
+    "sourceSelectionId": "facts-only.v1",
+    "outputSchemaId": "semantic-feeds.output.v1"
+  },
+  "agents": [
+    {
+      "agentId": "archiver",
+      "name": "Archiver",
+      "facts": [
+        {
+          "ref": "fact:archiver:responsibility",
+          "kind": "responsibility",
+          "text": "Archives expired synthetic records."
+        }
+      ]
+    },
+    {
+      "agentId": "notifier",
+      "name": "Notifier",
+      "facts": [
+        {
+          "ref": "fact:notifier:responsibility",
+          "kind": "responsibility",
+          "text": "Sends scheduled synthetic reminders."
+        }
+      ]
+    }
+  ],
+  "provenRelationships": [],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:complete-abstention:0",
+      "code": "other",
+      "agentIds": [],
+      "description": "Insufficient evidence is intentionally supplied."
+    }
+  ],
+  "sourceExcerpts": [],
+  "contextPressure": {
+    "sourceCharactersAvailable": 0,
+    "sourceCharactersIncluded": 0,
+    "omittedExcerptCount": 0,
+    "truncatedExcerptCount": 0,
+    "serializedBytes": 1495,
+    "estimatedTokens": 374,
+    "maxPacketBytes": 64000,
+    "sectionBytes": {
+      "project": 141,
+      "inventory": 151,
+      "configuration": 187,
+      "agents": 320,
+      "provenRelationships": 2,
+      "sharedContext": 2,
+      "coverageGaps": 131,
+      "sourceExcerpts": 2
+    }
+  }
+}

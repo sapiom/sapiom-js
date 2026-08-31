@@ -1,0 +1,26 @@
+{
+  "protocol": "semantic-graph-eval.mock-provider/1",
+  "fixtureId": "provider-failure",
+  "responses": {
+    "facts-only.v1": {
+      "status": "failure",
+      "errorCode": "provider-unavailable",
+      "latencyMs": 10
+    },
+    "bounded-source.v1": {
+      "status": "failure",
+      "errorCode": "provider-unavailable",
+      "latencyMs": 20
+    },
+    "bounded-source.v2": {
+      "status": "failure",
+      "errorCode": "provider-unavailable",
+      "latencyMs": 20
+    },
+    "context-pressure.v1": {
+      "status": "failure",
+      "errorCode": "provider-unavailable",
+      "latencyMs": 30
+    }
+  }
+}

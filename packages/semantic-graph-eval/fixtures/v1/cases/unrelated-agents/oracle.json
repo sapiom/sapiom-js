@@ -1,0 +1,18 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "unrelated-agents",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "invoice",
+      "targetAgentId": "newsletter",
+      "category": "unrelated-agents"
+    },
+    {
+      "sourceAgentId": "newsletter",
+      "targetAgentId": "invoice",
+      "category": "unrelated-agents"
+    }
+  ]
+}

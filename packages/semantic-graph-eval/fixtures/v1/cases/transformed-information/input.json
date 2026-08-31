@@ -1,0 +1,128 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "transformed-information",
+  "role": "holdout",
+  "categories": [
+    "positive",
+    "transformation"
+  ],
+  "project": {
+    "projectId": "project:transformed-information",
+    "projectSnapshotDigest": "sha256:84fe58e88d2f09d0dd08ce9468199697ab2a52fbc25108973f692f138bce39d5"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:bddd84730455c7a8bcdc20e1afac7bf735808efb2b2ffddc9d88898697f11836"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "outreach",
+        "identityStatus": "canonical",
+        "path": "agents/outreach",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "scorer",
+        "identityStatus": "canonical",
+        "path": "agents/scorer",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:ad9850ebfbc7cb528d58ae1ab936bf1e3f3038b7ba9a0b366f91da32122a3a83",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:bddd84730455c7a8bcdc20e1afac7bf735808efb2b2ffddc9d88898697f11836"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:1b0a2c6bb64e9638fa9a2d18a3ca4a312c6bb0974d4fc68116c20fff14a148ba",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "outreach",
+      "name": "Outreach",
+      "facts": [
+        {
+          "ref": "fact:outreach:input:0",
+          "kind": "input",
+          "text": "Priority band derived from account signals."
+        },
+        {
+          "ref": "fact:outreach:responsibility",
+          "kind": "responsibility",
+          "text": "Prioritizes messages from stored priority bands."
+        }
+      ]
+    },
+    {
+      "agentId": "scorer",
+      "name": "Scorer",
+      "facts": [
+        {
+          "ref": "fact:scorer:output:0",
+          "kind": "output",
+          "text": "Priority band."
+        },
+        {
+          "ref": "fact:scorer:responsibility",
+          "kind": "responsibility",
+          "text": "Transforms account signals into a priority band."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:transformed-information:0",
+      "code": "transformation",
+      "agentIds": [
+        "outreach",
+        "scorer"
+      ],
+      "description": "The stored priority band no longer shares the input schema."
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "ref": "source:outreach:band",
+      "agentId": "outreach",
+      "language": "typescript",
+      "path": "agents/outreach/index.ts",
+      "content": "const priority = await bands.load(accountId);"
+    },
+    {
+      "ref": "source:scorer:band",
+      "agentId": "scorer",
+      "language": "typescript",
+      "path": "agents/scorer/index.ts",
+      "content": "await bands.save(accountId, toPriorityBand(rawSignals));"
+    }
+  ]
+}

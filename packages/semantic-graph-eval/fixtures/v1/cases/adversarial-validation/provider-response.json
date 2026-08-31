@@ -1,0 +1,180 @@
+{
+  "protocol": "semantic-graph-eval.mock-provider/1",
+  "fixtureId": "adversarial-validation",
+  "responses": {
+    "facts-only.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 300,
+        "outputTokens": 40,
+        "costUsd": 0,
+        "latencyMs": 10,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "bounded-source.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "partial",
+        "candidates": [
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "alpha",
+            "targetAgentId": "beta",
+            "explanation": "This pair is already proven.",
+            "supportRefs": [
+              "fact:alpha:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "alpha",
+            "targetAgentId": "alpha",
+            "explanation": "Self flow must be rejected.",
+            "supportRefs": [
+              "fact:alpha:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "alpha",
+            "targetAgentId": "ghost-agent",
+            "explanation": "Unknown endpoint must be rejected.",
+            "supportRefs": [
+              "fact:alpha:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "beta",
+            "targetAgentId": "gamma",
+            "explanation": "Gamma consumes Beta's transformed facts.",
+            "supportRefs": [
+              "fact:beta:responsibility",
+              "fact:gamma:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "beta",
+            "targetAgentId": "gamma",
+            "explanation": "Duplicate candidate must be rejected.",
+            "supportRefs": [
+              "fact:beta:responsibility",
+              "fact:gamma:responsibility"
+            ]
+          },
+          {
+            "relationship": "invokes",
+            "sourceAgentId": "beta",
+            "targetAgentId": "gamma",
+            "explanation": "Wrong relationship type.",
+            "supportRefs": [
+              "fact:beta:responsibility"
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 600,
+        "outputTokens": 80,
+        "costUsd": 0,
+        "latencyMs": 20,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "bounded-source.v2": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "partial",
+        "candidates": [
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "alpha",
+            "targetAgentId": "beta",
+            "explanation": "This pair is already proven.",
+            "supportRefs": [
+              "fact:alpha:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "alpha",
+            "targetAgentId": "alpha",
+            "explanation": "Self flow must be rejected.",
+            "supportRefs": [
+              "fact:alpha:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "alpha",
+            "targetAgentId": "ghost-agent",
+            "explanation": "Unknown endpoint must be rejected.",
+            "supportRefs": [
+              "fact:alpha:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "beta",
+            "targetAgentId": "gamma",
+            "explanation": "Gamma consumes Beta's transformed facts.",
+            "supportRefs": [
+              "fact:beta:responsibility",
+              "fact:gamma:responsibility"
+            ]
+          },
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "beta",
+            "targetAgentId": "gamma",
+            "explanation": "Duplicate candidate must be rejected.",
+            "supportRefs": [
+              "fact:beta:responsibility",
+              "fact:gamma:responsibility"
+            ]
+          },
+          {
+            "relationship": "invokes",
+            "sourceAgentId": "beta",
+            "targetAgentId": "gamma",
+            "explanation": "Wrong relationship type.",
+            "supportRefs": [
+              "fact:beta:responsibility"
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 600,
+        "outputTokens": 80,
+        "costUsd": 0,
+        "latencyMs": 20,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "context-pressure.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 900,
+        "outputTokens": 120,
+        "costUsd": 0,
+        "latencyMs": 30,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    }
+  }
+}

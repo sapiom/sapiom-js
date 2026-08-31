@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "truncated-context",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "producer",
+      "targetAgentId": "consumer"
+    }
+  ],
+  "forbiddenFeeds": []
+}

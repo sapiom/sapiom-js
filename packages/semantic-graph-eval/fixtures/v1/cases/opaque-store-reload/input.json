@@ -1,0 +1,134 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "opaque-store-reload",
+  "role": "calibration",
+  "categories": [
+    "opaque-store-reload",
+    "positive"
+  ],
+  "project": {
+    "projectId": "project:opaque-store-reload",
+    "projectSnapshotDigest": "sha256:9c38e3652731fd923cc1e079b8766d11f76a6d74228372fc4f2fe39394649cee"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:ee497e71807c39347cb8607f5583a1bca75bd3474726a5aec6d4ae67ed1252be"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "collector",
+        "identityStatus": "canonical",
+        "path": "agents/collector",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "writer",
+        "identityStatus": "canonical",
+        "path": "agents/writer",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:a0e0c9c4ff3ad3d06f61bb45fe4af79fdead00ce8ab952d70ae3976f2a250286",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:ee497e71807c39347cb8607f5583a1bca75bd3474726a5aec6d4ae67ed1252be"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:0becf4418c92025af2eff2d750f973497d865cffb46c106ecd06047662ca0534",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "collector",
+      "name": "Collector",
+      "facts": [
+        {
+          "ref": "fact:collector:output:0",
+          "kind": "output",
+          "text": "Normalized dossier stored behind an opaque job key."
+        },
+        {
+          "ref": "fact:collector:responsibility",
+          "kind": "responsibility",
+          "text": "Normalizes research into a dossier stored by job key."
+        }
+      ]
+    },
+    {
+      "agentId": "writer",
+      "name": "Writer",
+      "facts": [
+        {
+          "ref": "fact:writer:input:0",
+          "kind": "input",
+          "text": "Normalized dossier loaded from the opaque store."
+        },
+        {
+          "ref": "fact:writer:responsibility",
+          "kind": "responsibility",
+          "text": "Loads a normalized dossier by job key and drafts copy."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [
+    {
+      "ref": "context:opaque-store-reload:0",
+      "kind": "shared-context",
+      "text": "A job key is preserved across the project workflow."
+    }
+  ],
+  "coverageGaps": [
+    {
+      "ref": "gap:opaque-store-reload:0",
+      "code": "opaque-store",
+      "agentIds": [
+        "collector",
+        "writer"
+      ],
+      "description": "The store/load API hides the value path from static analysis."
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "ref": "source:collector:store",
+      "agentId": "collector",
+      "language": "typescript",
+      "path": "agents/collector/index.ts",
+      "content": "await dossierStore.put(jobKey, normalizedDossier);"
+    },
+    {
+      "ref": "source:writer:load",
+      "agentId": "writer",
+      "language": "typescript",
+      "path": "agents/writer/index.ts",
+      "content": "const dossier = await dossierStore.get(jobKey);"
+    }
+  ]
+}

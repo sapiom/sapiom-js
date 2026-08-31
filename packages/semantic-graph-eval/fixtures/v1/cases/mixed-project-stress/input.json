@@ -1,0 +1,248 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "mixed-project-stress",
+  "role": "holdout",
+  "categories": [
+    "mixed-project",
+    "negative",
+    "positive"
+  ],
+  "project": {
+    "projectId": "project:mixed-project-stress",
+    "projectSnapshotDigest": "sha256:57fd2ef08a3f61cd25e946e16e62943f286be8c1edf67f5b170aae4da6864d9d"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:6a0d92ba2552c19db8ac44379cfa64208ab182ffc18587e4a282f4ea97d09b58"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "billing",
+        "identityStatus": "canonical",
+        "path": "agents/billing",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "orchestrator",
+        "identityStatus": "canonical",
+        "path": "agents/orchestrator",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "outreach",
+        "identityStatus": "canonical",
+        "path": "agents/outreach",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "research",
+        "identityStatus": "canonical",
+        "path": "agents/research",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "segmenter",
+        "identityStatus": "canonical",
+        "path": "agents/segmenter",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:faa8bd0c2e378d2e2d6885169ae8e709e9c26da76d9bc7bb7221e199eea9872e",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:6a0d92ba2552c19db8ac44379cfa64208ab182ffc18587e4a282f4ea97d09b58"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:bf7b2411937d778af152228725e6c528c775441f714a1189da0185fbe1a23499",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "fromAgentKey": "orchestrator",
+        "toAgentKey": "billing",
+        "relation": "invokes",
+        "basis": "static-invocation",
+        "mode": "blocking",
+        "callsites": [
+          {
+            "kind": "source-callsite",
+            "ref": "callsite:mixed-project-stress:orchestrator:billing"
+          }
+        ],
+        "evidenceId": "sha256:022bd980b59796f02bd9963a6aa418231cc9d72013be70a54744d8016d1b5299"
+      },
+      {
+        "fromAgentKey": "orchestrator",
+        "toAgentKey": "outreach",
+        "relation": "invokes",
+        "basis": "static-invocation",
+        "mode": "blocking",
+        "callsites": [
+          {
+            "kind": "source-callsite",
+            "ref": "callsite:mixed-project-stress:orchestrator:outreach"
+          }
+        ],
+        "evidenceId": "sha256:bd3bc400fca4d07ce9e787ded1b0e436b5983fe4b8518378e4f36cfd985ab30c"
+      },
+      {
+        "fromAgentKey": "orchestrator",
+        "toAgentKey": "research",
+        "relation": "invokes",
+        "basis": "static-invocation",
+        "mode": "blocking",
+        "callsites": [
+          {
+            "kind": "source-callsite",
+            "ref": "callsite:mixed-project-stress:orchestrator:research"
+          }
+        ],
+        "evidenceId": "sha256:842e459722449ced338fb8ee29a78d4a8d35d4834d7f3c27e67689678bcf6682"
+      },
+      {
+        "fromAgentKey": "orchestrator",
+        "toAgentKey": "segmenter",
+        "relation": "invokes",
+        "basis": "static-invocation",
+        "mode": "blocking",
+        "callsites": [
+          {
+            "kind": "source-callsite",
+            "ref": "callsite:mixed-project-stress:orchestrator:segmenter"
+          }
+        ],
+        "evidenceId": "sha256:96888de17df364831a35d3bffaf50ca272c1e3b557158f75b039467144a9f8a8"
+      }
+    ],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "billing",
+      "name": "Billing",
+      "facts": [
+        {
+          "ref": "fact:billing:responsibility",
+          "kind": "responsibility",
+          "text": "Creates invoices independently."
+        }
+      ]
+    },
+    {
+      "agentId": "orchestrator",
+      "name": "Orchestrator",
+      "facts": [
+        {
+          "ref": "fact:orchestrator:responsibility",
+          "kind": "responsibility",
+          "text": "Invokes all project agents."
+        }
+      ]
+    },
+    {
+      "agentId": "outreach",
+      "name": "Outreach",
+      "facts": [
+        {
+          "ref": "fact:outreach:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes audience segments."
+        }
+      ]
+    },
+    {
+      "agentId": "research",
+      "name": "Research",
+      "facts": [
+        {
+          "ref": "fact:research:responsibility",
+          "kind": "responsibility",
+          "text": "Stores normalized research."
+        }
+      ]
+    },
+    {
+      "agentId": "segmenter",
+      "name": "Segmenter",
+      "facts": [
+        {
+          "ref": "fact:segmenter:responsibility",
+          "kind": "responsibility",
+          "text": "Loads research and stores segments."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [
+    {
+      "ref": "context:mixed-project-stress:0",
+      "kind": "shared-context",
+      "text": "Research and campaign work share a synthetic project run ID."
+    }
+  ],
+  "coverageGaps": [
+    {
+      "ref": "gap:mixed-project-stress:0",
+      "code": "opaque-store",
+      "agentIds": [
+        "outreach",
+        "research",
+        "segmenter"
+      ],
+      "description": "Two opaque handoffs remain after direct invocations are proven."
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "ref": "source:outreach:segment-load",
+      "agentId": "outreach",
+      "language": "typescript",
+      "path": "agents/outreach/index.ts",
+      "content": "const segments = await segmentStore.get(runId);"
+    },
+    {
+      "ref": "source:research:store",
+      "agentId": "research",
+      "language": "typescript",
+      "path": "agents/research/index.ts",
+      "content": "await researchStore.put(runId, normalizedResearch);"
+    },
+    {
+      "ref": "source:segmenter:research-load",
+      "agentId": "segmenter",
+      "language": "typescript",
+      "path": "agents/segmenter/index.ts",
+      "content": "const research = await researchStore.get(runId);"
+    },
+    {
+      "ref": "source:segmenter:segment-store",
+      "agentId": "segmenter",
+      "language": "typescript",
+      "path": "agents/segmenter/index.ts",
+      "content": "await segmentStore.put(runId, deriveSegments(research));"
+    }
+  ]
+}

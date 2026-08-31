@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "adversarial-validation",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "beta",
+      "targetAgentId": "gamma"
+    }
+  ],
+  "forbiddenFeeds": []
+}

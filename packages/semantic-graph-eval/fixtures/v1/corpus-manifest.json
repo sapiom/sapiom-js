@@ -1,0 +1,205 @@
+{
+  "protocol": "semantic-graph-eval.manifest/1",
+  "cases": [
+    {
+      "fixtureId": "adversarial-validation",
+      "role": "calibration",
+      "categories": [
+        "adversarial",
+        "validation"
+      ],
+      "inputFingerprint": "sha256:5e2be73f32cb2cb7e711413878bec21e1c85dbbe9c19b8eac9025b4b5b776885",
+      "oracleFingerprint": "sha256:2ca5719d284c7fe9d5fa9515264675ee249dad84423eca38abdc9bd2bb008139",
+      "providerResponseFingerprint": "sha256:7b5eda14fdeb69ab52df0d88adbd24ac180d3743f3cd8b10ecfcb8076ad272f6"
+    },
+    {
+      "fixtureId": "complete-abstention",
+      "role": "calibration",
+      "categories": [
+        "abstention",
+        "negative"
+      ],
+      "inputFingerprint": "sha256:18dfe180dcb5bff90425c46b5ffb7318dbabff77a2dd63a7a462cdb7004a4aa3",
+      "oracleFingerprint": "sha256:3e8fc91352ecdbfd77beeab5423ecd19f9153aaa842e07e1a5d9020eca932f54",
+      "providerResponseFingerprint": "sha256:48a0ac1897321ad3116559816f1fa87fbd24450a0c019d3d702b1e43fbe88f40"
+    },
+    {
+      "fixtureId": "dynamic-derived-routing",
+      "role": "holdout",
+      "categories": [
+        "dynamic-routing",
+        "positive"
+      ],
+      "inputFingerprint": "sha256:470f19f749df5351a95294c0a7176ee8c4cbacc2f4db0ced3f88d2d0ed95bbb2",
+      "oracleFingerprint": "sha256:ae0e1a5f2fb628e5625e11ea470d5d32ac998fbc46c506e603587dd36d1046e8",
+      "providerResponseFingerprint": "sha256:452575ffeb40014cac475b9aa3555233b8f5c2173dc910900d5745ea17936ef5"
+    },
+    {
+      "fixtureId": "external-handoff",
+      "role": "calibration",
+      "categories": [
+        "external-handoff",
+        "positive"
+      ],
+      "inputFingerprint": "sha256:3d8b083043094641ea75d6a655ab31d2dac19f178945c17035e3522f48b154b0",
+      "oracleFingerprint": "sha256:b6761abceaad730516d5d4d350d0e872d42cb327c1f5e302e5bfffc2fd192fe0",
+      "providerResponseFingerprint": "sha256:2b1905782fd46f47424e146e44ded742c6c7c413802bd6ee809b9819e19a68b5"
+    },
+    {
+      "fixtureId": "fabricated-support-reference",
+      "role": "calibration",
+      "categories": [
+        "adversarial",
+        "fabricated-support-reference"
+      ],
+      "inputFingerprint": "sha256:0037350fdddd2af0a655b056936417f8e330ebd3863b615470ced44a18341031",
+      "oracleFingerprint": "sha256:d95a9b6a835ac55000354c5685d9f659849d63e20e81e945e5eee210c86b3f4c",
+      "providerResponseFingerprint": "sha256:1e1bfcd66e9c5308b9fd3376f6f329f7d7d4eb174ea8e43b102c740f3f308591"
+    },
+    {
+      "fixtureId": "invented-endpoint",
+      "role": "calibration",
+      "categories": [
+        "adversarial",
+        "invented-endpoint"
+      ],
+      "inputFingerprint": "sha256:d179320c3155a1ca8a6678a4f6313ed202c721ef559f022df324db185f1e112e",
+      "oracleFingerprint": "sha256:c38b9582dc0719155a4c8224ffc421a57e3127c656b8f9a9f372397b7a90385c",
+      "providerResponseFingerprint": "sha256:c1155e1fa93e4809798f7c93e7e26f1b7973ac13ca787ffd71062c51be4e8c66"
+    },
+    {
+      "fixtureId": "malformed-output",
+      "role": "calibration",
+      "categories": [
+        "adversarial",
+        "malformed-output"
+      ],
+      "inputFingerprint": "sha256:1f543915a6f2cab451a7eae4894e6ae00fce44c0438cd94a305d139e67042635",
+      "oracleFingerprint": "sha256:28c3d98933d477db8bafaa7abeddbc5537c52916e3de159cc5dab3c8f489b943",
+      "providerResponseFingerprint": "sha256:bcb0ef2d958c42fd218be9677e8533a14085cc91bb98d8a691abb5a987325094"
+    },
+    {
+      "fixtureId": "mixed-project-stress",
+      "role": "holdout",
+      "categories": [
+        "mixed-project",
+        "negative",
+        "positive"
+      ],
+      "inputFingerprint": "sha256:f1ee1cfa47507363aa07b156e30cd6a20f34ae42ba6dcd9aeb0869bd442df8ce",
+      "oracleFingerprint": "sha256:b8b0f63f48cfdc6d05381e9f22005799112899565c845f8c8249f102aabf8cfd",
+      "providerResponseFingerprint": "sha256:f5f798a4192761a170eff8fa694496366936af98680d6110fa70f759a1e40822"
+    },
+    {
+      "fixtureId": "opaque-store-reload",
+      "role": "calibration",
+      "categories": [
+        "opaque-store-reload",
+        "positive"
+      ],
+      "inputFingerprint": "sha256:50ad876d758de87825ad3e1d53c35953d5e00d364144821ee8d4b1ee8cfc2b35",
+      "oracleFingerprint": "sha256:8bcb47f492595118102c910e26866b0333ca70a5774e91dbeb3944a9d50acc3b",
+      "providerResponseFingerprint": "sha256:909fc27abc835fa3b7bea5ca3c20e1ebdfb0f53b29bc6d894a559d9be24a9667"
+    },
+    {
+      "fixtureId": "prompt-injection-excerpt",
+      "role": "holdout",
+      "categories": [
+        "adversarial",
+        "positive",
+        "prompt-injection"
+      ],
+      "inputFingerprint": "sha256:f4d3729af6bba81a5108d17aeed5aca6ee652189763f5b770fb11469e5a5ca71",
+      "oracleFingerprint": "sha256:2a55c4b65b84105e1aa66ef912448017a4d2993f07265b5e5e14abf567215802",
+      "providerResponseFingerprint": "sha256:36ea6f24eaa3a629e00c33c9fff205c1a2f86ff9068a7bfaecfd18fd4d2f1175"
+    },
+    {
+      "fixtureId": "provider-failure",
+      "role": "calibration",
+      "categories": [
+        "provider-failure",
+        "resilience"
+      ],
+      "inputFingerprint": "sha256:8ef12a282eb117b9f5a023847285562e9b0c99d2a7325f1c6bc0a499e70c8bf5",
+      "oracleFingerprint": "sha256:909f45c19f5e0239e786c4357a9f30a76bf2ca55c0b370577da31572b3db49c3",
+      "providerResponseFingerprint": "sha256:596e7ae7116083aaf73a5cec8756926d42f02348dceda9ebfacaca3595ecba2b"
+    },
+    {
+      "fixtureId": "shared-capability-only",
+      "role": "calibration",
+      "categories": [
+        "negative",
+        "shared-capability"
+      ],
+      "inputFingerprint": "sha256:bf39987544ee67bf0cc59b8389ee03da2b0e2cc7b4480a9e7f5edf5bf8a9f6ca",
+      "oracleFingerprint": "sha256:a25b7176ca9b23774bbfbb80efebf1c745ecaf9f5455303c265fad60fb5085c4",
+      "providerResponseFingerprint": "sha256:d75458cc6dae56ea40c99ded43f270ff69ccfe4e73a62b9f4cefa2416784599c"
+    },
+    {
+      "fixtureId": "sibling-invocations-no-flow",
+      "role": "calibration",
+      "categories": [
+        "negative",
+        "sibling-invocations"
+      ],
+      "inputFingerprint": "sha256:ce89a3b166be74132eee7e96da56cd46677904afb636d7c0f27ebbaf1a1a97cd",
+      "oracleFingerprint": "sha256:773fb09a0b7589936520440194bc0184648513326b27dc713c6dffce4af3a027",
+      "providerResponseFingerprint": "sha256:133f84dd0facfc50fe0fbd8872649a2ea8d027d9d131ac476891ea9424666e78"
+    },
+    {
+      "fixtureId": "similar-schema-only",
+      "role": "holdout",
+      "categories": [
+        "negative",
+        "similar-schema"
+      ],
+      "inputFingerprint": "sha256:be0e1f63c0896345d9aff686eddc4d120c2900f642575f4aabff3dfb115db372",
+      "oracleFingerprint": "sha256:db144127b77305171c3183625003dcebeb3dd4c2ee49db0d0439a1b9fe834e2b",
+      "providerResponseFingerprint": "sha256:558fd4c13bc41f60fa375adccc883a438a4da7ceb6417caf92dba7cec6351534"
+    },
+    {
+      "fixtureId": "transformed-information",
+      "role": "holdout",
+      "categories": [
+        "positive",
+        "transformation"
+      ],
+      "inputFingerprint": "sha256:77fd555cb49f5f9c1c9a0b33433b13586aa2b9770cac7cd3f46047f31a9b01ec",
+      "oracleFingerprint": "sha256:0b90f21bf464acfa3ecf556f14f02d60b1c2477d00f12436ebd17bdcd59d13e8",
+      "providerResponseFingerprint": "sha256:92ec10fde8c1add6ddef7abd8aac49c2087c6883f3e9ac9469e97b44941aee4e"
+    },
+    {
+      "fixtureId": "truncated-context",
+      "role": "holdout",
+      "categories": [
+        "positive",
+        "truncated-context"
+      ],
+      "inputFingerprint": "sha256:6c0ee59e7ac534afdb11e31c6adfe008c8688fca148abd853b3790029c617a29",
+      "oracleFingerprint": "sha256:9f756b1aaf37216d66892a5ebcb9169dcb36f33d18a6b3373b5482bce1d72bf4",
+      "providerResponseFingerprint": "sha256:1b267083797641a8152aa02467a74a235c072d1106c9551bc8d0cbd0b53ce9ad"
+    },
+    {
+      "fixtureId": "unrelated-agents",
+      "role": "holdout",
+      "categories": [
+        "negative",
+        "unrelated-agents"
+      ],
+      "inputFingerprint": "sha256:dc49a560b5a84405f3e77b9ccdc2746b80de4558c2b0ae73d2ece7290d4b8539",
+      "oracleFingerprint": "sha256:dcd3a4f6d6bb35ab11df6ac5ab9408ab4bda5d96dee3f98844be92838345c0b5",
+      "providerResponseFingerprint": "sha256:e38228afe62e975d5a7ab3119f6984938066f42a2bb936786694de2dfc5cfb7e"
+    },
+    {
+      "fixtureId": "unsupported-cycle",
+      "role": "holdout",
+      "categories": [
+        "negative",
+        "unsupported-cycle"
+      ],
+      "inputFingerprint": "sha256:9fcb5f6e82694fdf08d3e2077cef2d9908959a55235d1a7e3eddf14e5e7fa85f",
+      "oracleFingerprint": "sha256:0db1eedb1ec35f3757d154314a9223d43016f922e72308ec1398bb0a76704666",
+      "providerResponseFingerprint": "sha256:f122e5c1f92d01febc69e51a7b7508fa86f63e426336ba1eb3ccbcc9285b1f67"
+    }
+  ]
+}

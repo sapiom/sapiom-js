@@ -1,0 +1,7 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "malformed-output",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": []
+}

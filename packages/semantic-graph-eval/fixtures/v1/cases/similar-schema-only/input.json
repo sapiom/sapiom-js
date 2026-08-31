@@ -1,0 +1,113 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "similar-schema-only",
+  "role": "holdout",
+  "categories": [
+    "negative",
+    "similar-schema"
+  ],
+  "project": {
+    "projectId": "project:similar-schema-only",
+    "projectSnapshotDigest": "sha256:c04a91988022a8cfbf65e2faa3c159ae00c19ed658c1b9928bd19174b486395f"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:5f53b8f7ec1b3743c88a498046b56f1de65f96720ca8da8eae4774fcddfab5fa"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "fraud-check",
+        "identityStatus": "canonical",
+        "path": "agents/fraud-check",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "profile-builder",
+        "identityStatus": "canonical",
+        "path": "agents/profile-builder",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:8d3f16c41afa7e1dbb64f59a468dd7706aed746e9b38f79ff1b35bcd62222a41",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:5f53b8f7ec1b3743c88a498046b56f1de65f96720ca8da8eae4774fcddfab5fa"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:2e41432722cf0657392cd934517d6d43e9a6b32d01839df69523719babd25dd5",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "fraud-check",
+      "name": "Fraud Check",
+      "facts": [
+        {
+          "ref": "fact:fraud-check:output:0",
+          "kind": "output",
+          "text": "CustomerSummary schema."
+        },
+        {
+          "ref": "fact:fraud-check:responsibility",
+          "kind": "responsibility",
+          "text": "Builds an independent customer summary for risk checks."
+        }
+      ]
+    },
+    {
+      "agentId": "profile-builder",
+      "name": "Profile Builder",
+      "facts": [
+        {
+          "ref": "fact:profile-builder:output:0",
+          "kind": "output",
+          "text": "CustomerSummary schema."
+        },
+        {
+          "ref": "fact:profile-builder:responsibility",
+          "kind": "responsibility",
+          "text": "Builds a customer summary from profile fields."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:similar-schema-only:0",
+      "code": "other",
+      "agentIds": [
+        "fraud-check",
+        "profile-builder"
+      ],
+      "description": "Matching output schemas are independently constructed."
+    }
+  ],
+  "sourceExcerpts": []
+}

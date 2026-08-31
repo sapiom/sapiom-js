@@ -1,0 +1,113 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "shared-capability-only",
+  "role": "calibration",
+  "categories": [
+    "negative",
+    "shared-capability"
+  ],
+  "project": {
+    "projectId": "project:shared-capability-only",
+    "projectSnapshotDigest": "sha256:8ccbe5ea845e188d573455b475978a5212797fc68d2fce956550724acdc2a91c"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:0106132af8ddbf536e275ed30a7eaa93deac5261dd7b2f38c997392791d0d72a"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "billing",
+        "identityStatus": "canonical",
+        "path": "agents/billing",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "support",
+        "identityStatus": "canonical",
+        "path": "agents/support",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:8eedb1f8e0f3bcdb10e7f778b09482addc0f0f61e29a0987415bcbd3385d3454",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:0106132af8ddbf536e275ed30a7eaa93deac5261dd7b2f38c997392791d0d72a"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:6b08d275224132e00c5bf41b9d3a947d07b1b1de282c05b7b1e9f84a7a91be6c",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "billing",
+      "name": "Billing",
+      "facts": [
+        {
+          "ref": "fact:billing:capability:0",
+          "kind": "capability",
+          "text": "Stripe API."
+        },
+        {
+          "ref": "fact:billing:responsibility",
+          "kind": "responsibility",
+          "text": "Creates invoices."
+        }
+      ]
+    },
+    {
+      "agentId": "support",
+      "name": "Support",
+      "facts": [
+        {
+          "ref": "fact:support:capability:0",
+          "kind": "capability",
+          "text": "Stripe API."
+        },
+        {
+          "ref": "fact:support:responsibility",
+          "kind": "responsibility",
+          "text": "Looks up payment status for support replies."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:shared-capability-only:0",
+      "code": "other",
+      "agentIds": [
+        "billing",
+        "support"
+      ],
+      "description": "Shared capability use is not evidence of information flow."
+    }
+  ],
+  "sourceExcerpts": []
+}

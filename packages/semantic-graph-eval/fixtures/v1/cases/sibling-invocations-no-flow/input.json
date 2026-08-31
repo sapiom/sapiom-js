@@ -1,0 +1,149 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "sibling-invocations-no-flow",
+  "role": "calibration",
+  "categories": [
+    "negative",
+    "sibling-invocations"
+  ],
+  "project": {
+    "projectId": "project:sibling-invocations-no-flow",
+    "projectSnapshotDigest": "sha256:71cbeedb4e3b9185de1fa43c478da9f9c3c8a100733b3ef117f5172de6ebb71f"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:05ece36ed9cbb1b9e9977cc6857f11b99c56bef1886aa264700e20dfc3061c79"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "coordinator",
+        "identityStatus": "canonical",
+        "path": "agents/coordinator",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "growth",
+        "identityStatus": "canonical",
+        "path": "agents/growth",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "research",
+        "identityStatus": "canonical",
+        "path": "agents/research",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:ba93e87bb50aa482f081e126cd911837f4124e6be8809697250360ad985cd6bc",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:05ece36ed9cbb1b9e9977cc6857f11b99c56bef1886aa264700e20dfc3061c79"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:fca316db584895e98d0414b3b02277a0d5ceacf710af1bfb48f56dad66b3eae7",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "fromAgentKey": "coordinator",
+        "toAgentKey": "growth",
+        "relation": "invokes",
+        "basis": "static-invocation",
+        "mode": "blocking",
+        "callsites": [
+          {
+            "kind": "source-callsite",
+            "ref": "callsite:sibling-invocations-no-flow:coordinator:growth"
+          }
+        ],
+        "evidenceId": "sha256:01f43411c02b08baa9e3287057de5588aaf573678a851061c8e914fbf177546c"
+      },
+      {
+        "fromAgentKey": "coordinator",
+        "toAgentKey": "research",
+        "relation": "invokes",
+        "basis": "static-invocation",
+        "mode": "blocking",
+        "callsites": [
+          {
+            "kind": "source-callsite",
+            "ref": "callsite:sibling-invocations-no-flow:coordinator:research"
+          }
+        ],
+        "evidenceId": "sha256:f607e15b784feab9f05d1140a240ad5d6aabced1af9f622117a5184f44cd135e"
+      }
+    ],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "coordinator",
+      "name": "Coordinator",
+      "facts": [
+        {
+          "ref": "fact:coordinator:responsibility",
+          "kind": "responsibility",
+          "text": "Invokes two independent specialist agents."
+        }
+      ]
+    },
+    {
+      "agentId": "growth",
+      "name": "Growth",
+      "facts": [
+        {
+          "ref": "fact:growth:responsibility",
+          "kind": "responsibility",
+          "text": "Returns an independent channel plan to Coordinator."
+        }
+      ]
+    },
+    {
+      "agentId": "research",
+      "name": "Research",
+      "facts": [
+        {
+          "ref": "fact:research:responsibility",
+          "kind": "responsibility",
+          "text": "Returns independent research to Coordinator."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:sibling-invocations-no-flow:0",
+      "code": "other",
+      "agentIds": [
+        "growth",
+        "research"
+      ],
+      "description": "Sibling invocation does not establish lateral flow."
+    }
+  ],
+  "sourceExcerpts": []
+}

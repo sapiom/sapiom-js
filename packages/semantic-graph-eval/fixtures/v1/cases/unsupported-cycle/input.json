@@ -1,0 +1,103 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "unsupported-cycle",
+  "role": "holdout",
+  "categories": [
+    "negative",
+    "unsupported-cycle"
+  ],
+  "project": {
+    "projectId": "project:unsupported-cycle",
+    "projectSnapshotDigest": "sha256:d1541728201ea20a2589b64d9755d0c28ea69703c48e5397edc95cc4cb60de14"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:a1b202a0a2217376d8adf12399812ac26bcc3c41d9fd8fe92f546fdaace0ae5b"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "planner",
+        "identityStatus": "canonical",
+        "path": "agents/planner",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "reviewer",
+        "identityStatus": "canonical",
+        "path": "agents/reviewer",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:edf7a26699fca360c4224c1e2ed08683041c55d50ca87227f92fba69c8938640",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:a1b202a0a2217376d8adf12399812ac26bcc3c41d9fd8fe92f546fdaace0ae5b"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:621e77454b634cc58b5f49a9d8266d60bac7503583cb87d9d352c5fda5d2fe20",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "planner",
+      "name": "Planner",
+      "facts": [
+        {
+          "ref": "fact:planner:responsibility",
+          "kind": "responsibility",
+          "text": "Creates a plan from the project brief."
+        }
+      ]
+    },
+    {
+      "agentId": "reviewer",
+      "name": "Reviewer",
+      "facts": [
+        {
+          "ref": "fact:reviewer:responsibility",
+          "kind": "responsibility",
+          "text": "Reviews the original brief independently."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:unsupported-cycle:0",
+      "code": "other",
+      "agentIds": [
+        "planner",
+        "reviewer"
+      ],
+      "description": "No evidence supports a feedback cycle."
+    }
+  ],
+  "sourceExcerpts": []
+}

@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "fabricated-support-reference",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "alpha",
+      "targetAgentId": "beta"
+    }
+  ],
+  "forbiddenFeeds": []
+}

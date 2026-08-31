@@ -1,0 +1,18 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "similar-schema-only",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "fraud-check",
+      "targetAgentId": "profile-builder",
+      "category": "similar-schema"
+    },
+    {
+      "sourceAgentId": "profile-builder",
+      "targetAgentId": "fraud-check",
+      "category": "similar-schema"
+    }
+  ]
+}

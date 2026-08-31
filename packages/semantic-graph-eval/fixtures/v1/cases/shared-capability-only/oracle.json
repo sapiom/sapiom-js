@@ -1,0 +1,18 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "shared-capability-only",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "billing",
+      "targetAgentId": "support",
+      "category": "shared-capability"
+    },
+    {
+      "sourceAgentId": "support",
+      "targetAgentId": "billing",
+      "category": "shared-capability"
+    }
+  ]
+}

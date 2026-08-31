@@ -1,0 +1,128 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "dynamic-derived-routing",
+  "role": "holdout",
+  "categories": [
+    "dynamic-routing",
+    "positive"
+  ],
+  "project": {
+    "projectId": "project:dynamic-derived-routing",
+    "projectSnapshotDigest": "sha256:c048f61133ace1547369a3cc68c2dd3a3019478f2c5543ef9b76519472496ac6"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:cc0a49fdfa69f8998fe8dc0e544832ce7f7eaa502c470983d31c3f5c6ff576f9"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "growth",
+        "identityStatus": "canonical",
+        "path": "agents/growth",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "research",
+        "identityStatus": "canonical",
+        "path": "agents/research",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:b01101bea08ac40beff7e5732e4a6b1a93d1f2588d5121d3760bd97faff1dba0",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:cc0a49fdfa69f8998fe8dc0e544832ce7f7eaa502c470983d31c3f5c6ff576f9"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:7a6cbbfb5268da2d90f80088d4af168468425bdbca8995949959f3ff6c37d907",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "growth",
+      "name": "Growth",
+      "facts": [
+        {
+          "ref": "fact:growth:input:0",
+          "kind": "input",
+          "text": "Derived audience segment."
+        },
+        {
+          "ref": "fact:growth:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes routed audience segments to plan campaigns."
+        }
+      ]
+    },
+    {
+      "agentId": "research",
+      "name": "Research",
+      "facts": [
+        {
+          "ref": "fact:research:output:0",
+          "kind": "output",
+          "text": "Derived audience segment."
+        },
+        {
+          "ref": "fact:research:responsibility",
+          "kind": "responsibility",
+          "text": "Derives audience segments and publishes to a runtime-selected topic."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:dynamic-derived-routing:0",
+      "code": "dynamic-routing",
+      "agentIds": [
+        "growth",
+        "research"
+      ],
+      "description": "The destination topic is selected from configuration at runtime."
+    }
+  ],
+  "sourceExcerpts": [
+    {
+      "ref": "source:growth:subscribe",
+      "agentId": "growth",
+      "language": "typescript",
+      "path": "agents/growth/index.ts",
+      "content": "bus.subscribe(settings.segmentTopic, planCampaign);"
+    },
+    {
+      "ref": "source:research:publish",
+      "agentId": "research",
+      "language": "typescript",
+      "path": "agents/research/index.ts",
+      "content": "await bus.publish(config.segmentTopic, derivedSegments);"
+    }
+  ]
+}

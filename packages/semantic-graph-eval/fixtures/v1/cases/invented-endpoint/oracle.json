@@ -1,0 +1,13 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "invented-endpoint",
+  "expectedOutcome": "abstained",
+  "expectedFeeds": [],
+  "forbiddenFeeds": [
+    {
+      "sourceAgentId": "collector",
+      "targetAgentId": "ghost-agent",
+      "category": "invented-endpoint"
+    }
+  ]
+}

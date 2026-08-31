@@ -1,0 +1,103 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "fabricated-support-reference",
+  "role": "calibration",
+  "categories": [
+    "adversarial",
+    "fabricated-support-reference"
+  ],
+  "project": {
+    "projectId": "project:fabricated-support-reference",
+    "projectSnapshotDigest": "sha256:1a6e61e4c8e15fa7047a7ce44ddc92a5d0893665708318b1fab4aa263c135cc9"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:38837e751601baf2555b8b43889b1856f6437646067d66e53054611fe7209467"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "alpha",
+        "identityStatus": "canonical",
+        "path": "agents/alpha",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "beta",
+        "identityStatus": "canonical",
+        "path": "agents/beta",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:e7a5440993646a651459af8177befdddafc6604fc1993adcd1ab8019abfef70c",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:38837e751601baf2555b8b43889b1856f6437646067d66e53054611fe7209467"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:e9b7e2eb96209485903309640f1f8d8ba08fd962107a4a013180ebe1c54d5d29",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "alpha",
+      "name": "Alpha",
+      "facts": [
+        {
+          "ref": "fact:alpha:responsibility",
+          "kind": "responsibility",
+          "text": "Produces facts."
+        }
+      ]
+    },
+    {
+      "agentId": "beta",
+      "name": "Beta",
+      "facts": [
+        {
+          "ref": "fact:beta:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes facts."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:fabricated-support-reference:0",
+      "code": "other",
+      "agentIds": [
+        "alpha",
+        "beta"
+      ],
+      "description": "A plausible relationship cites a reference absent from the packet."
+    }
+  ],
+  "sourceExcerpts": []
+}

@@ -1,0 +1,12 @@
+{
+  "protocol": "semantic-graph-eval.oracle/1",
+  "fixtureId": "dynamic-derived-routing",
+  "expectedOutcome": "proposals",
+  "expectedFeeds": [
+    {
+      "sourceAgentId": "research",
+      "targetAgentId": "growth"
+    }
+  ],
+  "forbiddenFeeds": []
+}

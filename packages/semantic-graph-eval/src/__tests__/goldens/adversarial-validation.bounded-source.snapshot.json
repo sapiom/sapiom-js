@@ -1,0 +1,50 @@
+{
+  "protocol": "semantic-graph-eval.snapshot/1",
+  "fixtureId": "adversarial-validation",
+  "configurationId": "bounded-source.v1",
+  "inputFingerprint": "sha256:5e2be73f32cb2cb7e711413878bec21e1c85dbbe9c19b8eac9025b4b5b776885",
+  "configurationFingerprint": "sha256:10315d409616dae41417f8432b142b4686306f220d0fd9b992ddc15f743121f2",
+  "attemptStatus": "accepted",
+  "providerErrorCode": null,
+  "outcome": "partial",
+  "accepted": [
+    {
+      "relationship": "feeds",
+      "sourceAgentId": "beta",
+      "targetAgentId": "gamma",
+      "explanation": "Gamma consumes Beta's transformed facts.",
+      "supportRefs": [
+        "fact:beta:responsibility",
+        "fact:gamma:responsibility"
+      ],
+      "candidateId": "sha256:bf751f4a918f7ced09010612ff45b5953711e0fdb73fdade4f72a36b2d087b76"
+    }
+  ],
+  "rejected": [
+    {
+      "index": 0,
+      "code": "already-proven",
+      "candidateFingerprint": "sha256:ab0f744a492feaa2f9ac18baa698893d1132bd1a2ef6c8736999fa916f880024"
+    },
+    {
+      "index": 1,
+      "code": "self-link",
+      "candidateFingerprint": "sha256:b61257e9e3fec5114f3546e0ffcd2c0df0aafaa5e78b113fe042e9915bae0174"
+    },
+    {
+      "index": 2,
+      "code": "unknown-endpoint",
+      "candidateFingerprint": "sha256:b4fd0a2f054b9e69159f16082e56a3bab112b6b53590b964b6c0fd8d11846b2e"
+    },
+    {
+      "index": 4,
+      "code": "duplicate-candidate",
+      "candidateFingerprint": "sha256:203320f9a4a551025e7f848a5140f59f443ac4d276da129942f9e3ae3677fa6c"
+    },
+    {
+      "index": 5,
+      "code": "invalid-candidate",
+      "candidateFingerprint": "sha256:f425d6963a7785948a10fb98364d45330e95b426d53701763ec86ad8d2d6c078"
+    }
+  ]
+}

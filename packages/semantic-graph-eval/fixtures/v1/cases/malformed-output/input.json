@@ -1,0 +1,103 @@
+{
+  "protocol": "semantic-graph-eval.fixture/1",
+  "fixtureId": "malformed-output",
+  "role": "calibration",
+  "categories": [
+    "adversarial",
+    "malformed-output"
+  ],
+  "project": {
+    "projectId": "project:malformed-output",
+    "projectSnapshotDigest": "sha256:b5f7032bdca471de03dbae41ded1f737456d951ff123f91a2c34f549b79ed6a9"
+  },
+  "inventory": {
+    "protocol": 1,
+    "version": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:d59da4b0e0a65d4a77bb5e9a29789f3439e63bf508c29ed85e59366d59546cb0"
+    },
+    "status": "complete",
+    "agents": [
+      {
+        "agentKey": "alpha",
+        "identityStatus": "canonical",
+        "path": "agents/alpha",
+        "entrypoint": "index.ts"
+      },
+      {
+        "agentKey": "beta",
+        "identityStatus": "canonical",
+        "path": "agents/beta",
+        "entrypoint": "index.ts"
+      }
+    ]
+  },
+  "phaseAEvidence": {
+    "protocol": 1,
+    "kind": "static-result",
+    "resultId": "sha256:3cff96bda8d8388f9a82745b354978f2866b1aa9bc6318fec2ffd0a828c3723c",
+    "scope": {
+      "kind": "bundle",
+      "bundleDigest": "sha256:d59da4b0e0a65d4a77bb5e9a29789f3439e63bf508c29ed85e59366d59546cb0"
+    },
+    "producer": {
+      "id": "semantic-graph-eval-fixture",
+      "version": "1"
+    },
+    "analysisFingerprint": "sha256:fb898912377f929812ac8a6bc0f8c4fc11f431b8aaeca1634906ab508d5d16c7",
+    "outcome": "success",
+    "coverage": {
+      "status": "partial",
+      "gaps": [
+        {
+          "code": "opaque-boundary"
+        }
+      ]
+    },
+    "evidence": [],
+    "diagnostics": [
+      {
+        "code": "incomplete-analysis",
+        "severity": "warning"
+      }
+    ],
+    "quarantine": []
+  },
+  "agentCards": [
+    {
+      "agentId": "alpha",
+      "name": "Alpha",
+      "facts": [
+        {
+          "ref": "fact:alpha:responsibility",
+          "kind": "responsibility",
+          "text": "Produces facts."
+        }
+      ]
+    },
+    {
+      "agentId": "beta",
+      "name": "Beta",
+      "facts": [
+        {
+          "ref": "fact:beta:responsibility",
+          "kind": "responsibility",
+          "text": "Consumes facts."
+        }
+      ]
+    }
+  ],
+  "sharedContext": [],
+  "coverageGaps": [
+    {
+      "ref": "gap:malformed-output:0",
+      "code": "other",
+      "agentIds": [
+        "alpha",
+        "beta"
+      ],
+      "description": "Provider output is deliberately malformed."
+    }
+  ],
+  "sourceExcerpts": []
+}

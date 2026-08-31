@@ -1,0 +1,99 @@
+{
+  "protocol": "semantic-graph-eval.mock-provider/1",
+  "fixtureId": "transformed-information",
+  "responses": {
+    "facts-only.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "abstained",
+        "candidates": []
+      },
+      "usage": {
+        "inputTokens": 300,
+        "outputTokens": 40,
+        "costUsd": 0,
+        "latencyMs": 10,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "bounded-source.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "complete",
+        "candidates": [
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "scorer",
+            "targetAgentId": "outreach",
+            "explanation": "Outreach loads the priority band produced from Scorer's signals.",
+            "supportRefs": [
+              "source:scorer:band",
+              "source:outreach:band"
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 600,
+        "outputTokens": 80,
+        "costUsd": 0,
+        "latencyMs": 20,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "bounded-source.v2": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "complete",
+        "candidates": [
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "scorer",
+            "targetAgentId": "outreach",
+            "explanation": "Outreach loads the priority band produced from Scorer's signals.",
+            "supportRefs": [
+              "source:scorer:band",
+              "source:outreach:band"
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 600,
+        "outputTokens": 80,
+        "costUsd": 0,
+        "latencyMs": 20,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    },
+    "context-pressure.v1": {
+      "status": "success",
+      "rawResponse": {
+        "outcome": "complete",
+        "candidates": [
+          {
+            "relationship": "feeds",
+            "sourceAgentId": "scorer",
+            "targetAgentId": "outreach",
+            "explanation": "The saved priority band carries Scorer's derived information to Outreach.",
+            "supportRefs": [
+              "source:scorer:band",
+              "source:outreach:band"
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 900,
+        "outputTokens": 120,
+        "costUsd": 0,
+        "latencyMs": 30,
+        "servedClass": "mock",
+        "lane": "deterministic"
+      }
+    }
+  }
+}
