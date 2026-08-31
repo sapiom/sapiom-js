@@ -65,10 +65,10 @@ synchronous exact-reference round trip through an in-memory array or `Map` from
 a direct handoff before the one-turn sidecar expires. Queue/storage exclusion is
 therefore guaranteed only when the boundary changes object identity, crosses a
 timer turn, or invokes an uninstrumented agent boundary (which consumes the
-receipt). This v1 carrier and its client must also resolve through the same CJS
-or ESM package format. Mixed CJS/ESM loading keeps separate closure stores and is
-an explicit remaining integration limitation; using a discoverable global store
-would violate receipt privacy. Both same-format published surfaces are tested.
+receipt). The package's CJS and ESM root/carrier exports route through one
+canonical closure-backed implementation, so supported mixed-format callsites and
+result handoffs share the same private state without a process-global store or
+public extraction/rebinding helpers. All four cross-format directions are tested.
 The SDK treats all carrier values as opaque and exposes no new caller, callee,
 bundle, or execution identity. Missing or unsupported metadata preserves legacy
 behavior.

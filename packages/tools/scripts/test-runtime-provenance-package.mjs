@@ -88,26 +88,84 @@ assert.deepEqual(sensitiveCjsExports, []);
 
 const esmTools = await import("@sapiom/tools");
 const esmCarrier = await import(CARRIER_EXPORT);
+await assert.rejects(
+  import("@sapiom/tools/dist/esm/agents/runtime-callsite-store.js"),
+  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+);
+assert.deepEqual(Object.keys(esmTools).sort(), Object.keys(cjsTools).sort());
+assert.equal(esmTools.createClient, cjsTools.createClient);
+assert.equal(
+  esmCarrier.carryAgentRuntimeProvenance,
+  cjsCarrier.carryAgentRuntimeProvenance,
+);
 await verifySameFormat("esm", esmTools, esmCarrier);
 
-// Mixed CJS/ESM loading intentionally has isolated closure state. Sharing via a
-// discoverable global would make the receipt store consumer-accessible. Pin the
-// documented boundary: mixed-format carrier/client pairs do not forward.
-const mixedServer = fakeAgentServer();
-const mixedClient = esmTools.createClient({
-  apiKey: "k",
-  fetch: mixedServer.fetch,
-});
-await mixedClient.agents.launch(
-  cjsCarrier.carryAgentRuntimeProvenance(
-    { definition: "mixed-consumer" },
-    { version: 1, callsite: "callsite.mixed" },
-  ),
+async function verifyCrossFormatCallsite(label, tools, carrier) {
+  const server = fakeAgentServer();
+  const client = tools.createClient({ apiKey: "k", fetch: server.fetch });
+  await client.agents.launch(
+    carrier.carryAgentRuntimeProvenance(
+      { definition: `${label}-consumer` },
+      { version: 1, callsite: `callsite.${label}` },
+    ),
+  );
+  const post = server.calls.find((call) => call.init.method === "POST");
+  assert.equal(header(post, CALLSITE_HEADER), `callsite.${label}`);
+  await client.shutdown();
+}
+
+async function verifyCrossFormatResult(
+  label,
+  producerTools,
+  consumerTools,
+  consumerCarrier,
+) {
+  const server = fakeAgentServer();
+  const producer = producerTools.createClient({
+    apiKey: "k",
+    fetch: server.fetch,
+  });
+  const consumer = consumerTools.createClient({
+    apiKey: "k",
+    fetch: server.fetch,
+  });
+  for (const target of ["full-result", "output"]) {
+    const result = await producer.agents.run({
+      definition: `${label}-${target}-producer`,
+    });
+    await consumer.agents.run(
+      consumerCarrier.carryAgentRuntimeProvenance(
+        {
+          definition: `${label}-${target}-consumer`,
+          input: target === "full-result" ? result : result.output,
+        },
+        { version: 1, callsite: `callsite.${label}.${target}` },
+      ),
+    );
+    const post = server.calls
+      .filter((call) => call.init.method === "POST")
+      .at(-1);
+    assert.equal(header(post, CALLSITE_HEADER), `callsite.${label}.${target}`);
+    assert.equal(header(post, LINEAGE_HEADER), "signed.package-surface");
+  }
+  await Promise.all([producer.shutdown(), consumer.shutdown()]);
+}
+
+await verifyCrossFormatCallsite("cjs-carrier-esm-client", esmTools, cjsCarrier);
+await verifyCrossFormatCallsite("esm-carrier-cjs-client", cjsTools, esmCarrier);
+await verifyCrossFormatResult(
+  "cjs-result-esm-client",
+  cjsTools,
+  esmTools,
+  esmCarrier,
 );
-const mixedPost = mixedServer.calls.find((call) => call.init.method === "POST");
-assert.equal(header(mixedPost, CALLSITE_HEADER), null);
-await mixedClient.shutdown();
+await verifyCrossFormatResult(
+  "esm-result-cjs-client",
+  esmTools,
+  cjsTools,
+  cjsCarrier,
+);
 
 console.log(
-  "runtime provenance package surfaces: CJS + ESM passed; mixed format isolated",
+  "runtime provenance package surfaces: CJS + ESM and four cross-format paths passed",
 );

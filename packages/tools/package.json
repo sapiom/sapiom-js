@@ -105,8 +105,9 @@
     "@sapiom/analytics-core": "workspace:^"
   },
   "scripts": {
-    "build": "npm run gen:version && npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
+    "build": "npm run gen:version && npm run build:cjs && npm run build:esm && npm run build:canonical-exports && npm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
+    "build:canonical-exports": "node scripts/canonicalize-runtime-provenance-exports.mjs",
     "build:esm": "tsc --project tsconfig.esm.json",
     "build:esm-pkg": "node -e \"require('fs').writeFileSync('dist/esm/package.json',JSON.stringify({type:'module'}))\"",
     "clean": "rm -rf dist *.tsbuildinfo",

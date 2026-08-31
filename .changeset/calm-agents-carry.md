@@ -7,4 +7,5 @@ calls send opaque callsite evidence out of band, terminal results retain an
 SDK-only server receipt, and only exact direct result-to-input handoffs forward
 that receipt through a trusted, one-shot build callsite. Private receipt state is
 not package-exported; reflected values are redacted from errors. Request/result
-JSON and calls without metadata remain unchanged.
+JSON and calls without metadata remain unchanged. CJS and ESM imports share one
+private closure-backed store, including mixed-format direct handoffs.
