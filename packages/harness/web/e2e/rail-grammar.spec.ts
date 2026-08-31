@@ -239,10 +239,19 @@ test.describe("first-run explainer", () => {
   });
 
   test("survives a ui-prefs reset", async ({ page }) => {
-    // The reason this fact is NOT a `ui-prefs` field. `ui-prefs` is the UI's
-    // arrangement — folds, filing, pane widths — and it is a blob a user may
-    // reasonably throw away. Having been taught what a project is must not
-    // come back when the arrangement does.
+    // AN INVARIANT, NOT THE SAP-2991 REGRESSION GUARD — and worth being
+    // explicit about, because the two look alike. This spec passes against
+    // the pre-fix code too: the old flag had its own key
+    // (`sapiom-harness-help-seen`), so clearing `ui-prefs` never touched it.
+    // The port-dependent bug is unprovable in a fixture served from one
+    // stable origin; `rest.test.ts`'s re-read assertion is what fails without
+    // the change, and a real two-port restart is what proved it.
+    //
+    // What this pins down is the REASON the fact is not a `ui-prefs` field.
+    // `ui-prefs` is the UI's arrangement — folds, filing, pane widths — and it
+    // is a blob a user may reasonably throw away. Having been taught what a
+    // project is must not come back when the arrangement does, so a later
+    // "just fold it into ui-prefs" simplification has to fail here.
     await page.goto("/?seed=0&help=1");
     await page.getByTestId("help-overlay-dismiss").click();
     await expect(page.getByTestId("help-overlay")).toHaveCount(0);

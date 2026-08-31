@@ -1815,9 +1815,11 @@ export class MockApi implements HarnessApi {
           ...(this.promptedConsent ? { telemetryOptIn: true } : {}),
         }),
     // Seeded from the reload-surviving store rather than from the fixture —
-    // see MOCK_HELP_SEEN_KEY. Nothing has been dismissed until a spec
-    // dismisses it, so a page opened in a fresh context starts false.
-    helpSeen: readMockHelpSeen(),
+    // see MOCK_HELP_SEEN_KEY. `fresh` short-circuits it because that fixture
+    // means "brand-new install", and a brand-new install has no settings file
+    // to have recorded anything in: reading a dismissal a previous page in the
+    // same context left behind would make it a used one.
+    helpSeen: this.fresh ? false : readMockHelpSeen(),
   };
 
   private workspaceKey(cwd: string): WorkspaceKey {
