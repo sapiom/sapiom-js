@@ -15,12 +15,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { FsListResponse } from "./api";
 import { folderCompletions } from "./folder-completions";
 
-const listing = (path: string, ...names: string[]): FsListResponse =>
-  ({
-    path,
-    parent: path.slice(0, path.lastIndexOf("/")) || "/",
-    dirs: names.map((name) => ({ name, path: `${path}/${name}`, hasAgentProject: false })),
-  }) as FsListResponse;
+// No cast: a field added to FsListResponse must break here rather than pass
+// silently through an `as`.
+const listing = (path: string, ...names: string[]): FsListResponse => ({
+  path,
+  parent: path.slice(0, path.lastIndexOf("/")) || "/",
+  dirs: names.map((name) => ({ name, path: `${path}/${name}`, hasAgentProject: false })),
+});
 
 const rejects = (): Promise<never> => Promise.reject(new Error("ENOENT"));
 
