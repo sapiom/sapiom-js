@@ -194,9 +194,25 @@ describe("HarnessRegistryInventoryProvider", () => {
     const pending = await inventory.listAgents(SCOPE);
     expect(pending.identitySettled).toBe(false);
     expect(pending.warnings).toEqual([]);
+    expect(pending.inventory.agents).toMatchObject([
+      {
+        agentKey: "local:first",
+        identityStatus: "provisional",
+        identityIssue: "identity-pending",
+      },
+      {
+        agentKey: "local:second",
+        identityStatus: "provisional",
+        identityIssue: "identity-pending",
+      },
+    ]);
     expect(
       pending.inventory.agents.map((agent) => agent.identityIssue),
     ).toEqual(["identity-pending", "identity-pending"]);
+    expect(pending.context.map((item) => item.resolutionAliases)).toEqual([
+      ["shared-marker"],
+      ["shared-marker"],
+    ]);
 
     pending.startEnrichment?.();
     release();
@@ -209,6 +225,49 @@ describe("HarnessRegistryInventoryProvider", () => {
       "payments",
     ]);
     expect(settled.warnings).toEqual([]);
+  });
+
+  it("keeps shared retryable marker guesses under local identities", async () => {
+    const changed = vi.fn();
+    const inventory = provider(
+      [
+        workflow("First", "first", "shared-marker"),
+        workflow("Second", "second", "shared-marker"),
+      ],
+      {
+        inspectManifestName: async () => ({
+          status: "failed",
+          retryable: true,
+        }),
+        onIdentityChange: changed,
+      },
+    );
+
+    const result = await enrich(
+      inventory,
+      await inventory.listAgents(SCOPE),
+      changed,
+    );
+
+    expect(result.identitySettled).toBe(false);
+    expect(result.inventory.agents).toMatchObject([
+      {
+        agentKey: "local:first",
+        identityStatus: "provisional",
+        identityIssue: "identity-unavailable",
+      },
+      {
+        agentKey: "local:second",
+        identityStatus: "provisional",
+        identityIssue: "identity-unavailable",
+      },
+    ]);
+    expect(result.warnings).toHaveLength(2);
+    expect(
+      result.warnings.every(
+        (warning) => warning.code === "inventory-extraction-failed",
+      ),
+    ).toBe(true);
   });
 
   it("keeps duplicate source names as separate deterministic local identities", async () => {

@@ -525,7 +525,12 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
 
     const canonicalCounts = new Map<AgentKey, number>();
     const provisionalCounts = new Map<AgentKey, number>();
+    const candidateCounts = new Map<AgentKey, number>();
     for (const agent of prepared) {
+      candidateCounts.set(
+        agent.candidateKey,
+        (candidateCounts.get(agent.candidateKey) ?? 0) + 1,
+      );
       // An unsettled candidate is a guess, not a claim. Two agents that share
       // a registry marker while source identity is pending or retryable are
       // not yet a collision.
@@ -567,8 +572,14 @@ export class HarnessRegistryInventoryProvider implements AgentInventoryProvider 
             (canonicalCount === 0 && provisionalCount > 1));
       const shadowedByCanonical =
         agent.canonicalName === null && canonicalCount === 1;
+      // A shared unsettled marker is still only a guess, so it cannot honestly
+      // serve as either agent's unique public key. Keep both rows provisional
+      // under their deterministic locations until inspection settles them.
+      const sharedUnsettledCandidate =
+        !agent.identitySettled &&
+        (candidateCounts.get(agent.candidateKey) ?? 0) > 1;
       let agentKey =
-        duplicate || shadowedByCanonical
+        duplicate || shadowedByCanonical || sharedUnsettledCandidate
           ? agent.fallbackKey
           : agent.candidateKey;
       const base = agentKey;

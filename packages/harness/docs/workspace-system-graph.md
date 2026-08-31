@@ -56,9 +56,9 @@ but they are not durable across a Studio restart.
 
 | State      | `graph`                                 | Meaning                                                                                                                                      |
 | ---------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `building` | `null` until a usable projection exists | The first projection, or a refresh without last-good data, is in progress.                                                                   |
+| `building` | `null` until a usable projection exists | The first projection, or a refresh without a usable graph, is in progress.                                                                   |
 | `ready`    | non-null                                | The current projection completed and is cacheable.                                                                                           |
-| `stale`    | non-null                                | A last-good graph remains usable while refresh is running or after refresh failed.                                                           |
+| `stale`    | non-null                                | The newest usable graph remains visible while refresh is running or after refresh failed.                                                    |
 | `degraded` | partial graph or `null`                 | Projection was not cacheable, or no usable graph could be built. The UI may offer one bounded automatic recovery followed by explicit retry. |
 
 Every `200` response also carries:

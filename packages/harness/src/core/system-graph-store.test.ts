@@ -242,6 +242,34 @@ describe("SystemGraphStore", () => {
     });
   });
 
+  it("keeps the newest partial graph after an inventory refresh failure", async () => {
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce(buildResult("initial"))
+      .mockResolvedValueOnce(buildResult("partial", false));
+    const store = new SystemGraphStore({ build });
+    await store.get(scope);
+
+    store.requestRefresh(scope);
+    await vi.waitFor(() => {
+      expect(store.peek(scope.workspaceKey)).toMatchObject({
+        state: "degraded",
+        graph: graphFor("partial"),
+      });
+    });
+
+    const stale = store.reportRefreshFailure(scope);
+    expect(stale).toMatchObject({
+      state: "stale",
+      graph: graphFor("partial"),
+    });
+    expect(store.peekNavigation(scope.workspaceKey)).toEqual({
+      workspaceKey: scope.workspaceKey,
+      revision: stale.revision,
+      targets: [{ agentKey: "partial", workflowPath: "/private/partial" }],
+    });
+  });
+
   it("keeps last-good data stale after a failed inventory refresh", async () => {
     const pending = deferred<SystemGraphBuildResult>();
     const build = vi

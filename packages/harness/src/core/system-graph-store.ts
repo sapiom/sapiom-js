@@ -17,10 +17,6 @@ interface SystemGraphEntry {
   scope: WorkspaceScope;
   snapshot: SystemGraphSnapshot;
   navigation: SystemGraphNavigationResponse;
-  lastGood: {
-    graph: SystemGraph;
-    navigation: SystemGraphNavigationTarget[];
-  } | null;
   activeBuild: Promise<SystemGraphSnapshot> | null;
   generation: number;
   refreshPending: boolean;
@@ -32,13 +28,10 @@ function visibleProjection(entry: SystemGraphEntry): {
   graph: SystemGraph | null;
   navigation: readonly SystemGraphNavigationTarget[];
 } {
-  if (entry.snapshot.graph !== null) {
-    return {
-      graph: entry.snapshot.graph,
-      navigation: entry.navigation.targets,
-    };
-  }
-  return entry.lastGood ?? { graph: null, navigation: [] };
+  return {
+    graph: entry.snapshot.graph,
+    navigation: entry.navigation.targets,
+  };
 }
 
 function sameNavigation(
@@ -206,7 +199,6 @@ export class SystemGraphStore {
         revision: this.revisionFloors.get(scope.workspaceKey) ?? 0,
         targets: [],
       },
-      lastGood: null,
       activeBuild: null,
       generation: 0,
       refreshPending: false,
@@ -289,7 +281,6 @@ export class SystemGraphStore {
       ...target,
     }));
     if (result.cacheable) {
-      entry.lastGood = { graph: result.graph, navigation };
       entry.automaticRetryUsed = false;
       const snapshot = this.transition(
         entry,

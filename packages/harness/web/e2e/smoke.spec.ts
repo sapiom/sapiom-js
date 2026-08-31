@@ -972,6 +972,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
           }
         ).__HARNESS_TEST__?.systemGraphRequests?.[0] ?? "",
     );
+    const leasingNode = page.getByTestId("system-graph-node-leasing");
     await page
       .getByTestId("workflow-leasing")
       .locator(".workflow-item-trigger")
@@ -1032,6 +1033,12 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("system-graph-stale")).toBeVisible();
     await expect(page.getByTestId("system-graph-canvas")).toBeVisible();
     await expect.poll(requestCount).toBe(3);
+    // A stale graph and its exact-revision sidecar are still one safe snapshot:
+    // drill-in and the sidecar-derived group join remain available.
+    await expect(leasingNode).toHaveClass(/is-navigable/);
+    await expect(
+      page.locator('[data-testid^="system-graph-group-"]'),
+    ).not.toHaveCount(0);
 
     // A partial refresh keeps valid topology interactive and labels it degraded.
     await page.evaluate((key) => {
@@ -1083,7 +1090,6 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
 
     // React may batch adjacent event frames. A following unrelated frame must
     // not overwrite the graph invalidation or leave old navigation clickable.
-    const leasingNode = page.getByTestId("system-graph-node-leasing");
     await expect(leasingNode).toHaveClass(/is-navigable/);
     await page.evaluate((key) => {
       const win = window as unknown as {
