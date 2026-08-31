@@ -3,6 +3,7 @@ import {
   PACKAGE_INVENTORY_PROTOCOL,
   canonicalPackageAgentFactsJson,
   createPackageAgentFactsSnapshot,
+  packageAgentFactsRecordSchema,
   packageAgentFactsSnapshotSchema,
   type PackageAgentFactsProducer,
   type PackageInventory,
@@ -113,7 +114,7 @@ describe("package AgentFacts protocol 1", () => {
       { kind: "graph-evidence-record", ref: "edge:coordinator.research" },
     ]);
     expect(normalized.agents[1]?.summary).toBe(
-      "agentKey: research; authored description: Researches public filings.; input schema: known; output schema: known; declared capabilities: llm.run, web.scrape; observed capabilities: database.query",
+      "agentKey: research; authored description: Researches public filings.; input schema: valid; output schema: valid; declared capabilities: llm.run, web.scrape; observed capabilities: database.query",
     );
     expect(packageAgentFactsSnapshotSchema.parse(normalized)).toEqual(
       normalized,
@@ -337,6 +338,145 @@ describe("package AgentFacts protocol 1", () => {
     expect(normalized.agents[1]?.summary).toBe(
       "agentKey: research; authored description: unknown; input schema: unknown; output schema: unknown; declared capabilities: unknown; observed capabilities: unknown",
     );
+  });
+
+  it("downgrades agent-scoped dynamic-data diagnostics to partial completeness", () => {
+    const normalized = createPackageAgentFactsSnapshot(
+      {
+        scope: inventory().version,
+        extractor: EXTRACTOR,
+        diagnostics: [
+          {
+            code: "dynamic-data",
+            severity: "warning",
+            agentKey: "research",
+          },
+        ],
+        cards: [
+          {
+            agentKey: "coordinator",
+            description: null,
+            inputSchema: null,
+            outputSchema: null,
+            declaredCapabilities: [],
+            observed: [],
+          },
+          {
+            agentKey: "research",
+            description: "Runtime-defined behavior.",
+            inputSchema: null,
+            outputSchema: null,
+            declaredCapabilities: [],
+            observed: [],
+          },
+        ],
+      },
+      inventory(),
+    );
+
+    expect(normalized.agents[1]?.completeness).toEqual({
+      status: "partial",
+      diagnostics: [
+        {
+          code: "dynamic-data",
+          severity: "warning",
+          agentKey: "research",
+        },
+        {
+          code: "incomplete-extraction",
+          severity: "warning",
+          agentKey: "research",
+        },
+      ],
+    });
+  });
+
+  it("rejects complete records with unknown fields or partial diagnostics", () => {
+    const normalized = snapshot([
+      { agentKey: "coordinator" },
+      { agentKey: "research" },
+    ]);
+    const completeWithUnknown = {
+      ...normalized.agents[0]!,
+      completeness: { status: "complete" },
+    };
+
+    expect(() =>
+      packageAgentFactsRecordSchema.parse(completeWithUnknown),
+    ).toThrow(/complete AgentFacts record/);
+    expect(() =>
+      packageAgentFactsSnapshotSchema.parse({
+        ...normalized,
+        agents: [completeWithUnknown, normalized.agents[1]!],
+      }),
+    ).toThrow(/complete AgentFacts record/);
+    expect(() =>
+      packageAgentFactsSnapshotSchema.parse({
+        ...normalized,
+        agents: [
+          {
+            ...normalized.agents[0]!,
+            description: { status: "known", value: null },
+            inputSchema: { status: "known", validation: "valid", value: null },
+            outputSchema: { status: "known", validation: "valid", value: null },
+            capabilities: {
+              declared: { status: "known", values: [] },
+              observed: { status: "known", values: [] },
+            },
+            completeness: { status: "complete" },
+            summary:
+              "agentKey: coordinator; authored description: none; input schema: valid; output schema: valid; declared capabilities: none; observed capabilities: none",
+          },
+          normalized.agents[1]!,
+        ],
+        diagnostics: [
+          {
+            code: "dynamic-data",
+            severity: "warning",
+            agentKey: "coordinator",
+          },
+        ],
+      }),
+    ).toThrow(/diagnostics requiring partial/);
+  });
+
+  it("preserves but labels invalid JSON Schemas and prevents complete extraction", () => {
+    const normalized = snapshot([
+      {
+        agentKey: "coordinator",
+        description: null,
+        inputSchema: { type: "strng" },
+        outputSchema: true,
+        declaredCapabilities: [],
+        observed: [],
+      },
+      {
+        agentKey: "research",
+        description: null,
+        inputSchema: false,
+        outputSchema: null,
+        declaredCapabilities: [],
+        observed: [],
+      },
+    ]);
+
+    expect(normalized.agents[0]?.inputSchema).toEqual({
+      status: "known",
+      validation: "invalid",
+      value: { type: "strng" },
+    });
+    expect(normalized.agents[0]?.outputSchema).toEqual({
+      status: "known",
+      validation: "valid",
+      value: true,
+    });
+    expect(normalized.agents[0]?.completeness.status).toBe("partial");
+    expect(normalized.agents[0]?.summary).toContain("input schema: invalid");
+    expect(normalized.agents[1]?.inputSchema).toEqual({
+      status: "known",
+      validation: "valid",
+      value: false,
+    });
   });
 
   it("rejects tampered summaries and non-normalized capability sets", () => {

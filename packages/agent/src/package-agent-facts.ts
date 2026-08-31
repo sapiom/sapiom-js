@@ -41,6 +41,9 @@ const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
   ]),
 );
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
+const jsonSchemaValueSchema = z.union([z.boolean(), jsonObjectSchema]);
+const jsonSchemaOrNullSchema = jsonSchemaValueSchema.nullable();
+type JsonSchemaOrNull = z.infer<typeof jsonSchemaOrNullSchema>;
 
 function referenceSchema<Kind extends string>(kind: Kind) {
   return z
@@ -111,7 +114,11 @@ const stringOrNullFieldSchema = z.discriminatedUnion("status", [
 ]);
 const schemaFieldSchema = z.discriminatedUnion("status", [
   z
-    .object({ status: z.literal("known"), value: jsonObjectSchema.nullable() })
+    .object({
+      status: z.literal("known"),
+      validation: z.enum(["valid", "invalid"]),
+      value: jsonSchemaOrNullSchema,
+    })
     .strict(),
   z.object({ status: z.literal("unknown") }).strict(),
 ]);
@@ -205,8 +212,8 @@ export const packageAgentFactsCardInputSchema = z
       .array(packageAgentFactsEvidenceReferenceSchema)
       .optional(),
     description: z.string().nullable().optional(),
-    inputSchema: jsonObjectSchema.nullable().optional(),
-    outputSchema: jsonObjectSchema.nullable().optional(),
+    inputSchema: jsonSchemaOrNullSchema.optional(),
+    outputSchema: jsonSchemaOrNullSchema.optional(),
     declaredCapabilities: z.array(capabilitySchema).optional(),
     observed: z.array(z.unknown()).optional(),
     completeness: packageAgentFactsCompletenessSchema.optional(),
@@ -271,6 +278,17 @@ export const packageAgentFactsRecordSchema = z
         code: "custom",
         path: ["summary"],
         message: "Summary does not match deterministic template content",
+      });
+    }
+    if (
+      record.completeness.status === "complete" &&
+      recordRequiresPartial(record)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["completeness"],
+        message:
+          "A complete AgentFacts record cannot contain unknown, invalid, dynamic, or partial facts",
       });
     }
   });
@@ -377,8 +395,66 @@ function canonicalizeJsonObject<T>(value: T): T {
   return JSON.parse(canonicalPackageAgentFactsJson(value)) as T;
 }
 
+const JSON_SCHEMA_TYPES = new Set([
+  "array",
+  "boolean",
+  "integer",
+  "null",
+  "number",
+  "object",
+  "string",
+]);
+
+function jsonSchemaValidation(value: JsonSchemaOrNull): "valid" | "invalid" {
+  if (value === null || typeof value === "boolean") return "valid";
+  if (
+    !Object.prototype.hasOwnProperty.call(value, "type") ||
+    value.type === undefined
+  ) {
+    return "valid";
+  }
+  if (typeof value.type === "string") {
+    return JSON_SCHEMA_TYPES.has(value.type) ? "valid" : "invalid";
+  }
+  if (Array.isArray(value.type)) {
+    return value.type.every(
+      (item) => typeof item === "string" && JSON_SCHEMA_TYPES.has(item),
+    )
+      ? "valid"
+      : "invalid";
+  }
+  return "invalid";
+}
+
 function normalizeCapabilities(capabilities: readonly string[]): string[] {
   return [...new Set(capabilities)].sort(compareText);
+}
+
+const PARTIAL_DIAGNOSTIC_CODES = new Set<PackageAgentFactsDiagnosticCode>([
+  "invalid-observation",
+  "unsupported-observed-fact",
+  "incomplete-extraction",
+  "dynamic-data",
+]);
+
+function diagnosticRequiresPartial(
+  diagnostic: PackageAgentFactsDiagnostic,
+): boolean {
+  return PARTIAL_DIAGNOSTIC_CODES.has(diagnostic.code);
+}
+
+function recordRequiresPartial(record: PackageAgentFactsRecord): boolean {
+  return (
+    record.description.status === "unknown" ||
+    record.inputSchema.status === "unknown" ||
+    record.inputSchema.validation === "invalid" ||
+    record.outputSchema.status === "unknown" ||
+    record.outputSchema.validation === "invalid" ||
+    record.capabilities.declared.status === "unknown" ||
+    record.capabilities.observed.status === "unknown" ||
+    (record.completeness.status !== "complete" &&
+      record.completeness.diagnostics.some(diagnosticRequiresPartial))
+  );
 }
 
 function normalizeByCanonical<T>(
@@ -516,8 +592,14 @@ function summarizeAgentFacts(
         ? "none"
         : fields.description.value
       : "unknown";
-  const input = fields.inputSchema.status === "known" ? "known" : "unknown";
-  const output = fields.outputSchema.status === "known" ? "known" : "unknown";
+  const input =
+    fields.inputSchema.status === "known"
+      ? fields.inputSchema.validation
+      : "unknown";
+  const output =
+    fields.outputSchema.status === "known"
+      ? fields.outputSchema.validation
+      : "unknown";
   const declared =
     fields.declared.status === "known"
       ? fields.declared.values.length === 0
@@ -536,11 +618,12 @@ function summarizeAgentFacts(
 function recordFromCard(
   agentKey: string,
   card: PackageAgentFactsCardInput,
+  externalDiagnostics: readonly PackageAgentFactsDiagnostic[] = [],
 ): {
   record: PackageAgentFactsRecord;
   diagnostics: PackageAgentFactsDiagnostic[];
 } {
-  const diagnostics: PackageAgentFactsDiagnostic[] = [];
+  const diagnostics: PackageAgentFactsDiagnostic[] = [...externalDiagnostics];
   const observedCapabilities: string[] = [];
   const evidenceReferences: PackageAgentFactsEvidenceReference[] = [
     ...(card.evidenceReferences ?? []),
@@ -578,6 +661,7 @@ function recordFromCard(
     "inputSchema" in card
       ? {
           status: "known",
+          validation: jsonSchemaValidation(card.inputSchema ?? null),
           value: canonicalizeJsonObject(card.inputSchema ?? null),
         }
       : { status: "unknown" };
@@ -585,6 +669,7 @@ function recordFromCard(
     "outputSchema" in card
       ? {
           status: "known",
+          validation: jsonSchemaValidation(card.outputSchema ?? null),
           value: canonicalizeJsonObject(card.outputSchema ?? null),
         }
       : { status: "unknown" };
@@ -614,10 +699,21 @@ function recordFromCard(
         } as const,
       ]
     : [];
+  const schemaDiagnostics = [inputSchema, outputSchema].some(
+    (schema) => schema.status === "known" && schema.validation === "invalid",
+  )
+    ? [
+        {
+          code: "incomplete-extraction",
+          severity: "warning",
+          agentKey,
+        } as const,
+      ]
+    : [];
   const mergedCompleteness = mergeIncompleteCompleteness(
     agentKey,
     card.completeness,
-    [...missingFieldDiagnostics, ...diagnostics],
+    [...missingFieldDiagnostics, ...schemaDiagnostics, ...diagnostics],
   );
   const completeness = normalizeCompleteness(mergedCompleteness.completeness);
   const record = {
@@ -681,6 +777,9 @@ export const packageAgentFactsSnapshotSchema = snapshotBaseSchema.superRefine(
       });
     }
     for (const [index, agent] of snapshot.agents.entries()) {
+      const agentDiagnostics = snapshot.diagnostics.filter(
+        (diagnostic) => diagnostic.agentKey === agent.agentKey,
+      );
       const normalized = packageAgentFactsRecordSchema.parse({
         ...agent,
         references: {
@@ -707,6 +806,17 @@ export const packageAgentFactsSnapshotSchema = snapshotBaseSchema.superRefine(
           code: "custom",
           path: ["agents", index],
           message: "Agent facts record is not normalized",
+        });
+      }
+      if (
+        agent.completeness.status === "complete" &&
+        agentDiagnostics.some(diagnosticRequiresPartial)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["agents", index, "completeness"],
+          message:
+            "Agent-scoped diagnostics requiring partial extraction cannot accompany a complete record",
         });
       }
     }
@@ -756,6 +866,17 @@ export function createPackageAgentFactsSnapshot(
   const diagnostics: PackageAgentFactsDiagnostic[] = [
     ...(parsedInput.diagnostics ?? []),
   ];
+  const inputDiagnosticsByAgentKey = new Map<
+    string,
+    PackageAgentFactsDiagnostic[]
+  >();
+  for (const diagnostic of parsedInput.diagnostics ?? []) {
+    if (diagnostic.agentKey === undefined) continue;
+    inputDiagnosticsByAgentKey.set(diagnostic.agentKey, [
+      ...(inputDiagnosticsByAgentKey.get(diagnostic.agentKey) ?? []),
+      diagnostic,
+    ]);
+  }
   const inventoryKeys = new Set(
     inventory.agents.map((agent) => agent.agentKey),
   );
@@ -807,6 +928,7 @@ export function createPackageAgentFactsSnapshot(
     const { record, diagnostics: cardDiagnostics } = recordFromCard(
       agent.agentKey,
       cards[0]!,
+      inputDiagnosticsByAgentKey.get(agent.agentKey),
     );
     diagnostics.push(...cardDiagnostics);
     agents.push(record);
