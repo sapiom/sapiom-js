@@ -78,7 +78,7 @@ export interface CachedExtractionOptions {
  * failure. Callers use this to avoid writing a misleading error render. */
 export class ExtractionLaunchCancelledError extends Error {
   constructor() {
-    super("Workflow extraction authorization expired before launch");
+    super("Agent extraction authorization expired before launch");
     this.name = "ExtractionLaunchCancelledError";
   }
 }

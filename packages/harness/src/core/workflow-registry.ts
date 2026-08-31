@@ -959,12 +959,12 @@ export class WorkflowRegistry {
       this.persistedSnapshotOutOfSync = false;
     } catch (rollbackError) {
       const compensationError = new Error(
-        "Workflow registry write was superseded and compensation failed",
+        "Agent registry write was superseded and compensation failed",
       ) as Error & { cause?: unknown };
       compensationError.cause = rollbackError;
       throw compensationError;
     }
-    throw new Error("Workflow registry write was superseded");
+    throw new Error("Agent registry write was superseded");
   }
 
   private async writeSnapshot(
@@ -982,7 +982,7 @@ export class WorkflowRegistry {
     try {
       await fs.writeFile(tmpPath, JSON.stringify(workflows, null, 2));
       if (primary && (this.retired || (isCurrent && !isCurrent()))) {
-        throw new Error("Workflow registry write was superseded");
+        throw new Error("Agent registry write was superseded");
       }
       const rename = fs.rename(tmpPath, this.registryPath);
       this.activeRename = rename;
@@ -1267,7 +1267,7 @@ export class WorkflowRegistry {
   ): Promise<WorkflowRegistryScanResult> {
     return this.enqueue(async () => {
       if (this.retired) {
-        throw new Error("Workflow registry is retired");
+        throw new Error("Agent registry is retired");
       }
       await this.ensureLoaded();
       const scanEpoch = this.discoveryEpoch;
@@ -1629,9 +1629,7 @@ export class WorkflowRegistry {
         scanLifetime !== this.discoveryLifetime ||
         this.wasDirtiedSince(canonicalRoot, scanEpoch)
       ) {
-        throw new Error(
-          "Workflow discovery scan was superseded by a newer edit",
-        );
+        throw new Error("Agent discovery scan was superseded by a newer edit");
       }
       try {
         if (rowsChanged || this.persistedSnapshotOutOfSync) {
@@ -1656,9 +1654,7 @@ export class WorkflowRegistry {
         scanLifetime !== this.discoveryLifetime ||
         this.wasDirtiedSince(canonicalRoot, scanEpoch)
       ) {
-        throw new Error(
-          "Workflow discovery scan was superseded by a newer edit",
-        );
+        throw new Error("Agent discovery scan was superseded by a newer edit");
       }
       this.removePrivateStateForRows(pruned);
       if (rowsChanged) this.workflows = nextWorkflows;
@@ -1730,7 +1726,7 @@ export class WorkflowRegistry {
   async connectPath(inputPath: string): Promise<WorkflowInfo> {
     return this.enqueue(async () => {
       if (this.retired) {
-        throw new Error("Workflow registry is retired");
+        throw new Error("Agent registry is retired");
       }
       await this.ensureLoaded();
       const connectEpoch = this.discoveryEpoch;

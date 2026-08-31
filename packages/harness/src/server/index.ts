@@ -1915,9 +1915,7 @@ export const startServer = async (
     } = {},
   ): Promise<CoordinatedScanResult> => {
     if (!coordinatorActive) {
-      return Promise.reject(
-        new Error("Workflow discovery coordinator is closed"),
-      );
+      return Promise.reject(new Error("Agent discovery coordinator is closed"));
     }
     const prepared = scanOptions.dirty
       ? prepareDirtyWorkflowRoot(root)
@@ -1991,7 +1989,7 @@ export const startServer = async (
             generation,
           });
           if (!coordinatorActive) {
-            throw new Error("Workflow discovery coordinator is closed");
+            throw new Error("Agent discovery coordinator is closed");
           }
           const outcome = await workflowRegistry.scanDetailed(
             flight.lexicalRoot,
@@ -2011,7 +2009,7 @@ export const startServer = async (
             outcome.sourceBudget,
           );
           if (!coordinatorActive) {
-            throw new Error("Workflow discovery coordinator is closed");
+            throw new Error("Agent discovery coordinator is closed");
           }
           if (generation !== flight.generation || flight.pending) {
             continue;
@@ -2084,7 +2082,7 @@ export const startServer = async (
           throw error;
         }
       }
-      throw new Error("Workflow discovery coordinator is closed");
+      throw new Error("Agent discovery coordinator is closed");
     })().finally(() => {
       if (scanFlights.get(canonicalRoot) === flight) {
         scanFlights.delete(canonicalRoot);
@@ -3122,7 +3120,7 @@ export const startServer = async (
       coordinatorActive = false;
       coordinatorEpoch += 1;
       await workflowRegistry.retirePendingDiscovery();
-      rejectPublication(new Error("Workflow discovery coordinator is closed"));
+      rejectPublication(new Error("Agent discovery coordinator is closed"));
       clearInterval(sessionSweepTimer);
       clearInterval(ndjsonRetentionTimer);
       canvasWatcher.stopAll();

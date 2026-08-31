@@ -192,8 +192,8 @@
     "id": "server-workflow-change-event",
     "path": "packages/harness/src/server/index.ts",
     "pattern": "^workflows\\.changed$",
-    "occurrences": 3,
-    "reason": "The internal WebSocket event name remains stable for existing clients, including explicit agent connections that refresh Project graphs."
+    "occurrences": 1,
+    "reason": "The internal WebSocket event name remains stable for existing clients; accepted agent discovery publishes it from the coordinator."
   },
   {
     "id": "rest-session-binding-route",
@@ -514,7 +514,7 @@
     "id": "web-api-workflow-change-event",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^workflows\\.changed$",
-    "occurrences": 2,
-    "reason": "The internal WebSocket event name remains stable for existing clients. Announced by the mock's mover and its scaffold, the two mutations that change what the rail shows."
+    "occurrences": 3,
+    "reason": "The internal WebSocket event name remains stable for existing clients. The mock announces source discovery, moves, and scaffolds through this signal."
   }
 ]
