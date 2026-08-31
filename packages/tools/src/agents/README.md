@@ -52,12 +52,26 @@ invocation through `@sapiom/tools/_internal/agent-runtime-provenance`. The token
 travels in dedicated request headers, never in `AgentRunSpec` or its JSON body.
 When a terminal response carries a supported server-signed lineage receipt, the
 SDK retains it in object-identity sidecars on the returned result and its exact
-object-valued `output`. The receipt is forwarded only when one of those exact
-objects is passed directly as the next agent's `input`; copies, nested values,
-transformed primitives, delayed queues, storage, and arbitrary objects do not
-inherit it. The SDK treats both values as opaque and exposes no caller, callee,
-bundle, or execution identity through this contract. Missing or unsupported
-metadata preserves the legacy behavior.
+object-valued `output`. One receipt can be forwarded once, only when one of those
+exact objects is the direct `input` of an immediate invocation carrying a valid
+v1 build callsite. An uninstrumented agent invocation consumes the sidecar
+without forwarding it, a timer turn expires it, and delayed dispatch never sends
+runtime provenance. Copies, nested values, and transformed primitives do not
+inherit the sidecar.
+
+The detectable boundary is intentionally narrower than arbitrary data-flow
+tracking: the SDK does not recursively inspect values and cannot distinguish a
+synchronous exact-reference round trip through an in-memory array or `Map` from
+a direct handoff before the one-turn sidecar expires. Queue/storage exclusion is
+therefore guaranteed only when the boundary changes object identity, crosses a
+timer turn, or invokes an uninstrumented agent boundary (which consumes the
+receipt). This v1 carrier and its client must also resolve through the same CJS
+or ESM package format. Mixed CJS/ESM loading keeps separate closure stores and is
+an explicit remaining integration limitation; using a discoverable global store
+would violate receipt privacy. Both same-format published surfaces are tested.
+The SDK treats all carrier values as opaque and exposes no new caller, callee,
+bundle, or execution identity. Missing or unsupported metadata preserves legacy
+behavior.
 
 - **Addressed by slug.** `definition` is the deployed agent's slug — its stable handle. `input` is passed to its entry step.
 

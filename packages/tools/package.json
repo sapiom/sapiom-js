@@ -114,6 +114,7 @@
     "gen:version": "node scripts/generate-version.mjs",
     "test": "npm run gen:version && jest",
     "test:coverage": "npm run gen:version && jest --coverage",
+    "test:runtime-provenance-package": "node scripts/test-runtime-provenance-package.mjs",
     "test:watch": "npm run gen:version && jest --watch",
     "typecheck": "npm run gen:version && tsc --noEmit",
     "lint": "eslint src --ext .ts",
