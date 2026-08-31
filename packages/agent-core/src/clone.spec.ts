@@ -259,6 +259,48 @@ describe("clone", () => {
     }
   });
 
+  it("falls back to a git clone when archives are switched off (409)", async () => {
+    // The engine ships with the flag OFF, so against a freshly deployed engine
+    // EVERY clone gets a 409 — not a 404. Handling only 404 broke clone outright
+    // at the exact stage of the rollout that is meant to change nothing.
+    const spy = mockFetch([
+      { status: 409, body: { message: "Source archives are disabled." } },
+      { status: 200, body: DEFINITION_TOKEN_BODY },
+    ]);
+    const base = makeTmp();
+    const target = path.join(base, "project");
+    const rec = recordingClone();
+    try {
+      await clone({ definitionId: "253", targetDir: target, cloneRepo: rec.fn }, client);
+
+      const urls = spy.mock.calls.map((c) => (c as [string])[0]);
+      expect(urls).toEqual([
+        "https://example.com/v1/workflows/definitions/253/source",
+        "https://example.com/v1/workflows/definitions/253/clone-token",
+      ]);
+      expect(rec.calls).toHaveLength(1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT fall back when the archive read is genuinely forbidden", async () => {
+    // A 403 is a real error. Falling back would turn it into a stale checkout that
+    // looks like a success, which is the failure mode this whole rewire exists to
+    // remove.
+    mockFetch([{ status: 403, body: { message: "no access" } }]);
+    const base = makeTmp();
+    const rec = recordingClone();
+    try {
+      await expect(
+        clone({ definitionId: "253", targetDir: path.join(base, "project"), cloneRepo: rec.fn }, client),
+      ).rejects.toMatchObject({ code: "HTTP_403" });
+      expect(rec.calls).toHaveLength(0);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to a git clone when the agent has no stored archive", async () => {
     // An agent that only ever deployed through the push path, or an engine older
     // than the download route: 404 means "no archive", so the git clone still

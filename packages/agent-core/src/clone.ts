@@ -337,10 +337,20 @@ export async function clone(
 /**
  * Materialise a deployed agent from its stored source archive.
  *
- * Returns false when the agent has no archive to read (HTTP 404), which is the
- * caller's signal to fall back to the git clone. Every other failure propagates:
- * a 403 or a corrupt archive is a real error, and silently falling back would
- * turn it into a stale checkout that looks like a success.
+ * Returns false when this server cannot give us an archive, which is the caller's
+ * signal to fall back to the git clone:
+ *
+ *   404 — no archive for this agent, or an engine older than the route.
+ *   409 — archives are switched off, or this tenant is not in the rollout yet.
+ *
+ * 409 matters as much as 404 and is easier to miss: the engine ships with the
+ * flag OFF, so against a freshly deployed engine EVERY clone gets a 409. Handling
+ * only 404 would have broken clone outright at exactly the stage that is supposed
+ * to be a no-op. The deploy path treats both the same way, for the same reason.
+ *
+ * Every other failure propagates: a 403 or a corrupt archive is a real error, and
+ * silently falling back would turn it into a stale checkout that looks like
+ * success.
  */
 async function cloneFromArchive(
   client: GatewayClient,
@@ -351,7 +361,12 @@ async function cloneFromArchive(
   try {
     archive = await client.getArchive(`/definitions/${encodeURIComponent(definitionId)}/source`);
   } catch (error) {
-    if (error instanceof AgentOperationError && error.code === "HTTP_404") return false;
+    if (
+      error instanceof AgentOperationError &&
+      (error.code === "HTTP_404" || error.code === "HTTP_409")
+    ) {
+      return false;
+    }
     throw error;
   }
 
