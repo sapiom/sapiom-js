@@ -302,10 +302,20 @@ async function verifyNativeErrorStackRedaction(tools, carrier) {
   assert.notEqual(customCaught, customFailure);
   assert.equal(customStackReads, 0);
   assert.equal(customDiagnosticReads, 0);
-  assert.equal(
-    Object.getOwnPropertyDescriptor(customCaught, "stack").get,
-    customStackGetter,
+  const customStackDescriptor = Object.getOwnPropertyDescriptor(
+    customCaught,
+    "stack",
   );
+  assert.equal(customStackDescriptor.value, "[REDACTED runtime provenance]");
+  assert.equal("get" in customStackDescriptor, false);
+  assert.equal("set" in customStackDescriptor, false);
+  const customLazyDescriptor = Object.getOwnPropertyDescriptor(
+    customCaught.diagnostics,
+    "lazy",
+  );
+  assert.equal(customLazyDescriptor.value, "[REDACTED runtime provenance]");
+  assert.equal("get" in customLazyDescriptor, false);
+  assert.equal("set" in customLazyDescriptor, false);
   assert.equal(
     customCaught.diagnostics.reflected,
     "[REDACTED runtime provenance]",
@@ -343,6 +353,172 @@ async function verifyNativeErrorStackRedaction(tools, carrier) {
   });
   assert.equal(noPrivateCaught, noPrivateFailure);
   await noPrivateClient.shutdown();
+}
+
+async function verifyContainerDiagnosticRedaction(tools, carrier) {
+  const callsite = "callsite.package-container-private";
+  const secretSymbol = Symbol("secret diagnostic");
+  const lazySymbol = Symbol("lazy diagnostic");
+  let symbolAccessorReads = 0;
+  const symbolHeaders = new Headers({ "x-request-id": "request-public" });
+  symbolHeaders[secretSymbol] = callsite;
+  Object.defineProperty(symbolHeaders, lazySymbol, {
+    configurable: true,
+    get() {
+      symbolAccessorReads += 1;
+      return callsite;
+    },
+  });
+  const symbolFailure = Object.assign(
+    new TypeError("symbol transport failed"),
+    {
+      request: { headers: symbolHeaders },
+    },
+  );
+  const symbolClient = tools.createClient({
+    apiKey: "k",
+    fetch: async () => {
+      throw symbolFailure;
+    },
+  });
+  const symbolCaught = await captureLaunchError(
+    symbolClient,
+    carrier.carryAgentRuntimeProvenance(
+      { definition: "package-symbol-diagnostics" },
+      { version: 1, callsite },
+    ),
+  );
+  assert.notEqual(symbolCaught, symbolFailure);
+  assert.equal(symbolCaught.request.headers[secretSymbol], undefined);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(symbolCaught.request.headers, lazySymbol),
+    undefined,
+  );
+  assert.equal(symbolAccessorReads, 0);
+  assert.equal(symbolFailure.request.headers[secretSymbol], callsite);
+  assert.equal(
+    typeof Object.getOwnPropertyDescriptor(
+      symbolFailure.request.headers,
+      lazySymbol,
+    ).get,
+    "function",
+  );
+  await symbolClient.shutdown();
+
+  let poisonedMethodReads = 0;
+  let customGetterReads = 0;
+  const poison = () => {
+    poisonedMethodReads += 1;
+    throw new Error("instance container method must not run");
+  };
+  const headers = new Headers({
+    [CALLSITE_HEADER]: callsite,
+    "x-request-id": "request-public",
+  });
+  Object.defineProperty(headers, "forEach", {
+    configurable: true,
+    value: poison,
+  });
+  const shared = { privateValue: callsite, publicValue: "shared-public" };
+  const map = new Map([["shared", shared]]);
+  const set = new Set([shared]);
+  map.set("self", map);
+  set.add(set);
+  for (const [container, methods] of [
+    [map, ["entries", "forEach", "set", Symbol.iterator]],
+    [set, ["entries", "forEach", "add", Symbol.iterator]],
+  ]) {
+    for (const method of methods) {
+      Object.defineProperty(container, method, {
+        configurable: true,
+        value: poison,
+      });
+    }
+  }
+  class OpaqueDiagnostic {
+    constructor() {
+      this.privateValue = callsite;
+      this.publicValue = "opaque-public";
+    }
+  }
+  const opaque = new OpaqueDiagnostic();
+  const diagnostics = {
+    request: { headers, requestId: "request-public" },
+    map,
+    set,
+    opaque,
+    publicValue: "diagnostic-public",
+  };
+  Object.defineProperty(diagnostics, "lazy", {
+    configurable: true,
+    get() {
+      customGetterReads += 1;
+      return callsite;
+    },
+  });
+  const failure = Object.assign(new TypeError("container transport failed"), {
+    code: "EAGENT",
+    diagnostics,
+  });
+  const client = tools.createClient({
+    apiKey: "k",
+    fetch: async () => {
+      throw failure;
+    },
+  });
+  const caught = await captureLaunchError(
+    client,
+    carrier.carryAgentRuntimeProvenance(
+      { definition: "package-container-diagnostics" },
+      { version: 1, callsite },
+    ),
+  );
+
+  assert.notEqual(caught, failure);
+  assert.ok(caught instanceof TypeError);
+  assert.equal(caught.code, "EAGENT");
+  assert.equal(caught.diagnostics.request.requestId, "request-public");
+  assert.equal(
+    Headers.prototype.get.call(
+      caught.diagnostics.request.headers,
+      CALLSITE_HEADER,
+    ),
+    "[REDACTED runtime provenance]",
+  );
+  const caughtShared = Map.prototype.get.call(caught.diagnostics.map, "shared");
+  assert.equal(
+    Map.prototype.get.call(caught.diagnostics.map, "self"),
+    caught.diagnostics.map,
+  );
+  assert.equal(
+    Set.prototype.has.call(caught.diagnostics.set, caught.diagnostics.set),
+    true,
+  );
+  assert.equal(
+    Set.prototype.has.call(caught.diagnostics.set, caughtShared),
+    true,
+  );
+  assert.equal(caughtShared.privateValue, "[REDACTED runtime provenance]");
+  assert.equal(caughtShared.publicValue, "shared-public");
+  assert.equal(caught.diagnostics.opaque, "[REDACTED runtime provenance]");
+  assert.equal(caught.diagnostics.publicValue, "diagnostic-public");
+  const lazyDescriptor = Object.getOwnPropertyDescriptor(
+    caught.diagnostics,
+    "lazy",
+  );
+  assert.equal(lazyDescriptor.value, "[REDACTED runtime provenance]");
+  assert.equal("get" in lazyDescriptor, false);
+  assert.equal("set" in lazyDescriptor, false);
+  assert.equal(poisonedMethodReads, 0);
+  assert.equal(customGetterReads, 0);
+  assert.equal(Headers.prototype.get.call(headers, CALLSITE_HEADER), callsite);
+  assert.equal(Map.prototype.get.call(map, "shared"), shared);
+  assert.equal(Map.prototype.get.call(map, "self"), map);
+  assert.equal(Set.prototype.has.call(set, set), true);
+  assert.equal(shared.privateValue, callsite);
+  assert.equal(opaque.privateValue, callsite);
+  assert.equal(failure.diagnostics, diagnostics);
+  await client.shutdown();
 }
 
 const cjsTools = require("@sapiom/tools");
@@ -395,6 +571,7 @@ assert.throws(
 );
 await verifySameFormat("cjs", cjsTools, cjsCarrier);
 await verifyNativeErrorStackRedaction(cjsTools, cjsCarrier);
+await verifyContainerDiagnosticRedaction(cjsTools, cjsCarrier);
 
 const esmTools = await import("@sapiom/tools");
 const esmCarrier = await import(CARRIER_EXPORT);
@@ -623,5 +800,5 @@ for (const loaded of loadedAfterStub) {
 }
 
 console.log(
-  "runtime provenance package surfaces: native Error stacks, native roots, constructor identity, cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
+  "runtime provenance package surfaces: fail-closed diagnostics, native Error stacks, native roots, constructor identity, cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
 );

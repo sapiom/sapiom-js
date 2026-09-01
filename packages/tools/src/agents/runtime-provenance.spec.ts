@@ -630,6 +630,241 @@ describe("agents runtime provenance v1", () => {
     ).toBe("ECONNREFUSED");
   });
 
+  it("redacts launch headers captured by a custom transport without invoking instance methods", async () => {
+    const callsite = "callsite.headers-private";
+    let instanceForEachReads = 0;
+    let failure:
+      | (TypeError & {
+          code: string;
+          request: { headers: Headers; requestId: string };
+        })
+      | undefined;
+    const fetch = (async (
+      _input: string | URL | Request,
+      init: RequestInit = {},
+    ) => {
+      const headers = new Headers(init.headers);
+      Object.defineProperty(headers, "forEach", {
+        configurable: true,
+        value() {
+          instanceForEachReads += 1;
+          throw new Error("instance forEach must not run");
+        },
+      });
+      failure = Object.assign(new TypeError("fetch failed"), {
+        code: "EAGENT",
+        request: { headers, requestId: "request-public" },
+      });
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-headers" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    const surfaced = error as typeof failure & {
+      request: { headers: Headers; requestId: string };
+    };
+    expect(failure).toBeDefined();
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(surfaced.code).toBe("EAGENT");
+    expect(surfaced.request.requestId).toBe("request-public");
+    expect(surfaced.request.headers).toBeInstanceOf(Headers);
+    expect(
+      Headers.prototype.get.call(
+        surfaced.request.headers,
+        AGENT_RUNTIME_CALLSITE_HEADER,
+      ),
+    ).toBe("[REDACTED runtime provenance]");
+    expect(instanceForEachReads).toBe(0);
+    expect(
+      Headers.prototype.get.call(
+        failure!.request.headers,
+        AGENT_RUNTIME_CALLSITE_HEADER,
+      ),
+    ).toBe(callsite);
+    expect(failure!.request.requestId).toBe("request-public");
+  });
+
+  it("fails closed for custom symbol surfaces on captured Headers without invoking accessors", async () => {
+    const callsite = "callsite.headers-symbol-private";
+    const secretSymbol = Symbol("secret diagnostic");
+    const lazySymbol = Symbol("lazy diagnostic");
+    let symbolAccessorReads = 0;
+    let failure:
+      | (TypeError & {
+          request: { headers: Headers & Record<symbol, unknown> };
+        })
+      | undefined;
+    const fetch = (async (
+      _input: string | URL | Request,
+      init: RequestInit = {},
+    ) => {
+      const headers = new Headers(init.headers) as Headers &
+        Record<symbol, unknown>;
+      Headers.prototype.delete.call(headers, AGENT_RUNTIME_CALLSITE_HEADER);
+      headers[secretSymbol] = callsite;
+      Object.defineProperty(headers, lazySymbol, {
+        configurable: true,
+        get() {
+          symbolAccessorReads += 1;
+          return callsite;
+        },
+      });
+      failure = Object.assign(new TypeError("fetch failed"), {
+        request: { headers },
+      });
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-headers-symbol" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    const surfaced = error as typeof failure & {
+      request: { headers: Headers & Record<symbol, unknown> };
+    };
+    expect(failure).toBeDefined();
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(surfaced.request.headers[secretSymbol]).toBeUndefined();
+    expect(
+      Object.getOwnPropertyDescriptor(surfaced.request.headers, lazySymbol),
+    ).toBeUndefined();
+    expect(symbolAccessorReads).toBe(0);
+    expect(failure!.request.headers[secretSymbol]).toBe(callsite);
+    expect(
+      Object.getOwnPropertyDescriptor(failure!.request.headers, lazySymbol)
+        ?.get,
+    ).toBeDefined();
+  });
+
+  it("redacts Map and Set entries while preserving cycles and shared references", async () => {
+    const callsite = "callsite.containers-private";
+    const shared = { privateValue: callsite, publicValue: "shared-public" };
+    const map = new Map<unknown, unknown>();
+    const set = new Set<unknown>();
+    map.set("shared", shared);
+    map.set("self", map);
+    set.add(shared);
+    set.add(set);
+    let instanceMethodReads = 0;
+    const poisonedMethod = () => {
+      instanceMethodReads += 1;
+      throw new Error("instance container method must not run");
+    };
+    for (const [container, methods] of [
+      [map, ["entries", "forEach", "set", Symbol.iterator]],
+      [set, ["entries", "forEach", "add", Symbol.iterator]],
+    ] as const) {
+      for (const method of methods) {
+        Object.defineProperty(container, method, {
+          configurable: true,
+          value: poisonedMethod,
+        });
+      }
+    }
+    const diagnostics = { map, set };
+    const failure = Object.assign(new TypeError("fetch failed"), {
+      code: "EAGENT",
+      diagnostics,
+    });
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-containers" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    const surfaced = error as typeof failure;
+    const surfacedMap = surfaced.diagnostics.map;
+    const surfacedSet = surfaced.diagnostics.set;
+    const surfacedShared = surfacedMap.get("shared") as typeof shared;
+    expect(error).not.toBe(failure);
+    expect(surfacedMap).toBeInstanceOf(Map);
+    expect(surfacedSet).toBeInstanceOf(Set);
+    expect(surfacedMap.get("self")).toBe(surfacedMap);
+    expect(surfacedSet.has(surfacedSet)).toBe(true);
+    expect([...surfacedSet][0]).toBe(surfacedShared);
+    expect(surfacedShared.privateValue).toBe("[REDACTED runtime provenance]");
+    expect(surfacedShared.publicValue).toBe("shared-public");
+    expect(instanceMethodReads).toBe(0);
+    expect(map.get("shared")).toBe(shared);
+    expect(map.get("self")).toBe(map);
+    expect(set.has(set)).toBe(true);
+    expect(shared.privateValue).toBe(callsite);
+  });
+
+  it("fails closed for custom diagnostic instances without creating invalid shells", async () => {
+    const callsite = "callsite.custom-instance-private";
+    class CustomDiagnostic {
+      readonly privateValue = callsite;
+      readonly publicValue = "custom-public";
+    }
+    const custom = new CustomDiagnostic();
+    const diagnostics = { custom, publicSibling: "sibling-public" };
+    const failure = Object.assign(new TypeError("fetch failed"), {
+      code: "EAGENT",
+      diagnostics,
+    });
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-custom-instance" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    const surfaced = error as typeof failure;
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(surfaced.code).toBe("EAGENT");
+    expect(surfaced.diagnostics.custom).toBe("[REDACTED runtime provenance]");
+    expect(surfaced.diagnostics.custom).not.toBeInstanceOf(CustomDiagnostic);
+    expect(surfaced.diagnostics.publicSibling).toBe("sibling-public");
+    expect(failure.diagnostics).toBe(diagnostics);
+    expect(custom.privateValue).toBe(callsite);
+    expect(custom.publicValue).toBe("custom-public");
+  });
+
   it("redacts nested ordinary diagnostics without mutating the original error graph", async () => {
     const callsite = "callsite.nested-private";
     interface NestedDiagnostics {
@@ -741,22 +976,26 @@ describe("agents runtime provenance v1", () => {
       status: 502,
       retryable: true,
     });
-    expect((error as DiagnosticTransportError).diagnostics.observedAt).toBe(
+    expect((error as DiagnosticTransportError).diagnostics.observedAt).not.toBe(
       observedAt,
     );
-    expect(observedAt.toISOString()).toBe("2026-09-01T00:00:00.000Z");
-    expect(accessorReads).toBe(0);
     expect(
-      Object.getOwnPropertyDescriptor(
-        (error as DiagnosticTransportError).diagnostics.request,
-        "lazyDiagnostic",
-      )?.get,
-    ).toBe(
-      Object.getOwnPropertyDescriptor(
-        failure.diagnostics.request,
-        "lazyDiagnostic",
-      )?.get,
+      (error as DiagnosticTransportError).diagnostics.observedAt,
+    ).toBeInstanceOf(Date);
+    expect(observedAt.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+    expect(
+      (error as DiagnosticTransportError).diagnostics.observedAt.toISOString(),
+    ).toBe("2026-09-01T00:00:00.000Z");
+    expect(accessorReads).toBe(0);
+    const lazyDiagnosticDescriptor = Object.getOwnPropertyDescriptor(
+      (error as DiagnosticTransportError).diagnostics.request,
+      "lazyDiagnostic",
     );
+    expect(lazyDiagnosticDescriptor?.value).toBe(
+      "[REDACTED runtime provenance]",
+    );
+    expect("get" in lazyDiagnosticDescriptor!).toBe(false);
+    expect("set" in lazyDiagnosticDescriptor!).toBe(false);
     expect(Object.getOwnPropertyDescriptor(error, "diagnostics")).toEqual(
       expect.objectContaining({
         configurable: originalDescriptor?.configurable,
@@ -823,9 +1062,22 @@ describe("agents runtime provenance v1", () => {
     expect(error).toBeInstanceOf(TypeError);
     expect(stackReads).toBe(0);
     expect(diagnosticReads).toBe(0);
-    expect(Object.getOwnPropertyDescriptor(error, "stack")?.get).toBe(
-      customStackGetter,
+    const surfacedStackDescriptor = Object.getOwnPropertyDescriptor(
+      error,
+      "stack",
     );
+    expect(surfacedStackDescriptor?.value).toBe(
+      "[REDACTED runtime provenance]",
+    );
+    expect("get" in surfacedStackDescriptor!).toBe(false);
+    expect("set" in surfacedStackDescriptor!).toBe(false);
+    const surfacedLazyDescriptor = Object.getOwnPropertyDescriptor(
+      (error as typeof failure).diagnostics,
+      "lazy",
+    );
+    expect(surfacedLazyDescriptor?.value).toBe("[REDACTED runtime provenance]");
+    expect("get" in surfacedLazyDescriptor!).toBe(false);
+    expect("set" in surfacedLazyDescriptor!).toBe(false);
     expect((error as typeof failure).diagnostics.reflected).toBe(
       "[REDACTED runtime provenance]",
     );

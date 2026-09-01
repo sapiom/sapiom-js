@@ -48,6 +48,39 @@ const AGENT_RUNTIME_CALLSITE_HEADER = "x-sapiom-runtime-callsite-evidence";
 const AGENT_RUNTIME_LINEAGE_HEADER = "x-sapiom-runtime-lineage-receipt";
 const MAX_OPAQUE_TOKEN_LENGTH = 8_192;
 const RUNTIME_PROVENANCE_REDACTION = "[REDACTED runtime provenance]";
+const NATIVE_ARRAY_IS_ARRAY = Array.isArray;
+const NATIVE_ARRAY_PROTOTYPE = Array.prototype;
+const NATIVE_DATE = Date;
+const NATIVE_DATE_PROTOTYPE = Date.prototype;
+const NATIVE_DATE_GET_TIME = Date.prototype.getTime;
+const NATIVE_ERROR = Error;
+const NATIVE_HEADERS = Headers;
+const NATIVE_HEADERS_PROTOTYPE = Headers.prototype;
+const NATIVE_HEADERS_APPEND = Headers.prototype.append;
+const NATIVE_HEADERS_FOR_EACH = Headers.prototype.forEach;
+const NATIVE_HEADERS_HAS = Headers.prototype.has;
+const NATIVE_MAP = Map;
+const NATIVE_MAP_PROTOTYPE = Map.prototype;
+const NATIVE_MAP_FOR_EACH = Map.prototype.forEach;
+const NATIVE_MAP_HAS = Map.prototype.has;
+const NATIVE_MAP_SET = Map.prototype.set;
+const NATIVE_SET = Set;
+const NATIVE_SET_PROTOTYPE = Set.prototype;
+const NATIVE_SET_ADD = Set.prototype.add;
+const NATIVE_SET_FOR_EACH = Set.prototype.forEach;
+const NATIVE_SET_HAS = Set.prototype.has;
+const NATIVE_OBJECT_CREATE = Object.create;
+const NATIVE_OBJECT_DEFINE_PROPERTY = Object.defineProperty;
+const NATIVE_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR =
+  Object.getOwnPropertyDescriptor;
+const NATIVE_OBJECT_GET_PROTOTYPE_OF = Object.getPrototypeOf;
+const NATIVE_OBJECT_PROTOTYPE = Object.prototype;
+const NATIVE_OBJECT_SET_PROTOTYPE_OF = Object.setPrototypeOf;
+const NATIVE_REFLECT_APPLY = Reflect.apply;
+const NATIVE_REFLECT_DELETE_PROPERTY = Reflect.deleteProperty;
+const NATIVE_REFLECT_OWN_KEYS = Reflect.ownKeys;
+const DIAGNOSTIC_BRAND_SENTINEL = {};
+const DIAGNOSTIC_HEADERS_BRAND_SENTINEL = "x-sapiom-diagnostic-brand";
 
 interface LineageRecord {
   readonly receipt: string;
@@ -124,14 +157,8 @@ function redactedAgentRuntimeError(
 
   const redactString = (value: string): string =>
     redactAgentRuntimeProvenance(value, values);
-  const isTraversableDiagnostic = (value: unknown): value is object => {
-    if (value === null || typeof value !== "object") return false;
-    if (value instanceof Error || Array.isArray(value)) return true;
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-  };
-  const nativeErrorStackDescriptor = Object.getOwnPropertyDescriptor(
-    new Error(),
+  const nativeErrorStackDescriptor = NATIVE_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+    new NATIVE_ERROR(),
     "stack",
   );
   const isNativeErrorStackAccessor = (
@@ -142,7 +169,7 @@ function redactedAgentRuntimeError(
     get: () => unknown;
     set: (value: unknown) => void;
   } =>
-    source instanceof Error &&
+    source instanceof NATIVE_ERROR &&
     key === "stack" &&
     !("value" in descriptor) &&
     nativeErrorStackDescriptor !== undefined &&
@@ -160,7 +187,7 @@ function redactedAgentRuntimeError(
     if (cached !== undefined) return cached;
     let stack: unknown;
     try {
-      stack = descriptor.get.call(source);
+      stack = NATIVE_REFLECT_APPLY(descriptor.get, source, []);
     } catch {
       return undefined;
     }
@@ -169,66 +196,237 @@ function redactedAgentRuntimeError(
     return stack;
   };
 
-  if (!isTraversableDiagnostic(error)) {
-    const message = String(error);
-    const redacted = redactString(message);
-    return redacted === message ? error : new Error(redacted);
-  }
-
-  const inspected = new WeakSet<object>();
-  const containsPrivateValue = (value: unknown): boolean => {
-    if (typeof value === "string") return redactString(value) !== value;
-    if (!isTraversableDiagnostic(value) || inspected.has(value)) return false;
-    inspected.add(value);
-    for (const key of Reflect.ownKeys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor && isNativeErrorStackAccessor(value, key, descriptor)) {
-        const stack = nativeErrorStack(value, descriptor);
-        if (stack !== undefined && redactString(stack) !== stack) return true;
-      }
-      if (
-        descriptor &&
-        "value" in descriptor &&
-        containsPrivateValue(descriptor.value)
-      ) {
-        return true;
-      }
+  type DiagnosticKind =
+    | "error"
+    | "array"
+    | "plain"
+    | "map"
+    | "set"
+    | "headers"
+    | "date"
+    | "opaque";
+  const hasNativeBrand = (
+    intrinsic: (...args: never[]) => unknown,
+    value: object,
+    args: readonly unknown[],
+  ): boolean => {
+    try {
+      NATIVE_REFLECT_APPLY(intrinsic, value, args);
+      return true;
+    } catch {
+      return false;
     }
-    return false;
+  };
+  const diagnosticKind = (value: object): DiagnosticKind => {
+    if (value instanceof NATIVE_ERROR) return "error";
+    const prototype = NATIVE_OBJECT_GET_PROTOTYPE_OF(value);
+    if (NATIVE_ARRAY_IS_ARRAY(value)) {
+      return prototype === NATIVE_ARRAY_PROTOTYPE ? "array" : "opaque";
+    }
+    if (prototype === NATIVE_OBJECT_PROTOTYPE || prototype === null) {
+      return "plain";
+    }
+    if (
+      prototype === NATIVE_MAP_PROTOTYPE &&
+      hasNativeBrand(NATIVE_MAP_HAS, value, [DIAGNOSTIC_BRAND_SENTINEL])
+    ) {
+      return "map";
+    }
+    if (
+      prototype === NATIVE_SET_PROTOTYPE &&
+      hasNativeBrand(NATIVE_SET_HAS, value, [DIAGNOSTIC_BRAND_SENTINEL])
+    ) {
+      return "set";
+    }
+    if (
+      prototype === NATIVE_HEADERS_PROTOTYPE &&
+      hasNativeBrand(NATIVE_HEADERS_HAS, value, [
+        DIAGNOSTIC_HEADERS_BRAND_SENTINEL,
+      ])
+    ) {
+      return "headers";
+    }
+    if (
+      prototype === NATIVE_DATE_PROTOTYPE &&
+      hasNativeBrand(NATIVE_DATE_GET_TIME, value, [])
+    ) {
+      return "date";
+    }
+    return "opaque";
   };
 
-  if (!containsPrivateValue(error)) return error;
+  type DescriptorSnapshot = readonly [PropertyKey, PropertyDescriptor];
+  const inspected = new WeakSet<object>();
+  const kinds = new WeakMap<object, DiagnosticKind>();
+  const descriptors = new WeakMap<object, DescriptorSnapshot[]>();
+  const mapEntries = new WeakMap<object, [unknown, unknown][]>();
+  const setEntries = new WeakMap<object, unknown[]>();
+  const headerEntries = new WeakMap<object, [string, string][]>();
+  const dateValues = new WeakMap<object, number>();
+
+  const descriptorSnapshots = (value: object): DescriptorSnapshot[] => {
+    const snapshots: DescriptorSnapshot[] = [];
+    for (const key of NATIVE_REFLECT_OWN_KEYS(value)) {
+      const descriptor = NATIVE_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+      if (descriptor) snapshots.push([key, descriptor]);
+    }
+    descriptors.set(value, snapshots);
+    return snapshots;
+  };
+
+  const requiresSanitization = (value: unknown): boolean => {
+    if (typeof value === "string") return redactString(value) !== value;
+    if (typeof value === "function" || typeof value === "symbol") return true;
+    if (value === null || typeof value !== "object") return false;
+    const kind = diagnosticKind(value);
+    kinds.set(value, kind);
+    if (kind === "opaque") return true;
+    if (inspected.has(value)) return false;
+    inspected.add(value);
+
+    let required = false;
+    if (kind === "map") {
+      const entries: [unknown, unknown][] = [];
+      NATIVE_REFLECT_APPLY(NATIVE_MAP_FOR_EACH, value, [
+        (entryValue: unknown, entryKey: unknown) => {
+          entries.push([entryKey, entryValue]);
+        },
+      ]);
+      mapEntries.set(value, entries);
+      for (const [entryKey, entryValue] of entries) {
+        if (requiresSanitization(entryKey)) required = true;
+        if (requiresSanitization(entryValue)) required = true;
+      }
+    } else if (kind === "set") {
+      const entries: unknown[] = [];
+      NATIVE_REFLECT_APPLY(NATIVE_SET_FOR_EACH, value, [
+        (entryValue: unknown) => {
+          entries.push(entryValue);
+        },
+      ]);
+      setEntries.set(value, entries);
+      for (const entryValue of entries) {
+        if (requiresSanitization(entryValue)) required = true;
+      }
+    } else if (kind === "headers") {
+      const entries: [string, string][] = [];
+      NATIVE_REFLECT_APPLY(NATIVE_HEADERS_FOR_EACH, value, [
+        (entryValue: string, entryKey: string) => {
+          entries.push([entryKey, entryValue]);
+        },
+      ]);
+      headerEntries.set(value, entries);
+      for (const [entryKey, entryValue] of entries) {
+        if (redactString(entryKey) !== entryKey) required = true;
+        if (redactString(entryValue) !== entryValue) required = true;
+      }
+    } else if (kind === "date") {
+      dateValues.set(
+        value,
+        NATIVE_REFLECT_APPLY(NATIVE_DATE_GET_TIME, value, []),
+      );
+    }
+
+    for (const [key, descriptor] of descriptorSnapshots(value)) {
+      if (typeof key !== "string" || redactString(key) !== key) {
+        required = true;
+        continue;
+      }
+      if (descriptor && isNativeErrorStackAccessor(value, key, descriptor)) {
+        const stack = nativeErrorStack(value, descriptor);
+        if (stack === undefined || redactString(stack) !== stack) {
+          required = true;
+        }
+        continue;
+      }
+      if (!("value" in descriptor)) {
+        required = true;
+        continue;
+      }
+      if (requiresSanitization(descriptor.value)) required = true;
+    }
+    return required;
+  };
+
+  if (!requiresSanitization(error)) return error;
 
   const sanitized = new WeakMap<object, object>();
   const sanitizeValue = (value: unknown): unknown => {
     if (typeof value === "string") return redactString(value);
-    if (!isTraversableDiagnostic(value)) return value;
+    if (typeof value === "function" || typeof value === "symbol") {
+      return RUNTIME_PROVENANCE_REDACTION;
+    }
+    if (value === null || typeof value !== "object") return value;
+    const kind = kinds.get(value) ?? diagnosticKind(value);
+    if (kind === "opaque") return RUNTIME_PROVENANCE_REDACTION;
     const cached = sanitized.get(value);
     if (cached) return cached;
 
     let initializedStackDescriptor: PropertyDescriptor | undefined;
     let target: object;
-    if (value instanceof Error) {
-      target = new Error();
-      initializedStackDescriptor = Object.getOwnPropertyDescriptor(
+    if (kind === "error") {
+      target = new NATIVE_ERROR();
+      initializedStackDescriptor = NATIVE_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
         target,
         "stack",
       );
-      Object.setPrototypeOf(target, Object.getPrototypeOf(value));
-      for (const key of Reflect.ownKeys(target)) {
-        if (!Object.prototype.hasOwnProperty.call(value, key)) {
-          Reflect.deleteProperty(target, key);
+      NATIVE_OBJECT_SET_PROTOTYPE_OF(
+        target,
+        NATIVE_OBJECT_GET_PROTOTYPE_OF(value),
+      );
+      const sourceDescriptors = descriptors.get(value) ?? [];
+      for (const targetKey of NATIVE_REFLECT_OWN_KEYS(target)) {
+        let sourceHasKey = false;
+        for (const [sourceKey] of sourceDescriptors) {
+          if (sourceKey === targetKey) sourceHasKey = true;
+        }
+        if (!sourceHasKey) {
+          NATIVE_REFLECT_DELETE_PROPERTY(target, targetKey);
         }
       }
-    } else if (Array.isArray(value)) {
-      target = Object.setPrototypeOf([], Object.getPrototypeOf(value));
+    } else if (kind === "array") {
+      target = NATIVE_OBJECT_SET_PROTOTYPE_OF(
+        [],
+        NATIVE_OBJECT_GET_PROTOTYPE_OF(value),
+      );
+    } else if (kind === "map") {
+      target = new NATIVE_MAP();
+    } else if (kind === "set") {
+      target = new NATIVE_SET();
+    } else if (kind === "headers") {
+      target = new NATIVE_HEADERS();
+    } else if (kind === "date") {
+      target = new NATIVE_DATE(dateValues.get(value)!);
     } else {
-      target = Object.create(Object.getPrototypeOf(value));
+      target = NATIVE_OBJECT_CREATE(NATIVE_OBJECT_GET_PROTOTYPE_OF(value));
     }
     sanitized.set(value, target);
-    for (const key of Reflect.ownKeys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor) continue;
+
+    if (kind === "map") {
+      for (const [entryKey, entryValue] of mapEntries.get(value) ?? []) {
+        NATIVE_REFLECT_APPLY(NATIVE_MAP_SET, target, [
+          sanitizeValue(entryKey),
+          sanitizeValue(entryValue),
+        ]);
+      }
+    } else if (kind === "set") {
+      for (const entryValue of setEntries.get(value) ?? []) {
+        NATIVE_REFLECT_APPLY(NATIVE_SET_ADD, target, [
+          sanitizeValue(entryValue),
+        ]);
+      }
+    } else if (kind === "headers") {
+      for (const [entryKey, entryValue] of headerEntries.get(value) ?? []) {
+        if (redactString(entryKey) !== entryKey) continue;
+        NATIVE_REFLECT_APPLY(NATIVE_HEADERS_APPEND, target, [
+          entryKey,
+          redactString(entryValue),
+        ]);
+      }
+    }
+
+    for (const [key, descriptor] of descriptors.get(value) ?? []) {
+      if (typeof key !== "string" || redactString(key) !== key) continue;
       if (
         initializedStackDescriptor &&
         !("value" in initializedStackDescriptor) &&
@@ -238,8 +436,10 @@ function redactedAgentRuntimeError(
       ) {
         const stack = nativeErrorStack(value, descriptor);
         if (stack !== undefined) {
-          initializedStackDescriptor.set.call(target, redactString(stack));
-          Object.defineProperty(target, key, {
+          NATIVE_REFLECT_APPLY(initializedStackDescriptor.set, target, [
+            redactString(stack),
+          ]);
+          NATIVE_OBJECT_DEFINE_PROPERTY(target, key, {
             configurable: descriptor.configurable,
             enumerable: descriptor.enumerable,
             get: initializedStackDescriptor.get,
@@ -248,10 +448,17 @@ function redactedAgentRuntimeError(
           continue;
         }
       }
-      if ("value" in descriptor) {
-        descriptor.value = sanitizeValue(descriptor.value);
+      if (!("value" in descriptor)) {
+        NATIVE_OBJECT_DEFINE_PROPERTY(target, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          value: RUNTIME_PROVENANCE_REDACTION,
+          writable: false,
+        });
+        continue;
       }
-      Object.defineProperty(target, key, descriptor);
+      descriptor.value = sanitizeValue(descriptor.value);
+      NATIVE_OBJECT_DEFINE_PROPERTY(target, key, descriptor);
     }
     return target;
   };
