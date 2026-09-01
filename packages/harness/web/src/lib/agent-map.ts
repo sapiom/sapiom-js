@@ -3,6 +3,8 @@ import type {
   AgentMapWorkspaceState,
   StudioProjectBindingSummary,
   StudioProjectSummary,
+  StudioCurrentWorkspaceResponse,
+  StudioWorkspaceSelection,
 } from "@shared/agent-map";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -167,4 +169,84 @@ export function parseAgentMapWorkspaceResponse(
   const workspace = parseWorkspace(value.workspace, project.projectId);
   if (!workspace) throw new Error("Invalid Agent Map workspace response");
   return { project, workspace };
+}
+
+function parseSelection(
+  value: unknown,
+  projectId: string,
+): StudioWorkspaceSelection | null {
+  if (!isRecord(value) || value.projectId !== projectId) return null;
+  if (
+    value.kind === "agent-map" &&
+    hasExactKeys(value, ["kind", "projectId"])
+  ) {
+    return { kind: "agent-map", projectId };
+  }
+  if (
+    value.kind === "agent" &&
+    hasExactKeys(value, ["kind", "projectId", "agentId"]) &&
+    isOpaqueId(value.agentId)
+  ) {
+    return { kind: "agent", projectId, agentId: value.agentId };
+  }
+  return null;
+}
+
+/** Strict parser for the path-free durable selection boundary. */
+export function parseStudioCurrentWorkspaceResponse(
+  value: unknown,
+  expectedProjectId: string,
+): StudioCurrentWorkspaceResponse {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["projectId", "selection", "agents", "repaired"]) ||
+    value.projectId !== expectedProjectId ||
+    typeof value.repaired !== "boolean" ||
+    !Array.isArray(value.agents)
+  )
+    throw new Error("Invalid Studio current-workspace response");
+  const selection = parseSelection(value.selection, expectedProjectId);
+  const agents = value.agents.map((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, ["agentId", "name", "definitionId"]) ||
+      !isOpaqueId(candidate.agentId) ||
+      typeof candidate.name !== "string" ||
+      !candidate.name ||
+      (candidate.definitionId !== null &&
+        !Number.isSafeInteger(candidate.definitionId))
+    )
+      return null;
+    return {
+      agentId: candidate.agentId,
+      name: candidate.name,
+      definitionId: candidate.definitionId as number | null,
+    };
+  });
+  if (!selection || agents.some((agent) => agent === null)) {
+    throw new Error("Invalid Studio current-workspace response");
+  }
+  return {
+    projectId: expectedProjectId,
+    selection,
+    agents: agents as StudioCurrentWorkspaceResponse["agents"],
+    repaired: value.repaired,
+  };
+}
+
+/** Client-only restore guard; the server applies the same rule authoritatively. */
+export function resolveStudioWorkspaceSelection(
+  projectId: string,
+  selection: StudioWorkspaceSelection | null | undefined,
+  agentIds: readonly string[],
+): { selection: StudioWorkspaceSelection; repair: boolean } {
+  if (!selection)
+    return { selection: { kind: "agent-map", projectId }, repair: false };
+  if (selection.projectId !== projectId) {
+    return { selection: { kind: "agent-map", projectId }, repair: true };
+  }
+  if (selection.kind === "agent" && !agentIds.includes(selection.agentId)) {
+    return { selection: { kind: "agent-map", projectId }, repair: true };
+  }
+  return { selection, repair: false };
 }

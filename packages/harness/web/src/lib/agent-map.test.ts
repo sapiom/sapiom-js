@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseAgentMapWorkspaceResponse } from "./agent-map";
+import {
+  parseAgentMapWorkspaceResponse,
+  resolveStudioWorkspaceSelection,
+} from "./agent-map";
 import { MockApi } from "./api";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
@@ -89,5 +92,38 @@ describe("parseAgentMapWorkspaceResponse", () => {
     expect(() => parseAgentMapWorkspaceResponse(value, projectId)).toThrow(
       "Invalid Agent Map workspace response",
     );
+  });
+});
+
+describe("resolveStudioWorkspaceSelection", () => {
+  it("defaults to map without treating a first visit as a repair", () => {
+    expect(resolveStudioWorkspaceSelection(projectId, null, [])).toEqual({
+      selection: { kind: "agent-map", projectId },
+      repair: false,
+    });
+  });
+
+  it("restores only a valid agent inside this project", () => {
+    const selection = { kind: "agent" as const, projectId, agentId: "agent_1" };
+    expect(
+      resolveStudioWorkspaceSelection(projectId, selection, ["agent_1"]),
+    ).toEqual({
+      selection,
+      repair: false,
+    });
+    expect(resolveStudioWorkspaceSelection(projectId, selection, [])).toEqual({
+      selection: { kind: "agent-map", projectId },
+      repair: true,
+    });
+  });
+
+  it("repairs a foreign-project selection", () => {
+    expect(
+      resolveStudioWorkspaceSelection(
+        projectId,
+        { kind: "agent-map", projectId: "project_foreign" },
+        [],
+      ),
+    ).toEqual({ selection: { kind: "agent-map", projectId }, repair: true });
   });
 });

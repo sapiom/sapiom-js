@@ -5,7 +5,10 @@ import {
   type AgentMapErrorCode,
   type AgentMapErrorResponse,
   type AgentMapWorkspaceResponse,
+  type PutStudioCurrentWorkspaceRequest,
+  type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
+import type { WorkflowInfo } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import {
   AgentMapWorkspaceStore,
@@ -16,10 +19,19 @@ import {
   StudioProjectCatalogError,
 } from "../core/studio-project-catalog.js";
 import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import {
+  StudioWorkspacePreferenceStore,
+  StudioWorkspacePreferenceStoreError,
+} from "../core/studio-workspace-preferences.js";
 
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
   store: AgentMapWorkspaceStore;
+  preferences: StudioWorkspacePreferenceStore;
+  userId: string;
+  listWorkflows: () =>
+    | readonly WorkflowInfo[]
+    | Promise<readonly WorkflowInfo[]>;
   /** Existing allow-listed roots only; this callback must not scan source. */
   listWorkspaceScopes: () =>
     | readonly WorkspaceScopeSummary[]
@@ -161,7 +173,19 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       }
     },
   );
-
+  const projectContext = async (projectId: string) => {
+    const reconciled = await options.catalog.reconcile(
+      await options.listWorkspaceScopes(),
+    );
+    const project = await options.catalog.resolve(projectId);
+    if (!project) return null;
+    return {
+      project,
+      roots: reconciled.workspaceScopes
+        .filter((scope) => scope.projectId === project.projectId)
+        .map((scope) => scope.cwd),
+    };
+  };
   router.get("/projects/:projectId/agent-map/workspace", async (req, res) => {
     try {
       await options.catalog.reconcile(await options.listWorkspaceScopes());
@@ -181,6 +205,72 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     } catch (error) {
       const bounded =
         error instanceof AgentMapWorkspaceStoreError ||
+        error instanceof StudioProjectCatalogError
+          ? error.code
+          : "storage_unavailable";
+      res
+        .status(bounded === "storage_unavailable" ? 503 : 500)
+        .json(errorBody(bounded));
+    }
+  });
+
+  router.get("/projects/:projectId/current-workspace", async (req, res) => {
+    try {
+      const context = await projectContext(req.params.projectId);
+      if (!context) {
+        res.status(404).json(errorBody("project_not_found"));
+        return;
+      }
+      const current = await options.preferences.current(
+        options.userId,
+        context.project.projectId,
+        context.roots,
+        await options.listWorkflows(),
+      );
+      res.status(200).setHeader("Cache-Control", "no-store").json(current);
+    } catch (error) {
+      const bounded =
+        error instanceof StudioWorkspacePreferenceStoreError ||
+        error instanceof StudioProjectCatalogError
+          ? error.code
+          : "storage_unavailable";
+      res
+        .status(bounded === "storage_unavailable" ? 503 : 500)
+        .json(errorBody(bounded));
+    }
+  });
+
+  router.put("/projects/:projectId/current-workspace", async (req, res) => {
+    try {
+      const context = await projectContext(req.params.projectId);
+      if (!context) {
+        res.status(404).json(errorBody("project_not_found"));
+        return;
+      }
+      const body = req.body as
+        | Partial<PutStudioCurrentWorkspaceRequest>
+        | undefined;
+      const selection = body?.selection as StudioWorkspaceSelection | undefined;
+      if (
+        !selection ||
+        (selection.kind !== "agent-map" && selection.kind !== "agent") ||
+        typeof selection.projectId !== "string" ||
+        (selection.kind === "agent" && typeof selection.agentId !== "string")
+      ) {
+        res.status(400).json(errorBody("malformed_state"));
+        return;
+      }
+      const current = await options.preferences.put(
+        options.userId,
+        context.project.projectId,
+        selection,
+        context.roots,
+        await options.listWorkflows(),
+      );
+      res.status(200).setHeader("Cache-Control", "no-store").json(current);
+    } catch (error) {
+      const bounded =
+        error instanceof StudioWorkspacePreferenceStoreError ||
         error instanceof StudioProjectCatalogError
           ? error.code
           : "storage_unavailable";

@@ -11,6 +11,7 @@ export type StudioProjectId = string;
 export const STUDIO_PROJECT_CATALOG_SCHEMA_VERSION = 1;
 export const AGENT_MAP_WORKSPACE_SCHEMA_VERSION = 1;
 export const AGENT_MAP_INITIAL_RECORD_VERSION = 1;
+export const STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION = 1;
 
 export type ProjectRootBindingStatus = "active" | "missing";
 
@@ -49,6 +50,38 @@ export interface AgentMapWorkspaceState {
 export interface AgentMapWorkspaceResponse {
   project: StudioProjectSummary;
   workspace: AgentMapWorkspaceState;
+}
+
+/** Stable, path-free identity for the workspace currently open in Studio. */
+export type StudioWorkspaceSelection =
+  | { kind: "agent-map"; projectId: StudioProjectId }
+  | { kind: "agent"; projectId: StudioProjectId; agentId: string };
+
+/** Server-owned preference. The user id is derived from the trusted host. */
+export interface StudioWorkspacePreference {
+  userId: string;
+  projectId: StudioProjectId;
+  selection: StudioWorkspaceSelection;
+  updatedAt: string;
+}
+
+/** Public projection of a server-private agent/path binding. */
+export interface StudioWorkspaceAgentSummary {
+  agentId: string;
+  name: string;
+  definitionId: number | null;
+}
+
+export interface StudioCurrentWorkspaceResponse {
+  projectId: StudioProjectId;
+  selection: StudioWorkspaceSelection;
+  agents: StudioWorkspaceAgentSummary[];
+  /** True when a missing, deleted, or foreign selection was repaired to map. */
+  repaired: boolean;
+}
+
+export interface PutStudioCurrentWorkspaceRequest {
+  selection: StudioWorkspaceSelection;
 }
 
 export type AgentMapErrorCode =

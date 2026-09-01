@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import type { SessionSummary } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
+import type { StudioProjectId } from "@shared/agent-map";
 
 /**
  * One place the user was working. Distinct from past-session "history" (ended
@@ -13,6 +14,7 @@ import type { WorkspaceKey } from "@shared/system-graph";
 export type NavigationVisit =
   | { kind: "session"; sessionId: string; agentPath: string | null }
   | { kind: "agent"; agentPath: string }
+  | { kind: "agent-map"; projectId: StudioProjectId }
   | {
       kind: "project";
       workspaceKey: WorkspaceKey;
@@ -44,6 +46,8 @@ export function sameNavigationVisit(
     return a.sessionId === b.sessionId;
   if (a.kind === "agent" && b.kind === "agent")
     return a.agentPath === b.agentPath;
+  if (a.kind === "agent-map" && b.kind === "agent-map")
+    return a.projectId === b.projectId;
   if (a.kind === "project" && b.kind === "project") {
     return a.workspaceKey === b.workspaceKey;
   }

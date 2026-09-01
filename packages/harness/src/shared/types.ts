@@ -1584,6 +1584,14 @@ export interface WorkflowInfo {
   starterId?: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
+  /**
+   * Project-scoped opaque selection identities. An agent can appear beneath
+   * overlapping opened roots, so this is a list rather than one global id.
+   */
+  studioBindings?: Array<{
+    projectId: import("./agent-map.js").StudioProjectId;
+    agentId: string;
+  }>;
 }
 
 /**

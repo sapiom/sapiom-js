@@ -57,6 +57,7 @@ import type {
   WorkflowInputContractResponse,
 } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
+import type { StudioWorkspaceSelection } from "@shared/agent-map";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { CommandPalette } from "./components/CommandPalette";
@@ -279,6 +280,105 @@ export const App = (): JSX.Element => {
   const [selectedProject, setSelectedProject] = useState<ProjectRef | null>(
     null,
   );
+  const [studioSelection, setStudioSelection] =
+    useState<StudioWorkspaceSelection | null>(null);
+  const restoredStudioProjectsRef = useRef(new Set<string>());
+  const studioRestoreGenerationRef = useRef(0);
+
+  // A project visit restores its server-owned preference before choosing an
+  // altitude. Workspace and preference are fetched together so an agent
+  // restore never flashes the map first.
+  useEffect(() => {
+    const state = harness.state;
+    const active = state?.sessions.find(
+      (session) => session.id === harness.activeSessionId,
+    );
+    if (!state?.studioProjects || !active) return;
+    const scope = state.workspaceScopes?.find((candidate) =>
+      isWithinDir(candidate.cwd, active.cwd),
+    );
+    const project = state.studioProjects.find(
+      (candidate) => candidate.projectId === scope?.projectId,
+    );
+    if (
+      !scope?.projectId ||
+      !project ||
+      restoredStudioProjectsRef.current.has(project.projectId)
+    )
+      return;
+    restoredStudioProjectsRef.current.add(project.projectId);
+    const generation = ++studioRestoreGenerationRef.current;
+    void Promise.all([
+      harness.api.getAgentMapWorkspace(project.projectId),
+      harness.api.getStudioCurrentWorkspace(project.projectId),
+    ])
+      .then(([, current]) => {
+        if (generation !== studioRestoreGenerationRef.current) return;
+        const restoredSelection = current.selection;
+        const workflow =
+          restoredSelection.kind === "agent"
+            ? state.workflows.find((candidate) =>
+                candidate.studioBindings?.some(
+                  (binding) =>
+                    binding.projectId === restoredSelection.projectId &&
+                    binding.agentId === restoredSelection.agentId,
+                ),
+              )
+            : null;
+        if (workflow && restoredSelection.kind === "agent") {
+          setStudioSelection(restoredSelection);
+          setSelectedProject(null);
+          setFocusedAgentPath(workflow.path);
+          return;
+        }
+        setStudioSelection({ kind: "agent-map", projectId: project.projectId });
+        setSelectedProject({
+          workspaceKey: scope.workspaceKey,
+          root: scope.cwd,
+          label: project.displayName,
+        });
+        setFocusedAgentPath(scope.cwd);
+      })
+      .catch(() => {
+        restoredStudioProjectsRef.current.delete(project.projectId);
+      });
+  }, [harness.activeSessionId, harness.api, harness.state]);
+
+  // A selected agent that disappears is repaired atomically to its project's
+  // map; the server is authoritative and persists the repair.
+  useEffect(() => {
+    const state = harness.state;
+    if (studioSelection?.kind !== "agent" || !state) return;
+    if (
+      state.workflows.some((workflow) =>
+        workflow.studioBindings?.some(
+          (binding) =>
+            binding.projectId === studioSelection.projectId &&
+            binding.agentId === studioSelection.agentId,
+        ),
+      )
+    )
+      return;
+    const scope = state.workspaceScopes?.find(
+      (candidate) => candidate.projectId === studioSelection.projectId,
+    );
+    const project = state.studioProjects?.find(
+      (candidate) => candidate.projectId === studioSelection.projectId,
+    );
+    if (!scope || !project) return;
+    const fallback: StudioWorkspaceSelection = {
+      kind: "agent-map",
+      projectId: studioSelection.projectId,
+    };
+    setStudioSelection(fallback);
+    setSelectedProject({
+      workspaceKey: scope.workspaceKey,
+      root: scope.cwd,
+      label: project.displayName,
+    });
+    setFocusedAgentPath(scope.cwd);
+    void harness.api.putStudioCurrentWorkspace(project.projectId, fallback);
+  }, [harness.api, harness.state, studioSelection]);
   // The project whose FIRST session is being created. The centre pane says so
   // while the POST and the pty spawn resolve; without it a project you have
   // just selected flashes the create-new composer for the length of a session
@@ -809,7 +909,9 @@ export const App = (): JSX.Element => {
       applyingVisitRef.current = false;
       return;
     }
-    if (selectedProject) {
+    if (selectedProject && studioSelection?.kind === "agent-map") {
+      recordVisit({ kind: "agent-map", projectId: studioSelection.projectId });
+    } else if (selectedProject) {
       recordVisit({
         kind: "project",
         workspaceKey: selectedProject.workspaceKey,
@@ -837,6 +939,7 @@ export const App = (): JSX.Element => {
   }, [
     recordVisit,
     selectedProject,
+    studioSelection,
     templatesOpen,
     reviewSummary,
     composing,
@@ -849,6 +952,7 @@ export const App = (): JSX.Element => {
   const applyVisit = useCallback(
     (visit: NavigationVisit | null): void => {
       if (!visit) return;
+      studioRestoreGenerationRef.current += 1;
       // Replaying, not navigating: tell the record effect to skip the one run
       // this state change triggers, so it never re-derives-and-pushes (which
       // would truncate the forward stack). See applyingVisitRef above.
@@ -865,6 +969,23 @@ export const App = (): JSX.Element => {
         // beside it. The ref exists because the handler closes over `state`,
         // which is only available past the loading guard.
         selectProjectRef.current?.(visit.workspaceKey, visit.root, visit.label);
+      } else if (visit.kind === "agent-map") {
+        const state = harness.state;
+        const scope = state?.workspaceScopes?.find(
+          (candidate) => candidate.projectId === visit.projectId,
+        );
+        const project = state?.studioProjects?.find(
+          (candidate) => candidate.projectId === visit.projectId,
+        );
+        if (scope && project) {
+          setStudioSelection({ kind: "agent-map", projectId: visit.projectId });
+          setSelectedProject({
+            workspaceKey: scope.workspaceKey,
+            root: scope.cwd,
+            label: project.displayName,
+          });
+          setFocusedAgentPath(scope.cwd);
+        }
       } else {
         setSelectedProject(null);
       }
@@ -875,7 +996,7 @@ export const App = (): JSX.Element => {
         setFocusedAgentPath(visit.agentPath);
       }
     },
-    [setActiveSessionId],
+    [harness.state, setActiveSessionId],
   );
 
   // The dead pane's Resume button has to be as honest as a history row's tag,
@@ -1198,6 +1319,25 @@ export const App = (): JSX.Element => {
     root: string,
     label: string,
   ): void => {
+    studioRestoreGenerationRef.current += 1;
+    const studioProjectId = workspaceScopes.find(
+      (scope) => scope.workspaceKey === workspaceKey,
+    )?.projectId;
+    if (
+      studioProjectId &&
+      state.studioProjects?.some(
+        (project) => project.projectId === studioProjectId,
+      )
+    ) {
+      const selection: StudioWorkspaceSelection = {
+        kind: "agent-map",
+        projectId: studioProjectId,
+      };
+      setStudioSelection(selection);
+      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection);
+    } else {
+      setStudioSelection(null);
+    }
     setSelectedProject({ workspaceKey, root, label });
     // ONE selection: the rail selection IS the project now, so the agent that
     // happened to be focused before stops being what any surface is about.
@@ -1404,6 +1544,35 @@ export const App = (): JSX.Element => {
     // the selection following the thing the user just made.
     setSelectedProject(null);
     setFocusedAgentPath(created.path);
+    studioRestoreGenerationRef.current += 1;
+    // Creation is an explicit agent transition, but it does not write an
+    // Agent Map node. Resolve the server-issued project-scoped binding after
+    // the registry rescan and persist only that workspace preference.
+    void harness.api
+      .getState()
+      .then((refreshed) => {
+        const projectId = refreshed.workspaceScopes?.find((scope) =>
+          samePath(scope.cwd, request.root),
+        )?.projectId;
+        const workflow = refreshed.workflows.find((candidate) =>
+          samePath(candidate.path, created.path),
+        );
+        const binding = workflow?.studioBindings?.find(
+          (candidate) => candidate.projectId === projectId,
+        );
+        if (!binding) return;
+        const selection: StudioWorkspaceSelection = {
+          kind: "agent",
+          projectId: binding.projectId,
+          agentId: binding.agentId,
+        };
+        setStudioSelection(selection);
+        return harness.api.putStudioCurrentWorkspace(
+          binding.projectId,
+          selection,
+        );
+      })
+      .catch(() => {});
 
     // EVERYTHING BELOW IS THE CHAT, and the agent already exists. A session
     // that fails to start is a session failure, reported as one — it must
@@ -1779,13 +1948,42 @@ export const App = (): JSX.Element => {
    * project's own session, or to none. Its overlapping-roots answer is
    * deliberate and asymmetric; the reasoning lives with the function.
    */
-  const handleFocusAgent = (path: string): void => {
+  const handleFocusAgent = (
+    path: string,
+    preferredStudioBinding?: { projectId: string; agentId: string },
+  ): void => {
+    studioRestoreGenerationRef.current += 1;
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
     setOverviewOpen(false);
     setSelectedProject(null);
     setFocusedAgentPath(path);
+    const workflow = state.workflows.find((candidate) =>
+      samePath(candidate.path, path),
+    );
+    const studioBinding =
+      preferredStudioBinding ??
+      workflow?.studioBindings?.find(
+        (binding) => binding.projectId === studioSelection?.projectId,
+      ) ??
+      (workflow?.studioBindings?.length === 1
+        ? workflow.studioBindings[0]
+        : undefined);
+    if (studioBinding) {
+      const selection: StudioWorkspaceSelection = {
+        kind: "agent",
+        projectId: studioBinding.projectId,
+        agentId: studioBinding.agentId,
+      };
+      setStudioSelection(selection);
+      void harness.api.putStudioCurrentWorkspace(
+        studioBinding.projectId,
+        selection,
+      );
+    } else {
+      setStudioSelection(null);
+    }
     closeMobileDrawer();
     const decision = sessionForFocus({
       focusPath: path,
@@ -2097,8 +2295,19 @@ export const App = (): JSX.Element => {
             activeSessionId={harness.activeSessionId}
             focusedAgentPath={atMapAltitude ? null : focusedAgentPath}
             workspaceScopes={state.workspaceScopes}
+            studioProjects={state.studioProjects}
+            studioSelection={studioSelection}
             selectedWorkspaceKey={selectedProject?.workspaceKey ?? null}
             onSelectWorkspace={handleSelectWorkspace}
+            onSelectAgentMap={(projectId, root, label) => {
+              const scope = workspaceScopes.find(
+                (candidate) => candidate.projectId === projectId,
+              );
+              if (scope) handleSelectWorkspace(scope.workspaceKey, root, label);
+            }}
+            onSelectStudioAgent={(workflow, projectId, agentId) =>
+              handleFocusAgent(workflow.path, { projectId, agentId })
+            }
             onFocusAgent={handleFocusAgent}
             onOpenPalette={() => setPaletteOpen(true)}
             onConnect={async (path) => {
@@ -2142,7 +2351,50 @@ export const App = (): JSX.Element => {
               }
               await harness.removeProject(root);
             }}
-            onOpenProject={harness.openProject}
+            onOpenProject={async (requestedRoot) => {
+              const openedRoot = await harness.openProject(requestedRoot);
+              const refreshed = await harness.api.getState();
+              const scope = refreshed.workspaceScopes?.find((candidate) =>
+                samePath(candidate.cwd, openedRoot),
+              );
+              const project = refreshed.studioProjects?.find(
+                (candidate) => candidate.projectId === scope?.projectId,
+              );
+              if (!scope?.projectId || !project) return;
+              restoredStudioProjectsRef.current.add(project.projectId);
+              const generation = ++studioRestoreGenerationRef.current;
+              const [, current] = await Promise.all([
+                harness.api.getAgentMapWorkspace(project.projectId),
+                harness.api.getStudioCurrentWorkspace(project.projectId),
+              ]);
+              if (generation !== studioRestoreGenerationRef.current) return;
+              const restoredSelection = current.selection;
+              if (restoredSelection.kind === "agent") {
+                const workflow = refreshed.workflows.find((candidate) =>
+                  candidate.studioBindings?.some(
+                    (binding) =>
+                      binding.projectId === restoredSelection.projectId &&
+                      binding.agentId === restoredSelection.agentId,
+                  ),
+                );
+                if (workflow) {
+                  setStudioSelection(restoredSelection);
+                  setSelectedProject(null);
+                  setFocusedAgentPath(workflow.path);
+                  return;
+                }
+              }
+              setStudioSelection({
+                kind: "agent-map",
+                projectId: project.projectId,
+              });
+              setSelectedProject({
+                workspaceKey: scope.workspaceKey,
+                root: scope.cwd,
+                label: project.displayName,
+              });
+              setFocusedAgentPath(scope.cwd);
+            }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
             onCreateSession={handleCreateSession}

@@ -153,6 +153,7 @@ import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -2514,6 +2515,46 @@ export const startServer = async (
       },
     },
   );
+  const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
+    join(statePaths.agentMap, "studio-workspace-preferences.json"),
+  );
+
+  const annotateStudioSelections = async (
+    workflows: readonly RegistryWorkflowInfo[],
+  ): Promise<RegistryWorkflowInfo[]> => {
+    const scopes = await workspaceScopeCatalog.list();
+    const projects = (await studioProjectCatalog.reconcile(scopes)).projects;
+    const annotations = new Map<
+      string,
+      Array<{ agentId: string; projectId: string }>
+    >();
+    for (const project of projects) {
+      const roots = scopes
+        .filter((scope) => scope.projectId === project.projectId)
+        .map((scope) => scope.cwd);
+      for (const [
+        workflowPath,
+        agentId,
+      ] of await studioWorkspacePreferences.agentIds(
+        project.projectId,
+        roots,
+        workflows,
+      )) {
+        const existing = annotations.get(workflowPath) ?? [];
+        existing.push({ agentId, projectId: project.projectId });
+        annotations.set(workflowPath, existing);
+      }
+    }
+    return workflows.map((workflow) => {
+      const annotation = annotations.get(workflow.path);
+      return annotation
+        ? {
+            ...workflow,
+            studioBindings: annotation,
+          }
+        : workflow;
+    });
+  };
 
   const app: Express = express();
   app.disable("x-powered-by");
@@ -2544,7 +2585,9 @@ export const startServer = async (
           }
         : null,
       listWorkflows: async () =>
-        publicWorkflowInfos(await enrichWorkflows(workflowsCache)),
+        publicWorkflowInfos(
+          await annotateStudioSelections(await enrichWorkflows(workflowsCache)),
+        ),
       listWorkspaceScopes: listWorkspaceScopesAndRetain,
       listStudioProjects: async () => {
         try {
@@ -2603,6 +2646,9 @@ export const startServer = async (
     createAgentMapRouter({
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
+      preferences: studioWorkspacePreferences,
+      userId: identity?.userId ?? machineId,
+      listWorkflows: () => workflowsCache,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
     }),
   );
@@ -2667,7 +2713,9 @@ export const startServer = async (
   // as WorkflowRegistryLike so this wrapper needs no unsafe cast.
   const enrichedWorkflowRegistry: WorkflowRegistryLike = {
     list: async () =>
-      publicWorkflowInfos(await enrichWorkflows(workflowsCache)),
+      publicWorkflowInfos(
+        await annotateStudioSelections(await enrichWorkflows(workflowsCache)),
+      ),
     scan: (root: string) =>
       scanWorkflowsAndBroadcast(root, "requested", { dirty: true }).then(
         (outcome) => publicWorkflowInfos(outcome.found),

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import type { AgentMapWorkspaceResponse } from "../shared/agent-map.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
@@ -50,7 +51,24 @@ describe("createAgentMapRouter", () => {
     app.use("/api", express.json());
     app.use(
       "/api",
-      createAgentMapRouter({ catalog, store, listWorkspaceScopes }),
+      createAgentMapRouter({
+        catalog,
+        store,
+        preferences: new StudioWorkspacePreferenceStore(
+          path.join(stateRoot, "studio-workspace-preferences.json"),
+        ),
+        userId: "user-test",
+        listWorkflows: () => [
+          {
+            name: "Planner",
+            path: path.join(privateRoot, "planner"),
+            definitionId: null,
+            definitionSlug: null,
+            source: "scan" as const,
+          },
+        ],
+        listWorkspaceScopes,
+      }),
     );
     server = app.listen(0);
     const address = server.address() as AddressInfo;
@@ -230,6 +248,54 @@ describe("createAgentMapRouter", () => {
     expect(
       (await fixture.catalog.resolve(fixture.project.projectId))?.bindings,
     ).toHaveLength(1);
+  });
+
+  it("defaults to Agent Map, persists a valid opaque agent, and repairs a foreign id", async () => {
+    const fixture = await start();
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/current-workspace`;
+    const headers = {
+      "X-Harness-Token": "test-token",
+      "Content-Type": "application/json",
+    };
+    const first = await fetch(route, { headers });
+    const initial = (await first.json()) as {
+      selection: { kind: string };
+      agents: Array<{ agentId: string }>;
+    };
+    expect(initial.selection.kind).toBe("agent-map");
+    expect(JSON.stringify(initial)).not.toContain(fixture.privateRoot);
+
+    const selected = await fetch(route, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId: initial.agents[0]!.agentId,
+        },
+      }),
+    });
+    expect(await selected.json()).toMatchObject({
+      repaired: false,
+      selection: { kind: "agent", agentId: initial.agents[0]!.agentId },
+    });
+
+    const repaired = await fetch(route, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId: "agent_00000000-0000-4000-8000-999999999999",
+        },
+      }),
+    });
+    expect(await repaired.json()).toMatchObject({
+      repaired: true,
+      selection: { kind: "agent-map" },
+    });
   });
 
   it("returns a bounded 404 before touching workspace storage", async () => {
