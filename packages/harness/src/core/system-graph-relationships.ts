@@ -6,7 +6,6 @@ import ts from "typescript";
 import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,
-  workflowSourceFileMetadata,
   type AgentInvocationDetectionWarning,
   type AgentInvocationMode,
   type SourceEvidence,
@@ -533,6 +532,9 @@ const MODE_ORDER: Record<AgentInvocationMode, number> = {
 };
 
 const PROGRAM_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+const INVOCATION_ALIAS_MAX_VERTICES = 2_048;
+const INVOCATION_ALIAS_MAX_EDGES = 8_192;
+const INVOCATION_ALIAS_MAX_WORK = 32_768;
 
 type TargetResult = { kind: "literal"; slug: string } | { kind: "dynamic" };
 type WrapperTargetResult =
@@ -603,6 +605,14 @@ interface PackageSourceSnapshot {
   files: ReadonlyMap<string, string>;
   observedPaths: readonly string[];
   complete: boolean;
+}
+
+let toolsDeclarationAdmissionProbeForTest: ((path: string) => void) | null = null;
+
+export function setToolsDeclarationAdmissionProbeForTest(
+  next: ((path: string) => void) | null,
+): void {
+  toolsDeclarationAdmissionProbeForTest = next;
 }
 
 function packageRootForCaller(caller: AgentInventoryItem): string {
@@ -1038,52 +1048,169 @@ function collectInvocationMethodAliases(
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
 
-  const resolveWrites = (
-    key: string,
-    seen = new Set<string>(),
-  ): {
-    resolutions: SystemGraphInvocationMethodResolution[];
+  let edgeCount = 0;
+  for (const symbolWrites of writes.values()) {
+    edgeCount += symbolWrites.filter((write) => write.kind === "alias").length;
+  }
+  const dynamicMethod = {
+    kind: "dynamic",
+    modes: ["blocking", "async"],
+  } as const satisfies SystemGraphInvocationMethodResolution;
+  if (
+    writes.size > INVOCATION_ALIAS_MAX_VERTICES ||
+    edgeCount > INVOCATION_ALIAS_MAX_EDGES
+  ) {
+    return new Map(
+      [...writes.keys()].map((key) => [key, dynamicMethod]),
+    );
+  }
+
+  interface AliasResolution {
+    modeMask: number;
+    methodMultiplicity: 0 | 1 | 2;
     nonMethod: boolean;
     unresolved: boolean;
-  } => {
-    const symbolWrites = writes.get(key);
-    if (!symbolWrites || symbolWrites.length === 0) {
-      return { resolutions: [], nonMethod: false, unresolved: true };
-    }
-    if (seen.has(key)) {
-      return { resolutions: [], nonMethod: false, unresolved: true };
-    }
-    const nextSeen = new Set(seen);
-    nextSeen.add(key);
-    const resolutions: SystemGraphInvocationMethodResolution[] = [];
-    let nonMethod = false;
-    let unresolved = false;
-    for (const write of symbolWrites) {
-      if (write.kind === "method") {
-        resolutions.push(write.resolution);
-      } else if (write.kind === "non-method") {
-        nonMethod = true;
-      } else {
-        const resolved = resolveWrites(write.key, nextSeen);
-        resolutions.push(...resolved.resolutions);
-        nonMethod ||= resolved.nonMethod;
-        unresolved ||= resolved.unresolved;
-      }
-    }
-    return { resolutions, nonMethod, unresolved };
+  }
+  const BLOCKING_MODE = 1;
+  const ASYNC_MODE = 2;
+  const dynamicAliasResolution = (): AliasResolution => ({
+    modeMask: BLOCKING_MODE | ASYNC_MODE,
+    methodMultiplicity: 2,
+    nonMethod: false,
+    unresolved: true,
+  });
+  const methodResolutionState = (
+    resolution: SystemGraphInvocationMethodResolution,
+  ): AliasResolution => ({
+    modeMask:
+      resolution.kind === "resolved"
+        ? resolution.mode === "blocking"
+          ? BLOCKING_MODE
+          : ASYNC_MODE
+        : resolution.modes.reduce(
+            (mask, mode) =>
+              mask | (mode === "blocking" ? BLOCKING_MODE : ASYNC_MODE),
+            0,
+          ),
+    methodMultiplicity: 1,
+    nonMethod: false,
+    unresolved: resolution.kind === "dynamic",
+  });
+  const saturatedAdd = (left: 0 | 1 | 2, right: 0 | 1 | 2): 0 | 1 | 2 =>
+    left === 0 ? right : right === 0 ? left : 2;
+  const mergeState = (
+    left: AliasResolution,
+    right: AliasResolution,
+  ): boolean => {
+    const next: AliasResolution = {
+      modeMask: left.modeMask | right.modeMask,
+      methodMultiplicity: saturatedAdd(
+        left.methodMultiplicity,
+        right.methodMultiplicity,
+      ),
+      nonMethod: left.nonMethod || right.nonMethod,
+      unresolved: left.unresolved || right.unresolved,
+    };
+    const changed =
+      next.modeMask !== left.modeMask ||
+      next.methodMultiplicity !== left.methodMultiplicity ||
+      next.nonMethod !== left.nonMethod ||
+      next.unresolved !== left.unresolved;
+    if (changed) Object.assign(left, next);
+    return changed;
   };
 
+  const states = new Map<string, AliasResolution>();
+  const aliasEdges: Array<{ source: string; target: string }> = [];
   for (const [key, symbolWrites] of writes) {
-    const resolved = resolveWrites(key);
-    if (resolved.resolutions.length === 0) continue;
+    const state: AliasResolution = {
+      modeMask: 0,
+      methodMultiplicity: 0,
+      nonMethod: false,
+      unresolved: false,
+    };
+    states.set(key, state);
+    for (const write of symbolWrites) {
+      if (write.kind === "method") {
+        mergeState(state, methodResolutionState(write.resolution));
+      } else if (write.kind === "non-method") {
+        state.nonMethod = true;
+      } else {
+        aliasEdges.push({ source: key, target: write.key });
+      }
+    }
+  }
+  for (const edge of aliasEdges) {
+    if (states.has(edge.target)) continue;
+    const state = states.get(edge.source);
+    if (state) state.unresolved = true;
+  }
+  const cycleIndegree = new Map<string, number>();
+  const cycleOutgoing = new Map<string, string[]>();
+  for (const key of writes.keys()) {
+    cycleIndegree.set(key, 0);
+    cycleOutgoing.set(key, []);
+  }
+  for (const edge of aliasEdges) {
+    if (!writes.has(edge.target)) continue;
+    cycleIndegree.set(edge.target, (cycleIndegree.get(edge.target) ?? 0) + 1);
+    cycleOutgoing.get(edge.source)?.push(edge.target);
+  }
+  const acyclic = [...cycleIndegree]
+    .filter(([, count]) => count === 0)
+    .map(([key]) => key)
+    .sort();
+  for (let index = 0; index < acyclic.length; index += 1) {
+    const key = acyclic[index]!;
+    for (const target of cycleOutgoing.get(key) ?? []) {
+      const next = (cycleIndegree.get(target) ?? 0) - 1;
+      cycleIndegree.set(target, next);
+      if (next === 0) acyclic.push(target);
+    }
+  }
+  for (const [key, count] of cycleIndegree) {
+    if (count > 0) mergeState(states.get(key)!, dynamicAliasResolution());
+  }
+
+  let work = 0;
+  const aliasTargets = new Map<string, string[]>();
+  for (const edge of aliasEdges) {
+    const targets = aliasTargets.get(edge.source) ?? [];
+    targets.push(edge.target);
+    aliasTargets.set(edge.source, targets);
+  }
+  for (const key of [...acyclic].reverse()) {
+    const source = states.get(key);
+    if (!source) continue;
+    for (const targetKey of (aliasTargets.get(key) ?? []).sort()) {
+      const target = states.get(targetKey);
+      if (!target) continue;
+      work += 1;
+      if (work > INVOCATION_ALIAS_MAX_WORK) {
+        return new Map(
+          [...writes.keys()].map((key) => [key, dynamicMethod]),
+        );
+      }
+      mergeState(source, target);
+    }
+  }
+
+  for (const [key, symbolWrites] of writes) {
+    const alias = states.get(key);
+    if (!alias || alias.modeMask === 0) continue;
+    const cleanBlocking = alias.modeMask === BLOCKING_MODE;
+    const cleanAsync = alias.modeMask === ASYNC_MODE;
     methodAliases.set(
       key,
       symbolWrites.length === 1 &&
-        resolved.resolutions.length === 1 &&
-        !resolved.nonMethod &&
-        !resolved.unresolved &&
-        resolved.resolutions[0]!.kind === "resolved"
-        ? resolved.resolutions[0]!
+        alias.methodMultiplicity === 1 &&
+        !alias.nonMethod &&
+        !alias.unresolved &&
+        (cleanBlocking || cleanAsync)
+        ? {
+            kind: "resolved",
+            mode: cleanBlocking ? "blocking" : "async",
+          }
         : { kind: "dynamic", modes: ["blocking", "async"] },
     );
   }
@@ -1290,6 +1417,31 @@ function snapshotMemberPath(
     : null;
 }
 
+async function admittedToolsDeclarationPath(
+  packageRoot: string,
+): Promise<"absent" | "inadmissible" | { status: "regular"; path: string }> {
+  let current = packageRoot;
+  const segments = ["node_modules", "@sapiom", "tools", "index.d.ts"];
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]!);
+    let stat: import("node:fs").Stats;
+    try {
+      toolsDeclarationAdmissionProbeForTest?.(current);
+      stat = await fs.lstat(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT" || code === "ENOTDIR"
+        ? "absent"
+        : "inadmissible";
+    }
+    if (stat.isSymbolicLink()) return "inadmissible";
+    const final = index === segments.length - 1;
+    if (final) return stat.isFile() ? { status: "regular", path: current } : "inadmissible";
+    if (!stat.isDirectory()) return "inadmissible";
+  }
+  return "absent";
+}
+
 async function snapshotPackageSources(
   packageRoot: string,
   readHooks: WorkflowSourceReadHooks,
@@ -1312,48 +1464,29 @@ async function snapshotPackageSources(
     }
     files.set(canonicalFile, content);
   }
-  const toolsDeclaration = lexicalAbsolutePath(
-    path.join(
-      canonicalPackageRoot,
-      "node_modules",
-      "@sapiom",
-      "tools",
-      "index.d.ts",
-    ),
+  const toolsDeclaration = path.join(
     canonicalPackageRoot,
+    "node_modules",
+    "@sapiom",
+    "tools",
+    "index.d.ts",
   );
-  let toolsDeclarationExists = true;
-  try {
-    await fs.lstat(toolsDeclaration);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      toolsDeclarationExists = false;
-    } else {
-      complete = false;
-      observedPaths.add(toolsDeclaration);
-    }
-  }
-  if (toolsDeclarationExists) {
-    const toolsDeclarationMetadata = await workflowSourceFileMetadata(
+  const toolsDeclarationAdmission =
+    await admittedToolsDeclarationPath(canonicalPackageRoot);
+  if (toolsDeclarationAdmission === "inadmissible") {
+    complete = false;
+    observedPaths.add(toolsDeclaration);
+  } else if (toolsDeclarationAdmission !== "absent") {
+    const toolsDeclarationSource = await readWorkflowSourceFile(
       canonicalPackageRoot,
-      toolsDeclaration,
+      toolsDeclarationAdmission.path,
+      readHooks,
     );
-    if (toolsDeclarationMetadata.status === "regular") {
-      const toolsDeclarationSource = await readWorkflowSourceFile(
-        canonicalPackageRoot,
-        toolsDeclaration,
-        readHooks,
-      );
-      if (toolsDeclarationSource === null) {
-        complete = false;
-      } else {
-        files.set(toolsDeclaration, toolsDeclarationSource);
-        observedPaths.add(toolsDeclaration);
-      }
-    } else {
+    if (toolsDeclarationSource === null) {
       complete = false;
-      observedPaths.add(toolsDeclaration);
+    } else {
+      files.set(toolsDeclarationAdmission.path, toolsDeclarationSource);
+      observedPaths.add(toolsDeclarationAdmission.path);
     }
   }
   return {
