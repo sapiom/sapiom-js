@@ -9,7 +9,6 @@ import type {
   PlannerSessionMetadata,
 } from "../shared/agent-map.js";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
-import { childPath } from "./path-safety.js";
 import {
   SessionInputGuardRejectedError,
   SessionManager,
@@ -349,8 +348,9 @@ export class PlannerGreetingCoordinator {
   }
 
   private sessionDirectory(sessionId: string): string {
-    const directory = childPath(this.root, sessionId);
-    if (directory === null) {
+    const directory = path.resolve(this.root, sessionId);
+    const rootPrefix = `${this.root}${path.sep}`;
+    if (!directory.startsWith(rootPrefix)) {
       throw new Error("invalid planner session storage identity");
     }
     return directory;
