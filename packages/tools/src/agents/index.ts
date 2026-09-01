@@ -130,6 +130,44 @@ function redactedAgentRuntimeError(
     const prototype = Object.getPrototypeOf(value);
     return prototype === Object.prototype || prototype === null;
   };
+  const nativeErrorStackDescriptor = Object.getOwnPropertyDescriptor(
+    new Error(),
+    "stack",
+  );
+  const isNativeErrorStackAccessor = (
+    source: object,
+    key: PropertyKey,
+    descriptor: PropertyDescriptor,
+  ): descriptor is PropertyDescriptor & {
+    get: () => unknown;
+    set: (value: unknown) => void;
+  } =>
+    source instanceof Error &&
+    key === "stack" &&
+    !("value" in descriptor) &&
+    nativeErrorStackDescriptor !== undefined &&
+    !("value" in nativeErrorStackDescriptor) &&
+    typeof descriptor.get === "function" &&
+    typeof descriptor.set === "function" &&
+    descriptor.get === nativeErrorStackDescriptor.get &&
+    descriptor.set === nativeErrorStackDescriptor.set;
+  const nativeErrorStacks = new WeakMap<object, string>();
+  const nativeErrorStack = (
+    source: object,
+    descriptor: PropertyDescriptor & { get: () => unknown },
+  ): string | undefined => {
+    const cached = nativeErrorStacks.get(source);
+    if (cached !== undefined) return cached;
+    let stack: unknown;
+    try {
+      stack = descriptor.get.call(source);
+    } catch {
+      return undefined;
+    }
+    if (typeof stack !== "string") return undefined;
+    nativeErrorStacks.set(source, stack);
+    return stack;
+  };
 
   if (!isTraversableDiagnostic(error)) {
     const message = String(error);
@@ -144,6 +182,10 @@ function redactedAgentRuntimeError(
     inspected.add(value);
     for (const key of Reflect.ownKeys(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor && isNativeErrorStackAccessor(value, key, descriptor)) {
+        const stack = nativeErrorStack(value, descriptor);
+        if (stack !== undefined && redactString(stack) !== stack) return true;
+      }
       if (
         descriptor &&
         "value" in descriptor &&
@@ -164,13 +206,48 @@ function redactedAgentRuntimeError(
     const cached = sanitized.get(value);
     if (cached) return cached;
 
-    const target = Array.isArray(value)
-      ? Object.setPrototypeOf([], Object.getPrototypeOf(value))
-      : Object.create(Object.getPrototypeOf(value));
+    let initializedStackDescriptor: PropertyDescriptor | undefined;
+    let target: object;
+    if (value instanceof Error) {
+      target = new Error();
+      initializedStackDescriptor = Object.getOwnPropertyDescriptor(
+        target,
+        "stack",
+      );
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value));
+      for (const key of Reflect.ownKeys(target)) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) {
+          Reflect.deleteProperty(target, key);
+        }
+      }
+    } else if (Array.isArray(value)) {
+      target = Object.setPrototypeOf([], Object.getPrototypeOf(value));
+    } else {
+      target = Object.create(Object.getPrototypeOf(value));
+    }
     sanitized.set(value, target);
     for (const key of Reflect.ownKeys(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor) continue;
+      if (
+        initializedStackDescriptor &&
+        !("value" in initializedStackDescriptor) &&
+        typeof initializedStackDescriptor.get === "function" &&
+        typeof initializedStackDescriptor.set === "function" &&
+        isNativeErrorStackAccessor(value, key, descriptor)
+      ) {
+        const stack = nativeErrorStack(value, descriptor);
+        if (stack !== undefined) {
+          initializedStackDescriptor.set.call(target, redactString(stack));
+          Object.defineProperty(target, key, {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            get: initializedStackDescriptor.get,
+            set: initializedStackDescriptor.set,
+          });
+          continue;
+        }
+      }
       if ("value" in descriptor) {
         descriptor.value = sanitizeValue(descriptor.value);
       }

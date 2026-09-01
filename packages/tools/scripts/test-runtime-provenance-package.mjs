@@ -131,6 +131,212 @@ async function verifySameFormat(label, tools, carrier) {
   await client.shutdown();
 }
 
+async function captureLaunchError(client, spec) {
+  try {
+    await client.agents.launch(spec);
+  } catch (error) {
+    return error;
+  }
+  assert.fail("expected agent launch to throw");
+}
+
+class NativeStackTransportError extends TypeError {
+  constructor(message, cause, diagnostics) {
+    super(message, { cause });
+    this.name = "NativeStackTransportError";
+    this.code = "EAGENT";
+    this.diagnostics = diagnostics;
+  }
+}
+
+function nativeStackFixture(callsite, diagnostics) {
+  const cause = new Error(`native cause reflected ${callsite}`);
+  cause.code = "ECONNREFUSED";
+  return new NativeStackTransportError(
+    `native transport reflected ${callsite}`,
+    cause,
+    diagnostics,
+  );
+}
+
+async function verifyNativeErrorStackRedaction(tools, carrier) {
+  const callsite = "callsite.package-native-stack";
+  let nestedGetterReads = 0;
+  const diagnostics = {
+    request: {
+      headers: {
+        [CALLSITE_HEADER]: callsite,
+        "x-request-id": "request-public",
+      },
+    },
+    response: { status: 502, retryable: true },
+  };
+  Object.defineProperty(diagnostics.request, "lazy", {
+    configurable: true,
+    enumerable: false,
+    get() {
+      nestedGetterReads += 1;
+      return callsite;
+    },
+  });
+  const failure = nativeStackFixture(callsite, diagnostics);
+  const failureStackDescriptor = Object.getOwnPropertyDescriptor(
+    failure,
+    "stack",
+  );
+  assert.ok(failureStackDescriptor);
+  assert.equal("value" in failureStackDescriptor, false);
+  assert.equal(typeof failure.stack, "string");
+  assert.match(failure.stack, /nativeStackFixture/);
+  assert.match(failure.stack, new RegExp(callsite));
+  const client = tools.createClient({
+    apiKey: "k",
+    fetch: async () => {
+      throw failure;
+    },
+  });
+  const caught = await captureLaunchError(
+    client,
+    carrier.carryAgentRuntimeProvenance(
+      { definition: "package-native-stack" },
+      { version: 1, callsite },
+    ),
+  );
+
+  assert.notEqual(caught, failure);
+  assert.ok(caught instanceof NativeStackTransportError);
+  assert.equal(
+    Object.getPrototypeOf(caught),
+    NativeStackTransportError.prototype,
+  );
+  assert.equal(caught.code, "EAGENT");
+  assert.equal(caught.diagnostics.response.status, 502);
+  assert.equal(caught.diagnostics.response.retryable, true);
+  assert.equal(
+    caught.diagnostics.request.headers["x-request-id"],
+    "request-public",
+  );
+  assert.equal(
+    caught.diagnostics.request.headers[CALLSITE_HEADER],
+    "[REDACTED runtime provenance]",
+  );
+  assert.equal(typeof caught.stack, "string");
+  assert.match(caught.stack, /nativeStackFixture/);
+  assert.equal(caught.stack.includes(callsite), false);
+  const caughtStackDescriptor = Object.getOwnPropertyDescriptor(
+    caught,
+    "stack",
+  );
+  assert.ok(caughtStackDescriptor);
+  assert.equal("value" in caughtStackDescriptor, false);
+  assert.equal(caughtStackDescriptor.get, failureStackDescriptor.get);
+  assert.equal(caughtStackDescriptor.set, failureStackDescriptor.set);
+  assert.equal(
+    caughtStackDescriptor.configurable,
+    failureStackDescriptor.configurable,
+  );
+  assert.equal(
+    caughtStackDescriptor.enumerable,
+    failureStackDescriptor.enumerable,
+  );
+  assert.equal(caught.message.includes(callsite), false);
+  assert.equal(caught.cause.message.includes(callsite), false);
+  assert.equal(typeof caught.cause.stack, "string");
+  assert.match(caught.cause.stack, /nativeStackFixture/);
+  assert.equal(caught.cause.stack.includes(callsite), false);
+  assert.equal(caught.cause.code, "ECONNREFUSED");
+  assert.equal(nestedGetterReads, 0);
+  assert.equal(failure.message.includes(callsite), true);
+  assert.equal(failure.stack.includes(callsite), true);
+  assert.equal(failure.cause.message.includes(callsite), true);
+  assert.equal(failure.cause.stack.includes(callsite), true);
+  assert.equal(failure.diagnostics.request.headers[CALLSITE_HEADER], callsite);
+  await client.shutdown();
+
+  let customStackReads = 0;
+  let customDiagnosticReads = 0;
+  const customDiagnostics = { reflected: callsite };
+  Object.defineProperty(customDiagnostics, "lazy", {
+    configurable: true,
+    enumerable: false,
+    get() {
+      customDiagnosticReads += 1;
+      return callsite;
+    },
+  });
+  const customFailure = new NativeStackTransportError(
+    "custom stack transport",
+    new Error("public cause"),
+    customDiagnostics,
+  );
+  const customStackGetter = () => {
+    customStackReads += 1;
+    return `custom stack ${callsite}`;
+  };
+  Object.defineProperty(customFailure, "stack", {
+    configurable: true,
+    enumerable: false,
+    get: customStackGetter,
+  });
+  const customClient = tools.createClient({
+    apiKey: "k",
+    fetch: async () => {
+      throw customFailure;
+    },
+  });
+  const customCaught = await captureLaunchError(
+    customClient,
+    carrier.carryAgentRuntimeProvenance(
+      { definition: "package-custom-stack" },
+      { version: 1, callsite },
+    ),
+  );
+  assert.notEqual(customCaught, customFailure);
+  assert.equal(customStackReads, 0);
+  assert.equal(customDiagnosticReads, 0);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(customCaught, "stack").get,
+    customStackGetter,
+  );
+  assert.equal(
+    customCaught.diagnostics.reflected,
+    "[REDACTED runtime provenance]",
+  );
+  await customClient.shutdown();
+
+  const noMatchFailure = nativeStackFixture("public-value", {
+    request: { headers: { "x-request-id": "request-public" } },
+  });
+  const noMatchClient = tools.createClient({
+    apiKey: "k",
+    fetch: async () => {
+      throw noMatchFailure;
+    },
+  });
+  const noMatchCaught = await captureLaunchError(
+    noMatchClient,
+    carrier.carryAgentRuntimeProvenance(
+      { definition: "package-no-match" },
+      { version: 1, callsite: "callsite.not-reflected" },
+    ),
+  );
+  assert.equal(noMatchCaught, noMatchFailure);
+  await noMatchClient.shutdown();
+
+  const noPrivateFailure = new TypeError("uninstrumented transport");
+  const noPrivateClient = tools.createClient({
+    apiKey: "k",
+    fetch: async () => {
+      throw noPrivateFailure;
+    },
+  });
+  const noPrivateCaught = await captureLaunchError(noPrivateClient, {
+    definition: "package-no-private",
+  });
+  assert.equal(noPrivateCaught, noPrivateFailure);
+  await noPrivateClient.shutdown();
+}
+
 const cjsTools = require("@sapiom/tools");
 const cjsCarrier = require(CARRIER_EXPORT);
 const cjsSandboxes = require("@sapiom/tools/sandboxes");
@@ -180,6 +386,7 @@ assert.throws(
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
 );
 await verifySameFormat("cjs", cjsTools, cjsCarrier);
+await verifyNativeErrorStackRedaction(cjsTools, cjsCarrier);
 
 const esmTools = await import("@sapiom/tools");
 const esmCarrier = await import(CARRIER_EXPORT);
@@ -408,5 +615,5 @@ for (const loaded of loadedAfterStub) {
 }
 
 console.log(
-  "runtime provenance package surfaces: native roots, constructor identity, cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
+  "runtime provenance package surfaces: native Error stacks, native roots, constructor identity, cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
 );

@@ -667,13 +667,15 @@ describe("agents runtime provenance v1", () => {
       }
     }
     const failure = new DiagnosticTransportError(diagnostics);
-    Object.defineProperty(failure, "stack", {
-      configurable: true,
-      enumerable: false,
-      value:
-        "DiagnosticTransportError: fetch failed with diagnostics\n    at preserved-frame.ts:1:1",
-      writable: true,
-    });
+    const originalStack = failure.stack;
+    const originalStackDescriptor = Object.getOwnPropertyDescriptor(
+      failure,
+      "stack",
+    );
+    expect(originalStackDescriptor).toBeDefined();
+    expect(originalStackDescriptor).not.toHaveProperty("value");
+    expect(typeof originalStack).toBe("string");
+    expect(originalStack).toContain("runtime-provenance.spec.ts");
     const originalDescriptor = Object.getOwnPropertyDescriptor(
       failure,
       "diagnostics",
@@ -699,7 +701,15 @@ describe("agents runtime provenance v1", () => {
     expect(error).toBeInstanceOf(DiagnosticTransportError);
     expect((error as DiagnosticTransportError).code).toBe("EAGENT");
     expect((error as DiagnosticTransportError).message).toBe(failure.message);
-    expect((error as DiagnosticTransportError).stack).toBe(failure.stack);
+    expect((error as DiagnosticTransportError).stack).toBe(originalStack);
+    expect(Object.getOwnPropertyDescriptor(error, "stack")).toEqual(
+      expect.objectContaining({
+        configurable: originalStackDescriptor?.configurable,
+        enumerable: originalStackDescriptor?.enumerable,
+        get: originalStackDescriptor?.get,
+        set: originalStackDescriptor?.set,
+      }),
+    );
     expect(
       (error as DiagnosticTransportError).diagnostics.request.headers[
         AGENT_RUNTIME_CALLSITE_HEADER
@@ -743,6 +753,69 @@ describe("agents runtime provenance v1", () => {
       failure.diagnostics.request.headers[AGENT_RUNTIME_CALLSITE_HEADER],
     ).toBe(callsite);
     expect(failure.code).toBe("EAGENT");
+  });
+
+  it("does not invoke custom stack or nested diagnostic accessors", async () => {
+    const callsite = "callsite.custom-accessor-private";
+    let stackReads = 0;
+    let diagnosticReads = 0;
+    const diagnostics: Record<string, unknown> = {
+      reflected: callsite,
+      publicValue: "diagnostic-public",
+    };
+    Object.defineProperty(diagnostics, "lazy", {
+      configurable: true,
+      enumerable: false,
+      get() {
+        diagnosticReads += 1;
+        return callsite;
+      },
+    });
+    const failure = Object.assign(new TypeError("fetch failed"), {
+      code: "EAGENT",
+      diagnostics,
+    });
+    const customStackGetter = () => {
+      stackReads += 1;
+      return `custom stack ${callsite}`;
+    };
+    Object.defineProperty(failure, "stack", {
+      configurable: true,
+      enumerable: false,
+      get: customStackGetter,
+    });
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-custom-accessors" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(stackReads).toBe(0);
+    expect(diagnosticReads).toBe(0);
+    expect(Object.getOwnPropertyDescriptor(error, "stack")?.get).toBe(
+      customStackGetter,
+    );
+    expect((error as typeof failure).diagnostics.reflected).toBe(
+      "[REDACTED runtime provenance]",
+    );
+    expect((error as typeof failure).diagnostics.publicValue).toBe(
+      "diagnostic-public",
+    );
+    expect(failure.diagnostics).toBe(diagnostics);
+    expect(failure.diagnostics.reflected).toBe(callsite);
   });
 
   it("preserves exact identity when supplied provenance does not occur in nested diagnostics", async () => {
