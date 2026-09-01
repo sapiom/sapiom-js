@@ -48,6 +48,7 @@ interface FunctionRecord {
 interface FunctionSummary {
   returns: FlowValue;
   sinks: readonly SummarySink[];
+  mutations: readonly SummaryMutation[];
   candidates: readonly PackageGraphStaticEvidenceCandidate[];
   complete: boolean;
 }
@@ -56,6 +57,12 @@ interface SummarySink {
   targetAgentKey: string;
   destination: SourceEvidence;
   input: FlowValue;
+}
+
+interface SummaryMutation {
+  parameterIndex: number;
+  path: readonly AssignmentPathSegment[];
+  value: FlowValue;
 }
 
 type SourceMap = Map<string, SourceEvidence[]>;
@@ -619,6 +626,13 @@ function withReference(value: FlowValue, context: AnalysisContext): FlowValue {
   };
 }
 
+function withFreshReference(value: FlowValue, context: AnalysisContext): FlowValue {
+  return {
+    ...cloneValue(value),
+    references: [`ref:${context.nextReferenceId++}`],
+  };
+}
+
 function referencesOverlap(
   left: readonly string[],
   right: readonly string[],
@@ -792,6 +806,24 @@ function assignPath(
   return next;
 }
 
+function selectedAssignmentBase(
+  value: FlowValue,
+  pathSegments: readonly AssignmentPathSegment[],
+): { references: readonly string[]; path: readonly AssignmentPathSegment[] } {
+  if (pathSegments.length === 0) return { references: value.references, path: [] };
+  let current = value;
+  for (const segment of pathSegments.slice(0, -1)) {
+    current =
+      segment.kind === "property"
+        ? selectProperty(current, segment.key)
+        : selectElement(current, segment.key);
+  }
+  return {
+    references: current.references,
+    path: pathSegments.slice(-1),
+  };
+}
+
 function assignExpression(
   environment: Environment,
   checker: ts.TypeChecker,
@@ -810,16 +842,17 @@ function assignExpression(
     }
     return environment;
   }
-  const next = new Map(environment);
+  const next = environment;
   const rootValue = next.get(target.root) ?? emptyValue();
-  if (target.path.length > 0 && rootValue.references.length > 0) {
+  const base = selectedAssignmentBase(rootValue, target.path);
+  if (base.path.length > 0 && base.references.length > 0) {
     for (const [key, value] of next) {
       next.set(
         key,
         updateReferencedPath(
           value,
-          rootValue.references,
-          target.path,
+          base.references,
+          base.path,
           right,
         ),
       );
@@ -835,6 +868,7 @@ function bindPattern(
   checker: ts.TypeChecker,
   name: ts.BindingName,
   value: FlowValue,
+  context?: AnalysisContext,
 ): void {
   if (ts.isIdentifier(name)) {
     const key = symbolIdentity(checker, name);
@@ -849,7 +883,15 @@ function bindPattern(
     }
     if (ts.isObjectBindingPattern(name)) {
       if (element.dotDotDotToken) {
-        bindPattern(environment, checker, element.name, objectRestWithout(value, consumed));
+        bindPattern(
+          environment,
+          checker,
+          element.name,
+          context
+            ? withFreshReference(objectRestWithout(value, consumed), context)
+            : objectRestWithout(value, consumed),
+          context,
+        );
         continue;
       }
       const key = element.propertyName
@@ -859,15 +901,35 @@ function bindPattern(
           : null;
       if (!key) continue;
       consumed.add(key);
-      bindPattern(environment, checker, element.name, selectProperty(value, key));
+      bindPattern(
+        environment,
+        checker,
+        element.name,
+        selectProperty(value, key),
+        context,
+      );
     } else {
       const index = consumed.size.toString();
       if (element.dotDotDotToken) {
-        bindPattern(environment, checker, element.name, arrayRestFrom(value, consumed.size));
+        bindPattern(
+          environment,
+          checker,
+          element.name,
+          context
+            ? withFreshReference(arrayRestFrom(value, consumed.size), context)
+            : arrayRestFrom(value, consumed.size),
+          context,
+        );
         continue;
       }
       consumed.add(index);
-      bindPattern(environment, checker, element.name, selectElement(value, index));
+      bindPattern(
+        environment,
+        checker,
+        element.name,
+        selectElement(value, index),
+        context,
+      );
     }
   }
 }
@@ -1013,6 +1075,23 @@ function calledFunctionKey(
   return null;
 }
 
+function collectParameterMutations(
+  parameterIndex: number,
+  value: FlowValue,
+  pathSegments: readonly AssignmentPathSegment[] = [],
+): SummaryMutation[] {
+  const mutations: SummaryMutation[] = [];
+  for (const [key, child] of value.properties) {
+    const path = [...pathSegments, { kind: "property" as const, key }];
+    mutations.push({ parameterIndex, path, value: cloneValue(child) });
+  }
+  for (const [key, child] of value.elements) {
+    const path = [...pathSegments, { kind: "element" as const, key }];
+    mutations.push({ parameterIndex, path, value: cloneValue(child) });
+  }
+  return mutations;
+}
+
 function routedFunctionKey(
   expression: ts.Expression,
   context: AnalysisContext,
@@ -1117,6 +1196,9 @@ function evaluateExpression(
             value.propertyHazards.delete(key);
           }
         }
+        for (const key of spread.propertyHazards) {
+          value.propertyHazards.add(key);
+        }
         value.unknown = mergeValues(
           value.unknown ?? emptyValue(),
           {
@@ -1184,6 +1266,12 @@ function evaluateExpression(
           if (!child) continue;
           value.elements.set((nextIndex + index).toString(), cloneValue(child));
         }
+        for (const key of spread.elementHazards) {
+          const index = Number(key);
+          if (Number.isInteger(index)) {
+            value.elementHazards.add((nextIndex + index).toString());
+          }
+        }
         if (indexes.length > 0) nextIndex += Math.max(...indexes) + 1;
       } else {
         value.elements.set(
@@ -1205,7 +1293,18 @@ function evaluateExpression(
   }
   if (ts.isBinaryExpression(current)) {
     if (current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      return evaluateExpression(current.right, environment, context, file);
+      const right = evaluateExpression(current.right, environment, context, file);
+      if (ts.isExpression(current.left)) {
+        assignExpression(
+          environment,
+          context.compiler.checker,
+          unwrapTsExpression(current.left),
+          right,
+          context,
+          file,
+        );
+      }
+      return right;
     }
     return mergeValues(
       evaluateExpression(current.left, environment, context, file),
@@ -1243,7 +1342,7 @@ function evaluateExpression(
   const routed = routedFunctionKey(current.expression, context);
   const key = routed ?? calledFunctionKey(current.expression, context);
   if (key && context.functions.has(key)) {
-    return evaluateFunction(key, args, context);
+    return evaluateFunction(key, args, context, environment);
   }
   if (args.some(hasProvenance)) {
     addPartialDiagnostic(context, "opaque-boundary", {
@@ -1285,7 +1384,7 @@ function bindAssignmentPattern(
           next,
           checker,
           property.expression,
-          objectRestWithout(value, consumed),
+          withFreshReference(objectRestWithout(value, consumed), context),
           context,
           file,
         );
@@ -1345,7 +1444,7 @@ function bindAssignmentPattern(
         next,
         checker,
         element.expression,
-        arrayRestFrom(value, index),
+        withFreshReference(arrayRestFrom(value, index), context),
         context,
         file,
       );
@@ -1439,10 +1538,31 @@ function nodeReferencesProvenance(
     if (child !== node && ts.isFunctionLike(child)) return;
     if (ts.isIdentifier(child)) {
       const key = symbolIdentity(context.compiler.checker, child);
-      if (key && hasConcreteProvenance(environment.get(key) ?? emptyValue())) {
+      if (key && hasProvenance(environment.get(key) ?? emptyValue())) {
         found = true;
         return;
       }
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function nodeContainsAgentInvocation(
+  node: ts.Node,
+  context: AnalysisContext,
+): boolean {
+  let found = false;
+  const visit = (child: ts.Node): void => {
+    if (found) return;
+    if (child !== node && ts.isFunctionLike(child)) return;
+    if (
+      ts.isCallExpression(child) &&
+      context.compiler.resolveInvocationTarget(child)
+    ) {
+      found = true;
+      return;
     }
     ts.forEachChild(child, visit);
   };
@@ -1475,10 +1595,10 @@ function loopTouchesProvenance(
   }
   return (
     expressions.some((expression) =>
-      hasConcreteProvenance(
-        evaluateExpression(expression, environment, context, file),
-      ),
-    ) || nodeReferencesProvenance(statement.statement, environment, context)
+      hasProvenance(evaluateExpression(expression, environment, context, file)),
+    ) ||
+    nodeReferencesProvenance(statement.statement, environment, context) ||
+    nodeContainsAgentInvocation(statement.statement, context)
   );
 }
 
@@ -1506,7 +1626,7 @@ function analyzeStatement(
           context,
           file,
         );
-        const afterAssignment = assignExpression(
+        assignExpression(
           next,
           context.compiler.checker,
           unwrapTsExpression(initializer.left),
@@ -1514,9 +1634,7 @@ function analyzeStatement(
           context,
           file,
         );
-        next.clear();
-        for (const [key, value] of afterAssignment) next.set(key, value);
-        bindPattern(next, context.compiler.checker, declaration.name, right);
+        bindPattern(next, context.compiler.checker, declaration.name, right, context);
         continue;
       }
       bindPattern(
@@ -1524,6 +1642,7 @@ function analyzeStatement(
         context.compiler.checker,
         declaration.name,
         evaluateExpression(declaration.initializer, next, context, file),
+        context,
       );
     }
     return { returns: [], fallthrough: true, breaks: false, environment: next };
@@ -1668,10 +1787,35 @@ function evaluateFunction(
   key: string,
   args: readonly FlowValue[],
   context: AnalysisContext,
+  environment?: Environment,
 ): FlowValue {
   const summary = summarizeFunction(key, context);
   if (!summary.complete) context.complete = false;
   context.candidates.push(...summary.candidates);
+  if (environment) {
+    for (const mutation of summary.mutations) {
+      const arg = args[mutation.parameterIndex] ?? emptyValue();
+      const value = substituteParameters(mutation.value, args);
+      if (arg.references.length > 0) {
+        for (const [environmentKey, environmentValue] of environment) {
+          environment.set(
+            environmentKey,
+            updateReferencedPath(
+              environmentValue,
+              arg.references,
+              mutation.path,
+              value,
+            ),
+          );
+        }
+      } else if (hasProvenance(value)) {
+        addPartialDiagnostic(context, "opaque-boundary", {
+          reason: "unsupported-helper-mutation",
+          functionKey: digest(key),
+        });
+      }
+    }
+  }
   for (const sink of summary.sinks) {
     emitSinkCandidates(
       context,
@@ -1694,11 +1838,23 @@ function summarizeFunction(
       reason: "cycle",
       functionKey: digest(key),
     });
-    return { returns: emptyValue(), sinks: [], candidates: [], complete: false };
+    return {
+      returns: emptyValue(),
+      sinks: [],
+      mutations: [],
+      candidates: [],
+      complete: false,
+    };
   }
   const record = context.functions.get(key);
   if (!record?.node.body) {
-    return { returns: emptyValue(), sinks: [], candidates: [], complete: true };
+    return {
+      returns: emptyValue(),
+      sinks: [],
+      mutations: [],
+      candidates: [],
+      complete: true,
+    };
   }
   context.cycleStack.add(key);
   const nested: AnalysisContext = {
@@ -1709,8 +1865,18 @@ function summarizeFunction(
     cycleStack: context.cycleStack,
   };
   const environment: Environment = new Map();
+  const parameterKeys: Array<string | null> = [];
   record.node.parameters.forEach((parameter, index) => {
-    bindPattern(environment, context.compiler.checker, parameter.name, parameterValue(index));
+    parameterKeys[index] = ts.isIdentifier(parameter.name)
+      ? symbolIdentity(context.compiler.checker, parameter.name)
+      : null;
+    bindPattern(
+      environment,
+      context.compiler.checker,
+      parameter.name,
+      parameterValue(index),
+      context,
+    );
   });
   const body = ts.isBlock(record.node.body)
     ? record.node.body.statements
@@ -1719,6 +1885,14 @@ function summarizeFunction(
   const summary: FunctionSummary = {
     returns: mergeValues(...result.returns),
     sinks: [...nested.markerSinks],
+    mutations: parameterKeys.flatMap((parameterKey, index) =>
+      parameterKey
+        ? collectParameterMutations(
+            index,
+            result.environment.get(parameterKey) ?? emptyValue(),
+          )
+        : [],
+    ),
     candidates: normalizeCandidates(nested.candidates),
     complete: nested.complete,
   };

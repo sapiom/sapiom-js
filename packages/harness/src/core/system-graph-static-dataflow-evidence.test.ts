@@ -449,6 +449,48 @@ export async function run() {
     ).toEqual([["sales", "growth"]]);
   });
 
+  it("carries overwrite hazards through nested and multiple object spreads until restored", async () => {
+    const nested = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const sales = await agents.run({ definition: "sales" });
+  const inner = { value: sales, ...research };
+  const outer = { ...inner };
+  await agents.run({ definition: "growth", input: outer.value });
+}
+`,
+    });
+    expect(nested.result.complete).toBe(false);
+    expect(nested.result.cacheable).toBe(false);
+    expect(nested.result.result.evidence).toEqual([]);
+
+    const restored = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const sales = await agents.run({ definition: "sales" });
+  const inner = { value: sales, ...research };
+  const restored = { ...inner, value: sales };
+  await agents.run({ definition: "growth", input: restored.value });
+}
+`,
+    });
+    expect(restored.result.complete).toBe(true);
+    expect(
+      projectPackageGraphEvidence(restored.inventory, [
+        restored.result.result,
+      ]).connectors.map(({ fromAgentKey, toAgentKey }) => [
+        fromAgentKey,
+        toAgentKey,
+      ]),
+    ).toEqual([["sales", "growth"]]);
+  });
+
   it("marks provenance-bearing unresolved option spreads partial without guessing overwritten input", async () => {
     const analysis = await analyze({
       "agents/coordinator/index.ts": `
@@ -525,6 +567,76 @@ export async function run() {
   const assigned = (holder.value = research);
   await agents.run({ definition: "growth", input: holder.value });
   await agents.run({ definition: "sales", input: assigned });
+}
+`,
+      }),
+    ).toEqual([
+      ["research", "growth"],
+      ["research", "sales"],
+    ]);
+  });
+
+  it("keeps rest top-level containers independent while preserving nested child identity", async () => {
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const holder = { nested: {} };
+  const { ...rest } = holder;
+  rest.value = research;
+  rest.nested.value = research;
+  await agents.run({ definition: "growth", input: holder.value });
+  await agents.run({ definition: "sales", input: holder.nested.value });
+}
+`,
+      }),
+    ).toEqual([["research", "sales"]]);
+
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const holder = [{}];
+  const [...rest] = holder;
+  rest[0].value = research;
+  rest[1] = research;
+  await agents.run({ definition: "growth", input: holder[0].value });
+  await agents.run({ definition: "sales", input: holder[1] });
+}
+`,
+      }),
+    ).toEqual([["research", "growth"]]);
+  });
+
+  it("propagates chained assignments, nested invocation-input assignments, and helper mutations", async () => {
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+function put(holder, value) {
+  holder.value = value;
+}
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const a = {};
+  const b = {};
+  a.value = b.value = research;
+  const holder = {};
+  await agents.run({ definition: "sales", input: (holder.value = research) });
+  const target = {};
+  put(target, research);
+  await agents.run({ definition: "growth", input: a.value });
+  await agents.run({ definition: "growth", input: b.value });
+  await agents.run({ definition: "growth", input: holder.value });
+  await agents.run({ definition: "growth", input: target.value });
 }
 `,
       }),
@@ -641,17 +753,78 @@ export async function run() {
 
     const safe = await analyze({
       "agents/coordinator/index.ts": `
-import { agents } from "@sapiom/tools";
-
 export async function run() {
   for (const item of ["static"]) {
-    await agents.run({ definition: "growth", input: item });
+    const value = item;
   }
 }
 `,
     });
     expect(safe.result.complete).toBe(true);
     expect(safe.result.result.evidence).toEqual([]);
+  });
+
+  it("marks loop-local producers and parameter-root loop provenance partial", async () => {
+    for (const source of [
+      `
+import { agents } from "@sapiom/tools";
+export async function run() {
+  let r;
+  while (true) {
+    r = await agents.run({ definition: "research" });
+    await agents.run({ definition: "growth", input: r });
+    break;
+  }
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+export async function run() {
+  let r;
+  do {
+    r = await agents.run({ definition: "research" });
+    await agents.run({ definition: "growth", input: r });
+    break;
+  } while (true);
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+export async function run() {
+  for (let i = 0; i < 1; i++) {
+    const r = await agents.run({ definition: "research" });
+    await agents.run({ definition: "growth", input: r });
+  }
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  const map = { value: output };
+  for (const key in map) {
+    await agents.run({ definition: "growth", input: map[key] });
+  }
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+function send(items) {
+  for (const item of items) {
+    agents.run({ definition: "growth", input: item });
+  }
+}
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  send([output]);
+}
+`,
+    ]) {
+      const result = await analyze({ "agents/coordinator/index.ts": source });
+      expect(result.result.complete).toBe(false);
+      expect(result.result.cacheable).toBe(false);
+      expect(result.result.result.evidence).toEqual([]);
+    }
   });
 
   it("preserves positional identity through known array spreads and degrades unknown-length spreads", async () => {
