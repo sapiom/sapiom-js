@@ -2,4 +2,4 @@
 "@sapiom/harness": patch
 ---
 
-Move shared workspace watch ownership behind a graph-neutral internal module without changing watcher behavior.
+Refactor workspace file-watch ownership without changing behavior or public APIs.

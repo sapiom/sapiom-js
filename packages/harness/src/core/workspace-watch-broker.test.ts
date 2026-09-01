@@ -14,6 +14,7 @@ let root: string;
 let listener: Parameters<WorkspaceWatchFactory>[1];
 let close: ReturnType<typeof vi.fn>;
 let watchFactory: ReturnType<typeof vi.fn<WorkspaceWatchFactory>>;
+let aliasPath: string | null;
 
 function subscriber(
   overrides: Partial<SharedWorkspaceWatchSubscriber> = {},
@@ -31,6 +32,7 @@ function subscriber(
 describe("SharedWorkspaceWatchBroker", () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-watch-broker-"));
+    aliasPath = null;
     close = vi.fn();
     watchFactory = vi.fn<WorkspaceWatchFactory>((_root, nextListener) => {
       listener = nextListener;
@@ -43,6 +45,7 @@ describe("SharedWorkspaceWatchBroker", () => {
   });
 
   afterEach(async () => {
+    if (aliasPath) await fs.rm(aliasPath, { force: true });
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -131,8 +134,8 @@ describe("SharedWorkspaceWatchBroker", () => {
   });
 
   it("shares one canonical lease and releases it exactly once after the final subscriber", async () => {
-    const alias = `${root}-alias`;
-    await fs.symlink(root, alias, "dir");
+    aliasPath = `${root}-alias`;
+    await fs.symlink(root, aliasPath, "dir");
     const snapshotWorkspace = vi.fn(async () => "inventory");
     const snapshotSources = vi.fn(async () => new Map());
     const releaseOrder: string[] = [];
@@ -151,7 +154,7 @@ describe("SharedWorkspaceWatchBroker", () => {
     const secondKey = {};
 
     await broker.subscribe(firstKey, subscriber());
-    await broker.subscribe(secondKey, subscriber({ root: alias }));
+    await broker.subscribe(secondKey, subscriber({ root: aliasPath }));
 
     expect(watchFactory).toHaveBeenCalledTimes(1);
     expect(snapshotWorkspace).toHaveBeenCalledTimes(1);
@@ -171,8 +174,6 @@ describe("SharedWorkspaceWatchBroker", () => {
     broker.unsubscribe(secondKey);
     expect(close).toHaveBeenCalledOnce();
     expect(onLastLeaseReleased).toHaveBeenCalledOnce();
-
-    await fs.unlink(alias);
   });
 
   it("includes a subscriber that joins while the shared baseline is pending", async () => {
