@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile, readdir } from "node:fs/promises";
+import { glob, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,22 +25,6 @@ const STATIC_PROVIDER_NEUTRAL_COPY_TARGETS = [
   "packages/sandbox/src/multipart.ts",
   "packages/sandbox/src/types.ts",
   "packages/tools/src/content-generation/index.ts",
-  // Every `src/**/README.md` below ships in the @sapiom/tools npm tarball (see its package.json
-  // `files`), so a provider name reaching one is unretractable once published — audit them all.
-  "packages/tools/src/agents/README.md",
-  "packages/tools/src/browser-automation/README.md",
-  "packages/tools/src/content-generation/README.md",
-  "packages/tools/src/database/README.md",
-  "packages/tools/src/domains/README.md",
-  "packages/tools/src/email/README.md",
-  "packages/tools/src/file-storage/README.md",
-  "packages/tools/src/memory/README.md",
-  "packages/tools/src/models/README.md",
-  "packages/tools/src/repositories/README.md",
-  "packages/tools/src/sandboxes/README.md",
-  "packages/tools/src/schedules/README.md",
-  "packages/tools/src/search/README.md",
-  "packages/tools/src/speech/README.md",
   "packages/tools/src/llm/index.ts",
   "packages/tools/src/sandboxes/index.ts",
   "packages/tools/src/sandboxes/multipart.ts",
@@ -120,6 +104,63 @@ async function collectRegisteredExampleAssets(
   return assets;
 }
 
+/**
+ * Published docs for packages whose PUBLIC API is deliberately provider-named, so provider-neutral
+ * copy does not apply to them. `@sapiom/langchain-classic` exports `SapiomChatOpenAI` /
+ * `SapiomChatAnthropic`; a README that could not name those classes could not document the package.
+ * Deliberately a file list, not a pattern — each entry is a judgement that the names are the
+ * contract, and a new one should have to be argued for rather than matched into.
+ */
+const PROVIDER_NAMED_PACKAGE_DOCS = new Set([
+  "packages/langchain-classic/README.md",
+]);
+
+/**
+ * Markdown that is PUBLISHED to npm, discovered from each package's own `files` globs rather than
+ * listed here. Anything shipped in a tarball is unretractable once released, so the audit has to
+ * track whatever `files` actually ships — enumerating today's matches would silently miss the next
+ * directory someone adds. `.md` only (the audit is about copy, not built output), and CHANGELOGs are
+ * excluded: they are append-only release history whose old entries must not be rewritten.
+ */
+async function collectPublishedMarkdownTargets(rootDir) {
+  const targets = [];
+  for await (const manifestPath of glob("packages/*/package.json", {
+    cwd: rootDir,
+  })) {
+    const manifest = JSON.parse(
+      await readFile(path.join(rootDir, manifestPath), "utf8"),
+    );
+    if (!Array.isArray(manifest.files)) continue;
+    const packageDir = path.dirname(toPosix(manifestPath));
+    for (const entry of manifest.files) {
+      if (typeof entry !== "string" || !entry.endsWith(".md")) continue;
+      if (path.posix.basename(entry) === "CHANGELOG.md") continue;
+      for await (const match of glob(entry, {
+        cwd: path.join(rootDir, packageDir),
+      })) {
+        const relativePath = path.posix.join(packageDir, toPosix(match));
+        if (PROVIDER_NAMED_PACKAGE_DOCS.has(relativePath)) continue;
+        targets.push(relativePath);
+      }
+    }
+  }
+  return targets;
+}
+
+/**
+ * Pending changesets. These become the published CHANGELOG entry verbatim, so a provider name here
+ * reaches npm and cannot be edited afterwards — the one surface with no correction window at all.
+ */
+async function collectChangesetTargets(rootDir) {
+  const targets = [];
+  for await (const match of glob(".changeset/*.md", { cwd: rootDir })) {
+    const relativePath = toPosix(match);
+    if (path.posix.basename(relativePath) === "README.md") continue;
+    targets.push(relativePath);
+  }
+  return targets;
+}
+
 export async function collectProviderNeutralCopyTargets(
   rootDir = REPOSITORY_ROOT,
 ) {
@@ -127,6 +168,12 @@ export async function collectProviderNeutralCopyTargets(
     await readFile(path.join(rootDir, "examples/registry.json"), "utf8"),
   );
   const targets = new Set(STATIC_PROVIDER_NEUTRAL_COPY_TARGETS);
+  for (const target of await collectPublishedMarkdownTargets(rootDir)) {
+    targets.add(target);
+  }
+  for (const target of await collectChangesetTargets(rootDir)) {
+    targets.add(target);
+  }
   for (const template of registry.templates ?? []) {
     if (typeof template?.sourcePath !== "string") continue;
     for (const asset of await collectRegisteredExampleAssets(

@@ -124,10 +124,9 @@ export type OutputFormat = "png" | "jpeg" | "webp" | "mp4";
 type LiteralUnion<T extends string> = T | (string & Record<never, never>);
 
 /**
- * What every `select` shares: the opt-in ranking preference. The `requires` vocabulary differs by
- * media type, so it lives on {@link ImageSelect} / {@link VideoSelect} rather than here — an image
- * model cannot lip-sync, and a type that accepted the tag anyway would turn a compile-time mistake
- * into a paid round-trip.
+ * What every `select` shares: the opt-in ranking preference. `requires` is NOT here — its vocabulary
+ * is per media type (an image model cannot lip-sync), so it lives on the media type that can
+ * actually satisfy it. See {@link VideoSelect.requires}.
  */
 interface MediaSelectBase {
   /**
@@ -150,42 +149,38 @@ interface MediaSelectBase {
  * Capability-based model SELECTION (E5 / SAP-2580) for the IMAGE path — steers the choice when
  * `model` is OMITTED. The neutral params you declare already narrow the candidate models on their
  * own, so `select` is the escape hatch for what they cannot express, not the main path. Whichever
- * model the platform picks comes back as `resolvedModel`. A malformed `select`, an unknown
- * `requires` tag, or an unknown `prefer` value is rejected as an unsupported param BEFORE any
- * charge — never silently ignored.
+ * model the platform picks comes back as `resolvedModel`. A malformed `select` or an unknown
+ * `prefer` value is rejected as an unsupported param BEFORE any charge — never silently ignored.
+ *
+ * `prefer` is the whole image surface today: there is no `requires` here because no image model
+ * declares a capability tag, so the option could only ever narrow the candidates to none. It is a
+ * named type rather than an alias of {@link MediaSelectBase} so that adding image `requires`, if
+ * the catalog grows one, is a non-breaking addition to THIS type instead of a new export.
  */
-export interface ImageSelect extends MediaSelectBase {
-  /**
-   * Intrinsic capability tags the selected image model MUST declare. Only `"referenceImage"` (image
-   * conditioning / img2img) is meaningful for images — `"audio"` and `"lipsync"` are video-only
-   * axes, so they are not accepted here and asking for one is a compile error rather than a paid
-   * round-trip that 400s.
-   *
-   * NOTE: no image model in the catalog declares `referenceImage` today, so setting this currently
-   * narrows the candidates to NONE and the request fails before any charge. The tag is typed because
-   * image conditioning is on the roadmap; until it lands, prefer {@link MediaSelectBase.prefer}
-   * alone on the image path, or pin `model`.
-   */
-  requires?: Array<"referenceImage">;
-}
+export interface ImageSelect extends MediaSelectBase {}
 
 /**
  * Capability-based model SELECTION (E5 / SAP-2580) for the VIDEO path. Same contract as
- * {@link ImageSelect}, over the wider capability vocabulary video models actually declare.
+ * {@link ImageSelect}, plus the `requires` vocabulary video models actually declare.
  */
 export interface VideoSelect extends MediaSelectBase {
   /**
    * Intrinsic capability tags the selected video model MUST declare — the axes a neutral param
    * cannot express. An unknown tag is rejected as an unsupported param, before any charge.
+   *
+   * Video-only: no image model declares any of these, so there is no image equivalent. If the
+   * platform catalogs a new tag, it works on the wire before this list names it — pass it through
+   * {@link VideoCreateInput.passthrough} rather than waiting for an SDK release.
    */
   requires?: Array<"audio" | "lipsync" | "referenceImage">;
 }
 
 /**
- * Either media type's selection directives — the shape shared by
- * {@link ImageCreateInput.select} and {@link VideoCreateInput.select}. Name this only in code that
- * is generic over both; a call site should use the specific {@link ImageSelect} /
- * {@link VideoSelect}, which accept exactly the tags their media type can satisfy.
+ * Either media type's selection directives, for code that is generic over both — a value of this
+ * type is accepted by {@link ImageCreateInput.select} AND {@link VideoCreateInput.select} (every
+ * member's own fields are optional, so each is assignable to the other). A call site that knows its
+ * media type should name the specific {@link ImageSelect} / {@link VideoSelect} instead, so that
+ * asking an image model for a video-only capability stays a compile error.
  */
 export type MediaSelect = ImageSelect | VideoSelect;
 

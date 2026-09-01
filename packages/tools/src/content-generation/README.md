@@ -262,11 +262,10 @@ out.resolvedModel; // e.g. "seedance-fast" — what the platform picked
 out.preferSatisfied; // true: cheapest verified against every candidate
 ```
 
-- `requires` — capability tags the chosen model must declare. Video accepts `"audio"`,
-  `"lipsync"` and `"referenceImage"`; images accept `"referenceImage"` only, and no image
-  model declares it yet (see [`select` and images](#select-and-images) below). An unknown
-  tag is rejected as an unsupported param. `requires` is intended to hold whether or not
-  you also pin `model` — it states a requirement, not just a tie-breaker.
+- `requires` — capability tags the chosen model must declare: `"audio"`, `"lipsync"`,
+  `"referenceImage"`. **Video only** — see [`select` and images](#select-and-images)
+  below. An unknown tag is rejected as an unsupported param. `requires` is intended to
+  hold whether or not you also pin `model` — it states a requirement, not a tie-breaker.
 - `prefer: "cheapest"` — re-ranks the surviving candidates by a **live** price join. It
   degrades, never fails: if the join is unavailable, slow, or incomplete, selection falls
   back to deterministic catalog order and the response reports `preferSatisfied: false`.
@@ -283,15 +282,24 @@ If no model satisfies the constraints, the request fails before any charge.
 
 ### `select` and images
 
-`select` is typed per media type, because the two do not offer the same capabilities:
-`ImageSelect` accepts only `requires: ["referenceImage"]`, while `VideoSelect` accepts
-`"audio"`, `"lipsync"` and `"referenceImage"`. Asking for a video-only capability on an
-image call is a compile error rather than a runtime failure.
+`select` is typed per media type, because the two do not offer the same capabilities.
+**`requires` is video-only.** No image model in the catalog declares a capability tag, so
+`ImageSelect` is `{ prefer?: "cheapest" }` and asking an image call for `requires` is a
+compile error rather than a request that can only fail:
 
-Be aware that **no image model in the catalog declares `referenceImage` today**, so any
-`requires` on an image call currently narrows the candidates to none. The tag is typed
-because image conditioning is on the roadmap; until it lands, use `select.prefer` alone
-on the image path, or pin `model`.
+```typescript
+// Images: prefer is the whole surface.
+await sapiom.contentGeneration.images.create({
+  prompt: "a red bicycle",
+  select: { prefer: "cheapest" },
+});
+```
+
+If image conditioning is cataloged later, `requires` gets added to `ImageSelect` — a
+non-breaking change, which is why it is left off now rather than shipped unsatisfiable.
+
+Writing code generic over both media types? `MediaSelect` is the union of `ImageSelect`
+and `VideoSelect`, and a value of that type is accepted by either call.
 
 ## Gotchas
 

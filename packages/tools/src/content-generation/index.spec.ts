@@ -20,6 +20,9 @@ import type {
   VideoGenerationResult,
   ImageSelect,
   VideoSelect,
+  MediaSelect,
+  ImageCreateInput,
+  VideoCreateInput,
 } from "./index.js";
 
 // ---------------------------------------------------------------------------
@@ -1539,28 +1542,40 @@ describe("public model aliases (SAP-2582)", () => {
 });
 
 describe("capability-based selection (E5/SAP-2580)", () => {
-  it("types `requires` per media type — a video-only tag is a compile error on images", () => {
-    // Compile-time guard, enforced by `tsc --noEmit`: if the image `select` type ever widens back
-    // to the full vocabulary, `@ts-expect-error` goes unused and the typecheck fails. Images cannot
-    // do audio or lip-sync, so asking must fail at the keyboard, not after a paid round-trip.
-    // @ts-expect-error — `lipsync` is a video-only capability tag.
+  it("scopes `requires` to video — any `requires` is a compile error on the image path", () => {
+    // Compile-time guard, enforced by `tsc --noEmit`: if `requires` is ever added to the image
+    // type, these `@ts-expect-error`s go unused and the typecheck fails. No image model declares
+    // ANY capability tag, so asking must fail at the keyboard, not after a paid round-trip.
+    // @ts-expect-error — `lipsync` is video-only; images accept no `requires`.
     const videoOnlyTag: ImageSelect = { requires: ["lipsync"] };
-    // @ts-expect-error — `audio` is a video-only capability tag.
-    const audioTag: ImageSelect = { requires: ["audio"] };
+    // @ts-expect-error — images accept no `requires` at all, not even `referenceImage`.
+    const referenceTag: ImageSelect = { requires: ["referenceImage"] };
     void videoOnlyTag;
-    void audioTag;
+    void referenceTag;
 
-    // The tags each media type DOES accept still type-check.
-    const image: ImageSelect = {
-      requires: ["referenceImage"],
-      prefer: "cheapest",
-    };
+    // What each media type DOES accept.
+    const image: ImageSelect = { prefer: "cheapest" };
     const video: VideoSelect = {
       requires: ["audio", "lipsync", "referenceImage"],
       prefer: "cheapest",
     };
-    expect(image.requires).toEqual(["referenceImage"]);
+    expect(image.prefer).toBe("cheapest");
     expect(video.requires).toHaveLength(3);
+  });
+
+  it("`MediaSelect` is accepted by BOTH image and video inputs", () => {
+    // The generic-over-both claim its JSDoc makes, held to by the compiler: a `MediaSelect` must be
+    // assignable to each media type's `select`, or the export is a trap for the code it exists for.
+    const shared = {} as MediaSelect;
+    const imageInput: ImageCreateInput = { prompt: "x", select: shared };
+    const videoInput: VideoCreateInput = { prompt: "x", select: shared };
+    // Both directions of the union, too.
+    const asImage: ImageSelect = shared;
+    const asVideo: VideoSelect = shared;
+    void asImage;
+    void asVideo;
+    expect(imageInput.prompt).toBe("x");
+    expect(videoInput.prompt).toBe("x");
   });
 
   it("createImage rides `select` on the body when set", async () => {
@@ -1574,19 +1589,17 @@ describe("capability-based selection (E5/SAP-2580)", () => {
     ]);
 
     const out = await createImage(
-      {
-        prompt: "x",
-        select: { requires: ["referenceImage"], prefer: "cheapest" },
-      },
+      { prompt: "x", select: { prefer: "cheapest" } },
       transport,
       BASE,
     );
 
     // `select` is forwarded as a nested object verbatim — the router validates it. No `model`:
-    // `select` only steers when the caller left the choice to the platform.
+    // `select` only steers when the caller left the choice to the platform. `prefer` is the whole
+    // image surface; `requires` is video-only (no image model declares a capability tag).
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
-      select: { requires: ["referenceImage"], prefer: "cheapest" },
+      select: { prefer: "cheapest" },
     });
     // The router's echo of which model served it, and whether the preference was honored.
     expect(out.resolvedModel).toBe("flux-fast");
