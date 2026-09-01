@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -17,7 +18,7 @@ function tokenCapturingAdapter(tokenPath: string): HarnessAdapter {
     command: "bash",
     args: [
       "-c",
-      'printf "%s" "$SAPIOM_HARNESS_INGEST_TOKEN" > "$SAPIOM_TEST_INGEST_TOKEN_PATH"; exec bash',
+      'printf \'{"ingestUrl":"%s","ingestToken":"%s"}\' "$SAPIOM_HARNESS_INGEST_URL" "$SAPIOM_HARNESS_INGEST_TOKEN" > "$SAPIOM_TEST_INGEST_TOKEN_PATH"; exec bash',
     ],
     env: { SAPIOM_TEST_INGEST_TOKEN_PATH: tokenPath },
     cwd: opts.cwd,
@@ -33,17 +34,34 @@ function tokenCapturingAdapter(tokenPath: string): HarnessAdapter {
   };
 }
 
+async function unusedPort(): Promise<number> {
+  const probe = createNetServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) =>
+    probe.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
+}
+
 describe("coding-agent authorization boundary", () => {
   let root: string;
   let projectRoot: string;
   let tokenPath: string;
+  let webDir: string;
   let server: HarnessServer | undefined;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-auth-wiring-"));
     projectRoot = path.join(root, "project");
     tokenPath = path.join(root, "ingest-token");
+    webDir = path.join(root, "web");
     await fs.mkdir(projectRoot);
+    await fs.mkdir(webDir);
+    await fs.writeFile(
+      path.join(webDir, "index.html"),
+      '<!doctype html><html><head></head><body><div id="root"></div></body></html>',
+    );
   });
 
   afterEach(async () => {
@@ -62,13 +80,15 @@ describe("coding-agent authorization boundary", () => {
   });
 
   it("allows the PTY token to ingest hooks but rejects it on project mutations", async () => {
+    const port = await unusedPort();
     server = await startServer({
-      port: 0,
+      port,
       bootToken: BOOT_TOKEN,
       telemetryOptIn: false,
       adapters: { "claude-code": tokenCapturingAdapter(tokenPath) },
       stateRoot: root,
       launchDir: projectRoot,
+      webDir,
       autoCreateSession: false,
       loadSystemPrompt: async () => "",
     });
@@ -76,14 +96,26 @@ describe("coding-agent authorization boundary", () => {
       cwd: projectRoot,
       harness: "claude-code",
     });
-    let ingestToken = "";
+    let ptyEnvironment: { ingestUrl: string; ingestToken: string } | undefined;
     await vi.waitFor(async () => {
-      ingestToken = await fs.readFile(tokenPath, "utf8");
-      expect(ingestToken).not.toBe("");
+      ptyEnvironment = JSON.parse(await fs.readFile(tokenPath, "utf8")) as {
+        ingestUrl: string;
+        ingestToken: string;
+      };
+      expect(ptyEnvironment.ingestToken).not.toBe("");
     });
 
+    const { ingestToken, ingestUrl } = ptyEnvironment!;
     expect(ingestToken).not.toBe(BOOT_TOKEN);
-    const baseUrl = `http://127.0.0.1:${server.port}`;
+    expect(JSON.stringify(ptyEnvironment)).not.toContain(server.uiToken);
+    const baseUrl = new URL(ingestUrl).origin;
+    expect(baseUrl).toBe(`http://127.0.0.1:${server.port}`);
+
+    // The model can fetch the origin it receives for hooks, but without the
+    // host-only UI launch capability the HTML contains no privileged token.
+    const bareHtml = await (await fetch(`${baseUrl}/`)).text();
+    expect(bareHtml).not.toContain(BOOT_TOKEN);
+    expect(bareHtml).not.toContain(server.uiToken);
     const mutation = await fetch(`${baseUrl}/api/projects`, {
       method: "POST",
       headers: {
@@ -93,6 +125,22 @@ describe("coding-agent authorization boundary", () => {
       body: JSON.stringify({ displayName: "Model-controlled project" }),
     });
     expect(mutation.status).toBe(401);
+
+    const legitimateLaunch = await fetch(
+      `${baseUrl}/?uiToken=${encodeURIComponent(server.uiToken)}`,
+      { redirect: "manual" },
+    );
+    expect(legitimateLaunch.status).toBe(303);
+    expect(legitimateLaunch.headers.get("location")).not.toContain("uiToken");
+    const uiCookie = legitimateLaunch.headers
+      .get("set-cookie")
+      ?.split(";", 1)[0];
+    const legitimateHtml = await (
+      await fetch(`${baseUrl}${legitimateLaunch.headers.get("location")!}`, {
+        headers: { cookie: uiCookie! },
+      })
+    ).text();
+    expect(legitimateHtml).toContain(JSON.stringify(BOOT_TOKEN));
 
     const bootTokenIngest = await fetch(`${baseUrl}/ingest`, {
       method: "POST",

@@ -149,62 +149,121 @@ describe("StudioProjectCatalog", () => {
     );
   });
 
-  it("does not let a delayed stale-lock waiter remove a newly acquired lock", async () => {
+  it("fences three writers while reclaiming a dead owner without leaking lock artifacts", async () => {
     const { catalogPath } = await fixture();
     const lockPath = `${catalogPath}.lock`;
-    await fs.mkdir(lockPath, { recursive: true });
-    await fs.writeFile(path.join(lockPath, "owner"), "abandoned-owner");
-    const staleAt = new Date(Date.now() - 60_000);
-    await fs.utimes(lockPath, staleAt, staleAt);
+    const deadPid = process.pid + 100_000;
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ ownerId: "abandoned-owner", pid: deadPid }),
+    );
 
-    const delayedObserved = deferred();
+    const bothDelayedObserved = deferred();
     const resumeDelayed = deferred();
-    const replacementAcquired = deferred();
-    const releaseReplacement = deferred();
-    const replacementRestored = deferred();
-
-    const delayed = new StudioProjectCatalog(
-      catalogPath,
-      () => new Date(),
-      {
-        afterStaleLockObserved: async () => {
-          delayedObserved.resolve();
-          await resumeDelayed.promise;
-        },
-        afterUnexpectedReclaimRestored: () => {
-          replacementRestored.resolve();
-        },
+    const winnerAcquired = deferred();
+    const releaseWinner = deferred();
+    const delayedObservedReplacement = deferred();
+    let deadObservations = 0;
+    const delayedHooks = {
+      isPidAlive: (pid: number) => pid === process.pid,
+      afterDeadOwnerObserved: async () => {
+        deadObservations += 1;
+        if (deadObservations === 2) bothDelayedObserved.resolve();
+        await resumeDelayed.promise;
       },
+      afterObservedOwnerChanged: () => {
+        delayedObservedReplacement.resolve();
+      },
+      afterLiveOwnerObserved: () => {
+        delayedObservedReplacement.resolve();
+      },
+    };
+    const delayedB = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      delayedHooks,
     );
-    const replacement = new StudioProjectCatalog(
+    const delayedC = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      delayedHooks,
+    );
+    const winner = new StudioProjectCatalog(
       catalogPath,
       () => new Date(),
       {
+        isPidAlive: (pid) => pid === process.pid,
         afterLockAcquired: async () => {
-          replacementAcquired.resolve();
-          await releaseReplacement.promise;
+          winnerAcquired.resolve();
+          await releaseWinner.promise;
         },
       },
     );
 
-    const delayedWrite = delayed.create("Delayed writer");
-    await delayedObserved.promise;
-    const replacementWrite = replacement.create("Replacement writer");
-    await replacementAcquired.promise;
-
-    // The delayed waiter now acts on its stale observation. It atomically
-    // moves the replacement lock, notices the owner changed, and restores it.
+    const writeB = delayedB.create("Writer B");
+    const writeC = delayedC.create("Writer C");
+    await bothDelayedObserved.promise;
+    const writeA = winner.create("Writer A");
+    await winnerAcquired.promise;
     resumeDelayed.resolve();
-    await replacementRestored.promise;
-    releaseReplacement.resolve();
+    await delayedObservedReplacement.promise;
+    releaseWinner.resolve();
 
-    await Promise.all([delayedWrite, replacementWrite]);
+    await Promise.all([writeA, writeB, writeC]);
     const restarted = await new StudioProjectCatalog(catalogPath).list();
     expect(restarted.map((project) => project.displayName).sort()).toEqual([
-      "Delayed writer",
-      "Replacement writer",
+      "Writer A",
+      "Writer B",
+      "Writer C",
     ]);
-    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      (await fs.readdir(path.dirname(catalogPath))).filter((entry) =>
+        entry.startsWith(`${path.basename(catalogPath)}.lock`),
+      ),
+    ).toEqual([]);
+  });
+
+  it("never evicts a slow live PID even when its lock mtime is old", async () => {
+    const { catalogPath } = await fixture();
+    const lockPath = `${catalogPath}.lock`;
+    const liveAcquired = deferred();
+    const releaseLive = deferred();
+    const waiterObservedLive = deferred();
+    let waiterSettled = false;
+    const live = new StudioProjectCatalog(catalogPath, () => new Date(), {
+      afterLockAcquired: async () => {
+        liveAcquired.resolve();
+        await releaseLive.promise;
+      },
+    });
+    const waiter = new StudioProjectCatalog(catalogPath, () => new Date(), {
+      afterLiveOwnerObserved: () => {
+        waiterObservedLive.resolve();
+      },
+    });
+
+    const liveWrite = live.create("Slow live writer");
+    await liveAcquired.promise;
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, old, old);
+    const waiterWrite = waiter.create("Patient writer").finally(() => {
+      waiterSettled = true;
+    });
+    await waiterObservedLive.promise;
+    expect(waiterSettled).toBe(false);
+    releaseLive.resolve();
+
+    await Promise.all([liveWrite, waiterWrite]);
+    expect(
+      (await new StudioProjectCatalog(catalogPath).list()).map(
+        (project) => project.displayName,
+      ).sort(),
+    ).toEqual(["Patient writer", "Slow live writer"]);
+    expect(
+      (await fs.readdir(path.dirname(catalogPath))).filter((entry) =>
+        entry.startsWith(`${path.basename(catalogPath)}.lock`),
+      ),
+    ).toEqual([]);
   });
 
   it("preserves unsafe live scopes without Agent Map assignment and accepts legal path whitespace", async () => {
@@ -233,6 +292,38 @@ describe("StudioProjectCatalog", () => {
         (scope) => scope.workspaceKey === "workspace-unsafe",
       ),
     ).not.toHaveProperty("projectId");
+  });
+
+  it("keeps every conflicting legacy-key root unassigned in both orders and after restart", async () => {
+    const { root, catalogPath } = await fixture();
+    const alpha = path.join(root, "alpha");
+    const beta = path.join(root, "beta");
+    await Promise.all([fs.mkdir(alpha), fs.mkdir(beta)]);
+    const forwardScopes = [
+      { workspaceKey: "shared-legacy-key", cwd: alpha },
+      { workspaceKey: "shared-legacy-key", cwd: beta },
+    ];
+
+    const forward = await new StudioProjectCatalog(catalogPath).reconcile(
+      forwardScopes,
+    );
+    const reversed = await new StudioProjectCatalog(catalogPath).reconcile(
+      [...forwardScopes].reverse(),
+    );
+
+    for (const result of [forward, reversed]) {
+      expect(result.projects).toEqual([]);
+      expect(result.workspaceScopes).toEqual(
+        expect.arrayContaining(forwardScopes),
+      );
+      expect(result.workspaceScopes).toHaveLength(2);
+      expect(
+        result.workspaceScopes.every(
+          (scope) => !Object.prototype.hasOwnProperty.call(scope, "projectId"),
+        ),
+      ).toBe(true);
+    }
+    expect(await new StudioProjectCatalog(catalogPath).list()).toEqual([]);
   });
 
   it("rejects a move onto another binding in the same project and remains restart-readable", async () => {

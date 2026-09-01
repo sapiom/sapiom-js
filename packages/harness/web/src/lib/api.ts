@@ -263,12 +263,12 @@ export function errorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Read once at module load: `window.__HARNESS__ = {token}` (baked in by the server), falling back to `?token=`. */
+/** Read the boot token injected only into a UI-credential-authorized HTML response. */
 export function getBootToken(): string {
   const injected = (window as unknown as { __HARNESS__?: { token?: string } })
     .__HARNESS__;
   if (injected?.token) return injected.token;
-  return new URLSearchParams(window.location.search).get("token") ?? "";
+  return "";
 }
 
 /** Response from GET /api/auth/status — live auth state from the server. */

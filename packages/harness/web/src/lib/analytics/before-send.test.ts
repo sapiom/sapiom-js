@@ -8,9 +8,9 @@ function capture(event: string, properties: Record<string, unknown>, extra?: Par
 }
 
 describe("sanitizeUrl", () => {
-  it("strips the query string (which carries the boot token) and the fragment", () => {
-    expect(sanitizeUrl("http://localhost:4100/?token=super-secret")).toBe("http://localhost/");
-    expect(sanitizeUrl("http://localhost:4100/workbench?token=x#frag")).toBe("http://localhost/workbench");
+  it("strips the query string (including a UI launch credential) and the fragment", () => {
+    expect(sanitizeUrl("http://localhost:4100/?uiToken=super-secret")).toBe("http://localhost/");
+    expect(sanitizeUrl("http://localhost:4100/workbench?uiToken=x#frag")).toBe("http://localhost/workbench");
   });
 
   it("collapses the ephemeral port so every boot reports one origin", () => {
@@ -49,11 +49,11 @@ describe("beforeSend", () => {
     expect(beforeSend(null)).toBeNull();
   });
 
-  it("redacts the boot token from $current_url and person-property URLs", () => {
+  it("redacts the UI launch credential from $current_url and person-property URLs", () => {
     const result = capture(
       "$pageview",
-      { $current_url: "http://localhost:4100/?token=secret" },
-      { $set_once: { $initial_current_url: "http://localhost:4100/?token=secret" } },
+      { $current_url: "http://localhost:4100/?uiToken=secret" },
+      { $set_once: { $initial_current_url: "http://localhost:4100/?uiToken=secret" } },
     );
     const out = beforeSend(result)!;
     expect((out.properties as Record<string, unknown>).$current_url).toBe("http://localhost/");

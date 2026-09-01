@@ -881,7 +881,7 @@ async function checkUpdateConfig(): Promise<string> {
  */
 export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
   const base = `http://127.0.0.1:${boot.server.port}`;
-  const token = new URL(boot.url).searchParams.get("token");
+  const token = boot.bootToken;
 
   return [
     await check("http-spa", async () => {

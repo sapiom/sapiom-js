@@ -116,14 +116,14 @@ const main = async (): Promise<void> => {
   printBanner({
     dir: options.dir,
     port: server?.port ?? options.port,
-    bootToken,
+    uiToken: server?.uiToken ?? "",
     identity,
     telemetryOptIn: consentResult.telemetryOptIn,
     serverStarted: server !== null,
   });
 
   if (server && !options.noOpen) {
-    await open(`http://localhost:${server.port}/?token=${bootToken}`);
+    await open(`http://localhost:${server.port}/?uiToken=${server.uiToken}`);
   }
 
   if (server) {
