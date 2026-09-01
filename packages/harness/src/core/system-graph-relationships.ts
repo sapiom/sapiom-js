@@ -1066,104 +1066,151 @@ function collectInvocationMethodAliases(
   }
 
   interface AliasResolution {
-    resolutions: SystemGraphInvocationMethodResolution[];
+    modeMask: number;
+    methodMultiplicity: 0 | 1 | 2;
     nonMethod: boolean;
     unresolved: boolean;
   }
-  const resolved = new Map<string, AliasResolution>();
-  const visiting = new Set<string>();
-  const resolvedState = new Set<string>();
-  let work = 0;
+  const BLOCKING_MODE = 1;
+  const ASYNC_MODE = 2;
   const dynamicAliasResolution = (): AliasResolution => ({
-    resolutions: [dynamicMethod],
+    modeMask: BLOCKING_MODE | ASYNC_MODE,
+    methodMultiplicity: 2,
     nonMethod: false,
     unresolved: true,
   });
-
-  const resolveAlias = (start: string): AliasResolution => {
-    const cached = resolved.get(start);
-    if (cached) return cached;
-    const stack: Array<{ key: string; expanded: boolean }> = [
-      { key: start, expanded: false },
-    ];
-    while (stack.length > 0) {
-      work += 1;
-      if (work > INVOCATION_ALIAS_MAX_WORK) {
-        for (const key of writes.keys()) {
-          resolved.set(key, dynamicAliasResolution());
-          resolvedState.add(key);
-          visiting.delete(key);
-        }
-        return resolved.get(start)!;
-      }
-      const frame = stack.pop()!;
-      if (resolved.has(frame.key)) continue;
-      const symbolWrites = writes.get(frame.key);
-      if (!symbolWrites || symbolWrites.length === 0) {
-        resolved.set(frame.key, {
-          resolutions: [],
-          nonMethod: false,
-          unresolved: true,
-        });
-        resolvedState.add(frame.key);
-        visiting.delete(frame.key);
-        continue;
-      }
-      if (!frame.expanded) {
-        if (visiting.has(frame.key)) {
-          resolved.set(frame.key, dynamicAliasResolution());
-          resolvedState.add(frame.key);
-          visiting.delete(frame.key);
-          continue;
-        }
-        if (resolvedState.has(frame.key)) continue;
-        visiting.add(frame.key);
-        stack.push({ key: frame.key, expanded: true });
-        for (const write of symbolWrites) {
-          if (write.kind !== "alias") continue;
-          if (visiting.has(write.key)) {
-            resolved.set(write.key, dynamicAliasResolution());
-            resolvedState.add(write.key);
-            visiting.delete(write.key);
-          } else if (!resolved.has(write.key)) {
-            stack.push({ key: write.key, expanded: false });
-          }
-        }
-        continue;
-      }
-      const resolutions: SystemGraphInvocationMethodResolution[] = [];
-      let nonMethod = false;
-      let unresolved = false;
-      for (const write of symbolWrites) {
-        if (write.kind === "method") {
-          resolutions.push(write.resolution);
-        } else if (write.kind === "non-method") {
-          nonMethod = true;
-        } else {
-          const alias = resolved.get(write.key) ?? dynamicAliasResolution();
-          resolutions.push(...alias.resolutions);
-          nonMethod ||= alias.nonMethod;
-          unresolved ||= alias.unresolved;
-        }
-      }
-      resolved.set(frame.key, { resolutions, nonMethod, unresolved });
-      resolvedState.add(frame.key);
-      visiting.delete(frame.key);
-    }
-    return resolved.get(start) ?? dynamicAliasResolution();
+  const methodResolutionState = (
+    resolution: SystemGraphInvocationMethodResolution,
+  ): AliasResolution => ({
+    modeMask:
+      resolution.kind === "resolved"
+        ? resolution.mode === "blocking"
+          ? BLOCKING_MODE
+          : ASYNC_MODE
+        : resolution.modes.reduce(
+            (mask, mode) =>
+              mask | (mode === "blocking" ? BLOCKING_MODE : ASYNC_MODE),
+            0,
+          ),
+    methodMultiplicity: 1,
+    nonMethod: false,
+    unresolved: resolution.kind === "dynamic",
+  });
+  const saturatedAdd = (left: 0 | 1 | 2, right: 0 | 1 | 2): 0 | 1 | 2 =>
+    left === 0 ? right : right === 0 ? left : 2;
+  const mergeState = (
+    left: AliasResolution,
+    right: AliasResolution,
+  ): boolean => {
+    const next: AliasResolution = {
+      modeMask: left.modeMask | right.modeMask,
+      methodMultiplicity: saturatedAdd(
+        left.methodMultiplicity,
+        right.methodMultiplicity,
+      ),
+      nonMethod: left.nonMethod || right.nonMethod,
+      unresolved: left.unresolved || right.unresolved,
+    };
+    const changed =
+      next.modeMask !== left.modeMask ||
+      next.methodMultiplicity !== left.methodMultiplicity ||
+      next.nonMethod !== left.nonMethod ||
+      next.unresolved !== left.unresolved;
+    if (changed) Object.assign(left, next);
+    return changed;
   };
 
+  const states = new Map<string, AliasResolution>();
+  const aliasEdges: Array<{ source: string; target: string }> = [];
   for (const [key, symbolWrites] of writes) {
-    const alias = resolveAlias(key);
-    if (alias.resolutions.length === 0) continue;
+    const state: AliasResolution = {
+      modeMask: 0,
+      methodMultiplicity: 0,
+      nonMethod: false,
+      unresolved: false,
+    };
+    states.set(key, state);
+    for (const write of symbolWrites) {
+      if (write.kind === "method") {
+        mergeState(state, methodResolutionState(write.resolution));
+      } else if (write.kind === "non-method") {
+        state.nonMethod = true;
+      } else {
+        aliasEdges.push({ source: key, target: write.key });
+      }
+    }
+  }
+  for (const edge of aliasEdges) {
+    if (states.has(edge.target)) continue;
+    const state = states.get(edge.source);
+    if (state) state.unresolved = true;
+  }
+  const cycleIndegree = new Map<string, number>();
+  const cycleOutgoing = new Map<string, string[]>();
+  for (const key of writes.keys()) {
+    cycleIndegree.set(key, 0);
+    cycleOutgoing.set(key, []);
+  }
+  for (const edge of aliasEdges) {
+    if (!writes.has(edge.target)) continue;
+    cycleIndegree.set(edge.target, (cycleIndegree.get(edge.target) ?? 0) + 1);
+    cycleOutgoing.get(edge.source)?.push(edge.target);
+  }
+  const acyclic = [...cycleIndegree]
+    .filter(([, count]) => count === 0)
+    .map(([key]) => key)
+    .sort();
+  for (let index = 0; index < acyclic.length; index += 1) {
+    const key = acyclic[index]!;
+    for (const target of cycleOutgoing.get(key) ?? []) {
+      const next = (cycleIndegree.get(target) ?? 0) - 1;
+      cycleIndegree.set(target, next);
+      if (next === 0) acyclic.push(target);
+    }
+  }
+  for (const [key, count] of cycleIndegree) {
+    if (count > 0) mergeState(states.get(key)!, dynamicAliasResolution());
+  }
+
+  let work = 0;
+  const aliasTargets = new Map<string, string[]>();
+  for (const edge of aliasEdges) {
+    const targets = aliasTargets.get(edge.source) ?? [];
+    targets.push(edge.target);
+    aliasTargets.set(edge.source, targets);
+  }
+  for (const key of [...acyclic].reverse()) {
+    const source = states.get(key);
+    if (!source) continue;
+    for (const targetKey of (aliasTargets.get(key) ?? []).sort()) {
+      const target = states.get(targetKey);
+      if (!target) continue;
+      work += 1;
+      if (work > INVOCATION_ALIAS_MAX_WORK) {
+        return new Map(
+          [...writes.keys()].map((key) => [key, dynamicMethod]),
+        );
+      }
+      mergeState(source, target);
+    }
+  }
+
+  for (const [key, symbolWrites] of writes) {
+    const alias = states.get(key);
+    if (!alias || alias.modeMask === 0) continue;
+    const cleanBlocking = alias.modeMask === BLOCKING_MODE;
+    const cleanAsync = alias.modeMask === ASYNC_MODE;
     methodAliases.set(
       key,
       symbolWrites.length === 1 &&
-        alias.resolutions.length === 1 &&
+        alias.methodMultiplicity === 1 &&
         !alias.nonMethod &&
         !alias.unresolved &&
-        alias.resolutions[0]!.kind === "resolved"
-        ? alias.resolutions[0]!
+        (cleanBlocking || cleanAsync)
+        ? {
+            kind: "resolved",
+            mode: cleanBlocking ? "blocking" : "async",
+          }
         : { kind: "dynamic", modes: ["blocking", "async"] },
     );
   }

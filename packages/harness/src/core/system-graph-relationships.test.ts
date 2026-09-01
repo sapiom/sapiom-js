@@ -818,6 +818,154 @@ invoke({ definition: "research" });
     expect(result.warnings).toEqual([]);
   });
 
+  it("resolves 2k acyclic alias chains below the cap", async () => {
+    const chainLength = 2_000;
+    const lines = [
+      'import { agents } from "@sapiom/tools";',
+      "",
+      "const alias0 = agents.launch;",
+      ...Array.from(
+        { length: chainLength },
+        (_, index) => `const alias${index + 1} = alias${index};`,
+      ),
+      `alias${chainLength}({ definition: "research" });`,
+    ];
+    const [coordinator] = await packageWithCallers(
+      { "agents/coordinator/index.ts": `${lines.join("\n")}\n` },
+      ["coordinator"],
+    );
+
+    const started = performance.now();
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+    const elapsed = performance.now() - started;
+
+    expect(elapsed).toBeLessThan(5_000);
+    expect(result.invocations).toEqual([
+      {
+        target: "research",
+        mode: "async",
+        evidence: [{ file: "index.ts", line: chainLength + 4, column: 1 }],
+      },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("degrades duplicate-edge diamonds without path expansion", async () => {
+    const depth = 20;
+    const lines = [
+      'import { agents } from "@sapiom/tools";',
+      "",
+      "const alias0 = agents.run;",
+      ...Array.from(
+        { length: depth },
+        (_, index) =>
+          `let alias${index + 1} = alias${index};\nalias${index + 1} = alias${index};`,
+      ),
+      `alias${depth}({ definition: "research" });`,
+    ];
+    const [coordinator] = await packageWithCallers(
+      { "agents/coordinator/index.ts": `${lines.join("\n")}\n` },
+      ["coordinator"],
+    );
+
+    const started = performance.now();
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+    const elapsed = performance.now() - started;
+
+    expect(elapsed).toBeLessThan(2_000);
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: depth * 2 + 4, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: depth * 2 + 4, column: 1 },
+      },
+    ]);
+  });
+
+  it("keeps deeper duplicate-edge diamonds bounded", async () => {
+    const depth = 200;
+    const lines = [
+      'import { agents } from "@sapiom/tools";',
+      "",
+      "const alias0 = agents.run;",
+      ...Array.from(
+        { length: depth },
+        (_, index) =>
+          `let alias${index + 1} = alias${index};\nalias${index + 1} = alias${index};`,
+      ),
+      `alias${depth}({ definition: "research" });`,
+    ];
+    const [coordinator] = await packageWithCallers(
+      { "agents/coordinator/index.ts": `${lines.join("\n")}\n` },
+      ["coordinator"],
+    );
+
+    const started = performance.now();
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+    const elapsed = performance.now() - started;
+
+    expect(elapsed).toBeLessThan(5_000);
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: depth * 2 + 4, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: depth * 2 + 4, column: 1 },
+      },
+    ]);
+  });
+
+  it("degrades mixed blocking and async alias branches without guessing", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+const run = agents.run;
+const launch = agents.launch;
+const invoke = Math.random() > 0.5 ? run : launch;
+invoke({ definition: "research" });
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+    ]);
+  });
+
   it("resolves aliases independently of declaration order", async () => {
     const [coordinator] = await packageWithCallers(
       {
@@ -881,7 +1029,7 @@ second({ definition: "research" });
   });
 
   it("degrades alias graphs beyond deterministic caps", async () => {
-    const chainLength = 2_050;
+    const chainLength = 3_000;
     const lines = [
       'import { agents } from "@sapiom/tools";',
       "",
