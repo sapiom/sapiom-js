@@ -298,8 +298,10 @@ await sapiom.contentGeneration.images.create({
 If image conditioning is cataloged later, `requires` gets added to `ImageSelect` — a
 non-breaking change, which is why it is left off now rather than shipped unsatisfiable.
 
-Writing code generic over both media types? `MediaSelect` is the union of `ImageSelect`
-and `VideoSelect`, and a value of that type is accepted by either call.
+Writing code generic over both media types? `MediaSelect` is the shape the two share
+(`{ prefer?: "cheapest" }`), and a value of that type is accepted by either call. It is
+the shared shape rather than a union of the two, so it really is assignable to both —
+name the specific `VideoSelect` when you need `requires`.
 
 ## Gotchas
 

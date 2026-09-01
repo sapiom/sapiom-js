@@ -119,9 +119,9 @@ export type {
   OutputFormat,
 } from "./content-generation/index.js";
 // Capability-based model selection (E5/SAP-2580) — the `select` directives honored when `model`
-// is omitted; the response echoes `resolvedModel` + `preferSatisfied`. Typed per media type, so an
-// image call cannot ask for a video-only `requires`. `MediaSelect` is the union of the two and is
-// accepted by both inputs — name it only in code generic over image AND video.
+// is omitted; the response echoes `resolvedModel` + `preferSatisfied`. Typed per media type: only
+// `VideoSelect` exposes `requires`, and the image type prohibits it. `MediaSelect` is the shared
+// shape both inputs accept — name it only in code generic over image AND video.
 export type {
   ImageSelect,
   VideoSelect,

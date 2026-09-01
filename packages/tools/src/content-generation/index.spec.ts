@@ -1543,9 +1543,9 @@ describe("public model aliases (SAP-2582)", () => {
 
 describe("capability-based selection (E5/SAP-2580)", () => {
   it("scopes `requires` to video — any `requires` is a compile error on the image path", () => {
-    // Compile-time guard, enforced by `tsc --noEmit`: if `requires` is ever added to the image
-    // type, these `@ts-expect-error`s go unused and the typecheck fails. No image model declares
-    // ANY capability tag, so asking must fail at the keyboard, not after a paid round-trip.
+    // Compile-time guard, enforced by `tsc --noEmit`: if `requires` ever becomes settable on the
+    // image type, these `@ts-expect-error`s go unused and the typecheck fails. No image model
+    // declares ANY capability tag, so asking must fail at the keyboard, not after a round-trip.
     // @ts-expect-error — `lipsync` is video-only; images accept no `requires`.
     const videoOnlyTag: ImageSelect = { requires: ["lipsync"] };
     // @ts-expect-error — images accept no `requires` at all, not even `referenceImage`.
@@ -1563,13 +1563,35 @@ describe("capability-based selection (E5/SAP-2580)", () => {
     expect(video.requires).toHaveLength(3);
   });
 
-  it("`MediaSelect` is accepted by BOTH image and video inputs", () => {
-    // The generic-over-both claim its JSDoc makes, held to by the compiler: a `MediaSelect` must be
-    // assignable to each media type's `select`, or the export is a trap for the code it exists for.
+  it("rejects `requires` on images even when it is not an inline literal", () => {
+    // The case a `requires?: never` PROHIBITION catches and an omitted property does not. An
+    // omitted `requires` leans on excess-property checking, which only fires on object literals —
+    // a pre-built object carrying `prefer` alongside `requires` shares a property (so weak-type
+    // detection is satisfied too) and slipped through to a runtime rejection. `never` makes it a
+    // direct type error on the property, however the value was assembled.
+    const inferred = { prefer: "cheapest" as const, requires: ["lipsync"] };
+    // @ts-expect-error — `requires` is prohibited on the image path, literal or not.
+    const asImage: ImageSelect = inferred;
+    void asImage;
+
+    // A properly typed VideoSelect is rejected on the image path too — it is the property that is
+    // prohibited, not merely a loosely-inferred one.
+    const built: VideoSelect = { prefer: "cheapest", requires: ["lipsync"] };
+    // @ts-expect-error — a VideoSelect is deliberately NOT assignable to ImageSelect.
+    const videoAsImage: ImageSelect = built;
+    void videoAsImage;
+
+    // …and stays usable where it belongs.
+    expect(built.requires).toEqual(["lipsync"]);
+  });
+
+  it("`MediaSelect` is the shared shape — accepted by BOTH image and video inputs", () => {
+    // The generic-over-both claim its JSDoc makes, held to by the compiler. `MediaSelect` is the
+    // shared shape rather than `ImageSelect | VideoSelect`: a union would carry `VideoSelect`,
+    // which is deliberately NOT assignable to `ImageSelect` now that images prohibit `requires`.
     const shared = {} as MediaSelect;
     const imageInput: ImageCreateInput = { prompt: "x", select: shared };
     const videoInput: VideoCreateInput = { prompt: "x", select: shared };
-    // Both directions of the union, too.
     const asImage: ImageSelect = shared;
     const asVideo: VideoSelect = shared;
     void asImage;

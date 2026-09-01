@@ -152,12 +152,22 @@ interface MediaSelectBase {
  * model the platform picks comes back as `resolvedModel`. A malformed `select` or an unknown
  * `prefer` value is rejected as an unsupported param BEFORE any charge — never silently ignored.
  *
- * `prefer` is the whole image surface today: there is no `requires` here because no image model
- * declares a capability tag, so the option could only ever narrow the candidates to none. It is a
- * named type rather than an alias of {@link MediaSelectBase} so that adding image `requires`, if
- * the catalog grows one, is a non-breaking addition to THIS type instead of a new export.
+ * `prefer` is the whole image surface today. Images accept no `requires`: no image model declares a
+ * capability tag, so the option could only ever narrow the candidates to none.
  */
-export interface ImageSelect extends MediaSelectBase {}
+export interface ImageSelect extends MediaSelectBase {
+  /**
+   * Not accepted on the image path — a PROHIBITION, not an option you can set. Typed `never` rather
+   * than omitted so that passing `requires` is a direct type error on the property itself, however
+   * the value was built: an inline literal, or an object assembled elsewhere and passed by
+   * reference. (Omitting it caught the literal via excess-property checking, but let a pre-built
+   * object carrying both `prefer` and `requires` through silently.)
+   *
+   * If the catalog grows an image capability tag, this becomes a real tag list — a non-breaking
+   * change to THIS type rather than a new export.
+   */
+  requires?: never;
+}
 
 /**
  * Capability-based model SELECTION (E5 / SAP-2580) for the VIDEO path. Same contract as
@@ -176,13 +186,15 @@ export interface VideoSelect extends MediaSelectBase {
 }
 
 /**
- * Either media type's selection directives, for code that is generic over both — a value of this
- * type is accepted by {@link ImageCreateInput.select} AND {@link VideoCreateInput.select} (every
- * member's own fields are optional, so each is assignable to the other). A call site that knows its
- * media type should name the specific {@link ImageSelect} / {@link VideoSelect} instead, so that
- * asking an image model for a video-only capability stays a compile error.
+ * The selection directives BOTH media types accept — for code that is generic over image and video.
+ * This is the shared shape itself (the fields common to {@link ImageSelect} and
+ * {@link VideoSelect}), not a union of them, so a value of this type is genuinely assignable to
+ * {@link ImageCreateInput.select} AND {@link VideoCreateInput.select}.
+ *
+ * A call site that knows its media type should name the specific type instead: only
+ * {@link VideoSelect} exposes `requires`, and going through `MediaSelect` would hide it.
  */
-export type MediaSelect = ImageSelect | VideoSelect;
+export type MediaSelect = MediaSelectBase;
 
 /**
  * The public semantic image-model aliases the routed image capability serves, ready to pass as
