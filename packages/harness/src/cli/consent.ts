@@ -83,11 +83,13 @@ export interface ConsentResult {
  * Environment opt-out, same precedence and value-parsing as
  * `@sapiom/analytics-core`'s `resolveConsent()`: `SAPIOM_TELEMETRY_DISABLED`
  * (Sapiom-specific) before `DO_NOT_TRACK` (the ecosystem-wide convention),
- * both accepting `1`/`true` case-insensitively. Checked ahead of any stored
+ * both accepting `1`/`true` case-insensitively. Exported because every opt-out
+ * flag in this package must accept the same spellings — a flag that silently
+ * ignores `=true` is not an opt-out (profiles/system-prompt-fetch.ts). Checked ahead of any stored
  * settings — an operator setting either at the OS/shell level always wins
  * for that run, regardless of a previously persisted opt-in.
  */
-function isEnvFlagSet(value: string | undefined): boolean {
+export function isEnvFlagSet(value: string | undefined): boolean {
   if (typeof value !== "string") return false;
   const normalized = value.trim().toLowerCase();
   return normalized === "1" || normalized === "true";

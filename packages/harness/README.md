@@ -39,6 +39,21 @@ session lifecycle) to improve Sapiom. Opt out any time; `--no-telemetry`
 disables collection entirely. Events are also written locally to
 `~/.sapiom/harness/events.ndjson` for your own inspection.
 
+## Outbound requests
+
+Beyond telemetry (above) and the Sapiom calls your own actions make (sign-in,
+Deploy, Prod Run), Agent Studio makes one request of its own:
+
+- **System prompt, on every session start** — an unauthenticated
+  `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
+  your coding agent is told about can improve without you upgrading this package.
+  It sends no session content, no identifiers and no API key, and it is *not*
+  gated on the telemetry opt-in — it fetches configuration rather than reporting
+  usage. It is bounded at 5 seconds and falls back to the prompt bundled in this
+  package on any failure, so an offline session behaves exactly as before.
+  `SAPIOM_HARNESS_PROMPT_FETCH_DISABLED=1` (or `true`) skips the request entirely
+  and always uses the bundled prompt.
+
 ## Development
 
 ```bash

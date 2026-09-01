@@ -100,10 +100,11 @@ describe("fetchSystemPrompt", () => {
 
 describe("fetchSystemPromptForActiveEnvironment", () => {
   let originalFetch: typeof globalThis.fetch;
-  const originalFlag = process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED;
+  let originalFlag: string | undefined;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    originalFlag = process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED;
   });
 
   afterEach(() => {
@@ -116,6 +117,19 @@ describe("fetchSystemPromptForActiveEnvironment", () => {
     // src/test-setup.ts sets this for the whole suite, which is what keeps every
     // startServer spec off the network — assert the switch actually does that.
     process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED = "1";
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    await expect(fetchSystemPromptForActiveEnvironment()).resolves.toBe(
+      DEFAULT_SYSTEM_PROMPT,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts the `true` spelling every other opt-out flag accepts", async () => {
+    // A flag that only honoured "1" would leave an air-gapped session stalling for the
+    // full timeout on every start, having been told not to fetch.
+    process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED = "true";
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
 

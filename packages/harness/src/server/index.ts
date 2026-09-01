@@ -89,6 +89,7 @@ import {
   type McpDevServerCommand,
 } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import {
@@ -226,6 +227,11 @@ export interface HarnessServerOptions {
   /** Session registry file. Defaults to `<stateRoot>/sessions.json`. */
   sessionsPath?: string;
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Loads the coding-agent system prompt for each session start. Defaults to the
+   *  live fetch of GET /v1/harness/system-prompt (SAP-2810), which resolves to the
+   *  bundled DEFAULT_SYSTEM_PROMPT on any failure. Tests and offline hosts inject a
+   *  plain function instead of reaching the network. */
+  loadSystemPrompt?: () => Promise<string>;
   /** Host-supplied launcher for the local sapiom-dev MCP server, replacing the
    *  default `npx @sapiom/mcp@latest`. The Electron host passes its own binary
    *  (GUI-subsystem — allocates no console window on Windows, where the npx
@@ -522,9 +528,10 @@ function createDefaultBuildLaunchOpts(
           : undefined;
 
     // The served prompt (SAP-2810): loaded per session start, so a backend deploy
-    // reaches an install that never upgraded @sapiom/harness. Never throws — an
-    // offline, slow or erroring backend resolves to the bundled DEFAULT_SYSTEM_PROMPT,
-    // which is exactly what `generateSystemPromptFile` would have written anyway.
+    // reaches an install that never upgraded @sapiom/harness. The default loader
+    // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
+    // throwing; the `.catch` covers an injected loader that does not, because a
+    // session must never fail to start over the text of its prompt.
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -538,7 +545,10 @@ function createDefaultBuildLaunchOpts(
         harnessVersion: readVersion(),
         ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
       }),
-      loadSystemPrompt(),
+      loadSystemPrompt().catch((err: unknown) => {
+        console.error("[harness] system-prompt load failed:", err);
+        return DEFAULT_SYSTEM_PROMPT;
+      }),
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
     const systemPromptFile = await generateSystemPromptFile(harnessSessionId, {
@@ -1038,6 +1048,7 @@ export const startServer = async (
         deliveryFor: (harness) => systemPromptDeliveryFor(adapters[harness]),
       },
       options.sapiomDevMcp,
+      options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
     );
   const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
     await pendingGeneratedRemovals.get(harnessSessionId);

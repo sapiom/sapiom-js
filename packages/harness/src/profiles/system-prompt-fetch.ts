@@ -1,5 +1,6 @@
 import { resolveEnvironment, type ResolvedEnvironment } from "@sapiom/mcp/auth";
 
+import { isEnvFlagSet } from "../cli/consent.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./default.js";
 
 /** How long to wait for the system-prompt endpoint before falling back. */
@@ -42,15 +43,17 @@ export async function fetchSystemPrompt(env: ResolvedEnvironment): Promise<strin
  * server calls per session start. Environment resolution reads a file, so it falls
  * back to the bundled prompt rather than throwing when the store is unreadable.
  *
- * `SAPIOM_HARNESS_PROMPT_FETCH_DISABLED=1` pins the bundled prompt and skips the
- * request entirely: an escape hatch for an air-gapped run, and how the test suite
- * keeps ~10 `startServer` specs off the network (set in src/test-setup.ts, the same
- * pattern telemetry uses there).
+ * `SAPIOM_HARNESS_PROMPT_FETCH_DISABLED=1` (or `true`) pins the bundled prompt and skips
+ * the request entirely: an escape hatch for an air-gapped run, and how the test suite
+ * keeps every `startServer` spec off the network (set in src/test-setup.ts, the same
+ * pattern telemetry uses there). Spellings match the telemetry opt-outs, via the same
+ * `isEnvFlagSet` — a flag that ignored `=true` would stall an air-gapped session for the
+ * full timeout on every start, which is the opposite of what the operator asked for.
  */
 export async function fetchSystemPromptForActiveEnvironment(
   environment = process.env.SAPIOM_ENVIRONMENT,
 ): Promise<string> {
-  if (process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED === "1") {
+  if (isEnvFlagSet(process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED)) {
     return DEFAULT_SYSTEM_PROMPT;
   }
   try {
