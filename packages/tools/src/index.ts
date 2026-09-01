@@ -119,8 +119,13 @@ export type {
   OutputFormat,
 } from "./content-generation/index.js";
 // Capability-based model selection (E5/SAP-2580) — the `select` directives honored when `model`
-// is omitted; the response echoes `resolvedModel` + `preferSatisfied`.
-export type { MediaSelect } from "./content-generation/index.js";
+// is omitted; the response echoes `resolvedModel` + `preferSatisfied`. Typed per media type, so an
+// image call cannot ask for a video-only capability; `MediaSelect` is the union, for generic code.
+export type {
+  ImageSelect,
+  VideoSelect,
+  MediaSelect,
+} from "./content-generation/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { VIDEO_RESULT_SIGNAL } from "./content-generation/index.js";
 export { IMAGE_RESULT_SIGNAL } from "./content-generation/index.js";

@@ -15,7 +15,12 @@ import {
   VIDEO_MODEL_ALIASES,
   ContentGenerationHttpError,
 } from "./index.js";
-import type { ImageGenerationResult, VideoGenerationResult } from "./index.js";
+import type {
+  ImageGenerationResult,
+  VideoGenerationResult,
+  ImageSelect,
+  VideoSelect,
+} from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — the capability fn is tested directly with a real Transport wired to
@@ -1534,6 +1539,30 @@ describe("public model aliases (SAP-2582)", () => {
 });
 
 describe("capability-based selection (E5/SAP-2580)", () => {
+  it("types `requires` per media type — a video-only tag is a compile error on images", () => {
+    // Compile-time guard, enforced by `tsc --noEmit`: if the image `select` type ever widens back
+    // to the full vocabulary, `@ts-expect-error` goes unused and the typecheck fails. Images cannot
+    // do audio or lip-sync, so asking must fail at the keyboard, not after a paid round-trip.
+    // @ts-expect-error — `lipsync` is a video-only capability tag.
+    const videoOnlyTag: ImageSelect = { requires: ["lipsync"] };
+    // @ts-expect-error — `audio` is a video-only capability tag.
+    const audioTag: ImageSelect = { requires: ["audio"] };
+    void videoOnlyTag;
+    void audioTag;
+
+    // The tags each media type DOES accept still type-check.
+    const image: ImageSelect = {
+      requires: ["referenceImage"],
+      prefer: "cheapest",
+    };
+    const video: VideoSelect = {
+      requires: ["audio", "lipsync", "referenceImage"],
+      prefer: "cheapest",
+    };
+    expect(image.requires).toEqual(["referenceImage"]);
+    expect(video.requires).toHaveLength(3);
+  });
+
   it("createImage rides `select` on the body when set", async () => {
     const { transport, calls } = makeTransport([
       () =>

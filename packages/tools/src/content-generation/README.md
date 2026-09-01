@@ -227,13 +227,15 @@ await sapiom.contentGeneration.images.create({
 | `nano-banana-pro`       | `wan-standard`                |
 | `gpt-image-2`           | `minimax-h3-max`              |
 
-Both are listed in catalog order — cheapest first, and the order the platform
-selects in when you omit `model`. Neither is a closed set: `model` is typed as a
-literal union widened to `string`, so a newly-cataloged alias works before this SDK
-catches up, and the SDK never validates the value locally — the platform catalog is
-the authority.
+Both are listed in the platform's catalog order, which is the order it considers
+them in when you omit `model`. Treat it as a stable listing, not a price ranking — if
+you want the cheapest, ask for it with `select.prefer` below.
 
-> The `VIDEO_MODELS` export (raw `fal-ai/…` ids) is **deprecated**. Video routes
+Neither is a closed set: `model` is typed as a literal union widened to `string`, so a
+newly-cataloged alias works before this SDK catches up, and the SDK never validates the
+value locally — the platform catalog is the authority.
+
+> The `VIDEO_MODELS` export (raw provider model ids) is **deprecated**. Video routes
 > through the same alias-resolving capability as images, so the same guidance applies:
 > the pins still work, but migrate them — `veo3Fast` → `"veo3-fast"`,
 > `klingV16StandardText` → `"kling-standard"`, `wanV22Text` → `"wan-standard"`,
@@ -260,10 +262,11 @@ out.resolvedModel; // e.g. "seedance-fast" — what the platform picked
 out.preferSatisfied; // true: cheapest verified against every candidate
 ```
 
-- `requires` — `"audio"`, `"lipsync"`, `"referenceImage"`. An unknown tag is a
-  `400 unsupported_param`, pre-charge. If you _also_ pin `model`, `requires` is still
-  enforced against the pin, so a model lacking the capability is rejected rather than
-  rendered and billed.
+- `requires` — capability tags the chosen model must declare. Video accepts `"audio"`,
+  `"lipsync"` and `"referenceImage"`; images accept `"referenceImage"` only, and no image
+  model declares it yet (see [`select` and images](#select-and-images) below). An unknown
+  tag is rejected as an unsupported param. `requires` is intended to hold whether or not
+  you also pin `model` — it states a requirement, not just a tie-breaker.
 - `prefer: "cheapest"` — re-ranks the surviving candidates by a **live** price join. It
   degrades, never fails: if the join is unavailable, slow, or incomplete, selection falls
   back to deterministic catalog order and the response reports `preferSatisfied: false`.
@@ -276,8 +279,19 @@ it, not a fixed per-model tier. Omit `duration` (video) / `count` (images) and e
 candidate is priced at its _own_ catalog default, so a model with a shorter default can
 win on absolute price — pin them to compare on equal terms.
 
-If nothing satisfies the constraints, the request is rejected pre-charge, naming which
-constraint eliminated which model.
+If no model satisfies the constraints, the request fails before any charge.
+
+### `select` and images
+
+`select` is typed per media type, because the two do not offer the same capabilities:
+`ImageSelect` accepts only `requires: ["referenceImage"]`, while `VideoSelect` accepts
+`"audio"`, `"lipsync"` and `"referenceImage"`. Asking for a video-only capability on an
+image call is a compile error rather than a runtime failure.
+
+Be aware that **no image model in the catalog declares `referenceImage` today**, so any
+`requires` on an image call currently narrows the candidates to none. The tag is typed
+because image conditioning is on the roadmap; until it lands, use `select.prefer` alone
+on the image path, or pin `model`.
 
 ## Gotchas
 

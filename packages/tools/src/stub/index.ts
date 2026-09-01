@@ -1262,7 +1262,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             [input],
             () => stubImageResult(input),
           ) as ImageGenerationResult;
-          // Mirror the real client's `withDispatchCost`: stamp the resolvedModel onto a COPY, so
+          // Mirror the real client's `withDispatchMetadata`: stamp the resolvedModel onto a COPY, so
           // the handle, `wait()`, and the resume payload all carry the same value — an invariant
           // the routed path guarantees — while the caller's override object is never touched and
           // its own resolvedModel wins when present.
@@ -1305,7 +1305,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             [input],
             () => stubVideoResult(input),
           ) as VideoGenerationResult;
-          // Mirror the real client's `withDispatchCost`: stamp the resolvedModel onto a COPY, so
+          // Mirror the real client's `withDispatchMetadata`: stamp the resolvedModel onto a COPY, so
           // the handle, `wait()`, and the resume payload all carry the same value — an invariant
           // the routed path guarantees — while the caller's override object is never touched and
           // its own resolvedModel wins when present.

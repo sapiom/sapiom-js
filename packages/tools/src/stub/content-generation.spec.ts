@@ -72,7 +72,7 @@ describe("createStubClient().contentGeneration — resolvedModel on the sync cre
 // `result.resolvedModel = input.model ?? "stub-model"` onto whatever resolve() returned — throwing
 // on a frozen override and silently clobbering a non-frozen one. resolvedModel now lives in the
 // launch fallback factories, and the launch paths stamp it onto a COPY of the resolved override
-// (mirroring the real client's `withDispatchCost`), so `handle.resolvedModel` and
+// (mirroring the real client's `withDispatchMetadata`), so `handle.resolvedModel` and
 // `(await handle.wait()).resolvedModel` always agree. These tests lock both halves in.
 describe("createStubClient().contentGeneration — resolvedModel on the launch path", () => {
   it("images.launch / video.launch default and echo like create", async () => {
@@ -112,7 +112,7 @@ describe("createStubClient().contentGeneration — resolvedModel on the launch p
     // Deliberately NOT frozen — this is the mutation guard for the common case (a frozen object
     // would turn a reintroduced post-mutation into a throw instead of a silent clobber). The
     // stamp lands on a copy, so the caller's object gains no key, and handle.resolvedModel ===
-    // wait().resolvedModel holds like it does on the routed path (`withDispatchCost`).
+    // wait().resolvedModel holds like it does on the routed path (`withDispatchMetadata`).
     const override = { video: { url: "https://cdn/override.mp4" } };
     const stub = createStubClient({
       overrides: { "contentGeneration.video.launch": override },

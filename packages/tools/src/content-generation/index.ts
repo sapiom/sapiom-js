@@ -124,22 +124,12 @@ export type OutputFormat = "png" | "jpeg" | "webp" | "mp4";
 type LiteralUnion<T extends string> = T | (string & Record<never, never>);
 
 /**
- * Capability-based model SELECTION (E5 / SAP-2580) — steers the choice when `model` is OMITTED. The
- * neutral params you declare already narrow the candidate models on their own, so `select` is the
- * escape hatch for what they cannot express, not the main path. Whichever model the platform picks
- * comes back as `resolvedModel`. A malformed `select`, an unknown `requires` tag, or an unknown
- * `prefer` value is rejected `400 unsupported_param` BEFORE any charge — never silently ignored.
- *
- * When `model` IS pinned, `prefer` is inert (there is nothing left to rank), but `requires` is still
- * enforced against the pin: a pinned model lacking a required capability is rejected pre-payment
- * rather than rendered and billed.
+ * What every `select` shares: the opt-in ranking preference. The `requires` vocabulary differs by
+ * media type, so it lives on {@link ImageSelect} / {@link VideoSelect} rather than here — an image
+ * model cannot lip-sync, and a type that accepted the tag anyway would turn a compile-time mistake
+ * into a paid round-trip.
  */
-export interface MediaSelect {
-  /**
-   * Intrinsic capability tags the selected model MUST declare — the axes a neutral param cannot
-   * express. An unknown tag is a `400 unsupported_param`.
-   */
-  requires?: Array<"audio" | "lipsync" | "referenceImage">;
+interface MediaSelectBase {
   /**
    * Opt-in preference over the surviving candidates. `"cheapest"` re-ranks them by a LIVE price join
    * and picks the lowest, instead of the default deterministic catalog order. It DEGRADES, never
@@ -157,10 +147,53 @@ export interface MediaSelect {
 }
 
 /**
+ * Capability-based model SELECTION (E5 / SAP-2580) for the IMAGE path — steers the choice when
+ * `model` is OMITTED. The neutral params you declare already narrow the candidate models on their
+ * own, so `select` is the escape hatch for what they cannot express, not the main path. Whichever
+ * model the platform picks comes back as `resolvedModel`. A malformed `select`, an unknown
+ * `requires` tag, or an unknown `prefer` value is rejected as an unsupported param BEFORE any
+ * charge — never silently ignored.
+ */
+export interface ImageSelect extends MediaSelectBase {
+  /**
+   * Intrinsic capability tags the selected image model MUST declare. Only `"referenceImage"` (image
+   * conditioning / img2img) is meaningful for images — `"audio"` and `"lipsync"` are video-only
+   * axes, so they are not accepted here and asking for one is a compile error rather than a paid
+   * round-trip that 400s.
+   *
+   * NOTE: no image model in the catalog declares `referenceImage` today, so setting this currently
+   * narrows the candidates to NONE and the request fails before any charge. The tag is typed because
+   * image conditioning is on the roadmap; until it lands, prefer {@link MediaSelectBase.prefer}
+   * alone on the image path, or pin `model`.
+   */
+  requires?: Array<"referenceImage">;
+}
+
+/**
+ * Capability-based model SELECTION (E5 / SAP-2580) for the VIDEO path. Same contract as
+ * {@link ImageSelect}, over the wider capability vocabulary video models actually declare.
+ */
+export interface VideoSelect extends MediaSelectBase {
+  /**
+   * Intrinsic capability tags the selected video model MUST declare — the axes a neutral param
+   * cannot express. An unknown tag is rejected as an unsupported param, before any charge.
+   */
+  requires?: Array<"audio" | "lipsync" | "referenceImage">;
+}
+
+/**
+ * Either media type's selection directives — the shape shared by
+ * {@link ImageCreateInput.select} and {@link VideoCreateInput.select}. Name this only in code that
+ * is generic over both; a call site should use the specific {@link ImageSelect} /
+ * {@link VideoSelect}, which accept exactly the tags their media type can satisfy.
+ */
+export type MediaSelect = ImageSelect | VideoSelect;
+
+/**
  * The public semantic image-model aliases the routed image capability serves, ready to pass as
- * {@link ImageCreateInput.model} — e.g. `IMAGE_MODELS.fluxFast`. Ordered as the platform's catalog
- * orders them (cheapest-first at a 1 MP reference), which is also the order it selects in when you
- * omit `model` entirely.
+ * {@link ImageCreateInput.model} — e.g. `IMAGE_MODELS.fluxFast`. Listed in the platform's catalog
+ * order, which is the order it considers them in when you omit `model`. That is a stable listing,
+ * not a price ranking — to get the cheapest, ask for it with `select.prefer`.
  *
  * These are Sapiom's OWN neutral names, resolved to a concrete provider model server-side, and they
  * are the SUPPORTED input for {@link ImageCreateInput.model}. A raw provider model id is DEPRECATED:
@@ -211,9 +244,9 @@ export interface ImageCreateInput {
   /**
    * Optional capability-based model selection (E5 / SAP-2580), honored when `model` is omitted:
    * the platform picks a model satisfying your declared params plus `select.requires`, optionally
-   * re-ranked by `select.prefer`. See {@link MediaSelect}.
+   * re-ranked by `select.prefer`. See {@link ImageSelect}.
    */
-  select?: MediaSelect;
+  select?: ImageSelect;
 
   /**
    * Optional cross-call idempotency key: a repeat with the same key (per tenant) returns the
@@ -883,9 +916,9 @@ export interface VideoCreateInput {
   /**
    * Optional capability-based model selection (E5 / SAP-2580), honored when `model` is omitted:
    * the platform picks a model satisfying your declared params plus `select.requires`, optionally
-   * re-ranked by `select.prefer`. See {@link MediaSelect}.
+   * re-ranked by `select.prefer`. See {@link VideoSelect}.
    */
-  select?: MediaSelect;
+  select?: VideoSelect;
 
   /**
    * Optional cross-call idempotency key: a repeat with the same key (per tenant) returns the
@@ -1059,7 +1092,7 @@ function mapVideo(raw: RawMedia): GeneratedVideo {
 }
 
 // Returns the camelCase video BODY only — the submit-only metadata (`resolvedModel`, `cost`) is
-// threaded on separately by `withDispatchCost`, since the queue passthrough omits it.
+// threaded on separately by `withDispatchMetadata`, since the queue passthrough omits it.
 function mapVideoResult(raw: RawVideoResult): {
   video?: GeneratedVideo;
   [key: string]: unknown;
