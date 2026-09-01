@@ -60,6 +60,34 @@ describe("AgentMapWorkspaceStore", () => {
     });
   });
 
+  it("selects one winner across independent store instances", async () => {
+    const root = await fixture();
+    const firstEvent = vi.fn();
+    const secondEvent = vi.fn();
+    const first = new AgentMapWorkspaceStore(root, {
+      now: () => new Date("2026-09-01T12:00:00.000Z"),
+      onEvent: firstEvent,
+    });
+    const second = new AgentMapWorkspaceStore(root, {
+      now: () => new Date("2026-09-01T12:00:01.000Z"),
+      onEvent: secondEvent,
+    });
+
+    const [left, right] = await Promise.all([
+      first.readOrCreate(projectId),
+      second.readOrCreate(projectId),
+    ]);
+    const restarted = await new AgentMapWorkspaceStore(root).readOrCreate(
+      projectId,
+    );
+
+    expect(left).toEqual(right);
+    expect(restarted).toEqual(left);
+    expect(firstEvent.mock.calls.length + secondEvent.mock.calls.length).toBe(
+      1,
+    );
+  });
+
   it("does not treat a leftover temporary file as workspace state", async () => {
     const root = await fixture();
     const directory = path.join(root, "projects", projectId);

@@ -17,7 +17,6 @@ export type ProjectRootBindingStatus = "active" | "missing";
 /** The public projection of a server-private root binding. */
 export interface StudioProjectBindingSummary {
   id: string;
-  repositoryId: string | null;
   status: ProjectRootBindingStatus;
 }
 

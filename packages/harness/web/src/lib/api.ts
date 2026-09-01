@@ -1192,7 +1192,8 @@ function writeMockHelpSeen(seen: boolean): void {
  * dismiss survives a reload — for the fixture most likely to want it: dismiss
  * on a fresh install, reload as a returning user, stay dismissed.
  */
-if (typeof window !== "undefined" && isFreshMockState()) writeMockHelpSeen(false);
+if (typeof window !== "undefined" && isFreshMockState())
+  writeMockHelpSeen(false);
 
 /**
  * Every rail-state write the mock has served this page load, newest last, for
@@ -1897,7 +1898,6 @@ export class MockApi implements HarnessApi {
       bindings: [
         {
           id: `root_00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
-          repositoryId: null,
           status: "active",
         },
       ],

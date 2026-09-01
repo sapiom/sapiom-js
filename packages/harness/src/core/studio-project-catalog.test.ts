@@ -84,9 +84,105 @@ describe("StudioProjectCatalog", () => {
     expect(moved.projectId).toBe(project.projectId);
     expect(expanded.projectId).toBe(project.projectId);
     expect(expanded.bindings).toHaveLength(2);
-    expect(expanded.bindings.map((entry) => entry.repositoryId)).toContain(
-      "repo_publisher",
+    expect(JSON.stringify(expanded)).not.toContain("repo_publisher");
+    expect(
+      (
+        JSON.parse(await fs.readFile(catalogPath, "utf8")) as {
+          projects: Array<{
+            rootBindings: Array<{ repositoryId: string | null }>;
+          }>;
+        }
+      ).projects[0]?.rootBindings.map((entry) => entry.repositoryId),
+    ).toContain("repo_publisher");
+
+    const restarted = await new StudioProjectCatalog(catalogPath).reconcile([
+      { workspaceKey: "workspace-new", cwd: movedRoot },
+      { workspaceKey: "workspace-publisher", cwd: secondRoot },
+    ]);
+    expect(restarted.projects).toHaveLength(1);
+    expect(restarted.projects[0]?.projectId).toBe(project.projectId);
+    expect(restarted.workspaceScopes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ projectId: project.projectId }),
+        expect.objectContaining({ projectId: project.projectId }),
+      ]),
     );
+  });
+
+  it("serializes concurrent writers from independent catalog instances", async () => {
+    const { root, catalogPath } = await fixture();
+    const alpha = path.join(root, "alpha");
+    const beta = path.join(root, "beta");
+    await Promise.all([fs.mkdir(alpha), fs.mkdir(beta)]);
+
+    const [first, second] = await Promise.all([
+      new StudioProjectCatalog(catalogPath).reconcile([
+        { workspaceKey: "workspace-alpha", cwd: alpha },
+      ]),
+      new StudioProjectCatalog(catalogPath).reconcile([
+        { workspaceKey: "workspace-beta", cwd: beta },
+      ]),
+    ]);
+    const reconciled = await new StudioProjectCatalog(catalogPath).reconcile([
+      { workspaceKey: "workspace-alpha", cwd: alpha },
+      { workspaceKey: "workspace-beta", cwd: beta },
+    ]);
+
+    expect(reconciled.projects).toHaveLength(2);
+    expect(
+      new Set(reconciled.workspaceScopes.map((scope) => scope.projectId)),
+    ).toEqual(
+      new Set([
+        first.workspaceScopes[0]?.projectId,
+        second.workspaceScopes[0]?.projectId,
+      ]),
+    );
+  });
+
+  it("skips unsafe live scopes without rejecting legal path whitespace", async () => {
+    const { root, catalogPath } = await fixture();
+    const spaced = path.join(root, "project ");
+    await fs.mkdir(spaced);
+
+    const reconciled = await new StudioProjectCatalog(catalogPath).reconcile([
+      { workspaceKey: "workspace-unsafe", cwd: `${root}/bad\npath` },
+      { workspaceKey: "workspace-spaced", cwd: spaced },
+    ]);
+
+    expect(reconciled.projects).toHaveLength(1);
+    expect(reconciled.projects[0]?.displayName).toBe("project");
+    expect(reconciled.workspaceScopes).toEqual([
+      expect.objectContaining({ cwd: spaced }),
+    ]);
+  });
+
+  it("rejects a move onto another binding in the same project and remains restart-readable", async () => {
+    const { root, catalogPath } = await fixture();
+    const firstRoot = path.join(root, "first");
+    const secondRoot = path.join(root, "second");
+    await Promise.all([fs.mkdir(firstRoot), fs.mkdir(secondRoot)]);
+    const catalog = new StudioProjectCatalog(catalogPath);
+    const project = (
+      await catalog.reconcile([
+        { workspaceKey: "workspace-first", cwd: firstRoot },
+      ])
+    ).projects[0]!;
+    await catalog.addRootBinding(project.projectId, secondRoot, {
+      legacyWorkspaceKey: "workspace-second",
+    });
+
+    await expect(
+      catalog.moveRootBinding(
+        project.projectId,
+        project.bindings[0]!.id,
+        secondRoot,
+      ),
+    ).rejects.toMatchObject({ code: "malformed_state" });
+
+    const restarted = await new StudioProjectCatalog(catalogPath).resolve(
+      project.projectId,
+    );
+    expect(restarted?.bindings).toHaveLength(2);
   });
 
   it("supports a project with no repository binding", async () => {

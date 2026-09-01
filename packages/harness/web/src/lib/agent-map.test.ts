@@ -15,7 +15,6 @@ function validResponse(): unknown {
       bindings: [
         {
           id: "root_00000000-0000-4000-8000-000000000001",
-          repositoryId: "repo_market_research",
           status: "active",
         },
       ],
@@ -66,9 +65,8 @@ describe("parseAgentMapWorkspaceResponse", () => {
       (value: any) => (value.project.displayName = "/secret/project"),
     ],
     [
-      "repository URL",
-      (value: any) =>
-        (value.project.bindings[0].repositoryId = "https://example.com/repo"),
+      "private repository field",
+      (value: any) => (value.project.bindings[0].repositoryId = "repo-private"),
     ],
     [
       "project mismatch",

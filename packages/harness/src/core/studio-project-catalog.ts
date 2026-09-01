@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   STUDIO_PROJECT_CATALOG_SCHEMA_VERSION,
@@ -86,6 +87,13 @@ function isSafeText(value: unknown): value is string {
   );
 }
 
+/** Filesystem names may legally begin or end with spaces on macOS/POSIX. */
+function isSafePathText(value: unknown): value is string {
+  return (
+    typeof value === "string" && value !== "" && !hasControlCharacter(value)
+  );
+}
+
 function isOpaqueId(value: unknown): value is string {
   return (
     isSafeText(value) &&
@@ -132,7 +140,7 @@ function parseBinding(value: unknown): ProjectRootBinding | null {
     !hasExactKeys(value, ["id", "repositoryId", "localRootRef", "status"]) ||
     !isBindingId(value.id) ||
     (value.repositoryId !== null && !isOpaqueId(value.repositoryId)) ||
-    !isSafeText(value.localRootRef) ||
+    !isSafePathText(value.localRootRef) ||
     (!path.posix.isAbsolute(value.localRootRef) &&
       !path.win32.isAbsolute(value.localRootRef)) ||
     (value.status !== "active" && value.status !== "missing")
@@ -254,7 +262,7 @@ function publicSummary(project: StudioProjectIdentity): StudioProjectSummary {
     identityVersion: project.identityVersion,
     displayName: project.displayName,
     bindings: project.rootBindings
-      .map(({ id, repositoryId, status }) => ({ id, repositoryId, status }))
+      .map(({ id, status }) => ({ id, status }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -285,6 +293,10 @@ function storageError(): StudioProjectCatalogError {
   return new StudioProjectCatalogError("storage_unavailable");
 }
 
+const CATALOG_LOCK_TIMEOUT_MS = 5_000;
+const CATALOG_STALE_LOCK_MS = 30_000;
+const CATALOG_LOCK_RETRY_MS = 10;
+
 /**
  * Durable, serialized owner of Studio project identity. Catalog reads never
  * run package inventory or source discovery; callers provide the already
@@ -301,7 +313,19 @@ export class StudioProjectCatalog {
   ) {}
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutationQueue.then(operation, operation);
+    const lockedOperation = async (): Promise<T> => {
+      const release = await this.acquireFileLock();
+      try {
+        // CLI and Electron share one state root. Always re-read after taking
+        // the cross-instance lock so a whole-catalog atomic rewrite includes
+        // identities committed by another live host.
+        await this.load(true);
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const result = this.mutationQueue.then(lockedOperation, lockedOperation);
     this.mutationQueue = result.then(
       () => undefined,
       () => undefined,
@@ -309,31 +333,71 @@ export class StudioProjectCatalog {
     return result;
   }
 
-  private async load(): Promise<void> {
-    if (this.projects !== null) return;
-    if (!this.loadPromise) {
-      this.loadPromise = (async () => {
-        let raw: string;
-        try {
-          raw = await fs.readFile(this.catalogPath, "utf8");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            this.projects = [];
-            return;
-          }
+  private async acquireFileLock(): Promise<() => Promise<void>> {
+    const lockPath = `${this.catalogPath}.lock`;
+    const deadline = Date.now() + CATALOG_LOCK_TIMEOUT_MS;
+    try {
+      await fs.mkdir(path.dirname(this.catalogPath), { recursive: true });
+    } catch {
+      throw storageError();
+    }
+    for (;;) {
+      try {
+        await fs.mkdir(lockPath);
+        return async () => {
+          await fs.rmdir(lockPath).catch(() => {});
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
           throw storageError();
         }
-        let decoded: unknown;
-        try {
-          decoded = JSON.parse(raw) as unknown;
-        } catch {
-          throw new StudioProjectCatalogError("malformed_state");
+      }
+
+      try {
+        const lock = await fs.stat(lockPath);
+        if (Date.now() - lock.mtimeMs > CATALOG_STALE_LOCK_MS) {
+          await fs.rmdir(lockPath).catch(() => {});
+          continue;
         }
-        this.projects = parseCatalog(decoded).projects;
-      })().finally(() => {
-        this.loadPromise = null;
-      });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw storageError();
+      }
+      if (Date.now() >= deadline) throw storageError();
+      await delay(CATALOG_LOCK_RETRY_MS);
     }
+  }
+
+  private async load(force = false): Promise<void> {
+    if (this.loadPromise) {
+      await this.loadPromise;
+      // A forced mutation read may have joined a read that began before this
+      // instance acquired the file lock. Read once more while holding the lock
+      // so the mutation cannot commit from that potentially stale snapshot.
+      if (!force) return;
+    }
+    if (!force && this.projects !== null) return;
+    this.loadPromise = (async () => {
+      let raw: string;
+      try {
+        raw = await fs.readFile(this.catalogPath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          this.projects = [];
+          return;
+        }
+        throw storageError();
+      }
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(raw) as unknown;
+      } catch {
+        throw new StudioProjectCatalogError("malformed_state");
+      }
+      this.projects = parseCatalog(decoded).projects;
+    })().finally(() => {
+      this.loadPromise = null;
+    });
     await this.loadPromise;
   }
 
@@ -369,7 +433,7 @@ export class StudioProjectCatalog {
 
   async list(): Promise<StudioProjectSummary[]> {
     await this.mutationQueue;
-    await this.load();
+    await this.load(true);
     return this.projects!.map(publicSummary);
   }
 
@@ -409,13 +473,21 @@ export class StudioProjectCatalog {
       const dedupedScopes = new Map<string, WorkspaceScopeSummary>();
       const rootsByLegacyKey = new Map<string, string>();
       for (const scope of scopes) {
-        if (!isSafeText(scope.workspaceKey) || !isSafeText(scope.cwd)) {
-          throw new StudioProjectCatalogError("malformed_state");
+        // Workspace scopes are live operational input, not persisted catalog
+        // state. One unsafe/unrepresentable path must not poison every valid
+        // project read. Spaces at either end remain valid path characters.
+        if (!isSafeText(scope.workspaceKey) || !isSafePathText(scope.cwd)) {
+          continue;
         }
-        const canonical = canonicalGraphPath(scope.cwd);
+        let canonical: string;
+        try {
+          canonical = canonicalGraphPath(scope.cwd);
+        } catch {
+          continue;
+        }
         const aliasedRoot = rootsByLegacyKey.get(scope.workspaceKey);
         if (aliasedRoot !== undefined && aliasedRoot !== canonical) {
-          throw new StudioProjectCatalogError("malformed_state");
+          continue;
         }
         rootsByLegacyKey.set(scope.workspaceKey, canonical);
         if (!dedupedScopes.has(canonical)) {
@@ -464,7 +536,7 @@ export class StudioProjectCatalog {
           project = {
             projectId: `project_${randomUUID()}`,
             identityVersion: 1,
-            displayName: path.basename(canonical) || "Project",
+            displayName: path.basename(canonical).trim() || "Project",
             rootBindings: [
               {
                 id: `root_${randomUUID()}`,
@@ -529,7 +601,7 @@ export class StudioProjectCatalog {
   ): Promise<StudioProjectSummary | null> {
     if (!isStudioProjectId(projectId)) return null;
     await this.mutationQueue;
-    await this.load();
+    await this.load(true);
     const project = this.projects!.find(
       (candidate) => candidate.projectId === projectId,
     );
@@ -552,13 +624,23 @@ export class StudioProjectCatalog {
       const binding = project?.rootBindings.find(
         (candidate) => candidate.id === bindingId,
       );
-      if (!project || !binding || !isSafeText(root)) {
+      if (!project || !binding || !isSafePathText(root)) {
         throw new StudioProjectCatalogError("malformed_state");
       }
       if (legacyWorkspaceKey !== undefined && !isSafeText(legacyWorkspaceKey)) {
         throw new StudioProjectCatalogError("malformed_state");
       }
       const canonical = canonicalGraphPath(root);
+      if (
+        project.rootBindings.some(
+          (candidate) =>
+            candidate.id !== binding.id && candidate.localRootRef === canonical,
+        )
+      ) {
+        // Reject instead of persisting two private bindings for the same root;
+        // the strict restart parser enforces this same invariant.
+        throw new StudioProjectCatalogError("malformed_state");
+      }
       if (
         next.some(
           (candidate) =>
@@ -601,7 +683,7 @@ export class StudioProjectCatalog {
       );
       if (
         !project ||
-        !isSafeText(root) ||
+        !isSafePathText(root) ||
         (options.repositoryId !== undefined &&
           options.repositoryId !== null &&
           !isOpaqueId(options.repositoryId)) ||

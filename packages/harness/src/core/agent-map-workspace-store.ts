@@ -236,14 +236,41 @@ export class AgentMapWorkspaceStore {
         `${JSON.stringify(workspace, null, 2)}\n`,
         "utf8",
       );
-      await fs.rename(temporary, workspacePath);
-    } catch {
+      // `rename()` replaces an existing target on POSIX, so it cannot select
+      // one winner across two Studio processes (or even two store instances).
+      // The temporary file is already complete; linking it into the final name
+      // is an atomic, no-clobber commit. An EEXIST loser reads and returns the
+      // winner instead of publishing its divergent timestamp or event.
+      await fs.link(temporary, workspacePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return this.readExisting(projectId, workspacePath);
+      }
       throw storageError();
     } finally {
       await fs.rm(temporary, { force: true }).catch(() => {});
     }
     this.emit({ name: "agent_map.workspace_initialized", projectId });
     return workspace;
+  }
+
+  private async readExisting(
+    projectId: StudioProjectId,
+    workspacePath: string,
+  ): Promise<AgentMapWorkspaceState> {
+    let raw: string;
+    try {
+      raw = await fs.readFile(workspacePath, "utf8");
+    } catch {
+      throw storageError();
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(raw) as unknown;
+    } catch {
+      throw new AgentMapWorkspaceStoreError("malformed_state");
+    }
+    return parseAgentMapWorkspaceState(decoded, projectId);
   }
 
   /**

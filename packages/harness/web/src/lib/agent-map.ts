@@ -61,16 +61,14 @@ function isTimestamp(value: unknown): value is string {
 function parseBinding(value: unknown): StudioProjectBindingSummary | null {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["id", "repositoryId", "status"]) ||
+    !hasExactKeys(value, ["id", "status"]) ||
     !isOpaqueId(value.id) ||
-    (value.repositoryId !== null && !isOpaqueId(value.repositoryId)) ||
     (value.status !== "active" && value.status !== "missing")
   ) {
     return null;
   }
   return {
     id: value.id,
-    repositoryId: value.repositoryId,
     status: value.status,
   };
 }

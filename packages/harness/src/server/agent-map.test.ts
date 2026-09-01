@@ -34,11 +34,12 @@ describe("createAgentMapRouter", () => {
     const privateRoot = path.join(stateRoot, "private-market-research");
     await fs.mkdir(privateRoot);
     const scope = { workspaceKey: "workspace-private-alias", cwd: privateRoot };
+    const scopes = [scope];
     const catalog = new StudioProjectCatalog(
       path.join(stateRoot, "studio-projects.json"),
     );
     const project = (await catalog.reconcile([scope])).projects[0]!;
-    const listWorkspaceScopes = vi.fn(async () => [scope]);
+    const listWorkspaceScopes = vi.fn(async () => [...scopes]);
     const onEvent = vi.fn();
     const store = new AgentMapWorkspaceStore(
       path.join(stateRoot, "agent-map"),
@@ -46,6 +47,7 @@ describe("createAgentMapRouter", () => {
     );
     const app = express();
     app.use("/api", createBootTokenMiddleware("test-token"));
+    app.use("/api", express.json());
     app.use(
       "/api",
       createAgentMapRouter({ catalog, store, listWorkspaceScopes }),
@@ -57,6 +59,8 @@ describe("createAgentMapRouter", () => {
       stateRoot,
       privateRoot,
       project,
+      catalog,
+      scopes,
       listWorkspaceScopes,
       onEvent,
     };
@@ -102,6 +106,130 @@ describe("createAgentMapRouter", () => {
     expect(publicJson).not.toContain("workspace-private-alias");
     expect(fixture.onEvent).toHaveBeenCalledTimes(1);
     expect(fixture.listWorkspaceScopes).toHaveBeenCalledTimes(2);
+  });
+
+  it("creates a zero-binding project without eagerly creating map state", async () => {
+    const fixture = await start();
+    const response = await fetch(`${fixture.baseUrl}/api/projects`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ displayName: "Empty plan" }),
+    });
+    const project = (await response.json()) as {
+      projectId: string;
+      bindings: unknown[];
+    };
+
+    expect(response.status).toBe(201);
+    expect(project.bindings).toEqual([]);
+    await expect(
+      fs.stat(
+        path.join(
+          fixture.stateRoot,
+          "agent-map",
+          "projects",
+          project.projectId,
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves identity when the authenticated boundary moves and adds root bindings", async () => {
+    const fixture = await start();
+    const movedRoot = path.join(fixture.stateRoot, "moved-market-research");
+    const secondRoot = path.join(fixture.stateRoot, "publisher-repository");
+    await Promise.all([fs.mkdir(movedRoot), fs.mkdir(secondRoot)]);
+    fixture.scopes.splice(
+      0,
+      fixture.scopes.length,
+      { workspaceKey: "workspace-moved", cwd: movedRoot },
+      { workspaceKey: "workspace-publisher", cwd: secondRoot },
+    );
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Harness-Token": "test-token",
+    };
+
+    const moved = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings/${fixture.project.bindings[0]!.id}`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ root: movedRoot }),
+      },
+    );
+    const added = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ root: secondRoot }),
+      },
+    );
+    const opened = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/agent-map/workspace`,
+      { headers },
+    );
+    const movedBody = (await moved.json()) as Record<string, unknown>;
+    const addedBody = (await added.json()) as Record<string, unknown>;
+    const openedBody = (await opened.json()) as AgentMapWorkspaceResponse;
+
+    expect(moved.status).toBe(200);
+    expect(added.status).toBe(201);
+    expect(opened.status).toBe(200);
+    expect(movedBody.projectId).toBe(fixture.project.projectId);
+    expect(addedBody.projectId).toBe(fixture.project.projectId);
+    expect(openedBody.project.projectId).toBe(fixture.project.projectId);
+    expect(openedBody.project.bindings).toHaveLength(2);
+    for (const body of [movedBody, addedBody, openedBody]) {
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain(movedRoot);
+      expect(serialized).not.toContain(secondRoot);
+      expect(serialized).not.toContain("workspace-moved");
+      expect(serialized).not.toContain("repositoryId");
+    }
+
+    const restarted = await new StudioProjectCatalog(
+      path.join(fixture.stateRoot, "studio-projects.json"),
+    ).reconcile(fixture.scopes);
+    expect(restarted.projects).toHaveLength(1);
+    expect(restarted.projects[0]?.projectId).toBe(fixture.project.projectId);
+    expect(restarted.projects[0]?.bindings).toHaveLength(2);
+  });
+
+  it("does not expose root association without the boot token or allow list", async () => {
+    const fixture = await start();
+    const unknownRoot = path.join(fixture.stateRoot, "not-opened");
+    await fs.mkdir(unknownRoot);
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings`;
+
+    expect(
+      (
+        await fetch(route, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ root: unknownRoot }),
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(route, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Harness-Token": "test-token",
+          },
+          body: JSON.stringify({ root: unknownRoot }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (await fixture.catalog.resolve(fixture.project.projectId))?.bindings,
+    ).toHaveLength(1);
   });
 
   it("returns a bounded 404 before touching workspace storage", async () => {
