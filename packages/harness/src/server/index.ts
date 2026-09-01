@@ -2523,15 +2523,23 @@ export const startServer = async (
     workflows: readonly RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
     const scopes = await workspaceScopeCatalog.list();
-    const projects = (await studioProjectCatalog.reconcile(scopes)).projects;
+    const reconciled = await studioProjectCatalog.reconcile(scopes);
+    const projects = reconciled.projects;
     const annotations = new Map<
       string,
       Array<{ agentId: string; projectId: string }>
     >();
     for (const project of projects) {
-      const roots = scopes
+      const roots = reconciled.workspaceScopes
         .filter((scope) => scope.projectId === project.projectId)
         .map((scope) => scope.cwd);
+      const scanComplete =
+        roots.length > 0 &&
+        (
+          await Promise.all(
+            roots.map((root) => workflowRegistry.discoveryStatus(root)),
+          )
+        ).every((status) => status === "complete");
       for (const [
         workflowPath,
         agentId,
@@ -2539,6 +2547,7 @@ export const startServer = async (
         project.projectId,
         roots,
         workflows,
+        scanComplete,
       )) {
         const existing = annotations.get(workflowPath) ?? [];
         existing.push({ agentId, projectId: project.projectId });
@@ -2649,6 +2658,13 @@ export const startServer = async (
       preferences: studioWorkspacePreferences,
       userId: identity?.userId ?? machineId,
       listWorkflows: () => workflowsCache,
+      isWorkflowScanComplete: async (roots) =>
+        roots.length > 0 &&
+        (
+          await Promise.all(
+            roots.map((root) => workflowRegistry.discoveryStatus(root)),
+          )
+        ).every((status) => status === "complete"),
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
     }),
   );
@@ -2872,6 +2888,7 @@ export const startServer = async (
       // broadcasts `workflows.changed`: the rail re-derives the tree from the
       // NEW path rather than from a stale registry row.
       onMoved: async (from, to) => {
+        await studioWorkspacePreferences.moveAgentBindings(from, to);
         remapSessions(sessionManager.list(), from, to);
         await Promise.all([
           scanWorkflowsAndBroadcast(dirname(from), "agent-moved", {

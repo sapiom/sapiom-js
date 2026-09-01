@@ -6,6 +6,9 @@ import type {
   StudioCurrentWorkspaceResponse,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
+import type { WorkspaceScopeSummary } from "@shared/system-graph";
+
+import { isWithinDir, stripTrailingSep } from "./paths";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -249,4 +252,36 @@ export function resolveStudioWorkspaceSelection(
     return { selection: { kind: "agent-map", projectId }, repair: true };
   }
   return { selection, repair: false };
+}
+
+/**
+ * The durable Studio project owning a path. Nested opened projects use the
+ * nearest containing root, matching session scope rather than recent-dir order.
+ */
+export function mostSpecificStudioScope(
+  targetPath: string,
+  scopes: readonly WorkspaceScopeSummary[],
+  projects: readonly StudioProjectSummary[],
+): (WorkspaceScopeSummary & { projectId: string }) | null {
+  const projectIds = new Set(projects.map((project) => project.projectId));
+  return (
+    scopes
+      .filter(
+        (scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+          Boolean(
+            scope.projectId &&
+              projectIds.has(scope.projectId) &&
+              isWithinDir(scope.cwd, targetPath),
+          ),
+      )
+      .map((scope) => ({
+        scope,
+        depth: stripTrailingSep(scope.cwd).length,
+      }))
+      .sort(
+        (left, right) =>
+          right.depth - left.depth ||
+          left.scope.projectId.localeCompare(right.scope.projectId),
+      )[0]?.scope ?? null
+  );
 }

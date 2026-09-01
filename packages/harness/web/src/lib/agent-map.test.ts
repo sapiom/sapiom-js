@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { StudioProjectSummary } from "@shared/agent-map";
 
 import {
+  mostSpecificStudioScope,
   parseAgentMapWorkspaceResponse,
   resolveStudioWorkspaceSelection,
 } from "./agent-map";
@@ -127,3 +129,38 @@ describe("resolveStudioWorkspaceSelection", () => {
     ).toEqual({ selection: { kind: "agent-map", projectId }, repair: true });
   });
 });
+
+describe("mostSpecificStudioScope", () => {
+  it("chooses the nearest containing durable project, not the first parent", () => {
+    const nestedProjectId =
+      "project_00000000-0000-4000-8000-000000000002";
+    expect(
+      mostSpecificStudioScope(
+        "/work/services/agent",
+        [
+          { workspaceKey: "parent", cwd: "/work", projectId },
+          {
+            workspaceKey: "nested",
+            cwd: "/work/services",
+            projectId: nestedProjectId,
+          },
+        ],
+        [
+          validResponseProject(projectId),
+          validResponseProject(nestedProjectId),
+        ],
+      )?.projectId,
+    ).toBe(nestedProjectId);
+  });
+});
+
+function validResponseProject(id: string): StudioProjectSummary {
+  return {
+    projectId: id,
+    identityVersion: 1,
+    displayName: "Project",
+    bindings: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}

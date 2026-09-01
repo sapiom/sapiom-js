@@ -44,6 +44,7 @@ describe("StudioWorkspacePreferenceStore", () => {
       value.projectId,
       [projectRoot],
       value.workflows,
+      true,
     );
     expect(first.selection).toEqual({
       kind: "agent-map",
@@ -62,10 +63,11 @@ describe("StudioWorkspacePreferenceStore", () => {
       } as StudioWorkspaceSelection,
       [projectRoot],
       value.workflows,
+      true,
     );
     const restarted = await new StudioWorkspacePreferenceStore(
       value.file,
-    ).current("user-a", value.projectId, [projectRoot], value.workflows);
+    ).current("user-a", value.projectId, [projectRoot], value.workflows, true);
     expect(restarted.selection).toEqual({
       kind: "agent",
       projectId: value.projectId,
@@ -85,7 +87,7 @@ describe("StudioWorkspacePreferenceStore", () => {
     });
   });
 
-  it("isolates users and repairs deleted or foreign agent ids to map", async () => {
+  it("isolates users, keeps transient absence in memory, and durably repairs proven deletion", async () => {
     const value = await fixture();
     const projectRoot = path.join(value.root, "project");
     const store = new StudioWorkspacePreferenceStore(value.file);
@@ -94,6 +96,7 @@ describe("StudioWorkspacePreferenceStore", () => {
       value.projectId,
       [projectRoot],
       value.workflows,
+      true,
     );
     await store.put(
       "user-a",
@@ -105,6 +108,7 @@ describe("StudioWorkspacePreferenceStore", () => {
       },
       [projectRoot],
       value.workflows,
+      true,
     );
     expect(
       (
@@ -113,12 +117,33 @@ describe("StudioWorkspacePreferenceStore", () => {
           value.projectId,
           [projectRoot],
           value.workflows,
+          true,
         )
       ).selection.kind,
     ).toBe("agent-map");
+
     expect(
-      await store.current("user-a", value.projectId, [projectRoot], []),
+      await store.current("user-a", value.projectId, [projectRoot], [], false),
+    ).toMatchObject({ repaired: false, selection: { kind: "agent-map" } });
+    expect(
+      await new StudioWorkspacePreferenceStore(value.file).current(
+        "user-a",
+        value.projectId,
+        [projectRoot],
+        value.workflows,
+        true,
+      ),
+    ).toMatchObject({
+      repaired: false,
+      selection: { kind: "agent", agentId: current.agents[0]!.agentId },
+    });
+
+    expect(
+      await store.current("user-a", value.projectId, [projectRoot], [], true),
     ).toMatchObject({ repaired: true, selection: { kind: "agent-map" } });
+    expect(await fs.readFile(value.file, "utf8")).not.toContain(
+      value.workflows[0]!.path,
+    );
     expect(
       await store.put(
         "user-a",
@@ -130,11 +155,57 @@ describe("StudioWorkspacePreferenceStore", () => {
         },
         [projectRoot],
         value.workflows,
+        true,
       ),
     ).toMatchObject({ repaired: true, selection: { kind: "agent-map" } });
   });
 
-  it("reconciles a moved workflow by definition id without changing its id", async () => {
+  it("preserves a null-definition agent id and remembered selection across an authenticated move and restart", async () => {
+    const value = await fixture();
+    const projectRoot = path.join(value.root, "project");
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    const first = await store.current(
+      "user",
+      value.projectId,
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    await store.put(
+      "user",
+      value.projectId,
+      {
+        kind: "agent",
+        projectId: value.projectId,
+        agentId: first.agents[0]!.agentId,
+      },
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    const movedPath = path.join(projectRoot, "archive", "planner");
+    await store.moveAgentBindings(value.workflows[0]!.path, movedPath);
+    const moved = [
+      { ...value.workflows[0]!, path: movedPath },
+    ];
+    const second = await new StudioWorkspacePreferenceStore(value.file).current(
+      "user",
+      value.projectId,
+      [projectRoot],
+      moved,
+      true,
+    );
+    expect(second.agents[0]!.agentId).toBe(first.agents[0]!.agentId);
+    expect(second.selection).toMatchObject({
+      kind: "agent",
+      agentId: first.agents[0]!.agentId,
+    });
+    const persisted = await fs.readFile(value.file, "utf8");
+    expect(persisted).toContain(movedPath);
+    expect(persisted).not.toContain(value.workflows[0]!.path);
+  });
+
+  it("never repoints an old binding to a different checkout with the same definition id", async () => {
     const value = await fixture();
     const projectRoot = path.join(value.root, "project");
     const store = new StudioWorkspacePreferenceStore(value.file);
@@ -144,16 +215,35 @@ describe("StudioWorkspacePreferenceStore", () => {
       value.projectId,
       [projectRoot],
       original,
+      true,
     );
-    const moved = [
-      { ...original[0]!, path: path.join(projectRoot, "renamed") },
+    await store.put(
+      "user",
+      value.projectId,
+      {
+        kind: "agent",
+        projectId: value.projectId,
+        agentId: first.agents[0]!.agentId,
+      },
+      [projectRoot],
+      original,
+      true,
+    );
+    const duplicateCheckout = [
+      {
+        ...original[0]!,
+        path: path.join(projectRoot, "other-checkout", "planner"),
+      },
     ];
-    const second = await store.current(
+    const reconciled = await store.current(
       "user",
       value.projectId,
       [projectRoot],
-      moved,
+      duplicateCheckout,
+      true,
     );
-    expect(second.agents[0]!.agentId).toBe(first.agents[0]!.agentId);
+    expect(reconciled.selection).toMatchObject({ kind: "agent-map" });
+    expect(reconciled.repaired).toBe(true);
+    expect(reconciled.agents[0]!.agentId).not.toBe(first.agents[0]!.agentId);
   });
 });

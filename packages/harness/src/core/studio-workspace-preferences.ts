@@ -189,6 +189,7 @@ export class StudioWorkspacePreferenceStore {
     projectId: StudioProjectId,
     roots: readonly string[],
     workflows: readonly SelectableWorkflow[],
+    scanComplete: boolean,
   ): {
     state: PersistedPreferences;
     agents: StudioWorkspaceAgentSummary[];
@@ -211,14 +212,6 @@ export class StudioWorkspacePreferenceStore {
         (candidate) =>
           candidate.projectId === projectId && candidate.path === workflow.path,
       );
-      if (!binding && workflow.definitionId !== null) {
-        const matches = next.agentBindings.filter(
-          (candidate) =>
-            candidate.projectId === projectId &&
-            candidate.definitionId === workflow.definitionId,
-        );
-        if (matches.length === 1) binding = matches[0];
-      }
       if (!binding) {
         binding = {
           projectId,
@@ -254,6 +247,17 @@ export class StudioWorkspacePreferenceStore {
         left.name.localeCompare(right.name) ||
         left.agentId.localeCompare(right.agentId),
     );
+    if (scanComplete) {
+      const activeAgentIds = new Set(agents.map((agent) => agent.agentId));
+      const retained = next.agentBindings.filter(
+        (binding) =>
+          binding.projectId !== projectId || activeAgentIds.has(binding.agentId),
+      );
+      if (retained.length !== next.agentBindings.length) {
+        next.agentBindings = retained;
+        changed = true;
+      }
+    }
     return { state: next, agents, changed };
   }
 
@@ -262,6 +266,7 @@ export class StudioWorkspacePreferenceStore {
     projectId: StudioProjectId,
     roots: readonly string[],
     workflows: readonly SelectableWorkflow[],
+    scanComplete: boolean,
   ): Promise<StudioCurrentWorkspaceResponse> {
     return this.enqueue(async () => {
       const reconciled = this.reconcile(
@@ -269,6 +274,7 @@ export class StudioWorkspacePreferenceStore {
         projectId,
         roots,
         workflows,
+        scanComplete,
       );
       const preference = reconciled.state.preferences.find(
         (candidate) =>
@@ -279,7 +285,7 @@ export class StudioWorkspacePreferenceStore {
         !requested ||
         requested.kind !== "agent" ||
         reconciled.agents.some((agent) => agent.agentId === requested.agentId);
-      const repaired = Boolean(preference && !valid);
+      const repaired = Boolean(preference && !valid && scanComplete);
       const selection: StudioWorkspaceSelection =
         preference && valid
           ? preference.selection
@@ -306,6 +312,7 @@ export class StudioWorkspacePreferenceStore {
     requested: StudioWorkspaceSelection,
     roots: readonly string[],
     workflows: readonly SelectableWorkflow[],
+    scanComplete: boolean,
   ): Promise<StudioCurrentWorkspaceResponse> {
     return this.enqueue(async () => {
       const reconciled = this.reconcile(
@@ -313,6 +320,7 @@ export class StudioWorkspacePreferenceStore {
         projectId,
         roots,
         workflows,
+        scanComplete,
       );
       const normalized: StudioWorkspaceSelection =
         requested.kind === "agent"
@@ -358,6 +366,7 @@ export class StudioWorkspacePreferenceStore {
     projectId: StudioProjectId,
     roots: readonly string[],
     workflows: readonly SelectableWorkflow[],
+    scanComplete: boolean,
   ): Promise<Map<string, string>> {
     return this.enqueue(async () => {
       const reconciled = this.reconcile(
@@ -365,6 +374,7 @@ export class StudioWorkspacePreferenceStore {
         projectId,
         roots,
         workflows,
+        scanComplete,
       );
       if (reconciled.changed) await this.persist(reconciled.state);
       const byId = new Map(
@@ -378,6 +388,38 @@ export class StudioWorkspacePreferenceStore {
           )
           .map((binding) => [binding.path, binding.agentId]),
       );
+    });
+  }
+
+  /**
+   * Moves private reconciliation evidence inside the authenticated disk-move
+   * transaction. The public move request never supplies an identity: the
+   * route resolves both paths from its registry and allow-listed target first.
+   */
+  async moveAgentBindings(from: string, to: string): Promise<void> {
+    await this.enqueue(async () => {
+      const state = await this.load();
+      const source = path.resolve(from);
+      const target = path.resolve(to);
+      let changed = false;
+      const agentBindings = state.agentBindings.map((binding) => {
+        const relative = path.relative(source, path.resolve(binding.path));
+        if (
+          relative === ".." ||
+          relative.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relative)
+        ) {
+          return binding;
+        }
+        changed = true;
+        return {
+          ...binding,
+          path: relative === "" ? target : path.join(target, relative),
+          updatedAt: this.now().toISOString(),
+        };
+      });
+      if (!changed) return;
+      await this.persist({ ...state, agentBindings });
     });
   }
 }

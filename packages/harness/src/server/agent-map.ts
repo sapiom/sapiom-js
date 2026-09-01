@@ -32,6 +32,9 @@ export interface AgentMapRouterOptions {
   listWorkflows: () =>
     | readonly WorkflowInfo[]
     | Promise<readonly WorkflowInfo[]>;
+  isWorkflowScanComplete: (
+    roots: readonly string[],
+  ) => boolean | Promise<boolean>;
   /** Existing allow-listed roots only; this callback must not scan source. */
   listWorkspaceScopes: () =>
     | readonly WorkspaceScopeSummary[]
@@ -226,6 +229,7 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         context.project.projectId,
         context.roots,
         await options.listWorkflows(),
+        await options.isWorkflowScanComplete(context.roots),
       );
       res.status(200).setHeader("Cache-Control", "no-store").json(current);
     } catch (error) {
@@ -266,6 +270,7 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         selection,
         context.roots,
         await options.listWorkflows(),
+        await options.isWorkflowScanComplete(context.roots),
       );
       res.status(200).setHeader("Cache-Control", "no-store").json(current);
     } catch (error) {

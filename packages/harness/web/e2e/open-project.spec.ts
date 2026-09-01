@@ -74,7 +74,9 @@ test.describe("the header + opens a project", () => {
       "aria-pressed",
       "true",
     );
-    await expect(page.getByTestId("system-graph-empty")).toBeVisible();
+    await expect(page.getByTestId("agent-map-empty")).toHaveText(
+      "Nothing generated yet",
+    );
     // The row is REMEMBERED, not just rendered: `recentDirs` is the harness's
     // one workspace list, and the whole rail re-derives from it when the axis
     // changes. (A cross-RELOAD assertion belongs against a real server — the

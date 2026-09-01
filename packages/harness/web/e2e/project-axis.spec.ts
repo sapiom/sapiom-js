@@ -180,9 +180,19 @@ test.describe("the plan-first project children", () => {
 
     await group.getByTestId("agent-map-select").click();
     await expect(map).toHaveClass(/is-selected/);
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+
+    // A selected child expands on selection, but an intentional disclosure
+    // click stays collapsed until the user expands it again.
+    await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(map).toBeHidden();
     await expect(
-      page.getByTestId("system-graph-node-dashboard-keeper"),
-    ).toBeVisible();
+      page.getByTestId("project-disclosure-dashboard-keeper"),
+    ).toHaveAttribute("aria-expanded", "false");
+    await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(map).toBeVisible();
+    await expect(map).toHaveClass(/is-selected/);
+
     await agent.locator("button").click();
     await expect(agent).toHaveClass(/is-focused/);
     // Every durable project has at least the Agent Map child to disclose.
@@ -210,6 +220,21 @@ test.describe("the plan-first project children", () => {
     await expect(
       page.locator('.rail-list [data-testid^="workspace-new-session-"]'),
     ).toHaveCount(0);
+  });
+
+  test("a non-map destination clears the plan-first rail selection", async ({
+    page,
+  }) => {
+    const map = page
+      .getByTestId("workspace-group-dashboard-keeper")
+      .getByTestId("agent-map-row");
+    await map.getByTestId("agent-map-select").click();
+    await expect(map).toHaveClass(/is-selected/);
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+
+    await page.getByTestId("rail-templates").click();
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    await expect(map).not.toHaveClass(/is-selected/);
   });
 });
 

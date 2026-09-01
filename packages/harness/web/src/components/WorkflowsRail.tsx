@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { JSX } from "react";
 import type {
   AppState,
@@ -597,20 +603,21 @@ export function WorkflowsRail({
   useEffect(() => {
     saveUiPrefs({ collapsedKeys: Array.from(collapsedKeys) });
   }, [collapsedKeys]);
-  useEffect(() => {
-    if (!studioSelection) return;
-    const root = (workspaceScopes ?? []).find(
-      (scope) => scope.projectId === studioSelection.projectId,
-    )?.cwd;
-    if (!root) return;
+  const selectedStudioRoot = studioSelection
+    ? ((workspaceScopes ?? []).find(
+        (scope) => scope.projectId === studioSelection.projectId,
+      )?.cwd ?? null)
+    : null;
+  useLayoutEffect(() => {
+    if (!selectedStudioRoot) return;
     setCollapsedKeys((previous) => {
-      const key = projectKey(root);
+      const key = projectKey(selectedStudioRoot);
       if (!previous.has(key)) return previous;
       const next = new Set(previous);
       next.delete(key);
       return next;
     });
-  }, [collapsedKeys, studioSelection, workspaceScopes]);
+  }, [selectedStudioRoot, studioSelection]);
 
   const exitedSessions = sessions.filter(
     (session) => session.status === "exited",

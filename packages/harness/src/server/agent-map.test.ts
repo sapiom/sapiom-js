@@ -67,6 +67,7 @@ describe("createAgentMapRouter", () => {
             source: "scan" as const,
           },
         ],
+        isWorkflowScanComplete: () => true,
         listWorkspaceScopes,
       }),
     );
