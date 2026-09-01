@@ -1440,6 +1440,7 @@ export const App = (): JSX.Element => {
         (project) => project.projectId === studioProjectId,
       )
     ) {
+      restoredStudioProjectsRef.current.add(studioProjectId);
       const selection: StudioWorkspaceSelection = {
         kind: "agent-map",
         projectId: studioProjectId,
@@ -2102,6 +2103,7 @@ export const App = (): JSX.Element => {
       projectId: binding.projectId,
       agentId: binding.agentId,
     };
+    restoredStudioProjectsRef.current.add(binding.projectId);
     setStudioSelection(selection);
     void harness.api.putStudioCurrentWorkspace(binding.projectId, selection);
   };

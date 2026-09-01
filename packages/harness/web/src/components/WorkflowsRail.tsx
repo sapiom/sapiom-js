@@ -600,6 +600,15 @@ export function WorkflowsRail({
       return next;
     });
   }, []);
+  const revealProject = useCallback((root: string): void => {
+    setCollapsedKeys((previous) => {
+      const key = projectKey(root);
+      if (!previous.has(key)) return previous;
+      const next = new Set(previous);
+      next.delete(key);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     saveUiPrefs({ collapsedKeys: Array.from(collapsedKeys) });
   }, [collapsedKeys]);
@@ -608,16 +617,15 @@ export function WorkflowsRail({
         (scope) => scope.projectId === studioSelection.projectId,
       )?.cwd ?? null)
     : null;
+  const selectedStudioKey = studioSelection
+    ? studioSelection.kind === "agent"
+      ? `${studioSelection.kind}:${studioSelection.projectId}:${studioSelection.agentId}`
+      : `${studioSelection.kind}:${studioSelection.projectId}`
+    : null;
   useLayoutEffect(() => {
     if (!selectedStudioRoot) return;
-    setCollapsedKeys((previous) => {
-      const key = projectKey(selectedStudioRoot);
-      if (!previous.has(key)) return previous;
-      const next = new Set(previous);
-      next.delete(key);
-      return next;
-    });
-  }, [selectedStudioRoot, studioSelection]);
+    revealProject(selectedStudioRoot);
+  }, [revealProject, selectedStudioKey, selectedStudioRoot]);
 
   const exitedSessions = sessions.filter(
     (session) => session.status === "exited",
@@ -1236,6 +1244,7 @@ export function WorkflowsRail({
                 (candidate) => candidate.projectId === studioProject?.projectId,
               );
               if (planFirst && workflow && binding) {
+                revealProject(project.root);
                 onSelectStudioAgent(
                   workflow,
                   binding.projectId,
@@ -1428,13 +1437,14 @@ export function WorkflowsRail({
                   <>
                     <AgentMapRow
                       selected={mapSelected}
-                      onSelect={() =>
+                      onSelect={() => {
+                        revealProject(project.root);
                         onSelectAgentMap(
                           studioProject.projectId,
                           project.root,
                           project.label,
-                        )
-                      }
+                        );
+                      }}
                     />
                     {project.rootAgent && (
                       <WorkflowRow
