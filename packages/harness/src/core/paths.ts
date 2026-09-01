@@ -25,6 +25,8 @@ export interface HarnessStatePaths {
   workflows: string;
   events: string;
   settings: string;
+  studioProjects: string;
+  agentMap: string;
   generated: string;
   records: string;
   sampleProject: string;
@@ -53,6 +55,8 @@ export function resolveStatePaths(stateRoot?: string): HarnessStatePaths {
     workflows: join(root, relativeToHome(HARNESS_PATHS.workflows)),
     events: join(root, relativeToHome(HARNESS_PATHS.events)),
     settings: join(root, relativeToHome(HARNESS_PATHS.settings)),
+    studioProjects: join(root, relativeToHome(HARNESS_PATHS.studioProjects)),
+    agentMap: join(root, relativeToHome(HARNESS_PATHS.agentMap)),
     generated: join(root, relativeToHome(HARNESS_PATHS.generated)),
     records: join(root, relativeToHome(HARNESS_PATHS.records)),
     sampleProject: join(root, relativeToHome(HARNESS_PATHS.sampleProject)),

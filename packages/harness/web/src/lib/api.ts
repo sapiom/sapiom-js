@@ -41,6 +41,11 @@ import {
   type WorkspaceKey,
   type WorkspaceScopeSummary,
 } from "@shared/system-graph";
+import type {
+  AgentMapWorkspaceResponse,
+  StudioProjectId,
+  StudioProjectSummary,
+} from "@shared/agent-map";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
@@ -50,6 +55,7 @@ import {
   parseSystemGraphNavigation,
   parseSystemGraphSnapshot,
 } from "./system-graph";
+import { parseAgentMapWorkspaceResponse } from "./agent-map";
 import { refuseMove, remapUnder } from "./agent-move";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
@@ -347,6 +353,10 @@ export interface HarnessApi {
    */
   authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
+  /** Durable, path-free empty/proposal/revision pointers for one Studio project. */
+  getAgentMapWorkspace(
+    projectId: StudioProjectId,
+  ): Promise<AgentMapWorkspaceResponse>;
   /** Revisioned local dependency projection for one server-issued workspace key. */
   getSystemGraph(
     workspaceKey: WorkspaceKey,
@@ -574,6 +584,15 @@ class RealApi implements HarnessApi {
 
   getState(): Promise<AppState> {
     return this.request<AppState>("/api/state");
+  }
+
+  async getAgentMapWorkspace(
+    projectId: StudioProjectId,
+  ): Promise<AgentMapWorkspaceResponse> {
+    const value = await this.request<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/agent-map/workspace`,
+    );
+    return parseAgentMapWorkspaceResponse(value, projectId);
   }
 
   async getSystemGraph(
@@ -1636,6 +1655,7 @@ export class MockApi implements HarnessApi {
   /** Stable for the lifetime of the mock process, mirroring server-issued
    * opaque keys without putting filesystem paths into graph payloads. */
   private workspaceKeys = new Map<string, WorkspaceKey>();
+  private studioProjectIds = new Map<string, StudioProjectId>();
   private systemGraphSnapshots = new Map<WorkspaceKey, SystemGraphSnapshot>();
   private systemGraphNavigation = new Map<
     WorkspaceKey,
@@ -1844,6 +1864,16 @@ export class MockApi implements HarnessApi {
     return key;
   }
 
+  private studioProjectId(cwd: string): StudioProjectId {
+    const existing = this.studioProjectIds.get(cwd);
+    if (existing) return existing;
+    // Valid UUID-shaped IDs keep mock and real strict parsing identical.
+    const ordinal = String(this.studioProjectIds.size + 1).padStart(12, "0");
+    const projectId = `project_00000000-0000-4000-8000-${ordinal}`;
+    this.studioProjectIds.set(cwd, projectId);
+    return projectId;
+  }
+
   private workspaceScopes(): WorkspaceScopeSummary[] {
     const roots = new Set([
       ...this.settings.recentDirs,
@@ -1851,7 +1881,29 @@ export class MockApi implements HarnessApi {
     ]);
     return [...roots]
       .sort((left, right) => left.localeCompare(right))
-      .map((cwd) => ({ cwd, workspaceKey: this.workspaceKey(cwd) }));
+      .map((cwd) => ({
+        cwd,
+        workspaceKey: this.workspaceKey(cwd),
+        projectId: this.studioProjectId(cwd),
+      }));
+  }
+
+  private studioProjects(): StudioProjectSummary[] {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    return this.workspaceScopes().map((scope, index) => ({
+      projectId: scope.projectId!,
+      identityVersion: 1,
+      displayName: basenameOf(scope.cwd) || "Project",
+      bindings: [
+        {
+          id: `root_00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          repositoryId: null,
+          status: "active",
+        },
+      ],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
   }
 
   async getState(): Promise<AppState> {
@@ -1926,6 +1978,7 @@ export class MockApi implements HarnessApi {
       sessions: this.sessions,
       workflows: this.workflows,
       workspaceScopes: this.workspaceScopes(),
+      studioProjects: this.studioProjects(),
       macros: MOCK_MACROS,
       launchDir: MOCK_LAUNCH_DIR,
       // Mirrors the Electron host (`<launchDir>/projects`) rather than the CLI
@@ -1936,6 +1989,38 @@ export class MockApi implements HarnessApi {
       ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
     };
+  }
+
+  async getAgentMapWorkspace(
+    projectId: StudioProjectId,
+  ): Promise<AgentMapWorkspaceResponse> {
+    await delay();
+    const project = this.studioProjects().find(
+      (candidate) => candidate.projectId === projectId,
+    );
+    if (!project) {
+      throw new ApiError(
+        404,
+        "Studio project not found",
+        "Studio project not found",
+      );
+    }
+    return parseAgentMapWorkspaceResponse(
+      {
+        project,
+        workspace: {
+          projectId,
+          schemaVersion: 1,
+          recordVersion: 1,
+          confirmedRevisionId: null,
+          activeProposalId: null,
+          projectBuildPlanId: null,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+        },
+      },
+      projectId,
+    );
   }
 
   async getSystemGraph(

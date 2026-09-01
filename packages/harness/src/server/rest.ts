@@ -33,6 +33,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
+import type { StudioProjectSummary } from "../shared/agent-map.js";
 import {
   HARNESS_UPLOADS_DIR,
   JSON_BODY_LIMIT_BYTES,
@@ -188,6 +189,10 @@ export interface RestRouterOptions {
   listWorkspaceScopes?: () =>
     | WorkspaceScopeSummary[]
     | Promise<WorkspaceScopeSummary[]>;
+  /** Path-free durable Agent Map project identities. */
+  listStudioProjects?: () =>
+    | StudioProjectSummary[]
+    | Promise<StudioProjectSummary[]>;
   listMacros: () => MacroDef[];
   /** Look up a registered workflow by its path; null when not found. Backs
    *  PATCH /sessions/:id/workflow's validation (a bind target must already
@@ -319,6 +324,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
         workflows: await listWorkflows(),
         ...(options.listWorkspaceScopes
           ? { workspaceScopes: await options.listWorkspaceScopes() }
+          : {}),
+        ...(options.listStudioProjects
+          ? { studioProjects: await options.listStudioProjects() }
           : {}),
         macros: listMacros(),
         launchDir: options.launchDir,

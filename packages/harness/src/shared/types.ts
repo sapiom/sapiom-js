@@ -31,6 +31,10 @@ export const HARNESS_PATHS = {
   events: `${HARNESS_HOME}/events.ndjson`,
   /** User settings (opt-in state, macros overrides). */
   settings: `${HARNESS_HOME}/settings.json`,
+  /** Durable Studio project identities and private repository/root bindings. */
+  studioProjects: `${HARNESS_HOME}/studio-projects.json`,
+  /** Durable plan-first Agent Map records, partitioned beneath projects/. */
+  agentMap: `${HARNESS_HOME}/agent-map`,
   /** Generated per-session agent config (claude settings/mcp-config files). */
   generated: `${HARNESS_HOME}/generated`,
   /**
@@ -785,7 +789,9 @@ export type AnalyticsEventType =
   | "consent.changed"
   | "session.created"
   | "mcp.install"
-  | "plan.upgrade_clicked";
+  | "plan.upgrade_clicked"
+  | "agent_map.workspace_initialized"
+  | "agent_map.workspace_read_failed";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -1184,6 +1190,8 @@ export interface AppState {
   /** Opaque identities for the workspace folders currently known to Studio.
    * Optional for compatibility with older servers and test fixtures. */
   workspaceScopes?: import("./system-graph.js").WorkspaceScopeSummary[];
+  /** Path-free durable project identities for the plan-first Agent Map. */
+  studioProjects?: import("./agent-map.js").StudioProjectSummary[];
   macros: MacroDef[];
   /** The directory the CLI was launched against — the SPA prefills the
    *  new-session modal with this instead of recentDirs[0]. */

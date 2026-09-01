@@ -102,6 +102,8 @@ export interface WorkspaceScopeSummary {
   workspaceKey: WorkspaceKey;
   /** Used only to join the existing workspace-folder projection in AppState. */
   cwd: string;
+  /** Durable Agent Map identity joined server-side; WorkspaceKey stays legacy. */
+  projectId?: import("./agent-map.js").StudioProjectId;
 }
 
 export interface SystemGraphNode {

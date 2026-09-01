@@ -29,6 +29,8 @@ describe("resolveStatePaths", () => {
     expect(paths.workflows).toBe(path.join(root, "workflows.json"));
     expect(paths.events).toBe(path.join(root, "events.ndjson"));
     expect(paths.settings).toBe(path.join(root, "settings.json"));
+    expect(paths.studioProjects).toBe(path.join(root, "studio-projects.json"));
+    expect(paths.agentMap).toBe(path.join(root, "agent-map"));
     expect(paths.generated).toBe(path.join(root, "generated"));
     expect(paths.sampleProject).toBe(path.join(root, "sample-project"));
   });
@@ -41,6 +43,8 @@ describe("resolveStatePaths", () => {
     expect(paths.workflows).toBe("/scratch/state/workflows.json");
     expect(paths.events).toBe("/scratch/state/events.ndjson");
     expect(paths.settings).toBe("/scratch/state/settings.json");
+    expect(paths.studioProjects).toBe("/scratch/state/studio-projects.json");
+    expect(paths.agentMap).toBe("/scratch/state/agent-map");
     expect(paths.generated).toBe("/scratch/state/generated");
     expect(paths.sampleProject).toBe("/scratch/state/sample-project");
   });

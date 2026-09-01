@@ -18,6 +18,7 @@ export default defineConfig({
       // truth. Mirrors the alias in web/vite.config.ts.
       "@shared/types": fileURLToPath(new URL("src/shared/types.ts", import.meta.url)),
       "@shared/system-graph": fileURLToPath(new URL("src/shared/system-graph.ts", import.meta.url)),
+      "@shared/agent-map": fileURLToPath(new URL("src/shared/agent-map.ts", import.meta.url)),
       "@shared/agent-name": fileURLToPath(new URL("src/shared/agent-name.ts", import.meta.url)),
     },
   },

@@ -11,6 +11,7 @@ import {
   createServer as createHttpServer,
   type Server as HttpServer,
 } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -149,6 +150,9 @@ import { createBootTokenMiddleware } from "./auth.js";
 import { createApiKeyProvider } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
+import { createAgentMapRouter } from "./agent-map.js";
+import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -1074,6 +1078,9 @@ export const startServer = async (
     ...(await loadSettings(statePaths.settings)).recentDirs,
     ...sessionManager.list().map((session) => session.cwd),
   ]);
+  const studioProjectCatalog = new StudioProjectCatalog(
+    statePaths.studioProjects,
+  );
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
@@ -2246,7 +2253,14 @@ export const startServer = async (
         activeSystemGraphScopes.delete(workspaceKey);
       }
     }
-    return scopes;
+    try {
+      return (await studioProjectCatalog.reconcile(scopes)).workspaceScopes;
+    } catch {
+      // Agent Map is additive in E1. A bad/unavailable new catalog cannot
+      // strand the legacy rail or System Graph during coexistence.
+      console.error("[harness] Studio project catalog is unavailable");
+      return scopes;
+    }
   };
 
   /** Enrich only the bound workflow before a Canvas render. Canvas extraction
@@ -2467,6 +2481,40 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
+  const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
+    statePaths.agentMap,
+    {
+      onEvent: (event) => {
+        const sessionId = `agent-map-${event.projectId}`;
+        const analyticsEvent: AnalyticsEvent = {
+          eventId: randomUUID(),
+          seq: seqCounter.next(sessionId),
+          ts: new Date().toISOString(),
+          userId: identity?.userId ?? null,
+          tenantId: identity?.tenantId ?? null,
+          machineId,
+          harnessSessionId: sessionId,
+          agentSessionId: null,
+          harness: "claude-code",
+          type: event.name,
+          payload: {
+            project_id: event.projectId,
+            ...(event.name === "agent_map.workspace_read_failed"
+              ? {
+                  error_code: event.errorCode,
+                  ...(event.schemaVersion !== undefined
+                    ? { schema_version: event.schemaVersion }
+                    : {}),
+                }
+              : {}),
+          },
+        };
+        void eventStore.append(analyticsEvent).catch(() => {});
+        batcher.enqueue(analyticsEvent);
+      },
+    },
+  );
+
   const app: Express = express();
   app.disable("x-powered-by");
 
@@ -2498,6 +2546,14 @@ export const startServer = async (
       listWorkflows: async () =>
         publicWorkflowInfos(await enrichWorkflows(workflowsCache)),
       listWorkspaceScopes: listWorkspaceScopesAndRetain,
+      listStudioProjects: async () => {
+        try {
+          return await studioProjectCatalog.list();
+        } catch {
+          console.error("[harness] Studio project catalog is unavailable");
+          return [];
+        }
+      },
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>
         workflowsCache.find((w) => w.path === workflowPath) ?? null,
@@ -2540,6 +2596,14 @@ export const startServer = async (
         tenantId: identity?.tenantId ?? null,
       },
       settingsPath: statePaths.settings,
+    }),
+  );
+  app.use(
+    "/api",
+    createAgentMapRouter({
+      catalog: studioProjectCatalog,
+      store: agentMapWorkspaceStore,
+      listWorkspaceScopes: () => workspaceScopeCatalog.list(),
     }),
   );
   app.use(
