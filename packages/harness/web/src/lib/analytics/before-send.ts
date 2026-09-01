@@ -11,10 +11,11 @@ import type { CaptureResult } from "posthog-js";
  * drops replay snapshots here; the harness sets journey as a super-property and
  * never records, so both are gone):
  *
- * 1. **Strip URL secrets.** The harness serves itself at
- *    `http://localhost:<port>/?token=<bootToken>` — the boot token is a live
- *    credential sitting in `$current_url` on every event. Drop ALL query params
- *    and fragments (the harness has no attribution params worth keeping).
+ * 1. **Strip URL secrets.** The host launches the harness once with a short-lived
+ *    `?uiToken=<launchCredential>` URL. The server redirects it away before the
+ *    SPA or PostHog loads, and this redaction remains a defense in depth. Drop
+ *    ALL query params and fragments (the harness has no attribution params
+ *    worth keeping).
  * 2. **Redact click text.** Truncate autocaptured `$el_text` everywhere, and
  *    drop it entirely on a secrets/vault surface, where a copy-button's label or
  *    a field value can be the secret itself.

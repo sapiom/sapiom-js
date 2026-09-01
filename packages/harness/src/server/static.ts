@@ -3,11 +3,14 @@
  * when the web bundle hasn't been built yet (e.g. `pnpm dev` without a prior
  * `pnpm build:web`), so the server is still useful for API/WS-only testing.
  *
- * Boot-token injection: every HTML response has a `<script>` block baked in
- * before `</head>` that sets `window.__HARNESS__ = { token, posthog }`.
- * This lets `getBootToken()` (web/src/lib/api.ts) resolve the token without
- * relying on the `?token=` query param — which is lost on navigation/reload
- * and caused every /api POST to 401 after the first page load (SAP-1898).
+ * Privileged bootstrap: only a browser request carrying the separate UI
+ * launch credential receives `window.__HARNESS__.token`. A coding-agent PTY
+ * knows this server's origin for `/ingest`, so an unconditional token-bearing
+ * index page would let the model upgrade its ingest-only capability into full
+ * `/api` mutation authority. A valid launch query establishes an HttpOnly,
+ * same-site session cookie, then redirects to remove the UI credential before
+ * any app/analytics code runs. Reloads and deep SPA routes stay authorized
+ * without ever placing that UI credential in browser JavaScript.
  *
  * PostHog config injection (SAP-1988): the same `<script>` also carries the
  * client PostHog project key + hosts, resolved server-side from env so ONE
@@ -29,6 +32,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import express, { Router, type Request, type Response } from "express";
+import { timingSafeEqualString } from "./auth.js";
 
 const PLACEHOLDER_HTML = `<!doctype html>
 <html>
@@ -58,6 +62,8 @@ interface PosthogClientConfig {
 
 /** Documented default client key — the Sapiom product project (291192). */
 const DEFAULT_POSTHOG_KEY = "phc_QmzsBloYUZJw7orDRBsEeV9Oz4lQ548cputd7RZ8pAq";
+const UI_BOOTSTRAP_QUERY = "uiToken";
+const UI_BOOTSTRAP_COOKIE = "sapiom_studio_ui";
 
 function resolvePosthogConfig(): PosthogClientConfig | null {
   // Explicit empty string disables; unset falls back to the default key.
@@ -76,8 +82,9 @@ function resolvePosthogConfig(): PosthogClientConfig | null {
  * values are safely escaped even if they contain characters that could break a
  * bare string interpolation.
  */
-function buildTokenScript(bootToken: string): string {
-  const payload: { token: string; posthog?: PosthogClientConfig } = { token: bootToken };
+function buildBootstrapScript(bootToken?: string): string {
+  const payload: { token?: string; posthog?: PosthogClientConfig } = {};
+  if (bootToken) payload.token = bootToken;
   const posthog = resolvePosthogConfig();
   if (posthog) payload.posthog = posthog;
   const safeJson = JSON.stringify(payload).replace(/</g, "\\u003c");
@@ -90,8 +97,8 @@ function buildTokenScript(bootToken: string): string {
  * load. Falls back to prepending to `<body>` if `</head>` is absent (shouldn't
  * happen with our Vite output, but keeps the injection unconditional).
  */
-function injectTokenScript(html: string, bootToken: string): string {
-  const script = buildTokenScript(bootToken);
+function injectBootstrapScript(html: string, bootToken?: string): string {
+  const script = buildBootstrapScript(bootToken);
   if (html.includes("</head>")) {
     return html.replace("</head>", `${script}</head>`);
   }
@@ -103,7 +110,29 @@ function injectTokenScript(html: string, bootToken: string): string {
   return script + html;
 }
 
-export function createStaticRouter(webDir: string, bootToken: string): Router {
+function cookieValue(req: Request, name: string): string {
+  const header = req.header("cookie") ?? "";
+  for (const entry of header.split(";")) {
+    const separator = entry.indexOf("=");
+    if (separator === -1 || entry.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(entry.slice(separator + 1).trim());
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function queryValue(req: Request, name: string): string {
+  const value = req.query[name];
+  return typeof value === "string" ? value : "";
+}
+
+export function createStaticRouter(
+  webDir: string,
+  credentials: { bootToken: string; uiToken: string },
+): Router {
   const router = Router();
   const indexPath = join(webDir, "index.html");
 
@@ -112,7 +141,11 @@ export function createStaticRouter(webDir: string, bootToken: string): Router {
     // (it's a Vite build output), so a single read is fine and avoids
     // repeated disk I/O for every page navigation request.
     const rawHtml = readFileSync(indexPath, "utf-8");
-    const injectedHtml = injectTokenScript(rawHtml, bootToken);
+    const publicHtml = injectBootstrapScript(rawHtml);
+    const privilegedHtml = injectBootstrapScript(
+      rawHtml,
+      credentials.bootToken,
+    );
 
     // Serve hashed assets (JS, CSS, images) via express.static.
     // `index: false` prevents express.static from auto-serving index.html
@@ -120,8 +153,36 @@ export function createStaticRouter(webDir: string, bootToken: string): Router {
     // below so every HTML response always carries the injected token script.
     router.use(express.static(webDir, { index: false }));
 
-    router.get("*", (_req: Request, res: Response) => {
-      res.status(200).set("Content-Type", "text/html").send(injectedHtml);
+    router.get("*", (req: Request, res: Response) => {
+      const queryAuthorized = timingSafeEqualString(
+        queryValue(req, UI_BOOTSTRAP_QUERY),
+        credentials.uiToken,
+      );
+      const cookieAuthorized = timingSafeEqualString(
+        cookieValue(req, UI_BOOTSTRAP_COOKIE),
+        credentials.uiToken,
+      );
+      if (queryAuthorized) {
+        res.cookie(UI_BOOTSTRAP_COOKIE, credentials.uiToken, {
+          httpOnly: true,
+          sameSite: "strict",
+          path: "/",
+        });
+        const cleanUrl = new URL(req.originalUrl, "http://localhost");
+        cleanUrl.searchParams.delete(UI_BOOTSTRAP_QUERY);
+        res
+          .status(303)
+          .set("Cache-Control", "no-store")
+          .set("Location", `${cleanUrl.pathname}${cleanUrl.search}`)
+          .send();
+        return;
+      }
+      res
+        .status(200)
+        .set("Content-Type", "text/html")
+        .set("Cache-Control", "no-store")
+        .set("Vary", "Cookie")
+        .send(cookieAuthorized ? privilegedHtml : publicHtml);
     });
   } else {
     router.get("*", (_req: Request, res: Response) => {

@@ -294,8 +294,32 @@ function storageError(): StudioProjectCatalogError {
 }
 
 const CATALOG_LOCK_TIMEOUT_MS = 5_000;
-const CATALOG_STALE_LOCK_MS = 30_000;
 const CATALOG_LOCK_RETRY_MS = 10;
+
+interface CatalogLockOwner {
+  ownerId: string;
+  pid: number;
+}
+
+function sameLockOwner(
+  left: CatalogLockOwner | null,
+  right: CatalogLockOwner,
+): left is CatalogLockOwner {
+  return (
+    left !== null &&
+    left.ownerId === right.ownerId &&
+    left.pid === right.pid
+  );
+}
+
+/** Internal deterministic seams used only by file-lock race regressions. */
+export interface StudioProjectCatalogLockTestHooks {
+  afterDeadOwnerObserved?: (owner: CatalogLockOwner) => void | Promise<void>;
+  afterObservedOwnerChanged?: () => void | Promise<void>;
+  afterLiveOwnerObserved?: (owner: CatalogLockOwner) => void | Promise<void>;
+  afterLockAcquired?: (ownerId: string) => void | Promise<void>;
+  isPidAlive?: (pid: number) => boolean;
+}
 
 /**
  * Durable, serialized owner of Studio project identity. Catalog reads never
@@ -310,6 +334,7 @@ export class StudioProjectCatalog {
   constructor(
     private readonly catalogPath: string,
     private readonly now: () => Date = () => new Date(),
+    private readonly lockTestHooks: StudioProjectCatalogLockTestHooks = {},
   ) {}
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -335,36 +360,191 @@ export class StudioProjectCatalog {
 
   private async acquireFileLock(): Promise<() => Promise<void>> {
     const lockPath = `${this.catalogPath}.lock`;
+    const owner: CatalogLockOwner = {
+      ownerId: randomUUID(),
+      pid: process.pid,
+    };
     const deadline = Date.now() + CATALOG_LOCK_TIMEOUT_MS;
     try {
       await fs.mkdir(path.dirname(this.catalogPath), { recursive: true });
     } catch {
       throw storageError();
     }
+    await this.cleanupDeadLockArtifacts(lockPath);
     for (;;) {
-      try {
-        await fs.mkdir(lockPath);
-        return async () => {
-          await fs.rmdir(lockPath).catch(() => {});
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          throw storageError();
+      if (await this.tryCreateLockFile(lockPath, owner)) {
+        try {
+          await this.lockTestHooks.afterLockAcquired?.(owner.ownerId);
+        } catch (error) {
+          await this.releaseFileLock(lockPath, owner);
+          throw error;
         }
+        return () => this.releaseFileLock(lockPath, owner);
+      }
+
+      const observedOwner = await this.readLockOwner(lockPath);
+      if (observedOwner === null) {
+        // Another process may be between exclusive create and owner write.
+        // Never evict an owner whose PID cannot be proven dead.
+        if (Date.now() >= deadline) throw storageError();
+        await delay(CATALOG_LOCK_RETRY_MS);
+        continue;
+      }
+      if (this.isPidAlive(observedOwner.pid)) {
+        await this.lockTestHooks.afterLiveOwnerObserved?.(observedOwner);
+        if (Date.now() >= deadline) throw storageError();
+        await delay(CATALOG_LOCK_RETRY_MS);
+        continue;
+      }
+
+      await this.lockTestHooks.afterDeadOwnerObserved?.(observedOwner);
+      const claimPath = `${lockPath}.claim-${observedOwner.ownerId}`;
+      if (!(await this.tryCreateLockFile(claimPath, owner))) {
+        if (Date.now() >= deadline) throw storageError();
+        await delay(CATALOG_LOCK_RETRY_MS);
+        continue;
       }
 
       try {
-        const lock = await fs.stat(lockPath);
-        if (Date.now() - lock.mtimeMs > CATALOG_STALE_LOCK_MS) {
-          await fs.rmdir(lockPath).catch(() => {});
+        // Every waiter that observed this dead owner competes for the same
+        // claim. Re-read under that claim: a delayed waiter must not rename a
+        // newer live owner's fixed lock.
+        const currentOwner = await this.readLockOwner(lockPath);
+        if (
+          !sameLockOwner(currentOwner, observedOwner) ||
+          this.isPidAlive(currentOwner.pid)
+        ) {
+          await this.lockTestHooks.afterObservedOwnerChanged?.();
           continue;
         }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+
+        const tombstone = `${lockPath}.reclaim-${owner.ownerId}`;
+        try {
+          await fs.rename(lockPath, tombstone);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw storageError();
+        }
+
+        // The fixed name is the fence. A normal contender may win this gap;
+        // this reclaimer proceeds only if its own exclusive create wins.
+        if (!(await this.tryCreateLockFile(lockPath, owner))) {
+          await fs.rm(tombstone, { force: true }).catch(() => {});
+          continue;
+        }
+
+        await fs.rm(tombstone, { force: true });
+        try {
+          await this.lockTestHooks.afterLockAcquired?.(owner.ownerId);
+        } catch (error) {
+          await this.releaseFileLock(lockPath, owner);
+          throw error;
+        }
+        return () => this.releaseFileLock(lockPath, owner);
+      } finally {
+        await this.releaseFileLock(claimPath, owner);
+      }
+    }
+  }
+
+  private async tryCreateLockFile(
+    lockPath: string,
+    owner: CatalogLockOwner,
+  ): Promise<boolean> {
+    try {
+      await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+      });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw storageError();
+    }
+  }
+
+  private async readLockOwner(lockPath: string): Promise<CatalogLockOwner | null> {
+    let raw: string;
+    try {
+      raw = await fs.readFile(lockPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw storageError();
+    }
+    try {
+      const decoded = JSON.parse(raw) as unknown;
+      if (
+        !isRecord(decoded) ||
+        !hasExactKeys(decoded, ["ownerId", "pid"]) ||
+        !isOpaqueId(decoded.ownerId) ||
+        !Number.isSafeInteger(decoded.pid) ||
+        (decoded.pid as number) <= 0
+      ) {
+        return null;
+      }
+      return {
+        ownerId: decoded.ownerId,
+        pid: decoded.pid as number,
+      };
+    } catch {
+      // An exclusive creator may still be writing its owner record. Unknown
+      // ownership waits and fails closed; it is never reclaimed by age.
+      return null;
+    }
+  }
+
+  private isPidAlive(pid: number): boolean {
+    if (this.lockTestHooks.isPidAlive) {
+      return this.lockTestHooks.isPidAlive(pid);
+    }
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+
+  private async cleanupDeadLockArtifacts(lockPath: string): Promise<void> {
+    const directory = path.dirname(lockPath);
+    const base = path.basename(lockPath);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw storageError();
+    }
+    await Promise.all(
+      entries
+        .filter(
+          (entry) =>
+            entry.startsWith(`${base}.reclaim-`) ||
+            entry.startsWith(`${base}.claim-`),
+        )
+        .map(async (entry) => {
+          const artifact = path.join(directory, entry);
+          const artifactOwner = await this.readLockOwner(artifact);
+          if (artifactOwner && !this.isPidAlive(artifactOwner.pid)) {
+            await fs.rm(artifact, { force: true });
+          }
+        }),
+    );
+  }
+
+  /** A live PID cannot be reclaimed, so this read-then-unlink is owner-safe. */
+  private async releaseFileLock(
+    lockPath: string,
+    owner: CatalogLockOwner,
+  ): Promise<void> {
+    const currentOwner = await this.readLockOwner(lockPath);
+    if (!sameLockOwner(currentOwner, owner)) return;
+    try {
+      await fs.unlink(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw storageError();
       }
-      if (Date.now() >= deadline) throw storageError();
-      await delay(CATALOG_LOCK_RETRY_MS);
     }
   }
 
@@ -471,25 +651,55 @@ export class StudioProjectCatalog {
       await this.load();
       const next = cloneProjects(this.projects!);
       const dedupedScopes = new Map<string, WorkspaceScopeSummary>();
-      const rootsByLegacyKey = new Map<string, string>();
+      const unassignedScopes: WorkspaceScopeSummary[] = [];
+      const canonicalScopes: Array<{
+        scope: WorkspaceScopeSummary;
+        canonical: string;
+      }> = [];
+      const rootsByLegacyKey = new Map<string, Set<string>>();
       for (const scope of scopes) {
         // Workspace scopes are live operational input, not persisted catalog
         // state. One unsafe/unrepresentable path must not poison every valid
         // project read. Spaces at either end remain valid path characters.
         if (!isSafeText(scope.workspaceKey) || !isSafePathText(scope.cwd)) {
+          unassignedScopes.push({
+            workspaceKey: scope.workspaceKey,
+            cwd: scope.cwd,
+          });
           continue;
         }
         let canonical: string;
         try {
           canonical = canonicalGraphPath(scope.cwd);
         } catch {
+          unassignedScopes.push({
+            workspaceKey: scope.workspaceKey,
+            cwd: scope.cwd,
+          });
           continue;
         }
-        const aliasedRoot = rootsByLegacyKey.get(scope.workspaceKey);
-        if (aliasedRoot !== undefined && aliasedRoot !== canonical) {
+        canonicalScopes.push({ scope, canonical });
+        const roots = rootsByLegacyKey.get(scope.workspaceKey) ?? new Set();
+        roots.add(canonical);
+        rootsByLegacyKey.set(scope.workspaceKey, roots);
+      }
+
+      const conflictingLegacyKeys = new Set(
+        [...rootsByLegacyKey]
+          .filter(([, roots]) => roots.size > 1)
+          .map(([workspaceKey]) => workspaceKey),
+      );
+      for (const { scope, canonical } of canonicalScopes) {
+        // Decide alias conflicts as a group before assigning anything. Input
+        // order must not let the first member mint a durable identity while
+        // later members with the same legacy key remain ambiguous.
+        if (conflictingLegacyKeys.has(scope.workspaceKey)) {
+          unassignedScopes.push({
+            workspaceKey: scope.workspaceKey,
+            cwd: scope.cwd,
+          });
           continue;
         }
-        rootsByLegacyKey.set(scope.workspaceKey, canonical);
         if (!dedupedScopes.has(canonical)) {
           // Canonical form is private matching evidence only. Preserve the
           // existing lexical cwd in AppState so this additive join cannot
@@ -588,8 +798,8 @@ export class StudioProjectCatalog {
       }
       return {
         projects: (changed ? next : this.projects!).map(publicSummary),
-        workspaceScopes: reconciledScopes.sort((left, right) =>
-          left.cwd.localeCompare(right.cwd),
+        workspaceScopes: [...unassignedScopes, ...reconciledScopes].sort(
+          (left, right) => left.cwd.localeCompare(right.cwd),
         ),
       };
     });

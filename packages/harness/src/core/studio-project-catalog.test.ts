@@ -8,6 +8,16 @@ import {
   StudioProjectCatalogError,
 } from "./studio-project-catalog.js";
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  return {
+    promise: new Promise<void>((done) => {
+      resolve = done;
+    }),
+    resolve,
+  };
+}
+
 describe("StudioProjectCatalog", () => {
   const roots: string[] = [];
 
@@ -139,7 +149,124 @@ describe("StudioProjectCatalog", () => {
     );
   });
 
-  it("skips unsafe live scopes without rejecting legal path whitespace", async () => {
+  it("fences three writers while reclaiming a dead owner without leaking lock artifacts", async () => {
+    const { catalogPath } = await fixture();
+    const lockPath = `${catalogPath}.lock`;
+    const deadPid = process.pid + 100_000;
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ ownerId: "abandoned-owner", pid: deadPid }),
+    );
+
+    const bothDelayedObserved = deferred();
+    const resumeDelayed = deferred();
+    const winnerAcquired = deferred();
+    const releaseWinner = deferred();
+    const delayedObservedReplacement = deferred();
+    let deadObservations = 0;
+    const delayedHooks = {
+      isPidAlive: (pid: number) => pid === process.pid,
+      afterDeadOwnerObserved: async () => {
+        deadObservations += 1;
+        if (deadObservations === 2) bothDelayedObserved.resolve();
+        await resumeDelayed.promise;
+      },
+      afterObservedOwnerChanged: () => {
+        delayedObservedReplacement.resolve();
+      },
+      afterLiveOwnerObserved: () => {
+        delayedObservedReplacement.resolve();
+      },
+    };
+    const delayedB = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      delayedHooks,
+    );
+    const delayedC = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      delayedHooks,
+    );
+    const winner = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      {
+        isPidAlive: (pid) => pid === process.pid,
+        afterLockAcquired: async () => {
+          winnerAcquired.resolve();
+          await releaseWinner.promise;
+        },
+      },
+    );
+
+    const writeB = delayedB.create("Writer B");
+    const writeC = delayedC.create("Writer C");
+    await bothDelayedObserved.promise;
+    const writeA = winner.create("Writer A");
+    await winnerAcquired.promise;
+    resumeDelayed.resolve();
+    await delayedObservedReplacement.promise;
+    releaseWinner.resolve();
+
+    await Promise.all([writeA, writeB, writeC]);
+    const restarted = await new StudioProjectCatalog(catalogPath).list();
+    expect(restarted.map((project) => project.displayName).sort()).toEqual([
+      "Writer A",
+      "Writer B",
+      "Writer C",
+    ]);
+    expect(
+      (await fs.readdir(path.dirname(catalogPath))).filter((entry) =>
+        entry.startsWith(`${path.basename(catalogPath)}.lock`),
+      ),
+    ).toEqual([]);
+  });
+
+  it("never evicts a slow live PID even when its lock mtime is old", async () => {
+    const { catalogPath } = await fixture();
+    const lockPath = `${catalogPath}.lock`;
+    const liveAcquired = deferred();
+    const releaseLive = deferred();
+    const waiterObservedLive = deferred();
+    let waiterSettled = false;
+    const live = new StudioProjectCatalog(catalogPath, () => new Date(), {
+      afterLockAcquired: async () => {
+        liveAcquired.resolve();
+        await releaseLive.promise;
+      },
+    });
+    const waiter = new StudioProjectCatalog(catalogPath, () => new Date(), {
+      afterLiveOwnerObserved: () => {
+        waiterObservedLive.resolve();
+      },
+    });
+
+    const liveWrite = live.create("Slow live writer");
+    await liveAcquired.promise;
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, old, old);
+    const waiterWrite = waiter.create("Patient writer").finally(() => {
+      waiterSettled = true;
+    });
+    await waiterObservedLive.promise;
+    expect(waiterSettled).toBe(false);
+    releaseLive.resolve();
+
+    await Promise.all([liveWrite, waiterWrite]);
+    expect(
+      (await new StudioProjectCatalog(catalogPath).list()).map(
+        (project) => project.displayName,
+      ).sort(),
+    ).toEqual(["Patient writer", "Slow live writer"]);
+    expect(
+      (await fs.readdir(path.dirname(catalogPath))).filter((entry) =>
+        entry.startsWith(`${path.basename(catalogPath)}.lock`),
+      ),
+    ).toEqual([]);
+  });
+
+  it("preserves unsafe live scopes without Agent Map assignment and accepts legal path whitespace", async () => {
     const { root, catalogPath } = await fixture();
     const spaced = path.join(root, "project ");
     await fs.mkdir(spaced);
@@ -151,9 +278,52 @@ describe("StudioProjectCatalog", () => {
 
     expect(reconciled.projects).toHaveLength(1);
     expect(reconciled.projects[0]?.displayName).toBe("project");
-    expect(reconciled.workspaceScopes).toEqual([
-      expect.objectContaining({ cwd: spaced }),
-    ]);
+    expect(reconciled.workspaceScopes).toEqual(
+      expect.arrayContaining([
+        {
+          workspaceKey: "workspace-unsafe",
+          cwd: `${root}/bad\npath`,
+        },
+        expect.objectContaining({ cwd: spaced }),
+      ]),
+    );
+    expect(
+      reconciled.workspaceScopes.find(
+        (scope) => scope.workspaceKey === "workspace-unsafe",
+      ),
+    ).not.toHaveProperty("projectId");
+  });
+
+  it("keeps every conflicting legacy-key root unassigned in both orders and after restart", async () => {
+    const { root, catalogPath } = await fixture();
+    const alpha = path.join(root, "alpha");
+    const beta = path.join(root, "beta");
+    await Promise.all([fs.mkdir(alpha), fs.mkdir(beta)]);
+    const forwardScopes = [
+      { workspaceKey: "shared-legacy-key", cwd: alpha },
+      { workspaceKey: "shared-legacy-key", cwd: beta },
+    ];
+
+    const forward = await new StudioProjectCatalog(catalogPath).reconcile(
+      forwardScopes,
+    );
+    const reversed = await new StudioProjectCatalog(catalogPath).reconcile(
+      [...forwardScopes].reverse(),
+    );
+
+    for (const result of [forward, reversed]) {
+      expect(result.projects).toEqual([]);
+      expect(result.workspaceScopes).toEqual(
+        expect.arrayContaining(forwardScopes),
+      );
+      expect(result.workspaceScopes).toHaveLength(2);
+      expect(
+        result.workspaceScopes.every(
+          (scope) => !Object.prototype.hasOwnProperty.call(scope, "projectId"),
+        ),
+      ).toBe(true);
+    }
+    expect(await new StudioProjectCatalog(catalogPath).list()).toEqual([]);
   });
 
   it("rejects a move onto another binding in the same project and remains restart-readable", async () => {

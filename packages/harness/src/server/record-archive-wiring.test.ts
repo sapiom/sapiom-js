@@ -31,12 +31,20 @@ import type {
 const TOKEN = "test-token";
 
 /** A claude-code-shaped adapter that spawns bash — a real pty we can kill. */
-function fakeClaudeAdapter(): HarnessAdapter {
+function fakeClaudeAdapter(ingestTokenPath: string): HarnessAdapter {
   return {
     id: "claude-code",
     eventSource: "hooks",
     doctor: async () => [],
-    launch: (opts: LaunchOpts): SpawnSpec => ({ command: "bash", args: [], env: {}, cwd: opts.cwd }),
+    launch: (opts: LaunchOpts): SpawnSpec => ({
+      command: "bash",
+      args: [
+        "-c",
+        'printf "%s" "$SAPIOM_HARNESS_INGEST_TOKEN" > "$SAPIOM_TEST_INGEST_TOKEN_PATH"; exec bash',
+      ],
+      env: { SAPIOM_TEST_INGEST_TOKEN_PATH: ingestTokenPath },
+      cwd: opts.cwd,
+    }),
     resume: (_agentSessionId: string, opts: LaunchOpts): SpawnSpec => ({
       command: "bash",
       args: [],
@@ -53,6 +61,7 @@ describe("session record archive wiring", () => {
   let cwd: string;
   let eventStorePath: string;
   let recordsRoot: string;
+  let ingestTokenPath: string;
   let server: HarnessServer | undefined;
   let baseUrl: string;
 
@@ -61,6 +70,7 @@ describe("session record archive wiring", () => {
     cwd = join(dir, "project");
     eventStorePath = join(dir, "events.ndjson");
     recordsRoot = join(dir, "records");
+    ingestTokenPath = join(dir, "ingest-token");
     await mkdir(cwd, { recursive: true });
   });
 
@@ -78,7 +88,7 @@ describe("session record archive wiring", () => {
       bootToken: TOKEN,
       telemetryOptIn: false,
       autoCreateSession: false,
-      adapters: { "claude-code": fakeClaudeAdapter() },
+      adapters: { "claude-code": fakeClaudeAdapter(ingestTokenPath) },
       stateRoot: dir,
     });
     baseUrl = `http://127.0.0.1:${booted.port}`;
@@ -91,9 +101,17 @@ describe("session record archive wiring", () => {
     hookEvent: string,
     payload: Record<string, unknown> = {},
   ): Promise<void> {
+    let ingestToken = "";
+    await vi.waitFor(async () => {
+      ingestToken = await readFile(ingestTokenPath, "utf8");
+      expect(ingestToken).not.toBe("");
+    });
     const res = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${ingestToken}`,
+        "content-type": "application/json",
+      },
       body: JSON.stringify({ hookEvent, harnessSessionId, payload }),
     });
     expect(res.status).toBe(200);

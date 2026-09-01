@@ -389,8 +389,9 @@ async function testCoreFlow(): Promise<void> {
 
     assert(capture.env.SAPIOM_HARNESS_INGEST_URL?.endsWith("/ingest"), "pty env carries SAPIOM_HARNESS_INGEST_URL");
     assert(
-      capture.env.SAPIOM_HARNESS_INGEST_TOKEN === bootToken,
-      "pty env carries the boot token as SAPIOM_HARNESS_INGEST_TOKEN",
+      capture.env.SAPIOM_HARNESS_INGEST_TOKEN !== bootToken &&
+        Boolean(capture.env.SAPIOM_HARNESS_INGEST_TOKEN),
+      "pty env carries a distinct ingest-only SAPIOM_HARNESS_INGEST_TOKEN",
     );
     assert(capture.env.SAPIOM_HARNESS_SESSION_ID === sessionId, "pty env carries SAPIOM_HARNESS_SESSION_ID");
 
@@ -410,7 +411,10 @@ async function testCoreFlow(): Promise<void> {
     // wouldn't be interactive before its own hooks fire. Simulating that
     // event before injecting input mirrors real production ordering, not
     // just satisfying the script.
-    const ingestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${bootToken}` };
+    const ingestHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${capture.env.SAPIOM_HARNESS_INGEST_TOKEN}`,
+    };
     const agentSessionId = "e2e-agent-session-1";
 
     const sessionStartRes = await fetch(`${baseUrl}/ingest`, {
