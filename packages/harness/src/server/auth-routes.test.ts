@@ -79,6 +79,7 @@ function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
       bus: opts.bus,
       environment: "production",
       performBrowserAuthImpl: opts.performBrowserAuthImpl,
+      onPlanningUserChanged: opts.onPlanningUserChanged,
     }),
   );
   const server = app.listen(0);
@@ -189,7 +190,13 @@ describe("POST /api/auth/start — success", () => {
     );
 
     const provider = makeProvider("sk-fresh-key");
-    const result = startApp({ bus, performBrowserAuthImpl: mockBrowserAuth, apiKeyProvider: provider });
+    const onPlanningUserChanged = vi.fn();
+    const result = startApp({
+      bus,
+      performBrowserAuthImpl: mockBrowserAuth,
+      apiKeyProvider: provider,
+      onPlanningUserChanged,
+    });
     server = result.server;
     baseUrl = result.baseUrl;
     const { authState } = result;
@@ -236,6 +243,7 @@ describe("POST /api/auth/start — success", () => {
 
     // Provider was refreshed to adopt the new key.
     expect(provider.calls.refresh).toBe(1);
+    expect(onPlanningUserChanged).toHaveBeenCalledWith("tenant-1");
 
     // Bus broadcasted auth.changed with authenticated: true.
     const authEvents = busEvents.filter((e) => e.type === "auth.changed");
@@ -379,7 +387,13 @@ describe("POST /api/auth/disconnect", () => {
   it("clears credentials, resets auth state, broadcasts auth.changed, returns { ok: true }", async () => {
     const authState = createMutableAuthState({ authenticated: true, organizationName: "Acme" });
     const provider = makeProvider();
-    const result = startApp({ bus, authState, apiKeyProvider: provider });
+    const onPlanningUserChanged = vi.fn();
+    const result = startApp({
+      bus,
+      authState,
+      apiKeyProvider: provider,
+      onPlanningUserChanged,
+    });
     server = result.server;
     baseUrl = result.baseUrl;
 
@@ -393,6 +407,7 @@ describe("POST /api/auth/disconnect", () => {
 
     // Auth state set to unauthenticated.
     expect(authState.get()).toEqual({ authenticated: false, organizationName: null });
+    expect(onPlanningUserChanged).toHaveBeenCalledWith(null);
 
     // Bus notified.
     const authEvents = busEvents.filter((e) => e.type === "auth.changed");

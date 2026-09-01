@@ -10,6 +10,7 @@ import type {
 } from "../shared/agent-map.js";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
 import {
+  SessionInputGuardRejectedError,
   SessionManager,
   SessionNotReadyError,
 } from "./session-manager.js";
@@ -37,6 +38,14 @@ interface ExpectedPrompt {
   kind: "greeting" | "user";
   id: string;
   text: string;
+  /** A failed/timed-out greeting stays as a FIFO tombstone so a late hook
+   * cannot be mistaken for a later retry. */
+  retired?: boolean;
+}
+
+interface ObservedGreetingAttempt {
+  id: string;
+  retired: boolean;
 }
 
 interface AttemptTimer {
@@ -67,6 +76,10 @@ export interface PlannerGreetingCoordinatorOptions {
   writeState?: (file: string, state: unknown) => Promise<void>;
   /** Test seam for accepted-ledger cleanup/commit failures. */
   writeAcceptedLedger?: (file: string, state: unknown) => Promise<void>;
+  /** Test seam for the atomic predecessor-to-successor queue handoff. */
+  moveStateDirectory?: (source: string, target: string) => Promise<void>;
+  /** Live authorization gate checked immediately before every PTY dispatch. */
+  canDispatch?: (session: HarnessSession) => boolean | Promise<boolean>;
   onEvent?: (event: PlannerLifecycleEvent) => Promise<void> | void;
 }
 
@@ -76,6 +89,15 @@ export class PlannerGreetingRetryUnavailableError extends Error {
   constructor() {
     super("greeting retry is not available");
     this.name = "PlannerGreetingRetryUnavailableError";
+  }
+}
+
+export class PlannerDispatchForbiddenError extends Error {
+  readonly code = "planner_dispatch_forbidden";
+
+  constructor() {
+    super("planner session is no longer authorized for this project binding");
+    this.name = "PlannerDispatchForbiddenError";
   }
 }
 
@@ -175,9 +197,48 @@ function isPersistedPlannerState(
   }
 }
 
-export function plannerGreetingPrompt(emptyProject: boolean): string {
+/** A directory rename can commit before the successor rewrites the embedded
+ * session identity. The trusted `rehydratedFrom` link is the recovery marker:
+ * accept only an otherwise-valid predecessor state with the same scoped
+ * project/user/role, then re-key every identity-bearing field in memory. */
+function adoptRehydratedState(
+  value: unknown,
+  session: HarnessSession,
+): PersistedPlannerState | null {
+  if (!session.planning || !session.rehydratedFrom) return null;
+  const predecessorId = session.rehydratedFrom;
+  const predecessor: HarnessSession = {
+    ...session,
+    id: predecessorId,
+    planning: {
+      ...structuredClone(session.planning),
+      identity: {
+        ...structuredClone(session.planning.identity),
+        sessionId: predecessorId,
+      },
+    },
+  };
+  if (!isPersistedPlannerState(value, predecessor)) return null;
+  return {
+    ...structuredClone(value),
+    metadata: {
+      ...structuredClone(value.metadata),
+      identity: structuredClone(session.planning.identity),
+    },
+    inputs: value.inputs.map((input) => ({
+      ...structuredClone(input),
+      sessionId: session.id,
+    })),
+    dispatchingInputId: value.dispatchingInputId ?? null,
+  };
+}
+
+export function plannerGreetingPrompt(
+  emptyProject: boolean,
+  attemptId?: string,
+): string {
   const question = emptyProject
-    ? "Ask exactly one open-ended question about what the system should accomplish."
+    ? "Ask exactly one open-ended question about what kind of agent architecture the user wants to build."
     : "Briefly acknowledge that a current plan exists, then ask exactly one open-ended question about what the user wants to review, extend, or change.";
   return [
     "This is a private Agent Studio control turn.",
@@ -185,6 +246,9 @@ export function plannerGreetingPrompt(emptyProject: boolean): string {
     "Explain that you and the user will plan the agents, responsibilities, data flow, resources, and connectors together.",
     question,
     "Do not propose an architecture, create nodes or relationships, invoke tools, or ask a second question before the user replies.",
+    ...(attemptId
+      ? [`Internal attempt ID: ${attemptId}. Never mention this ID in your response.`]
+      : []),
   ].join(" ");
 }
 
@@ -260,8 +324,20 @@ export class PlannerGreetingCoordinator {
   private readonly states = new Map<string, PersistedPlannerState>();
   private readonly writes = new Map<string, Promise<unknown>>();
   private readonly expected = new Map<string, ExpectedPrompt[]>();
-  private readonly observedAttempts = new Map<string, string[]>();
+  private readonly observedAttempts = new Map<
+    string,
+    Array<ObservedGreetingAttempt | null>
+  >();
+  private readonly correlationOverflow = new Set<string>();
   private readonly timers = new Map<string, AttemptTimer>();
+  /** Status hooks can race a freshly spawned PTY ahead of register/handoff. */
+  private readonly registeredSessions = new Set<string>();
+  /** A successfully handed-off predecessor can never dispatch or mutate its
+   * retired FIFO again, even if a late status/hook callback arrives. */
+  private readonly retiredSessions = new Set<string>();
+  /** Successors loaded after a crash between the atomic directory move and
+   * the best-effort embedded-identity rewrite. */
+  private readonly adoptedSessions = new Set<string>();
 
   constructor(private readonly options: PlannerGreetingCoordinatorOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -282,6 +358,14 @@ export class PlannerGreetingCoordinator {
       void Promise.resolve(this.options.onEvent?.(event)).catch(() => {});
     } catch {
       // Telemetry is best effort and must never change planner semantics.
+    }
+  }
+
+  private async canDispatch(session: HarnessSession): Promise<boolean> {
+    try {
+      return (await this.options.canDispatch?.(session)) ?? true;
+    } catch {
+      return false;
     }
   }
 
@@ -335,21 +419,27 @@ export class PlannerGreetingCoordinator {
     emptyProject = true,
   ): Promise<PersistedPlannerState> {
     const cached = this.states.get(session.id);
-    if (cached) return cached;
+    // Every transition works on an isolated snapshot. Nothing may mutate the
+    // authoritative cache until persist() commits the primary queue file.
+    if (cached) return structuredClone(cached);
     let state: PersistedPlannerState;
     try {
       const parsed: unknown = JSON.parse(
         await fs.readFile(this.file(session.id), "utf8"),
       );
-      if (!isPersistedPlannerState(parsed, session)) {
-        throw new Error("invalid planner state");
+      if (isPersistedPlannerState(parsed, session)) {
+        state = {
+          ...parsed,
+          // Backward-compatible with queue files written by the first SAP-3055
+          // review head before dispatch intent became explicit.
+          dispatchingInputId: parsed.dispatchingInputId ?? null,
+        };
+      } else {
+        const adopted = adoptRehydratedState(parsed, session);
+        if (!adopted) throw new Error("invalid planner state");
+        state = adopted;
+        this.adoptedSessions.add(session.id);
       }
-      state = {
-        ...parsed,
-        // Backward-compatible with queue files written by the first SAP-3055
-        // review head before dispatch intent became explicit.
-        dispatchingInputId: parsed.dispatchingInputId ?? null,
-      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         // A single damaged or unreadable session queue is local corruption,
@@ -358,7 +448,7 @@ export class PlannerGreetingCoordinator {
       }
       state = this.newState(session, emptyProject);
     }
-    this.states.set(session.id, state);
+    this.states.set(session.id, structuredClone(state));
     return state;
   }
 
@@ -530,21 +620,43 @@ export class PlannerGreetingCoordinator {
     this.timers.set(sessionId, { key, handle });
   }
 
-  private dropAttemptCorrelation(sessionId: string, attemptId: string): void {
+  private retireAttemptCorrelation(sessionId: string, attemptId: string): void {
     const expected = this.expected.get(sessionId);
     if (expected) {
-      const retained = expected.filter(
-        (entry) => !(entry.kind === "greeting" && entry.id === attemptId),
+      this.expected.set(
+        sessionId,
+        expected.map((entry) =>
+          entry.kind === "greeting" && entry.id === attemptId
+            ? { ...entry, retired: true }
+            : entry,
+        ),
       );
-      if (retained.length > 0) this.expected.set(sessionId, retained);
-      else this.expected.delete(sessionId);
     }
     const observed = this.observedAttempts.get(sessionId);
     if (observed) {
-      const retained = observed.filter((id) => id !== attemptId);
-      if (retained.length > 0) this.observedAttempts.set(sessionId, retained);
-      else this.observedAttempts.delete(sessionId);
+      this.observedAttempts.set(
+        sessionId,
+        observed.map((entry) =>
+          entry?.id === attemptId ? { ...entry, retired: true } : entry,
+        ),
+      );
     }
+  }
+
+  private removeExpectedGreeting(sessionId: string, attemptId: string): void {
+    const expected = this.expected.get(sessionId);
+    if (!expected) return;
+    const remaining = expected.filter(
+      (entry) => !(entry.kind === "greeting" && entry.id === attemptId),
+    );
+    if (remaining.length === 0) this.expected.delete(sessionId);
+    else this.expected.set(sessionId, remaining);
+  }
+
+  private clearCorrelation(sessionId: string): void {
+    this.expected.delete(sessionId);
+    this.observedAttempts.delete(sessionId);
+    this.correlationOverflow.delete(sessionId);
   }
 
   private async persist(
@@ -553,18 +665,6 @@ export class PlannerGreetingCoordinator {
   ): Promise<void> {
     try {
       await this.writeState(this.file(sessionId), state);
-      // A cloned queue transition (notably a dispatch intent) is authoritative
-      // only after its queue-file write commits. Publishing it first would let
-      // a transient write failure leave a phantom intent in memory, causing a
-      // later same-process drain to discard input that never reached the PTY.
-      // Greeting transitions generally mutate their already-cached state in
-      // place, so their bounded persistence-failure classification below is
-      // unchanged.
-      this.states.set(sessionId, state);
-      await this.options.sessionManager.setPlanningMetadata(
-        sessionId,
-        state.metadata,
-      );
     } catch {
       if (
         state.metadata.greeting.status === "pending" ||
@@ -582,10 +682,26 @@ export class PlannerGreetingCoordinator {
         };
         // At least one of the two stores may still be available. Keep the
         // bounded classification wherever possible; never persist raw errors.
-        await this.options.sessionManager
-          .setPlanningMetadata(sessionId, state.metadata)
-          .catch(() => {});
-        await this.writeState(this.file(sessionId), state).catch(() => {});
+        let fallbackCommitted = false;
+        try {
+          await this.options.sessionManager.setPlanningMetadata(
+            sessionId,
+            state.metadata,
+          );
+          fallbackCommitted = true;
+        } catch {
+          // The primary queue fallback below may still retain the bounded
+          // terminal classification.
+        }
+        try {
+          await this.writeState(this.file(sessionId), state);
+          fallbackCommitted = true;
+        } catch {
+          // If sessions.json committed, mergeRegistration treats that terminal
+          // projection as authoritative on restart. Only a total two-store
+          // outage retains the last committed cache.
+        }
+        if (fallbackCommitted) this.states.set(sessionId, structuredClone(state));
         this.emit({
           name: "planner_greeting.failed",
           projectId: state.metadata.identity.projectId,
@@ -598,6 +714,20 @@ export class PlannerGreetingCoordinator {
       }
       throw new Error("planner state persistence failed");
     }
+
+    // The queue file contains the full coordinator state and is authoritative.
+    // Publish its clone only after that primary write commits: a transient
+    // failure before this point must not leave a phantom dispatch intent in
+    // memory. SessionManager's sessions.json metadata is a UI/list projection,
+    // not a second commit prerequisite. If that projection write fails after
+    // the queue commit, aborting here would strand a durable pre-PTY intent
+    // that restart must conservatively drop even though submitInput was never
+    // called. Keep dispatch moving and retry the projection on every later
+    // transition/registration instead.
+    this.states.set(sessionId, structuredClone(state));
+    await this.options.sessionManager
+      .setPlanningMetadata(sessionId, state.metadata)
+      .catch(() => {});
   }
 
   /**
@@ -619,6 +749,158 @@ export class PlannerGreetingCoordinator {
     state.metadata.queuedInputIds = state.inputs.map((input) => input.id);
   }
 
+  private async retireHandoffPredecessor(
+    predecessor: HarnessSession,
+    source?: PersistedPlannerState,
+  ): Promise<void> {
+    const predecessorId = predecessor.id;
+    const retired: PersistedPlannerState | undefined = source
+      ? {
+          ...structuredClone(source),
+          inputs: [],
+          dispatchingInputId: null,
+          metadata: {
+            ...structuredClone(source.metadata),
+            queuedInputIds: [],
+          },
+        }
+      : undefined;
+    if (retired) this.states.set(predecessorId, retired);
+    const metadata =
+      retired?.metadata ??
+      (predecessor.planning
+        ? { ...structuredClone(predecessor.planning), queuedInputIds: [] }
+        : undefined);
+    if (metadata) {
+      await this.options.sessionManager
+        .setPlanningMetadata(predecessorId, metadata)
+        .catch(() => {});
+    }
+    this.clearTimer(predecessorId);
+    this.clearCorrelation(predecessorId);
+    this.registeredSessions.delete(predecessorId);
+    this.retiredSessions.add(predecessorId);
+  }
+
+  /** Atomically move a predecessor's entire coordinator directory into its
+   * rehydrated replacement. There is never a point with two durable FIFO
+   * copies: before rename only the predecessor exists; after rename only the
+   * exact successor exists. The embedded identity rewrite is best effort and
+   * recoverable through `adoptRehydratedState` after a crash. Accepted entries
+   * are removed and unresolved dispatch intent is classified uncertain before
+   * the move, so neither can become replayable under the successor. */
+  private async handoffRehydratedInputs(
+    session: HarnessSession,
+    replacementState: PersistedPlannerState,
+  ): Promise<{ state: PersistedPlannerState; moved: boolean }> {
+    const predecessorId = session.rehydratedFrom;
+    if (!predecessorId || predecessorId === session.id) {
+      return { state: replacementState, moved: false };
+    }
+    const predecessor = this.options.sessionManager.get(predecessorId);
+    const sourceIdentity = predecessor?.planning?.identity;
+    const targetIdentity = session.planning?.identity;
+    if (
+      !predecessor ||
+      !sourceIdentity ||
+      !targetIdentity ||
+      sourceIdentity.role !== "map-planner" ||
+      targetIdentity.role !== "map-planner" ||
+      sourceIdentity.projectId !== targetIdentity.projectId ||
+      sourceIdentity.userId !== targetIdentity.userId
+    ) {
+      return { state: replacementState, moved: false };
+    }
+
+    return this.serialize(predecessorId, async () => {
+      // A canonical or adoptable target file proves a prior atomic move
+      // already committed. On a later boot the old HarnessSession may register
+      // first and recreate an empty source queue; never rename that directory
+      // over the authoritative target. A non-empty second source is an
+      // impossible/conflicting dual owner and fails closed.
+      try {
+        await fs.access(this.file(session.id));
+        let recreatedSource: PersistedPlannerState | undefined;
+        try {
+          await fs.access(this.file(predecessorId));
+          recreatedSource = await this.load(predecessor);
+          recreatedSource = await this.reconcileAcceptedInputs(recreatedSource);
+          if (recreatedSource.dispatchingInputId !== null) {
+            recreatedSource = await this.resolveUncertainDispatch(recreatedSource);
+          }
+          if (recreatedSource.inputs.length > 0) {
+            throw new Error("conflicting planner handoff queues");
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        await this.retireHandoffPredecessor(predecessor, recreatedSource);
+        return { state: replacementState, moved: true };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+
+      try {
+        await fs.access(this.file(predecessorId));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return {
+            state: replacementState,
+            moved: this.adoptedSessions.has(session.id),
+          };
+        }
+        throw error;
+      }
+      let source = await this.load(predecessor);
+      source = await this.reconcileAcceptedInputs(source);
+      if (source.dispatchingInputId !== null) {
+        source = await this.resolveUncertainDispatch(source);
+      }
+
+      const transferred = source.inputs.map((input) => ({
+        ...structuredClone(input),
+        sessionId: session.id,
+      }));
+      const transferredIds = new Set(transferred.map((input) => input.id));
+      const mergedInputs = [
+        ...transferred,
+        ...replacementState.inputs.filter(
+          (input) => !transferredIds.has(input.id),
+        ),
+      ];
+      const replacement: PersistedPlannerState = {
+        ...structuredClone(source),
+        inputs: mergedInputs,
+        dispatchingInputId: null,
+        metadata: {
+          ...structuredClone(source.metadata),
+          identity: structuredClone(targetIdentity),
+          queuedInputIds: mergedInputs.map((input) => input.id),
+        },
+      };
+      const sourceDirectory = path.dirname(this.file(predecessorId));
+      const targetDirectory = path.dirname(this.file(session.id));
+      const move = this.options.moveStateDirectory ?? fs.rename;
+      await move(sourceDirectory, targetDirectory);
+
+      // The rename above is the only ownership commit. Publish the re-keyed
+      // cache immediately; rewriting the moved file is merely canonicalization
+      // because a crash can always adopt its predecessor identity in place.
+      this.states.set(session.id, structuredClone(replacement));
+      this.states.delete(predecessorId);
+      try {
+        await this.writeState(this.file(session.id), replacement);
+        this.adoptedSessions.delete(session.id);
+      } catch {
+        this.adoptedSessions.add(session.id);
+      }
+      await this.writeAcceptedInputIds(session.id, []).catch(() => {});
+
+      await this.retireHandoffPredecessor(predecessor, source);
+      return { state: replacement, moved: true };
+    });
+  }
+
   async register(
     session: HarnessSession,
     context: PlannerRegistrationContext,
@@ -628,7 +910,17 @@ export class PlannerGreetingCoordinator {
     let shouldDrain = false;
     await this.serialize(session.id, async () => {
       const cached = this.states.has(session.id);
-      const state = await this.load(session, context.emptyProject);
+      let state = await this.load(session, context.emptyProject);
+      let handoffMoved = false;
+      // A crash can occur after the replacement queue commit but before the
+      // predecessor retirement commit. `rehydratedFrom` is persisted on the
+      // HarnessSession, so repeat this idempotent handoff during process boot
+      // as well as the original rehydration callback.
+      if (session.rehydratedFrom) {
+        const handoff = await this.handoffRehydratedInputs(session, state);
+        state = handoff.state;
+        handoffMoved = handoff.moved;
+      }
       this.mergeRegistration(state, session);
 
       // Only a process-boot load proves an in-flight dispatch was abandoned.
@@ -667,12 +959,38 @@ export class PlannerGreetingCoordinator {
           });
         }
       }
-      await this.persist(session.id, state);
+      if (handoffMoved) {
+        // The directory rename already durably committed FIFO ownership. A
+        // failed canonical rewrite must not reject the exact successor and let
+        // a later open mint a second owner; future pre-PTY transitions retry
+        // the normal authoritative queue write.
+        this.states.set(session.id, structuredClone(state));
+        try {
+          await this.writeState(this.file(session.id), state);
+          this.adoptedSessions.delete(session.id);
+        } catch {
+          this.adoptedSessions.add(session.id);
+        }
+        await this.options.sessionManager
+          .setPlanningMetadata(session.id, state.metadata)
+          .catch(() => {});
+      } else {
+        await this.persist(session.id, state);
+      }
+      this.registeredSessions.add(session.id);
       if (state.metadata.greeting.status === "pending") {
-        if (session.ready && session.status === "running") shouldStart = true;
-        else this.armTimer(session.id, "pending");
+        const allowed = await this.canDispatch(session);
+        if (
+          session.ready &&
+          session.status === "running" &&
+          allowed
+        ) shouldStart = true;
+        else if (allowed) this.armTimer(session.id, "pending");
       } else if (isTerminal(state.metadata)) {
-        shouldDrain = session.ready && session.status === "running";
+        shouldDrain =
+          session.ready &&
+          session.status === "running" &&
+          (await this.canDispatch(session));
       }
     });
     if (shouldStart) await this.startGreeting(session.id, false);
@@ -681,7 +999,15 @@ export class PlannerGreetingCoordinator {
 
   async onSessionStatus(session: HarnessSession): Promise<void> {
     if (!session.planning) return;
-    if (session.ready && session.status === "running") {
+    if (
+      !this.registeredSessions.has(session.id) ||
+      this.retiredSessions.has(session.id)
+    ) return;
+    if (
+      session.ready &&
+      session.status === "running" &&
+      (await this.canDispatch(session))
+    ) {
       this.clearTimer(session.id, "pending");
       const state = this.states.get(session.id);
       if (state && isTerminal(state.metadata)) await this.drainSession(session.id);
@@ -693,6 +1019,7 @@ export class PlannerGreetingCoordinator {
       this.clearTimer(session.id);
       this.expected.delete(session.id);
       this.observedAttempts.delete(session.id);
+      this.correlationOverflow.delete(session.id);
       await this.fail(
         session.id,
         timer?.key ?? "pending",
@@ -704,9 +1031,17 @@ export class PlannerGreetingCoordinator {
 
   private async startGreeting(sessionId: string, retry: boolean): Promise<void> {
     await this.serialize(sessionId, async () => {
+      if (this.retiredSessions.has(sessionId)) return;
       const session = this.options.sessionManager.get(sessionId);
       if (!session?.planning) return;
       const state = await this.load(session);
+      if (!(await this.canDispatch(session))) {
+        if (retry) throw new PlannerDispatchForbiddenError();
+        if (state.metadata.greeting.status === "pending") {
+          await this.setFailure(state, "pending", "session_exited", false);
+        }
+        return;
+      }
       if (retry) {
         if (
           state.metadata.greeting.status !== "failed" ||
@@ -731,31 +1066,59 @@ export class PlannerGreetingCoordinator {
         attemptId,
         queueDepth: state.inputs.length,
       });
-      const prompt = plannerGreetingPrompt(state.emptyProject);
+      const prompt = plannerGreetingPrompt(state.emptyProject, attemptId);
+      if (!(await this.canDispatch(session))) {
+        await this.setFailure(state, attemptId, "session_exited", false);
+        if (retry) throw new PlannerDispatchForbiddenError();
+        return;
+      }
+      // Register before crossing the PTY boundary. A prompt hook may arrive
+      // immediately after the write, before submitInput's delayed Enter has
+      // resolved; registering afterward loses the only safe correlation.
+      const queue = this.expected.get(sessionId) ?? [];
+      queue.push({
+        kind: "greeting",
+        id: attemptId,
+        text: prompt,
+        retired: false,
+      });
+      this.expected.set(sessionId, queue);
       try {
         const accepted = await this.options.sessionManager.submitInput(
           sessionId,
           prompt,
           true,
+          () => this.canDispatch(session),
         );
         if (!accepted) {
+          // A false return proves the prompt did not cross the PTY boundary.
+          this.removeExpectedGreeting(sessionId, attemptId);
           await this.setFailure(state, attemptId, "session_exited", false);
           return;
         }
-        // Correlation is registered only after the PTY accepted the write.
-        const queue = this.expected.get(sessionId) ?? [];
-        queue.push({ kind: "greeting", id: attemptId, text: prompt });
-        this.expected.set(sessionId, queue);
         this.armTimer(sessionId, attemptId);
       } catch (error) {
+        if (
+          error instanceof SessionNotReadyError ||
+          (error instanceof SessionInputGuardRejectedError && !error.staged)
+        ) {
+          // Both cases prove absence at the PTY boundary. A guard rejection
+          // after staging is intentionally retained/retired as uncertain.
+          this.removeExpectedGreeting(sessionId, attemptId);
+        }
         await this.setFailure(
           state,
           attemptId,
           error instanceof SessionNotReadyError
             ? "session_not_ready"
-            : "injection_failed",
-          true,
+            : error instanceof SessionInputGuardRejectedError
+              ? "session_exited"
+              : "injection_failed",
+          !(error instanceof SessionInputGuardRejectedError),
         );
+        if (retry && error instanceof SessionInputGuardRejectedError) {
+          throw new PlannerDispatchForbiddenError();
+        }
       }
     });
   }
@@ -774,10 +1137,11 @@ export class PlannerGreetingCoordinator {
     const sessionId = state.metadata.identity.sessionId;
     const attemptId = greeting.status === "generating" ? greeting.attemptId : undefined;
     this.clearTimer(sessionId, expectedKey);
-    if (attemptId) this.dropAttemptCorrelation(sessionId, attemptId);
+    if (attemptId) this.retireAttemptCorrelation(sessionId, attemptId);
     if (state.inputs.length > 0) {
       state.metadata.greeting = { status: "skipped", reason: "user-proceeded" };
       await this.persist(sessionId, state);
+      this.clearCorrelation(sessionId);
       this.emit({
         name: "planner_greeting.skipped",
         projectId: state.metadata.identity.projectId,
@@ -791,6 +1155,7 @@ export class PlannerGreetingCoordinator {
     }
     state.metadata.greeting = { status: "failed", retryable, errorCode };
     await this.persist(sessionId, state);
+    if (!retryable) this.clearCorrelation(sessionId);
     this.emit({
       name: "planner_greeting.failed",
       projectId: state.metadata.identity.projectId,
@@ -809,6 +1174,7 @@ export class PlannerGreetingCoordinator {
     retryable: boolean,
   ): Promise<void> {
     await this.serialize(sessionId, async () => {
+      if (this.retiredSessions.has(sessionId)) return;
       const session = this.options.sessionManager.get(sessionId);
       if (!session?.planning) return;
       const state = await this.load(session);
@@ -822,8 +1188,14 @@ export class PlannerGreetingCoordinator {
 
   async enqueue(sessionId: string, text: string): Promise<PlannerSessionMetadata> {
     return this.serialize(sessionId, async () => {
+      if (this.retiredSessions.has(sessionId)) {
+        throw new PlannerDispatchForbiddenError();
+      }
       const session = this.options.sessionManager.get(sessionId);
       if (!session?.planning) throw new Error("planner session not found");
+      if (!(await this.canDispatch(session))) {
+        throw new PlannerDispatchForbiddenError();
+      }
       const state = await this.load(session);
       const input: PlannerQueuedInput = {
         id: this.generateId(),
@@ -844,13 +1216,17 @@ export class PlannerGreetingCoordinator {
         });
       }
       await this.persist(sessionId, state);
-      if (isTerminal(state.metadata)) await this.drain(state);
-      return structuredClone(state.metadata);
+      if (isTerminal(state.metadata)) await this.drain(state, true);
+      // drain() advances through immutable queue-state clones. Return the
+      // latest authoritative projection rather than the pre-drain object so a
+      // 202 response never reports IDs that were already durably dequeued.
+      return structuredClone(this.states.get(sessionId)?.metadata ?? state.metadata);
     });
   }
 
   private async drainSession(sessionId: string): Promise<void> {
     await this.serialize(sessionId, async () => {
+      if (this.retiredSessions.has(sessionId)) return;
       const session = this.options.sessionManager.get(sessionId);
       if (!session?.planning) return;
       const state = await this.load(session);
@@ -858,7 +1234,10 @@ export class PlannerGreetingCoordinator {
     });
   }
 
-  private async drain(initialState: PersistedPlannerState): Promise<void> {
+  private async drain(
+    initialState: PersistedPlannerState,
+    throwOnForbidden = false,
+  ): Promise<void> {
     let state: PersistedPlannerState;
     try {
       // An accepted-input ledger is the commit/ack boundary. If the prior
@@ -871,7 +1250,14 @@ export class PlannerGreetingCoordinator {
     while (state.inputs.length > 0) {
       const input = state.inputs[0]!;
       const session = this.options.sessionManager.get(input.sessionId);
-      if (!session?.ready || session.status !== "running") return;
+      if (
+        !session?.ready ||
+        session.status !== "running"
+      ) return;
+      if (!(await this.canDispatch(session))) {
+        if (throwOnForbidden) throw new PlannerDispatchForbiddenError();
+        return;
+      }
 
       // A durable intent without a durable acceptance acknowledgement is
       // irreducibly ambiguous across a crash. Never guess by replaying it: a
@@ -897,19 +1283,35 @@ export class PlannerGreetingCoordinator {
         return;
       }
       state = prepared;
+      if (!(await this.canDispatch(session))) {
+        const rollback: PersistedPlannerState = {
+          ...structuredClone(state),
+          dispatchingInputId: null,
+        };
+        await this.persist(input.sessionId, rollback).catch(() => {});
+        if (throwOnForbidden) throw new PlannerDispatchForbiddenError();
+        return;
+      }
       let accepted = false;
       try {
         accepted = await this.options.sessionManager.submitInput(
           input.sessionId,
           input.text,
           true,
+          () => this.canDispatch(session),
         );
-      } catch {
+      } catch (error) {
         const rollback: PersistedPlannerState = {
           ...structuredClone(state),
           dispatchingInputId: null,
         };
         await this.persist(input.sessionId, rollback).catch(() => {});
+        if (
+          throwOnForbidden &&
+          error instanceof SessionInputGuardRejectedError
+        ) {
+          throw new PlannerDispatchForbiddenError();
+        }
         return;
       }
       if (!accepted) {
@@ -956,18 +1358,30 @@ export class PlannerGreetingCoordinator {
 
   /** Add local-only correlation without removing transcript content. */
   decorateLocalEvent(event: AnalyticsEvent): AnalyticsEvent {
+    if (this.retiredSessions.has(event.harnessSessionId)) return event;
     const session = this.options.sessionManager.get(event.harnessSessionId);
     if (!session?.planning || event.type !== "prompt.submitted") return event;
     const prompt = typeof event.payload.prompt === "string" ? event.payload.prompt : "";
     const queue = this.expected.get(event.harnessSessionId) ?? [];
     const index = queue.findIndex((entry) => entry.text === prompt);
-    if (index < 0) return event;
-    const [match] = queue.splice(index, 1);
-    if (match.kind === "greeting") {
-      const observed = this.observedAttempts.get(event.harnessSessionId) ?? [];
-      observed.push(match.id);
+    const [match] = index < 0 ? [] : queue.splice(index, 1);
+    if (queue.length === 0) this.expected.delete(event.harnessSessionId);
+    const observed = this.observedAttempts.get(event.harnessSessionId) ?? [];
+    // One barrier per observed planner prompt, including unmatched/user
+    // prompts. turn.completed has no attempt token, so skipping those barriers
+    // would let their completion shift a later greeting attempt instead.
+    if (observed.length >= 256) {
+      this.clearCorrelation(event.harnessSessionId);
+      this.correlationOverflow.add(event.harnessSessionId);
+    } else {
+      observed.push(
+        match?.kind === "greeting"
+          ? { id: match.id, retired: match.retired === true }
+          : null,
+      );
       this.observedAttempts.set(event.harnessSessionId, observed);
     }
+    if (!match) return event;
     return {
       ...event,
       payload: {
@@ -999,18 +1413,36 @@ export class PlannerGreetingCoordinator {
   async onEventPersisted(event: AnalyticsEvent): Promise<void> {
     if (event.type !== "turn.completed") return;
     await this.serialize(event.harnessSessionId, async () => {
+      if (this.retiredSessions.has(event.harnessSessionId)) return;
+      // Consume exactly one prompt barrier for every completion before looking
+      // at lifecycle state. In particular, a late completion while attempt 1
+      // is failed must not remain queued to satisfy a later retry.
+      const observed = this.observedAttempts.get(event.harnessSessionId);
+      const completedAttempt = observed?.shift();
+      if (observed?.length === 0) {
+        this.observedAttempts.delete(event.harnessSessionId);
+      }
       const session = this.options.sessionManager.get(event.harnessSessionId);
       if (!session?.planning) return;
       const state = await this.load(session);
+      if (this.correlationOverflow.delete(event.harnessSessionId)) {
+        if (state.metadata.greeting.status === "generating") {
+          await this.setFailure(
+            state,
+            state.metadata.greeting.attemptId,
+            "model_turn_failed",
+            true,
+          );
+        }
+        return;
+      }
       if (state.metadata.greeting.status !== "generating") return;
       const attemptId = state.metadata.greeting.attemptId;
-      const observed = this.observedAttempts.get(event.harnessSessionId);
-      const observedIndex = observed?.indexOf(attemptId) ?? -1;
-      if (!observed || observedIndex < 0) return;
-      observed.splice(observedIndex, 1);
-      if (observed.length === 0) {
-        this.observedAttempts.delete(event.harnessSessionId);
-      }
+      if (!completedAttempt) return;
+      // Stop/turn.completed carries no attempt token. Consume correlations in
+      // prompt-observation order: a retired older turn is a tombstone, never
+      // evidence that the currently generating retry completed.
+      if (completedAttempt.retired || completedAttempt.id !== attemptId) return;
       const text = event.payload.assistantText;
       if (typeof text !== "string" || text.trim() === "") {
         await this.setFailure(state, attemptId, "model_turn_failed", true);
@@ -1022,6 +1454,7 @@ export class PlannerGreetingCoordinator {
         messageId: event.eventId,
       };
       await this.persist(event.harnessSessionId, state);
+      this.clearCorrelation(event.harnessSessionId);
       this.emit({
         name: "planner_greeting.delivered",
         projectId: state.metadata.identity.projectId,

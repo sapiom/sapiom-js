@@ -6,11 +6,18 @@ Add trusted, project-scoped Agent Map planner sessions with deterministic
 resume-or-create/fresh resolution, focused path-free context, a durable
 automatic-greeting state machine, FIFO user input, bounded lifecycle telemetry,
 public planner session/greeting state, and per-session ingest capabilities that
-cannot be replayed across PTYs or used for host `/api` mutations.
+cannot be replayed across PTYs or used for host `/api` mutations. Rehydrated
+planner replacements atomically inherit the exact predecessor FIFO while their
+focused brief can reuse an older recorded ancestor.
 
 **Breaking:** generic `POST /api/sessions` now strictly rejects unknown fields,
 so clients can no longer attach planner metadata to a generic create request.
-Generic planner input and resume routes also reject planner sessions. Migrate
-planner clients to the project-scoped `/api/projects/:projectId/planner-sessions`
-open, message, and greeting-retry routes; generic coding-agent sessions are
-unchanged.
+Generic planner input, resume, and adopt routes also reject planner-owned
+sessions and vendor identities (including durable historical aliases after a
+rotation). Migrate planner clients to the project-scoped
+`/api/projects/:projectId/planner-sessions`
+open, message, and greeting-retry routes. All coding-agent sessions now pin
+vendor identity to a durable session owner: conflicting `SessionStart` claims
+are rejected. The only rotation exception is a short-lived, one-shot
+server-observed `/clear` or `/resume` terminal gesture; `/resume` picker input
+may refresh its soft window only within a bounded hard deadline.

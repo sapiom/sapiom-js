@@ -109,6 +109,11 @@ replayed: it is resolved at-most-once with a bounded
 `planner_session.input_delivery_uncertain` event, then later FIFO entries may
 continue. A PTY write and a filesystem write cannot provide true exactly-once
 delivery without an idempotent external acknowledgement.
+When vendor resume falls back to a replacement planner, the whole coordinator
+directory is atomically handed to that exact successor before it can receive
+input. A later replacement follows the queue-owning predecessor while its
+focused rehydration brief may still come from an older recorded ancestor, so a
+pre-ready exit cannot orphan or duplicate accepted FIFO work.
 
 The focused system context contains only bounded project/session identity,
 current workspace pointer IDs, and binding references. The current workspace
@@ -124,14 +129,20 @@ rejected, it grants no `/api` authority, and it is rotated or revoked with the
 process lifecycle. A vendor resume pointer is pinned to one harness session;
 only a short-lived, one-shot `/clear` or `/resume` transition observed on the
 trusted terminal/input path may rotate it, and a pointer already owned by
-another harness session is always rejected.
+another harness session is always rejected. Current and rotated pointers are
+reserved in a server-private, SHA-256-keyed, mode-`0600` sidecar next to the
+session registry; raw historical aliases never enter a browser DTO. Planner
+reuse and input additionally require the session cwd to remain one of the
+project's current active root bindings and its owner to match the live signed-in
+identity (or stable machine-local principal while signed out).
 
 **Migration note (breaking):** `POST /api/sessions` now rejects unknown fields,
 including client-authored planner metadata. Generic
-`POST /api/sessions/:id/input` and `POST /api/sessions/:id/resume` reject planner
-sessions. Clients must open, message, and retry planners through the
-project-scoped routes above; ordinary coding-agent sessions keep using the
-generic session API.
+`POST /api/sessions/:id/input`, `POST /api/sessions/:id/resume`, and
+`POST /api/sessions/adopt` reject planner sessions/owned vendor aliases.
+Clients must open, message, and retry planners through the project-scoped
+routes above. Generic coding-agent sessions also use the durable vendor-ID pin;
+their only rotation exception is the same trusted `/clear`/`/resume` gesture.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 

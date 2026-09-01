@@ -40,7 +40,7 @@ export interface IngestDeps {
     harnessSessionId: string,
     agentSessionId: string,
     source: unknown,
-  ) => boolean;
+  ) => boolean | Promise<boolean>;
   /**
    * Called once a SessionStart(-equivalent) event is actually processed for
    * a session — the signal that its TUI is genuinely interactive, not just
@@ -111,6 +111,15 @@ function bearerToken(header: string | undefined): string | null {
   return header.slice("Bearer ".length);
 }
 
+/** Shared by HTTP hooks and in-process Codex tailing because both reuse the
+ * same sequence counter. SessionStart's awaited durable identity commit must
+ * remain ahead of immediately-following prompt/stop events even though the
+ * HTTP hook endpoint acknowledges before processing finishes. */
+const ingestQueues = new WeakMap<
+  SeqCounter,
+  Map<string, Promise<unknown>>
+>();
+
 export async function processIngest(
   body: IngestRequestBody,
   deps: IngestDeps,
@@ -119,6 +128,31 @@ export async function processIngest(
   const hookEvent = body.hookEvent;
   const harnessSessionId = body.harnessSessionId;
   if (!hookEvent || !harnessSessionId) return;
+
+  let queues = ingestQueues.get(seqCounter);
+  if (!queues) {
+    queues = new Map();
+    ingestQueues.set(seqCounter, queues);
+  }
+  const prior = queues.get(harnessSessionId) ?? Promise.resolve();
+  const next = prior
+    .catch(() => {})
+    .then(() => processIngestNow(body, deps, seqCounter));
+  queues.set(harnessSessionId, next);
+  try {
+    await next;
+  } finally {
+    if (queues.get(harnessSessionId) === next) queues.delete(harnessSessionId);
+  }
+}
+
+async function processIngestNow(
+  body: IngestRequestBody,
+  deps: IngestDeps,
+  seqCounter: SeqCounter,
+): Promise<void> {
+  const hookEvent = body.hookEvent!;
+  const harnessSessionId = body.harnessSessionId!;
 
   const session = deps.resolveSession(harnessSessionId);
   if (!session) return;
@@ -152,11 +186,11 @@ export async function processIngest(
   if (hookEvent === "SessionStart") {
     if (
       finalEvent.agentSessionId &&
-      !deps.onAgentSessionResolved(
+      !(await deps.onAgentSessionResolved(
         harnessSessionId,
         finalEvent.agentSessionId,
         finalEvent.payload.source,
-      )
+      ))
     ) {
       // The bearer capability authenticates the harness session, not an
       // arbitrary vendor resume pointer inside its payload. Ignore the entire
@@ -165,6 +199,17 @@ export async function processIngest(
       return;
     }
     deps.onSessionReady?.(harnessSessionId);
+  } else {
+    // Only SessionStart may propose or rotate a vendor identity through the
+    // authority check above. Every other hook's `payload.session_id` is
+    // model/provider-authored input: pin its local event envelope back to the
+    // server-owned session record before indexing, correlation, persistence,
+    // or telemetry. Otherwise session A can name B here and make record reads,
+    // turn counts, and rehydration coalesce the two conversations locally.
+    finalEvent = {
+      ...finalEvent,
+      agentSessionId: session.agentSessionId,
+    };
   }
 
   finalEvent = deps.decorateEvent?.(finalEvent) ?? finalEvent;

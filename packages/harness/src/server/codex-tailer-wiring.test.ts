@@ -151,7 +151,7 @@ describe("codex tailer lifecycle wiring", () => {
       stateRoot: dir,
     });
 
-    const historical = server.sessionManager.registerHistorical({
+    const historical = await server.sessionManager.registerHistorical({
       agentSessionId: "agent-resumed",
       harness: "codex",
       cwd,

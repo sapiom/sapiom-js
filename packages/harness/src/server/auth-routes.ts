@@ -114,6 +114,9 @@ export interface AuthRoutesOptions {
    * round-trip without opening a real browser or binding a local port.
    */
   performBrowserAuthImpl?: typeof performBrowserAuth;
+  /** Server-private identity projection for authorization consumers. It is
+   * intentionally not added to AuthState or any browser response. */
+  onPlanningUserChanged?: (userId: string | null) => void;
 }
 
 /**
@@ -130,6 +133,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     bus,
     environment,
     performBrowserAuthImpl = performBrowserAuth,
+    onPlanningUserChanged,
   } = opts;
 
   // Track any in-flight start() call so a second concurrent POST /api/auth/start
@@ -194,6 +198,10 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
           authenticated: true,
           organizationName: result.organizationName,
         });
+        // CLI identity uses tenantId as HarnessIdentity.userId. Update the
+        // private live principal in the same committed transition as auth;
+        // never expose it in the public auth status payload.
+        onPlanningUserChanged?.(result.tenantId);
         bus.publish({
           type: "auth.changed",
           authenticated: true,
@@ -243,6 +251,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
       apiKeyProvider.clear();
 
       authState.set({ authenticated: false, organizationName: null });
+      onPlanningUserChanged?.(null);
       bus.publish({
         type: "auth.changed",
         authenticated: false,

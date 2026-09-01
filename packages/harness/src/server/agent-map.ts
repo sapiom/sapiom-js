@@ -24,6 +24,7 @@ import {
   type PlanningSessionService,
 } from "../core/planning-session.js";
 import {
+  PlannerDispatchForbiddenError,
   PlannerGreetingRetryUnavailableError,
   type PlannerGreetingCoordinator,
 } from "../core/planner-greeting.js";
@@ -55,6 +56,10 @@ function sendPlanningError(
   res: import("express").Response,
   error: unknown,
 ): boolean {
+  if (error instanceof PlannerDispatchForbiddenError) {
+    res.status(403).json({ code: error.code, error: error.message });
+    return true;
+  }
   if (!(error instanceof PlanningSessionError)) return false;
   const status =
     error.code === "project_not_found" || error.code === "session_not_found"
@@ -265,7 +270,7 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         return;
       }
       try {
-        options.planningSessions.requireOwned(
+        await options.planningSessions.requireOwned(
           req.params.projectId,
           req.params.sessionId,
         );
@@ -292,16 +297,13 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         return;
       }
       try {
-        options.planningSessions.requireOwned(
+        const session = await options.planningSessions.requireOwned(
           req.params.projectId,
           req.params.sessionId,
         );
         await options.plannerGreeting.retry(req.params.sessionId);
         res.status(202).json({
-          metadata: options.planningSessions.requireOwned(
-            req.params.projectId,
-            req.params.sessionId,
-          ).planning,
+          metadata: session.planning,
         });
       } catch (error) {
         if (error instanceof PlannerGreetingRetryUnavailableError) {

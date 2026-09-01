@@ -154,7 +154,11 @@ import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
-import { PlanningSessionService } from "../core/planning-session.js";
+import {
+  isPlannerDispatchAuthorized,
+  localPlanningPrincipal,
+  PlanningSessionService,
+} from "../core/planning-session.js";
 import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
@@ -618,6 +622,10 @@ export const startServer = async (
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
+  // Authentication may change in-app without restarting Studio. Keep the
+  // planning principal live and server-private; browser auth DTOs expose only
+  // their existing boolean/organization fields.
+  let planningUserId = identity?.userId ?? null;
 
   // One-way identity migration: seed ~/.sapiom/analytics.json from the
   // legacy harness machine-id so existing installs keep the same anonymous_id
@@ -2582,6 +2590,14 @@ export const startServer = async (
   const plannerGreeting = new PlannerGreetingCoordinator({
     root: statePaths.plannerSessions,
     sessionManager,
+    canDispatch: (session) =>
+      isPlannerDispatchAuthorized({
+        session,
+        currentPrincipal: () =>
+          localPlanningPrincipal(planningUserId, machineId),
+        resolveProject: (projectId) =>
+          studioProjectCatalog.resolveIdentity(projectId),
+      }),
     onEvent: emitPlannerLifecycle,
   });
   for (const session of sessionManager.list()) {
@@ -2614,6 +2630,7 @@ export const startServer = async (
     sessionManager,
     readRecord: (id) => sessionRecordReader.read(id),
     userId: identity?.userId ?? null,
+    currentUserId: () => planningUserId,
     machineId,
     defaultHarness: options.defaultHarnessKind ?? "claude-code",
     // E1 owns the durable workspace pointers, but not the later revision,
@@ -3095,6 +3112,9 @@ export const startServer = async (
       apiKeyProvider,
       bus,
       environment: process.env.SAPIOM_ENVIRONMENT,
+      onPlanningUserChanged: (userId) => {
+        planningUserId = userId;
+      },
     }),
   );
 

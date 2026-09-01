@@ -365,6 +365,82 @@ describe("PlannerGreetingCoordinator", () => {
     );
   });
 
+  it("does not resurrect an enqueue whose primary queue write was rejected", async () => {
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    let rejectFirstEnqueue = true;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      writeState: async (file, value) => {
+        const state = value as {
+          dispatchingInputId: string | null;
+          inputs: Array<{ text: string }>;
+        };
+        if (
+          rejectFirstEnqueue &&
+          state.dispatchingInputId === null &&
+          state.inputs.some((input) => input.text === "rejected input")
+        ) {
+          rejectFirstEnqueue = false;
+          throw new Error("primary enqueue write rejected");
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+      },
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+
+    await expect(
+      coordinator.enqueue(session.id, "rejected input"),
+    ).rejects.toThrow("planner state persistence failed");
+    await coordinator.enqueue(session.id, "accepted input");
+
+    expect(submitted).toEqual(["accepted input"]);
+    expect(session.planning?.queuedInputIds).toEqual([]);
+    expect(
+      await fs.readFile(
+        path.join(root, session.id, "input-queue.json"),
+        "utf8",
+      ),
+    ).not.toContain("rejected input");
+  });
+
+  it("keeps dispatching when only the secondary sessions projection fails", async () => {
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    const setPlanningMetadata = vi.fn(async () => {
+      throw new Error("sessions.json projection unavailable");
+    });
+    manager.setPlanningMetadata = setPlanningMetadata;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+
+    await expect(
+      coordinator.enqueue(session.id, "deliver from the authoritative queue"),
+    ).resolves.toMatchObject({ queuedInputIds: [] });
+
+    expect(submitted).toEqual(["deliver from the authoritative queue"]);
+    expect(setPlanningMetadata).toHaveBeenCalled();
+    const durable = JSON.parse(
+      await fs.readFile(
+        path.join(root, session.id, "input-queue.json"),
+        "utf8",
+      ),
+    ) as { dispatchingInputId: string | null; inputs: unknown[] };
+    expect(durable).toMatchObject({
+      dispatchingInputId: null,
+      inputs: [],
+    });
+  });
+
   it("resolves an orphaned dispatch as uncertain and lets the later FIFO continue", async () => {
     session.ready = false;
     session.planning!.greeting = {
@@ -491,6 +567,27 @@ describe("PlannerGreetingCoordinator", () => {
     expect(session.planning?.queuedInputIds).toEqual([]);
   });
 
+  it("keeps a queued planner message out of the PTY when its live dispatch authority is rebound before readiness", async () => {
+    session.ready = false;
+    let authorized = true;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      canDispatch: async () => authorized,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.enqueue(session.id, "private queued plan request");
+    expect(submitted).toEqual([]);
+
+    authorized = false;
+    session.ready = true;
+    await coordinator.onSessionStatus(session);
+
+    expect(submitted).toEqual([]);
+    expect(session.planning?.queuedInputIds).toHaveLength(1);
+  });
+
   it("does not extend the readiness deadline on live re-registration", async () => {
     vi.useFakeTimers();
     session.ready = false;
@@ -537,7 +634,7 @@ describe("PlannerGreetingCoordinator", () => {
     expect(decorated.payload).not.toHaveProperty("plannerOrigin");
   });
 
-  it("removes timed-out correlation so one retry completion delivers the greeting", async () => {
+  it("uses unique prompts and FIFO tombstones so a late old turn cannot deliver a retry", async () => {
     vi.useFakeTimers();
     const ids = ["attempt-1", "attempt-2"];
     const coordinator = new PlannerGreetingCoordinator({
@@ -547,11 +644,7 @@ describe("PlannerGreetingCoordinator", () => {
       deliveryTimeoutMs: 100,
     });
     await coordinator.register(session, { emptyProject: true, mode: "created" });
-    await coordinator.onSessionStatus(session);
-    const prompt = submitted[0]!;
-    coordinator.decorateLocalEvent(
-      event(session.id, "prompt.submitted", { prompt }),
-    );
+    const oldPrompt = submitted[0]!;
     await vi.advanceTimersByTimeAsync(101);
     await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
       .writes.get(session.id);
@@ -563,6 +656,21 @@ describe("PlannerGreetingCoordinator", () => {
 
     await coordinator.retry(session.id);
     const retryPrompt = submitted[1]!;
+    expect(retryPrompt).not.toBe(oldPrompt);
+    const lateOldPrompt = coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: oldPrompt }),
+    );
+    expect(lateOldPrompt.payload.plannerAttemptId).toBe("attempt-1");
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", {
+        assistantText: "Late answer from the first attempt",
+      }),
+    );
+    expect(session.planning?.greeting).toEqual({
+      status: "generating",
+      attemptId: "attempt-2",
+    });
+
     const retryEvent = coordinator.decorateLocalEvent(
       event(session.id, "prompt.submitted", { prompt: retryPrompt }),
     );
@@ -579,16 +687,38 @@ describe("PlannerGreetingCoordinator", () => {
     });
   });
 
-  it("adds expected correlation only after a submit is accepted", async () => {
-    manager.submitInput = async () => false;
+  it("pre-registers correlation before submit and removes it on a proven false return", async () => {
+    const holder: { coordinator?: PlannerGreetingCoordinator } = {};
+    const synchronousPrompts: AnalyticsEvent[] = [];
+    manager.submitInput = async (_id, prompt) => {
+      synchronousPrompts.push(
+        holder.coordinator!.decorateLocalEvent(
+          event(session.id, "prompt.submitted", { prompt }),
+        ),
+      );
+      return true;
+    };
     const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      generateId: () => "attempt-synchronous",
+      deliveryTimeoutMs: 60_000,
+    });
+    holder.coordinator = coordinator;
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    expect(synchronousPrompts[0]?.payload.plannerAttemptId).toBe(
+      "attempt-synchronous",
+    );
+
+    session = plannerSession("session-false");
+    manager.submitInput = async () => false;
+    const rejected = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await coordinator.register(session, { emptyProject: true, mode: "created" });
-    await coordinator.onSessionStatus(session);
-    const decorated = coordinator.decorateLocalEvent(
+    await rejected.register(session, { emptyProject: true, mode: "created" });
+    const decorated = rejected.decorateLocalEvent(
       event(session.id, "prompt.submitted", {
         prompt: plannerGreetingPrompt(true),
       }),
@@ -600,6 +730,65 @@ describe("PlannerGreetingCoordinator", () => {
       retryable: false,
       errorCode: "session_exited",
     });
+  });
+
+  it("consumes unmatched prompt completions before the active greeting barrier", async () => {
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      generateId: () => "attempt-1",
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    const greetingPrompt = submitted[0]!;
+
+    coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: "unmatched user turn" }),
+    );
+    coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: greetingPrompt }),
+    );
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", { assistantText: "user answer" }),
+    );
+    expect(session.planning?.greeting).toEqual({
+      status: "generating",
+      attemptId: "attempt-1",
+    });
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", { assistantText: "greeting answer" }),
+    );
+    expect(session.planning?.greeting.status).toBe("delivered");
+  });
+
+  it("consumes a late completion while failed before a retry begins", async () => {
+    vi.useFakeTimers();
+    const ids = ["attempt-1", "attempt-2"];
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      generateId: () => ids.shift() ?? "state-write",
+      deliveryTimeoutMs: 100,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: submitted[0]! }),
+    );
+    await vi.advanceTimersByTimeAsync(101);
+    await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
+      .writes.get(session.id);
+
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", { assistantText: "late old answer" }),
+    );
+    await coordinator.retry(session.id);
+    coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: submitted[1]! }),
+    );
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", { assistantText: "retry answer" }),
+    );
+    expect(session.planning?.greeting.status).toBe("delivered");
   });
 
   it("quarantines a corrupt queue without preventing local registration", async () => {
@@ -638,6 +827,21 @@ describe("PlannerGreetingCoordinator", () => {
     await expect(
       coordinator.register(session, { emptyProject: true, mode: "created" }),
     ).rejects.toThrow("planner state persistence failed");
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "persistence_failed",
+    });
+    expect(
+      (
+        coordinator as unknown as {
+          states: Map<string, { metadata: NonNullable<HarnessSession["planning"]> }>;
+        }
+      ).states.get(session.id)?.metadata.greeting,
+    ).toEqual(session.planning?.greeting);
+    await expect(coordinator.retry(session.id)).rejects.toThrow(
+      "planner state persistence failed",
+    );
     expect(session.planning?.greeting).toEqual({
       status: "failed",
       retryable: true,
@@ -691,7 +895,13 @@ describe("plannerGreetingPrompt", () => {
       expect(prompt).toContain("Do not propose an architecture");
       expect(prompt).toContain("invoke tools");
     }
-    expect(empty).toContain("what the system should accomplish");
+    expect(empty).toContain(
+      "what kind of agent architecture the user wants to build",
+    );
     expect(existing).toContain("current plan exists");
+    const attempted = plannerGreetingPrompt(true, "attempt-private-1");
+    expect(attempted).toContain("Internal attempt ID: attempt-private-1");
+    expect(attempted).toContain("Never mention this ID");
+    expect(empty).not.toContain("attempt-private-1");
   });
 });

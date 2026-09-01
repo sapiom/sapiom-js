@@ -366,9 +366,10 @@ describe("createAgentMapRouter", () => {
   });
 
   it("rejects foreign planner messages and bounds unavailable retries", async () => {
-    const requireOwned = vi.fn<() => HarnessSession>(() => {
+    const requireOwned = vi.fn<() => Promise<HarnessSession>>(async () => {
       throw new PlanningSessionError("forbidden");
     });
+    const enqueue = vi.fn(async () => ({}) as never);
     const retry = vi.fn(async () => {
       throw new PlannerGreetingRetryUnavailableError();
     });
@@ -378,7 +379,7 @@ describe("createAgentMapRouter", () => {
         requireOwned,
       } as unknown as PlanningSessionService,
       plannerGreeting: {
-        enqueue: vi.fn(),
+        enqueue,
         retry,
       } as unknown as PlannerGreetingCoordinator,
     });
@@ -392,8 +393,17 @@ describe("createAgentMapRouter", () => {
     );
     expect(message.status).toBe(403);
     expect(await message.json()).toMatchObject({ code: "forbidden" });
+    expect(enqueue).not.toHaveBeenCalled();
 
-    requireOwned.mockImplementation(() => ({ id: "owned" }) as HarnessSession);
+    const forbiddenRetry = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/foreign/greeting/retry`,
+      { method: "POST", headers, body: "{}" },
+    );
+    expect(forbiddenRetry.status).toBe(403);
+    expect(await forbiddenRetry.json()).toMatchObject({ code: "forbidden" });
+    expect(retry).not.toHaveBeenCalled();
+
+    requireOwned.mockResolvedValue({ id: "owned" } as HarnessSession);
     const retryResponse = await fetch(
       `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/owned/greeting/retry`,
       { method: "POST", headers, body: "{}" },

@@ -182,11 +182,12 @@ export interface HarnessSession {
   /**
    * The prior session this one was seeded from (portable continue — see
    * core/rehydration.ts), when a brief was ACTUALLY produced and delivered.
-   * Null/absent otherwise, including when the client asked to rehydrate from
-   * an id our event log holds nothing for: this field is the record of what
-   * happened, not of what was requested, so the UI can never present an
-   * empty-handed fresh session as a continuation. Absent on sessions
-   * persisted by builds from before this existed.
+   * For a trusted planner replacement, this instead names the exact prior
+   * HarnessSession whose durable coordinator FIFO was handed off; its brief
+   * may come from an older recorded ancestor in the same continuation chain.
+   * Null/absent otherwise, including an ordinary client request whose event
+   * log contains no usable context. Absent on sessions persisted by builds
+   * from before this existed.
    */
   rehydratedFrom?: string | null;
   /**

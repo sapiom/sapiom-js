@@ -45,6 +45,10 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
   return {
     list: () => Array.from(sessions.values()),
     get: (id: string) => sessions.get(id),
+    getAgentSessionOwner: vi.fn((agentSessionId: string) =>
+      Array.from(sessions.values()).find(
+        (session) => session.agentSessionId === agentSessionId,
+      )),
     create: vi.fn(),
     resume: vi.fn(),
     kill: vi.fn(() => true),
@@ -55,7 +59,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
       if (session) session.boundWorkflowPath = workflowPath;
     }),
     registerHistorical: vi.fn(
-      (input: {
+      async (input: {
         agentSessionId: string;
         harness: HarnessKind;
         cwd: string;
@@ -1429,6 +1433,44 @@ describe("createRestRouter", () => {
       expect(sessionManager.get("planner-existing")?.planning).toEqual(original);
     });
 
+    it("rejects a rotated planner's durable old alias even though its current pointer changed", async () => {
+      const planner = exitedSession({
+        id: "planner-rotated",
+        agentSessionId: "vendor-new",
+        planning: {
+          identity: {
+            projectId: "project-1",
+            sessionId: "planner-rotated",
+            userId: "user-1",
+            role: "map-planner",
+          },
+          greeting: { status: "delivered", messageId: "message-1" },
+          queuedInputIds: [],
+        },
+      });
+      const sessionManager = fakeSessionManager([planner]);
+      (
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+      ).mockImplementation((agentSessionId: string) =>
+        agentSessionId === body.agentSessionId ? planner : undefined,
+      );
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager,
+        adapters: { "claude-code": historyAdapter({ canResume }) },
+      });
+
+      const response = await adopt(body);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(canResume).not.toHaveBeenCalled();
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
     it("400s on a malformed body and an unspawnable harness", async () => {
       start({ adapters: { "claude-code": historyAdapter() } });
       expect((await adopt({ ...body, agentSessionId: "" })).status).toBe(400);
@@ -1614,7 +1656,7 @@ describe("createRestRouter", () => {
       const sessionManager = makeRealSessionManager();
 
       // Simulate a session record written by an earlier build or hand-edited.
-      const session = sessionManager.registerHistorical({
+      const session = await sessionManager.registerHistorical({
         agentSessionId: "agent-abc",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",
@@ -1641,7 +1683,7 @@ describe("createRestRouter", () => {
     it("POST /sessions/:id/input returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
       const sessionManager = makeRealSessionManager();
 
-      const session = sessionManager.registerHistorical({
+      const session = await sessionManager.registerHistorical({
         agentSessionId: "agent-def",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",
