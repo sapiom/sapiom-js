@@ -89,13 +89,13 @@ import {
   type McpDevServerCommand,
 } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
-import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import {
   removeGeneratedSessionDir,
   sweepGeneratedDirs,
 } from "../core/inject/retention.js";
+import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
+import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import {
