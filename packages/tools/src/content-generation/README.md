@@ -63,7 +63,8 @@ out.video?.url; // provider-hosted URL (may be short-lived / unauthenticated)
 
 Video input takes `prompt`, plus the optional neutral params (`aspectRatio`,
 `resolution`, `duration`, `audio`, `seed`, `negativePrompt`, `referenceImage` —
-see [Input params](#input-params)), `storage`, `model`, and two async controls:
+see [Input params](#input-params)), `storage`, `model` / `select`
+(see [Choosing a model](#choosing-a-model)), and two async controls:
 `pollIntervalMs` (poll cadence, default 5s) and `timeoutMs` (give up and throw if
 it isn't ready in time, default 5 min). The returned `video` is
 `{ url, contentType?, fileId?, downloadUrl?, downloadUrlExpiresAt?, storageError? }`.
@@ -146,7 +147,7 @@ to this shape when wiring local tests.
 ## Input params
 
 Describe **what you want** with neutral params instead of provider-specific knobs.
-They're validated against the chosen model *before* you're charged and mapped to
+They're validated against the chosen model _before_ you're charged and mapped to
 that model's wire format, so switching models doesn't mean rewriting the call.
 Passing an unsupported param throws `ContentGenerationHttpError` (`unsupported_param`)
 **before any charge** — the response also carries `resolvedModel` and `cost`.
@@ -180,8 +181,11 @@ persist `cost.reference` and settle from it.
 
 Shared:
 
-- `model` (optional) — a semantic alias (e.g. `"flux-fast"`, `"veo3-fast"`);
-  defaults to a fast model. Most callers omit it.
+- `model` (optional) — a **public semantic alias** (e.g. `"flux-fast"`,
+  `"veo3-fast"`); defaults to a fast model. Most callers omit it. See
+  [Choosing a model](#choosing-a-model) — raw provider ids are rejected.
+- `select` (optional) — capability-based model selection, used when `model` is
+  omitted. See [Choosing a model](#choosing-a-model).
 - `storage` (optional) — persist outputs; `{ visibility: "private" | "public" }`.
 - `idempotencyKey` (optional) — cross-call idempotency key; a repeat with the same
   key (per tenant) returns the existing generation instead of a new one, like
@@ -195,6 +199,83 @@ Shared:
 Each returned image is `{ url, contentType?, width?, height?, fileId?,
 downloadUrl?, downloadUrlExpiresAt?, storageError? }`; any additional
 model-specific fields are returned on the result as-is.
+
+## Choosing a model
+
+`model` takes a **public semantic alias** — Sapiom's own neutral name for a model,
+resolved to a concrete provider model server-side. Raw provider model ids are **not**
+part of this surface: passing one is rejected with `ContentGenerationHttpError`
+(`400 unknown_model`) **before any charge**.
+
+```typescript
+import { IMAGE_MODELS, VIDEO_MODEL_ALIASES } from "@sapiom/tools";
+
+await sapiom.contentGeneration.images.create({
+  prompt: "a red bicycle",
+  model: IMAGE_MODELS.fluxStandard, // or just "flux-standard"
+});
+```
+
+| Images (`IMAGE_MODELS`) | Video (`VIDEO_MODEL_ALIASES`) |
+| ----------------------- | ----------------------------- |
+| `flux-fast` (default)   | `veo3-fast` (default)         |
+| `flux-standard`         | `seedance-fast`               |
+| `ideogram-v3`           | `seedance-standard`           |
+| `flux-pro-kontext`      | `kling-standard`              |
+| `nano-banana-pro`       | `wan-standard`                |
+| `gpt-image-2`           | `minimax-h3-max`              |
+
+Both are listed in catalog order — cheapest first, and the order the platform
+selects in when you omit `model`. Neither is a closed set: `model` is typed as a
+literal union widened to `string`, so a newly-cataloged alias works before this SDK
+catches up, and the SDK never validates the value locally — the platform catalog is
+the authority.
+
+> The `VIDEO_MODELS` export (raw `fal-ai/…` ids) is **deprecated**. Video now routes
+> through the same alias-resolving capability as images, so those ids will be rejected
+> too. Migrate: `veo3Fast` → `"veo3-fast"`, `klingV16StandardText` → `"kling-standard"`,
+> `wanV22Text` → `"wan-standard"`, `seedance20Fast` → `"seedance-fast"`.
+> `minimaxVideo01` has no cataloged alias — switch it to a cataloged model such as
+> `"minimax-h3-max"`.
+
+### Let the platform pick: `select`
+
+Omit `model` and the platform chooses one for you. Your neutral params already narrow
+the candidates on their own; `select` covers what they can't express, and the response
+echoes the choice as `resolvedModel`:
+
+```typescript
+const out = await sapiom.contentGeneration.video.create({
+  prompt: "a person speaking to camera",
+  aspectRatio: "9:16",
+  duration: 6,
+  select: {
+    requires: ["audio", "lipsync"], // intrinsic capabilities the model must declare
+    prefer: "cheapest", // re-rank the survivors by a live price join
+  },
+});
+out.resolvedModel; // e.g. "seedance-fast" — what the platform picked
+out.preferSatisfied; // true: cheapest verified against every candidate
+```
+
+- `requires` — `"audio"`, `"lipsync"`, `"referenceImage"`. An unknown tag is a
+  `400 unsupported_param`, pre-charge. If you _also_ pin `model`, `requires` is still
+  enforced against the pin, so a model lacking the capability is rejected rather than
+  rendered and billed.
+- `prefer: "cheapest"` — re-ranks the surviving candidates by a **live** price join. It
+  degrades, never fails: if the join is unavailable, slow, or incomplete, selection falls
+  back to deterministic catalog order and the response reports `preferSatisfied: false`.
+  A `true` means the cheapest was verified against _every_ candidate.
+- `preferSatisfied` is **absent** unless you asked for a preference — never a
+  fabricated `false`.
+
+`"cheapest"` compares the live price of your exact request as each candidate would run
+it, not a fixed per-model tier. Omit `duration` (video) / `count` (images) and each
+candidate is priced at its _own_ catalog default, so a model with a shorter default can
+win on absolute price — pin them to compare on equal terms.
+
+If nothing satisfies the constraints, the request is rejected pre-charge, naming which
+constraint eliminated which model.
 
 ## Gotchas
 

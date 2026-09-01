@@ -98,8 +98,18 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
-// Concrete video model ids the gateway serves, for callers that want to pin one. Prefer a semantic
-// alias (e.g. "veo3-fast") — the routed video capability resolves it server-side (SAP-2575).
+// The PUBLIC semantic model aliases the routed image/video capabilities serve, for callers that
+// want to pin one. The routed surface is alias-only (E8/SAP-2582) — a raw provider id is rejected
+// with `unknown_model` — so pin from these maps, not from the deprecated VIDEO_MODELS.
+export {
+  IMAGE_MODELS,
+  VIDEO_MODEL_ALIASES,
+} from "./content-generation/index.js";
+export type {
+  KnownImageModel,
+  KnownVideoModelAlias,
+} from "./content-generation/index.js";
+// @deprecated raw provider video ids — kept exported for back-compat; migrate to VIDEO_MODEL_ALIASES.
 export { VIDEO_MODELS } from "./content-generation/index.js";
 export type { KnownVideoModel } from "./content-generation/index.js";
 // Neutral param vocabulary (E4/SAP-2579) — name these when building typed media inputs.
@@ -108,6 +118,9 @@ export type {
   Resolution,
   OutputFormat,
 } from "./content-generation/index.js";
+// Capability-based model selection (E5/SAP-2580) — the `select` directives honored when `model`
+// is omitted; the response echoes `resolvedModel` + `preferSatisfied`.
+export type { MediaSelect } from "./content-generation/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { VIDEO_RESULT_SIGNAL } from "./content-generation/index.js";
 export { IMAGE_RESULT_SIGNAL } from "./content-generation/index.js";
