@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { glob, readFile, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,6 +60,24 @@ const REQUIRED_CONTRACT_PATTERNS_BY_PATH = {
     /\{\s*anthropic:\s*string;\s*openai:\s*string\s*\}/g,
   ],
   "packages/tools/src/sandboxes/index.ts": [/"blaxel"/giu],
+  // `@sapiom/langchain-classic` binds LangChain's provider-specific chat models, so the provider
+  // names ARE its public contract — it exports `SapiomChatOpenAI` / `SapiomChatAnthropic` over the
+  // `@langchain/openai` / `@langchain/anthropic` peers. Unmasked narrowly, one usage at a time,
+  // rather than skipping the file: the rest of this published README stays audited, so a stray
+  // `fal` or `blaxel` in it is still caught.
+  "packages/langchain-classic/README.md": [
+    // Peer dependency package names, in install commands and prose.
+    /@langchain\/(?:openai|anthropic)/giu,
+    // The exported binding classes and the LangChain base classes they wrap.
+    /\b(?:Sapiom)?Chat(?:OpenAI|Anthropic)\b/gu,
+    // "Works with any LangChain model (OpenAI, Anthropic, etc.)".
+    /\(OpenAI, Anthropic, etc\.\)/gu,
+    // Section labels in the install snippet and the usage example.
+    /# or for OpenAI:/gu,
+    /\/\/ (?:OpenAI|Anthropic)$/gmu,
+    // Example variable names bound to each class.
+    /\bconst (?:openai|anthropic)\b/gu,
+  ],
 };
 
 const FORBIDDEN_PROVIDER_COPY_RE =
@@ -104,44 +122,97 @@ async function collectRegisteredExampleAssets(
   return assets;
 }
 
-/**
- * Published docs for packages whose PUBLIC API is deliberately provider-named, so provider-neutral
- * copy does not apply to them. `@sapiom/langchain-classic` exports `SapiomChatOpenAI` /
- * `SapiomChatAnthropic`; a README that could not name those classes could not document the package.
- * Deliberately a file list, not a pattern — each entry is a judgement that the names are the
- * contract, and a new one should have to be argued for rather than matched into.
- */
-const PROVIDER_NAMED_PACKAGE_DOCS = new Set([
-  "packages/langchain-classic/README.md",
+/** Directories never walked when discovering published markdown. */
+const UNWALKED_DIRECTORIES = new Set([
+  "node_modules",
+  // Build output. Its markdown is generated from `src`, which IS audited, and whether it exists at
+  // all depends on build state — walking it would make the audited-file count differ between a
+  // fresh checkout and a built tree.
+  "dist",
 ]);
 
 /**
- * Markdown that is PUBLISHED to npm, discovered from each package's own `files` globs rather than
+ * Translate a `files` entry to a matcher. npm `files` accepts literal paths, directories, and
+ * globs — `@sapiom/tools` ships a recursive README glob — so a plain `endsWith` comparison would
+ * miss most of them. A double-star segment spans any number of directories; a single star stays
+ * within one path segment.
+ */
+function filesEntryToRegExp(entry) {
+  const expanded = entry
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\u0000")
+    .replace(/\*\*/g, "\u0001")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\u0000/g, "(?:.*/)?")
+    .replace(/\u0001/g, ".*");
+  return new RegExp(`^${expanded}$`);
+}
+
+/** Every markdown file under `relativeDir`, recursively. Missing directory ⇒ none. */
+async function collectMarkdownUnder(rootDir, relativeDir) {
+  let entries;
+  try {
+    entries = await readdir(path.join(rootDir, relativeDir), {
+      withFileTypes: true,
+    });
+  } catch {
+    return []; // not built / not present — nothing published from here
+  }
+  const found = [];
+  for (const entry of entries) {
+    const childPath = path.posix.join(relativeDir, entry.name);
+    if (entry.isDirectory()) {
+      if (UNWALKED_DIRECTORIES.has(entry.name)) continue;
+      found.push(...(await collectMarkdownUnder(rootDir, childPath)));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      found.push(childPath);
+    }
+  }
+  return found;
+}
+
+/**
+ * Markdown that is PUBLISHED to npm, derived from each package's own `files` entries rather than
  * listed here. Anything shipped in a tarball is unretractable once released, so the audit has to
  * track whatever `files` actually ships — enumerating today's matches would silently miss the next
- * directory someone adds. `.md` only (the audit is about copy, not built output), and CHANGELOGs are
- * excluded: they are append-only release history whose old entries must not be rewritten.
+ * file or directory someone adds. Both forms count: a recursive markdown glob, and a plain
+ * DIRECTORY entry (`skills`, `templates`), which ships every `.md` beneath it.
+ *
+ * CHANGELOGs are excluded — append-only release history whose old entries must not be rewritten.
  */
 async function collectPublishedMarkdownTargets(rootDir) {
   const targets = [];
-  for await (const manifestPath of glob("packages/*/package.json", {
-    cwd: rootDir,
-  })) {
-    const manifest = JSON.parse(
-      await readFile(path.join(rootDir, manifestPath), "utf8"),
-    );
+  const packageDirs = await readdir(path.join(rootDir, "packages"), {
+    withFileTypes: true,
+  });
+  for (const packageEntry of packageDirs) {
+    if (!packageEntry.isDirectory()) continue;
+    const packageDir = path.posix.join("packages", packageEntry.name);
+    let manifest;
+    try {
+      manifest = JSON.parse(
+        await readFile(path.join(rootDir, packageDir, "package.json"), "utf8"),
+      );
+    } catch {
+      continue; // no manifest ⇒ nothing is published from this directory
+    }
     if (!Array.isArray(manifest.files)) continue;
-    const packageDir = path.dirname(toPosix(manifestPath));
-    for (const entry of manifest.files) {
-      if (typeof entry !== "string" || !entry.endsWith(".md")) continue;
-      if (path.posix.basename(entry) === "CHANGELOG.md") continue;
-      for await (const match of glob(entry, {
-        cwd: path.join(rootDir, packageDir),
-      })) {
-        const relativePath = path.posix.join(packageDir, toPosix(match));
-        if (PROVIDER_NAMED_PACKAGE_DOCS.has(relativePath)) continue;
-        targets.push(relativePath);
-      }
+    // A directory entry ships every `.md` beneath it; a markdown entry may be a glob.
+    const matchers = manifest.files
+      .filter((entry) => typeof entry === "string")
+      .map((entry) =>
+        filesEntryToRegExp(entry.endsWith(".md") ? entry : `${entry}/**/*.md`),
+      );
+    if (matchers.length === 0) continue;
+    for (const markdownPath of await collectMarkdownUnder(
+      rootDir,
+      packageDir,
+    )) {
+      const relativeToPackage = path.posix.relative(packageDir, markdownPath);
+      if (path.posix.basename(relativeToPackage) === "CHANGELOG.md") continue;
+      if (!matchers.some((matcher) => matcher.test(relativeToPackage)))
+        continue;
+      targets.push(markdownPath);
     }
   }
   return targets;
@@ -152,13 +223,17 @@ async function collectPublishedMarkdownTargets(rootDir) {
  * reaches npm and cannot be edited afterwards — the one surface with no correction window at all.
  */
 async function collectChangesetTargets(rootDir) {
-  const targets = [];
-  for await (const match of glob(".changeset/*.md", { cwd: rootDir })) {
-    const relativePath = toPosix(match);
-    if (path.posix.basename(relativePath) === "README.md") continue;
-    targets.push(relativePath);
-  }
-  return targets;
+  const entries = await readdir(path.join(rootDir, ".changeset"), {
+    withFileTypes: true,
+  });
+  return entries
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.endsWith(".md") &&
+        entry.name !== "README.md",
+    )
+    .map((entry) => path.posix.join(".changeset", entry.name));
 }
 
 export async function collectProviderNeutralCopyTargets(
