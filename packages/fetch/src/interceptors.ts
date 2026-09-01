@@ -12,6 +12,8 @@ import {
 
 import type { FailureMode, TransactionPollingConfig } from "@sapiom/core";
 
+import { cloneRequest } from "./sapiom-request.js";
+
 /**
  * Authorization configuration for fetch
  */
@@ -304,7 +306,7 @@ export async function handleAuthorization(
   const headers = new Headers(request.headers);
   setHeader(headers, "X-Sapiom-Transaction-Id", transaction.id);
 
-  return new Request(request, { headers });
+  return cloneRequest(request, { headers });
 }
 
 /**
@@ -503,7 +505,7 @@ export async function handlePayment(
   setHeader(retryHeaders, headerName, paymentHeaderValue);
 
   return await globalThis.fetch(
-    new Request(requestForRetry, { headers: retryHeaders }),
+    cloneRequest(requestForRetry, { headers: retryHeaders }),
   );
 }
 
