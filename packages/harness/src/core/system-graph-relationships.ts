@@ -6,7 +6,6 @@ import ts from "typescript";
 import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,
-  workflowSourceFileMetadata,
   type AgentInvocationDetectionWarning,
   type AgentInvocationMode,
   type SourceEvidence,
@@ -533,6 +532,9 @@ const MODE_ORDER: Record<AgentInvocationMode, number> = {
 };
 
 const PROGRAM_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+const INVOCATION_ALIAS_MAX_VERTICES = 2_048;
+const INVOCATION_ALIAS_MAX_EDGES = 8_192;
+const INVOCATION_ALIAS_MAX_WORK = 32_768;
 
 type TargetResult = { kind: "literal"; slug: string } | { kind: "dynamic" };
 type WrapperTargetResult =
@@ -603,6 +605,14 @@ interface PackageSourceSnapshot {
   files: ReadonlyMap<string, string>;
   observedPaths: readonly string[];
   complete: boolean;
+}
+
+let toolsDeclarationAdmissionProbeForTest: ((path: string) => void) | null = null;
+
+export function setToolsDeclarationAdmissionProbeForTest(
+  next: ((path: string) => void) | null,
+): void {
+  toolsDeclarationAdmissionProbeForTest = next;
 }
 
 function packageRootForCaller(caller: AgentInventoryItem): string {
@@ -1038,52 +1048,122 @@ function collectInvocationMethodAliases(
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
 
-  const resolveWrites = (
-    key: string,
-    seen = new Set<string>(),
-  ): {
+  let edgeCount = 0;
+  for (const symbolWrites of writes.values()) {
+    edgeCount += symbolWrites.filter((write) => write.kind === "alias").length;
+  }
+  const dynamicMethod = {
+    kind: "dynamic",
+    modes: ["blocking", "async"],
+  } as const satisfies SystemGraphInvocationMethodResolution;
+  if (
+    writes.size > INVOCATION_ALIAS_MAX_VERTICES ||
+    edgeCount > INVOCATION_ALIAS_MAX_EDGES
+  ) {
+    return new Map(
+      [...writes.keys()].map((key) => [key, dynamicMethod]),
+    );
+  }
+
+  interface AliasResolution {
     resolutions: SystemGraphInvocationMethodResolution[];
     nonMethod: boolean;
     unresolved: boolean;
-  } => {
-    const symbolWrites = writes.get(key);
-    if (!symbolWrites || symbolWrites.length === 0) {
-      return { resolutions: [], nonMethod: false, unresolved: true };
-    }
-    if (seen.has(key)) {
-      return { resolutions: [], nonMethod: false, unresolved: true };
-    }
-    const nextSeen = new Set(seen);
-    nextSeen.add(key);
-    const resolutions: SystemGraphInvocationMethodResolution[] = [];
-    let nonMethod = false;
-    let unresolved = false;
-    for (const write of symbolWrites) {
-      if (write.kind === "method") {
-        resolutions.push(write.resolution);
-      } else if (write.kind === "non-method") {
-        nonMethod = true;
-      } else {
-        const resolved = resolveWrites(write.key, nextSeen);
-        resolutions.push(...resolved.resolutions);
-        nonMethod ||= resolved.nonMethod;
-        unresolved ||= resolved.unresolved;
+  }
+  const resolved = new Map<string, AliasResolution>();
+  const visiting = new Set<string>();
+  const resolvedState = new Set<string>();
+  let work = 0;
+  const dynamicAliasResolution = (): AliasResolution => ({
+    resolutions: [dynamicMethod],
+    nonMethod: false,
+    unresolved: true,
+  });
+
+  const resolveAlias = (start: string): AliasResolution => {
+    const cached = resolved.get(start);
+    if (cached) return cached;
+    const stack: Array<{ key: string; expanded: boolean }> = [
+      { key: start, expanded: false },
+    ];
+    while (stack.length > 0) {
+      work += 1;
+      if (work > INVOCATION_ALIAS_MAX_WORK) {
+        for (const key of writes.keys()) {
+          resolved.set(key, dynamicAliasResolution());
+          resolvedState.add(key);
+          visiting.delete(key);
+        }
+        return resolved.get(start)!;
       }
+      const frame = stack.pop()!;
+      if (resolved.has(frame.key)) continue;
+      const symbolWrites = writes.get(frame.key);
+      if (!symbolWrites || symbolWrites.length === 0) {
+        resolved.set(frame.key, {
+          resolutions: [],
+          nonMethod: false,
+          unresolved: true,
+        });
+        resolvedState.add(frame.key);
+        visiting.delete(frame.key);
+        continue;
+      }
+      if (!frame.expanded) {
+        if (visiting.has(frame.key)) {
+          resolved.set(frame.key, dynamicAliasResolution());
+          resolvedState.add(frame.key);
+          visiting.delete(frame.key);
+          continue;
+        }
+        if (resolvedState.has(frame.key)) continue;
+        visiting.add(frame.key);
+        stack.push({ key: frame.key, expanded: true });
+        for (const write of symbolWrites) {
+          if (write.kind !== "alias") continue;
+          if (visiting.has(write.key)) {
+            resolved.set(write.key, dynamicAliasResolution());
+            resolvedState.add(write.key);
+            visiting.delete(write.key);
+          } else if (!resolved.has(write.key)) {
+            stack.push({ key: write.key, expanded: false });
+          }
+        }
+        continue;
+      }
+      const resolutions: SystemGraphInvocationMethodResolution[] = [];
+      let nonMethod = false;
+      let unresolved = false;
+      for (const write of symbolWrites) {
+        if (write.kind === "method") {
+          resolutions.push(write.resolution);
+        } else if (write.kind === "non-method") {
+          nonMethod = true;
+        } else {
+          const alias = resolved.get(write.key) ?? dynamicAliasResolution();
+          resolutions.push(...alias.resolutions);
+          nonMethod ||= alias.nonMethod;
+          unresolved ||= alias.unresolved;
+        }
+      }
+      resolved.set(frame.key, { resolutions, nonMethod, unresolved });
+      resolvedState.add(frame.key);
+      visiting.delete(frame.key);
     }
-    return { resolutions, nonMethod, unresolved };
+    return resolved.get(start) ?? dynamicAliasResolution();
   };
 
   for (const [key, symbolWrites] of writes) {
-    const resolved = resolveWrites(key);
-    if (resolved.resolutions.length === 0) continue;
+    const alias = resolveAlias(key);
+    if (alias.resolutions.length === 0) continue;
     methodAliases.set(
       key,
       symbolWrites.length === 1 &&
-        resolved.resolutions.length === 1 &&
-        !resolved.nonMethod &&
-        !resolved.unresolved &&
-        resolved.resolutions[0]!.kind === "resolved"
-        ? resolved.resolutions[0]!
+        alias.resolutions.length === 1 &&
+        !alias.nonMethod &&
+        !alias.unresolved &&
+        alias.resolutions[0]!.kind === "resolved"
+        ? alias.resolutions[0]!
         : { kind: "dynamic", modes: ["blocking", "async"] },
     );
   }
@@ -1290,6 +1370,31 @@ function snapshotMemberPath(
     : null;
 }
 
+async function admittedToolsDeclarationPath(
+  packageRoot: string,
+): Promise<"absent" | "inadmissible" | { status: "regular"; path: string }> {
+  let current = packageRoot;
+  const segments = ["node_modules", "@sapiom", "tools", "index.d.ts"];
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]!);
+    let stat: import("node:fs").Stats;
+    try {
+      toolsDeclarationAdmissionProbeForTest?.(current);
+      stat = await fs.lstat(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT" || code === "ENOTDIR"
+        ? "absent"
+        : "inadmissible";
+    }
+    if (stat.isSymbolicLink()) return "inadmissible";
+    const final = index === segments.length - 1;
+    if (final) return stat.isFile() ? { status: "regular", path: current } : "inadmissible";
+    if (!stat.isDirectory()) return "inadmissible";
+  }
+  return "absent";
+}
+
 async function snapshotPackageSources(
   packageRoot: string,
   readHooks: WorkflowSourceReadHooks,
@@ -1312,48 +1417,29 @@ async function snapshotPackageSources(
     }
     files.set(canonicalFile, content);
   }
-  const toolsDeclaration = lexicalAbsolutePath(
-    path.join(
-      canonicalPackageRoot,
-      "node_modules",
-      "@sapiom",
-      "tools",
-      "index.d.ts",
-    ),
+  const toolsDeclaration = path.join(
     canonicalPackageRoot,
+    "node_modules",
+    "@sapiom",
+    "tools",
+    "index.d.ts",
   );
-  let toolsDeclarationExists = true;
-  try {
-    await fs.lstat(toolsDeclaration);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      toolsDeclarationExists = false;
-    } else {
-      complete = false;
-      observedPaths.add(toolsDeclaration);
-    }
-  }
-  if (toolsDeclarationExists) {
-    const toolsDeclarationMetadata = await workflowSourceFileMetadata(
+  const toolsDeclarationAdmission =
+    await admittedToolsDeclarationPath(canonicalPackageRoot);
+  if (toolsDeclarationAdmission === "inadmissible") {
+    complete = false;
+    observedPaths.add(toolsDeclaration);
+  } else if (toolsDeclarationAdmission !== "absent") {
+    const toolsDeclarationSource = await readWorkflowSourceFile(
       canonicalPackageRoot,
-      toolsDeclaration,
+      toolsDeclarationAdmission.path,
+      readHooks,
     );
-    if (toolsDeclarationMetadata.status === "regular") {
-      const toolsDeclarationSource = await readWorkflowSourceFile(
-        canonicalPackageRoot,
-        toolsDeclaration,
-        readHooks,
-      );
-      if (toolsDeclarationSource === null) {
-        complete = false;
-      } else {
-        files.set(toolsDeclaration, toolsDeclarationSource);
-        observedPaths.add(toolsDeclaration);
-      }
-    } else {
+    if (toolsDeclarationSource === null) {
       complete = false;
-      observedPaths.add(toolsDeclaration);
+    } else {
+      files.set(toolsDeclarationAdmission.path, toolsDeclarationSource);
+      observedPaths.add(toolsDeclarationAdmission.path);
     }
   }
   return {

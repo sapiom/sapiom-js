@@ -8,6 +8,7 @@ import {
   CachedAgentInvocationProvider,
   SourceAgentInvocationProvider,
   createSystemGraphPackageCompilerResult,
+  setToolsDeclarationAdmissionProbeForTest,
   type AgentInvocationProvider,
   type AgentInvocationProviderResult,
 } from "./system-graph-relationships.js";
@@ -87,6 +88,7 @@ async function packageWithCallers(
 
 afterEach(async () => {
   clearCanonicalGraphPathCacheForTest();
+  setToolsDeclarationAdmissionProbeForTest(null);
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -501,6 +503,186 @@ await agents.run({ definition: "research" });
     ).toEqual([]);
   });
 
+  it("handles regular and missing tools declarations deterministically", async () => {
+    const [regular] = await packageWithCallers(
+      {
+        "node_modules/@sapiom/tools/index.d.ts": `
+export declare const agents: {
+  run(spec: { definition: string }): Promise<unknown>;
+};
+`,
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+await agents.run({ definition: "research" });
+`,
+      },
+      ["coordinator"],
+    );
+    const missingRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-missing-tools-test-"),
+    );
+    temporaryRoots.push(missingRoot);
+    await fs.mkdir(path.join(missingRoot, "agents", "coordinator"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(missingRoot, "agents", "coordinator", "index.ts"),
+      "export const idle = true;\n",
+    );
+
+    const regularResult = await createSystemGraphPackageCompilerResult({
+      packageRoot: path.resolve(regular!.sourceRoot, "../.."),
+    });
+    const missingResult = await createSystemGraphPackageCompilerResult({
+      packageRoot: missingRoot,
+    });
+
+    expect(regularResult.complete).toBe(true);
+    expect([...regularResult.sources.keys()]).toContain(
+      path.resolve(regular!.sourceRoot, "../../node_modules/@sapiom/tools/index.d.ts"),
+    );
+    expect(missingResult.complete).toBe(true);
+    expect([...missingResult.sources.keys()]).not.toContain(
+      path.join(missingRoot, "node_modules", "@sapiom", "tools", "index.d.ts"),
+    );
+  });
+
+  it("marks directory and symlink tools declarations partial without reading them", async () => {
+    const cases: Array<{
+      name: string;
+      setup: (root: string, external: string) => Promise<void>;
+    }> = [
+      {
+        name: "directory",
+        setup: async (root) => {
+          await fs.mkdir(
+            path.join(root, "node_modules", "@sapiom", "tools", "index.d.ts"),
+            { recursive: true },
+          );
+        },
+      },
+      {
+        name: "dangling-final-symlink",
+        setup: async (root) => {
+          await fs.mkdir(path.join(root, "node_modules", "@sapiom", "tools"), {
+            recursive: true,
+          });
+          await fs.symlink(
+            path.join(root, "missing.d.ts"),
+            path.join(root, "node_modules", "@sapiom", "tools", "index.d.ts"),
+          );
+        },
+      },
+      {
+        name: "internal-final-symlink",
+        setup: async (root) => {
+          await fs.mkdir(path.join(root, "node_modules", "@sapiom", "tools"), {
+            recursive: true,
+          });
+          await fs.writeFile(path.join(root, "internal.d.ts"), "export {};\n");
+          await fs.symlink(
+            path.join(root, "internal.d.ts"),
+            path.join(root, "node_modules", "@sapiom", "tools", "index.d.ts"),
+          );
+        },
+      },
+      {
+        name: "external-final-symlink",
+        setup: async (root, external) => {
+          await fs.mkdir(path.join(root, "node_modules", "@sapiom", "tools"), {
+            recursive: true,
+          });
+          await fs.writeFile(path.join(external, "index.d.ts"), "export {};\n");
+          await fs.symlink(
+            path.join(external, "index.d.ts"),
+            path.join(root, "node_modules", "@sapiom", "tools", "index.d.ts"),
+          );
+        },
+      },
+    ];
+
+    for (const entry of cases) {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), `system-graph-tools-${entry.name}-`),
+      );
+      const external = await fs.mkdtemp(
+        path.join(os.tmpdir(), `system-graph-tools-${entry.name}-external-`),
+      );
+      temporaryRoots.push(root, external);
+      await fs.mkdir(path.join(root, "agents", "coordinator"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(root, "agents", "coordinator", "index.ts"),
+        "export const idle = true;\n",
+      );
+      await entry.setup(root, external);
+      const onBytesRead = vi.fn();
+
+      const result = await createSystemGraphPackageCompilerResult({
+        packageRoot: root,
+        readHooks: { onBytesRead },
+      });
+
+      expect(result.complete, entry.name).toBe(false);
+      expect(onBytesRead).not.toHaveBeenCalledWith(
+        path.join(root, "node_modules", "@sapiom", "tools", "index.d.ts"),
+        expect.any(Number),
+      );
+    }
+  });
+
+  it("rejects a symlinked tools declaration ancestor before descendant probes", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-tools-ancestor-test-"),
+    );
+    const external = await fs.mkdtemp(
+      path.join(os.tmpdir(), "system-graph-tools-ancestor-external-test-"),
+    );
+    temporaryRoots.push(root, external);
+    await fs.mkdir(path.join(root, "agents", "coordinator"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "agents", "coordinator", "index.ts"),
+      "export const idle = true;\n",
+    );
+    await fs.mkdir(path.join(root, "node_modules", "@sapiom"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(external, "tools"), { recursive: true });
+    await fs.writeFile(
+      path.join(external, "tools", "index.d.ts"),
+      "export {};\n",
+    );
+    await fs.symlink(
+      path.join(external, "tools"),
+      path.join(root, "node_modules", "@sapiom", "tools"),
+      "dir",
+    );
+    const descendant = path.join(
+      root,
+      "node_modules",
+      "@sapiom",
+      "tools",
+      "index.d.ts",
+    );
+    const onBytesRead = vi.fn();
+    const lstatPaths: string[] = [];
+    setToolsDeclarationAdmissionProbeForTest((candidate) => {
+      lstatPaths.push(candidate);
+    });
+
+    const result = await createSystemGraphPackageCompilerResult({
+      packageRoot: root,
+      readHooks: { onBytesRead },
+    });
+
+    expect(result.complete).toBe(false);
+    expect(lstatPaths).not.toContain(descendant);
+    expect(onBytesRead).not.toHaveBeenCalledWith(descendant, expect.any(Number));
+  });
+
   it("resolves computed methods, method aliases, assignments, and destructuring", async () => {
     const [coordinator] = await packageWithCallers(
       {
@@ -600,6 +782,138 @@ invoke({ definition: "research" });
       },
     ]);
     expect(result.warnings).toEqual([]);
+  });
+
+  it("resolves long acyclic alias chains within bounded work", async () => {
+    const chainLength = 1_000;
+    const lines = [
+      'import { agents } from "@sapiom/tools";',
+      "",
+      "const alias0 = agents.run;",
+      ...Array.from(
+        { length: chainLength },
+        (_, index) => `const alias${index + 1} = alias${index};`,
+      ),
+      `alias${chainLength}({ definition: "research" });`,
+    ];
+    const [coordinator] = await packageWithCallers(
+      { "agents/coordinator/index.ts": `${lines.join("\n")}\n` },
+      ["coordinator"],
+    );
+
+    const started = performance.now();
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+    const elapsed = performance.now() - started;
+
+    expect(elapsed).toBeLessThan(5_000);
+    expect(result.invocations).toEqual([
+      {
+        target: "research",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: chainLength + 4, column: 1 }],
+      },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("resolves aliases independently of declaration order", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+const invoke = run;
+const run = agents.run;
+invoke({ definition: "research" });
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([
+      {
+        target: "research",
+        mode: "blocking",
+        evidence: [{ file: "index.ts", line: 6, column: 1 }],
+      },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("degrades method alias cycles, including anchored cycles", async () => {
+    const [coordinator] = await packageWithCallers(
+      {
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+let first = agents.run;
+let second = first;
+first = second;
+second({ definition: "research" });
+`,
+      },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: 7, column: 1 },
+      },
+    ]);
+  });
+
+  it("degrades alias graphs beyond deterministic caps", async () => {
+    const chainLength = 2_050;
+    const lines = [
+      'import { agents } from "@sapiom/tools";',
+      "",
+      "const alias0 = agents.run;",
+      ...Array.from(
+        { length: chainLength },
+        (_, index) => `const alias${index + 1} = alias${index};`,
+      ),
+      `alias${chainLength}({ definition: "research" });`,
+    ];
+    const [coordinator] = await packageWithCallers(
+      { "agents/coordinator/index.ts": `${lines.join("\n")}\n` },
+      ["coordinator"],
+    );
+
+    const result = await new SourceAgentInvocationProvider().listInvocations(
+      coordinator!,
+    );
+
+    expect(result.invocations).toEqual([]);
+    expect(result.warnings).toEqual([
+      {
+        code: "dynamic-target",
+        mode: "blocking",
+        evidence: { file: "index.ts", line: chainLength + 4, column: 1 },
+      },
+      {
+        code: "dynamic-target",
+        mode: "async",
+        evidence: { file: "index.ts", line: chainLength + 4, column: 1 },
+      },
+    ]);
   });
 
   it("degrades ambiguous transitive method aliases instead of silently completing", async () => {
