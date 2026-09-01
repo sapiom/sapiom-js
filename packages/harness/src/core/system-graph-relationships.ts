@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import ts from "typescript";
 
 import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,
+  workflowSourceFileMetadata,
   type AgentInvocationDetectionWarning,
   type AgentInvocationMode,
   type SourceEvidence,
@@ -578,6 +580,7 @@ type InvocationMethodAliasMap = ReadonlyMap<
 >;
 type InvocationMethodWrite =
   | { kind: "method"; resolution: SystemGraphInvocationMethodResolution }
+  | { kind: "alias"; key: string }
   | { kind: "non-method" };
 
 interface PackageInvocation {
@@ -931,7 +934,6 @@ function symbolWriteKey(
 function methodWriteFromExpression(
   expression: ts.Expression,
   checker: ts.TypeChecker,
-  resolvedAliases: InvocationMethodAliasMap,
 ): InvocationMethodWrite {
   const direct = directInvocationMethodResolution(expression, checker);
   if (direct) return { kind: "method", resolution: direct };
@@ -940,14 +942,12 @@ function methodWriteFromExpression(
     const whenTrue = methodWriteFromExpression(
       current.whenTrue,
       checker,
-      resolvedAliases,
     );
     const whenFalse = methodWriteFromExpression(
       current.whenFalse,
       checker,
-      resolvedAliases,
     );
-    return whenTrue.kind === "method" || whenFalse.kind === "method"
+    return whenTrue.kind !== "non-method" || whenFalse.kind !== "non-method"
       ? { kind: "method", resolution: { kind: "dynamic", modes: ["blocking", "async"] } }
       : { kind: "non-method" };
   }
@@ -955,10 +955,7 @@ function methodWriteFromExpression(
     return { kind: "non-method" };
   }
   const key = symbolWriteKey(checker, current);
-  const aliased = key ? resolvedAliases.get(key) ?? null : null;
-  return aliased
-    ? { kind: "method", resolution: aliased }
-    : { kind: "non-method" };
+  return key ? { kind: "alias", key } : { kind: "non-method" };
 }
 
 function addMethodAliasWrite(
@@ -1020,7 +1017,7 @@ function collectInvocationMethodAliases(
           writes,
           checker,
           node.name,
-          methodWriteFromExpression(node.initializer, checker, methodAliases),
+          methodWriteFromExpression(node.initializer, checker),
         );
       }
     } else if (
@@ -1033,26 +1030,60 @@ function collectInvocationMethodAliases(
           writes,
           checker,
           left,
-          methodWriteFromExpression(node.right, checker, methodAliases),
+          methodWriteFromExpression(node.right, checker),
         );
       }
     }
     ts.forEachChild(node, visit);
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
+
+  const resolveWrites = (
+    key: string,
+    seen = new Set<string>(),
+  ): {
+    resolutions: SystemGraphInvocationMethodResolution[];
+    nonMethod: boolean;
+    unresolved: boolean;
+  } => {
+    const symbolWrites = writes.get(key);
+    if (!symbolWrites || symbolWrites.length === 0) {
+      return { resolutions: [], nonMethod: false, unresolved: true };
+    }
+    if (seen.has(key)) {
+      return { resolutions: [], nonMethod: false, unresolved: true };
+    }
+    const nextSeen = new Set(seen);
+    nextSeen.add(key);
+    const resolutions: SystemGraphInvocationMethodResolution[] = [];
+    let nonMethod = false;
+    let unresolved = false;
+    for (const write of symbolWrites) {
+      if (write.kind === "method") {
+        resolutions.push(write.resolution);
+      } else if (write.kind === "non-method") {
+        nonMethod = true;
+      } else {
+        const resolved = resolveWrites(write.key, nextSeen);
+        resolutions.push(...resolved.resolutions);
+        nonMethod ||= resolved.nonMethod;
+        unresolved ||= resolved.unresolved;
+      }
+    }
+    return { resolutions, nonMethod, unresolved };
+  };
+
   for (const [key, symbolWrites] of writes) {
-    const methodWrites = symbolWrites.filter(
-      (write): write is Extract<InvocationMethodWrite, { kind: "method" }> =>
-        write.kind === "method",
-    );
-    if (methodWrites.length === 0) continue;
-    const hasNonMethodWrite = symbolWrites.some((write) => write.kind === "non-method");
+    const resolved = resolveWrites(key);
+    if (resolved.resolutions.length === 0) continue;
     methodAliases.set(
       key,
-      methodWrites.length === 1 &&
-        !hasNonMethodWrite &&
-        methodWrites[0]!.resolution.kind === "resolved"
-        ? methodWrites[0]!.resolution
+      symbolWrites.length === 1 &&
+        resolved.resolutions.length === 1 &&
+        !resolved.nonMethod &&
+        !resolved.unresolved &&
+        resolved.resolutions[0]!.kind === "resolved"
+        ? resolved.resolutions[0]!
         : { kind: "dynamic", modes: ["blocking", "async"] },
     );
   }
@@ -1281,7 +1312,7 @@ async function snapshotPackageSources(
     }
     files.set(canonicalFile, content);
   }
-  const toolsDeclaration = canonicalGraphPath(
+  const toolsDeclaration = lexicalAbsolutePath(
     path.join(
       canonicalPackageRoot,
       "node_modules",
@@ -1289,15 +1320,41 @@ async function snapshotPackageSources(
       "tools",
       "index.d.ts",
     ),
-  );
-  const toolsDeclarationSource = await readWorkflowSourceFile(
     canonicalPackageRoot,
-    toolsDeclaration,
-    readHooks,
   );
-  if (toolsDeclarationSource !== null) {
-    files.set(toolsDeclaration, toolsDeclarationSource);
-    observedPaths.add(toolsDeclaration);
+  let toolsDeclarationExists = true;
+  try {
+    await fs.lstat(toolsDeclaration);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      toolsDeclarationExists = false;
+    } else {
+      complete = false;
+      observedPaths.add(toolsDeclaration);
+    }
+  }
+  if (toolsDeclarationExists) {
+    const toolsDeclarationMetadata = await workflowSourceFileMetadata(
+      canonicalPackageRoot,
+      toolsDeclaration,
+    );
+    if (toolsDeclarationMetadata.status === "regular") {
+      const toolsDeclarationSource = await readWorkflowSourceFile(
+        canonicalPackageRoot,
+        toolsDeclaration,
+        readHooks,
+      );
+      if (toolsDeclarationSource === null) {
+        complete = false;
+      } else {
+        files.set(toolsDeclaration, toolsDeclarationSource);
+        observedPaths.add(toolsDeclaration);
+      }
+    } else {
+      complete = false;
+      observedPaths.add(toolsDeclaration);
+    }
   }
   return {
     packageRoot: canonicalPackageRoot,
