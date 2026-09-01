@@ -67,10 +67,16 @@ test.describe("the header + opens a project", () => {
     await page.getByTestId("open-project").click();
 
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
-    // The settings mutation refreshes the server-issued scope catalog in place:
-    // a just-opened empty project is graphable immediately, without a reload.
-    await page.getByTestId("project-select-blank-slate").click();
-    await expect(page.getByTestId("system-graph-empty")).toBeVisible();
+    const group = page.getByTestId("workspace-group-blank-slate");
+    // First visit lands on the pinned Agent Map without a label click.
+    await expect(group.getByTestId("agent-map-row")).toBeVisible();
+    await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByTestId("agent-map-empty")).toHaveText(
+      "Nothing generated yet",
+    );
     // The row is REMEMBERED, not just rendered: `recentDirs` is the harness's
     // one workspace list, and the whole rail re-derives from it when the axis
     // changes. (A cross-RELOAD assertion belongs against a real server — the
@@ -169,7 +175,9 @@ test.describe("the two questions stay two controls", () => {
     await expect(page.getByTestId("aw-add")).toHaveCount(0);
     // But the other question is one press away rather than a closed dialog,
     // and it is NAMED for the outcome so it cannot be mistaken for the primary.
-    await expect(page.getByTestId("open-project")).toHaveText("Open as project");
+    await expect(page.getByTestId("open-project")).toHaveText(
+      "Open as project",
+    );
     await expect(page.getByTestId("open-project")).toBeEnabled();
     await page.getByTestId("open-project").click();
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();

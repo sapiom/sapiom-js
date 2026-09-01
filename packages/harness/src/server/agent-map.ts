@@ -7,8 +7,12 @@ import {
   type AgentMapWorkspaceResponse,
   type PlannerMessageRequest,
   type PlannerSessionRequest,
+  type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
-import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
+import {
+  SPAWNABLE_HARNESS_KINDS,
+  type WorkflowInfo,
+} from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import {
   AgentMapWorkspaceStore,
@@ -19,6 +23,10 @@ import {
   StudioProjectCatalogError,
 } from "../core/studio-project-catalog.js";
 import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import {
+  StudioWorkspacePreferenceStore,
+  StudioWorkspacePreferenceStoreError,
+} from "../core/studio-workspace-preferences.js";
 import {
   PlanningSessionError,
   type PlanningSessionService,
@@ -32,6 +40,15 @@ import {
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
   store: AgentMapWorkspaceStore;
+  preferences: StudioWorkspacePreferenceStore;
+  /** Current trusted principal; authentication can change without a restart. */
+  currentUserId: () => string;
+  listWorkflows: () =>
+    | readonly WorkflowInfo[]
+    | Promise<readonly WorkflowInfo[]>;
+  isWorkflowScanComplete: (
+    roots: readonly string[],
+  ) => boolean | Promise<boolean>;
   /** Existing allow-listed roots only; this callback must not scan source. */
   listWorkspaceScopes: () =>
     | readonly WorkspaceScopeSummary[]
@@ -85,6 +102,35 @@ function errorBody(code: AgentMapErrorCode): AgentMapErrorResponse {
 const rootAssociationSchema = z.object({ root: z.string().min(1) }).strict();
 const createProjectSchema = z
   .object({ displayName: z.string().min(1) })
+  .strict();
+const studioProjectIdSchema = z
+  .string()
+  .regex(
+    /^project_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+const studioAgentIdSchema = z
+  .string()
+  .regex(
+    /^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+const putCurrentWorkspaceSchema = z
+  .object({
+    selection: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("agent-map"),
+          projectId: studioProjectIdSchema,
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("agent"),
+          projectId: studioProjectIdSchema,
+          agentId: studioAgentIdSchema,
+        })
+        .strict(),
+    ]),
+  })
   .strict();
 
 async function allowlistedScope(
@@ -206,7 +252,19 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       }
     },
   );
-
+  const projectContext = async (projectId: string) => {
+    const reconciled = await options.catalog.reconcile(
+      await options.listWorkspaceScopes(),
+    );
+    const project = await options.catalog.resolve(projectId);
+    if (!project) return null;
+    return {
+      project,
+      roots: reconciled.workspaceScopes
+        .filter((scope) => scope.projectId === project.projectId)
+        .map((scope) => scope.cwd),
+    };
+  };
   router.get("/projects/:projectId/agent-map/workspace", async (req, res) => {
     try {
       await options.catalog.reconcile(await options.listWorkspaceScopes());
@@ -226,6 +284,67 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     } catch (error) {
       const bounded =
         error instanceof AgentMapWorkspaceStoreError ||
+        error instanceof StudioProjectCatalogError
+          ? error.code
+          : "storage_unavailable";
+      res
+        .status(bounded === "storage_unavailable" ? 503 : 500)
+        .json(errorBody(bounded));
+    }
+  });
+
+  router.get("/projects/:projectId/current-workspace", async (req, res) => {
+    try {
+      const context = await projectContext(req.params.projectId);
+      if (!context) {
+        res.status(404).json(errorBody("project_not_found"));
+        return;
+      }
+      const current = await options.preferences.current(
+        options.currentUserId(),
+        context.project.projectId,
+        context.roots,
+        await options.listWorkflows(),
+        await options.isWorkflowScanComplete(context.roots),
+      );
+      res.status(200).setHeader("Cache-Control", "no-store").json(current);
+    } catch (error) {
+      const bounded =
+        error instanceof StudioWorkspacePreferenceStoreError ||
+        error instanceof StudioProjectCatalogError
+          ? error.code
+          : "storage_unavailable";
+      res
+        .status(bounded === "storage_unavailable" ? 503 : 500)
+        .json(errorBody(bounded));
+    }
+  });
+
+  router.put("/projects/:projectId/current-workspace", async (req, res) => {
+    try {
+      const context = await projectContext(req.params.projectId);
+      if (!context) {
+        res.status(404).json(errorBody("project_not_found"));
+        return;
+      }
+      const parsed = putCurrentWorkspaceSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json(errorBody("malformed_state"));
+        return;
+      }
+      const selection: StudioWorkspaceSelection = parsed.data.selection;
+      const current = await options.preferences.put(
+        options.currentUserId(),
+        context.project.projectId,
+        selection,
+        context.roots,
+        await options.listWorkflows(),
+        await options.isWorkflowScanComplete(context.roots),
+      );
+      res.status(200).setHeader("Cache-Control", "no-store").json(current);
+    } catch (error) {
+      const bounded =
+        error instanceof StudioWorkspacePreferenceStoreError ||
         error instanceof StudioProjectCatalogError
           ? error.code
           : "storage_unavailable";

@@ -46,8 +46,11 @@ import type {
   PlannerMessageRequest,
   PlannerSessionRequest,
   PlannerSessionResponse,
+  PutStudioCurrentWorkspaceRequest,
+  StudioCurrentWorkspaceResponse,
   StudioProjectId,
   StudioProjectSummary,
+  StudioWorkspaceSelection,
 } from "@shared/agent-map";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
@@ -58,7 +61,10 @@ import {
   parseSystemGraphNavigation,
   parseSystemGraphSnapshot,
 } from "./system-graph";
-import { parseAgentMapWorkspaceResponse } from "./agent-map";
+import {
+  parseAgentMapWorkspaceResponse,
+  parseStudioCurrentWorkspaceResponse,
+} from "./agent-map";
 import { refuseMove, remapUnder } from "./agent-move";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
@@ -360,6 +366,13 @@ export interface HarnessApi {
   getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
+  getStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+  ): Promise<StudioCurrentWorkspaceResponse>;
+  putStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+    selection: StudioWorkspaceSelection,
+  ): Promise<StudioCurrentWorkspaceResponse>;
   openPlannerSession(
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
@@ -609,6 +622,31 @@ class RealApi implements HarnessApi {
       `/api/projects/${encodeURIComponent(projectId)}/agent-map/workspace`,
     );
     return parseAgentMapWorkspaceResponse(value, projectId);
+  }
+
+  async getStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+  ): Promise<StudioCurrentWorkspaceResponse> {
+    const value = await this.request<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/current-workspace`,
+    );
+    return parseStudioCurrentWorkspaceResponse(value, projectId);
+  }
+
+  async putStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+    selection: StudioWorkspaceSelection,
+  ): Promise<StudioCurrentWorkspaceResponse> {
+    const value = await this.request<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/current-workspace`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          selection,
+        } satisfies PutStudioCurrentWorkspaceRequest),
+      },
+    );
+    return parseStudioCurrentWorkspaceResponse(value, projectId);
   }
 
   openPlannerSession(
@@ -1704,6 +1742,10 @@ export class MockApi implements HarnessApi {
    * opaque keys without putting filesystem paths into graph payloads. */
   private workspaceKeys = new Map<string, WorkspaceKey>();
   private studioProjectIds = new Map<string, StudioProjectId>();
+  private studioPreferences = new Map<
+    StudioProjectId,
+    StudioWorkspaceSelection
+  >();
   private systemGraphSnapshots = new Map<WorkspaceKey, SystemGraphSnapshot>();
   private systemGraphNavigation = new Map<
     WorkspaceKey,
@@ -1937,6 +1979,17 @@ export class MockApi implements HarnessApi {
   }
 
   private studioProjects(): StudioProjectSummary[] {
+    // Keep one deterministic mock seam for the legacy System Graph fallback.
+    // Production authority is determined by the server response; this query
+    // parameter only lets browser tests model a server that has no durable
+    // Studio project summaries yet.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockStudioProjects") ===
+        "absent"
+    ) {
+      return [];
+    }
     const timestamp = "2026-01-01T00:00:00.000Z";
     return this.workspaceScopes().map((scope, index) => ({
       projectId: scope.projectId!,
@@ -1951,6 +2004,27 @@ export class MockApi implements HarnessApi {
       createdAt: timestamp,
       updatedAt: timestamp,
     }));
+  }
+
+  private studioWorkflows(): WorkflowInfo[] {
+    const scopes = this.workspaceScopes();
+    return this.workflows.map((workflow, index) => {
+      const bindings = scopes
+        .filter(
+          (candidate) =>
+            candidate.projectId && isWithinDir(candidate.cwd, workflow.path),
+        )
+        .map((scope, bindingIndex) => ({
+          projectId: scope.projectId!,
+          agentId: `agent_00000000-0000-4000-${String(bindingIndex).padStart(4, "0")}-${String(index + 1).padStart(12, "0")}`,
+        }));
+      return bindings.length > 0
+        ? {
+            ...workflow,
+            studioBindings: bindings,
+          }
+        : workflow;
+    });
   }
 
   async getState(): Promise<AppState> {
@@ -2023,7 +2097,7 @@ export class MockApi implements HarnessApi {
           ? false
           : true,
       sessions: this.sessions,
-      workflows: this.workflows,
+      workflows: this.studioWorkflows(),
       workspaceScopes: this.workspaceScopes(),
       studioProjects: this.studioProjects(),
       macros: MOCK_MACROS,
@@ -2068,6 +2142,56 @@ export class MockApi implements HarnessApi {
       },
       projectId,
     );
+  }
+
+  async getStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+  ): Promise<StudioCurrentWorkspaceResponse> {
+    await delay();
+    const agents = this.studioWorkflows().flatMap((workflow) => {
+      const binding = workflow.studioBindings?.find(
+        (candidate) => candidate.projectId === projectId,
+      );
+      return binding
+        ? [
+            {
+              agentId: binding.agentId,
+              name: workflow.name,
+              definitionId: workflow.definitionId,
+            },
+          ]
+        : [];
+    });
+    const requested = this.studioPreferences.get(projectId);
+    const valid =
+      requested?.kind !== "agent" ||
+      agents.some((agent) => agent.agentId === requested.agentId);
+    const repaired = Boolean(requested && !valid);
+    const selection =
+      requested && valid
+        ? requested
+        : { kind: "agent-map" as const, projectId };
+    if (repaired) this.studioPreferences.set(projectId, selection);
+    return parseStudioCurrentWorkspaceResponse(
+      { projectId, selection, agents, repaired },
+      projectId,
+    );
+  }
+
+  async putStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+    requested: StudioWorkspaceSelection,
+  ): Promise<StudioCurrentWorkspaceResponse> {
+    const current = await this.getStudioCurrentWorkspace(projectId);
+    const valid =
+      requested.projectId === projectId &&
+      (requested.kind === "agent-map" ||
+        current.agents.some((agent) => agent.agentId === requested.agentId));
+    const selection = valid
+      ? requested
+      : { kind: "agent-map" as const, projectId };
+    this.studioPreferences.set(projectId, selection);
+    return { ...current, selection, repaired: !valid };
   }
 
   async openPlannerSession(
@@ -2119,7 +2243,9 @@ export class MockApi implements HarnessApi {
     sessionId: string,
     request: PlannerMessageRequest,
   ): Promise<void> {
-    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    const session = this.sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
     if (session?.planning?.identity.projectId !== projectId) {
       throw new ApiError(
         403,
@@ -2134,7 +2260,9 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
     sessionId: string,
   ): Promise<void> {
-    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    const session = this.sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
     if (session?.planning?.identity.projectId !== projectId) {
       throw new ApiError(
         403,

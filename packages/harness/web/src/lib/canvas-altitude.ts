@@ -20,6 +20,7 @@
  * module exists to make impossible.
  */
 import type { WorkspaceKey, WorkspaceScopeSummary } from "@shared/system-graph";
+import type { StudioWorkspaceSelection } from "@shared/agent-map";
 
 import { basenameOf, samePath } from "./paths";
 import { projectRootForAgent } from "./session-scope";
@@ -40,6 +41,23 @@ export type CanvasAltitude = "map" | "board";
 export type CanvasView =
   | { altitude: "map"; project: ProjectRef }
   | { altitude: "board"; agentPath: string | null };
+
+/** Path-free altitude contract used by the plan-first project branch. */
+export type StudioCanvasView =
+  | { altitude: "map"; projectId: string }
+  | { altitude: "board"; projectId: string; agentId: string };
+
+export function studioCanvasView(
+  selection: StudioWorkspaceSelection,
+): StudioCanvasView {
+  return selection.kind === "agent-map"
+    ? { altitude: "map", projectId: selection.projectId }
+    : {
+        altitude: "board",
+        projectId: selection.projectId,
+        agentId: selection.agentId,
+      };
+}
 
 /**
  * The one answer to "what is the canvas showing", from the one selection.

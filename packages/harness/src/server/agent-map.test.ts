@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
   PlannerGreetingRetryUnavailableError,
   type PlannerGreetingCoordinator,
@@ -53,6 +54,7 @@ describe("createAgentMapRouter", () => {
     const project = (await catalog.reconcile([scope])).projects[0]!;
     const listWorkspaceScopes = vi.fn(async () => [...scopes]);
     const onEvent = vi.fn();
+    let currentUserId = "user-test";
     const store = new AgentMapWorkspaceStore(
       path.join(stateRoot, "agent-map"),
       { onEvent },
@@ -63,7 +65,26 @@ describe("createAgentMapRouter", () => {
     app.use("/api", express.json());
     app.use(
       "/api",
-      createAgentMapRouter({ catalog, store, listWorkspaceScopes, ...planner }),
+      createAgentMapRouter({
+        catalog,
+        store,
+        preferences: new StudioWorkspacePreferenceStore(
+          path.join(stateRoot, "studio-workspace-preferences.json"),
+        ),
+        currentUserId: () => currentUserId,
+        listWorkflows: () => [
+          {
+            name: "Planner",
+            path: path.join(privateRoot, "planner"),
+            definitionId: null,
+            definitionSlug: null,
+            source: "scan" as const,
+          },
+        ],
+        isWorkflowScanComplete: () => true,
+        listWorkspaceScopes,
+        ...planner,
+      }),
     );
     server = app.listen(0);
     const address = server.address() as AddressInfo;
@@ -76,6 +97,9 @@ describe("createAgentMapRouter", () => {
       scopes,
       listWorkspaceScopes,
       onEvent,
+      setCurrentUserId: (userId: string) => {
+        currentUserId = userId;
+      },
     };
   }
 
@@ -243,6 +267,136 @@ describe("createAgentMapRouter", () => {
     expect(
       (await fixture.catalog.resolve(fixture.project.projectId))?.bindings,
     ).toHaveLength(1);
+  });
+
+  it("defaults to Agent Map, persists a valid opaque agent, and repairs a foreign id", async () => {
+    const fixture = await start();
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/current-workspace`;
+    const headers = {
+      "X-Harness-Token": "test-token",
+      "Content-Type": "application/json",
+    };
+    const first = await fetch(route, { headers });
+    const initial = (await first.json()) as {
+      selection: { kind: string };
+      agents: Array<{ agentId: string }>;
+    };
+    expect(initial.selection.kind).toBe("agent-map");
+    expect(JSON.stringify(initial)).not.toContain(fixture.privateRoot);
+
+    const selected = await fetch(route, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId: initial.agents[0]!.agentId,
+        },
+      }),
+    });
+    expect(await selected.json()).toMatchObject({
+      repaired: false,
+      selection: { kind: "agent", agentId: initial.agents[0]!.agentId },
+    });
+
+    const repaired = await fetch(route, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId: "agent_00000000-0000-4000-8000-999999999999",
+        },
+      }),
+    });
+    expect(await repaired.json()).toMatchObject({
+      repaired: true,
+      selection: { kind: "agent-map" },
+    });
+  });
+
+  it("isolates durable selection when the trusted principal changes live", async () => {
+    const fixture = await start();
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/current-workspace`;
+    const headers = {
+      "X-Harness-Token": "test-token",
+      "Content-Type": "application/json",
+    };
+    const initial = (await (await fetch(route, { headers })).json()) as {
+      agents: Array<{ agentId: string }>;
+    };
+    const agentId = initial.agents[0]!.agentId;
+    const selected = await fetch(route, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId,
+        },
+      }),
+    });
+    expect(await selected.json()).toMatchObject({
+      selection: { kind: "agent", agentId },
+    });
+
+    fixture.setCurrentUserId("user-other");
+    expect(await (await fetch(route, { headers })).json()).toMatchObject({
+      selection: { kind: "agent-map" },
+    });
+
+    fixture.setCurrentUserId("user-test");
+    expect(await (await fetch(route, { headers })).json()).toMatchObject({
+      selection: { kind: "agent", agentId },
+    });
+  });
+
+  it("strictly rejects malformed or over-posted workspace selections", async () => {
+    const fixture = await start();
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/current-workspace`;
+    const headers = {
+      "X-Harness-Token": "test-token",
+      "Content-Type": "application/json",
+    };
+    const invalidBodies = [
+      {
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId: "agent_not-a-server-id",
+        },
+      },
+      {
+        selection: {
+          kind: "agent-map",
+          projectId: fixture.project.projectId,
+          agentId: "agent_00000000-0000-4000-8000-000000000001",
+        },
+      },
+      {
+        selection: {
+          kind: "agent-map",
+          projectId: fixture.project.projectId,
+        },
+        privatePath: fixture.privateRoot,
+      },
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await fetch(route, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        code: "malformed_state",
+        error: "Agent Map state is malformed",
+      });
+    }
   });
 
   it("returns a bounded 404 before touching workspace storage", async () => {

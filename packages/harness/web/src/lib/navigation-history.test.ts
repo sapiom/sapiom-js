@@ -36,6 +36,10 @@ const project = (
   root = "/repo",
   label = "repo",
 ): NavigationVisit => ({ kind: "project", workspaceKey, root, label });
+const agentMap = (projectId: string): NavigationVisit => ({
+  kind: "agent-map",
+  projectId,
+});
 const review = (agentSessionId: string): NavigationVisit => ({
   kind: "review",
   // The reducer only reads summary.agentSessionId; a minimal cast keeps the
@@ -80,6 +84,14 @@ describe("sameNavigationVisit", () => {
     ).toBe(true);
     expect(
       sameNavigationVisit(project("workspace-a"), project("workspace-b")),
+    ).toBe(false);
+  });
+  it("compares Agent Map visits by durable project id", () => {
+    expect(
+      sameNavigationVisit(agentMap("project-a"), agentMap("project-a")),
+    ).toBe(true);
+    expect(
+      sameNavigationVisit(agentMap("project-a"), agentMap("project-b")),
     ).toBe(false);
   });
   it("compares reviews by summary.agentSessionId", () => {

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { JSX } from "react";
 import type {
   AppState,
@@ -11,6 +17,10 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
+import type {
+  StudioProjectSummary,
+  StudioWorkspaceSelection,
+} from "@shared/agent-map";
 
 import type { AuthStartResponse, FsListResponse } from "../lib/api";
 import type { ToastTone } from "../lib/toast";
@@ -29,6 +39,7 @@ import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import {
   ProjectRow,
   ProjectTreeRows,
+  AgentMapRow,
   dirKey,
   projectKey,
 } from "./ProjectTreeRows";
@@ -100,6 +111,9 @@ interface WorkflowsRailProps {
   /** Opaque server-issued identities that join project roots to the local
    * system-graph endpoint without exposing paths in URLs. */
   workspaceScopes: AppState["workspaceScopes"];
+  /** Presence selects the additive plan-first rail; absence preserves legacy. */
+  studioProjects: readonly StudioProjectSummary[] | undefined;
+  studioSelection: StudioWorkspaceSelection | null;
   /** The project whose dependency graph currently owns the full main area. */
   selectedWorkspaceKey: WorkspaceKey | null;
   /** Selects an exact project graph without changing the active session or
@@ -108,6 +122,12 @@ interface WorkflowsRailProps {
     workspaceKey: WorkspaceKey,
     root: string,
     label: string,
+  ) => void;
+  onSelectAgentMap: (projectId: string, root: string, label: string) => void;
+  onSelectStudioAgent: (
+    workflow: WorkflowInfo,
+    projectId: string,
+    agentId: string,
   ) => void;
   /** Focuses an agent (or a bare-scaffold folder): swaps the main panel's
    *  session tab strip to that subject's sessions. */
@@ -154,7 +174,7 @@ interface WorkflowsRailProps {
    * in it. Round 1 routed the header `+` into agent detection, so a folder with
    * no agent in it could not be added at all.
    */
-  onOpenProject: (root: string) => Promise<void>;
+  onOpenProject: (root: string) => Promise<unknown>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
@@ -438,8 +458,12 @@ export function WorkflowsRail({
   activeSessionId,
   focusedAgentPath,
   workspaceScopes,
+  studioProjects,
+  studioSelection,
   selectedWorkspaceKey,
   onSelectWorkspace,
+  onSelectAgentMap,
+  onSelectStudioAgent,
   onFocusAgent,
   onOpenPalette,
   onConnect,
@@ -576,9 +600,32 @@ export function WorkflowsRail({
       return next;
     });
   }, []);
+  const revealProject = useCallback((root: string): void => {
+    setCollapsedKeys((previous) => {
+      const key = projectKey(root);
+      if (!previous.has(key)) return previous;
+      const next = new Set(previous);
+      next.delete(key);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     saveUiPrefs({ collapsedKeys: Array.from(collapsedKeys) });
   }, [collapsedKeys]);
+  const selectedStudioRoot = studioSelection
+    ? ((workspaceScopes ?? []).find(
+        (scope) => scope.projectId === studioSelection.projectId,
+      )?.cwd ?? null)
+    : null;
+  const selectedStudioKey = studioSelection
+    ? studioSelection.kind === "agent"
+      ? `${studioSelection.kind}:${studioSelection.projectId}:${studioSelection.agentId}`
+      : `${studioSelection.kind}:${studioSelection.projectId}`
+    : null;
+  useLayoutEffect(() => {
+    if (!selectedStudioRoot) return;
+    revealProject(selectedStudioRoot);
+  }, [revealProject, selectedStudioKey, selectedStudioRoot]);
 
   const exitedSessions = sessions.filter(
     (session) => session.status === "exited",
@@ -1181,6 +1228,30 @@ export function WorkflowsRail({
             const workspaceScope = (workspaceScopes ?? []).find((scope) =>
               samePath(scope.cwd, project.root),
             );
+            const studioProject = studioProjects?.find(
+              (candidate) => candidate.projectId === workspaceScope?.projectId,
+            );
+            const planFirst = axis === "project" && studioProject != null;
+            const mapSelected =
+              planFirst &&
+              studioSelection?.kind === "agent-map" &&
+              studioSelection.projectId === studioProject.projectId;
+            const focusProjectAgent = (path: string): void => {
+              const workflow = workflows.find((candidate) =>
+                samePath(candidate.path, path),
+              );
+              const binding = workflow?.studioBindings?.find(
+                (candidate) => candidate.projectId === studioProject?.projectId,
+              );
+              if (planFirst && workflow && binding) {
+                revealProject(project.root);
+                onSelectStudioAgent(
+                  workflow,
+                  binding.projectId,
+                  binding.agentId,
+                );
+              } else onFocusAgent(path);
+            };
             const pending = pendingCwds.some((cwd) =>
               samePath(cwd, project.root),
             );
@@ -1222,25 +1293,30 @@ export function WorkflowsRail({
                 <ProjectRow
                   label={project.label}
                   root={project.root}
-                  rootAgent={showGroups ? null : project.rootAgent}
+                  rootAgent={planFirst || showGroups ? null : project.rootAgent}
                   collapsed={collapsed}
                   onToggleCollapsed={() =>
                     toggleCollapsed(projectKey(project.root))
                   }
                   workspaceKey={workspaceScope?.workspaceKey ?? null}
                   selected={
-                    workspaceScope?.workspaceKey === selectedWorkspaceKey
+                    mapSelected ||
+                    (!planFirst &&
+                      workspaceScope?.workspaceKey === selectedWorkspaceKey)
                   }
                   onSelectProject={onSelectWorkspace}
                   focusedAgentPath={focusedAgentPath}
-                  onFocusAgent={onFocusAgent}
+                  onFocusAgent={focusProjectAgent}
                   focusable={creating || bare != null}
                   disclosable={
-                    axis === "group"
-                      ? showGroups || soloAgents.length > 0
-                      : project.dirs.length > 0 || project.agents.length > 0
+                    planFirst
+                      ? true
+                      : axis === "group"
+                        ? showGroups || soloAgents.length > 0
+                        : project.dirs.length > 0 || project.agents.length > 0
                   }
                   busy={creating}
+                  disclosureOnly={planFirst}
                   drag={drag}
                   mainTestid={
                     workspaceScope
@@ -1275,7 +1351,8 @@ export function WorkflowsRail({
                           second door to the same place on a row that already
                           leads there would be the duplicate this rail keeps
                           removing. */}
-                      {project.rootAgent &&
+                      {!planFirst &&
+                        project.rootAgent &&
                         !showGroups &&
                         workspaceScope?.workspaceKey != null && (
                           <button
@@ -1284,7 +1361,8 @@ export function WorkflowsRail({
                             data-testid={`project-map-${project.label}`}
                             aria-label={`Open dependency graph for ${project.label}`}
                             aria-pressed={
-                              workspaceScope.workspaceKey === selectedWorkspaceKey
+                              workspaceScope.workspaceKey ===
+                              selectedWorkspaceKey
                             }
                             data-tooltip="Open dependency graph"
                             onClick={() =>
@@ -1355,6 +1433,36 @@ export function WorkflowsRail({
                     </>
                   }
                 />
+                {!collapsed && planFirst && studioProject && (
+                  <>
+                    <AgentMapRow
+                      selected={mapSelected}
+                      onSelect={() => {
+                        revealProject(project.root);
+                        onSelectAgentMap(
+                          studioProject.projectId,
+                          project.root,
+                          project.label,
+                        );
+                      }}
+                    />
+                    {project.rootAgent && (
+                      <WorkflowRow
+                        workflow={project.rootAgent.workflow}
+                        isFocused={
+                          studioSelection?.kind === "agent" &&
+                          studioSelection.agentId ===
+                            project.rootAgent.workflow.studioBindings?.find(
+                              (candidate) =>
+                                candidate.projectId === studioProject.projectId,
+                            )?.agentId
+                        }
+                        onFocus={focusProjectAgent}
+                        depth={0}
+                      />
+                    )}
+                  </>
+                )}
                 {/* AN EMPTY PROJECT SAYS SO, on its own row.
                     `projectIsEmpty` is the one emptiness answer and it consults
                     `rootAgent` — a merged root-agent project has nothing in
@@ -1368,32 +1476,34 @@ export function WorkflowsRail({
                     reaches this. */}
                 {!collapsed && empty && !creating && bare == null && (
                   <>
-                  <div className="workspace-row is-nested workspace-row-empty">
-                    <span
-                      className="row-disclosure row-disclosure-static"
-                      aria-hidden="true"
-                    />
-                    {/* A ROW YOU CAN ACT ON. An empty project stating its
+                    <div className="workspace-row is-nested workspace-row-empty">
+                      <span
+                        className="row-disclosure row-disclosure-static"
+                        aria-hidden="true"
+                      />
+                      {/* A ROW YOU CAN ACT ON. An empty project stating its
                         emptiness and offering nothing is a dead end — and the
                         whole reason to open a folder with no agent in it is to
                         put the first one there. This is that action, aimed at
                         THIS folder: a session rooted here, with the scaffold
                         prompt already sent. */}
-                    <button
-                      type="button"
-                      className="tree-row tree-row-empty-action"
-                      data-testid={`project-empty-${project.label}`}
-                      data-tooltip={`Start an agent in ${project.root}`}
-                      onClick={() => onCreateAgent(project.root, project.label)}
-                    >
-                      <Icon name="Sparkles" size={13} />
-                      <span className="tree-row-label">
-                        {(unsearchedCheckouts[project.root]?.length ?? 0) > 0
-                          ? "Create an agent here"
-                          : "Create the first agent here"}
-                      </span>
-                    </button>
-                  </div>
+                      <button
+                        type="button"
+                        className="tree-row tree-row-empty-action"
+                        data-testid={`project-empty-${project.label}`}
+                        data-tooltip={`Start an agent in ${project.root}`}
+                        onClick={() =>
+                          onCreateAgent(project.root, project.label)
+                        }
+                      >
+                        <Icon name="Sparkles" size={13} />
+                        <span className="tree-row-label">
+                          {(unsearchedCheckouts[project.root]?.length ?? 0) > 0
+                            ? "Create an agent here"
+                            : "Create the first agent here"}
+                        </span>
+                      </button>
+                    </div>
                     {/* THE BOUNDARY'S OWN ANSWER, when there is one.
                         A scan stops at every separate checkout, so a folder that
                         is not itself a repo but holds several clones finds
@@ -1405,7 +1515,10 @@ export function WorkflowsRail({
                         nothing here" and "I did not look in there". */}
                     {(unsearchedCheckouts[project.root]?.length ?? 0) > 0 && (
                       <div className="workspace-row is-nested">
-                        <span className="row-disclosure row-disclosure-static" aria-hidden="true" />
+                        <span
+                          className="row-disclosure row-disclosure-static"
+                          aria-hidden="true"
+                        />
                         <div
                           className="tree-row tree-row-note"
                           data-testid={`project-unsearched-${project.label}`}
@@ -1434,7 +1547,7 @@ export function WorkflowsRail({
                     agents={project.agents}
                     depth={0}
                     focusedAgentPath={focusedAgentPath}
-                    onFocusAgent={onFocusAgent}
+                    onFocusAgent={focusProjectAgent}
                     collapsedKeys={collapsedKeys}
                     onToggleCollapsed={toggleCollapsed}
                     drag={drag}
@@ -1598,7 +1711,9 @@ export function WorkflowsRail({
           listDir={listDir}
           onClose={() => setStartMode(null)}
           onConnect={onConnect}
-          onOpenProject={onOpenProject}
+          onOpenProject={async (root) => {
+            await onOpenProject(root);
+          }}
           onScan={onScanWorkflows}
           triggerRef={
             startMode === "open" ? addProjectTriggerRef : connectTriggerRef

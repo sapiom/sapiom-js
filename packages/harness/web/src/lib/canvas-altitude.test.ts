@@ -4,10 +4,33 @@ import type { WorkspaceScopeSummary } from "@shared/system-graph";
 
 import {
   canvasView,
+  studioCanvasView,
   projectAbove,
   projectRefForRoot,
   stepsDisabledReason,
 } from "./canvas-altitude";
+
+describe("studioCanvasView", () => {
+  it("uses durable project and agent ids without a root or WorkspaceKey", () => {
+    expect(
+      studioCanvasView({ kind: "agent-map", projectId: "project-a" }),
+    ).toEqual({
+      altitude: "map",
+      projectId: "project-a",
+    });
+    expect(
+      studioCanvasView({
+        kind: "agent",
+        projectId: "project-a",
+        agentId: "agent-a",
+      }),
+    ).toEqual({
+      altitude: "board",
+      projectId: "project-a",
+      agentId: "agent-a",
+    });
+  });
+});
 
 /**
  * E3.7–E3.9: one selection, two altitudes, always agreeing.

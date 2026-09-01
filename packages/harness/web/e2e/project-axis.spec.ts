@@ -19,9 +19,17 @@ import type { Locator, Page } from "@playwright/test";
 const ROOT = "/Users/demo/polsia";
 /** `polsia/services/workers` opened as its own project. */
 const NESTED_LABEL = "polsia/services/workers";
+const LEGACY_CONTAINMENT_TEST =
+  "parent and nested project graphs follow their visible containment";
 
-test.beforeEach(async ({ page }) => {
-  await page.goto("/?mockFixtures=deep");
+test.beforeEach(async ({ page }, testInfo) => {
+  // A server without durable Studio project summaries remains on the legacy
+  // System Graph path. Every other deep fixture exercises the plan-first path.
+  const studioProjects =
+    testInfo.title === LEGACY_CONTAINMENT_TEST
+      ? "&mockStudioProjects=absent"
+      : "";
+  await page.goto(`/?mockFixtures=deep${studioProjects}`);
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });
@@ -158,68 +166,88 @@ test.describe("ordering", () => {
   });
 });
 
-test.describe("the root-agent merge", () => {
-  test("a root that IS an agent renders exactly ONE row", async ({ page }) => {
-    // The project row and that agent are the same directory, so printing both
-    // says one word twice. That stutter was 15 of one install's 40 rows.
-    const rows = page
-      .getByTestId("workspace-group-dashboard-keeper")
-      .locator(".workspace-row");
-    await expect(rows).toHaveCount(1);
-    const row = rows.first();
-    // …and the one row keeps the agent identity while its project label opens
-    // the complete project graph.
-    await expect(row).toHaveAttribute(
-      "data-testid",
-      "workflow-dashboard-keeper",
-    );
-    await expect(row).toHaveClass(/workflow-item/);
-    /* THE ROW IS THE AGENT, so its own click focuses the agent. This used to
-       assert `is-selected`, the PROJECT selection, because `workspaceKey` won
-       the onClick unconditionally: a root-agent row always opened a dependency
-       graph that had exactly one node in it, and the only way to reach the
-       agent was to click that node. "I have to click that in order to see my
-       agent" was this line. */
+test.describe("the plan-first project children", () => {
+  test("a root agent is a separate target below the pinned Agent Map", async ({
+    page,
+  }) => {
+    const group = page.getByTestId("workspace-group-dashboard-keeper");
+    const project = group.getByTestId("project-row-dashboard-keeper");
+    const map = group.getByTestId("agent-map-row");
+    const agent = group.getByTestId("workflow-dashboard-keeper");
+    await expect(project).toBeVisible();
+    await expect(map).toBeVisible();
+    await expect(agent).toBeVisible();
+    await expect(group.locator(":scope > *")).toHaveCount(3);
+
+    // The project label is disclosure-only; the two children remain distinct.
     await page.getByTestId("project-select-dashboard-keeper").click();
-    await expect(row).toHaveClass(/is-focused/);
-    // The graph is not lost, it moves to its own control on the same row, which
-    // renders only where the row's click is spoken for.
-    await page.getByTestId("project-map-dashboard-keeper").click();
-    await expect(row).toHaveClass(/is-selected/);
-    await expect(
-      page.getByTestId("system-graph-node-dashboard-keeper"),
-    ).toBeVisible();
-    // The graph node is the ordinary agent door and restores the preserved
-    // agent/session panes.
-    await page.getByTestId("system-graph-node-dashboard-keeper").click();
-    await expect(row).toHaveClass(/is-focused/);
-    // …and with nothing under it, it offers no disclosure at all: a chevron
-    // that folds an empty subtree is an affordance for nothing.
+    await expect(map).toBeHidden();
+    await expect(agent).toBeHidden();
+    await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(map).toBeVisible();
+
+    await group.getByTestId("agent-map-select").click();
+    await expect(map).toHaveClass(/is-selected/);
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+
+    // A selected child expands on selection, but an intentional disclosure
+    // click stays collapsed until the user expands it again.
+    await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(map).toBeHidden();
     await expect(
       page.getByTestId("project-disclosure-dashboard-keeper"),
-    ).toHaveCount(0);
+    ).toHaveAttribute("aria-expanded", "false");
+    await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(map).toBeVisible();
+    await expect(map).toHaveClass(/is-selected/);
+
+    await agent.locator("button").click();
+    await expect(agent).toHaveClass(/is-focused/);
+    // Every durable project has at least the Agent Map child to disclose.
+    await expect(
+      page.getByTestId("project-disclosure-dashboard-keeper"),
+    ).toHaveCount(1);
     await expect(page.getByTestId("project-disclosure-polsia")).toHaveCount(1);
   });
 
-  test("a merged project row carries NO deploy glyph", async ({ page }) => {
-    // Deployment is a per-AGENT fact; on a project row it read as a property
-    // of the project, appearing on one and not its neighbour for reasons
-    // nothing on screen explained.
-    const row = page
-      .getByTestId("workspace-group-dashboard-keeper")
-      .locator(".workspace-row");
-    await expect(row.locator(".workflow-status")).toHaveCount(0);
+  test("the project row carries no deploy glyph; the agent child does", async ({
+    page,
+  }) => {
+    const group = page.getByTestId("workspace-group-dashboard-keeper");
+    await expect(
+      group
+        .getByTestId("project-row-dashboard-keeper")
+        .locator(".workflow-status"),
+    ).toHaveCount(0);
+    await expect(
+      group
+        .getByTestId("workflow-dashboard-keeper")
+        .locator(".workflow-status"),
+    ).toHaveCount(1);
     // The rail also offers no per-project `+`.
     await expect(
       page.locator('.rail-list [data-testid^="workspace-new-session-"]'),
     ).toHaveCount(0);
   });
+
+  test("a non-map destination clears the plan-first rail selection", async ({
+    page,
+  }) => {
+    const map = page
+      .getByTestId("workspace-group-dashboard-keeper")
+      .getByTestId("agent-map-row");
+    await map.getByTestId("agent-map-select").click();
+    await expect(map).toHaveClass(/is-selected/);
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+
+    await page.getByTestId("rail-templates").click();
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    await expect(map).not.toHaveClass(/is-selected/);
+  });
 });
 
 test.describe("multi-root", () => {
-  test("parent and nested project graphs follow their visible containment", async ({
-    page,
-  }) => {
+  test(LEGACY_CONTAINMENT_TEST, async ({ page }) => {
     await page.getByTestId("project-select-polsia").click();
     await expect(page.getByTestId("system-graph-node-gateway")).toBeVisible();
     await expect(page.getByTestId("system-graph-node-queue")).toBeVisible();
@@ -359,18 +387,25 @@ test.describe("row chrome", () => {
     // leading edge, then `+`, then settings last. A control at the leading edge
     // put the header in the same icon slot and indent as the nav rows above it,
     // so it read as one more nav button rather than the title of the tree below.
-    const headerOrder = await page.locator(".rail-header").evaluate((el) =>
-      [...el.querySelectorAll("[data-testid], .rail-header-label")].map(
-        (n) => n.getAttribute("data-testid") ?? "label",
-      ),
-    );
-    expect(headerOrder).toEqual(["label", "rail-add-project", "history-trigger"]);
+    const headerOrder = await page
+      .locator(".rail-header")
+      .evaluate((el) =>
+        [...el.querySelectorAll("[data-testid], .rail-header-label")].map(
+          (n) => n.getAttribute("data-testid") ?? "label",
+        ),
+      );
+    expect(headerOrder).toEqual([
+      "label",
+      "rail-add-project",
+      "history-trigger",
+    ]);
 
     // And the header's label is NOT indented like a nav row: it aligns to the
     // pane, where a section title belongs, not to the nav rows' icon slot.
     const indents = await page.evaluate(() => ({
       header: Math.round(
-        document.querySelector(".rail-header-label")!.getBoundingClientRect().left,
+        document.querySelector(".rail-header-label")!.getBoundingClientRect()
+          .left,
       ),
       navRow: Math.round(
         document
@@ -405,7 +440,9 @@ test.describe("row chrome", () => {
         .locator("svg.lucide-sliders-horizontal"),
     ).toHaveCount(0);
     // No HORIZONTAL ellipsis anywhere in the rail.
-    await expect(page.locator(".rail-shell svg.lucide-ellipsis")).toHaveCount(0);
+    await expect(page.locator(".rail-shell svg.lucide-ellipsis")).toHaveCount(
+      0,
+    );
     await expect(page.getByTestId("history-trigger")).toHaveAttribute(
       "aria-label",
       "Rail settings",
@@ -432,7 +469,7 @@ test.describe("row chrome", () => {
     const labels = (): Promise<string[]> =>
       page
         .locator(
-          ".rail-list > .workspace-group > .workspace-row .tree-row-label",
+          '.rail-list > .workspace-group > [data-testid^="project-row-"] > .workspace-row-main > .tree-row-label',
         )
         .allInnerTexts();
 

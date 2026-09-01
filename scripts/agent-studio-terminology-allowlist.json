@@ -220,8 +220,8 @@
     "id": "app-canvas-tab-icon-identifier",
     "path": "packages/harness/web/src/App.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 1,
-    "reason": "The design-system Workflow icon identifier is private and remains unchanged (matches the CanvasPane allowlist entry)."
+    "occurrences": 2,
+    "reason": "The design-system Workflow icon identifier is private and remains unchanged in the canvas tab and neutral Agent Map empty state (matches the CanvasPane allowlist entry)."
   },
   {
     "id": "canvas-pane-icon-identifier",

@@ -119,6 +119,39 @@ function dragSourceProps(
 export const projectKey = (root: string): string => `project:${root}`;
 export const dirKey = (path: string): string => `dir:${path}`;
 
+/** The durable project's pinned first child. It is a workspace, not an agent. */
+export function AgentMapRow({
+  selected,
+  onSelect,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+}): JSX.Element {
+  return (
+    <div
+      className={"workspace-row is-nested" + (selected ? " is-selected" : "")}
+      data-testid="agent-map-row"
+      {...trackingAttrs({ object: "workspace" })}
+    >
+      <span
+        className="row-disclosure row-disclosure-static"
+        aria-hidden="true"
+      />
+      <button
+        type="button"
+        className="tree-row"
+        data-testid="agent-map-select"
+        aria-pressed={selected}
+        data-tooltip={selected ? "Agent Map selected" : "Open Agent Map"}
+        onClick={onSelect}
+      >
+        <Icon name="Waypoints" size={13} />
+        <span className="tree-row-label">Agent Map</span>
+      </button>
+    </div>
+  );
+}
+
 /**
  * The row's left slot: identity at rest, disclosure on hover.
  *
@@ -334,6 +367,7 @@ export function ProjectRow({
   tooltip,
   busy = false,
   drag,
+  disclosureOnly = false,
 }: {
   label: string;
   root: string;
@@ -371,6 +405,8 @@ export function ProjectRow({
    *  never a drag source: moving the folder the project IS would move the
    *  project, which is what removing and adding one is for. */
   drag?: RailDrag;
+  /** Plan-first project labels disclose children instead of selecting a child. */
+  disclosureOnly?: boolean;
 }): JSX.Element {
   const agentPath = rootAgent?.workflow.path ?? null;
   // The row's identity, and the click that follows from it, are settled at the
@@ -439,11 +475,13 @@ export function ProjectRow({
            merged row through the trailing control the rail passes, so nothing
            is lost, and the two subjects stop competing for one click. */
         onClick={
-          focusTarget
-            ? () => onFocusAgent(focusTarget)
-            : workspaceKey
-              ? () => onSelectProject(workspaceKey, root, label)
-              : undefined
+          disclosureOnly
+            ? onToggleCollapsed
+            : focusTarget
+              ? () => onFocusAgent(focusTarget)
+              : workspaceKey
+                ? () => onSelectProject(workspaceKey, root, label)
+                : undefined
         }
         /* DOUBLE-CLICK TOGGLES DISCLOSURE — the platform convention for a
            disclosure row, and its absence read as breakage: the chevron was
@@ -475,23 +513,38 @@ export function ProjectRow({
            is; the title answers where it lives. */
         title={root}
         aria-pressed={
-          focusTarget ? (busy ? undefined : isFocused) : workspaceKey ? selected : undefined
+          disclosureOnly
+            ? undefined
+            : focusTarget
+              ? busy
+                ? undefined
+                : isFocused
+              : workspaceKey
+                ? selected
+                : undefined
         }
+        aria-expanded={disclosureOnly ? !collapsed : undefined}
         aria-busy={busy ? true : undefined}
         aria-label={
-          focusTarget
-            ? `Focus ${label}`
-            : workspaceKey
-              ? `Open dependency graph for ${label}`
-              : undefined
+          disclosureOnly
+            ? `${collapsed ? "Expand" : "Collapse"} ${label}`
+            : focusTarget
+              ? `Focus ${label}`
+              : workspaceKey
+                ? `Open dependency graph for ${label}`
+                : undefined
         }
         data-tooltip={
           tooltip ??
-          (focusTarget
-            ? "Focus this agent"
-            : workspaceKey
-              ? "Open dependency graph"
-              : undefined)
+          (disclosureOnly
+            ? collapsed
+              ? "Expand"
+              : "Collapse"
+            : focusTarget
+              ? "Focus this agent"
+              : workspaceKey
+                ? "Open dependency graph"
+                : undefined)
         }
       >
         <span className="tree-row-label">{label}</span>

@@ -247,7 +247,7 @@ export interface HarnessStateHook {
    * not the question. Round 1 had no such action at all, so the rail's `+`
    * opened agent detection and an empty folder could not be added.
    */
-  openProject: (root: string) => Promise<void>;
+  openProject: (root: string) => Promise<string>;
   /** Adapter registry (GET /api/harnesses) — drives the new-session picker
    *  (installed/experimental/external flags) and the MCP setup prompts. */
   listHarnesses: () => Promise<HarnessEntry[]>;
@@ -1329,7 +1329,13 @@ export function useHarnessState(): HarnessStateHook {
   const refreshWorkspaceScopes = useCallback(async (): Promise<void> => {
     const refreshed = await api.getState();
     setState((prev) =>
-      prev ? { ...prev, workspaceScopes: refreshed.workspaceScopes } : prev,
+      prev
+        ? {
+            ...prev,
+            workspaceScopes: refreshed.workspaceScopes,
+            studioProjects: refreshed.studioProjects,
+          }
+        : prev,
     );
   }, []);
 
@@ -1750,7 +1756,7 @@ export function useHarnessState(): HarnessStateHook {
    * Then the folder is remembered, which is what puts the row on screen.
    */
   const openProject = useCallback(
-    async (requested: string): Promise<void> => {
+    async (requested: string): Promise<string> => {
       /* YOU CANNOT OPEN A SINGLE AGENT AS A PROJECT, so opening an agent's own
          folder opens the folder that HOLDS it.
 
@@ -1811,6 +1817,7 @@ export function useHarnessState(): HarnessStateHook {
       } catch (err) {
         console.warn("[harness] scan after opening project failed", root, err);
       }
+      return root;
     },
     [reopenProjects, rememberProjectDir, scanWorkflows],
   );
