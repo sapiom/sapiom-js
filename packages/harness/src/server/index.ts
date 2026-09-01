@@ -31,6 +31,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
+import type { PlannerLifecycleEvent } from "../shared/agent-map.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -154,6 +155,13 @@ import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
+import {
+  isPlannerDispatchAuthorized,
+  localPlanningPrincipal,
+  PlanningSessionService,
+} from "../core/planning-session.js";
+import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -500,7 +508,7 @@ function createDefaultBuildLaunchOpts(
    */
   loadSystemPrompt: () => Promise<string> = fetchSystemPromptForActiveEnvironment,
 ): LaunchOptsBuilder {
-  return async (harnessSessionId, req) => {
+  return async (harnessSessionId, req, context) => {
     // Portable continue (SAP-2059). Resolved before the prompt file is
     // written, because for a `launch-flag` harness the brief IS part of that
     // file. Best-effort throughout: a brief that can't be assembled leaves
@@ -561,10 +569,13 @@ function createDefaultBuildLaunchOpts(
       }),
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
+    const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
+      .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+      .join("\n\n");
     const systemPromptFile = await generateSystemPromptFile(harnessSessionId, {
       generatedRoot,
       prompt,
-      ...(viaSystemPrompt ? { appendix: brief } : {}),
+      ...(appendices ? { appendix: appendices } : {}),
     });
     return {
       settingsFile: settings.settingsPath,
@@ -584,11 +595,10 @@ export const startServer = async (
   options: HarnessServerOptions,
 ): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
-  // Coding-agent hooks need to authenticate only to /ingest. Keep that
-  // capability distinct from the host/browser boot token: a model can read
-  // its own PTY environment, so injecting the boot token would also grant it
-  // every mutation beneath /api (including durable project rebinding).
-  const ingestToken = randomUUID();
+  // Coding-agent hooks receive a capability for exactly their own session.
+  // The registry is distinct from the host/browser boot token, process-local,
+  // rotated on resume, and revoked on exit.
+  const ingestCredentials = new IngestCredentialRegistry();
   // The browser launch capability is separate again: it authorizes delivery
   // of the boot token in initial HTML, but cannot call /api by itself.
   const uiToken = randomUUID();
@@ -613,6 +623,10 @@ export const startServer = async (
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
+  // Authentication may change in-app without restarting Studio. Keep the
+  // planning principal live and server-private; browser auth DTOs expose only
+  // their existing boolean/organization fields.
+  let planningUserId = identity?.userId ?? null;
 
   // One-way identity migration: seed ~/.sapiom/analytics.json from the
   // legacy harness machine-id so existing installs keep the same anonymous_id
@@ -1068,15 +1082,15 @@ export const startServer = async (
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
     );
-  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
+  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req, context) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
-    return innerBuildLaunchOpts(harnessSessionId, req);
+    return innerBuildLaunchOpts(harnessSessionId, req, context);
   };
 
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
-    ingestToken,
+    ingestCredentials,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
@@ -1229,7 +1243,7 @@ export const startServer = async (
   const taskManager = new TaskManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
-    ingestToken,
+    ingestCredentials,
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
     onCleanup: (taskId) => {
@@ -2495,6 +2509,52 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
+  const emitPlannerLifecycle = (event: PlannerLifecycleEvent): void => {
+    const session = sessionManager.get(event.sessionId);
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: seqCounter.next(event.sessionId),
+      ts: new Date().toISOString(),
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      harnessSessionId: event.sessionId,
+      // Planner lifecycle correlation uses the server-owned harness session.
+      // Provider session identity is unnecessary and may originate in a hook.
+      agentSessionId: null,
+      harness: session?.harness ?? "claude-code",
+      type: event.name,
+      payload: {
+        project_id: event.projectId,
+        ...("resolution" in event
+          ? { resolution: event.resolution }
+          : {
+              queue_depth: Math.max(0, Math.min(10_000, event.queueDepth)),
+              ...("attemptId" in event && event.attemptId
+                ? { attempt_id: event.attemptId }
+                : {}),
+              ...(event.name === "planner_greeting.failed"
+                ? {
+                    error_code: event.errorCode,
+                    retryable: event.retryable,
+                  }
+                : {}),
+              ...(event.name === "planner_greeting.skipped"
+                ? { reason: event.reason }
+                : {}),
+              ...(event.name === "planner_session.input_delivery_uncertain"
+                ? {
+                    input_id: event.inputId,
+                    error_code: event.errorCode,
+                  }
+                : {}),
+            }),
+      },
+    };
+    void eventStore.append(analyticsEvent).catch(() => {});
+    batcher.enqueue(analyticsEvent);
+  };
+
   const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
     statePaths.agentMap,
     {
@@ -2580,6 +2640,82 @@ export const startServer = async (
         : workflow;
     });
   };
+
+  const plannerGreeting = new PlannerGreetingCoordinator({
+    root: statePaths.plannerSessions,
+    sessionManager,
+    canDispatch: (session) =>
+      isPlannerDispatchAuthorized({
+        session,
+        currentPrincipal: () =>
+          localPlanningPrincipal(planningUserId, machineId),
+        resolveProject: (projectId) =>
+          studioProjectCatalog.resolveIdentity(projectId),
+      }),
+    onEvent: emitPlannerLifecycle,
+  });
+  for (const session of sessionManager.list()) {
+    if (!session.planning) continue;
+    let emptyProject = true;
+    try {
+      const workspace = await agentMapWorkspaceStore.readOrCreate(
+        session.planning.identity.projectId,
+      );
+      emptyProject =
+        workspace.confirmedRevisionId === null &&
+        workspace.activeProposalId === null &&
+        workspace.projectBuildPlanId === null;
+    } catch {
+      // Registration still recovers generating state and preserves its FIFO;
+      // the project route will surface any unavailable workspace later.
+    }
+    await plannerGreeting
+      .register(session, { emptyProject, mode: "boot" })
+      .catch((error: unknown) => {
+        console.error(
+          `[harness] planner registration failed for ${session.id}:`,
+          error instanceof Error ? error.message : "unknown error",
+        );
+      });
+  }
+  const planningSessions = new PlanningSessionService({
+    catalog: studioProjectCatalog,
+    workspaceStore: agentMapWorkspaceStore,
+    sessionManager,
+    readRecord: (id) => sessionRecordReader.read(id),
+    userId: identity?.userId ?? null,
+    currentUserId: () => planningUserId,
+    machineId,
+    defaultHarness: options.defaultHarnessKind ?? "claude-code",
+    // E1 owns the durable workspace pointers, but not the later revision,
+    // proposal, or build-plan detail records. Wire that shipped source
+    // explicitly so the focused-context contract emits honest null/empty
+    // detail slots today and has one allowlisted adapter boundary when those
+    // stores land; it must never fall back to scanning project files.
+    readFocusedContext: async (_projectId, workspace) => ({
+      confirmedRevision:
+        workspace.confirmedRevisionId === null
+          ? null
+          : { digest: null, summaries: [] },
+      activeProposal:
+        workspace.activeProposalId === null
+          ? null
+          : { status: null, summary: null },
+      projectBuildPlan:
+        workspace.projectBuildPlanId === null
+          ? null
+          : { status: null, summary: null },
+      warnings: [],
+    }),
+    onPlannerSession: (session, context) =>
+      plannerGreeting.register(session, context),
+    onEvent: emitPlannerLifecycle,
+  });
+  sessionManager.onStatusChange((session) => {
+    void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
+      console.error("[harness] planner greeting status transition failed:", error);
+    });
+  });
 
   const app: Express = express();
   app.disable("x-powered-by");
@@ -2672,10 +2808,13 @@ export const startServer = async (
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
-      userId: identity?.userId ?? machineId,
+      currentUserId: () =>
+        localPlanningPrincipal(planningUserId, machineId),
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
+      planningSessions,
+      plannerGreeting,
     }),
   );
   app.use(
@@ -3037,20 +3176,28 @@ export const startServer = async (
       apiKeyProvider,
       bus,
       environment: process.env.SAPIOM_ENVIRONMENT,
+      onPlanningUserChanged: (userId) => {
+        planningUserId = userId;
+      },
     }),
   );
 
   // Feeds the same seqCounter declared above — both hook POSTs and the Codex
   // transcript tailer run through processIngest(), which shares the counter.
   const ingestDeps: IngestDeps = {
-    ingestToken,
+    authenticate: (sessionId, token) =>
+      ingestCredentials.authenticate(sessionId, token),
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
-    onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+    onAgentSessionResolved: (harnessSessionId, agentSessionId, source) => {
       // Record the agent session id — used by session-manager for resume
       // (agentSessionId feeds the --resume flag) and by the codex tailer for
       // exact-match rollout discovery.
-      sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+      return sessionManager.setAgentSessionId(
+        harnessSessionId,
+        agentSessionId,
+        source,
+      );
     },
     onSessionReady: (harnessSessionId) => {
       sessionManager.setReady(harnessSessionId);
@@ -3058,6 +3205,9 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
+    decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
+    projectTelemetryEvent: (event) =>
+      plannerGreeting.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
@@ -3085,6 +3235,9 @@ export const startServer = async (
       }
     },
     onEventPersisted: (event: AnalyticsEvent) => {
+      void plannerGreeting.onEventPersisted(event).catch((error: unknown) => {
+        console.error("[harness] planner greeting completion failed:", error);
+      });
       // The normal end of a session: the SessionEnd hook's event is in the
       // store, so the archived record carries the whole conversation including
       // its `endedAt`. (The "exited" status handler archives too, for sessions
@@ -3096,8 +3249,8 @@ export const startServer = async (
     seqCounter,
   };
 
-  // /ingest authenticates itself (bearer ingestToken, not X-Harness-Token) —
-  // it must not sit behind the /api boot-token middleware above.
+  // /ingest authenticates a per-session bearer capability against the body
+  // session id (never X-Harness-Token), so it stays outside /api middleware.
   app.use(createIngestRouter(ingestDeps));
 
   // Codex has no hooks, so a live session's entire analytics eventSource is

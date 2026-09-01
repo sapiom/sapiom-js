@@ -28,6 +28,7 @@ import {
   UnknownSessionError,
 } from "../core/session-manager.js";
 import type { SessionRecordReader } from "../core/session-record.js";
+import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import {
   AdapterNotFoundError,
   ExternalHarnessError,
@@ -44,6 +45,14 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
   return {
     list: () => Array.from(sessions.values()),
     get: (id: string) => sessions.get(id),
+    getAgentSessionOwner: vi.fn((agentSessionId: string) =>
+      Array.from(sessions.values()).find(
+        (session) => session.agentSessionId === agentSessionId,
+      )),
+    isAgentSessionIdentityReserved: vi.fn((agentSessionId: string) =>
+      Array.from(sessions.values()).some(
+        (session) => session.agentSessionId === agentSessionId,
+      )),
     create: vi.fn(),
     resume: vi.fn(),
     kill: vi.fn(() => true),
@@ -54,7 +63,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
       if (session) session.boundWorkflowPath = workflowPath;
     }),
     registerHistorical: vi.fn(
-      (input: {
+      async (input: {
         agentSessionId: string;
         harness: HarnessKind;
         cwd: string;
@@ -466,6 +475,25 @@ describe("createRestRouter", () => {
       expect(onSessionCreated).not.toHaveBeenCalled();
     });
 
+    it("rejects role and project spoofing on generic session creation", async () => {
+      const sessionManager = fakeSessionManager();
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({
+          cwd: "/tmp/proj",
+          harness: "codex",
+          role: "map-planner",
+          projectId: "forged-project",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(sessionManager.create).not.toHaveBeenCalled();
+    });
+
     it("does not itself write the workspace context file — that's sessionManager.create()'s job now", async () => {
       // The initial write used to happen here, in this route, which meant
       // any caller that reached the session-creation path without going
@@ -739,6 +767,35 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
+    it("requires planner input to use the project-scoped FIFO", async () => {
+      const planner = exitedSession({
+        id: "planner-1",
+        planning: {
+          identity: {
+            projectId: "project-1",
+            sessionId: "planner-1",
+            userId: "user-1",
+            role: "map-planner",
+          },
+          greeting: { status: "pending" },
+          queuedInputIds: [],
+        },
+      });
+      const sessionManager = fakeSessionManager([planner]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/planner-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "bypass" }),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
     it("404s when submitInput reports no live pty for the session", async () => {
       const sessionManager = fakeSessionManager();
       (
@@ -908,6 +965,34 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
+    it("requires planner resume to use the trusted project resolver", async () => {
+      const planner = exitedSession({
+        id: "planner-1",
+        planning: {
+          identity: {
+            projectId: "project-1",
+            sessionId: "planner-1",
+            userId: "user-1",
+            role: "map-planner",
+          },
+          greeting: { status: "delivered", messageId: "message-1" },
+          queuedInputIds: [],
+        },
+      });
+      const sessionManager = fakeSessionManager([planner]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/planner-1/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
     it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
       const sessionManager = fakeSessionManager();
       (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
@@ -1315,6 +1400,119 @@ describe("createRestRouter", () => {
       expect(sessionManager.resume).toHaveBeenCalledWith("sess-existing");
     });
 
+    it("requires an existing foreign-owned planner to use its scoped route without mutation", async () => {
+      const planner = exitedSession({
+        id: "planner-existing",
+        agentSessionId: body.agentSessionId,
+        planning: {
+          identity: {
+            projectId: "foreign-project",
+            sessionId: "planner-existing",
+            userId: "foreign-user",
+            role: "map-planner",
+          },
+          greeting: { status: "delivered", messageId: "message-1" },
+          queuedInputIds: [],
+        },
+      });
+      const original = structuredClone(planner.planning);
+      const sessionManager = fakeSessionManager([planner]);
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume }),
+        },
+      });
+
+      const res = await adopt({ ...body, cwd: "/tmp/client-supplied-alias" });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(canResume).not.toHaveBeenCalled();
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+      expect(sessionManager.get("planner-existing")?.planning).toEqual(original);
+    });
+
+    it("rejects a rotated planner's durable old alias even though its current pointer changed", async () => {
+      const planner = exitedSession({
+        id: "planner-rotated",
+        agentSessionId: "vendor-new",
+        planning: {
+          identity: {
+            projectId: "project-1",
+            sessionId: "planner-rotated",
+            userId: "user-1",
+            role: "map-planner",
+          },
+          greeting: { status: "delivered", messageId: "message-1" },
+          queuedInputIds: [],
+        },
+      });
+      const sessionManager = fakeSessionManager([planner]);
+      (
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+      ).mockImplementation((agentSessionId: string) =>
+        agentSessionId === body.agentSessionId ? planner : undefined,
+      );
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager,
+        adapters: { "claude-code": historyAdapter({ canResume }) },
+      });
+
+      const response = await adopt(body);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(canResume).not.toHaveBeenCalled();
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
+    it("409s a generic session's historical alias before any adapter probe or mutation", async () => {
+      const owner = exitedSession({
+        id: "generic-rotated",
+        agentSessionId: "vendor-after-clear",
+      });
+      const original = structuredClone(owner);
+      const sessionManager = fakeSessionManager([owner]);
+      (
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+      ).mockImplementation((agentSessionId: string) =>
+        agentSessionId === body.agentSessionId ? owner : undefined,
+      );
+      (
+        sessionManager.isAgentSessionIdentityReserved as unknown as ReturnType<
+          typeof vi.fn
+        >
+      ).mockImplementation(
+        (agentSessionId: string) => agentSessionId === body.agentSessionId,
+      );
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager,
+        adapters: { "claude-code": historyAdapter({ canResume }) },
+      });
+
+      const response = await adopt(body);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        code: "AGENT_SESSION_IDENTITY_RESERVED",
+        error: "This conversation identity is already owned by a local session",
+      });
+      expect(canResume).not.toHaveBeenCalled();
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+      expect(sessionManager.list()).toEqual([original]);
+    });
+
     it("400s on a malformed body and an unspawnable harness", async () => {
       start({ adapters: { "claude-code": historyAdapter() } });
       expect((await adopt({ ...body, agentSessionId: "" })).status).toBe(400);
@@ -1487,7 +1685,7 @@ describe("createRestRouter", () => {
       const manager = new SessionManager({
         adapters: { "claude-code": makeMinimalAdapter() },
         ingestUrl: "http://127.0.0.1:4100",
-        ingestToken: "test-token",
+        ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
         sessionsPath: path.join(smDir, "sessions.json"),
         // spawnPty not provided — tests only call resume/submitInput which
         // throw before reaching spawn for external-harness sessions.
@@ -1500,7 +1698,7 @@ describe("createRestRouter", () => {
       const sessionManager = makeRealSessionManager();
 
       // Simulate a session record written by an earlier build or hand-edited.
-      const session = sessionManager.registerHistorical({
+      const session = await sessionManager.registerHistorical({
         agentSessionId: "agent-abc",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",
@@ -1527,7 +1725,7 @@ describe("createRestRouter", () => {
     it("POST /sessions/:id/input returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
       const sessionManager = makeRealSessionManager();
 
-      const session = sessionManager.registerHistorical({
+      const session = await sessionManager.registerHistorical({
         agentSessionId: "agent-def",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",

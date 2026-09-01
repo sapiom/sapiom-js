@@ -182,11 +182,12 @@ export interface HarnessSession {
   /**
    * The prior session this one was seeded from (portable continue — see
    * core/rehydration.ts), when a brief was ACTUALLY produced and delivered.
-   * Null/absent otherwise, including when the client asked to rehydrate from
-   * an id our event log holds nothing for: this field is the record of what
-   * happened, not of what was requested, so the UI can never present an
-   * empty-handed fresh session as a continuation. Absent on sessions
-   * persisted by builds from before this existed.
+   * For a trusted planner replacement, this instead names the exact prior
+   * HarnessSession whose durable coordinator FIFO was handed off; its brief
+   * may come from an older recorded ancestor in the same continuation chain.
+   * Null/absent otherwise, including an ordinary client request whose event
+   * log contains no usable context. Absent on sessions persisted by builds
+   * from before this existed.
    */
   rehydratedFrom?: string | null;
   /**
@@ -207,6 +208,8 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
+  /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
+  planning?: import("./agent-map.js").PlannerSessionMetadata;
 }
 
 /**
@@ -791,7 +794,15 @@ export type AnalyticsEventType =
   | "mcp.install"
   | "plan.upgrade_clicked"
   | "agent_map.workspace_initialized"
-  | "agent_map.workspace_read_failed";
+  | "agent_map.workspace_read_failed"
+  | "planner_session.created"
+  | "planner_session.resumed"
+  | "planner_session.input_delivery_uncertain"
+  | "planner_greeting.attempted"
+  | "planner_greeting.delivered"
+  | "planner_greeting.failed"
+  | "planner_greeting.skipped"
+  | "planner_greeting.retried";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the

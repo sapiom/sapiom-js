@@ -1,17 +1,25 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { HarnessAdapter, HarnessKind, HarnessSession, SpawnSpec } from "../shared/types.js";
+import type {
+  CreateSessionRequest,
+  HarnessAdapter,
+  HarnessKind,
+  HarnessSession,
+  SpawnSpec,
+} from "../shared/types.js";
 import { CodexAdapter } from "./adapters/codex.js";
 import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 import {
+  SessionInputGuardRejectedError,
   SessionManager,
   sanitizeExitTail,
   type PtySpawnFn,
   type SessionManagerOptions,
 } from "./session-manager.js";
+import { IngestCredentialRegistry } from "./ingest-credentials.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -100,6 +108,10 @@ describe("SessionManager", () => {
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
       platform?: SessionManagerOptions["platform"];
+      ingestCredentials?: SessionManagerOptions["ingestCredentials"];
+      writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
+      writeAgentSessionOwnerRegistry?:
+        SessionManagerOptions["writeAgentSessionOwnerRegistry"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -118,7 +130,9 @@ describe("SessionManager", () => {
     const manager = new SessionManager({
       adapters: { "claude-code": adapter },
       ingestUrl: "http://127.0.0.1:4100",
-      ingestToken: "boot-token",
+      ingestCredentials:
+        opts.ingestCredentials ??
+        new IngestCredentialRegistry(() => "boot-token"),
       sessionsPath,
       spawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
@@ -127,6 +141,8 @@ describe("SessionManager", () => {
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
       isPidAlive: opts.isPidAlive,
       platform: opts.platform,
+      writeSessionRegistry: opts.writeSessionRegistry,
+      writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -340,6 +356,34 @@ describe("SessionManager", () => {
       // Still just the one write from before the pty exited — no trailing \r.
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
     });
+
+    it("rechecks a scoped guard before Enter and leaves staged text unsubmitted after a rebind", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
+      const remainsAuthorized = vi
+        .fn<() => boolean>()
+        .mockReturnValueOnce(true)
+        .mockReturnValue(false);
+
+      const submitPromise = manager.submitInput(
+        session.id,
+        "planner message",
+        true,
+        remainsAuthorized,
+      );
+      const assertion = expect(submitPromise).rejects.toBeInstanceOf(
+        SessionInputGuardRejectedError,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      await assertion;
+
+      expect(remainsAuthorized).toHaveBeenCalledTimes(2);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("planner message");
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(2);
+      expect(spawns[0]?.pty.write).toHaveBeenLastCalledWith("\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+    });
   });
 
   describe("exit output capture (exitTail)", () => {
@@ -473,6 +517,29 @@ describe("SessionManager", () => {
       },
     );
 
+    it("rechecks a scoped guard after readiness and writes zero bytes after a queued planner is rebound", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      let authorized = true;
+      const submitPromise = manager.submitInput(
+        session.id,
+        "planner message",
+        true,
+        () => authorized,
+      );
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+
+      authorized = false;
+      manager.setReady(session.id);
+      const assertion = expect(submitPromise).rejects.toBeInstanceOf(
+        SessionInputGuardRejectedError,
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      await assertion;
+
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+    });
+
     it("throws SessionNotReadyError (never silently proceeds) when a session never becomes ready within the grace period", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
@@ -489,7 +556,7 @@ describe("SessionManager", () => {
     it("resuming resets ready back to false, even for a session that was ready before its pty exited", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-      manager.setAgentSessionId(session.id, "agent-1");
+      await manager.setAgentSessionId(session.id, "agent-1");
       manager.setReady(session.id);
       expect(manager.get(session.id)?.ready).toBe(true);
 
@@ -911,7 +978,7 @@ describe("SessionManager", () => {
     it("stops the old monitor when its pty exits and is replaced on resume", async () => {
       const { manager, spawns } = makeManager({ adapter: immediateAdapter() });
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-      manager.setAgentSessionId(session.id, "agent-1");
+      await manager.setAgentSessionId(session.id, "agent-1");
       spawns[0]?.emitData("› old Codex composer\r\n");
 
       await vi.advanceTimersByTimeAsync(300);
@@ -1168,7 +1235,7 @@ describe("SessionManager", () => {
 
     await expect(manager.resume(session.id)).rejects.toThrow(/no agentSessionId/);
 
-    manager.setAgentSessionId(session.id, "agent-uuid-1");
+    await manager.setAgentSessionId(session.id, "agent-uuid-1");
     spawns[0]?.emitExit(0);
     expect(manager.get(session.id)?.status).toBe("exited");
 
@@ -1181,6 +1248,561 @@ describe("SessionManager", () => {
     expect(resumed.id).toBe(session.id);
 
     await expect(manager.resume("does-not-exist")).rejects.toThrow(/Unknown session/);
+  });
+
+  it("pins vendor session identity write-once for live and resumed records", async () => {
+    const { manager } = makeManager();
+    const live = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(await manager.setAgentSessionId(live.id, "agent-live", "startup")).toBe(true);
+    expect(await manager.setAgentSessionId(live.id, "agent-live", "compact")).toBe(true);
+    expect(await manager.setAgentSessionId(live.id, "agent-other", "clear")).toBe(false);
+    expect(manager.get(live.id)?.agentSessionId).toBe("agent-live");
+
+    const resumed = await manager.registerHistorical({
+      agentSessionId: "agent-resumed",
+      harness: "claude-code",
+      cwd: "/tmp/resumed",
+      title: "resumed",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(await manager.setAgentSessionId(resumed.id, "agent-resumed")).toBe(true);
+    expect(await manager.setAgentSessionId(resumed.id, "agent-other", "resume")).toBe(false);
+    expect(manager.get(resumed.id)?.agentSessionId).toBe("agent-resumed");
+  });
+
+  it("rotates a pinned vendor identity once after fragmented trusted /clear input", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+    expect(manager.write(session.id, "/cl")).toBe(true);
+    expect(manager.write(session.id, "x")).toBe(true);
+    expect(manager.write(session.id, "\x7f")).toBe(true);
+    expect(manager.write(session.id, "ear\r")).toBe(true);
+
+    expect(await manager.setAgentSessionId(session.id, "agent-after", "clear")).toBe(true);
+    expect(manager.get(session.id)?.agentSessionId).toBe("agent-after");
+    // The gesture was consumed by the accepted rotation.
+    expect(await manager.setAgentSessionId(session.id, "agent-replayed", "clear")).toBe(false);
+    expect(manager.get(session.id)?.agentSessionId).toBe("agent-after");
+  });
+
+  it("fails closed on text containing commands, multiline input, paste controls, and a wrong hook source", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+    expect(manager.write(session.id, "please /clear\r")).toBe(true);
+    expect(await manager.setAgentSessionId(session.id, "agent-contained", "clear")).toBe(false);
+
+    expect(manager.write(session.id, "context\n/clear\r")).toBe(true);
+    expect(await manager.setAgentSessionId(session.id, "agent-multiline", "clear")).toBe(false);
+
+    // xterm may split the wrappers and preserve CR inside a multiline paste.
+    // No pasted line — including an inner exact command — may arm rotation.
+    expect(manager.write(session.id, "\x1b[20")).toBe(true);
+    expect(manager.write(session.id, "0~context\r/cl")).toBe(true);
+    expect(manager.write(session.id, "ear\r\x1b[20")).toBe(true);
+    expect(manager.write(session.id, "1~\r")).toBe(true);
+    expect(await manager.setAgentSessionId(session.id, "agent-pasted", "clear")).toBe(false);
+
+    // Ctrl-U safely abandons the prior draft and lets the exact replacement
+    // line authorize, while an unrelated hook source cannot consume it.
+    expect(manager.write(session.id, "draft\x15/clear\r")).toBe(true);
+    expect(await manager.setAgentSessionId(session.id, "agent-wrong-source", "resume")).toBe(false);
+    expect(await manager.setAgentSessionId(session.id, "agent-after", "clear")).toBe(true);
+  });
+
+  it("consumes a trusted transition when the matching hook repeats the same identity", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(session.id, "agent-same", "startup")).toBe(true);
+    expect(manager.write(session.id, "/clear\r")).toBe(true);
+
+    expect(await manager.setAgentSessionId(session.id, "agent-same", "clear")).toBe(true);
+    expect(await manager.setAgentSessionId(session.id, "agent-later", "clear")).toBe(false);
+    expect(manager.get(session.id)?.agentSessionId).toBe("agent-same");
+  });
+
+  it("lets protected submitInput arm picker and direct /resume transitions", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      expect(await manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+      const submitted = manager.submitInput(session.id, "/resume", true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await submitted).toBe(true);
+
+      // Picker navigation is escape-sequence input after `/resume` was
+      // submitted. A user can read for longer than the soft 30-second window;
+      // their later trusted selection refreshes it without model authority.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(manager.write(session.id, "\x1b[B\r")).toBe(true);
+      expect(await manager.setAgentSessionId(session.id, "agent-picked", "resume")).toBe(true);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-picked");
+
+      const direct = manager.submitInput(
+        session.id,
+        "/resume agent-direct",
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await direct).toBe(true);
+      expect(await manager.setAgentSessionId(session.id, "agent-direct", "resume")).toBe(true);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-direct");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never arms rotation from embedded newlines in raw or bracketed protected submits", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      expect(
+        await manager.setAgentSessionId(session.id, "agent-before", "startup"),
+      ).toBe(true);
+
+      const raw = manager.submitInput(
+        session.id,
+        "/clear\rnot-the-command",
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await raw).toBe(true);
+      expect(
+        await manager.setAgentSessionId(session.id, "agent-raw", "clear"),
+      ).toBe(false);
+
+      spawns[0]?.emitData("\x1b[?2004h");
+      const bracketed = manager.submitInput(
+        session.id,
+        "context\r/clear\nmore context",
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await bracketed).toBe(true);
+      expect(
+        await manager.setAgentSessionId(session.id, "agent-pasted", "clear"),
+      ).toBe(false);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-before");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an owned rotation target and consumes the authorization", async () => {
+    const { manager } = makeManager();
+    const first = await manager.create({
+      cwd: "/tmp/first",
+      harness: "claude-code",
+    });
+    const second = await manager.create({
+      cwd: "/tmp/second",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(first.id, "agent-first", "startup")).toBe(true);
+    expect(await manager.setAgentSessionId(second.id, "agent-second", "startup")).toBe(true);
+
+    expect(manager.write(first.id, "/clear\r")).toBe(true);
+    expect(await manager.setAgentSessionId(first.id, "agent-second", "clear")).toBe(false);
+    expect(manager.get(first.id)?.agentSessionId).toBe("agent-first");
+    // Rejection is still a one-shot use; a unique second target cannot reuse it.
+    expect(await manager.setAgentSessionId(first.id, "agent-third", "clear")).toBe(false);
+  });
+
+  it("rejects another session's owned identity on the initial pin", async () => {
+    const { manager } = makeManager();
+    const first = await manager.create({
+      cwd: "/tmp/first",
+      harness: "claude-code",
+    });
+    const second = await manager.create({
+      cwd: "/tmp/second",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(first.id, "agent-owned", "startup")).toBe(true);
+
+    expect(await manager.setAgentSessionId(second.id, "agent-owned", "startup")).toBe(false);
+    expect(manager.get(second.id)?.agentSessionId).toBeNull();
+
+    expect(manager.write(second.id, "/clear\r")).toBe(true);
+    expect(await manager.setAgentSessionId(second.id, "agent-owned", "clear")).toBe(false);
+    // The owned-target rejection consumes the grant even before an initial pin.
+    expect(await manager.setAgentSessionId(second.id, "agent-unique", "clear")).toBe(false);
+    expect(manager.get(second.id)?.agentSessionId).toBeNull();
+  });
+
+  it("durably tombstones rotated aliases across sessions and restarts without exposing raw ids", async () => {
+    const { manager } = makeManager();
+    const first = await manager.create({
+      cwd: "/tmp/first",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(first.id, "vendor-old", "startup")).toBe(true);
+    expect(manager.write(first.id, "/clear\r")).toBe(true);
+    expect(await manager.setAgentSessionId(first.id, "vendor-new", "clear")).toBe(true);
+
+    const second = await manager.create({
+      cwd: "/tmp/second",
+      harness: "claude-code",
+    });
+    expect(await manager.setAgentSessionId(second.id, "vendor-old", "startup")).toBe(false);
+
+    const ledgerPath = `${sessionsPath}.agent-session-owners.json`;
+    const ledger = await readFile(ledgerPath, "utf8");
+    expect(ledger).not.toContain("vendor-old");
+    expect(ledger).not.toContain("vendor-new");
+    expect((await stat(ledgerPath)).mode & 0o777).toBe(0o600);
+    expect(await readFile(sessionsPath, "utf8")).not.toContain("vendor-old");
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    const third = await restarted.create({
+      cwd: "/tmp/third",
+      harness: "claude-code",
+    });
+    expect(await restarted.setAgentSessionId(third.id, "vendor-old", "startup")).toBe(false);
+  });
+
+  it("serializes concurrent first claims so exactly one session owns a vendor id", async () => {
+    const { manager } = makeManager();
+    const first = await manager.create({ cwd: "/tmp/first", harness: "claude-code" });
+    const second = await manager.create({ cwd: "/tmp/second", harness: "claude-code" });
+
+    const results = await Promise.all([
+      manager.setAgentSessionId(first.id, "vendor-race", "startup"),
+      manager.setAgentSessionId(second.id, "vendor-race", "startup"),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(
+      [manager.get(first.id), manager.get(second.id)].filter(
+        (candidate) => candidate?.agentSessionId === "vendor-race",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails closed across a sidecar-committed registry failure and lets only the reserved owner retry", async () => {
+    let rejectRegistry = false;
+    const writeSessionRegistry = vi.fn(async (file: string, serialized: string) => {
+      if (rejectRegistry) throw new Error("injected sessions registry failure");
+      await writeFile(file, serialized, "utf8");
+    });
+    const { manager } = makeManager({ writeSessionRegistry });
+    const owner = await manager.create({ cwd: "/tmp/owner", harness: "claude-code" });
+    const attacker = await manager.create({ cwd: "/tmp/attacker", harness: "claude-code" });
+
+    rejectRegistry = true;
+    await expect(
+      manager.setAgentSessionId(owner.id, "vendor-partial", "startup"),
+    ).rejects.toThrow("injected sessions registry failure");
+    expect(manager.get(owner.id)?.agentSessionId).toBeNull();
+    // The first file committed. No other session can exploit the rolled-back
+    // public pointer to claim this now-ambiguous alias.
+    expect(
+      await manager.setAgentSessionId(attacker.id, "vendor-partial", "startup"),
+    ).toBe(false);
+    expect(manager.get(attacker.id)?.agentSessionId).toBeNull();
+
+    // Simulate the crash at the exact one-file boundary: sessions.json still
+    // has a null pointer, while the private ledger already reserves the alias.
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    const afterCrash = await restarted.create({
+      cwd: "/tmp/after-crash",
+      harness: "claude-code",
+    });
+    expect(
+      await restarted.setAgentSessionId(
+        afterCrash.id,
+        "vendor-partial",
+        "startup",
+      ),
+    ).toBe(false);
+
+    // Only the original durable owner ID may finish the public-pointer commit.
+    rejectRegistry = false;
+    expect(
+      await restarted.setAgentSessionId(owner.id, "vendor-partial", "startup"),
+    ).toBe(true);
+    const { manager: finalRestart } = makeManager();
+    await finalRestart.init();
+    const later = await finalRestart.create({ cwd: "/tmp/later", harness: "claude-code" });
+    expect(
+      await finalRestart.setAgentSessionId(later.id, "vendor-partial", "startup"),
+    ).toBe(false);
+  });
+
+  it("never lets an unrelated registry snapshot publish a rejected vendor pointer", async () => {
+    let rejectPointerWrite = true;
+    let releasePointerWrite: () => void = () => {};
+    let signalPointerWrite: () => void = () => {};
+    const pointerWriteStarted = new Promise<void>((resolve) => {
+      signalPointerWrite = resolve;
+    });
+    const pointerWriteGate = new Promise<void>((resolve) => {
+      releasePointerWrite = resolve;
+    });
+    const writeSessionRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        if (rejectPointerWrite && serialized.includes("vendor-snapshot-race")) {
+          signalPointerWrite();
+          await pointerWriteGate;
+          throw new Error("injected pointer registry failure");
+        }
+        await writeFile(file, serialized, "utf8");
+      },
+    );
+    const { manager } = makeManager({ writeSessionRegistry });
+    const owner = await manager.create({
+      cwd: "/tmp/owner",
+      harness: "claude-code",
+    });
+    const attacker = await manager.create({
+      cwd: "/tmp/attacker",
+      harness: "claude-code",
+    });
+
+    const pointerCommit = manager.setAgentSessionId(
+      owner.id,
+      "vendor-snapshot-race",
+      "startup",
+    );
+    await pointerWriteStarted;
+    // This fire-and-forget write used to snapshot the uncommitted pointer and
+    // persist it after the identity write rolled memory back.
+    manager.setReady(owner.id);
+    releasePointerWrite();
+    await expect(pointerCommit).rejects.toThrow(
+      "injected pointer registry failure",
+    );
+    await manager.flush();
+
+    expect(manager.get(owner.id)).toMatchObject({
+      agentSessionId: null,
+      ready: true,
+    });
+    const disk = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(disk.find((candidate) => candidate.id === owner.id)).toMatchObject({
+      agentSessionId: null,
+      ready: true,
+    });
+    expect(
+      await manager.setAgentSessionId(
+        attacker.id,
+        "vendor-snapshot-race",
+        "startup",
+      ),
+    ).toBe(false);
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    expect(restarted.get(owner.id)).toMatchObject({
+      agentSessionId: null,
+      ready: true,
+    });
+    rejectPointerWrite = false;
+    expect(
+      await restarted.setAgentSessionId(
+        owner.id,
+        "vendor-snapshot-race",
+        "startup",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an ambiguously committed ownership write fenced in-process and after restart", async () => {
+    const writeAgentSessionOwnerRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        await writeFile(file, serialized, { encoding: "utf8", mode: 0o600 });
+        throw new Error("injected post-commit owner-ledger failure");
+      },
+    );
+    const { manager } = makeManager({ writeAgentSessionOwnerRegistry });
+    const owner = await manager.create({
+      cwd: "/tmp/owner",
+      harness: "claude-code",
+    });
+    const attacker = await manager.create({
+      cwd: "/tmp/attacker",
+      harness: "claude-code",
+    });
+
+    await expect(
+      manager.setAgentSessionId(owner.id, "vendor-ambiguous", "startup"),
+    ).rejects.toThrow("injected post-commit owner-ledger failure");
+    expect(manager.get(owner.id)?.agentSessionId).toBeNull();
+    expect(manager.isAgentSessionIdentityReserved("vendor-ambiguous")).toBe(
+      true,
+    );
+    expect(
+      await manager.setAgentSessionId(
+        attacker.id,
+        "vendor-ambiguous",
+        "startup",
+      ),
+    ).toBe(false);
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    const afterRestart = await restarted.create({
+      cwd: "/tmp/after-restart",
+      harness: "claude-code",
+    });
+    expect(
+      await restarted.setAgentSessionId(
+        afterRestart.id,
+        "vendor-ambiguous",
+        "startup",
+      ),
+    ).toBe(false);
+
+    expect(
+      await restarted.setAgentSessionId(
+        owner.id,
+        "vendor-ambiguous",
+        "startup",
+      ),
+    ).toBe(true);
+  });
+
+  it("migrates legacy duplicate vendor pointers with first persisted owner winning", async () => {
+    const duplicate = "legacy-shared-vendor";
+    const first = {
+      id: "z-first-in-file",
+      agentSessionId: duplicate,
+      harness: "claude-code" as const,
+      cwd: "/tmp/first",
+      title: "first",
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    } satisfies HarnessSession;
+    const later = {
+      ...first,
+      id: "a-later-in-file",
+      cwd: "/tmp/later",
+      title: "later",
+    } satisfies HarnessSession;
+    await writeFile(sessionsPath, JSON.stringify([first, later], null, 2));
+
+    const { manager } = makeManager();
+    await manager.init();
+
+    expect(manager.get(first.id)?.agentSessionId).toBe(duplicate);
+    expect(manager.get(later.id)?.agentSessionId).toBeNull();
+    const migrated = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(
+      migrated.map(({ id, agentSessionId }) => ({ id, agentSessionId })),
+    ).toEqual([
+      { id: first.id, agentSessionId: duplicate },
+      { id: later.id, agentSessionId: null },
+    ]);
+    const ledgerPath = `${sessionsPath}.agent-session-owners.json`;
+    const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as {
+      owners: Record<string, string>;
+    };
+    expect(Object.values(ledger.owners)).toEqual([first.id]);
+    expect(await readFile(ledgerPath, "utf8")).not.toContain(duplicate);
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    expect(restarted.get(first.id)?.agentSessionId).toBe(duplicate);
+    expect(restarted.get(later.id)?.agentSessionId).toBeNull();
+    const claimant = await restarted.create({
+      cwd: "/tmp/claim",
+      harness: "claude-code",
+    });
+    expect(
+      await restarted.setAgentSessionId(
+        claimant.id,
+        duplicate,
+        "startup",
+      ),
+    ).toBe(false);
+    expect(restarted.get(claimant.id)?.agentSessionId).toBeNull();
+    expect(
+      restarted
+        .list()
+        .filter((candidate) => candidate.agentSessionId === duplicate),
+    ).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        harness: "claude-code",
+      }),
+    ]);
+  });
+
+  it("fails boot closed when the private ownership ledger is malformed", async () => {
+    await writeFile(
+      `${sessionsPath}.agent-session-owners.json`,
+      JSON.stringify({ version: 1, owners: { "not-a-digest": "session-1" } }),
+    );
+    const { manager } = makeManager();
+
+    await expect(manager.init()).rejects.toThrow(/invalid entry/);
+  });
+
+  it("hard-expires trusted rotation authority and clears it across relaunch", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      expect(await manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+      expect(manager.write(session.id, "/clear\r")).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await manager.setAgentSessionId(session.id, "agent-expired", "clear")).toBe(false);
+
+      expect(manager.write(session.id, "/resume\r")).toBe(true);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      // Input at the hard cap cannot revive an indefinitely stale picker.
+      expect(manager.write(session.id, "\x1b[B\r")).toBe(true);
+      expect(await manager.setAgentSessionId(session.id, "agent-picker-expired", "resume")).toBe(false);
+
+      expect(manager.write(session.id, "/resume\r")).toBe(true);
+      spawns[0]?.emitExit(0);
+      await manager.resume(session.id);
+      expect(await manager.setAgentSessionId(session.id, "agent-after-relaunch", "resume")).toBe(false);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-before");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("awaits an async buildLaunchOpts and merges its result into launch opts", async () => {
@@ -1200,13 +1822,39 @@ describe("SessionManager", () => {
     );
   });
 
+  it("keeps a trusted planner FIFO predecessor distinct from its history brief source", async () => {
+    const buildLaunchOpts = vi.fn(
+      async (_harnessSessionId: string, request: CreateSessionRequest) => ({
+        rehydratedFrom: request.rehydrateFrom,
+      }),
+    );
+    const { manager } = makeManager({ buildLaunchOpts });
+
+    const session = await manager.create(
+      {
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+        rehydrateFrom: "recorded-history-ancestor",
+      },
+      { handoffFromSessionId: "queue-owning-predecessor" },
+    );
+
+    expect(buildLaunchOpts).toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({
+        rehydrateFrom: "recorded-history-ancestor",
+      }),
+    );
+    expect(session.rehydratedFrom).toBe("queue-owning-predecessor");
+  });
+
   it("also awaits an async buildLaunchOpts on resume()", async () => {
     const buildLaunchOpts = vi.fn(async (harnessSessionId: string) => ({
       mcpConfigFile: `/generated/${harnessSessionId}/mcp-config.json`,
     }));
     const { manager, adapter, spawns } = makeManager({ buildLaunchOpts });
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-    manager.setAgentSessionId(session.id, "agent-uuid-1");
+    await manager.setAgentSessionId(session.id, "agent-uuid-1");
     spawns[0]?.emitExit(0);
 
     await manager.resume(session.id);
@@ -1219,7 +1867,7 @@ describe("SessionManager", () => {
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {
     const { manager } = makeManager();
-    const session = manager.registerHistorical({
+    const session = await manager.registerHistorical({
       agentSessionId: "agent-uuid-9",
       harness: "claude-code",
       cwd: "/tmp/proj",
@@ -1240,8 +1888,8 @@ describe("SessionManager", () => {
      *  the phantom shape: 16 of 49 real registry entries on the dev machine
      *  measured this way (SAP-2057 first reported 15 of 46), and
      *  every one of them was a Resume button guaranteed to fail. */
-    function registerPhantom(manager: SessionManager) {
-      return manager.registerHistorical({
+    async function registerPhantom(manager: SessionManager) {
+      return await manager.registerHistorical({
         agentSessionId: "agent-uuid-phantom",
         harness: "claude-code",
         cwd: "/tmp/proj",
@@ -1253,7 +1901,7 @@ describe("SessionManager", () => {
     it("throws SessionNotResumeableError instead of spawning when the agent no longer holds the conversation", async () => {
       const adapter = createFakeAdapter({ canResume: vi.fn(async () => false) });
       const { manager, spawns } = makeManager({ adapter });
-      const session = registerPhantom(manager);
+      const session = await registerPhantom(manager);
 
       await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
       // The point of the pre-flight: no doomed pty. Previously this spawned
@@ -1265,7 +1913,7 @@ describe("SessionManager", () => {
     it("names the agent and the reason so the 409 tells the user WHY", async () => {
       const adapter = createFakeAdapter({ canResume: vi.fn(async () => false) });
       const { manager } = makeManager({ adapter });
-      const session = registerPhantom(manager);
+      const session = await registerPhantom(manager);
 
       await expect(manager.resume(session.id)).rejects.toMatchObject({
         code: "SESSION_NOT_RESUMEABLE",
@@ -1279,7 +1927,7 @@ describe("SessionManager", () => {
     it("probes the agent's store with the session's own agentSessionId and cwd", async () => {
       const canResume = vi.fn(async () => true);
       const { manager } = makeManager({ adapter: createFakeAdapter({ canResume }) });
-      const session = registerPhantom(manager);
+      const session = await registerPhantom(manager);
 
       await manager.resume(session.id);
 
@@ -1288,7 +1936,7 @@ describe("SessionManager", () => {
 
     it("leaves a rejected session's record untouched — still exited, same lastActiveAt", async () => {
       const { manager } = makeManager({ adapter: createFakeAdapter({ canResume: vi.fn(async () => false) }) });
-      const session = registerPhantom(manager);
+      const session = await registerPhantom(manager);
 
       await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
 
@@ -1306,7 +1954,7 @@ describe("SessionManager", () => {
           throw new Error("node-pty exploded");
         },
       });
-      const session = registerPhantom(manager);
+      const session = await registerPhantom(manager);
 
       await expect(manager.resume(session.id)).rejects.toThrow("node-pty exploded");
 
@@ -1402,7 +2050,7 @@ describe("SessionManager", () => {
       };
       const { manager } = makeManager({ buildLaunchOpts, prepareWorkspaceContext, spawnPty });
 
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",
         cwd: "/tmp/proj",
@@ -1422,7 +2070,7 @@ describe("SessionManager", () => {
       });
       const { manager, spawns } = makeManager({ prepareWorkspaceContext });
 
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",
         cwd: "/tmp/proj",
@@ -1449,7 +2097,7 @@ describe("SessionManager", () => {
       const { manager } = makeManager();
       await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).resolves.toBeDefined();
 
-      const historical = manager.registerHistorical({
+      const historical = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",
         cwd: "/tmp/proj",
@@ -1496,7 +2144,7 @@ describe("SessionManager", () => {
       const ensureCanvasTemplate = vi.fn(async () => {});
       const { manager } = makeManager({ ensureCanvasTemplate });
 
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",
         cwd: "/tmp/proj",
@@ -1553,7 +2201,7 @@ describe("SessionManager", () => {
         throw new Error("read-only fs");
       });
       const { manager } = makeManager({ ensureCanvasTemplate });
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",
         cwd: "/tmp/proj",
@@ -1732,6 +2380,23 @@ describe("SessionManager", () => {
     expect(env?.["SAPIOM_HARNESS_INGEST_URL"]).toBe("http://127.0.0.1:4100/ingest");
     expect(env?.["SAPIOM_HARNESS_INGEST_TOKEN"]).toBe("boot-token");
     expect(env?.["SAPIOM_HARNESS_SESSION_ID"]).toBe(session.id);
+  });
+
+  it("issues and revokes a capability for the exact spawned session", async () => {
+    const issue = vi.fn((id: string) => `token-for:${id}`);
+    const revoke = vi.fn();
+    const { manager, spawns } = makeManager({
+      ingestCredentials: { issue, revoke, authenticate: () => false },
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(issue).toHaveBeenCalledWith(session.id);
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(revoke).toHaveBeenCalledWith(session.id);
   });
 
   it("owns a colour-capable PTY environment instead of inheriting launcher suppression", async () => {
@@ -2006,7 +2671,7 @@ describe("SessionManager", () => {
       const { manager } = makeManager();
 
       // Simulate a session record that arrived from disk or an earlier build.
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-session-abc",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",
@@ -2020,7 +2685,7 @@ describe("SessionManager", () => {
     it("resume() ExternalHarnessError has code HARNESS_EXTERNAL and names the harness label", async () => {
       const { manager } = makeManager();
 
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-session-def",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",
@@ -2045,7 +2710,7 @@ describe("SessionManager", () => {
     it("submitInput() throws ExternalHarnessError for a session with harness='conductor' and no live pty", async () => {
       const { manager } = makeManager();
 
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-session-ghi",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",
@@ -2059,7 +2724,7 @@ describe("SessionManager", () => {
     it("submitInput() ExternalHarnessError has code HARNESS_EXTERNAL", async () => {
       const { manager } = makeManager();
 
-      const session = manager.registerHistorical({
+      const session = await manager.registerHistorical({
         agentSessionId: "agent-session-jkl",
         harness: "conductor" as HarnessKind,
         cwd: "/tmp/conductor-proj",

@@ -9,6 +9,7 @@
  */
 
 import express, { type Router } from "express";
+import rateLimit from "express-rate-limit";
 
 import type { AnalyticsEvent, HarnessKind } from "../shared/types.js";
 import type { NormalizeContext } from "../core/collector/normalizer.js";
@@ -24,8 +25,8 @@ export interface IngestSessionContext {
 }
 
 export interface IngestDeps {
-  /** Per-boot secret; requests without a matching bearer token are rejected. */
-  ingestToken: string;
+  /** Authenticate the bearer capability against the body session id. */
+  authenticate: (harnessSessionId: string, token: string) => boolean;
   /** Raw hook payload -> AnalyticsEvent, or null to skip (e.g. PreToolUse). */
   normalize: (
     hookEvent: string,
@@ -35,7 +36,12 @@ export interface IngestDeps {
   /** Look up session context for a harnessSessionId. Undefined = unknown session, drop. */
   resolveSession: (harnessSessionId: string) => IngestSessionContext | undefined;
   /** Called once a session.start event reveals the agent's own session id. */
-  onAgentSessionResolved: (harnessSessionId: string, agentSessionId: string) => void;
+  /** False rejects a SessionStart whose vendor identity conflicts with its pin. */
+  onAgentSessionResolved: (
+    harnessSessionId: string,
+    agentSessionId: string,
+    source: unknown,
+  ) => boolean | Promise<boolean>;
   /**
    * Called once a SessionStart(-equivalent) event is actually processed for
    * a session — the signal that its TUI is genuinely interactive, not just
@@ -56,6 +62,10 @@ export interface IngestDeps {
    *  enrichment), before it's persisted — e.g. to feed a tool.call event's
    *  command/output text to dev-server port detection. */
   onNormalizedEvent?: (event: AnalyticsEvent) => void;
+  /** Local-only annotation (for example planner control-turn correlation). */
+  decorateEvent?: (event: AnalyticsEvent) => AnalyticsEvent;
+  /** Content-free projection used only for remote product telemetry. */
+  projectTelemetryEvent?: (event: AnalyticsEvent) => AnalyticsEvent;
   /**
    * Called for every event AFTER it has been persisted to the local store —
    * the seam for consumers that need to read the store back and see this event
@@ -97,10 +107,25 @@ export interface IngestRequestBody {
   payload?: Record<string, unknown>;
 }
 
+export interface IngestRouterOptions {
+  /** Test seam; production permits sustained hook traffic while bounding floods. */
+  rateLimitWindowMs?: number;
+  rateLimitMax?: number;
+}
+
 function bearerToken(header: string | undefined): string | null {
   if (!header || !header.startsWith("Bearer ")) return null;
   return header.slice("Bearer ".length);
 }
+
+/** Shared by HTTP hooks and in-process Codex tailing because both reuse the
+ * same sequence counter. SessionStart's awaited durable identity commit must
+ * remain ahead of immediately-following prompt/stop events even though the
+ * HTTP hook endpoint acknowledges before processing finishes. */
+const ingestQueues = new WeakMap<
+  SeqCounter,
+  Map<string, Promise<unknown>>
+>();
 
 export async function processIngest(
   body: IngestRequestBody,
@@ -110,6 +135,31 @@ export async function processIngest(
   const hookEvent = body.hookEvent;
   const harnessSessionId = body.harnessSessionId;
   if (!hookEvent || !harnessSessionId) return;
+
+  let queues = ingestQueues.get(seqCounter);
+  if (!queues) {
+    queues = new Map();
+    ingestQueues.set(seqCounter, queues);
+  }
+  const prior = queues.get(harnessSessionId) ?? Promise.resolve();
+  const next = prior
+    .catch(() => {})
+    .then(() => processIngestNow(body, deps, seqCounter));
+  queues.set(harnessSessionId, next);
+  try {
+    await next;
+  } finally {
+    if (queues.get(harnessSessionId) === next) queues.delete(harnessSessionId);
+  }
+}
+
+async function processIngestNow(
+  body: IngestRequestBody,
+  deps: IngestDeps,
+  seqCounter: SeqCounter,
+): Promise<void> {
+  const hookEvent = body.hookEvent!;
+  const harnessSessionId = body.harnessSessionId!;
 
   const session = deps.resolveSession(harnessSessionId);
   if (!session) return;
@@ -141,28 +191,75 @@ export async function processIngest(
   }
 
   if (hookEvent === "SessionStart") {
-    if (finalEvent.agentSessionId) deps.onAgentSessionResolved(harnessSessionId, finalEvent.agentSessionId);
+    if (
+      finalEvent.agentSessionId &&
+      !(await deps.onAgentSessionResolved(
+        harnessSessionId,
+        finalEvent.agentSessionId,
+        finalEvent.payload.source,
+      ))
+    ) {
+      // The bearer capability authenticates the harness session, not an
+      // arbitrary vendor resume pointer inside its payload. Ignore the entire
+      // conflicting start event: it cannot mark the session ready or enter
+      // local/remote event history under the pinned identity.
+      return;
+    }
     deps.onSessionReady?.(harnessSessionId);
+  } else {
+    // Only SessionStart may propose or rotate a vendor identity through the
+    // authority check above. Every other hook's `payload.session_id` is
+    // model/provider-authored input: pin its local event envelope back to the
+    // server-owned session record before indexing, correlation, persistence,
+    // or telemetry. Otherwise session A can name B here and make record reads,
+    // turn counts, and rehydration coalesce the two conversations locally.
+    finalEvent = {
+      ...finalEvent,
+      agentSessionId: session.agentSessionId,
+    };
   }
 
+  finalEvent = deps.decorateEvent?.(finalEvent) ?? finalEvent;
   deps.onNormalizedEvent?.(finalEvent);
   await deps.store.append(finalEvent);
   deps.onEventPersisted?.(finalEvent);
-  deps.batcher.enqueue(finalEvent);
+  deps.batcher.enqueue(deps.projectTelemetryEvent?.(finalEvent) ?? finalEvent);
 
   if (hookEvent === "SessionEnd") {
     seqCounter.reset(harnessSessionId);
   }
 }
 
-export function createIngestRouter(deps: IngestDeps): Router {
+export function createIngestRouter(
+  deps: IngestDeps,
+  options: IngestRouterOptions = {},
+): Router {
   const seqCounter = deps.seqCounter ?? createSeqCounter();
   const router = express.Router();
+  const ingestRateLimiter = rateLimit({
+    windowMs: options.rateLimitWindowMs ?? 60 * 1000,
+    // One local Studio can run many hook-producing sessions concurrently.
+    // 100 requests/second leaves ample headroom without allowing an agent or
+    // invalid-token caller to spin an unbounded authorization/processing loop.
+    max: options.rateLimitMax ?? 6_000,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
   router.use(express.json({ limit: "1mb" }));
 
-  router.post("/ingest", (req, res) => {
+  router.post("/ingest", ingestRateLimiter, (req, res) => {
     const token = bearerToken(req.headers.authorization);
-    if (token !== deps.ingestToken) {
+    const body: IngestRequestBody =
+      typeof req.body === "object" && req.body !== null && !Array.isArray(req.body)
+        ? (req.body as IngestRequestBody)
+        : {};
+    const harnessSessionId =
+      typeof body.harnessSessionId === "string" ? body.harnessSessionId : "";
+    if (
+      token === null ||
+      harnessSessionId === "" ||
+      !deps.authenticate(harnessSessionId, token)
+    ) {
       res.status(401).json({ ok: false });
       return;
     }
@@ -171,7 +268,7 @@ export function createIngestRouter(deps: IngestDeps): Router {
     // agent's hook pipeline. Processing happens after the response is sent.
     res.status(200).json({ ok: true });
 
-    void processIngest(req.body as IngestRequestBody, deps, seqCounter).catch((err) => {
+    void processIngest(body, deps, seqCounter).catch((err) => {
       deps.onError?.(err);
     });
   });

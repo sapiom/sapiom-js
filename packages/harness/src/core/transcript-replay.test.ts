@@ -33,6 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { IngestCredentialRegistry } from "./ingest-credentials.js";
 
 import { SessionManager } from "./session-manager.js";
 import type { HarnessAdapter, SpawnSpec } from "../shared/types.js";
@@ -296,7 +297,7 @@ describe.skipIf(!nodePty)("transcript-fixture replay via SessionManager (real pt
     manager = new SessionManager({
       adapters: { "claude-code": makeFakeAgentAdapter("basic-echo") },
       ingestUrl: "http://127.0.0.1:0",
-      ingestToken: "test-token",
+      ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
       sessionsPath,
       // No spawnPty override — uses the real node-pty.
     });

@@ -169,6 +169,31 @@ describe("foldSessionRecord", () => {
     expect(record.turns[0]).toMatchObject({ prompt: null, assistantText: "unprompted", incomplete: false });
   });
 
+  it("hides planner control input while retaining its assistant greeting", () => {
+    const record = foldSessionRecord([
+      event({
+        type: "prompt.submitted",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: {
+          prompt: "private infrastructure greeting instruction",
+          plannerOrigin: "infrastructure",
+          plannerAttemptId: "attempt-1",
+        },
+      }),
+      completed("2026-07-01T10:00:01.000Z", "What would you like to build?"),
+    ]);
+
+    expect(record.turnCount).toBe(0);
+    expect(record.turns).toHaveLength(1);
+    expect(record.turns[0]).toMatchObject({
+      prompt: null,
+      assistantText: "What would you like to build?",
+    });
+    expect(JSON.stringify(record)).not.toContain(
+      "private infrastructure greeting instruction",
+    );
+  });
+
   it("a second prompt closes the open turn as incomplete rather than dropping it", () => {
     const record = foldSessionRecord([
       prompt("2026-07-01T10:00:00.000Z", "first"),

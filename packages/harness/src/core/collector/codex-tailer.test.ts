@@ -27,6 +27,9 @@ function taskCompleteLine(): string {
 function taskStartedLine(): string {
   return JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }) + "\n";
 }
+function assistantMessageLine(message: string): string {
+  return JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message } }) + "\n";
+}
 
 describe("tailCodexRollout", () => {
   let dir: string;
@@ -122,6 +125,20 @@ describe("tailCodexRollout", () => {
     expect(onEvent.mock.calls.filter(([event]) => event !== "SessionStart")).toEqual([
       ["Stop", { stop_hook_active: false }],
     ]);
+  });
+
+  it("carries the latest assistant message into Codex turn completion", async () => {
+    await writeFile(rolloutPath, sessionMetaLine("agent-1", "/tmp/proj", "2026-01-01T00:00:00.000Z"));
+    start();
+    await sleep(POLL_MS * 4);
+
+    await appendFile(rolloutPath, assistantMessageLine("What should this system accomplish?") + taskCompleteLine());
+    await sleep(POLL_MS * 4);
+
+    expect(onEvent).toHaveBeenCalledWith("Stop", {
+      stop_hook_active: false,
+      last_assistant_message: "What should this system accomplish?",
+    });
   });
 
   it("processes lines in file order across multiple poll cycles", async () => {

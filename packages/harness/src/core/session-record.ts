@@ -162,8 +162,17 @@ export function foldSessionRecord(
         // Keep it, marked incomplete — dropping it would lose real tool calls.
         close(null);
         open = {
-          prompt: typeof payload.prompt === "string" ? payload.prompt : "",
-          promptAt: event.ts,
+          // Planner greeting control is retained locally for diagnostics but
+          // projected as an assistant-initiated turn: its private instruction
+          // must never appear as a user message or inflate the human turn count.
+          prompt:
+            payload.plannerOrigin === "infrastructure"
+              ? null
+              : typeof payload.prompt === "string"
+                ? payload.prompt
+                : "",
+          promptAt:
+            payload.plannerOrigin === "infrastructure" ? null : event.ts,
           toolCalls: [],
         };
         break;

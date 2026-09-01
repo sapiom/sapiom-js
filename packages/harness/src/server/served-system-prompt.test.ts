@@ -100,7 +100,7 @@ describe("served system prompt reaches the launched session", () => {
     const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
     // A resume needs an agent session id; the fake adapter reports none, so record one
     // the way the hook ingest would.
-    server.sessionManager.setAgentSessionId(session.id, "agent-session-1");
+    await server.sessionManager.setAgentSessionId(session.id, "agent-session-1");
     await server.sessionManager.kill(session.id);
 
     served = "# Redeployed prompt";

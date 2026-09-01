@@ -37,6 +37,7 @@ import { resolveSpawnTarget } from "./spawn-target.js";
 import { parseTaskStreamLine } from "./task-stream.js";
 import { AdapterNotFoundError, ExternalHarnessError } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
+import type { IngestCredentialProvider } from "./ingest-credentials.js";
 
 /** Rolling status-line window kept per task — enough for the activity view's
  *  recent-history list without unbounded growth on a chatty run. */
@@ -126,10 +127,8 @@ export interface TaskManagerOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   /** Base URL the harness server is reachable at, e.g. http://127.0.0.1:4100. */
   ingestUrl: string;
-  /** Per-boot secret — same one real sessions get, so the task's hooks can
-   *  POST to /ingest (events for an unknown session id are silently dropped
-   *  there, which is exactly what we want for tasks today). */
-  ingestToken: string;
+  /** Per-task capability issuer; shared ingest tokens are not supported. */
+  ingestCredentials: IngestCredentialProvider;
   collectorUrl?: string;
   /** Same builder real sessions use — generates the task's own --settings /
    *  --mcp-config / system-prompt files under generated/<taskId>. */
@@ -148,7 +147,8 @@ export type TaskStatusListener = (task: BackgroundTask) => void;
 export class TaskManager {
   private readonly adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   private readonly ingestUrl: string;
-  private readonly ingestToken: string;
+  private readonly issueIngestToken: (sessionId: string) => string;
+  private readonly revokeIngestToken: (sessionId: string) => void;
   private readonly collectorUrl: string | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly spawnProcess: TaskSpawnFn;
@@ -182,7 +182,10 @@ export class TaskManager {
   constructor(options: TaskManagerOptions) {
     this.adapters = options.adapters;
     this.ingestUrl = options.ingestUrl;
-    this.ingestToken = options.ingestToken;
+    this.issueIngestToken = (sessionId) =>
+      options.ingestCredentials.issue(sessionId);
+    this.revokeIngestToken = (sessionId) =>
+      options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
     this.buildLaunchOpts = options.buildLaunchOpts ?? (() => ({}));
     this.spawnProcess = options.spawnProcess ?? defaultSpawn;
@@ -287,7 +290,7 @@ export class TaskManager {
       else env[key] = value;
     }
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
-    env[ENV.ingestToken] = this.ingestToken;
+    env[ENV.ingestToken] = this.issueIngestToken(id);
     env[ENV.sessionId] = id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
 
@@ -321,6 +324,7 @@ export class TaskManager {
       // Never launched — nothing to track, but the generated config files
       // buildLaunchOpts just wrote still need their exit-time cleanup.
       releasePending();
+      this.revokeIngestToken(id);
       this.onCleanup(id);
       throw err;
     }
@@ -452,6 +456,7 @@ export class TaskManager {
   private finish(id: string, exitCode: number | null): void {
     const task = this.tasks.get(id);
     if (!task || task.status !== "running") return;
+    this.revokeIngestToken(id);
     const resultError = this.resultErrors.get(id);
     const failed = exitCode !== 0 || resultError !== undefined;
     task.status = failed ? "failed" : "completed";

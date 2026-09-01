@@ -41,7 +41,14 @@ import {
   SPAWNABLE_HARNESS_KINDS,
   EDITOR_KINDS,
 } from "../shared/types.js";
-import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError, SpawnTargetError } from "../core/errors.js";
+import {
+  AdapterNotFoundError,
+  AgentSessionIdentityReservedError,
+  ExternalHarnessError,
+  SessionAlreadyLiveError,
+  SessionNotResumeableError,
+  SpawnTargetError,
+} from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
@@ -79,7 +86,7 @@ const createSessionSchema = z.object({
   profile: z.string().optional(),
   rehydrateFrom: z.string().min(1).optional(),
   theme: z.enum(["light", "dark"]).optional(),
-}) satisfies z.ZodType<CreateSessionRequest>;
+}).strict() satisfies z.ZodType<CreateSessionRequest>;
 
 const injectInputSchema = z.object({
   text: z.string(),
@@ -690,6 +697,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
     if (
       err instanceof ExternalHarnessError ||
+      err instanceof AgentSessionIdentityReservedError ||
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionNotResumeableError
     ) {
@@ -714,6 +722,41 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const { agentSessionId, harness, title, lastActiveAt } = parsed.data;
     const cwd = normalizeCwd(parsed.data.cwd);
     try {
+      // Resolve an already-owned registry row before probing or mutating any
+      // adapter state. Generic adoption must never bypass the project/user
+      // authority and focused-context checks on the scoped planner route.
+      const durableOwner = sessionManager.getAgentSessionOwner(agentSessionId);
+      const identityReserved =
+        sessionManager.isAgentSessionIdentityReserved(agentSessionId);
+      const identityOwners = sessionManager
+        .list()
+        .filter((session) => session.agentSessionId === agentSessionId);
+      if (
+        durableOwner?.planning !== undefined ||
+        identityOwners.some((session) => session.planning !== undefined)
+      ) {
+        res.status(409).json({
+          code: "planner_session_requires_scoped_route",
+          error: "Planner sessions must be resumed through their project route",
+        });
+        return;
+      }
+      // For ordinary sessions, cwd remains part of the historical-record
+      // identity. It is deliberately checked only after the vendor id has
+      // been fenced from every planner owner above: client-supplied cwd must
+      // not alias around the scoped planner route.
+      const existing = identityOwners.find(
+        (session) => normalizeCwd(session.cwd) === cwd,
+      );
+      const historicalReservation =
+        identityReserved &&
+        (durableOwner === undefined ||
+          durableOwner.agentSessionId !== agentSessionId);
+      const conflictingCurrentOwner =
+        identityOwners.length > 0 && existing === undefined;
+      if (historicalReservation || conflictingCurrentOwner) {
+        throw new AgentSessionIdentityReservedError();
+      }
       // Never take the client's word for resumability — it's re-derived from
       // the agent's own store here, so a stale history row (transcript deleted
       // between the list and the click) can't leave a phantom record behind.
@@ -732,13 +775,15 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // mixed-separator form the SPA used to send, which never equals the
       // resolved `cwd` above — so an exact compare re-adopts the same
       // conversation into a duplicate row on every Resume.
-      const existing = sessionManager
-        .list()
-        .find(
-          (session) =>
-            session.agentSessionId === agentSessionId && normalizeCwd(session.cwd) === cwd,
-        );
-      const target = existing ?? sessionManager.registerHistorical({ agentSessionId, harness, cwd, title, lastActiveAt });
+      const target =
+        existing ??
+        (await sessionManager.registerHistorical({
+          agentSessionId,
+          harness,
+          cwd,
+          title,
+          lastActiveAt,
+        }));
       res.json(await sessionManager.resume(target.id));
     } catch (err) {
       if (sendResumeError(res, err)) return;
@@ -774,6 +819,13 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   router.post("/sessions/:id/resume", async (req, res, next) => {
+    if (sessionManager.get(req.params.id)?.planning) {
+      res.status(409).json({
+        code: "planner_session_requires_scoped_route",
+        error: "Planner sessions must be resumed through their project route",
+      });
+      return;
+    }
     try {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
@@ -797,6 +849,13 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const parsed = injectInputSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    if (sessionManager.get(req.params.id)?.planning) {
+      res.status(409).json({
+        code: "planner_session_requires_scoped_route",
+        error: "Planner input must use the project-scoped message route",
+      });
       return;
     }
     try {

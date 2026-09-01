@@ -88,6 +88,7 @@ export function tailCodexRollout(options: CodexTailerOptions): CodexTailerHandle
   let stopped = false;
   let polling = false;
   const pendingCalls = new Map<string, PendingFunctionCall>();
+  let lastAssistantText: string | null = null;
 
   // Resolve the resume-vs-fresh baseline exactly once, immediately, before
   // any poll reads content. `startFromBeginning` (see CodexTailerOptions)
@@ -181,8 +182,19 @@ export function tailCodexRollout(options: CodexTailerOptions): CodexTailerHandle
     if (entry.type === "event_msg") {
       if (payload?.type === "user_message" && typeof payload.message === "string") {
         options.onEvent("UserPromptSubmit", { prompt: payload.message });
+      } else if (
+        payload?.type === "agent_message" &&
+        typeof payload.message === "string"
+      ) {
+        lastAssistantText = payload.message;
       } else if (payload?.type === "task_complete") {
-        options.onEvent("Stop", { stop_hook_active: false });
+        options.onEvent("Stop", {
+          stop_hook_active: false,
+          ...(lastAssistantText
+            ? { last_assistant_message: lastAssistantText }
+            : {}),
+        });
+        lastAssistantText = null;
       }
       return;
     }
@@ -201,6 +213,22 @@ export function tailCodexRollout(options: CodexTailerOptions): CodexTailerHandle
           tool_input: call?.argumentsRaw ?? "",
           tool_response: payload.output ?? "",
         });
+      } else if (
+        payload?.type === "message" &&
+        payload.role === "assistant" &&
+        Array.isArray(payload.content)
+      ) {
+        const text = payload.content
+          .map((part) =>
+            typeof part === "object" &&
+            part !== null &&
+            typeof (part as { text?: unknown }).text === "string"
+              ? (part as { text: string }).text
+              : "",
+          )
+          .filter(Boolean)
+          .join("\n");
+        if (text) lastAssistantText = text;
       }
       return;
     }

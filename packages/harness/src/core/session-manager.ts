@@ -5,7 +5,7 @@
  * server restarts, even though the ptys themselves do not.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdir, readFile, rename, writeFile, chmod } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -21,6 +21,7 @@ import {
   type LaunchOpts,
   type SpawnSpec,
 } from "../shared/types.js";
+import type { PlannerSessionMetadata } from "../shared/agent-map.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -33,6 +34,7 @@ import { resolveSpawnTarget } from "./spawn-target.js";
 import { stripAnsi } from "./strip-ansi.js";
 import {
   AdapterNotFoundError,
+  AgentSessionIdentityReservedError,
   ExternalHarnessError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
@@ -40,15 +42,26 @@ import {
   UnknownSessionError,
 } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
+import type { IngestCredentialProvider } from "./ingest-credentials.js";
 
 export {
   AdapterNotFoundError,
+  AgentSessionIdentityReservedError,
   ExternalHarnessError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
   UnknownSessionError,
 } from "./errors.js";
+
+/** An optional server-owned submit guard rejected immediately at the PTY
+ * boundary. Generic callers omit the guard and retain existing behavior. */
+export class SessionInputGuardRejectedError extends Error {
+  constructor(readonly staged: boolean) {
+    super("session input authorization changed before submission");
+    this.name = "SessionInputGuardRejectedError";
+  }
+}
 
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
 // an unsupported platform surfaces as a spawn-time error instead of crashing
@@ -192,6 +205,24 @@ const HOOK_READY_POLL_MS = 1_000;
 const READY_GRACE_MS = 8_000;
 /** Poll interval while waiting out READY_GRACE_MS. */
 const READY_POLL_MS = 150;
+/**
+ * Vendor session ids normally remain pinned for the lifetime of a harness
+ * session. Claude's trusted `/clear` and `/resume` commands are the two
+ * exceptions: both can legitimately cause the next SessionStart hook to
+ * report a different id. Keep that exception one-shot and short-lived so a
+ * later hook cannot reuse an old user gesture as authority.
+ */
+const AGENT_SESSION_ROTATION_TTL_MS = 30_000;
+/** A picker may reasonably stay open longer than the soft grant. Trusted
+ * selection/navigation input refreshes it, but never beyond this hard cap. */
+const AGENT_SESSION_PICKER_ROTATION_MAX_MS = 5 * 60_000;
+/** Bound raw terminal input retained solely to recognize a trusted command. */
+const TRUSTED_INPUT_LINE_MAX = 256;
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+const AGENT_SESSION_OWNER_FILE_VERSION = 1;
+const AGENT_SESSION_OWNER_MAX_ENTRIES = 50_000;
+const AGENT_SESSION_OWNER_MAX_BYTES = 4 * 1024 * 1024;
 /** See `recordActivity()`: minimum gap between two `onActivity` broadcasts
  *  for the same session — pty.onData fires per chunk (often many times a
  *  second for a busy TUI), but the SPA's busy indicator only needs "this
@@ -271,6 +302,7 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
   req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
+  context?: { promptAppendix?: string },
 ) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
@@ -279,8 +311,8 @@ export interface SessionManagerOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   /** Base URL the harness server is reachable at, e.g. http://127.0.0.1:4100. */
   ingestUrl: string;
-  /** Per-boot secret; injected into every session's env so hook scripts can auth to /ingest. */
-  ingestToken: string;
+  /** Per-session capability issuer; shared ingest tokens are not supported. */
+  ingestCredentials: IngestCredentialProvider;
   /** Forwarded to sessions as SAPIOM_COLLECTOR_URL when set. */
   collectorUrl?: string;
   /** Absolute path to the session registry file. Defaults to HARNESS_PATHS.sessions (expanded). */
@@ -290,6 +322,14 @@ export interface SessionManagerOptions {
   buildLaunchOpts?: LaunchOptsBuilder;
   now?: () => string;
   generateId?: () => string;
+  /** Test seam for deterministic registry persistence failures. Production
+   * uses the atomic mode-preserving writer below. */
+  writeSessionRegistry?: (file: string, serialized: string) => Promise<void>;
+  /** Test seam for faults after the private identity ledger becomes durable. */
+  writeAgentSessionOwnerRegistry?: (
+    file: string,
+    serialized: string,
+  ) => Promise<void>;
   /**
    * Writes HARNESS_CONTEXT_FILE for a session — the caller (server/index.ts's
    * `writeSessionContext`) owns resolving the session's `boundWorkflowPath`
@@ -333,6 +373,23 @@ export interface SessionManagerOptions {
   platform?: NodeJS.Platform;
 }
 
+export interface TrustedSessionCreateOptions {
+  /** Server-authored only. Never populated from CreateSessionRequest. */
+  planning?: (sessionId: string) => PlannerSessionMetadata;
+  /** Focused trusted context composed into the existing system prompt. */
+  promptAppendix?: (sessionId: string) => string;
+  /** Server-owned coordinator predecessor. This may differ from the older
+   * history record used to build the rehydration brief. */
+  handoffFromSessionId?: string;
+}
+
+export interface TrustedSessionResumeOptions {
+  /** Server-authored only. Used to suppress fresh-only lifecycle work. */
+  planning?: PlannerSessionMetadata;
+  /** Recomputed focused context for the resumed process. */
+  promptAppendix?: string;
+}
+
 interface PtyHandle {
   pty: IPty;
   buffer: string;
@@ -368,6 +425,24 @@ interface PtyHandle {
    * would render as literal text.
    */
   bracketedPaste: BracketedPasteState;
+  /** Bounded, server-observed terminal line used to recognize `/clear` and
+   * `/resume`. Hook payloads and ingest credentials can never populate it. */
+  trustedInputLine: string;
+  /** Once an unsupported control/paste or oversized line is observed, that
+   * line cannot authorize identity rotation; Enter resets the condition. */
+  trustedInputInvalid: boolean;
+  /** Input-side bracketed-paste framing is independent from the app's
+   * output-side mode announcement. Both marker and content may span chunks. */
+  trustedInputPasting: boolean;
+  trustedInputEscape: string;
+  /** One-shot authority for the matching SessionStart transition. It lives on
+   * the pty handle so exit/relaunch clears it without durable ambient state. */
+  agentSessionRotation: {
+    source: "clear" | "resume";
+    expiresAt: number;
+    hardExpiresAt: number;
+    refreshOnInput: boolean;
+  } | null;
   /**
    * Resolves when this specific pty handle's session has fully exited —
    * either via node-pty's real `onExit` event OR a synthesized exit (kill()'s
@@ -396,13 +471,24 @@ interface PtyHandle {
 export class SessionManager {
   private readonly adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   private readonly ingestUrl: string;
-  private readonly ingestToken: string;
+  private readonly issueIngestToken: (sessionId: string) => string;
+  private readonly revokeIngestToken: (sessionId: string) => void;
   private readonly collectorUrl: string | undefined;
   private readonly sessionsPath: string;
+  /** Server-private, digest-only tombstones for every vendor identity ever
+   * accepted by a HarnessSession. Keeping this outside sessions.json avoids
+   * leaking historical aliases through the browser DTO. */
+  private readonly agentSessionOwnersPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly now: () => string;
   private readonly generateId: () => string;
+  private readonly writeSessionRegistry:
+    | ((file: string, serialized: string) => Promise<void>)
+    | undefined;
+  private readonly writeAgentSessionOwnerRegistry:
+    | ((file: string, serialized: string) => Promise<void>)
+    | undefined;
   private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
@@ -417,18 +503,35 @@ export class SessionManager {
   private readonly lastActivityBroadcast = new Map<string, number>();
   private writeQueue: Promise<void> = Promise.resolve();
   private writeSeq = 0;
+  /** While a vendor-pointer/add-row transaction is committing its private
+   * candidate snapshot, every ordinary registry write waits here and captures
+   * state only after the candidate was published or rejected. */
+  private sessionRegistryIdentityFence: Promise<void> | null = null;
+  private readonly agentSessionOwners = new Map<string, string>();
+  /** Serializes the full authorize -> reserve -> pointer commit transition.
+   * A file-level atomic rename alone is insufficient when two starts race the
+   * in-memory ownership check before either write begins. */
+  private agentSessionIdentityQueue: Promise<void> = Promise.resolve();
+  private agentSessionOwnerWriteSeq = 0;
   private initialized = false;
 
   constructor(options: SessionManagerOptions) {
     this.adapters = options.adapters;
     this.ingestUrl = options.ingestUrl;
-    this.ingestToken = options.ingestToken;
+    this.issueIngestToken = (sessionId) =>
+      options.ingestCredentials.issue(sessionId);
+    this.revokeIngestToken = (sessionId) =>
+      options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
     this.sessionsPath = expandHome(options.sessionsPath ?? HARNESS_PATHS.sessions);
+    this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
     this.spawnPty = options.spawnPty;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
+    this.writeSessionRegistry = options.writeSessionRegistry;
+    this.writeAgentSessionOwnerRegistry =
+      options.writeAgentSessionOwnerRegistry;
     this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
     this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
@@ -476,6 +579,7 @@ export class SessionManager {
       }
       this.sessions.set(session.id, session);
     }
+    dirty = (await this.loadAgentSessionOwners(persisted)) || dirty;
     if (dirty) await this.persist();
   }
 
@@ -485,6 +589,11 @@ export class SessionManager {
 
   get(id: string): HarnessSession | undefined {
     return this.sessions.get(id);
+  }
+
+  /** True only when this process owns the live PTY behind the record. */
+  isLive(id: string): boolean {
+    return this.ptys.has(id);
   }
 
   private getAdapter(harness: HarnessKind): HarnessAdapter {
@@ -503,13 +612,21 @@ export class SessionManager {
     return adapter;
   }
 
-  async create(req: CreateSessionRequest): Promise<HarnessSession> {
+  async create(
+    req: CreateSessionRequest,
+    trusted: TrustedSessionCreateOptions = {},
+  ): Promise<HarnessSession> {
     const id = this.generateId();
     const adapter = this.getAdapter(req.harness);
+    const planning = trusted.planning?.(id);
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: req.cwd,
-      ...(await this.buildLaunchOpts(id, req)),
+      ...(await (trusted.promptAppendix
+        ? this.buildLaunchOpts(id, req, {
+            promptAppendix: trusted.promptAppendix(id),
+          })
+        : this.buildLaunchOpts(id, req))),
     };
     const spec = adapter.launch(opts);
     const session: HarnessSession = {
@@ -523,16 +640,17 @@ export class SessionManager {
       lastActiveAt: this.now(),
       exitCode: null,
       boundWorkflowPath: null,
-      // What the builder actually managed to assemble, not what the caller
-      // asked for: `req.rehydrateFrom` naming a session our event log holds
-      // nothing for yields no brief, and this stays null so nothing downstream
-      // presents an empty-handed fresh session as a continuation.
-      rehydratedFrom: opts.rehydratedFrom ?? null,
+      // Ordinary callers record only what the builder actually rehydrated.
+      // A trusted planner replacement records its exact FIFO predecessor even
+      // when the brief came from an older recorded ancestor in that chain.
+      rehydratedFrom:
+        trusted.handoffFromSessionId ?? opts.rehydratedFrom ?? null,
       // Persisted so resume() regenerates the same ANSI base — otherwise a
       // resumed session would fall back to the server default and its dim text
       // could lose contrast against a differently-themed terminal.
       ...(req.theme ? { theme: req.theme } : {}),
       ready: false,
+      ...(planning ? { planning } : {}),
     };
     this.sessions.set(id, session);
     await this.persist();
@@ -569,33 +687,56 @@ export class SessionManager {
    * adopt route pre-verifies resumability before registering, so this never
    * mints a record that can't be resumed.
    */
-  registerHistorical(input: {
+  async registerHistorical(input: {
     agentSessionId: string;
     harness: HarnessKind;
     cwd: string;
     title: string;
     lastActiveAt: string;
-  }): HarnessSession {
+  }): Promise<HarnessSession> {
     const id = this.generateId();
-    const session: HarnessSession = {
-      id,
-      agentSessionId: input.agentSessionId,
-      harness: input.harness,
-      cwd: input.cwd,
-      title: input.title,
-      status: "exited",
-      createdAt: input.lastActiveAt,
-      lastActiveAt: input.lastActiveAt,
-      exitCode: null,
-      boundWorkflowPath: null,
-      ready: false,
-    };
-    this.sessions.set(id, session);
-    void this.persist();
-    return session;
+    return this.serializeAgentSessionIdentity(async () => {
+      const digest = this.agentSessionIdentityDigest(input.agentSessionId);
+      const existingOwnerId = this.agentSessionOwners.get(digest);
+      if (existingOwnerId) {
+        const existing = this.sessions.get(existingOwnerId);
+        if (existing?.agentSessionId === input.agentSessionId) return existing;
+        throw new AgentSessionIdentityReservedError();
+      }
+      const session: HarnessSession = {
+        id,
+        agentSessionId: input.agentSessionId,
+        harness: input.harness,
+        cwd: input.cwd,
+        title: input.title,
+        status: "exited",
+        createdAt: input.lastActiveAt,
+        lastActiveAt: input.lastActiveAt,
+        exitCode: null,
+        boundWorkflowPath: null,
+        ready: false,
+      };
+      await this.reserveAgentSessionIdentity(digest, id);
+      let releaseFence: () => void = () => {};
+      const fence = new Promise<void>((resolveFence) => {
+        releaseFence = resolveFence;
+      });
+      this.sessionRegistryIdentityFence = fence;
+      try {
+        await this.persistIdentityCandidate(session);
+        this.sessions.set(id, session);
+      } finally {
+        this.sessionRegistryIdentityFence = null;
+        releaseFence();
+      }
+      return session;
+    });
   }
 
-  async resume(id: string): Promise<HarnessSession> {
+  async resume(
+    id: string,
+    trusted: TrustedSessionResumeOptions = {},
+  ): Promise<HarnessSession> {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
@@ -620,10 +761,17 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
+    if (trusted.planning) {
+      session.planning = structuredClone(trusted.planning);
+    }
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: session.cwd,
-      ...(await this.buildLaunchOpts(id, session)),
+      ...(await (trusted.promptAppendix
+        ? this.buildLaunchOpts(id, session, {
+            promptAppendix: trusted.promptAppendix,
+          })
+        : this.buildLaunchOpts(id, session))),
     };
     const spec = adapter.resume(session.agentSessionId, opts);
     // Kept so the failure path below can put it back: `lastActiveAt` is
@@ -791,6 +939,7 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) return false;
     handle.pty.write(data);
+    this.observeTrustedTerminalInput(handle, data);
     const session = this.sessions.get(id);
     if (session) {
       session.lastActiveAt = this.now();
@@ -814,7 +963,20 @@ export class SessionManager {
    * that, so the caller (rest.ts, macros.ts) can surface a clear reason
    * instead of the input just vanishing.
    */
-  async submitInput(id: string, text: string, submit = true): Promise<boolean> {
+  async submitInput(
+    id: string,
+    text: string,
+    submit = true,
+    canWrite?: () => boolean | Promise<boolean>,
+  ): Promise<boolean> {
+    const remainsAuthorized = async (): Promise<boolean> => {
+      if (!canWrite) return true;
+      try {
+        return await canWrite();
+      } catch {
+        return false;
+      }
+    };
     const session = this.sessions.get(id);
     if (!session) return false;
 
@@ -835,11 +997,19 @@ export class SessionManager {
       // a resume) while we were waiting, same as the mid-write race below.
       if (this.ptys.get(id) !== handle) return false;
     }
+    // Re-evaluate after any readiness wait, immediately before the first byte
+    // crosses into the PTY. Planner callers use this to close project/account
+    // rebinding races; ordinary session inputs do not pass a guard.
+    if (canWrite && !(await remainsAuthorized())) {
+      throw new SessionInputGuardRejectedError(false);
+    }
 
     if (!submit) {
       handle.pty.write(text);
+      this.observeTrustedSubmittedText(handle, text);
     } else if (text.length === 0) {
       handle.pty.write("\r");
+      this.observeTrustedTerminalInput(handle, "\r");
     } else {
       // Bracketed when the app supports it: newlines in the prompt (the canvas
       // chat prepends a multi-line step context to every question) then stay
@@ -862,10 +1032,26 @@ export class SessionManager {
         : this.platform === "win32" &&
           (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
       handle.pty.write(paste ? wrapPaste(text) : text);
+      // Observe the server-owned plaintext rather than the bracketed-paste
+      // transport wrapper. Embedded newlines invalidate the line, so prompt
+      // text containing `/clear` cannot impersonate an exact slash command.
+      this.observeTrustedSubmittedText(handle, text);
       await sleep(SUBMIT_DELAY_MS);
       // The pty may have been killed/replaced while we were waiting.
       if (this.ptys.get(id) !== handle) return false;
+      // A project/account can change during the deliberate text→Enter delay.
+      // Do not submit the staged text under stale authority.
+      if (canWrite && !(await remainsAuthorized())) {
+        // Text was staged but not submitted. Clear the composer before
+        // releasing control so a later keypress cannot submit project-scoped
+        // content into the now-stale planner. Ctrl-U is a local line-clear,
+        // not an Enter/submission gesture.
+        handle.pty.write("\x15");
+        this.observeTrustedTerminalInput(handle, "\x15");
+        throw new SessionInputGuardRejectedError(true);
+      }
       handle.pty.write("\r");
+      this.observeTrustedTerminalInput(handle, "\r");
     }
 
     session.lastActiveAt = this.now();
@@ -1041,12 +1227,249 @@ export class SessionManager {
     this.refreshImmediatePromptState(adapter, handle);
   }
 
-  setAgentSessionId(id: string, agentSessionId: string): void {
+  setAgentSessionId(
+    id: string,
+    agentSessionId: string,
+    source?: unknown,
+  ): Promise<boolean> {
+    return this.serializeAgentSessionIdentity(() =>
+      this.setAgentSessionIdLocked(id, agentSessionId, source),
+    );
+  }
+
+  /** Resolve a current or historical vendor-id tombstone without disclosing
+   * the raw alias anywhere outside this server process. Used by the generic
+   * adopt route to preserve the scoped planner boundary after a rotation. */
+  getAgentSessionOwner(agentSessionId: string): HarnessSession | undefined {
+    const ownerId = this.agentSessionOwners.get(
+      this.agentSessionIdentityDigest(agentSessionId),
+    );
+    return ownerId ? this.sessions.get(ownerId) : undefined;
+  }
+
+  /** Whether the private ledger retains this current or historical alias,
+   * including a fail-closed tombstone whose original registry row is absent. */
+  isAgentSessionIdentityReserved(agentSessionId: string): boolean {
+    return this.agentSessionOwners.has(
+      this.agentSessionIdentityDigest(agentSessionId),
+    );
+  }
+
+  private async setAgentSessionIdLocked(
+    id: string,
+    agentSessionId: string,
+    source?: unknown,
+  ): Promise<boolean> {
     const session = this.sessions.get(id);
-    if (!session || session.agentSessionId === agentSessionId) return;
-    session.agentSessionId = agentSessionId;
-    void this.persist();
+    if (!session) return false;
+    const handle = this.ptys.get(id);
+    const transitionSource = source === "clear" || source === "resume" ? source : null;
+    let authorization = handle?.agentSessionRotation ?? null;
+    if (handle && authorization && authorization.expiresAt <= Date.now()) {
+      handle.agentSessionRotation = null;
+      authorization = null;
+    }
+    const matchesAuthorization =
+      transitionSource !== null &&
+      authorization?.source === transitionSource;
+
+    // A matching clear/resume SessionStart consumes the user gesture even
+    // when this is the first vendor id, Claude keeps the same id, or the
+    // proposed target is rejected below. It can never authorize a second pin.
+    if (handle && matchesAuthorization) {
+      handle.agentSessionRotation = null;
+    }
+
+    if (session.agentSessionId !== null) {
+      const sameIdentity = session.agentSessionId === agentSessionId;
+      if (sameIdentity) return true;
+      if (!matchesAuthorization) return false;
+    } else if (transitionSource !== null && !matchesAuthorization) {
+      // A clear/resume-shaped first pin is a transition too. Without the
+      // trusted gesture it is just model-authored hook text and must not get
+      // the looser ordinary-startup initial-pin treatment.
+      return false;
+    }
+    const digest = this.agentSessionIdentityDigest(agentSessionId);
+    const ownerId = this.agentSessionOwners.get(digest);
+    // Includes historical aliases from rotations, not just current public
+    // pointers. A fresh session can therefore never reclaim A's old id and
+    // merge its events/transcript with A after a restart.
+    if (ownerId !== undefined && ownerId !== id) return false;
+    if (ownerId === undefined) await this.reserveAgentSessionIdentity(digest, id);
+
+    const candidate = { ...session, agentSessionId };
+    let releaseFence: () => void = () => {};
+    const fence = new Promise<void>((resolveFence) => {
+      releaseFence = resolveFence;
+    });
+    this.sessionRegistryIdentityFence = fence;
+    try {
+      // The ingest request is not accepted into the event pipeline until both
+      // the ownership tombstone and public current pointer are durable. The
+      // sidecar is written first, so a crash between files fails closed. The
+      // candidate remains private until this write commits; ordinary session
+      // snapshots wait on the fence and therefore cannot resurrect a rejected
+      // pointer or erase an accepted one.
+      await this.persistIdentityCandidate(candidate);
+      session.agentSessionId = agentSessionId;
+    } finally {
+      this.sessionRegistryIdentityFence = null;
+      releaseFence();
+    }
     this.emitStatus(session);
+    return true;
+  }
+
+  /**
+   * Fold trusted host/UI input into one bounded command line. Only callers
+   * that already crossed the boot-token terminal WS or protected/internal
+   * submitInput boundary reach this method; raw ingest tokens cannot arm it.
+   * Unsupported controls and pasted/multiline content fail closed for the
+   * current line. Picker navigation after an exact `/resume` does not revoke
+   * the already-armed one-shot authorization.
+   */
+  private observeTrustedTerminalInput(handle: PtyHandle, data: string): void {
+    const pickerAuthorization = handle.agentSessionRotation;
+    if (
+      data.length > 0 &&
+      pickerAuthorization?.source === "resume" &&
+      pickerAuthorization.refreshOnInput
+    ) {
+      const now = Date.now();
+      if (pickerAuthorization.hardExpiresAt <= now) {
+        handle.agentSessionRotation = null;
+      } else {
+        // Picker navigation/search/selection is a fresh host-owned gesture.
+        // It may revive the soft window after the user paused to read, but it
+        // can never extend the original bounded picker lifetime.
+        pickerAuthorization.expiresAt = Math.min(
+          now + AGENT_SESSION_ROTATION_TTL_MS,
+          pickerAuthorization.hardExpiresAt,
+        );
+      }
+    }
+    for (const char of data) {
+      if (handle.trustedInputEscape !== "") {
+        handle.trustedInputEscape += char;
+        const control = handle.trustedInputEscape;
+        const possibleControls = handle.trustedInputPasting
+          ? [BRACKETED_PASTE_END]
+          : [BRACKETED_PASTE_START, BRACKETED_PASTE_END];
+        if (possibleControls.some((candidate) => candidate.startsWith(control))) {
+          if (control === BRACKETED_PASTE_START) {
+            handle.trustedInputPasting = true;
+            handle.trustedInputLine = "";
+            handle.trustedInputInvalid = true;
+            handle.trustedInputEscape = "";
+          } else if (control === BRACKETED_PASTE_END) {
+            handle.trustedInputPasting = false;
+            // A pasted slash command stays ineligible when the user presses
+            // Enter after the closing marker.
+            handle.trustedInputLine = "";
+            handle.trustedInputInvalid = true;
+            handle.trustedInputEscape = "";
+          }
+          continue;
+        }
+        // Unknown escape/control sequence. It cannot authorize this line;
+        // while inside a paste, keep ignoring content until the real end.
+        handle.trustedInputEscape = "";
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      if (char === "\x1b") {
+        handle.trustedInputEscape = char;
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      if (handle.trustedInputPasting) {
+        // In particular, CR inside a multiline paste is content, not trusted
+        // Enter, and must never reset invalid state or arm an inner `/clear`.
+        continue;
+      }
+      if (char === "\r") {
+        if (!handle.trustedInputInvalid) {
+          const transition = this.rotationForTrustedLine(handle.trustedInputLine);
+          if (transition) {
+            const now = Date.now();
+            handle.agentSessionRotation = {
+              source: transition.source,
+              expiresAt: now + AGENT_SESSION_ROTATION_TTL_MS,
+              hardExpiresAt:
+                now +
+                (transition.picker
+                  ? AGENT_SESSION_PICKER_ROTATION_MAX_MS
+                  : AGENT_SESSION_ROTATION_TTL_MS),
+              refreshOnInput: transition.picker,
+            };
+          }
+        }
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = false;
+        continue;
+      }
+      // A literal LF is pasted/multiline content, not the terminal's Enter
+      // key (which is CR). Reset fail-closed without authorizing an inner line.
+      if (char === "\n") {
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      if (char === "\x7f" || char === "\b") {
+        if (!handle.trustedInputInvalid) {
+          handle.trustedInputLine = handle.trustedInputLine.slice(0, -1);
+        }
+        continue;
+      }
+      // Ctrl-U clears the current composer; Ctrl-C abandons it. Neither
+      // revokes a command already submitted (notably `/resume` picker mode).
+      if (char === "\x15" || char === "\x03") {
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = false;
+        continue;
+      }
+      // Escape sequences, tabs, paste wrappers, and other controls are not
+      // required to type either exact command and therefore fail closed.
+      if (char < " " || char === "\x7f") {
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      if (handle.trustedInputInvalid) continue;
+      if (handle.trustedInputLine.length >= TRUSTED_INPUT_LINE_MAX) {
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      handle.trustedInputLine += char;
+    }
+  }
+
+  /** A protected discrete submit owns its final synthetic CR separately from
+   * the text phase. Embedded CR/LF is multiline prompt content, never a series
+   * of trusted Enter gestures: invalidate the whole submitted text so neither
+   * raw nor bracketed transport can smuggle an inner `/clear` or `/resume`. */
+  private observeTrustedSubmittedText(handle: PtyHandle, text: string): void {
+    if (text.includes("\r") || text.includes("\n")) {
+      handle.trustedInputLine = "";
+      handle.trustedInputInvalid = true;
+      return;
+    }
+    this.observeTrustedTerminalInput(handle, text);
+  }
+
+  private rotationForTrustedLine(
+    line: string,
+  ): { source: "clear" | "resume"; picker: boolean } | null {
+    if (line === "/clear") return { source: "clear", picker: false };
+    if (line === "/resume") return { source: "resume", picker: true };
+    if (
+      line.startsWith("/resume ") &&
+      line.slice("/resume ".length).trim().length > 0
+    ) {
+      return { source: "resume", picker: false };
+    }
+    return null;
   }
 
   /**
@@ -1061,6 +1484,18 @@ export class SessionManager {
     if (!session || session.ready) return;
     session.ready = true;
     void this.persist();
+    this.emitStatus(session);
+  }
+
+  /** Persist a coordinator-owned metadata projection before exposing it. */
+  async setPlanningMetadata(
+    id: string,
+    metadata: PlannerSessionMetadata,
+  ): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    session.planning = structuredClone(metadata);
+    await this.persist();
     this.emitStatus(session);
   }
 
@@ -1247,6 +1682,7 @@ export class SessionManager {
   /** Waits for all in-flight registry writes to settle. Useful before process
    * shutdown (and in tests that assert against the on-disk registry). */
   async flush(): Promise<void> {
+    await this.agentSessionIdentityQueue;
     await this.writeQueue;
   }
 
@@ -1294,7 +1730,7 @@ export class SessionManager {
     env.TERM = "xterm-256color";
     env.COLORTERM = "truecolor";
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
-    env[ENV.ingestToken] = this.ingestToken;
+    env[ENV.ingestToken] = this.issueIngestToken(session.id);
     env[ENV.sessionId] = session.id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
 
@@ -1338,6 +1774,11 @@ export class SessionManager {
       readinessCandidateAt: null,
       lastOutputAt: null,
       bracketedPaste: initialBracketedPasteState,
+      trustedInputLine: "",
+      trustedInputInvalid: false,
+      trustedInputPasting: false,
+      trustedInputEscape: "",
+      agentSessionRotation: null,
       exited,
       resolveExited,
       killed: false,
@@ -1495,6 +1936,7 @@ export class SessionManager {
     exitCode: number | null,
     { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
   ): Promise<void> {
+    this.revokeIngestToken(session.id);
     session.status = "exited";
     session.exitCode = exitCode;
     // Only markExited (a live-pty death) has output to preserve; every other
@@ -1515,18 +1957,195 @@ export class SessionManager {
     this.statusEmitter.emit("status", { ...session });
   }
 
-  /** Serializes writes so overlapping persist() calls can't interleave and
-   * corrupt the registry file; a failed write doesn't poison later ones. */
-  private persist(): Promise<void> {
+  private agentSessionIdentityDigest(agentSessionId: string): string {
+    return createHash("sha256").update(agentSessionId, "utf8").digest("hex");
+  }
+
+  private serializeAgentSessionIdentity<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const next = this.agentSessionIdentityQueue
+      .catch(() => {})
+      .then(operation);
+    this.agentSessionIdentityQueue = next.then(
+      () => {},
+      () => {},
+    );
+    return next;
+  }
+
+  /** Load the private alias ledger before accepting ingest. Missing is the
+   * one recoverable case (upgrade from an older build): current pointers seed
+   * it exactly once, with sessions.json order deterministically choosing the
+   * first owner of a legacy duplicate. Malformed/unreadable ledger state still
+   * fails boot rather than silently forgetting rotation tombstones. */
+  private async loadAgentSessionOwners(
+    persisted: HarnessSession[],
+  ): Promise<boolean> {
+    let needsWrite = false;
+    let pointersDirty = false;
+    try {
+      const raw = await readFile(this.agentSessionOwnersPath, "utf8");
+      if (Buffer.byteLength(raw, "utf8") > AGENT_SESSION_OWNER_MAX_BYTES) {
+        throw new Error("agent-session owner ledger exceeds its size limit");
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed).sort().join(",") !== "owners,version"
+      ) {
+        throw new Error("agent-session owner ledger has an invalid shape");
+      }
+      const record = parsed as { version?: unknown; owners?: unknown };
+      if (
+        record.version !== AGENT_SESSION_OWNER_FILE_VERSION ||
+        typeof record.owners !== "object" ||
+        record.owners === null ||
+        Array.isArray(record.owners)
+      ) {
+        throw new Error("agent-session owner ledger has an unsupported version");
+      }
+      const entries = Object.entries(record.owners as Record<string, unknown>);
+      if (entries.length > AGENT_SESSION_OWNER_MAX_ENTRIES) {
+        throw new Error("agent-session owner ledger exceeds its entry limit");
+      }
+      for (const [digest, ownerId] of entries) {
+        if (
+          !/^[a-f0-9]{64}$/u.test(digest) ||
+          typeof ownerId !== "string" ||
+          ownerId.length === 0 ||
+          ownerId.length > 256
+        ) {
+          throw new Error("agent-session owner ledger contains an invalid entry");
+        }
+        this.agentSessionOwners.set(digest, ownerId);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      needsWrite = true;
+    }
+
+    // Preserve persisted array order: released versions could create two rows
+    // with the same vendor id, so the first recorded owner wins the one-time
+    // upgrade. When a ledger already exists it is authoritative instead.
+    for (const session of persisted) {
+      if (!session.agentSessionId) continue;
+      const digest = this.agentSessionIdentityDigest(session.agentSessionId);
+      const ownerId = this.agentSessionOwners.get(digest);
+      if (ownerId !== undefined && ownerId !== session.id) {
+        session.agentSessionId = null;
+        pointersDirty = true;
+        continue;
+      }
+      if (ownerId === undefined) {
+        this.agentSessionOwners.set(digest, session.id);
+        needsWrite = true;
+      }
+    }
+    if (needsWrite) await this.persistAgentSessionOwners();
+    return pointersDirty;
+  }
+
+  private async reserveAgentSessionIdentity(
+    digest: string,
+    sessionId: string,
+  ): Promise<void> {
+    const ownerId = this.agentSessionOwners.get(digest);
+    if (ownerId === sessionId) return;
+    if (ownerId !== undefined) {
+      throw new AgentSessionIdentityReservedError();
+    }
+    this.agentSessionOwners.set(digest, sessionId);
+    // Atomic rename can commit and still surface an ambiguous later I/O
+    // failure. Retain the in-memory claim so this process never lets another
+    // session overwrite a possibly durable owner. A clean pre-commit failure
+    // therefore also fails closed until restart, which is the safe tradeoff.
+    await this.persistAgentSessionOwners();
+  }
+
+  private async persistAgentSessionOwners(): Promise<void> {
+    const owners = Object.fromEntries(
+      [...this.agentSessionOwners.entries()].sort(([a], [b]) =>
+        a.localeCompare(b),
+      ),
+    );
+    const serialized = `${JSON.stringify(
+      { version: AGENT_SESSION_OWNER_FILE_VERSION, owners },
+      null,
+      2,
+    )}\n`;
+    if (Buffer.byteLength(serialized, "utf8") > AGENT_SESSION_OWNER_MAX_BYTES) {
+      throw new Error("agent-session owner ledger exceeds its size limit");
+    }
+    if (this.writeAgentSessionOwnerRegistry) {
+      await this.writeAgentSessionOwnerRegistry(
+        this.agentSessionOwnersPath,
+        serialized,
+      );
+      return;
+    }
+    await mkdir(dirname(this.agentSessionOwnersPath), { recursive: true });
+    const tmpPath = `${this.agentSessionOwnersPath}.tmp-${process.pid}-${
+      this.agentSessionOwnerWriteSeq++
+    }`;
+    await writeFile(tmpPath, serialized, { encoding: "utf8", mode: 0o600 });
+    await rename(tmpPath, this.agentSessionOwnersPath);
+  }
+
+  private persistIdentityCandidate(candidate: HarnessSession): Promise<void> {
+    const current = this.list();
+    const index = current.findIndex((session) => session.id === candidate.id);
+    const proposed =
+      index === -1
+        ? [...current, candidate]
+        : current.map((session) =>
+            session.id === candidate.id ? candidate : session,
+          );
+    return this.enqueueRegistryWrite(JSON.stringify(proposed, null, 2) + "\n");
+  }
+
+  private enqueueRegistryWrite(
+    serialized: string | (() => string),
+    fence?: Promise<void>,
+  ): Promise<void> {
     const run = async (): Promise<void> => {
-      const list = this.list();
+      if (fence) await fence;
+      const content =
+        typeof serialized === "string" ? serialized : serialized();
+      if (this.writeSessionRegistry) {
+        await this.writeSessionRegistry(this.sessionsPath, content);
+        return;
+      }
       await mkdir(dirname(this.sessionsPath), { recursive: true });
       const tmpPath = `${this.sessionsPath}.tmp-${process.pid}-${this.writeSeq++}`;
-      await writeFile(tmpPath, JSON.stringify(list, null, 2) + "\n", "utf8");
+      await writeFile(tmpPath, content, "utf8");
       await rename(tmpPath, this.sessionsPath);
     };
     const next = this.writeQueue.catch(() => {}).then(run);
     this.writeQueue = next.catch(() => {});
     return next;
+  }
+
+  /** Serializes writes so overlapping persist() calls can't interleave and
+   * corrupt the registry file; a failed write doesn't poison later ones. */
+  private persist(): Promise<void> {
+    const fence = this.sessionRegistryIdentityFence;
+    if (fence) {
+      // Capturing an ordinary mutation while a private identity candidate is
+      // unresolved could persist the uncommitted pointer (if memory were
+      // mutated) or overwrite a successful commit with its old value. Wait,
+      // then snapshot the authoritative published map at execution time.
+      return this.enqueueRegistryWrite(
+        () => JSON.stringify(this.list(), null, 2) + "\n",
+        fence,
+      );
+    }
+    // Outside an identity transaction, capture at call time: queued writes
+    // represent the mutation that requested them, not an unrelated later one.
+    return this.enqueueRegistryWrite(
+      JSON.stringify(this.list(), null, 2) + "\n",
+    );
   }
 }
