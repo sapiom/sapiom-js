@@ -165,6 +165,10 @@ export interface ImageSelect extends MediaSelectBase {
    *
    * If the catalog grows an image capability tag, this becomes a real tag list — a non-breaking
    * change to THIS type rather than a new export.
+   *
+   * Reading the error: this repo leaves `exactOptionalPropertyTypes` off, so the property's type is
+   * `never | undefined` — i.e. `undefined` — and TypeScript reports "Type '…' is not assignable to
+   * type 'undefined'" rather than naming `never`. Same prohibition, confusing wording.
    */
   requires?: never;
 }
