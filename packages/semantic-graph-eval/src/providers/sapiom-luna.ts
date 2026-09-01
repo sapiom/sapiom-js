@@ -24,7 +24,6 @@ export interface SapiomLunaProviderOptions {
 
 interface CapturedResponseMetadata {
   status: number | null;
-  costUsd: number | null;
 }
 
 function tokenCount(value: unknown): number | null {
@@ -39,20 +38,9 @@ function sanitizedDisclosure(value: string | null): string | null {
     : null;
 }
 
-function headerNumber(headers: Headers, names: string[]): number | null {
-  for (const name of names) {
-    const raw = headers.get(name);
-    if (raw === null || raw.trim() === "") continue;
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-  }
-  return null;
-}
-
 function usageFromResponse(
   response: unknown,
   latencyMs: number,
-  costUsd: number | null,
   disclosure: { servedClass: string | null; lane: string | null },
 ): ProviderUsage {
   const usage =
@@ -66,7 +54,9 @@ function usageFromResponse(
   return {
     inputTokens: tokenCount(record.input_tokens),
     outputTokens: tokenCount(record.output_tokens),
-    costUsd,
+    // The public synchronous LLM response has no authoritative per-call price.
+    // Keep the absence explicit rather than guessing an internal header.
+    costUsd: null,
     latencyMs,
     servedClass: sanitizedDisclosure(disclosure.servedClass),
     lane: sanitizedDisclosure(disclosure.lane),
@@ -102,15 +92,10 @@ export class SapiomLunaProvider implements SemanticGraphProvider {
 
   async invoke(request: ProviderRequest): Promise<ProviderAttempt> {
     assertRealEvaluationEnabled(this.environment);
-    const captured: CapturedResponseMetadata = { status: null, costUsd: null };
+    const captured: CapturedResponseMetadata = { status: null };
     const capturingFetch: typeof globalThis.fetch = async (input, init) => {
       const response = await this.fetchImpl(input, init);
       captured.status = response.status;
-      captured.costUsd = headerNumber(response.headers, [
-        "x-sapiom-cost-usd",
-        "x-sapiom-price-usd",
-        "x-sapiom-request-cost-usd",
-      ]);
       return response;
     };
     const client = createClient({
@@ -119,19 +104,29 @@ export class SapiomLunaProvider implements SemanticGraphProvider {
     });
     const startedAt = this.now();
     try {
-      const response = await client.llm.run({
-        request: {
-          system: request.prompt.system,
-          messages: [{ role: "user", content: request.prompt.user }],
-          max_tokens: request.configuration.maxOutputTokens,
-        },
-        model: REQUESTED_MODEL,
-        neverFail: false,
-        output: {
-          name: request.prompt.outputName,
-          schema: request.prompt.outputSchema,
-        },
-      });
+      let response: unknown;
+      try {
+        response = await client.llm.run({
+          request: {
+            system: request.prompt.system,
+            messages: [{ role: "user", content: request.prompt.user }],
+            max_tokens: request.configuration.maxOutputTokens,
+          },
+          model: REQUESTED_MODEL,
+          neverFail: false,
+          output: {
+            name: request.prompt.outputName,
+            schema: request.prompt.outputSchema,
+          },
+        });
+      } catch {
+        return {
+          status: "failure",
+          errorCode: sanitizeProviderErrorCode(captured.status),
+          latencyMs: Math.max(0, this.now() - startedAt),
+          requestedModel: REQUESTED_MODEL,
+        };
+      }
       const latencyMs = Math.max(0, this.now() - startedAt);
       const rawResponse: unknown = client.llm.structuredOf(
         response,
@@ -143,16 +138,8 @@ export class SapiomLunaProvider implements SemanticGraphProvider {
         usage: usageFromResponse(
           response,
           latencyMs,
-          captured.costUsd,
           client.llm.readDisclosure(response),
         ),
-        requestedModel: REQUESTED_MODEL,
-      };
-    } catch {
-      return {
-        status: "failure",
-        errorCode: sanitizeProviderErrorCode(captured.status),
-        latencyMs: Math.max(0, this.now() - startedAt),
         requestedModel: REQUESTED_MODEL,
       };
     } finally {

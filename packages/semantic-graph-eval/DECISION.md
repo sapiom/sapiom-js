@@ -79,7 +79,7 @@ Across the 18 final `bounded-source.v2` calls, Luna produced 9 TP, 2 FP, and 1 F
 
 ### Cost and latency
 
-The gateway response supplied token usage and serving disclosure but no supported cost header on any of the final 48 calls, so every real `costUsd` value is `null`. A dollar estimate would not be evidence-backed and is intentionally not invented. Across the final dataset, usage was 46,040 input and 11,696 output tokens; summed provider latency was 202,426 ms. Median latency was 3,683 ms, p95 was 8,585 ms, and the maximum was 16,934 ms. Cost observability is therefore a required pre-ramp gate below.
+The public synchronous LLM response supplied token usage and serving disclosure but no authoritative per-call price, so every real `costUsd` value is `null`. The adapter deliberately does not guess internal cost headers, and a dollar estimate would not be evidence-backed. Across the final dataset, usage was 46,040 input and 11,696 output tokens; summed provider latency was 202,426 ms. Median latency was 3,683 ms, p95 was 8,585 ms, and the maximum was 16,934 ms. An authoritative billing surface is therefore a required pre-ramp gate below.
 
 ## Recommended initial contract for SAP-3003
 
@@ -116,7 +116,7 @@ Do not expose suggested edges until a larger, separately held-out shadow corpus 
 5. Zero accepted candidates with invalid endpoints/support refs, zero raw-payload/path/secret leaks, and zero Phase A mutations.
 6. Provider-failure rate below 1% and malformed-attempt rate below 1% over at least 100 shadow runs.
 7. p95 model latency at most 10,000 ms; p95 actual input at most 2,000 tokens; p95 output at most 800 tokens.
-8. Cost metadata present on 100% of calls and a non-null per-snapshot dollar cap approved before ramp. SAP-3002 cannot honestly set that dollar amount because disclosure coverage was 0%.
+8. Authoritative cost metadata joined to 100% of calls and a non-null per-snapshot dollar cap approved before ramp. SAP-3002 cannot honestly set that dollar amount because the public synchronous LLM response does not include price.
 9. Render-time model calls and writes remain exactly zero.
 
 The selected configuration currently fails gates 1, 2, 3 (abstention), 4, 6 (sample-size denominator), 7 (16,934 ms p95), and 8 despite the perfect small holdout, so the rollout decision is **no-go**. The next evidence step is a larger new shadow corpus that corrects calibration confounds, restores a pristine holdout, and measures cost disclosure; it is not production integration in this PR.
@@ -129,5 +129,5 @@ The selected configuration currently fails gates 1, 2, 3 (abstention), 4, 6 (sam
 - The sibling-invocation fixture's specialist descriptions say they return independent results to a coordinator. Luna's reverse-flow inference is plausible even though the oracle excludes those edges. Preserve immutable v1, but add a cleaner successor case in a new corpus version.
 - `context-pressure.v1` did not see the long truncated fixture in real calibration because that fixture was held out; only deterministic mock evaluation exercised its larger budget. Do not claim a real near-limit context result.
 - The experiment was one sample per run identity by design. It does not measure stochastic repeatability.
-- Gateway cost was undisclosed. SAP-3007/SAP-3010 must provide supported cost metadata before cost-based ramping.
+- The public synchronous LLM response has no authoritative price. SAP-3007/SAP-3010 must join a supported billing surface before cost-based ramping.
 - Holdout source value was not measured causally because holdout discipline permitted only the frozen configuration. A future corpus can preregister a source-ablation experiment.

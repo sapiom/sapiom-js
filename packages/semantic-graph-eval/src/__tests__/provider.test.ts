@@ -3,6 +3,7 @@ import {
   SapiomLunaProvider,
   assertRealEvaluationEnabled,
 } from "../providers/sapiom-luna.js";
+import { validateProviderAttempt } from "../validation.js";
 import { corpus, fixtureById, requestFor } from "./test-helpers.js";
 
 describe("provider boundary", () => {
@@ -44,15 +45,12 @@ describe("provider boundary", () => {
             },
           ],
           usage: { input_tokens: 321, output_tokens: 12 },
-          served_class: "luna",
+          served_class: "medium",
           lane: "run_now",
         }),
         {
           status: 200,
-          headers: {
-            "content-type": "application/json",
-            "x-sapiom-cost-usd": "0.0042",
-          },
+          headers: { "content-type": "application/json" },
         },
       );
     };
@@ -93,13 +91,41 @@ describe("provider boundary", () => {
       usage: {
         inputTokens: 321,
         outputTokens: 12,
-        costUsd: 0.0042,
+        costUsd: null,
         latencyMs: 25,
-        servedClass: "luna",
+        servedClass: "medium",
         lane: "run_now",
       },
       requestedModel: "gpt-luna",
     });
+  });
+
+  it("routes a missing forced output through malformed validation", async () => {
+    const fixture = fixtureById(await corpus(), "complete-abstention");
+    const request = requestFor(fixture);
+    const provider = new SapiomLunaProvider({
+      environment: {
+        RUN_REAL_SEMANTIC_GRAPH_EVAL: "1",
+        SAPIOM_API_KEY: "test-only-key",
+      },
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            content: [{ type: "text", text: "No forced tool payload" }],
+            usage: { input_tokens: 10, output_tokens: 4 },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      now: () => 10,
+    });
+    const attempt = await provider.invoke(request);
+    expect(attempt.status).toBe("success");
+    expect(validateProviderAttempt(request, attempt).attemptStatus).toBe(
+      "malformed",
+    );
   });
 
   it("sanitizes provider failures without persisting the response body", async () => {
