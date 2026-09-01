@@ -210,7 +210,10 @@ export interface HarnessServerOptions {
   port: number;
   /** Bind address. Defaults to 127.0.0.1 — the server must never listen on 0.0.0.0. */
   host?: string;
-  /** Per-boot secret; required on WS upgrades, /api (header) and hook scripts (bearer). */
+  /**
+   * Per-boot host/browser secret; required on WS upgrades and `/api` headers.
+   * This credential is deliberately never injected into coding-agent PTYs.
+   */
   bootToken: string;
   telemetryOptIn: boolean;
   /** Sapiom identity from CLI auth; omit/null when unauthenticated or --no-auth. */
@@ -578,6 +581,11 @@ export const startServer = async (
   options: HarnessServerOptions,
 ): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
+  // Coding-agent hooks need to authenticate only to /ingest. Keep that
+  // capability distinct from the host/browser boot token: a model can read
+  // its own PTY environment, so injecting the boot token would also grant it
+  // every mutation beneath /api (including durable project rebinding).
+  const ingestToken = randomUUID();
   const identity = options.identity ?? null;
   // The single source of truth for the Sapiom API key (`sk_…`) that Studio
   // actions authenticate with — distinct from the per-boot boot token that only
@@ -1062,7 +1070,7 @@ export const startServer = async (
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
-    ingestToken: options.bootToken,
+    ingestToken,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
@@ -1215,7 +1223,7 @@ export const startServer = async (
   const taskManager = new TaskManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
-    ingestToken: options.bootToken,
+    ingestToken,
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
     onCleanup: (taskId) => {
@@ -2968,7 +2976,7 @@ export const startServer = async (
   // Feeds the same seqCounter declared above — both hook POSTs and the Codex
   // transcript tailer run through processIngest(), which shares the counter.
   const ingestDeps: IngestDeps = {
-    ingestToken: options.bootToken,
+    ingestToken,
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
     onAgentSessionResolved: (harnessSessionId, agentSessionId) => {

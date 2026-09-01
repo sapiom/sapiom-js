@@ -1,0 +1,130 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  HarnessAdapter,
+  LaunchOpts,
+  SpawnSpec,
+} from "../shared/types.js";
+import { startServer, type HarnessServer } from "./index.js";
+
+const BOOT_TOKEN = "trusted-host-token";
+
+function tokenCapturingAdapter(tokenPath: string): HarnessAdapter {
+  const launch = (opts: LaunchOpts): SpawnSpec => ({
+    command: "bash",
+    args: [
+      "-c",
+      'printf "%s" "$SAPIOM_HARNESS_INGEST_TOKEN" > "$SAPIOM_TEST_INGEST_TOKEN_PATH"; exec bash',
+    ],
+    env: { SAPIOM_TEST_INGEST_TOKEN_PATH: tokenPath },
+    cwd: opts.cwd,
+  });
+  return {
+    id: "claude-code",
+    eventSource: "hooks",
+    doctor: async () => [],
+    launch,
+    resume: (_agentSessionId, opts) => launch(opts),
+    listPastSessions: async () => [],
+    canResume: async () => true,
+  };
+}
+
+describe("coding-agent authorization boundary", () => {
+  let root: string;
+  let projectRoot: string;
+  let tokenPath: string;
+  let server: HarnessServer | undefined;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-auth-wiring-"));
+    projectRoot = path.join(root, "project");
+    tokenPath = path.join(root, "ingest-token");
+    await fs.mkdir(projectRoot);
+  });
+
+  afterEach(async () => {
+    await server?.sessionManager.flush();
+    await server?.close();
+    await server?.sessionManager.flush();
+    server = undefined;
+    // Session exit schedules generated-dir cleanup. Retry if that bounded
+    // removal overlaps this fixture's own recursive cleanup.
+    await fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  });
+
+  it("allows the PTY token to ingest hooks but rejects it on project mutations", async () => {
+    server = await startServer({
+      port: 0,
+      bootToken: BOOT_TOKEN,
+      telemetryOptIn: false,
+      adapters: { "claude-code": tokenCapturingAdapter(tokenPath) },
+      stateRoot: root,
+      launchDir: projectRoot,
+      autoCreateSession: false,
+      loadSystemPrompt: async () => "",
+    });
+    const session = await server.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    let ingestToken = "";
+    await vi.waitFor(async () => {
+      ingestToken = await fs.readFile(tokenPath, "utf8");
+      expect(ingestToken).not.toBe("");
+    });
+
+    expect(ingestToken).not.toBe(BOOT_TOKEN);
+    const baseUrl = `http://127.0.0.1:${server.port}`;
+    const mutation = await fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": ingestToken,
+      },
+      body: JSON.stringify({ displayName: "Model-controlled project" }),
+    });
+    expect(mutation.status).toBe(401);
+
+    const bootTokenIngest = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${BOOT_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: session.id,
+        payload: { session_id: "agent-wrong-token" },
+      }),
+    });
+    expect(bootTokenIngest.status).toBe(401);
+
+    const ingest = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${ingestToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: session.id,
+        payload: { session_id: "agent-ingest-only", source: "startup" },
+      }),
+    });
+    expect(ingest.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(server?.sessionManager.get(session.id)?.agentSessionId).toBe(
+        "agent-ingest-only",
+      );
+    });
+  });
+});

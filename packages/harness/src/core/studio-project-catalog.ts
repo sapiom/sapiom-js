@@ -296,6 +296,14 @@ function storageError(): StudioProjectCatalogError {
 const CATALOG_LOCK_TIMEOUT_MS = 5_000;
 const CATALOG_STALE_LOCK_MS = 30_000;
 const CATALOG_LOCK_RETRY_MS = 10;
+const CATALOG_LOCK_OWNER_FILE = "owner";
+
+/** Internal deterministic seams used only by file-lock race regressions. */
+export interface StudioProjectCatalogLockTestHooks {
+  afterStaleLockObserved?: (ownerId: string | null) => void | Promise<void>;
+  afterUnexpectedReclaimRestored?: () => void | Promise<void>;
+  afterLockAcquired?: (ownerId: string) => void | Promise<void>;
+}
 
 /**
  * Durable, serialized owner of Studio project identity. Catalog reads never
@@ -310,6 +318,7 @@ export class StudioProjectCatalog {
   constructor(
     private readonly catalogPath: string,
     private readonly now: () => Date = () => new Date(),
+    private readonly lockTestHooks: StudioProjectCatalogLockTestHooks = {},
   ) {}
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -335,6 +344,7 @@ export class StudioProjectCatalog {
 
   private async acquireFileLock(): Promise<() => Promise<void>> {
     const lockPath = `${this.catalogPath}.lock`;
+    const ownerId = randomUUID();
     const deadline = Date.now() + CATALOG_LOCK_TIMEOUT_MS;
     try {
       await fs.mkdir(path.dirname(this.catalogPath), { recursive: true });
@@ -344,19 +354,36 @@ export class StudioProjectCatalog {
     for (;;) {
       try {
         await fs.mkdir(lockPath);
-        return async () => {
-          await fs.rmdir(lockPath).catch(() => {});
-        };
+        try {
+          await fs.writeFile(
+            path.join(lockPath, CATALOG_LOCK_OWNER_FILE),
+            ownerId,
+            { encoding: "utf8", flag: "wx" },
+          );
+          await this.lockTestHooks.afterLockAcquired?.(ownerId);
+        } catch (error) {
+          await this.releaseFileLock(lockPath, ownerId);
+          throw error;
+        }
+        return () => this.releaseFileLock(lockPath, ownerId);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          if (error instanceof StudioProjectCatalogError) throw error;
           throw storageError();
         }
       }
 
       try {
+        // Read identity before freshness. If another waiter replaces the lock
+        // between these observations, either the following stat sees the new
+        // (fresh) directory or the post-rename owner check restores it. Doing
+        // this in the opposite order could pair an old mtime with a new owner
+        // and mistakenly bless deletion of that new live lock.
+        const observedOwner = await this.readLockOwner(lockPath);
         const lock = await fs.stat(lockPath);
         if (Date.now() - lock.mtimeMs > CATALOG_STALE_LOCK_MS) {
-          await fs.rmdir(lockPath).catch(() => {});
+          await this.lockTestHooks.afterStaleLockObserved?.(observedOwner);
+          await this.reclaimStaleLock(lockPath, observedOwner);
           continue;
         }
       } catch (error) {
@@ -365,6 +392,84 @@ export class StudioProjectCatalog {
       }
       if (Date.now() >= deadline) throw storageError();
       await delay(CATALOG_LOCK_RETRY_MS);
+    }
+  }
+
+  private async readLockOwner(lockPath: string): Promise<string | null> {
+    try {
+      const owner = await fs.readFile(
+        path.join(lockPath, CATALOG_LOCK_OWNER_FILE),
+        "utf8",
+      );
+      return owner === "" ? null : owner;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw storageError();
+    }
+  }
+
+  /**
+   * Atomically moves the exact stale directory we observed out of the lock
+   * path. A delayed waiter can otherwise `rmdir` a newer owner's lock after
+   * another process has already reclaimed and reacquired it. Revalidating the
+   * owner marker after rename lets that waiter restore the newer lock intact.
+   */
+  private async reclaimStaleLock(
+    lockPath: string,
+    observedOwner: string | null,
+  ): Promise<void> {
+    const tombstone = `${lockPath}.reclaim-${randomUUID()}`;
+    try {
+      await fs.rename(lockPath, tombstone);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw storageError();
+    }
+
+    const reclaimedOwner = await this.readLockOwner(tombstone);
+    if (reclaimedOwner !== observedOwner) {
+      try {
+        await fs.rename(tombstone, lockPath);
+      } catch {
+        // Losing the fixed path here would strand a live writer. Keep the
+        // tombstone for diagnosis and fail closed instead of deleting it.
+        throw storageError();
+      }
+      await this.lockTestHooks.afterUnexpectedReclaimRestored?.();
+      return;
+    }
+    try {
+      await fs.rm(tombstone, { recursive: true });
+    } catch {
+      throw storageError();
+    }
+  }
+
+  /** Release only the directory carrying this acquisition's owner marker. */
+  private async releaseFileLock(
+    lockPath: string,
+    ownerId: string,
+  ): Promise<void> {
+    if ((await this.readLockOwner(lockPath)) !== ownerId) return;
+    const tombstone = `${lockPath}.release-${ownerId}-${randomUUID()}`;
+    try {
+      await fs.rename(lockPath, tombstone);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw storageError();
+    }
+    if ((await this.readLockOwner(tombstone)) !== ownerId) {
+      try {
+        await fs.rename(tombstone, lockPath);
+      } catch {
+        throw storageError();
+      }
+      return;
+    }
+    try {
+      await fs.rm(tombstone, { recursive: true });
+    } catch {
+      throw storageError();
     }
   }
 
@@ -471,22 +576,35 @@ export class StudioProjectCatalog {
       await this.load();
       const next = cloneProjects(this.projects!);
       const dedupedScopes = new Map<string, WorkspaceScopeSummary>();
+      const unassignedScopes: WorkspaceScopeSummary[] = [];
       const rootsByLegacyKey = new Map<string, string>();
       for (const scope of scopes) {
         // Workspace scopes are live operational input, not persisted catalog
         // state. One unsafe/unrepresentable path must not poison every valid
         // project read. Spaces at either end remain valid path characters.
         if (!isSafeText(scope.workspaceKey) || !isSafePathText(scope.cwd)) {
+          unassignedScopes.push({
+            workspaceKey: scope.workspaceKey,
+            cwd: scope.cwd,
+          });
           continue;
         }
         let canonical: string;
         try {
           canonical = canonicalGraphPath(scope.cwd);
         } catch {
+          unassignedScopes.push({
+            workspaceKey: scope.workspaceKey,
+            cwd: scope.cwd,
+          });
           continue;
         }
         const aliasedRoot = rootsByLegacyKey.get(scope.workspaceKey);
         if (aliasedRoot !== undefined && aliasedRoot !== canonical) {
+          unassignedScopes.push({
+            workspaceKey: scope.workspaceKey,
+            cwd: scope.cwd,
+          });
           continue;
         }
         rootsByLegacyKey.set(scope.workspaceKey, canonical);
@@ -588,8 +706,8 @@ export class StudioProjectCatalog {
       }
       return {
         projects: (changed ? next : this.projects!).map(publicSummary),
-        workspaceScopes: reconciledScopes.sort((left, right) =>
-          left.cwd.localeCompare(right.cwd),
+        workspaceScopes: [...unassignedScopes, ...reconciledScopes].sort(
+          (left, right) => left.cwd.localeCompare(right.cwd),
         ),
       };
     });

@@ -8,6 +8,16 @@ import {
   StudioProjectCatalogError,
 } from "./studio-project-catalog.js";
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  return {
+    promise: new Promise<void>((done) => {
+      resolve = done;
+    }),
+    resolve,
+  };
+}
+
 describe("StudioProjectCatalog", () => {
   const roots: string[] = [];
 
@@ -139,7 +149,65 @@ describe("StudioProjectCatalog", () => {
     );
   });
 
-  it("skips unsafe live scopes without rejecting legal path whitespace", async () => {
+  it("does not let a delayed stale-lock waiter remove a newly acquired lock", async () => {
+    const { catalogPath } = await fixture();
+    const lockPath = `${catalogPath}.lock`;
+    await fs.mkdir(lockPath, { recursive: true });
+    await fs.writeFile(path.join(lockPath, "owner"), "abandoned-owner");
+    const staleAt = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, staleAt, staleAt);
+
+    const delayedObserved = deferred();
+    const resumeDelayed = deferred();
+    const replacementAcquired = deferred();
+    const releaseReplacement = deferred();
+    const replacementRestored = deferred();
+
+    const delayed = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      {
+        afterStaleLockObserved: async () => {
+          delayedObserved.resolve();
+          await resumeDelayed.promise;
+        },
+        afterUnexpectedReclaimRestored: () => {
+          replacementRestored.resolve();
+        },
+      },
+    );
+    const replacement = new StudioProjectCatalog(
+      catalogPath,
+      () => new Date(),
+      {
+        afterLockAcquired: async () => {
+          replacementAcquired.resolve();
+          await releaseReplacement.promise;
+        },
+      },
+    );
+
+    const delayedWrite = delayed.create("Delayed writer");
+    await delayedObserved.promise;
+    const replacementWrite = replacement.create("Replacement writer");
+    await replacementAcquired.promise;
+
+    // The delayed waiter now acts on its stale observation. It atomically
+    // moves the replacement lock, notices the owner changed, and restores it.
+    resumeDelayed.resolve();
+    await replacementRestored.promise;
+    releaseReplacement.resolve();
+
+    await Promise.all([delayedWrite, replacementWrite]);
+    const restarted = await new StudioProjectCatalog(catalogPath).list();
+    expect(restarted.map((project) => project.displayName).sort()).toEqual([
+      "Delayed writer",
+      "Replacement writer",
+    ]);
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves unsafe live scopes without Agent Map assignment and accepts legal path whitespace", async () => {
     const { root, catalogPath } = await fixture();
     const spaced = path.join(root, "project ");
     await fs.mkdir(spaced);
@@ -151,9 +219,20 @@ describe("StudioProjectCatalog", () => {
 
     expect(reconciled.projects).toHaveLength(1);
     expect(reconciled.projects[0]?.displayName).toBe("project");
-    expect(reconciled.workspaceScopes).toEqual([
-      expect.objectContaining({ cwd: spaced }),
-    ]);
+    expect(reconciled.workspaceScopes).toEqual(
+      expect.arrayContaining([
+        {
+          workspaceKey: "workspace-unsafe",
+          cwd: `${root}/bad\npath`,
+        },
+        expect.objectContaining({ cwd: spaced }),
+      ]),
+    );
+    expect(
+      reconciled.workspaceScopes.find(
+        (scope) => scope.workspaceKey === "workspace-unsafe",
+      ),
+    ).not.toHaveProperty("projectId");
   });
 
   it("rejects a move onto another binding in the same project and remains restart-readable", async () => {
