@@ -184,6 +184,7 @@ function candidateOrder(left: HarnessSession, right: HarnessSession): number {
 
 export class PlanningSessionService {
   private readonly principal: string;
+  private readonly projectOpens = new Map<string, Promise<unknown>>();
 
   constructor(private readonly options: PlanningSessionServiceOptions) {
     this.principal = localPlanningPrincipal(options.userId, options.machineId);
@@ -276,7 +277,32 @@ export class PlanningSessionService {
     return session;
   }
 
-  async open(
+  private serializeOpen<T>(
+    projectId: StudioProjectId,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const prior = this.projectOpens.get(projectId) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(operation);
+    this.projectOpens.set(projectId, next);
+    const cleanup = (): void => {
+      if (this.projectOpens.get(projectId) === next) {
+        this.projectOpens.delete(projectId);
+      }
+    };
+    void next.then(cleanup, cleanup);
+    return next;
+  }
+
+  open(
+    projectId: StudioProjectId,
+    request: PlannerSessionRequest,
+  ): Promise<PlannerSessionResponse> {
+    return this.serializeOpen(projectId, () =>
+      this.openOnce(projectId, request),
+    );
+  }
+
+  private async openOnce(
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse> {

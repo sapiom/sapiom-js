@@ -100,9 +100,11 @@ function fixture(existing: HarnessSession[] = []) {
   const manager = {
     create,
     resume,
-    list: () => existing,
+    list: () => [...existing, ...created],
     isLive: (id: string) =>
-      existing.some((candidate) => candidate.id === id && candidate.status === "running"),
+      [...existing, ...created].some(
+        (candidate) => candidate.id === id && candidate.status === "running",
+      ),
     get: (id: string) => [...existing, ...created].find((candidate) => candidate.id === id),
     setPlanningMetadata: async (
       id: string,
@@ -217,6 +219,21 @@ describe("PlanningSessionService", () => {
       queuedInputIds: [],
     });
     expect(contexts.every((value) => !value.includes(project.rootBindings[0]!.localRootRef))).toBe(true);
+  });
+
+  it("serializes concurrent resume-or-create so both callers resolve one planner", async () => {
+    const { service, create } = fixture();
+    const [first, second] = await Promise.all([
+      service.open(projectId, { mode: "resume-or-create" }),
+      service.open(projectId, { mode: "resume-or-create" }),
+    ]);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(first).toMatchObject({ resolution: "created" });
+    expect(second).toMatchObject({
+      resolution: "live",
+      session: { id: first.session.id },
+    });
   });
 
   it("keeps the latest live owned session and rejects cross-project replay", async () => {
