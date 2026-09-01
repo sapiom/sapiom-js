@@ -2510,7 +2510,9 @@ export const startServer = async (
       tenantId: identity?.tenantId ?? null,
       machineId,
       harnessSessionId: event.sessionId,
-      agentSessionId: session?.agentSessionId ?? null,
+      // Planner lifecycle correlation uses the server-owned harness session.
+      // Provider session identity is unnecessary and may originate in a hook.
+      agentSessionId: null,
       harness: session?.harness ?? "claude-code",
       type: event.name,
       payload: {
@@ -3103,11 +3105,15 @@ export const startServer = async (
       ingestCredentials.authenticate(sessionId, token),
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
-    onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+    onAgentSessionResolved: (harnessSessionId, agentSessionId, source) => {
       // Record the agent session id — used by session-manager for resume
       // (agentSessionId feeds the --resume flag) and by the codex tailer for
       // exact-match rollout discovery.
-      return sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+      return sessionManager.setAgentSessionId(
+        harnessSessionId,
+        agentSessionId,
+        source,
+      );
     },
     onSessionReady: (harnessSessionId) => {
       sessionManager.setReady(harnessSessionId);

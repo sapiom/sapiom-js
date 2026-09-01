@@ -194,6 +194,16 @@ const HOOK_READY_POLL_MS = 1_000;
 const READY_GRACE_MS = 8_000;
 /** Poll interval while waiting out READY_GRACE_MS. */
 const READY_POLL_MS = 150;
+/**
+ * Vendor session ids normally remain pinned for the lifetime of a harness
+ * session. Claude's trusted `/clear` and `/resume` commands are the two
+ * exceptions: both can legitimately cause the next SessionStart hook to
+ * report a different id. Keep that exception one-shot and short-lived so a
+ * later hook cannot reuse an old user gesture as authority.
+ */
+const AGENT_SESSION_ROTATION_TTL_MS = 30_000;
+/** Bound raw terminal input retained solely to recognize a trusted command. */
+const TRUSTED_INPUT_LINE_MAX = 256;
 /** See `recordActivity()`: minimum gap between two `onActivity` broadcasts
  *  for the same session — pty.onData fires per chunk (often many times a
  *  second for a busy TUI), but the SPA's busy indicator only needs "this
@@ -385,6 +395,18 @@ interface PtyHandle {
    * would render as literal text.
    */
   bracketedPaste: BracketedPasteState;
+  /** Bounded, server-observed terminal line used to recognize `/clear` and
+   * `/resume`. Hook payloads and ingest credentials can never populate it. */
+  trustedInputLine: string;
+  /** Once an unsupported control/paste or oversized line is observed, that
+   * line cannot authorize identity rotation; Enter resets the condition. */
+  trustedInputInvalid: boolean;
+  /** One-shot authority for the matching SessionStart transition. It lives on
+   * the pty handle so exit/relaunch clears it without durable ambient state. */
+  agentSessionRotation: {
+    source: "clear" | "resume";
+    expiresAt: number;
+  } | null;
   /**
    * Resolves when this specific pty handle's session has fully exited —
    * either via node-pty's real `onExit` event OR a synthesized exit (kill()'s
@@ -836,6 +858,7 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) return false;
     handle.pty.write(data);
+    this.observeTrustedTerminalInput(handle, data);
     const session = this.sessions.get(id);
     if (session) {
       session.lastActiveAt = this.now();
@@ -883,8 +906,10 @@ export class SessionManager {
 
     if (!submit) {
       handle.pty.write(text);
+      this.observeTrustedTerminalInput(handle, text);
     } else if (text.length === 0) {
       handle.pty.write("\r");
+      this.observeTrustedTerminalInput(handle, "\r");
     } else {
       // Bracketed when the app supports it: newlines in the prompt (the canvas
       // chat prepends a multi-line step context to every question) then stay
@@ -907,10 +932,15 @@ export class SessionManager {
         : this.platform === "win32" &&
           (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
       handle.pty.write(paste ? wrapPaste(text) : text);
+      // Observe the server-owned plaintext rather than the bracketed-paste
+      // transport wrapper. Embedded newlines invalidate the line, so prompt
+      // text containing `/clear` cannot impersonate an exact slash command.
+      this.observeTrustedTerminalInput(handle, text);
       await sleep(SUBMIT_DELAY_MS);
       // The pty may have been killed/replaced while we were waiting.
       if (this.ptys.get(id) !== handle) return false;
       handle.pty.write("\r");
+      this.observeTrustedTerminalInput(handle, "\r");
     }
 
     session.lastActiveAt = this.now();
@@ -1086,20 +1116,127 @@ export class SessionManager {
     this.refreshImmediatePromptState(adapter, handle);
   }
 
-  setAgentSessionId(id: string, agentSessionId: string): boolean {
+  setAgentSessionId(
+    id: string,
+    agentSessionId: string,
+    source?: unknown,
+  ): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
-    // Vendor identity is learned once from this session's authenticated PTY.
-    // A resumed registry record is already pinned and may only repeat the exact
-    // value; allowing a later SessionStart to overwrite it would let session A
-    // redirect its next resume/tailer lookup to session B's vendor history.
+    const handle = this.ptys.get(id);
+    const transitionSource = source === "clear" || source === "resume" ? source : null;
+    let authorization = handle?.agentSessionRotation ?? null;
+    if (handle && authorization && authorization.expiresAt <= Date.now()) {
+      handle.agentSessionRotation = null;
+      authorization = null;
+    }
+    const matchesAuthorization =
+      transitionSource !== null &&
+      authorization?.source === transitionSource;
+
+    // A matching clear/resume SessionStart consumes the user gesture even
+    // when this is the first vendor id, Claude keeps the same id, or the
+    // proposed target is rejected below. It can never authorize a second pin.
+    if (handle && matchesAuthorization) {
+      handle.agentSessionRotation = null;
+    }
+
     if (session.agentSessionId !== null) {
-      return session.agentSessionId === agentSessionId;
+      const sameIdentity = session.agentSessionId === agentSessionId;
+      if (sameIdentity) return true;
+      if (!matchesAuthorization) return false;
+    } else if (transitionSource !== null && !matchesAuthorization) {
+      // A clear/resume-shaped first pin is a transition too. Without the
+      // trusted gesture it is just model-authored hook text and must not get
+      // the looser ordinary-startup initial-pin treatment.
+      return false;
+    }
+    // Never let session A take over session B's resume/tailer identity. This
+    // applies to the first pin as well as an authorized rotation: otherwise a
+    // fresh session's model-held ingest token could claim B on its first hook.
+    if (
+      [...this.sessions.values()].some(
+        (candidate) =>
+          candidate.id !== id && candidate.agentSessionId === agentSessionId,
+      )
+    ) {
+      return false;
     }
     session.agentSessionId = agentSessionId;
     void this.persist();
     this.emitStatus(session);
     return true;
+  }
+
+  /**
+   * Fold trusted host/UI input into one bounded command line. Only callers
+   * that already crossed the boot-token terminal WS or protected/internal
+   * submitInput boundary reach this method; raw ingest tokens cannot arm it.
+   * Unsupported controls and pasted/multiline content fail closed for the
+   * current line. Picker navigation after an exact `/resume` does not revoke
+   * the already-armed one-shot authorization.
+   */
+  private observeTrustedTerminalInput(handle: PtyHandle, data: string): void {
+    for (const char of data) {
+      if (char === "\r") {
+        if (!handle.trustedInputInvalid) {
+          const source = this.rotationSourceForTrustedLine(handle.trustedInputLine);
+          if (source) {
+            handle.agentSessionRotation = {
+              source,
+              expiresAt: Date.now() + AGENT_SESSION_ROTATION_TTL_MS,
+            };
+          }
+        }
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = false;
+        continue;
+      }
+      // A literal LF is pasted/multiline content, not the terminal's Enter
+      // key (which is CR). Reset fail-closed without authorizing an inner line.
+      if (char === "\n") {
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      if (char === "\x7f" || char === "\b") {
+        if (!handle.trustedInputInvalid) {
+          handle.trustedInputLine = handle.trustedInputLine.slice(0, -1);
+        }
+        continue;
+      }
+      // Ctrl-U clears the current composer; Ctrl-C abandons it. Neither
+      // revokes a command already submitted (notably `/resume` picker mode).
+      if (char === "\x15" || char === "\x03") {
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = false;
+        continue;
+      }
+      // Escape sequences, tabs, paste wrappers, and other controls are not
+      // required to type either exact command and therefore fail closed.
+      if (char < " " || char === "\x7f") {
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      if (handle.trustedInputInvalid) continue;
+      if (handle.trustedInputLine.length >= TRUSTED_INPUT_LINE_MAX) {
+        handle.trustedInputLine = "";
+        handle.trustedInputInvalid = true;
+        continue;
+      }
+      handle.trustedInputLine += char;
+    }
+  }
+
+  private rotationSourceForTrustedLine(line: string): "clear" | "resume" | null {
+    if (line === "/clear") return "clear";
+    if (
+      line === "/resume" ||
+      (line.startsWith("/resume ") && line.slice("/resume ".length).trim().length > 0)
+    ) {
+      return "resume";
+    }
+    return null;
   }
 
   /**
@@ -1403,6 +1540,9 @@ export class SessionManager {
       readinessCandidateAt: null,
       lastOutputAt: null,
       bracketedPaste: initialBracketedPasteState,
+      trustedInputLine: "",
+      trustedInputInvalid: false,
+      agentSessionRotation: null,
       exited,
       resolveExited,
       killed: false,

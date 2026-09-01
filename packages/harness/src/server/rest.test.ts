@@ -1392,6 +1392,43 @@ describe("createRestRouter", () => {
       expect(sessionManager.resume).toHaveBeenCalledWith("sess-existing");
     });
 
+    it("requires an existing foreign-owned planner to use its scoped route without mutation", async () => {
+      const planner = exitedSession({
+        id: "planner-existing",
+        agentSessionId: body.agentSessionId,
+        planning: {
+          identity: {
+            projectId: "foreign-project",
+            sessionId: "planner-existing",
+            userId: "foreign-user",
+            role: "map-planner",
+          },
+          greeting: { status: "delivered", messageId: "message-1" },
+          queuedInputIds: [],
+        },
+      });
+      const original = structuredClone(planner.planning);
+      const sessionManager = fakeSessionManager([planner]);
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume }),
+        },
+      });
+
+      const res = await adopt({ ...body, cwd: "/tmp/client-supplied-alias" });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(canResume).not.toHaveBeenCalled();
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+      expect(sessionManager.get("planner-existing")?.planning).toEqual(original);
+    });
+
     it("400s on a malformed body and an unspawnable harness", async () => {
       start({ adapters: { "claude-code": historyAdapter() } });
       expect((await adopt({ ...body, agentSessionId: "" })).status).toBe(400);

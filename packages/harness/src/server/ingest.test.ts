@@ -27,7 +27,11 @@ describe("createIngestRouter", () => {
   let baseUrl: string;
   let stored: AnalyticsEvent[];
   let enqueued: AnalyticsEvent[];
-  let resolved: Array<{ harnessSessionId: string; agentSessionId: string }>;
+  let resolved: Array<{
+    harnessSessionId: string;
+    agentSessionId: string;
+    source: unknown;
+  }>;
   let sessions: Map<string, IngestSessionContext>;
 
   function start(depsOverride: Partial<IngestDeps> = {}) {
@@ -52,13 +56,13 @@ describe("createIngestRouter", () => {
         sessionId === "session-1" && token === INGEST_TOKEN,
       normalize: normalizeHookEvent,
       resolveSession: (harnessSessionId) => sessions.get(harnessSessionId),
-      onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+      onAgentSessionResolved: (harnessSessionId, agentSessionId, source) => {
         const session = sessions.get(harnessSessionId);
         if (!session) return false;
         if (session.agentSessionId !== null) {
           return session.agentSessionId === agentSessionId;
         }
-        resolved.push({ harnessSessionId, agentSessionId });
+        resolved.push({ harnessSessionId, agentSessionId, source });
         session.agentSessionId = agentSessionId;
         return true;
       },
@@ -182,7 +186,11 @@ describe("createIngestRouter", () => {
     expect(res.status).toBe(200);
 
     await vi.waitFor(() => expect(resolved).toHaveLength(1));
-    expect(resolved[0]).toEqual({ harnessSessionId: "session-1", agentSessionId: "agent-42" });
+    expect(resolved[0]).toEqual({
+      harnessSessionId: "session-1",
+      agentSessionId: "agent-42",
+      source: "startup",
+    });
   });
 
   it("ignores a SessionStart whose vendor identity conflicts with the pinned session", async () => {
@@ -331,6 +339,7 @@ describe("createIngestRouter", () => {
 
   it("bounds hostile planner source, model, and usage before batching", async () => {
     const planningSession = {
+      agentSessionId: "agent-1",
       planning: {
         identity: {
           projectId: "project-1",
@@ -371,24 +380,38 @@ describe("createIngestRouter", () => {
       },
     });
     await postIngest(baseUrl, {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: {
+        session_id: "/private/envelope-secret",
+        prompt: "private prompt text",
+      },
+    });
+    await postIngest(baseUrl, {
       hookEvent: "Stop",
       harnessSessionId: "session-1",
       payload: {
-        session_id: "agent-1",
+        session_id: "/private/envelope-secret",
         transcript_path: "/private/transcript.jsonl",
         last_assistant_message: "private assistant text",
       },
     });
 
-    await vi.waitFor(() => expect(enqueued).toHaveLength(2));
+    await vi.waitFor(() => expect(enqueued).toHaveLength(3));
     expect(enqueued.map((event) => event.payload)).toEqual([
       { planner: true, source: "unknown" },
+      { planner: true, origin: "user" },
       {
         planner: true,
         hasAssistantText: true,
         modelReported: true,
         usage: { inputTokens: 1_000_000_000_000, outputTokens: null },
       },
+    ]);
+    expect(enqueued.map((event) => event.agentSessionId)).toEqual([
+      null,
+      null,
+      null,
     ]);
     expect(JSON.stringify(enqueued)).not.toContain("private");
     expect(JSON.stringify(enqueued)).not.toContain("secret");

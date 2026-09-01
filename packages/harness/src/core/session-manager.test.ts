@@ -1194,9 +1194,9 @@ describe("SessionManager", () => {
       harness: "claude-code",
     });
 
-    expect(manager.setAgentSessionId(live.id, "agent-live")).toBe(true);
-    expect(manager.setAgentSessionId(live.id, "agent-live")).toBe(true);
-    expect(manager.setAgentSessionId(live.id, "agent-other")).toBe(false);
+    expect(manager.setAgentSessionId(live.id, "agent-live", "startup")).toBe(true);
+    expect(manager.setAgentSessionId(live.id, "agent-live", "compact")).toBe(true);
+    expect(manager.setAgentSessionId(live.id, "agent-other", "clear")).toBe(false);
     expect(manager.get(live.id)?.agentSessionId).toBe("agent-live");
 
     const resumed = manager.registerHistorical({
@@ -1207,8 +1207,167 @@ describe("SessionManager", () => {
       lastActiveAt: "2026-01-01T00:00:00.000Z",
     });
     expect(manager.setAgentSessionId(resumed.id, "agent-resumed")).toBe(true);
-    expect(manager.setAgentSessionId(resumed.id, "agent-other")).toBe(false);
+    expect(manager.setAgentSessionId(resumed.id, "agent-other", "resume")).toBe(false);
     expect(manager.get(resumed.id)?.agentSessionId).toBe("agent-resumed");
+  });
+
+  it("rotates a pinned vendor identity once after fragmented trusted /clear input", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+    expect(manager.write(session.id, "/cl")).toBe(true);
+    expect(manager.write(session.id, "x")).toBe(true);
+    expect(manager.write(session.id, "\x7f")).toBe(true);
+    expect(manager.write(session.id, "ear\r")).toBe(true);
+
+    expect(manager.setAgentSessionId(session.id, "agent-after", "clear")).toBe(true);
+    expect(manager.get(session.id)?.agentSessionId).toBe("agent-after");
+    // The gesture was consumed by the accepted rotation.
+    expect(manager.setAgentSessionId(session.id, "agent-replayed", "clear")).toBe(false);
+    expect(manager.get(session.id)?.agentSessionId).toBe("agent-after");
+  });
+
+  it("fails closed on text containing commands, multiline input, paste controls, and a wrong hook source", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+    expect(manager.write(session.id, "please /clear\r")).toBe(true);
+    expect(manager.setAgentSessionId(session.id, "agent-contained", "clear")).toBe(false);
+
+    expect(manager.write(session.id, "context\n/clear\r")).toBe(true);
+    expect(manager.setAgentSessionId(session.id, "agent-multiline", "clear")).toBe(false);
+
+    expect(manager.write(session.id, "\x1b[200~/clear\x1b[201~\r")).toBe(true);
+    expect(manager.setAgentSessionId(session.id, "agent-pasted", "clear")).toBe(false);
+
+    // Ctrl-U safely abandons the prior draft and lets the exact replacement
+    // line authorize, while an unrelated hook source cannot consume it.
+    expect(manager.write(session.id, "draft\x15/clear\r")).toBe(true);
+    expect(manager.setAgentSessionId(session.id, "agent-wrong-source", "resume")).toBe(false);
+    expect(manager.setAgentSessionId(session.id, "agent-after", "clear")).toBe(true);
+  });
+
+  it("consumes a trusted transition when the matching hook repeats the same identity", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(manager.setAgentSessionId(session.id, "agent-same", "startup")).toBe(true);
+    expect(manager.write(session.id, "/clear\r")).toBe(true);
+
+    expect(manager.setAgentSessionId(session.id, "agent-same", "clear")).toBe(true);
+    expect(manager.setAgentSessionId(session.id, "agent-later", "clear")).toBe(false);
+    expect(manager.get(session.id)?.agentSessionId).toBe("agent-same");
+  });
+
+  it("lets protected submitInput arm picker and direct /resume transitions", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      expect(manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+      const submitted = manager.submitInput(session.id, "/resume", true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await submitted).toBe(true);
+
+      // Picker navigation is escape-sequence input after `/resume` was
+      // submitted. It must not revoke the already-armed authorization.
+      expect(manager.write(session.id, "\x1b[B\r")).toBe(true);
+      expect(manager.setAgentSessionId(session.id, "agent-picked", "resume")).toBe(true);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-picked");
+
+      const direct = manager.submitInput(
+        session.id,
+        "/resume agent-direct",
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await direct).toBe(true);
+      expect(manager.setAgentSessionId(session.id, "agent-direct", "resume")).toBe(true);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-direct");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an owned rotation target and consumes the authorization", async () => {
+    const { manager } = makeManager();
+    const first = await manager.create({
+      cwd: "/tmp/first",
+      harness: "claude-code",
+    });
+    const second = await manager.create({
+      cwd: "/tmp/second",
+      harness: "claude-code",
+    });
+    expect(manager.setAgentSessionId(first.id, "agent-first", "startup")).toBe(true);
+    expect(manager.setAgentSessionId(second.id, "agent-second", "startup")).toBe(true);
+
+    expect(manager.write(first.id, "/clear\r")).toBe(true);
+    expect(manager.setAgentSessionId(first.id, "agent-second", "clear")).toBe(false);
+    expect(manager.get(first.id)?.agentSessionId).toBe("agent-first");
+    // Rejection is still a one-shot use; a unique second target cannot reuse it.
+    expect(manager.setAgentSessionId(first.id, "agent-third", "clear")).toBe(false);
+  });
+
+  it("rejects another session's owned identity on the initial pin", async () => {
+    const { manager } = makeManager();
+    const first = await manager.create({
+      cwd: "/tmp/first",
+      harness: "claude-code",
+    });
+    const second = await manager.create({
+      cwd: "/tmp/second",
+      harness: "claude-code",
+    });
+    expect(manager.setAgentSessionId(first.id, "agent-owned", "startup")).toBe(true);
+
+    expect(manager.setAgentSessionId(second.id, "agent-owned", "startup")).toBe(false);
+    expect(manager.get(second.id)?.agentSessionId).toBeNull();
+
+    expect(manager.write(second.id, "/clear\r")).toBe(true);
+    expect(manager.setAgentSessionId(second.id, "agent-owned", "clear")).toBe(false);
+    // The owned-target rejection consumes the grant even before an initial pin.
+    expect(manager.setAgentSessionId(second.id, "agent-unique", "clear")).toBe(false);
+    expect(manager.get(second.id)?.agentSessionId).toBeNull();
+  });
+
+  it("expires trusted rotation authority and clears it across relaunch", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      expect(manager.setAgentSessionId(session.id, "agent-before", "startup")).toBe(true);
+
+      expect(manager.write(session.id, "/clear\r")).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(manager.setAgentSessionId(session.id, "agent-expired", "clear")).toBe(false);
+
+      expect(manager.write(session.id, "/resume\r")).toBe(true);
+      spawns[0]?.emitExit(0);
+      await manager.resume(session.id);
+      expect(manager.setAgentSessionId(session.id, "agent-after-relaunch", "resume")).toBe(false);
+      expect(manager.get(session.id)?.agentSessionId).toBe("agent-before");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("awaits an async buildLaunchOpts and merges its result into launch opts", async () => {

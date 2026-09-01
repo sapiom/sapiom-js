@@ -305,6 +305,22 @@ describe("coding-agent authorization boundary", () => {
     expect(forged.status).toBe(401);
     expect(server.sessionManager.get(second.id)?.agentSessionId).toBeNull();
 
+    const initialTakeover = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${secondToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: second.id,
+        payload: { session_id: "first-agent-session", source: "startup" },
+      }),
+    });
+    expect(initialTakeover.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.sessionManager.get(second.id)?.agentSessionId).toBeNull();
+
     const owned = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
       headers: {
@@ -324,6 +340,53 @@ describe("coding-agent authorization boundary", () => {
       );
     });
 
+    // A raw ingest capability plus an attacker-chosen `source: clear` is not
+    // enough to rotate the pinned vendor pointer; only trusted host/UI input
+    // can arm that transition.
+    const fakeClear = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${firstToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: first.id,
+        payload: { session_id: "untrusted-clear-target", source: "clear" },
+      }),
+    });
+    expect(fakeClear.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.sessionManager.get(first.id)?.agentSessionId).toBe(
+      "first-agent-session",
+    );
+
+    // The same transition succeeds after the server observes the exact
+    // trusted terminal command, even when its keystrokes are fragmented.
+    expect(server.sessionManager.write(first.id, "/cl")).toBe(true);
+    expect(server.sessionManager.write(first.id, "ear\r")).toBe(true);
+    const trustedClear = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${firstToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: first.id,
+        payload: { session_id: "first-after-clear", source: "clear" },
+      }),
+    });
+    expect(trustedClear.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(server?.sessionManager.get(first.id)?.agentSessionId).toBe(
+        "first-after-clear",
+      );
+    });
+
+    // Even a freshly armed transition cannot take another harness session's
+    // known identity, and the rejected attempt consumes the one-shot grant.
+    expect(server.sessionManager.write(first.id, "/resume\r")).toBe(true);
     const forgedResumePointer = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
       headers: {
@@ -339,10 +402,28 @@ describe("coding-agent authorization boundary", () => {
     expect(forgedResumePointer.status).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(server.sessionManager.get(first.id)?.agentSessionId).toBe(
-      "first-agent-session",
+      "first-after-clear",
     );
     expect(server.sessionManager.get(second.id)?.agentSessionId).toBe(
       "owned-agent-session",
+    );
+
+    const replayedResume = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${firstToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: first.id,
+        payload: { session_id: "unique-after-rejection", source: "resume" },
+      }),
+    });
+    expect(replayedResume.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.sessionManager.get(first.id)?.agentSessionId).toBe(
+      "first-after-clear",
     );
   });
 });

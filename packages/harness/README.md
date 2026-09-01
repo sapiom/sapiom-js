@@ -111,16 +111,20 @@ continue. A PTY write and a filesystem write cannot provide true exactly-once
 delivery without an idempotent external acknowledgement.
 
 The focused system context contains only bounded project/session identity,
-current workspace pointer IDs, and binding references. The E1 state stores do
-not yet own revision, proposal, or build-plan detail records, so their bounded
-digest, summary, status, and warning slots are honestly `null`/empty until those
-records land. Local root paths and source inventories are never included.
+current workspace pointer IDs, and binding references. The current workspace
+store does not yet own revision, proposal, or build-plan detail records, so
+their bounded digest, summary, status, and warning slots are honestly
+`null`/empty until those records land. Local root paths and source inventories
+are never included.
 
 The browser/host token gates every `/api` planner route and is never injected
 into a coding-agent PTY. Each PTY instead receives a random `/ingest` capability
 bound to its exact session ID; presenting it with another event `sessionId` is
 rejected, it grants no `/api` authority, and it is rotated or revoked with the
-process lifecycle.
+process lifecycle. A vendor resume pointer is pinned to one harness session;
+only a short-lived, one-shot `/clear` or `/resume` transition observed on the
+trusted terminal/input path may rotate it, and a pointer already owned by
+another harness session is always rejected.
 
 **Migration note (breaking):** `POST /api/sessions` now rejects unknown fields,
 including client-authored planner metadata. Generic

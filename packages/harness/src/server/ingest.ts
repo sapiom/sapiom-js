@@ -39,6 +39,7 @@ export interface IngestDeps {
   onAgentSessionResolved: (
     harnessSessionId: string,
     agentSessionId: string,
+    source: unknown,
   ) => boolean;
   /**
    * Called once a SessionStart(-equivalent) event is actually processed for
@@ -154,6 +155,7 @@ export async function processIngest(
       !deps.onAgentSessionResolved(
         harnessSessionId,
         finalEvent.agentSessionId,
+        finalEvent.payload.source,
       )
     ) {
       // The bearer capability authenticates the harness session, not an

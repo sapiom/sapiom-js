@@ -317,6 +317,54 @@ describe("PlannerGreetingCoordinator", () => {
     });
   });
 
+  it("does not publish a phantom dispatch intent when its durable write fails", async () => {
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    let failIntentWrite = true;
+    const lifecycle: unknown[] = [];
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      writeState: async (file, value) => {
+        const state = value as {
+          dispatchingInputId: string | null;
+          inputs: unknown[];
+        };
+        if (
+          failIntentWrite &&
+          state.dispatchingInputId !== null &&
+          state.inputs.length === 1
+        ) {
+          failIntentWrite = false;
+          throw new Error("transient dispatch-intent write failure");
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+      },
+      onEvent: (value) => {
+        lifecycle.push(value);
+      },
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+
+    await coordinator.enqueue(session.id, "first was never submitted");
+    expect(submitted).toEqual([]);
+    await coordinator.enqueue(session.id, "second triggers a safe retry");
+
+    expect(submitted).toEqual([
+      "first was never submitted",
+      "second triggers a safe retry",
+    ]);
+    expect(session.planning?.queuedInputIds).toEqual([]);
+    expect(lifecycle).not.toContainEqual(
+      expect.objectContaining({
+        name: "planner_session.input_delivery_uncertain",
+      }),
+    );
+  });
+
   it("resolves an orphaned dispatch as uncertain and lets the later FIFO continue", async () => {
     session.ready = false;
     session.planning!.greeting = {

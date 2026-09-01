@@ -714,6 +714,26 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const { agentSessionId, harness, title, lastActiveAt } = parsed.data;
     const cwd = normalizeCwd(parsed.data.cwd);
     try {
+      // Resolve an already-owned registry row before probing or mutating any
+      // adapter state. Generic adoption must never bypass the project/user
+      // authority and focused-context checks on the scoped planner route.
+      const identityOwners = sessionManager
+        .list()
+        .filter((session) => session.agentSessionId === agentSessionId);
+      if (identityOwners.some((session) => session.planning !== undefined)) {
+        res.status(409).json({
+          code: "planner_session_requires_scoped_route",
+          error: "Planner sessions must be resumed through their project route",
+        });
+        return;
+      }
+      // For ordinary sessions, cwd remains part of the historical-record
+      // identity. It is deliberately checked only after the vendor id has
+      // been fenced from every planner owner above: client-supplied cwd must
+      // not alias around the scoped planner route.
+      const existing = identityOwners.find(
+        (session) => normalizeCwd(session.cwd) === cwd,
+      );
       // Never take the client's word for resumability — it's re-derived from
       // the agent's own store here, so a stale history row (transcript deleted
       // between the list and the click) can't leave a phantom record behind.
@@ -732,12 +752,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // mixed-separator form the SPA used to send, which never equals the
       // resolved `cwd` above — so an exact compare re-adopts the same
       // conversation into a duplicate row on every Resume.
-      const existing = sessionManager
-        .list()
-        .find(
-          (session) =>
-            session.agentSessionId === agentSessionId && normalizeCwd(session.cwd) === cwd,
-        );
       const target = existing ?? sessionManager.registerHistorical({ agentSessionId, harness, cwd, title, lastActiveAt });
       res.json(await sessionManager.resume(target.id));
     } catch (err) {

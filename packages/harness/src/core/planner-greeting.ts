@@ -551,9 +551,16 @@ export class PlannerGreetingCoordinator {
     sessionId: string,
     state: PersistedPlannerState,
   ): Promise<void> {
-    this.states.set(sessionId, state);
     try {
       await this.writeState(this.file(sessionId), state);
+      // A cloned queue transition (notably a dispatch intent) is authoritative
+      // only after its queue-file write commits. Publishing it first would let
+      // a transient write failure leave a phantom intent in memory, causing a
+      // later same-process drain to discard input that never reached the PTY.
+      // Greeting transitions generally mutate their already-cached state in
+      // place, so their bounded persistence-failure classification below is
+      // unchanged.
+      this.states.set(sessionId, state);
       await this.options.sessionManager.setPlanningMetadata(
         sessionId,
         state.metadata,
@@ -977,7 +984,15 @@ export class PlannerGreetingCoordinator {
   redactForTelemetry(event: AnalyticsEvent): AnalyticsEvent {
     const session = this.options.sessionManager.get(event.harnessSessionId);
     return session?.planning
-      ? { ...event, payload: telemetryPayload(event) }
+      ? {
+          ...event,
+          // The normalized hook envelope is attacker-controlled too: every
+          // hook can supply `payload.session_id`. The harness session ID is the
+          // server-owned planner correlation key, so provider identity is not
+          // needed in remote planner telemetry at all.
+          agentSessionId: null,
+          payload: telemetryPayload(event),
+        }
       : event;
   }
 
