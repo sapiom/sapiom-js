@@ -133,10 +133,8 @@ import {
   isWithinGraphPath,
 } from "../core/system-graph-inventory.js";
 import { SystemGraphStore } from "../core/system-graph-store.js";
-import {
-  SharedWorkspaceWatchBroker,
-  SystemGraphWatcherManager,
-} from "../core/system-graph-watcher.js";
+import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
+import { SharedWorkspaceWatchBroker } from "../core/workspace-watch-broker.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
   createDefinitionSlugResolver,

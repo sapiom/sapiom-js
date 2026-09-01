@@ -36,7 +36,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { SharedWorkspaceWatchBrokerLike } from "./system-graph-watcher.js";
+import type { SharedWorkspaceWatchBrokerLike } from "./workspace-watch-broker.js";
 import {
   AGENT_PROJECT_SCAN_MAX_NODES,
   AgentProjectScanBudget,
@@ -853,10 +853,7 @@ export class WorkspaceWatcherManager {
       });
       void this.deps.sharedWatchBroker
         .subscribe(key, {
-          scope: {
-            workspaceKey: `session:${harnessSessionId}`,
-            root: canonicalCwd,
-          },
+          root: canonicalCwd,
           listSourceRoots: () =>
             this.deps.listSourceRoots?.(harnessSessionId, canonicalCwd) ?? [],
           listSourceObservations: () =>

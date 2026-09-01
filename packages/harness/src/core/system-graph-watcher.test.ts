@@ -4,12 +4,12 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceScope } from "./system-graph.js";
+import { SystemGraphWatcherManager } from "./system-graph-watcher.js";
 import {
   SharedWorkspaceWatchBroker,
-  SystemGraphWatcherManager,
-  type SystemGraphWatchFactory,
-  type SystemGraphWatchHandle,
-} from "./system-graph-watcher.js";
+  type WorkspaceWatchFactory,
+  type WorkspaceWatchHandle,
+} from "./workspace-watch-broker.js";
 import {
   snapshotWorkflowSourceRootsAsync,
   snapshotWorkspaceWorkflowsAsync,
@@ -103,12 +103,12 @@ describe("SystemGraphWatcherManager", () => {
   });
 
   it("routes native paths, ignores generated churn, and recovers via polling", async () => {
-    let watchListener!: Parameters<SystemGraphWatchFactory>[1];
+    let watchListener!: Parameters<WorkspaceWatchFactory>[1];
     let errorListener!: (error: Error) => void;
     const close = vi.fn();
-    const watchFactory: SystemGraphWatchFactory = (_watchRoot, listener) => {
+    const watchFactory: WorkspaceWatchFactory = (_watchRoot, listener) => {
       watchListener = listener;
-      const handle: SystemGraphWatchHandle = {
+      const handle: WorkspaceWatchHandle = {
         close,
         on: (_event, onError) => {
           errorListener = onError;
@@ -232,10 +232,10 @@ describe("SystemGraphWatcherManager", () => {
   });
 
   it("bounds source retries until a later raw event rearms recovery", async () => {
-    let watchListener!: Parameters<SystemGraphWatchFactory>[1];
-    const watchFactory: SystemGraphWatchFactory = (_watchRoot, listener) => {
+    let watchListener!: Parameters<WorkspaceWatchFactory>[1];
+    const watchFactory: WorkspaceWatchFactory = (_watchRoot, listener) => {
       watchListener = listener;
-      const handle: SystemGraphWatchHandle = {
+      const handle: WorkspaceWatchHandle = {
         close: vi.fn(),
         on: () => handle,
       };
@@ -354,12 +354,12 @@ describe("SystemGraphWatcherManager", () => {
     const baselineGate = new Promise<void>((resolve) => {
       releaseBaseline = resolve;
     });
-    let watchListener!: Parameters<SystemGraphWatchFactory>[1];
+    let watchListener!: Parameters<WorkspaceWatchFactory>[1];
     const close = vi.fn();
     const onPotentialChange = vi.fn();
-    const watchFactory: SystemGraphWatchFactory = (_watchRoot, listener) => {
+    const watchFactory: WorkspaceWatchFactory = (_watchRoot, listener) => {
       watchListener = listener;
-      const handle: SystemGraphWatchHandle = {
+      const handle: WorkspaceWatchHandle = {
         close,
         on: () => handle,
       };
@@ -398,12 +398,12 @@ describe("SystemGraphWatcherManager", () => {
   });
 
   it("closes an armed watcher when its initial baseline rejects", async () => {
-    let watchListener!: Parameters<SystemGraphWatchFactory>[1];
+    let watchListener!: Parameters<WorkspaceWatchFactory>[1];
     const close = vi.fn();
     const onPotentialChange = vi.fn();
-    const watchFactory: SystemGraphWatchFactory = (_watchRoot, listener) => {
+    const watchFactory: WorkspaceWatchFactory = (_watchRoot, listener) => {
       watchListener = listener;
-      const handle: SystemGraphWatchHandle = {
+      const handle: WorkspaceWatchHandle = {
         close,
         on: () => handle,
       };
@@ -441,10 +441,10 @@ describe("SystemGraphWatcherManager", () => {
     const baselineGate = new Promise<void>((resolve) => {
       releaseBaseline = resolve;
     });
-    let watchListener!: Parameters<SystemGraphWatchFactory>[1];
-    const watchFactory: SystemGraphWatchFactory = (_watchRoot, listener) => {
+    let watchListener!: Parameters<WorkspaceWatchFactory>[1];
+    const watchFactory: WorkspaceWatchFactory = (_watchRoot, listener) => {
       watchListener = listener;
-      const handle: SystemGraphWatchHandle = {
+      const handle: WorkspaceWatchHandle = {
         close: vi.fn(),
         on: () => handle,
       };
@@ -530,12 +530,12 @@ describe("SystemGraphWatcherManager", () => {
 
   it("shares one canonical-root watcher across two sessions and a graph caller", async () => {
     const agentRoot = await scaffoldAgent("shared-agent");
-    let watchListener!: Parameters<SystemGraphWatchFactory>[1];
+    let watchListener!: Parameters<WorkspaceWatchFactory>[1];
     const close = vi.fn();
-    const watchFactory = vi.fn<SystemGraphWatchFactory>(
+    const watchFactory = vi.fn<WorkspaceWatchFactory>(
       (_watchRoot, listener) => {
         watchListener = listener;
-        const handle: SystemGraphWatchHandle = {
+        const handle: WorkspaceWatchHandle = {
           close,
           on: () => handle,
         };
@@ -605,10 +605,10 @@ describe("SystemGraphWatcherManager", () => {
   it("cleans a rejected shared subscription so the same scope can retry", async () => {
     let attempts = 0;
     const closes: Array<ReturnType<typeof vi.fn>> = [];
-    const watchFactory = vi.fn<SystemGraphWatchFactory>(() => {
+    const watchFactory = vi.fn<WorkspaceWatchFactory>(() => {
       const close = vi.fn();
       closes.push(close);
-      const handle: SystemGraphWatchHandle = {
+      const handle: WorkspaceWatchHandle = {
         close,
         on: () => handle,
       };
