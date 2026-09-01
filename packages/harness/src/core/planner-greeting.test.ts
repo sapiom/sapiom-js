@@ -567,6 +567,47 @@ describe("PlannerGreetingCoordinator", () => {
     expect(session.planning?.queuedInputIds).toEqual([]);
   });
 
+  it("contains timer persistence rejection with only a bounded local classification", async () => {
+    vi.useFakeTimers();
+    session.ready = false;
+    let rejectWrites = false;
+    const localErrors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 100,
+      writeState: async (file, value) => {
+        if (rejectWrites) {
+          throw new Error("/private/customer provider-secret");
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+      },
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+
+    rejectWrites = true;
+    await vi.advanceTimersByTimeAsync(101);
+    await vi.waitFor(() => {
+      expect(localErrors).toHaveBeenCalledWith(
+        "[harness] planner greeting timeout transition failed: persistence_failed",
+      );
+    });
+
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "persistence_failed",
+    });
+    expect(JSON.stringify(localErrors.mock.calls)).not.toContain(
+      "private/customer",
+    );
+    expect(JSON.stringify(localErrors.mock.calls)).not.toContain(
+      "provider-secret",
+    );
+    localErrors.mockRestore();
+  });
+
   it("keeps a queued planner message out of the PTY when its live dispatch authority is rebound before readiness", async () => {
     session.ready = false;
     let authorized = true;

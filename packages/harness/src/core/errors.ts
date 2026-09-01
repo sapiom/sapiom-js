@@ -8,6 +8,7 @@
  *   SessionNotReadyError      → 409
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
+ *   AgentSessionIdentityReservedError → 409
  *   AdapterNotFoundError      → 400
  *   SpawnTargetError          → 400
  *   ExternalHarnessError      → 409
@@ -78,6 +79,20 @@ export class SessionNotResumeableError extends HarnessError {
 export class SessionAlreadyLiveError extends HarnessError {
   constructor(id: string) {
     super("SESSION_ALREADY_LIVE", `Session "${id}" already has a live pty`);
+  }
+}
+
+/**
+ * Thrown when generic adoption tries to claim a vendor conversation identity
+ * that this installation has already assigned to a different registry row or
+ * retained as a historical rotation tombstone. Maps to HTTP 409.
+ */
+export class AgentSessionIdentityReservedError extends HarnessError {
+  constructor() {
+    super(
+      "AGENT_SESSION_IDENTITY_RESERVED",
+      "This conversation identity is already owned by a local session",
+    );
   }
 }
 

@@ -13,10 +13,13 @@ focused brief can reuse an older recorded ancestor.
 **Breaking:** generic `POST /api/sessions` now strictly rejects unknown fields,
 so clients can no longer attach planner metadata to a generic create request.
 Generic planner input, resume, and adopt routes also reject planner-owned
-sessions and vendor identities (including durable historical aliases after a
-rotation). Migrate planner clients to the project-scoped
-`/api/projects/:projectId/planner-sessions`
-open, message, and greeting-retry routes. All coding-agent sessions now pin
+sessions. Generic adopt additionally rejects every conflicting current owner
+or durable historical vendor identity, including ordinary pre-`/clear` and
+pre-`/resume` aliases, with a bounded 409 before adapter probing. Migrate
+planner clients to the project-scoped open, message, and greeting-retry routes
+under `/api/projects/:projectId/planner-sessions`.
+
+All coding-agent sessions now pin
 vendor identity to a durable session owner: conflicting `SessionStart` claims
 are rejected. The only rotation exception is a short-lived, one-shot
 server-observed `/clear` or `/resume` terminal gesture; `/resume` picker input

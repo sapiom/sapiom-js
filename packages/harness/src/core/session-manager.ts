@@ -34,6 +34,7 @@ import { resolveSpawnTarget } from "./spawn-target.js";
 import { stripAnsi } from "./strip-ansi.js";
 import {
   AdapterNotFoundError,
+  AgentSessionIdentityReservedError,
   ExternalHarnessError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
@@ -45,6 +46,7 @@ import type { IngestCredentialProvider } from "./ingest-credentials.js";
 
 export {
   AdapterNotFoundError,
+  AgentSessionIdentityReservedError,
   ExternalHarnessError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
@@ -323,6 +325,11 @@ export interface SessionManagerOptions {
   /** Test seam for deterministic registry persistence failures. Production
    * uses the atomic mode-preserving writer below. */
   writeSessionRegistry?: (file: string, serialized: string) => Promise<void>;
+  /** Test seam for faults after the private identity ledger becomes durable. */
+  writeAgentSessionOwnerRegistry?: (
+    file: string,
+    serialized: string,
+  ) => Promise<void>;
   /**
    * Writes HARNESS_CONTEXT_FILE for a session — the caller (server/index.ts's
    * `writeSessionContext`) owns resolving the session's `boundWorkflowPath`
@@ -479,6 +486,9 @@ export class SessionManager {
   private readonly writeSessionRegistry:
     | ((file: string, serialized: string) => Promise<void>)
     | undefined;
+  private readonly writeAgentSessionOwnerRegistry:
+    | ((file: string, serialized: string) => Promise<void>)
+    | undefined;
   private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
@@ -493,6 +503,10 @@ export class SessionManager {
   private readonly lastActivityBroadcast = new Map<string, number>();
   private writeQueue: Promise<void> = Promise.resolve();
   private writeSeq = 0;
+  /** While a vendor-pointer/add-row transaction is committing its private
+   * candidate snapshot, every ordinary registry write waits here and captures
+   * state only after the candidate was published or rejected. */
+  private sessionRegistryIdentityFence: Promise<void> | null = null;
   private readonly agentSessionOwners = new Map<string, string>();
   /** Serializes the full authorize -> reserve -> pointer commit transition.
    * A file-level atomic rename alone is insufficient when two starts race the
@@ -516,6 +530,8 @@ export class SessionManager {
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
+    this.writeAgentSessionOwnerRegistry =
+      options.writeAgentSessionOwnerRegistry;
     this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
     this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
@@ -563,7 +579,7 @@ export class SessionManager {
       }
       this.sessions.set(session.id, session);
     }
-    await this.loadAgentSessionOwners(persisted);
+    dirty = (await this.loadAgentSessionOwners(persisted)) || dirty;
     if (dirty) await this.persist();
   }
 
@@ -685,7 +701,7 @@ export class SessionManager {
       if (existingOwnerId) {
         const existing = this.sessions.get(existingOwnerId);
         if (existing?.agentSessionId === input.agentSessionId) return existing;
-        throw new Error("Agent session identity is already reserved");
+        throw new AgentSessionIdentityReservedError();
       }
       const session: HarnessSession = {
         id,
@@ -701,15 +717,17 @@ export class SessionManager {
         ready: false,
       };
       await this.reserveAgentSessionIdentity(digest, id);
-      this.sessions.set(id, session);
+      let releaseFence: () => void = () => {};
+      const fence = new Promise<void>((resolveFence) => {
+        releaseFence = resolveFence;
+      });
+      this.sessionRegistryIdentityFence = fence;
       try {
-        await this.persist();
-      } catch (err) {
-        this.sessions.delete(id);
-        // The durable reservation deliberately remains. Losing availability
-        // for this alias is safer than making a possibly accepted identity
-        // claimable by another session after an ambiguous storage failure.
-        throw err;
+        await this.persistIdentityCandidate(session);
+        this.sessions.set(id, session);
+      } finally {
+        this.sessionRegistryIdentityFence = null;
+        releaseFence();
       }
       return session;
     });
@@ -1229,6 +1247,14 @@ export class SessionManager {
     return ownerId ? this.sessions.get(ownerId) : undefined;
   }
 
+  /** Whether the private ledger retains this current or historical alias,
+   * including a fail-closed tombstone whose original registry row is absent. */
+  isAgentSessionIdentityReserved(agentSessionId: string): boolean {
+    return this.agentSessionOwners.has(
+      this.agentSessionIdentityDigest(agentSessionId),
+    );
+  }
+
   private async setAgentSessionIdLocked(
     id: string,
     agentSessionId: string,
@@ -1272,16 +1298,24 @@ export class SessionManager {
     if (ownerId !== undefined && ownerId !== id) return false;
     if (ownerId === undefined) await this.reserveAgentSessionIdentity(digest, id);
 
-    const previousAgentSessionId = session.agentSessionId;
-    session.agentSessionId = agentSessionId;
+    const candidate = { ...session, agentSessionId };
+    let releaseFence: () => void = () => {};
+    const fence = new Promise<void>((resolveFence) => {
+      releaseFence = resolveFence;
+    });
+    this.sessionRegistryIdentityFence = fence;
     try {
       // The ingest request is not accepted into the event pipeline until both
       // the ownership tombstone and public current pointer are durable. The
-      // sidecar is written first, so a crash between files fails closed.
-      await this.persist();
-    } catch (err) {
-      session.agentSessionId = previousAgentSessionId;
-      throw err;
+      // sidecar is written first, so a crash between files fails closed. The
+      // candidate remains private until this write commits; ordinary session
+      // snapshots wait on the fence and therefore cannot resurrect a rejected
+      // pointer or erase an accepted one.
+      await this.persistIdentityCandidate(candidate);
+      session.agentSessionId = agentSessionId;
+    } finally {
+      this.sessionRegistryIdentityFence = null;
+      releaseFence();
     }
     this.emitStatus(session);
     return true;
@@ -1942,12 +1976,14 @@ export class SessionManager {
 
   /** Load the private alias ledger before accepting ingest. Missing is the
    * one recoverable case (upgrade from an older build): current pointers seed
-   * it exactly once. Malformed/unreadable state and legacy duplicate owners
-   * fail boot loudly rather than silently forgetting rotation tombstones. */
+   * it exactly once, with sessions.json order deterministically choosing the
+   * first owner of a legacy duplicate. Malformed/unreadable ledger state still
+   * fails boot rather than silently forgetting rotation tombstones. */
   private async loadAgentSessionOwners(
     persisted: HarnessSession[],
-  ): Promise<void> {
+  ): Promise<boolean> {
     let needsWrite = false;
+    let pointersDirty = false;
     try {
       const raw = await readFile(this.agentSessionOwnersPath, "utf8");
       if (Buffer.byteLength(raw, "utf8") > AGENT_SESSION_OWNER_MAX_BYTES) {
@@ -1991,16 +2027,17 @@ export class SessionManager {
       needsWrite = true;
     }
 
-    for (const session of [...persisted].sort((a, b) =>
-      a.id.localeCompare(b.id),
-    )) {
+    // Preserve persisted array order: released versions could create two rows
+    // with the same vendor id, so the first recorded owner wins the one-time
+    // upgrade. When a ledger already exists it is authoritative instead.
+    for (const session of persisted) {
       if (!session.agentSessionId) continue;
       const digest = this.agentSessionIdentityDigest(session.agentSessionId);
       const ownerId = this.agentSessionOwners.get(digest);
       if (ownerId !== undefined && ownerId !== session.id) {
-        throw new Error(
-          `Agent session identity has conflicting owners ${ownerId} and ${session.id}`,
-        );
+        session.agentSessionId = null;
+        pointersDirty = true;
+        continue;
       }
       if (ownerId === undefined) {
         this.agentSessionOwners.set(digest, session.id);
@@ -2008,6 +2045,7 @@ export class SessionManager {
       }
     }
     if (needsWrite) await this.persistAgentSessionOwners();
+    return pointersDirty;
   }
 
   private async reserveAgentSessionIdentity(
@@ -2017,15 +2055,14 @@ export class SessionManager {
     const ownerId = this.agentSessionOwners.get(digest);
     if (ownerId === sessionId) return;
     if (ownerId !== undefined) {
-      throw new Error("Agent session identity is already reserved");
+      throw new AgentSessionIdentityReservedError();
     }
     this.agentSessionOwners.set(digest, sessionId);
-    try {
-      await this.persistAgentSessionOwners();
-    } catch (err) {
-      this.agentSessionOwners.delete(digest);
-      throw err;
-    }
+    // Atomic rename can commit and still surface an ambiguous later I/O
+    // failure. Retain the in-memory claim so this process never lets another
+    // session overwrite a possibly durable owner. A clean pre-commit failure
+    // therefore also fails closed until restart, which is the safe tradeoff.
+    await this.persistAgentSessionOwners();
   }
 
   private async persistAgentSessionOwners(): Promise<void> {
@@ -2042,34 +2079,73 @@ export class SessionManager {
     if (Buffer.byteLength(serialized, "utf8") > AGENT_SESSION_OWNER_MAX_BYTES) {
       throw new Error("agent-session owner ledger exceeds its size limit");
     }
+    if (this.writeAgentSessionOwnerRegistry) {
+      await this.writeAgentSessionOwnerRegistry(
+        this.agentSessionOwnersPath,
+        serialized,
+      );
+      return;
+    }
     await mkdir(dirname(this.agentSessionOwnersPath), { recursive: true });
     const tmpPath = `${this.agentSessionOwnersPath}.tmp-${process.pid}-${
       this.agentSessionOwnerWriteSeq++
     }`;
     await writeFile(tmpPath, serialized, { encoding: "utf8", mode: 0o600 });
     await rename(tmpPath, this.agentSessionOwnersPath);
-    await chmod(this.agentSessionOwnersPath, 0o600);
   }
 
-  /** Serializes writes so overlapping persist() calls can't interleave and
-   * corrupt the registry file; a failed write doesn't poison later ones. */
-  private persist(): Promise<void> {
-    // Capture at call time: queued writes must represent the mutation that
-    // requested them, not whatever unrelated mutation happens to be in the
-    // shared map by the time the filesystem queue reaches this operation.
-    const serialized = JSON.stringify(this.list(), null, 2) + "\n";
+  private persistIdentityCandidate(candidate: HarnessSession): Promise<void> {
+    const current = this.list();
+    const index = current.findIndex((session) => session.id === candidate.id);
+    const proposed =
+      index === -1
+        ? [...current, candidate]
+        : current.map((session) =>
+            session.id === candidate.id ? candidate : session,
+          );
+    return this.enqueueRegistryWrite(JSON.stringify(proposed, null, 2) + "\n");
+  }
+
+  private enqueueRegistryWrite(
+    serialized: string | (() => string),
+    fence?: Promise<void>,
+  ): Promise<void> {
     const run = async (): Promise<void> => {
+      if (fence) await fence;
+      const content =
+        typeof serialized === "string" ? serialized : serialized();
       if (this.writeSessionRegistry) {
-        await this.writeSessionRegistry(this.sessionsPath, serialized);
+        await this.writeSessionRegistry(this.sessionsPath, content);
         return;
       }
       await mkdir(dirname(this.sessionsPath), { recursive: true });
       const tmpPath = `${this.sessionsPath}.tmp-${process.pid}-${this.writeSeq++}`;
-      await writeFile(tmpPath, serialized, "utf8");
+      await writeFile(tmpPath, content, "utf8");
       await rename(tmpPath, this.sessionsPath);
     };
     const next = this.writeQueue.catch(() => {}).then(run);
     this.writeQueue = next.catch(() => {});
     return next;
+  }
+
+  /** Serializes writes so overlapping persist() calls can't interleave and
+   * corrupt the registry file; a failed write doesn't poison later ones. */
+  private persist(): Promise<void> {
+    const fence = this.sessionRegistryIdentityFence;
+    if (fence) {
+      // Capturing an ordinary mutation while a private identity candidate is
+      // unresolved could persist the uncommitted pointer (if memory were
+      // mutated) or overwrite a successful commit with its old value. Wait,
+      // then snapshot the authoritative published map at execution time.
+      return this.enqueueRegistryWrite(
+        () => JSON.stringify(this.list(), null, 2) + "\n",
+        fence,
+      );
+    }
+    // Outside an identity transaction, capture at call time: queued writes
+    // represent the mutation that requested them, not an unrelated later one.
+    return this.enqueueRegistryWrite(
+      JSON.stringify(this.list(), null, 2) + "\n",
+    );
   }
 }

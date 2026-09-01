@@ -614,7 +614,20 @@ export class PlannerGreetingCoordinator {
     if (this.timers.get(sessionId)?.key === key) return;
     this.clearTimer(sessionId);
     const handle = setTimeout(() => {
-      void this.fail(sessionId, key, key === "pending" ? "session_not_ready" : "delivery_timeout", true);
+      void this.fail(
+        sessionId,
+        key,
+        key === "pending" ? "session_not_ready" : "delivery_timeout",
+        true,
+      ).catch(() => {
+        // Timer callbacks have no request boundary to receive a rejection.
+        // persist() already projects/emits `persistence_failed` wherever one
+        // durable store remains; log only a fixed local classification here,
+        // never the provider/storage error or planner content.
+        console.error(
+          "[harness] planner greeting timeout transition failed: persistence_failed",
+        );
+      });
     }, this.deliveryTimeoutMs);
     handle.unref?.();
     this.timers.set(sessionId, { key, handle });
@@ -666,10 +679,7 @@ export class PlannerGreetingCoordinator {
     try {
       await this.writeState(this.file(sessionId), state);
     } catch {
-      if (
-        state.metadata.greeting.status === "pending" ||
-        state.metadata.greeting.status === "generating"
-      ) {
+      if (!isTerminal(state.metadata)) {
         const attemptId =
           state.metadata.greeting.status === "generating"
             ? state.metadata.greeting.attemptId

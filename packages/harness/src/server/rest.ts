@@ -41,7 +41,14 @@ import {
   SPAWNABLE_HARNESS_KINDS,
   EDITOR_KINDS,
 } from "../shared/types.js";
-import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError, SpawnTargetError } from "../core/errors.js";
+import {
+  AdapterNotFoundError,
+  AgentSessionIdentityReservedError,
+  ExternalHarnessError,
+  SessionAlreadyLiveError,
+  SessionNotResumeableError,
+  SpawnTargetError,
+} from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
@@ -690,6 +697,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
     if (
       err instanceof ExternalHarnessError ||
+      err instanceof AgentSessionIdentityReservedError ||
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionNotResumeableError
     ) {
@@ -718,6 +726,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // adapter state. Generic adoption must never bypass the project/user
       // authority and focused-context checks on the scoped planner route.
       const durableOwner = sessionManager.getAgentSessionOwner(agentSessionId);
+      const identityReserved =
+        sessionManager.isAgentSessionIdentityReserved(agentSessionId);
       const identityOwners = sessionManager
         .list()
         .filter((session) => session.agentSessionId === agentSessionId);
@@ -738,6 +748,15 @@ export function createRestRouter(options: RestRouterOptions): Router {
       const existing = identityOwners.find(
         (session) => normalizeCwd(session.cwd) === cwd,
       );
+      const historicalReservation =
+        identityReserved &&
+        (durableOwner === undefined ||
+          durableOwner.agentSessionId !== agentSessionId);
+      const conflictingCurrentOwner =
+        identityOwners.length > 0 && existing === undefined;
+      if (historicalReservation || conflictingCurrentOwner) {
+        throw new AgentSessionIdentityReservedError();
+      }
       // Never take the client's word for resumability — it's re-derived from
       // the agent's own store here, so a stale history row (transcript deleted
       // between the list and the click) can't leave a phantom record behind.

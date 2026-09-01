@@ -110,6 +110,8 @@ describe("SessionManager", () => {
       platform?: SessionManagerOptions["platform"];
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
+      writeAgentSessionOwnerRegistry?:
+        SessionManagerOptions["writeAgentSessionOwnerRegistry"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -140,6 +142,7 @@ describe("SessionManager", () => {
       isPidAlive: opts.isPidAlive,
       platform: opts.platform,
       writeSessionRegistry: opts.writeSessionRegistry,
+      writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -1553,6 +1556,213 @@ describe("SessionManager", () => {
     expect(
       await finalRestart.setAgentSessionId(later.id, "vendor-partial", "startup"),
     ).toBe(false);
+  });
+
+  it("never lets an unrelated registry snapshot publish a rejected vendor pointer", async () => {
+    let rejectPointerWrite = true;
+    let releasePointerWrite: () => void = () => {};
+    let signalPointerWrite: () => void = () => {};
+    const pointerWriteStarted = new Promise<void>((resolve) => {
+      signalPointerWrite = resolve;
+    });
+    const pointerWriteGate = new Promise<void>((resolve) => {
+      releasePointerWrite = resolve;
+    });
+    const writeSessionRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        if (rejectPointerWrite && serialized.includes("vendor-snapshot-race")) {
+          signalPointerWrite();
+          await pointerWriteGate;
+          throw new Error("injected pointer registry failure");
+        }
+        await writeFile(file, serialized, "utf8");
+      },
+    );
+    const { manager } = makeManager({ writeSessionRegistry });
+    const owner = await manager.create({
+      cwd: "/tmp/owner",
+      harness: "claude-code",
+    });
+    const attacker = await manager.create({
+      cwd: "/tmp/attacker",
+      harness: "claude-code",
+    });
+
+    const pointerCommit = manager.setAgentSessionId(
+      owner.id,
+      "vendor-snapshot-race",
+      "startup",
+    );
+    await pointerWriteStarted;
+    // This fire-and-forget write used to snapshot the uncommitted pointer and
+    // persist it after the identity write rolled memory back.
+    manager.setReady(owner.id);
+    releasePointerWrite();
+    await expect(pointerCommit).rejects.toThrow(
+      "injected pointer registry failure",
+    );
+    await manager.flush();
+
+    expect(manager.get(owner.id)).toMatchObject({
+      agentSessionId: null,
+      ready: true,
+    });
+    const disk = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(disk.find((candidate) => candidate.id === owner.id)).toMatchObject({
+      agentSessionId: null,
+      ready: true,
+    });
+    expect(
+      await manager.setAgentSessionId(
+        attacker.id,
+        "vendor-snapshot-race",
+        "startup",
+      ),
+    ).toBe(false);
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    expect(restarted.get(owner.id)).toMatchObject({
+      agentSessionId: null,
+      ready: true,
+    });
+    rejectPointerWrite = false;
+    expect(
+      await restarted.setAgentSessionId(
+        owner.id,
+        "vendor-snapshot-race",
+        "startup",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an ambiguously committed ownership write fenced in-process and after restart", async () => {
+    const writeAgentSessionOwnerRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        await writeFile(file, serialized, { encoding: "utf8", mode: 0o600 });
+        throw new Error("injected post-commit owner-ledger failure");
+      },
+    );
+    const { manager } = makeManager({ writeAgentSessionOwnerRegistry });
+    const owner = await manager.create({
+      cwd: "/tmp/owner",
+      harness: "claude-code",
+    });
+    const attacker = await manager.create({
+      cwd: "/tmp/attacker",
+      harness: "claude-code",
+    });
+
+    await expect(
+      manager.setAgentSessionId(owner.id, "vendor-ambiguous", "startup"),
+    ).rejects.toThrow("injected post-commit owner-ledger failure");
+    expect(manager.get(owner.id)?.agentSessionId).toBeNull();
+    expect(manager.isAgentSessionIdentityReserved("vendor-ambiguous")).toBe(
+      true,
+    );
+    expect(
+      await manager.setAgentSessionId(
+        attacker.id,
+        "vendor-ambiguous",
+        "startup",
+      ),
+    ).toBe(false);
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    const afterRestart = await restarted.create({
+      cwd: "/tmp/after-restart",
+      harness: "claude-code",
+    });
+    expect(
+      await restarted.setAgentSessionId(
+        afterRestart.id,
+        "vendor-ambiguous",
+        "startup",
+      ),
+    ).toBe(false);
+
+    expect(
+      await restarted.setAgentSessionId(
+        owner.id,
+        "vendor-ambiguous",
+        "startup",
+      ),
+    ).toBe(true);
+  });
+
+  it("migrates legacy duplicate vendor pointers with first persisted owner winning", async () => {
+    const duplicate = "legacy-shared-vendor";
+    const first = {
+      id: "z-first-in-file",
+      agentSessionId: duplicate,
+      harness: "claude-code" as const,
+      cwd: "/tmp/first",
+      title: "first",
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    } satisfies HarnessSession;
+    const later = {
+      ...first,
+      id: "a-later-in-file",
+      cwd: "/tmp/later",
+      title: "later",
+    } satisfies HarnessSession;
+    await writeFile(sessionsPath, JSON.stringify([first, later], null, 2));
+
+    const { manager } = makeManager();
+    await manager.init();
+
+    expect(manager.get(first.id)?.agentSessionId).toBe(duplicate);
+    expect(manager.get(later.id)?.agentSessionId).toBeNull();
+    const migrated = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(
+      migrated.map(({ id, agentSessionId }) => ({ id, agentSessionId })),
+    ).toEqual([
+      { id: first.id, agentSessionId: duplicate },
+      { id: later.id, agentSessionId: null },
+    ]);
+    const ledgerPath = `${sessionsPath}.agent-session-owners.json`;
+    const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as {
+      owners: Record<string, string>;
+    };
+    expect(Object.values(ledger.owners)).toEqual([first.id]);
+    expect(await readFile(ledgerPath, "utf8")).not.toContain(duplicate);
+
+    const { manager: restarted } = makeManager();
+    await restarted.init();
+    expect(restarted.get(first.id)?.agentSessionId).toBe(duplicate);
+    expect(restarted.get(later.id)?.agentSessionId).toBeNull();
+    const claimant = await restarted.create({
+      cwd: "/tmp/claim",
+      harness: "claude-code",
+    });
+    expect(
+      await restarted.setAgentSessionId(
+        claimant.id,
+        duplicate,
+        "startup",
+      ),
+    ).toBe(false);
+    expect(restarted.get(claimant.id)?.agentSessionId).toBeNull();
+    expect(
+      restarted
+        .list()
+        .filter((candidate) => candidate.agentSessionId === duplicate),
+    ).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        harness: "claude-code",
+      }),
+    ]);
   });
 
   it("fails boot closed when the private ownership ledger is malformed", async () => {

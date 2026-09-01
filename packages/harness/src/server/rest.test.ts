@@ -49,6 +49,10 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
       Array.from(sessions.values()).find(
         (session) => session.agentSessionId === agentSessionId,
       )),
+    isAgentSessionIdentityReserved: vi.fn((agentSessionId: string) =>
+      Array.from(sessions.values()).some(
+        (session) => session.agentSessionId === agentSessionId,
+      )),
     create: vi.fn(),
     resume: vi.fn(),
     kill: vi.fn(() => true),
@@ -1469,6 +1473,44 @@ describe("createRestRouter", () => {
       expect(canResume).not.toHaveBeenCalled();
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
       expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
+    it("409s a generic session's historical alias before any adapter probe or mutation", async () => {
+      const owner = exitedSession({
+        id: "generic-rotated",
+        agentSessionId: "vendor-after-clear",
+      });
+      const original = structuredClone(owner);
+      const sessionManager = fakeSessionManager([owner]);
+      (
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+      ).mockImplementation((agentSessionId: string) =>
+        agentSessionId === body.agentSessionId ? owner : undefined,
+      );
+      (
+        sessionManager.isAgentSessionIdentityReserved as unknown as ReturnType<
+          typeof vi.fn
+        >
+      ).mockImplementation(
+        (agentSessionId: string) => agentSessionId === body.agentSessionId,
+      );
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager,
+        adapters: { "claude-code": historyAdapter({ canResume }) },
+      });
+
+      const response = await adopt(body);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        code: "AGENT_SESSION_IDENTITY_RESERVED",
+        error: "This conversation identity is already owned by a local session",
+      });
+      expect(canResume).not.toHaveBeenCalled();
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+      expect(sessionManager.list()).toEqual([original]);
     });
 
     it("400s on a malformed body and an unspawnable harness", async () => {

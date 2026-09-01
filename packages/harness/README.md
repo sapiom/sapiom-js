@@ -139,7 +139,10 @@ identity (or stable machine-local principal while signed out).
 **Migration note (breaking):** `POST /api/sessions` now rejects unknown fields,
 including client-authored planner metadata. Generic
 `POST /api/sessions/:id/input`, `POST /api/sessions/:id/resume`, and
-`POST /api/sessions/adopt` reject planner sessions/owned vendor aliases.
+`POST /api/sessions/adopt` reject planner sessions. Adopt also returns a
+bounded `AGENT_SESSION_IDENTITY_RESERVED` 409 for any ordinary current-owner
+conflict or durable historical alias (including a pre-`/clear` or
+pre-`/resume` identity), before probing or spawning an agent.
 Clients must open, message, and retry planners through the project-scoped
 routes above. Generic coding-agent sessions also use the durable vendor-ID pin;
 their only rotation exception is the same trusted `/clear`/`/resume` gesture.
