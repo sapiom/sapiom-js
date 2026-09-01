@@ -1048,4 +1048,234 @@ export async function run(route) {
     });
     expect(cache.getOrAnalyze(partial)).not.toBe(cache.getOrAnalyze(partial));
   });
+
+  it("applies helper leaf mutations through parameter aliases without erasing siblings", async () => {
+    expect(
+      await edgePairs({
+        "shared/mutate.ts": `
+export function put(holder, value) {
+  const alias = holder;
+  alias.value = value;
+}
+
+export function putNested(holder, value) {
+  const child = holder.child;
+  child.value = value;
+}
+
+export function putBoth(left, right, first, second) {
+  const leftAlias = left;
+  leftAlias.value = first;
+  right.value = second;
+}
+`,
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+import { put, putBoth, putNested } from "../../shared/mutate";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const sales = await agents.run({ definition: "sales" });
+  const holder = { keep: sales, child: {} };
+  const other = {};
+  put(holder, research);
+  putNested(holder, research);
+  putBoth(holder, other, research, sales);
+  await agents.run({ definition: "growth", input: holder.value });
+  await agents.run({ definition: "coordinator", input: holder.keep });
+  await agents.run({ definition: "sales", input: holder.child.value });
+  await agents.run({ definition: "growth", input: other.value });
+}
+`,
+      }),
+    ).toEqual([
+      ["research", "growth"],
+      ["research", "sales"],
+      ["sales", "coordinator"],
+      ["sales", "growth"],
+    ]);
+  });
+
+  it("freshens cached summary allocation references for each helper invocation", async () => {
+    const files = {
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+function init(holder) {
+  holder.child = {};
+}
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const a = {};
+  const b = {};
+  init(a);
+  init(b);
+  a.child.value = research;
+  await agents.run({ definition: "growth", input: b.child.value });
+  await agents.run({ definition: "sales", input: a.child.value });
+}
+`,
+    };
+    expect(await edgePairs(files)).toEqual([["research", "sales"]]);
+
+    const fixture = await writeFixture(files);
+    const cache = new StaticDataflowSummaryCache();
+    const first = cache.getOrAnalyze(fixture);
+    const second = cache.getOrAnalyze(fixture);
+    expect(second).toBe(first);
+    expect(first.result.evidence).toEqual(second.result.evidence);
+  });
+
+  it("models logical assignments and invalidates deletes and compound provenance writes", async () => {
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const holder = {};
+  holder.value ||= research;
+  holder["other"] ??= research;
+  await agents.run({ definition: "growth", input: holder.value });
+  await agents.run({ definition: "sales", input: holder.other });
+  delete holder.value;
+  delete holder["other"];
+  await agents.run({ definition: "coordinator", input: holder.value });
+}
+`,
+      }),
+    ).toEqual([
+      ["research", "growth"],
+      ["research", "sales"],
+    ]);
+
+    for (const source of [
+      `
+import { agents } from "@sapiom/tools";
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const holder = {};
+  holder.value += research;
+  await agents.run({ definition: "growth", input: holder.value });
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+export async function run(key) {
+  const research = await agents.run({ definition: "research" });
+  const holder = {};
+  holder[key] ||= research;
+}
+`,
+    ]) {
+      const result = await analyze({ "agents/coordinator/index.ts": source });
+      expect(result.result.complete).toBe(false);
+      expect(result.result.cacheable).toBe(false);
+      expect(result.result.result.evidence).toEqual([]);
+    }
+  });
+
+  it("marks unsupported loops with declaration initializers and wrapper effects partial", async () => {
+    for (const source of [
+      `
+import { agents } from "@sapiom/tools";
+function produce() {
+  return agents.run({ definition: "research" });
+}
+export async function run() {
+  for (let output = produce(); output; output = null) {
+    break;
+  }
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+function inner(value) {
+  agents.run({ definition: "growth", input: value });
+}
+function outer(value) {
+  inner(value);
+}
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  while (true) {
+    outer(output);
+    break;
+  }
+}
+`,
+      `
+import { agents } from "@sapiom/tools";
+function mutate(holder, value) {
+  holder.value = value;
+}
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  const holder = {};
+  do {
+    mutate(holder, output);
+    break;
+  } while (true);
+  await agents.run({ definition: "growth", input: holder.value });
+}
+`,
+    ]) {
+      const result = await analyze({ "agents/coordinator/index.ts": source });
+      expect(result.result.complete).toBe(false);
+      expect(result.result.cacheable).toBe(false);
+      expect(result.result.result.evidence).toEqual([]);
+    }
+  });
+
+  it("does not publish candidates or diagnostics from disconnected uncalled functions", async () => {
+    const unused = await analyze({
+      "shared/unused.ts": `
+import { agents } from "@sapiom/tools";
+
+export function exportedButUncalled() {
+  const output = agents.run({ definition: "research" });
+  agents.run({ definition: "growth", input: output });
+}
+`,
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+function unused() {
+  const output = agents.run({ definition: "research" });
+  agents.run({ definition: "growth", input: output });
+}
+
+function unusedPartial(value) {
+  while (value) {
+    agents.run({ definition: "growth", input: value });
+  }
+}
+
+export async function run() {
+}
+`,
+    });
+    expect(unused.result.complete).toBe(true);
+    expect(unused.result.result.evidence).toEqual([]);
+    expect(unused.result.result.diagnostics).toEqual([]);
+
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+function used() {
+  const output = agents.run({ definition: "research" });
+  agents.run({ definition: "growth", input: output });
+}
+
+export async function run() {
+  used();
+}
+`,
+      }),
+    ).toEqual([["research", "growth"]]);
+  });
 });

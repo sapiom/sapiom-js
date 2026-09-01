@@ -99,6 +99,7 @@ interface AnalysisContext {
   sourceFiles: readonly StaticDataflowSourceFile[];
   targetAliases: ReadonlyMap<string, readonly AgentInventoryItem[]>;
   functions: Map<string, FunctionRecord>;
+  rootFunctions: Set<string>;
   routingTables: Map<string, Map<string, string>>;
   summaries: Map<string, FunctionSummary>;
   candidates: PackageGraphStaticEvidenceCandidate[];
@@ -408,6 +409,7 @@ function parameterValue(index: number): FlowValue {
   return {
     ...emptyValue(),
     parameters: [{ index, path: [] }],
+    references: [`param:${index}`],
   };
 }
 
@@ -633,6 +635,37 @@ function withFreshReference(value: FlowValue, context: AnalysisContext): FlowVal
   };
 }
 
+function instantiateSummaryReferences(
+  value: FlowValue,
+  context: AnalysisContext,
+  references = new Map<string, string>(),
+): FlowValue {
+  const next = cloneValue(value);
+  next.references = value.references.map((reference) => {
+    const existing = references.get(reference);
+    if (existing) return existing;
+    const replacement = `ref:${context.nextReferenceId++}`;
+    references.set(reference, replacement);
+    return replacement;
+  });
+  next.properties = new Map(
+    [...value.properties.entries()].map(([key, child]) => [
+      key,
+      instantiateSummaryReferences(child, context, references),
+    ]),
+  );
+  next.elements = new Map(
+    [...value.elements.entries()].map(([key, child]) => [
+      key,
+      instantiateSummaryReferences(child, context, references),
+    ]),
+  );
+  next.unknown = value.unknown
+    ? instantiateSummaryReferences(value.unknown, context, references)
+    : null;
+  return next;
+}
+
 function referencesOverlap(
   left: readonly string[],
   right: readonly string[],
@@ -675,6 +708,56 @@ function updateReferencedPath(
   return next;
 }
 
+function deletePath(
+  value: FlowValue,
+  pathSegments: readonly AssignmentPathSegment[],
+): FlowValue {
+  if (pathSegments.length === 0) return emptyValue();
+  const [head, ...tail] = pathSegments;
+  const next = cloneValue(value);
+  if (head.kind === "property") {
+    if (tail.length === 0) {
+      next.properties.delete(head.key);
+      next.propertyHazards.delete(head.key);
+    } else {
+      next.properties.set(
+        head.key,
+        deletePath(next.properties.get(head.key) ?? emptyValue(), tail),
+      );
+    }
+  } else if (tail.length === 0) {
+    next.elements.delete(head.key);
+    next.elementHazards.delete(head.key);
+  } else {
+    next.elements.set(
+      head.key,
+      deletePath(next.elements.get(head.key) ?? emptyValue(), tail),
+    );
+  }
+  return next;
+}
+
+function deleteReferencedPath(
+  value: FlowValue,
+  references: readonly string[],
+  pathSegments: readonly AssignmentPathSegment[],
+): FlowValue {
+  if (referencesOverlap(value.references, references)) {
+    return deletePath(value, pathSegments);
+  }
+  const next = cloneValue(value);
+  for (const [key, child] of value.properties) {
+    next.properties.set(key, deleteReferencedPath(child, references, pathSegments));
+  }
+  for (const [key, child] of value.elements) {
+    next.elements.set(key, deleteReferencedPath(child, references, pathSegments));
+  }
+  if (value.unknown) {
+    next.unknown = deleteReferencedPath(value.unknown, references, pathSegments);
+  }
+  return next;
+}
+
 function symbolIdentity(
   checker: ts.TypeChecker,
   node: ts.Node | undefined,
@@ -709,6 +792,10 @@ function functionIdentity(
     return symbolIdentity(checker, parent.name);
   }
   return null;
+}
+
+function isAgentSource(file: StaticDataflowSourceFile): boolean {
+  return file.path === "agents" || file.path.startsWith("agents/");
 }
 
 function literalString(
@@ -747,6 +834,24 @@ type AssignmentPathSegment =
 interface AssignmentTarget {
   root: string;
   path: readonly AssignmentPathSegment[];
+}
+
+function isLogicalAssignmentOperator(kind: ts.SyntaxKind): boolean {
+  return (
+    kind === ts.SyntaxKind.BarBarEqualsToken ||
+    kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+    kind === ts.SyntaxKind.QuestionQuestionEqualsToken
+  );
+}
+
+function isCompoundAssignmentOperator(kind: ts.SyntaxKind): boolean {
+  return (
+    kind >= ts.SyntaxKind.FirstCompoundAssignment &&
+    kind <= ts.SyntaxKind.LastCompoundAssignment &&
+    kind !== ts.SyntaxKind.BarBarEqualsToken &&
+    kind !== ts.SyntaxKind.AmpersandAmpersandEqualsToken &&
+    kind !== ts.SyntaxKind.QuestionQuestionEqualsToken
+  );
 }
 
 function assignmentTarget(
@@ -859,6 +964,37 @@ function assignExpression(
     }
   } else {
     next.set(target.root, assignPath(rootValue, target.path, right));
+  }
+  return next;
+}
+
+function deleteExpression(
+  environment: Environment,
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  context: AnalysisContext,
+  file: StaticDataflowSourceFile,
+): Environment {
+  const target = assignmentTarget(checker, expression);
+  if (!target) {
+    const value = evaluateExpression(expression, environment, context, file);
+    if (hasProvenance(value)) {
+      addPartialDiagnostic(context, "opaque-boundary", {
+        reason: "unsupported-delete",
+        callsite: callsite(file, expression),
+      });
+    }
+    return environment;
+  }
+  const next = environment;
+  const rootValue = next.get(target.root) ?? emptyValue();
+  const base = selectedAssignmentBase(rootValue, target.path);
+  if (base.path.length > 0 && base.references.length > 0) {
+    for (const [key, value] of next) {
+      next.set(key, deleteReferencedPath(value, base.references, base.path));
+    }
+  } else {
+    next.set(target.root, deletePath(rootValue, target.path));
   }
   return next;
 }
@@ -1039,24 +1175,31 @@ function emitSinkCandidates(
   }
 }
 
-function substituteParameters(value: FlowValue, args: readonly FlowValue[]): FlowValue {
+function instantiateSummaryValue(
+  value: FlowValue,
+  args: readonly FlowValue[],
+  context: AnalysisContext,
+  references = new Map<string, string>(),
+): FlowValue {
   return mergeValues(
     {
-      ...cloneValue(value),
+      ...instantiateSummaryReferences(value, context, references),
       parameters: [],
       properties: new Map(
         [...value.properties.entries()].map(([key, child]) => [
           key,
-          substituteParameters(child, args),
+          instantiateSummaryValue(child, args, context, references),
         ]),
       ),
       elements: new Map(
         [...value.elements.entries()].map(([key, child]) => [
           key,
-          substituteParameters(child, args),
+          instantiateSummaryValue(child, args, context, references),
         ]),
       ),
-      unknown: value.unknown ? substituteParameters(value.unknown, args) : null,
+      unknown: value.unknown
+        ? instantiateSummaryValue(value.unknown, args, context, references)
+        : null,
     },
     ...value.parameters.map((param) =>
       selectPath(args[param.index] ?? emptyValue(), param.path),
@@ -1075,21 +1218,86 @@ function calledFunctionKey(
   return null;
 }
 
+function parameterPathSegments(
+  pathSegments: readonly string[],
+): AssignmentPathSegment[] | null {
+  const path: AssignmentPathSegment[] = [];
+  for (const segment of pathSegments) {
+    if (segment === "*") return null;
+    path.push(
+      segment.startsWith("#")
+        ? { kind: "element", key: segment.slice(1) }
+        : { kind: "property", key: segment },
+    );
+  }
+  return path;
+}
+
 function collectParameterMutations(
-  parameterIndex: number,
   value: FlowValue,
   pathSegments: readonly AssignmentPathSegment[] = [],
 ): SummaryMutation[] {
   const mutations: SummaryMutation[] = [];
+  for (const parameter of value.parameters) {
+    const parameterPath = parameterPathSegments(parameter.path);
+    if (!parameterPath) continue;
+    for (const [key, child] of value.properties) {
+      mutations.push({
+        parameterIndex: parameter.index,
+        path: [
+          ...parameterPath,
+          ...pathSegments,
+          { kind: "property" as const, key },
+        ],
+        value: cloneValue(child),
+      });
+    }
+    for (const [key, child] of value.elements) {
+      mutations.push({
+        parameterIndex: parameter.index,
+        path: [
+          ...parameterPath,
+          ...pathSegments,
+          { kind: "element" as const, key },
+        ],
+        value: cloneValue(child),
+      });
+    }
+  }
   for (const [key, child] of value.properties) {
-    const path = [...pathSegments, { kind: "property" as const, key }];
-    mutations.push({ parameterIndex, path, value: cloneValue(child) });
+    mutations.push(
+      ...collectParameterMutations(
+        child,
+        [...pathSegments, { kind: "property" as const, key }],
+      ),
+    );
   }
   for (const [key, child] of value.elements) {
-    const path = [...pathSegments, { kind: "element" as const, key }];
-    mutations.push({ parameterIndex, path, value: cloneValue(child) });
+    mutations.push(
+      ...collectParameterMutations(
+        child,
+        [...pathSegments, { kind: "element" as const, key }],
+      ),
+    );
   }
   return mutations;
+}
+
+function collectEnvironmentParameterMutations(
+  environment: Environment,
+): SummaryMutation[] {
+  const mutations = new Map<string, SummaryMutation>();
+  for (const [environmentKey, value] of [...environment].sort(([left], [right]) =>
+    compareText(left, right),
+  )) {
+    for (const mutation of collectParameterMutations(value)) {
+      const key = `${mutation.parameterIndex}:${mutation.path
+        .map((segment) => `${segment.kind}:${segment.key}`)
+        .join("/")}:${environmentKey}`;
+      mutations.set(key, mutation);
+    }
+  }
+  return [...mutations.values()];
 }
 
 function routedFunctionKey(
@@ -1284,6 +1492,16 @@ function evaluateExpression(
     }
     return value;
   }
+  if (ts.isDeleteExpression(current)) {
+    deleteExpression(
+      environment,
+      context.compiler.checker,
+      current.expression,
+      context,
+      file,
+    );
+    return emptyValue();
+  }
   if (ts.isTemplateExpression(current)) {
     return mergeValues(
       ...current.templateSpans.map((span) =>
@@ -1305,6 +1523,43 @@ function evaluateExpression(
         );
       }
       return right;
+    }
+    if (isLogicalAssignmentOperator(current.operatorToken.kind)) {
+      const left = evaluateExpression(current.left, environment, context, file);
+      const right = evaluateExpression(current.right, environment, context, file);
+      const assigned = mergeValues(left, right);
+      assignExpression(
+        environment,
+        context.compiler.checker,
+        unwrapTsExpression(current.left),
+        assigned,
+        context,
+        file,
+      );
+      return assigned;
+    }
+    if (isCompoundAssignmentOperator(current.operatorToken.kind)) {
+      const left = evaluateExpression(current.left, environment, context, file);
+      const right = evaluateExpression(current.right, environment, context, file);
+      const assigned =
+        hasProvenance(left) || hasProvenance(right)
+          ? { ...emptyValue(), opaque: true }
+          : emptyValue();
+      if (assigned.opaque) {
+        addPartialDiagnostic(context, "opaque-boundary", {
+          reason: "unsupported-assignment",
+          callsite: callsite(file, current.operatorToken),
+        });
+      }
+      assignExpression(
+        environment,
+        context.compiler.checker,
+        unwrapTsExpression(current.left),
+        assigned,
+        context,
+        file,
+      );
+      return assigned;
     }
     return mergeValues(
       evaluateExpression(current.left, environment, context, file),
@@ -1570,6 +1825,72 @@ function nodeContainsAgentInvocation(
   return found;
 }
 
+function isolatedProbeContext(context: AnalysisContext): AnalysisContext {
+  return {
+    ...context,
+    candidates: [],
+    markerSinks: [],
+    diagnostics: [],
+    coverageGaps: [],
+    nextReferenceId: context.nextReferenceId,
+    complete: true,
+  };
+}
+
+function expressionTouchesProvenanceOrEffects(
+  expression: ts.Expression,
+  environment: Environment,
+  context: AnalysisContext,
+  file: StaticDataflowSourceFile,
+): boolean {
+  const probe = isolatedProbeContext(context);
+  const value = evaluateExpression(expression, new Map(environment), probe, file);
+  return (
+    hasProvenance(value) ||
+    !probe.complete ||
+    probe.candidates.length > 0 ||
+    probe.markerSinks.length > 0
+  );
+}
+
+function nodeContainsFunctionEffects(
+  node: ts.Node,
+  environment: Environment,
+  context: AnalysisContext,
+  file: StaticDataflowSourceFile,
+): boolean {
+  let found = false;
+  const visit = (child: ts.Node): void => {
+    if (found) return;
+    if (child !== node && ts.isFunctionLike(child)) return;
+    if (ts.isCallExpression(child)) {
+      const probe = isolatedProbeContext(context);
+      const args = child.arguments.map((argument) =>
+        evaluateExpression(argument, new Map(environment), probe, file),
+      );
+      const key =
+        routedFunctionKey(child.expression, context) ??
+        calledFunctionKey(child.expression, context);
+      if (key && context.functions.has(key)) {
+        const summary = summarizeFunction(key, context);
+        found =
+          !summary.complete ||
+          !probe.complete ||
+          probe.candidates.length > 0 ||
+          probe.markerSinks.length > 0 ||
+          summary.candidates.length > 0 ||
+          summary.sinks.length > 0 ||
+          summary.mutations.length > 0 ||
+          hasProvenance(instantiateSummaryValue(summary.returns, args, probe));
+        return;
+      }
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return found;
+}
+
 function loopTouchesProvenance(
   statement:
     | ts.WhileStatement
@@ -1587,6 +1908,13 @@ function loopTouchesProvenance(
   } else if (ts.isForStatement(statement)) {
     if (statement.initializer && ts.isExpression(statement.initializer)) {
       expressions.push(statement.initializer);
+    } else if (
+      statement.initializer &&
+      ts.isVariableDeclarationList(statement.initializer)
+    ) {
+      for (const declaration of statement.initializer.declarations) {
+        if (declaration.initializer) expressions.push(declaration.initializer);
+      }
     }
     if (statement.condition) expressions.push(statement.condition);
     if (statement.incrementor) expressions.push(statement.incrementor);
@@ -1595,10 +1923,11 @@ function loopTouchesProvenance(
   }
   return (
     expressions.some((expression) =>
-      hasProvenance(evaluateExpression(expression, environment, context, file)),
+      expressionTouchesProvenanceOrEffects(expression, environment, context, file),
     ) ||
     nodeReferencesProvenance(statement.statement, environment, context) ||
-    nodeContainsAgentInvocation(statement.statement, context)
+    nodeContainsAgentInvocation(statement.statement, context) ||
+    nodeContainsFunctionEffects(statement.statement, environment, context, file)
   );
 }
 
@@ -1795,7 +2124,7 @@ function evaluateFunction(
   if (environment) {
     for (const mutation of summary.mutations) {
       const arg = args[mutation.parameterIndex] ?? emptyValue();
-      const value = substituteParameters(mutation.value, args);
+      const value = instantiateSummaryValue(mutation.value, args, context);
       if (arg.references.length > 0) {
         for (const [environmentKey, environmentValue] of environment) {
           environment.set(
@@ -1820,11 +2149,11 @@ function evaluateFunction(
     emitSinkCandidates(
       context,
       sink.targetAgentKey,
-      substituteParameters(sink.input, args),
+      instantiateSummaryValue(sink.input, args, context),
       sink.destination,
     );
   }
-  return substituteParameters(summary.returns, args);
+  return instantiateSummaryValue(summary.returns, args, context);
 }
 
 function summarizeFunction(
@@ -1865,11 +2194,7 @@ function summarizeFunction(
     cycleStack: context.cycleStack,
   };
   const environment: Environment = new Map();
-  const parameterKeys: Array<string | null> = [];
   record.node.parameters.forEach((parameter, index) => {
-    parameterKeys[index] = ts.isIdentifier(parameter.name)
-      ? symbolIdentity(context.compiler.checker, parameter.name)
-      : null;
     bindPattern(
       environment,
       context.compiler.checker,
@@ -1885,14 +2210,7 @@ function summarizeFunction(
   const summary: FunctionSummary = {
     returns: mergeValues(...result.returns),
     sinks: [...nested.markerSinks],
-    mutations: parameterKeys.flatMap((parameterKey, index) =>
-      parameterKey
-        ? collectParameterMutations(
-            index,
-            result.environment.get(parameterKey) ?? emptyValue(),
-          )
-        : [],
-    ),
+    mutations: collectEnvironmentParameterMutations(result.environment),
     candidates: normalizeCandidates(nested.candidates),
     complete: nested.complete,
   };
@@ -1908,9 +2226,20 @@ function collectTopLevel(context: AnalysisContext): void {
         const key = functionIdentity(context.compiler.checker, statement);
         if (key) {
           context.functions.set(key, { key, file, node: statement });
+          if (
+            isAgentSource(file) &&
+            statement.modifiers?.some(
+              (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+            )
+          ) {
+            context.rootFunctions.add(key);
+          }
         }
       }
       if (ts.isVariableStatement(statement)) {
+        const exported = statement.modifiers?.some(
+          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+        );
         for (const declaration of statement.declarationList.declarations) {
           if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
             continue;
@@ -1927,6 +2256,7 @@ function collectTopLevel(context: AnalysisContext): void {
             const key = functionIdentity(context.compiler.checker, initializer);
             if (key) {
               context.functions.set(key, { key, file, node: initializer });
+              if (exported && isAgentSource(file)) context.rootFunctions.add(key);
             }
           } else if (declarationKey && ts.isObjectLiteralExpression(initializer)) {
             const table = new Map<string, string>();
@@ -2004,6 +2334,7 @@ export function analyzeStaticDataflow(
     sourceFiles: files,
     targetAliases: targetAliases(input.agents),
     functions: new Map(),
+    rootFunctions: new Set(),
     routingTables: new Map(),
     summaries: new Map(),
     candidates: [],
@@ -2021,7 +2352,7 @@ export function analyzeStaticDataflow(
     });
   }
   collectTopLevel(context);
-  for (const key of [...context.functions.keys()].sort(compareText)) {
+  for (const key of [...context.rootFunctions].sort(compareText)) {
     evaluateFunction(key, [], context);
   }
   for (const file of files) {
