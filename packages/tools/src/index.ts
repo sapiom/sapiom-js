@@ -99,8 +99,8 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
 // The PUBLIC semantic model aliases the routed image/video capabilities serve, for callers that
-// want to pin one. The routed surface is alias-only (E8/SAP-2582) — a raw provider id is rejected
-// with `unknown_model` — so pin from these maps, not from the deprecated VIDEO_MODELS.
+// want to pin one. Aliases are the supported input; raw provider ids still work but are deprecated
+// (SAP-2582), so pin from these maps rather than from the deprecated VIDEO_MODELS.
 export {
   IMAGE_MODELS,
   VIDEO_MODEL_ALIASES,

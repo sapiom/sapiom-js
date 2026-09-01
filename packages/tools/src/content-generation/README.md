@@ -183,7 +183,7 @@ Shared:
 
 - `model` (optional) — a **public semantic alias** (e.g. `"flux-fast"`,
   `"veo3-fast"`); defaults to a fast model. Most callers omit it. See
-  [Choosing a model](#choosing-a-model) — raw provider ids are rejected.
+  [Choosing a model](#choosing-a-model) — raw provider ids are deprecated.
 - `select` (optional) — capability-based model selection, used when `model` is
   omitted. See [Choosing a model](#choosing-a-model).
 - `storage` (optional) — persist outputs; `{ visibility: "private" | "public" }`.
@@ -203,9 +203,11 @@ model-specific fields are returned on the result as-is.
 ## Choosing a model
 
 `model` takes a **public semantic alias** — Sapiom's own neutral name for a model,
-resolved to a concrete provider model server-side. Raw provider model ids are **not**
-part of this surface: passing one is rejected with `ContentGenerationHttpError`
-(`400 unknown_model`) **before any charge**.
+resolved to a concrete provider model server-side. Aliases are the supported input.
+
+Raw provider model ids are **deprecated**. An existing pin still works, and this
+release changes nothing about that, but raw ids are not part of the public surface and
+support for them will be removed in a future release — migrate pins to an alias.
 
 ```typescript
 import { IMAGE_MODELS, VIDEO_MODEL_ALIASES } from "@sapiom/tools";
@@ -231,12 +233,12 @@ literal union widened to `string`, so a newly-cataloged alias works before this 
 catches up, and the SDK never validates the value locally — the platform catalog is
 the authority.
 
-> The `VIDEO_MODELS` export (raw `fal-ai/…` ids) is **deprecated**. Video now routes
-> through the same alias-resolving capability as images, so those ids will be rejected
-> too. Migrate: `veo3Fast` → `"veo3-fast"`, `klingV16StandardText` → `"kling-standard"`,
-> `wanV22Text` → `"wan-standard"`, `seedance20Fast` → `"seedance-fast"`.
-> `minimaxVideo01` has no cataloged alias — switch it to a cataloged model such as
-> `"minimax-h3-max"`.
+> The `VIDEO_MODELS` export (raw `fal-ai/…` ids) is **deprecated**. Video routes
+> through the same alias-resolving capability as images, so the same guidance applies:
+> the pins still work, but migrate them — `veo3Fast` → `"veo3-fast"`,
+> `klingV16StandardText` → `"kling-standard"`, `wanV22Text` → `"wan-standard"`,
+> `seedance20Fast` → `"seedance-fast"`. `minimaxVideo01` has no cataloged alias —
+> switch it to a cataloged model such as `"minimax-h3-max"`.
 
 ### Let the platform pick: `select`
 

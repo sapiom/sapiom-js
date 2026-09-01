@@ -162,11 +162,13 @@ export interface MediaSelect {
  * orders them (cheapest-first at a 1 MP reference), which is also the order it selects in when you
  * omit `model` entirely.
  *
- * These are Sapiom's OWN neutral names, resolved to a concrete provider model server-side. Raw
- * provider ids are NOT part of this surface — the routed capability is alias-only and rejects one
- * with `400 unknown_model` (E8 / SAP-2582). The map is an autocomplete convenience, not a closed
- * set: `model` stays a {@link LiteralUnion}, so a newly-cataloged alias works before this SDK
- * catches up.
+ * These are Sapiom's OWN neutral names, resolved to a concrete provider model server-side, and they
+ * are the SUPPORTED input for {@link ImageCreateInput.model}. A raw provider model id is DEPRECATED:
+ * it still works today, but it is not part of the public surface and support for it will be removed
+ * in a future release (SAP-2582) — migrate pins to an alias from this map.
+ *
+ * The map is an autocomplete convenience, not a closed set: `model` stays a {@link LiteralUnion}, so
+ * a newly-cataloged alias works before this SDK catches up.
  */
 export const IMAGE_MODELS = {
   /** Fast, low-cost text-to-image. The default when `model` is omitted. */
@@ -195,10 +197,12 @@ export interface ImageCreateInput {
    * platform then selects one (the fast default, or the cheapest model that satisfies your params
    * and {@link ImageCreateInput.select}), and echoes the choice as `resolvedModel`.
    *
-   * Alias-ONLY (E8 / SAP-2582): a raw provider model id is rejected with `400 unknown_model` before
-   * any charge. Typed as a {@link LiteralUnion} rather than a closed union so a newly-cataloged
-   * alias works before this SDK catches up — the SDK forwards whatever you pass and lets the
-   * platform catalog be the authority.
+   * A raw provider model id is DEPRECATED here (SAP-2582). It still routes today — this field
+   * deliberately stays a {@link LiteralUnion}, so an existing pin keeps compiling and keeps working
+   * — but it is not part of the public surface and support for it will be removed in a future
+   * release. Migrate pins to an {@link IMAGE_MODELS} alias. The SDK forwards whatever you pass and
+   * adds no local validation: the platform catalog is the authority on what it accepts, so a
+   * newly-cataloged alias works before this SDK catches up.
    *
    * @example "flux-fast"
    */
@@ -480,8 +484,8 @@ function applyMediaParams(
  * `model` is a request-body field the router resolves from a public semantic alias to
  * the provider path (defaulting, or SELECTING per `select`, when omitted) — the SDK
  * no longer builds the `/run/<model>` URL itself, and never resolves an alias locally.
- * Because it is the ROUTED surface, it is alias-only: a raw provider id in `model`
- * comes back as `400 unknown_model` (E8 / SAP-2582).
+ * A public alias is the supported `model` input; a raw provider id is deprecated but
+ * still routes (SAP-2582).
  */
 export async function createImage(
   input: ImageCreateInput,
@@ -791,9 +795,10 @@ export const images = { create: createImage, launch: launchImage };
  * {@link VideoCreateInput.model} — e.g. `VIDEO_MODEL_ALIASES.veo3Fast`. The video counterpart of
  * {@link IMAGE_MODELS}, in the same catalog order the platform selects in when you omit `model`.
  *
- * Prefer these over the deprecated raw-provider-id map {@link VIDEO_MODELS}: the routed capability
- * is alias-only and will reject a raw id with `400 unknown_model` (E8 / SAP-2582). Not a closed set
- * — `model` stays a {@link LiteralUnion}, so a newly-cataloged alias works before this SDK catches up.
+ * Prefer these over the deprecated raw-provider-id map {@link VIDEO_MODELS}: aliases are the
+ * supported input, and support for raw ids will be removed in a future release (SAP-2582). Not a
+ * closed set — `model` stays a {@link LiteralUnion}, so a newly-cataloged alias works before this
+ * SDK catches up.
  */
 export const VIDEO_MODEL_ALIASES = {
   /** Fast text-to-video with native audio. The default when `model` is omitted. */
@@ -820,15 +825,14 @@ export type KnownVideoModelAlias =
  *
  * @deprecated Pass a public semantic alias from {@link VIDEO_MODEL_ALIASES} instead. Since
  * `video.create`/`video.launch` were repointed onto the `content.generation.video` capability
- * (SAP-2575) they go through the same routed, alias-resolving surface as images — and E8
- * (SAP-2582) makes that surface alias-ONLY, so a raw provider id is rejected with
- * `400 unknown_model` once the allowlist closes. A raw id still routes until then (the adapter
- * passes an already-resolved id straight through), and this map stays exported so existing code
- * keeps compiling, but every entry needs migrating:
+ * (SAP-2575) they go through the same routed, alias-resolving surface as images, where the alias is
+ * the supported input. These raw ids still route today and this map stays exported so existing code
+ * keeps compiling and working — but they are not part of the public surface, and support for them
+ * will be removed in a future release (SAP-2582). Every entry has an alias to migrate to:
  * `veo3Fast` → `"veo3-fast"`, `klingV16StandardText` → `"kling-standard"`,
- * `wanV22Text` → `"wan-standard"`, `seedance20Fast` → `"seedance-fast"`. `minimaxVideo01` has NO
- * cataloged alias — it is not on the public alias surface at all, so switch it to a cataloged
- * model (e.g. `"minimax-h3-max"`) rather than waiting for the rejection.
+ * `wanV22Text` → `"wan-standard"`, `seedance20Fast` → `"seedance-fast"`. The exception is
+ * `minimaxVideo01`, which has NO cataloged alias — switch it to a cataloged model such as
+ * `"minimax-h3-max"`.
  */
 export const VIDEO_MODELS = {
   /** Google Veo 3 Fast — fast text-to-video. The default. */
@@ -846,7 +850,9 @@ export const VIDEO_MODELS = {
 /**
  * A known raw provider video model id — one of the values of {@link VIDEO_MODELS}.
  *
- * @deprecated Use {@link KnownVideoModelAlias} — the routed surface is alias-only (E8 / SAP-2582).
+ * @deprecated Use {@link KnownVideoModelAlias}. Raw provider ids still work, but the public
+ * semantic alias is the supported input and raw-id support will be removed in a future release
+ * (SAP-2582).
  */
 export type KnownVideoModel = (typeof VIDEO_MODELS)[keyof typeof VIDEO_MODELS];
 
@@ -863,12 +869,12 @@ export interface VideoCreateInput {
    * selects one (the fast default, or the cheapest model satisfying your params and
    * {@link VideoCreateInput.select}), echoing the choice as `resolvedModel`.
    *
-   * Video routes through the same alias-resolving capability as images (SAP-2575), so E8
-   * (SAP-2582) makes it alias-only here too: a raw provider id from the deprecated
-   * {@link VIDEO_MODELS} map is rejected with `400 unknown_model` once the allowlist closes. The
-   * raw ids stay in the accepted TYPE for back-compat so existing code keeps compiling — that is
-   * a deliberate deprecation window, not an endorsement. Typed as a {@link LiteralUnion} so a
-   * newly-cataloged alias works before this SDK catches up.
+   * Video routes through the same alias-resolving capability as images (SAP-2575), so the same
+   * guidance applies: a raw provider id from the deprecated {@link VIDEO_MODELS} map is DEPRECATED
+   * but still routes today. Those ids stay in the accepted type — and this field stays a
+   * {@link LiteralUnion} — so existing code keeps compiling and working; support for them will be
+   * removed in a future release (SAP-2582). A {@link LiteralUnion} also means a newly-cataloged
+   * alias works before this SDK catches up.
    *
    * @example "veo3-fast"
    */
@@ -1080,8 +1086,8 @@ const sleep = (ms: number): Promise<void> =>
  * same seam {@link createImage} uses. `model` is a request-body field the router's video
  * adapter resolves from a public semantic alias like `"veo3-fast"` (defaulting, or SELECTING
  * per `select`, when omitted); the SDK no longer builds a `/run/<model>` URL itself. Video
- * shares the routed surface with images, so E8 (SAP-2582) makes it alias-only here too — a
- * raw provider id will come back as `400 unknown_model`. The poll
+ * shares the routed surface with images, so the same guidance applies — a raw provider id is
+ * deprecated but still routes (SAP-2582). The poll
  * loop is unchanged: the submit response's `responseUrl`/`statusUrl` point at the
  * gateway's queue passthrough, which still returns the provider's raw snake_case result.
  */

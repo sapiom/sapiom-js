@@ -118,7 +118,7 @@ describe("contentGeneration.images.create()", () => {
     );
 
     // model rides in the body as the caller's PUBLIC alias (the router resolves it to the
-    // provider path server-side — the routed surface is alias-only), and params is nested —
+    // provider path server-side — an alias is the supported input), and params is nested —
     // not spread — so the adapter forwards it verbatim.
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
@@ -1470,14 +1470,13 @@ describe("neutral params (E4/SAP-2579)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// E8 (SAP-2582) alias-only + E5 (SAP-2580) capability-based selection. The SDK is a
-// verbatim passthrough on both: it forwards the caller's alias untouched (no local
-// resolution) and rides `select` on the body only when set — the platform catalog is
-// the authority, and it is the router that rejects a raw provider id with
-// `unknown_model`, not the SDK.
+// Public model aliases (SAP-2582) + E5 (SAP-2580) capability-based selection. The SDK
+// is a verbatim passthrough on both: it forwards the caller's model untouched (no local
+// resolution, no local validation) and rides `select` on the body only when set. The
+// platform catalog is the authority on which selectors it accepts.
 // ---------------------------------------------------------------------------
 
-describe("alias-only model selectors (E8/SAP-2582)", () => {
+describe("public model aliases (SAP-2582)", () => {
   it("createImage forwards a public image alias unchanged — no local resolution", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [], resolvedModel: "nano-banana-pro" }),
@@ -1513,14 +1512,14 @@ describe("alias-only model selectors (E8/SAP-2582)", () => {
     expect(VIDEO_MODEL_ALIASES.veo3Fast).toBe("veo3-fast");
   });
 
-  it("still forwards a legacy raw provider id untouched — the SDK adds no client-side rejection", async () => {
+  it("still forwards a deprecated raw provider id untouched — no client-side rejection", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [], resolvedModel: "flux-standard" }),
     ]);
 
-    // The router is the authority: it answers a raw id with 400 `unknown_model` once the
-    // allowlist closes. The SDK must not pre-empt that with a local check, which would also
-    // block an alias the server knows but this SDK does not yet list.
+    // A raw id is deprecated, not refused: it still routes, so this must stay non-breaking.
+    // The SDK adds no local check either way — one would also block an alias the server knows
+    // but this SDK does not yet list. What the platform accepts is the platform's call.
     await createImage(
       { prompt: "x", model: "fal-ai/flux/dev" },
       transport,
