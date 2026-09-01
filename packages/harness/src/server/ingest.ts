@@ -24,8 +24,8 @@ export interface IngestSessionContext {
 }
 
 export interface IngestDeps {
-  /** Per-boot secret; requests without a matching bearer token are rejected. */
-  ingestToken: string;
+  /** Authenticate the bearer capability against the body session id. */
+  authenticate: (harnessSessionId: string, token: string) => boolean;
   /** Raw hook payload -> AnalyticsEvent, or null to skip (e.g. PreToolUse). */
   normalize: (
     hookEvent: string,
@@ -167,7 +167,17 @@ export function createIngestRouter(deps: IngestDeps): Router {
 
   router.post("/ingest", (req, res) => {
     const token = bearerToken(req.headers.authorization);
-    if (token !== deps.ingestToken) {
+    const body: IngestRequestBody =
+      typeof req.body === "object" && req.body !== null && !Array.isArray(req.body)
+        ? (req.body as IngestRequestBody)
+        : {};
+    const harnessSessionId =
+      typeof body.harnessSessionId === "string" ? body.harnessSessionId : "";
+    if (
+      token === null ||
+      harnessSessionId === "" ||
+      !deps.authenticate(harnessSessionId, token)
+    ) {
       res.status(401).json({ ok: false });
       return;
     }
@@ -176,7 +186,7 @@ export function createIngestRouter(deps: IngestDeps): Router {
     // agent's hook pipeline. Processing happens after the response is sent.
     res.status(200).json({ ok: true });
 
-    void processIngest(req.body as IngestRequestBody, deps, seqCounter).catch((err) => {
+    void processIngest(body, deps, seqCounter).catch((err) => {
       deps.onError?.(err);
     });
   });

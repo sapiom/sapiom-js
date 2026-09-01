@@ -12,6 +12,7 @@ import {
   type PtySpawnFn,
   type SessionManagerOptions,
 } from "./session-manager.js";
+import { IngestCredentialRegistry } from "./ingest-credentials.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -100,6 +101,7 @@ describe("SessionManager", () => {
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
       platform?: SessionManagerOptions["platform"];
+      ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -118,7 +120,9 @@ describe("SessionManager", () => {
     const manager = new SessionManager({
       adapters: { "claude-code": adapter },
       ingestUrl: "http://127.0.0.1:4100",
-      ingestToken: "boot-token",
+      ingestCredentials:
+        opts.ingestCredentials ??
+        new IngestCredentialRegistry(() => "boot-token"),
       sessionsPath,
       spawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
@@ -1732,6 +1736,23 @@ describe("SessionManager", () => {
     expect(env?.["SAPIOM_HARNESS_INGEST_URL"]).toBe("http://127.0.0.1:4100/ingest");
     expect(env?.["SAPIOM_HARNESS_INGEST_TOKEN"]).toBe("boot-token");
     expect(env?.["SAPIOM_HARNESS_SESSION_ID"]).toBe(session.id);
+  });
+
+  it("issues and revokes a capability for the exact spawned session", async () => {
+    const issue = vi.fn((id: string) => `token-for:${id}`);
+    const revoke = vi.fn();
+    const { manager, spawns } = makeManager({
+      ingestCredentials: { issue, revoke, authenticate: () => false },
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(issue).toHaveBeenCalledWith(session.id);
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(revoke).toHaveBeenCalledWith(session.id);
   });
 
   it("owns a colour-capable PTY environment instead of inheriting launcher suppression", async () => {

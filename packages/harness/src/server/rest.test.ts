@@ -28,6 +28,7 @@ import {
   UnknownSessionError,
 } from "../core/session-manager.js";
 import type { SessionRecordReader } from "../core/session-record.js";
+import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import {
   AdapterNotFoundError,
   ExternalHarnessError,
@@ -1563,7 +1564,7 @@ describe("createRestRouter", () => {
       const manager = new SessionManager({
         adapters: { "claude-code": makeMinimalAdapter() },
         ingestUrl: "http://127.0.0.1:4100",
-        ingestToken: "test-token",
+        ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
         sessionsPath: path.join(smDir, "sessions.json"),
         // spawnPty not provided — tests only call resume/submitInput which
         // throw before reaching spawn for external-harness sessions.

@@ -41,6 +41,7 @@ import {
   UnknownSessionError,
 } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
+import type { IngestCredentialProvider } from "./ingest-credentials.js";
 
 export {
   AdapterNotFoundError,
@@ -281,8 +282,8 @@ export interface SessionManagerOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   /** Base URL the harness server is reachable at, e.g. http://127.0.0.1:4100. */
   ingestUrl: string;
-  /** Per-boot secret; injected into every session's env so hook scripts can auth to /ingest. */
-  ingestToken: string;
+  /** Per-session capability issuer; shared ingest tokens are not supported. */
+  ingestCredentials: IngestCredentialProvider;
   /** Forwarded to sessions as SAPIOM_COLLECTOR_URL when set. */
   collectorUrl?: string;
   /** Absolute path to the session registry file. Defaults to HARNESS_PATHS.sessions (expanded). */
@@ -412,7 +413,8 @@ interface PtyHandle {
 export class SessionManager {
   private readonly adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   private readonly ingestUrl: string;
-  private readonly ingestToken: string;
+  private readonly issueIngestToken: (sessionId: string) => string;
+  private readonly revokeIngestToken: (sessionId: string) => void;
   private readonly collectorUrl: string | undefined;
   private readonly sessionsPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
@@ -438,7 +440,10 @@ export class SessionManager {
   constructor(options: SessionManagerOptions) {
     this.adapters = options.adapters;
     this.ingestUrl = options.ingestUrl;
-    this.ingestToken = options.ingestToken;
+    this.issueIngestToken = (sessionId) =>
+      options.ingestCredentials.issue(sessionId);
+    this.revokeIngestToken = (sessionId) =>
+      options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
     this.sessionsPath = expandHome(options.sessionsPath ?? HARNESS_PATHS.sessions);
     this.spawnPty = options.spawnPty;
@@ -1346,7 +1351,7 @@ export class SessionManager {
     env.TERM = "xterm-256color";
     env.COLORTERM = "truecolor";
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
-    env[ENV.ingestToken] = this.ingestToken;
+    env[ENV.ingestToken] = this.issueIngestToken(session.id);
     env[ENV.sessionId] = session.id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
 
@@ -1547,6 +1552,7 @@ export class SessionManager {
     exitCode: number | null,
     { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
   ): Promise<void> {
+    this.revokeIngestToken(session.id);
     session.status = "exited";
     session.exitCode = exitCode;
     // Only markExited (a live-pty death) has output to preserve; every other

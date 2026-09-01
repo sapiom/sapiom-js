@@ -12,14 +12,21 @@ import { startServer, type HarnessServer } from "./index.js";
 
 const BOOT_TOKEN = "trusted-host-token";
 
-function tokenCapturingAdapter(tokenPath: string): HarnessAdapter {
+function tokenCapturingAdapter(
+  tokenPath: string | ((sessionId: string) => string),
+): HarnessAdapter {
   const launch = (opts: LaunchOpts): SpawnSpec => ({
     command: "bash",
     args: [
       "-c",
       'printf "%s" "$SAPIOM_HARNESS_INGEST_TOKEN" > "$SAPIOM_TEST_INGEST_TOKEN_PATH"; exec bash',
     ],
-    env: { SAPIOM_TEST_INGEST_TOKEN_PATH: tokenPath },
+    env: {
+      SAPIOM_TEST_INGEST_TOKEN_PATH:
+        typeof tokenPath === "string"
+          ? tokenPath
+          : tokenPath(opts.harnessSessionId),
+    },
     cwd: opts.cwd,
   });
   return {
@@ -94,6 +101,40 @@ describe("coding-agent authorization boundary", () => {
     });
     expect(mutation.status).toBe(401);
 
+    const forgedPlanner = await fetch(
+      `${baseUrl}/api/projects/forged-project/planner-sessions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Harness-Token": ingestToken,
+        },
+        body: JSON.stringify({ mode: "fresh" }),
+      },
+    );
+    expect(forgedPlanner.status).toBe(401);
+
+    const forgedGenericRole = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": ingestToken,
+      },
+      body: JSON.stringify({
+        cwd: projectRoot,
+        harness: "claude-code",
+        planning: {
+          identity: {
+            projectId: "forged-project",
+            sessionId: "forged-session",
+            userId: "forged-user",
+            role: "map-planner",
+          },
+        },
+      }),
+    });
+    expect(forgedGenericRole.status).toBe(401);
+
     const bootTokenIngest = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
       headers: {
@@ -124,6 +165,87 @@ describe("coding-agent authorization boundary", () => {
     await vi.waitFor(() => {
       expect(server?.sessionManager.get(session.id)?.agentSessionId).toBe(
         "agent-ingest-only",
+      );
+    });
+
+    await server.sessionManager.kill(session.id);
+    const afterExit = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${ingestToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: session.id,
+        payload: { session_id: "replayed-after-exit" },
+      }),
+    });
+    expect(afterExit.status).toBe(401);
+  });
+
+  it("rejects one PTY capability when it forges another session id", async () => {
+    const tokenFor = (sessionId: string) => path.join(root, `${sessionId}.token`);
+    server = await startServer({
+      port: 0,
+      bootToken: BOOT_TOKEN,
+      telemetryOptIn: false,
+      adapters: { "claude-code": tokenCapturingAdapter(tokenFor) },
+      stateRoot: root,
+      launchDir: projectRoot,
+      autoCreateSession: false,
+      loadSystemPrompt: async () => "",
+    });
+    const first = await server.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    const second = await server.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    let firstToken = "";
+    let secondToken = "";
+    await vi.waitFor(async () => {
+      firstToken = await fs.readFile(tokenFor(first.id), "utf8");
+      secondToken = await fs.readFile(tokenFor(second.id), "utf8");
+      expect(firstToken).not.toBe("");
+      expect(secondToken).not.toBe("");
+    });
+    expect(firstToken).not.toBe(secondToken);
+
+    const baseUrl = `http://127.0.0.1:${server.port}`;
+    const forged = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${firstToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: second.id,
+        payload: { session_id: "forged-agent-session" },
+      }),
+    });
+    expect(forged.status).toBe(401);
+    expect(server.sessionManager.get(second.id)?.agentSessionId).toBeNull();
+
+    const owned = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${secondToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: second.id,
+        payload: { session_id: "owned-agent-session", source: "startup" },
+      }),
+    });
+    expect(owned.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(server?.sessionManager.get(second.id)?.agentSessionId).toBe(
+        "owned-agent-session",
       );
     });
   });

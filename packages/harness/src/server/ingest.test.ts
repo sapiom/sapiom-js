@@ -46,7 +46,8 @@ describe("createIngestRouter", () => {
     ]);
 
     const deps: IngestDeps = {
-      ingestToken: INGEST_TOKEN,
+      authenticate: (sessionId, token) =>
+        sessionId === "session-1" && token === INGEST_TOKEN,
       normalize: normalizeHookEvent,
       resolveSession: (harnessSessionId) => sessions.get(harnessSessionId),
       onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
@@ -86,6 +87,52 @@ describe("createIngestRouter", () => {
     const res = await postIngest(baseUrl, { hookEvent: "SessionStart" }, "wrong-token");
     expect(res.status).toBe(401);
     expect(stored).toHaveLength(0);
+  });
+
+  it("rejects malformed bodies before credential lookup", async () => {
+    const res = await postIngest(baseUrl, [], INGEST_TOKEN);
+    expect(res.status).toBe(401);
+    expect(stored).toEqual([]);
+  });
+
+  it("binds a valid bearer token to the body session id", async () => {
+    start({
+      authenticate: (sessionId, token) =>
+        (sessionId === "session-1" && token === INGEST_TOKEN) ||
+        (sessionId === "session-2" && token === "token-2"),
+    });
+    sessions.set("session-2", {
+      harness: "claude-code",
+      userId: "user-2",
+      tenantId: "tenant-2",
+      machineId: "machine-1",
+      agentSessionId: null,
+    });
+
+    const forged = await postIngest(
+      baseUrl,
+      {
+        hookEvent: "SessionStart",
+        harnessSessionId: "session-2",
+        payload: { session_id: "forged-agent" },
+      },
+      INGEST_TOKEN,
+    );
+    expect(forged.status).toBe(401);
+    expect(stored).toEqual([]);
+
+    const owned = await postIngest(
+      baseUrl,
+      {
+        hookEvent: "SessionStart",
+        harnessSessionId: "session-2",
+        payload: { session_id: "owned-agent" },
+      },
+      "token-2",
+    );
+    expect(owned.status).toBe(200);
+    await vi.waitFor(() => expect(stored).toHaveLength(1));
+    expect(stored[0]?.harnessSessionId).toBe("session-2");
   });
 
   it("responds 200 immediately and processes asynchronously", async () => {
@@ -159,13 +206,13 @@ describe("createIngestRouter", () => {
     expect(ready).toEqual([]);
   });
 
-  it("drops events for unknown sessions without storing anything", async () => {
+  it("rejects events for unknown sessions before processing", async () => {
     const res = await postIngest(baseUrl, {
       hookEvent: "UserPromptSubmit",
       harnessSessionId: "unknown-session",
       payload: { prompt: "hi" },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
 
     // give the async handler a tick to (not) run
     await new Promise((resolve) => setTimeout(resolve, 20));

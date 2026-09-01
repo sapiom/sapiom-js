@@ -260,18 +260,18 @@ export class PlanningSessionService {
           }),
       },
     );
+    this.emit({
+      name: mode === "created" ? "planner_session.created" : "planner_session.resumed",
+      projectId: project.projectId,
+      sessionId: session.id,
+      resolution: mode,
+    });
     await this.options.onPlannerSession?.(session, {
       emptyProject:
         workspace.confirmedRevisionId === null &&
         workspace.activeProposalId === null &&
         workspace.projectBuildPlanId === null,
       mode,
-    });
-    this.emit({
-      name: mode === "created" ? "planner_session.created" : "planner_session.resumed",
-      projectId: project.projectId,
-      sessionId: session.id,
-      resolution: mode,
     });
     return session;
   }
@@ -297,6 +297,12 @@ export class PlanningSessionService {
         const workspace = await this.options.workspaceStore.readOrCreate(
           project.projectId,
         );
+        this.emit({
+          name: "planner_session.resumed",
+          projectId,
+          sessionId: candidate.id,
+          resolution: "live",
+        });
         await this.options.onPlannerSession?.(candidate, {
           emptyProject:
             workspace.confirmedRevisionId === null &&
@@ -304,28 +310,22 @@ export class PlanningSessionService {
             workspace.projectBuildPlanId === null,
           mode: "live",
         });
-        this.emit({
-          name: "planner_session.resumed",
-          projectId,
-          sessionId: candidate.id,
-          resolution: "live",
-        });
         return { session: candidate, resolution: "live" };
       }
       if (candidate.agentSessionId) {
-        try {
-          const workspace = await this.options.workspaceStore.readOrCreate(
-            project.projectId,
-          );
-          const prior = candidate.planning!.greeting;
-          const planning = {
-            ...candidate.planning!,
-            greeting: isTerminalGreeting(prior)
-              ? prior
-              : ({ status: "skipped", reason: "user-proceeded" } as const),
-          };
-          const details = await this.focusedDetails(project, workspace);
-          const resumed = await this.options.sessionManager.resume(candidate.id, {
+        const workspace = await this.options.workspaceStore.readOrCreate(
+          project.projectId,
+        );
+        const prior = candidate.planning!.greeting;
+        const planning = {
+          ...candidate.planning!,
+          greeting: isTerminalGreeting(prior)
+            ? prior
+            : ({ status: "skipped", reason: "user-proceeded" } as const),
+        };
+        const details = await this.focusedDetails(project, workspace);
+        const resumed = await this.options.sessionManager
+          .resume(candidate.id, {
             planning,
             promptAppendix: buildFocusedPlannerContext({
               project,
@@ -334,6 +334,14 @@ export class PlanningSessionService {
               userId: this.principal,
               ...(details ? { details } : {}),
             }),
+          })
+          .catch(() => null);
+        if (resumed) {
+          this.emit({
+            name: "planner_session.resumed",
+            projectId,
+            sessionId: resumed.id,
+            resolution: "resumed",
           });
           await this.options.onPlannerSession?.(resumed, {
             emptyProject:
@@ -342,16 +350,9 @@ export class PlanningSessionService {
               workspace.projectBuildPlanId === null,
             mode: "resumed",
           });
-          this.emit({
-            name: "planner_session.resumed",
-            projectId,
-            sessionId: resumed.id,
-            resolution: "resumed",
-          });
           return { session: resumed, resolution: "resumed" };
-        } catch {
-          // A stale vendor record may still be safely rehydrated below.
         }
+        // A stale vendor record may still be safely rehydrated below.
       }
       const record = await this.options.readRecord(candidate.id).catch(() => null);
       const prior = candidate.planning!.greeting;

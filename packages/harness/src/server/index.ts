@@ -156,6 +156,7 @@ import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { PlanningSessionService } from "../core/planning-session.js";
 import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -587,11 +588,10 @@ export const startServer = async (
   options: HarnessServerOptions,
 ): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
-  // Coding-agent hooks need to authenticate only to /ingest. Keep that
-  // capability distinct from the host/browser boot token: a model can read
-  // its own PTY environment, so injecting the boot token would also grant it
-  // every mutation beneath /api (including durable project rebinding).
-  const ingestToken = randomUUID();
+  // Coding-agent hooks receive a capability for exactly their own session.
+  // The registry is distinct from the host/browser boot token, process-local,
+  // rotated on resume, and revoked on exit.
+  const ingestCredentials = new IngestCredentialRegistry();
   const identity = options.identity ?? null;
   // The single source of truth for the Sapiom API key (`sk_…`) that Studio
   // actions authenticate with — distinct from the per-boot boot token that only
@@ -1076,7 +1076,7 @@ export const startServer = async (
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
-    ingestToken,
+    ingestCredentials,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
@@ -1229,7 +1229,7 @@ export const startServer = async (
   const taskManager = new TaskManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
-    ingestToken,
+    ingestCredentials,
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
     onCleanup: (taskId) => {
@@ -3068,7 +3068,8 @@ export const startServer = async (
   // Feeds the same seqCounter declared above — both hook POSTs and the Codex
   // transcript tailer run through processIngest(), which shares the counter.
   const ingestDeps: IngestDeps = {
-    ingestToken,
+    authenticate: (sessionId, token) =>
+      ingestCredentials.authenticate(sessionId, token),
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
     onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
@@ -3127,8 +3128,8 @@ export const startServer = async (
     seqCounter,
   };
 
-  // /ingest authenticates itself (bearer ingestToken, not X-Harness-Token) —
-  // it must not sit behind the /api boot-token middleware above.
+  // /ingest authenticates a per-session bearer capability against the body
+  // session id (never X-Harness-Token), so it stays outside /api middleware.
   app.use(createIngestRouter(ingestDeps));
 
   // Codex has no hooks, so a live session's entire analytics eventSource is

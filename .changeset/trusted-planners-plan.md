@@ -5,7 +5,8 @@
 Add trusted, project-scoped Agent Map planner sessions with deterministic
 resume-or-create/fresh resolution, focused path-free context, a durable
 automatic-greeting state machine, FIFO user input, bounded lifecycle telemetry,
-and public planner session/greeting state.
+public planner session/greeting state, and per-session ingest capabilities that
+cannot be replayed across PTYs or used for host `/api` mutations.
 
 **Breaking:** generic `POST /api/sessions` now strictly rejects unknown fields,
 so clients can no longer attach planner metadata to a generic create request.

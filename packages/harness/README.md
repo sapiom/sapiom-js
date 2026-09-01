@@ -52,6 +52,11 @@ Agent Studio makes one Sapiom request of its own, separate from telemetry
 from what its other components do on their own (the app's product analytics, and
 `npx @sapiom/mcp@latest` fetching and running the local MCP server each session):
 
+Planner-session bootstrap makes no additional network request. Its focused
+context, greeting coordination, FIFO, and lifecycle persistence stay inside the
+local server; only the coding agent's ordinary provider traffic and the
+opt-in telemetry described above can leave the machine.
+
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
   your coding agent is told about can improve without you upgrading this package.
@@ -96,6 +101,12 @@ queue files are quarantined beside that file so one session cannot block boot.
 The focused system context contains only bounded project IDs, revision digest
 and summaries, proposal/build-plan status, binding references, and warnings —
 never local root paths or source inventories.
+
+The browser/host token gates every `/api` planner route and is never injected
+into a coding-agent PTY. Each PTY instead receives a random `/ingest` capability
+bound to its exact session ID; presenting it with another event `sessionId` is
+rejected, it grants no `/api` authority, and it is rotated or revoked with the
+process lifecycle.
 
 **Migration note (breaking):** `POST /api/sessions` now rejects unknown fields,
 including client-authored planner metadata. Generic

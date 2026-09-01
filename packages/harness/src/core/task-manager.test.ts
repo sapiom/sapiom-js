@@ -10,6 +10,7 @@ import {
   type TaskProcess,
   type TaskSpawnFn,
 } from "./task-manager.js";
+import { IngestCredentialRegistry } from "./ingest-credentials.js";
 
 class FakeProcess extends EventEmitter implements TaskProcess {
   pid = 4242;
@@ -62,7 +63,7 @@ function makeManager(options: {
   const manager = new TaskManager({
     adapters: { "claude-code": options.adapter ?? makeAdapter() },
     ingestUrl: "http://127.0.0.1:4100",
-    ingestToken: "tok-boot",
+    ingestCredentials: new IngestCredentialRegistry(() => "tok-boot"),
     spawnProcess,
     onCleanup: options.onCleanup,
     buildLaunchOpts: options.buildLaunchOpts,
@@ -308,7 +309,7 @@ describe("TaskManager", () => {
     const manager = new TaskManager({
       adapters: { "claude-code": makeAdapter() },
       ingestUrl: "http://127.0.0.1:4100",
-      ingestToken: "tok",
+      ingestCredentials: new IngestCredentialRegistry(() => "tok"),
       spawnProcess: (command, args, options) => {
         const proc = new FakeProcess();
         spawned.push({ command, args, options, proc });
@@ -338,7 +339,7 @@ describe("TaskManager", () => {
     const manager = new TaskManager({
       adapters: { "claude-code": makeAdapter() },
       ingestUrl: "http://127.0.0.1:4100",
-      ingestToken: "tok",
+      ingestCredentials: new IngestCredentialRegistry(() => "tok"),
       spawnProcess,
       onCleanup,
       generateId: () => "task-x",
