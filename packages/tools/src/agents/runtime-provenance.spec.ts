@@ -673,7 +673,9 @@ describe("agents runtime provenance v1", () => {
       "stack",
     );
     expect(originalStackDescriptor).toBeDefined();
-    expect(originalStackDescriptor).not.toHaveProperty("value");
+    const originalStackIsDataDescriptor =
+      originalStackDescriptor !== undefined &&
+      "value" in originalStackDescriptor;
     expect(typeof originalStack).toBe("string");
     expect(originalStack).toContain("runtime-provenance.spec.ts");
     const originalDescriptor = Object.getOwnPropertyDescriptor(
@@ -702,14 +704,29 @@ describe("agents runtime provenance v1", () => {
     expect((error as DiagnosticTransportError).code).toBe("EAGENT");
     expect((error as DiagnosticTransportError).message).toBe(failure.message);
     expect((error as DiagnosticTransportError).stack).toBe(originalStack);
-    expect(Object.getOwnPropertyDescriptor(error, "stack")).toEqual(
-      expect.objectContaining({
-        configurable: originalStackDescriptor?.configurable,
-        enumerable: originalStackDescriptor?.enumerable,
-        get: originalStackDescriptor?.get,
-        set: originalStackDescriptor?.set,
-      }),
+    const caughtStackDescriptor = Object.getOwnPropertyDescriptor(
+      error,
+      "stack",
     );
+    expect(caughtStackDescriptor).toBeDefined();
+    expect(
+      caughtStackDescriptor !== undefined && "value" in caughtStackDescriptor,
+    ).toBe(originalStackIsDataDescriptor);
+    expect(caughtStackDescriptor?.configurable).toBe(
+      originalStackDescriptor?.configurable,
+    );
+    expect(caughtStackDescriptor?.enumerable).toBe(
+      originalStackDescriptor?.enumerable,
+    );
+    if (originalStackIsDataDescriptor) {
+      expect(caughtStackDescriptor?.writable).toBe(
+        originalStackDescriptor?.writable,
+      );
+      expect(caughtStackDescriptor?.value).toBe(originalStack);
+    } else {
+      expect(caughtStackDescriptor?.get).toBe(originalStackDescriptor?.get);
+      expect(caughtStackDescriptor?.set).toBe(originalStackDescriptor?.set);
+    }
     expect(
       (error as DiagnosticTransportError).diagnostics.request.headers[
         AGENT_RUNTIME_CALLSITE_HEADER
@@ -752,6 +769,7 @@ describe("agents runtime provenance v1", () => {
     expect(
       failure.diagnostics.request.headers[AGENT_RUNTIME_CALLSITE_HEADER],
     ).toBe(callsite);
+    expect(failure.stack).toBe(originalStack);
     expect(failure.code).toBe("EAGENT");
   });
 
