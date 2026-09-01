@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { StudioWorkspaceSelection } from "../shared/agent-map.js";
+import {
+  STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION,
+  type StudioWorkspaceSelection,
+} from "../shared/agent-map.js";
 import { StudioWorkspacePreferenceStore } from "./studio-workspace-preferences.js";
 
 describe("StudioWorkspacePreferenceStore", () => {
@@ -77,14 +80,48 @@ describe("StudioWorkspacePreferenceStore", () => {
     expect(await fs.readFile(value.file, "utf8")).toContain(
       value.workflows[0]!.path,
     );
-    const persisted = JSON.parse(
-      await fs.readFile(value.file, "utf8"),
-    ) as { preferences: Array<{ selection: unknown }> };
+    const persisted = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      preferences: Array<{ selection: unknown }>;
+    };
     expect(persisted.preferences[0]!.selection).toEqual({
       kind: "agent",
       projectId: value.projectId,
       agentId: first.agents[0]!.agentId,
     });
+  });
+
+  it("rejects a non-v4 opaque agent id from persisted state", async () => {
+    const value = await fixture();
+    await fs.writeFile(
+      value.file,
+      `${JSON.stringify({
+        schemaVersion: STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION,
+        preferences: [
+          {
+            userId: "user-a",
+            projectId: value.projectId,
+            selection: {
+              kind: "agent",
+              projectId: value.projectId,
+              agentId: "agent_00000000-0000-1000-0000-000000000001",
+            },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        agentBindings: [],
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(
+      new StudioWorkspacePreferenceStore(value.file).current(
+        "user-a",
+        value.projectId,
+        [path.join(value.root, "project")],
+        value.workflows,
+        true,
+      ),
+    ).rejects.toMatchObject({ code: "malformed_state" });
   });
 
   it("isolates users, keeps transient absence in memory, and durably repairs proven deletion", async () => {
@@ -248,9 +285,7 @@ describe("StudioWorkspacePreferenceStore", () => {
     );
     const movedPath = path.join(projectRoot, "archive", "planner");
     await store.moveAgentBindings(value.workflows[0]!.path, movedPath);
-    const moved = [
-      { ...value.workflows[0]!, path: movedPath },
-    ];
+    const moved = [{ ...value.workflows[0]!, path: movedPath }];
     const second = await new StudioWorkspacePreferenceStore(value.file).current(
       "user",
       value.projectId,
