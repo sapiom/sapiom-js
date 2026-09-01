@@ -185,7 +185,7 @@ async function verifyNativeErrorStackRedaction(tools, carrier) {
     "stack",
   );
   assert.ok(failureStackDescriptor);
-  assert.equal("value" in failureStackDescriptor, false);
+  const failureStackIsDataDescriptor = "value" in failureStackDescriptor;
   assert.equal(typeof failure.stack, "string");
   assert.match(failure.stack, /nativeStackFixture/);
   assert.match(failure.stack, new RegExp(callsite));
@@ -228,9 +228,7 @@ async function verifyNativeErrorStackRedaction(tools, carrier) {
     "stack",
   );
   assert.ok(caughtStackDescriptor);
-  assert.equal("value" in caughtStackDescriptor, false);
-  assert.equal(caughtStackDescriptor.get, failureStackDescriptor.get);
-  assert.equal(caughtStackDescriptor.set, failureStackDescriptor.set);
+  assert.equal("value" in caughtStackDescriptor, failureStackIsDataDescriptor);
   assert.equal(
     caughtStackDescriptor.configurable,
     failureStackDescriptor.configurable,
@@ -239,6 +237,16 @@ async function verifyNativeErrorStackRedaction(tools, carrier) {
     caughtStackDescriptor.enumerable,
     failureStackDescriptor.enumerable,
   );
+  if (failureStackIsDataDescriptor) {
+    assert.equal(
+      caughtStackDescriptor.writable,
+      failureStackDescriptor.writable,
+    );
+    assert.equal(caughtStackDescriptor.value, caught.stack);
+  } else {
+    assert.equal(caughtStackDescriptor.get, failureStackDescriptor.get);
+    assert.equal(caughtStackDescriptor.set, failureStackDescriptor.set);
+  }
   assert.equal(caught.message.includes(callsite), false);
   assert.equal(caught.cause.message.includes(callsite), false);
   assert.equal(typeof caught.cause.stack, "string");
