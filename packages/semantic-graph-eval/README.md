@@ -61,3 +61,5 @@ RUN_REAL_SEMANTIC_GRAPH_EVAL=1 SAPIOM_API_KEY=... \
 ```
 
 Both `RUN_REAL_SEMANTIC_GRAPH_EVAL=1` and `SAPIOM_API_KEY` are mandatory. Luna mode requires an explicit `--configuration` and either `--set calibration` or `--set holdout`; holdout refuses every configuration except the frozen one. Normalized reports are written below `.temp/semantic-graph-eval/` and remain uncommitted. They contain candidate evidence, input/configuration/packet/prompt/normalized-output fingerprints, and supported metadata, but never credentials, raw request headers, raw provider bodies, or unrestricted source.
+
+Gateway invocation failures, malformed model output, and post-response harness normalization faults remain distinct. Harness faults use a fixed sanitized rejection code, allowing the CLI to write the partial paid-run evidence before it exits nonzero without misreporting the fault as a provider failure.

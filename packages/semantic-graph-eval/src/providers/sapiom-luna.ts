@@ -128,20 +128,29 @@ export class SapiomLunaProvider implements SemanticGraphProvider {
         };
       }
       const latencyMs = Math.max(0, this.now() - startedAt);
-      const rawResponse: unknown = client.llm.structuredOf(
-        response,
-        request.prompt.outputName,
-      );
-      return {
-        status: "success",
-        rawResponse,
-        usage: usageFromResponse(
+      try {
+        const rawResponse: unknown = client.llm.structuredOf(
           response,
+          request.prompt.outputName,
+        );
+        return {
+          status: "success",
+          rawResponse,
+          usage: usageFromResponse(
+            response,
+            latencyMs,
+            client.llm.readDisclosure(response),
+          ),
+          requestedModel: REQUESTED_MODEL,
+        };
+      } catch {
+        return {
+          status: "harness-failure",
+          errorCode: "response-normalization-error",
           latencyMs,
-          client.llm.readDisclosure(response),
-        ),
-        requestedModel: REQUESTED_MODEL,
-      };
+          requestedModel: REQUESTED_MODEL,
+        };
+      }
     } finally {
       await client.shutdown();
     }

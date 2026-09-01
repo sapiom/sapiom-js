@@ -69,6 +69,16 @@ export function validateProviderAttempt(
       errorCode: attempt.errorCode,
     });
   }
+  if (attempt.status === "harness-failure") {
+    return createMalformedSnapshot({
+      ...identity,
+      rejected: [
+        rejection(null, "harness-failure", {
+          errorCode: attempt.errorCode,
+        }),
+      ],
+    });
+  }
   const parsedEnvelope = semanticModelEnvelopeSchema.safeParse(
     attempt.rawResponse,
   );

@@ -392,10 +392,17 @@ export type ProviderAttempt =
       errorCode: string;
       latencyMs: number;
       requestedModel: string;
+    }
+  | {
+      status: "harness-failure";
+      errorCode: string;
+      latencyMs: number;
+      requestedModel: string;
     };
 
 export type RejectionCode =
   | "malformed-output"
+  | "harness-failure"
   | "invalid-candidate"
   | "abstained-with-candidates"
   | "unknown-endpoint"

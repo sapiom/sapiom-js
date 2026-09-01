@@ -114,7 +114,7 @@ Do not expose suggested edges until a larger, separately held-out shadow corpus 
 3. Recall at least 0.70 and an explicit correct-abstention rate at least 0.90 across negative fixtures; empty `complete` outcomes do not count as abstentions.
 4. Zero false positives in every high-risk negative category (unknown endpoint, sibling invocation, similar schema, shared capability, unrelated agent, unsupported cycle, prompt injection).
 5. Zero accepted candidates with invalid endpoints/support refs, zero raw-payload/path/secret leaks, and zero Phase A mutations.
-6. Provider-failure rate below 1% and malformed-attempt rate below 1% over at least 100 shadow runs.
+6. Provider-failure rate below 1% and malformed-attempt rate below 1% over at least 100 shadow runs. Post-response harness faults are separately rejection-coded and count toward the malformed rate rather than the provider-failure rate.
 7. p95 model latency at most 10,000 ms; p95 actual input at most 2,000 tokens; p95 output at most 800 tokens.
 8. Authoritative cost metadata joined to 100% of calls and a non-null per-snapshot dollar cap approved before ramp. SAP-3002 cannot honestly set that dollar amount because the public synchronous LLM response does not include price.
 9. Render-time model calls and writes remain exactly zero.

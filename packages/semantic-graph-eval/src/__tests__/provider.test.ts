@@ -1,3 +1,4 @@
+import * as sapiomTools from "@sapiom/tools";
 import { MockSemanticGraphProvider } from "../providers/mock.js";
 import {
   SapiomLunaProvider,
@@ -126,6 +127,56 @@ describe("provider boundary", () => {
     expect(validateProviderAttempt(request, attempt).attemptStatus).toBe(
       "malformed",
     );
+  });
+
+  it("records post-response harness faults without relabeling the provider", async () => {
+    const fixture = fixtureById(await corpus(), "complete-abstention");
+    const request = requestFor(fixture);
+    const shutdown = jest.fn().mockResolvedValue(undefined);
+    const createClient = jest
+      .spyOn(sapiomTools, "createClient")
+      .mockReturnValue({
+        llm: {
+          run: jest.fn().mockResolvedValue({}),
+          structuredOf: () => {
+            throw new Error("private client normalization detail");
+          },
+          readDisclosure: jest.fn(),
+        },
+        shutdown,
+      } as unknown as ReturnType<typeof sapiomTools.createClient>);
+    let clock = 100;
+    const provider = new SapiomLunaProvider({
+      environment: {
+        RUN_REAL_SEMANTIC_GRAPH_EVAL: "1",
+        SAPIOM_API_KEY: "test-only-key",
+      },
+      now: () => {
+        const value = clock;
+        clock += 25;
+        return value;
+      },
+    });
+
+    try {
+      const attempt = await provider.invoke(request);
+      expect(attempt).toEqual({
+        status: "harness-failure",
+        errorCode: "response-normalization-error",
+        latencyMs: 25,
+        requestedModel: "gpt-luna",
+      });
+      expect(JSON.stringify(attempt)).not.toContain("private client");
+      expect(validateProviderAttempt(request, attempt)).toMatchObject({
+        attemptStatus: "malformed",
+        providerErrorCode: null,
+        outcome: "failed",
+        rejected: [{ code: "harness-failure" }],
+      });
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    } finally {
+      createClient.mockRestore();
+    }
   });
 
   it("sanitizes provider failures without persisting the response body", async () => {
