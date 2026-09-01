@@ -66,9 +66,11 @@ a direct handoff before the one-turn sidecar expires. Queue/storage exclusion is
 therefore guaranteed only when the boundary changes object identity, crosses a
 timer turn, or invokes an uninstrumented agent boundary (which consumes the
 receipt). The package's CJS and ESM root/carrier exports route through one
-canonical closure-backed implementation, so supported mixed-format callsites and
-result handoffs share the same private state without a process-global store or
-public extraction/rebinding helpers. All four cross-format directions are tested.
+canonical bundled implementation. Its callsite and receipt stores remain lexical,
+so supported mixed-format handoffs share private state without process globals,
+public extraction/rebinding helpers, or callable private helpers in
+`require.cache`. Standalone callsite-store artifacts are omitted from the package.
+All four cross-format directions are tested.
 The SDK treats all carrier values as opaque and exposes no new caller, callee,
 bundle, or execution identity. Missing or unsupported metadata preserves legacy
 behavior.
