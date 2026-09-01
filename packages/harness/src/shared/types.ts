@@ -207,6 +207,8 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
+  /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
+  planning?: import("./agent-map.js").PlannerSessionMetadata;
 }
 
 /**

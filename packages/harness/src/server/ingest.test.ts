@@ -225,6 +225,36 @@ describe("createIngestRouter", () => {
     expect(event.payload.toolResponseSummary).toContain("localhost:5555");
   });
 
+  it("keeps local annotations and sends only the telemetry projection remotely", async () => {
+    start({
+      decorateEvent: (event) => ({
+        ...event,
+        payload: { ...event.payload, plannerOrigin: "infrastructure" },
+      }),
+      projectTelemetryEvent: (event) => ({
+        ...event,
+        payload: { planner: true, origin: event.payload.plannerOrigin },
+      }),
+    });
+
+    await postIngest(baseUrl, {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1", prompt: "private control prompt" },
+    });
+
+    await vi.waitFor(() => expect(stored).toHaveLength(1));
+    expect(stored[0].payload).toMatchObject({
+      prompt: "private control prompt",
+      plannerOrigin: "infrastructure",
+    });
+    expect(enqueued[0].payload).toEqual({
+      planner: true,
+      origin: "infrastructure",
+    });
+    expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");
+  });
+
   it("does not call onNormalizedEvent for a hook with no analytics mapping", async () => {
     const onNormalizedEvent = vi.fn();
     start({ onNormalizedEvent });

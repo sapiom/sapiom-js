@@ -5,7 +5,10 @@ import {
   type AgentMapErrorCode,
   type AgentMapErrorResponse,
   type AgentMapWorkspaceResponse,
+  type PlannerMessageRequest,
+  type PlannerSessionRequest,
 } from "../shared/agent-map.js";
+import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import {
   AgentMapWorkspaceStore,
@@ -16,6 +19,14 @@ import {
   StudioProjectCatalogError,
 } from "../core/studio-project-catalog.js";
 import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import {
+  PlanningSessionError,
+  type PlanningSessionService,
+} from "../core/planning-session.js";
+import {
+  PlannerGreetingRetryUnavailableError,
+  type PlannerGreetingCoordinator,
+} from "../core/planner-greeting.js";
 
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
@@ -24,6 +35,35 @@ export interface AgentMapRouterOptions {
   listWorkspaceScopes: () =>
     | readonly WorkspaceScopeSummary[]
     | Promise<readonly WorkspaceScopeSummary[]>;
+  planningSessions?: PlanningSessionService;
+  plannerGreeting?: PlannerGreetingCoordinator;
+}
+
+const plannerSessionSchema = z
+  .object({
+    mode: z.enum(["resume-or-create", "fresh"]),
+    harness: z.enum(SPAWNABLE_HARNESS_KINDS).optional(),
+    theme: z.enum(["light", "dark"]).optional(),
+  })
+  .strict() satisfies z.ZodType<PlannerSessionRequest>;
+
+const plannerMessageSchema = z
+  .object({ text: z.string().min(1).max(100_000) })
+  .strict() satisfies z.ZodType<PlannerMessageRequest>;
+
+function sendPlanningError(
+  res: import("express").Response,
+  error: unknown,
+): boolean {
+  if (!(error instanceof PlanningSessionError)) return false;
+  const status =
+    error.code === "project_not_found" || error.code === "session_not_found"
+      ? 404
+      : error.code === "forbidden"
+        ? 403
+        : 409;
+  res.status(status).json({ code: error.code, error: error.message });
+  return true;
 }
 
 const ERROR_MESSAGES: Record<AgentMapErrorCode, string> = {
@@ -189,5 +229,86 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         .json(errorBody(bounded));
     }
   });
+
+  router.post("/projects/:projectId/planner-sessions", async (req, res, next) => {
+    if (!options.planningSessions || !options.plannerGreeting) {
+      res.status(501).json({ error: "Planner sessions are unavailable" });
+      return;
+    }
+    const parsed = plannerSessionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid planner session request" });
+      return;
+    }
+    try {
+      await options.catalog.reconcile(await options.listWorkspaceScopes());
+      const result = await options.planningSessions.open(
+        req.params.projectId,
+        parsed.data,
+      );
+      res.status(result.resolution === "created" ? 201 : 200).json(result);
+    } catch (error) {
+      if (!sendPlanningError(res, error)) next(error);
+    }
+  });
+
+  router.post(
+    "/projects/:projectId/planner-sessions/:sessionId/messages",
+    async (req, res, next) => {
+      if (!options.planningSessions || !options.plannerGreeting) {
+        res.status(501).json({ error: "Planner sessions are unavailable" });
+        return;
+      }
+      const parsed = plannerMessageSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid planner message" });
+        return;
+      }
+      try {
+        options.planningSessions.requireOwned(
+          req.params.projectId,
+          req.params.sessionId,
+        );
+        const metadata = await options.plannerGreeting.enqueue(
+          req.params.sessionId,
+          parsed.data.text,
+        );
+        res.status(202).json({ metadata });
+      } catch (error) {
+        if (!sendPlanningError(res, error)) next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/projects/:projectId/planner-sessions/:sessionId/greeting/retry",
+    async (req, res, next) => {
+      if (!options.planningSessions || !options.plannerGreeting) {
+        res.status(501).json({ error: "Planner sessions are unavailable" });
+        return;
+      }
+      if (Object.keys((req.body ?? {}) as object).length > 0) {
+        res.status(400).json({ error: "Invalid greeting retry request" });
+        return;
+      }
+      try {
+        options.planningSessions.requireOwned(
+          req.params.projectId,
+          req.params.sessionId,
+        );
+        await options.plannerGreeting.retry(req.params.sessionId);
+        res.status(202).json({
+          metadata: options.planningSessions.requireOwned(
+            req.params.projectId,
+            req.params.sessionId,
+          ).planning,
+        });
+      } catch (error) {
+        if (error instanceof PlannerGreetingRetryUnavailableError) {
+          res.status(409).json({ code: error.code, error: error.message });
+        } else if (!sendPlanningError(res, error)) next(error);
+      }
+    },
+  );
   return router;
 }

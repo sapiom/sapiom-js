@@ -62,3 +62,67 @@ export interface AgentMapErrorResponse {
   code: AgentMapErrorCode;
   error: string;
 }
+
+export interface SessionPrincipal {
+  projectId: StudioProjectId;
+  sessionId: string;
+  userId: string;
+}
+
+export type PlanningSessionIdentity =
+  | (SessionPrincipal & { role: "map-planner" })
+  | (SessionPrincipal & {
+      role: "agent-builder";
+      assignment: { kind: "planned"; agentId: string };
+    })
+  | (SessionPrincipal & {
+      role: "agent-builder";
+      assignment: { kind: "unplanned" };
+    });
+
+export type PlannerGreetingErrorCode =
+  | "session_not_ready"
+  | "session_exited"
+  | "injection_failed"
+  | "model_turn_failed"
+  | "delivery_timeout"
+  | "persistence_failed";
+
+export type PlannerGreetingState =
+  | { status: "pending" }
+  | { status: "generating"; attemptId: string }
+  | { status: "delivered"; messageId: string }
+  | {
+      status: "failed";
+      retryable: boolean;
+      errorCode: PlannerGreetingErrorCode;
+    }
+  | { status: "skipped"; reason: "user-proceeded" };
+
+export interface PlannerSessionMetadata {
+  identity: Extract<PlanningSessionIdentity, { role: "map-planner" }>;
+  greeting: PlannerGreetingState;
+  queuedInputIds: string[];
+}
+
+export interface PlannerQueuedInput {
+  id: string;
+  sessionId: string;
+  text: string;
+  acceptedAt: string;
+}
+
+export interface PlannerSessionRequest {
+  mode: "resume-or-create" | "fresh";
+  harness?: import("./types.js").HarnessKind;
+  theme?: import("./types.js").UiTheme;
+}
+
+export interface PlannerSessionResponse {
+  session: import("./types.js").HarnessSession;
+  resolution: "created" | "live" | "resumed" | "rehydrated";
+}
+
+export interface PlannerMessageRequest {
+  text: string;
+}

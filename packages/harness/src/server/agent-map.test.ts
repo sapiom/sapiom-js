@@ -7,7 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import {
+  PlannerGreetingRetryUnavailableError,
+  type PlannerGreetingCoordinator,
+} from "../core/planner-greeting.js";
+import {
+  PlanningSessionError,
+  type PlanningSessionService,
+} from "../core/planning-session.js";
 import type { AgentMapWorkspaceResponse } from "../shared/agent-map.js";
+import type { HarnessSession } from "../shared/types.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
 
@@ -26,7 +35,10 @@ describe("createAgentMapRouter", () => {
     );
   });
 
-  async function start() {
+  async function start(planner?: {
+    planningSessions: PlanningSessionService;
+    plannerGreeting: PlannerGreetingCoordinator;
+  }) {
     const stateRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-router-"),
     );
@@ -46,11 +58,12 @@ describe("createAgentMapRouter", () => {
       { onEvent },
     );
     const app = express();
+    app.use(express.json());
     app.use("/api", createBootTokenMiddleware("test-token"));
     app.use("/api", express.json());
     app.use(
       "/api",
-      createAgentMapRouter({ catalog, store, listWorkspaceScopes }),
+      createAgentMapRouter({ catalog, store, listWorkspaceScopes, ...planner }),
     );
     server = app.listen(0);
     const address = server.address() as AddressInfo;
@@ -273,5 +286,122 @@ describe("createAgentMapRouter", () => {
       error: "Agent Map state is malformed",
     });
     expect(await fs.readFile(workspacePath, "utf8")).toBe("{bad-json");
+  });
+
+  it("protects planner routes and accepts only project-scoped intent", async () => {
+    let fixtureProjectId = "";
+    const plannerSession = {
+      id: "planner-session-1",
+      agentSessionId: null,
+      harness: "codex",
+      cwd: "/server/private/project",
+      title: "project",
+      status: "running",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      lastActiveAt: "2026-09-01T00:00:00.000Z",
+      exitCode: null,
+      boundWorkflowPath: null,
+      ready: false,
+    } as HarnessSession;
+    const open = vi.fn(async () => ({
+      session: plannerSession,
+      resolution: "created" as const,
+    }));
+    const requireOwned = vi.fn(() => plannerSession);
+    const enqueue = vi.fn(async () => ({
+      identity: {
+        projectId: fixtureProjectId,
+        sessionId: plannerSession.id,
+        userId: "user-1",
+        role: "map-planner" as const,
+      },
+      greeting: { status: "pending" as const },
+      queuedInputIds: ["input-1"],
+    }));
+    const retry = vi.fn(async () => {});
+    const fixture = await start({
+      planningSessions: { open, requireOwned } as unknown as PlanningSessionService,
+      plannerGreeting: { enqueue, retry } as unknown as PlannerGreetingCoordinator,
+    });
+    fixtureProjectId = fixture.project.projectId;
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions`;
+
+    expect(
+      (
+        await fetch(route, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: "fresh" }),
+        })
+      ).status,
+    ).toBe(401);
+    const forged = await fetch(route, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({
+        mode: "fresh",
+        role: "map-planner",
+        projectId: fixture.project.projectId,
+      }),
+    });
+    expect(forged.status).toBe(400);
+    expect(open).not.toHaveBeenCalled();
+
+    const valid = await fetch(route, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ mode: "fresh", harness: "codex" }),
+    });
+    expect(valid.status).toBe(201);
+    expect(open).toHaveBeenCalledWith(fixture.project.projectId, {
+      mode: "fresh",
+      harness: "codex",
+    });
+  });
+
+  it("rejects foreign planner messages and bounds unavailable retries", async () => {
+    const requireOwned = vi.fn<() => HarnessSession>(() => {
+      throw new PlanningSessionError("forbidden");
+    });
+    const retry = vi.fn(async () => {
+      throw new PlannerGreetingRetryUnavailableError();
+    });
+    const fixture = await start({
+      planningSessions: {
+        open: vi.fn(),
+        requireOwned,
+      } as unknown as PlanningSessionService,
+      plannerGreeting: {
+        enqueue: vi.fn(),
+        retry,
+      } as unknown as PlannerGreetingCoordinator,
+    });
+    const headers = {
+      "content-type": "application/json",
+      "X-Harness-Token": "test-token",
+    };
+    const message = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/foreign/messages`,
+      { method: "POST", headers, body: JSON.stringify({ text: "hello" }) },
+    );
+    expect(message.status).toBe(403);
+    expect(await message.json()).toMatchObject({ code: "forbidden" });
+
+    requireOwned.mockImplementation(() => ({ id: "owned" }) as HarnessSession);
+    const retryResponse = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/owned/greeting/retry`,
+      { method: "POST", headers, body: "{}" },
+    );
+    expect(retryResponse.status).toBe(409);
+    expect(await retryResponse.json()).toEqual({
+      code: "greeting_retry_unavailable",
+      error: "greeting retry is not available",
+    });
   });
 });

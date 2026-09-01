@@ -27,6 +27,7 @@ export interface HarnessStatePaths {
   settings: string;
   studioProjects: string;
   agentMap: string;
+  plannerSessions: string;
   generated: string;
   records: string;
   sampleProject: string;
@@ -57,6 +58,7 @@ export function resolveStatePaths(stateRoot?: string): HarnessStatePaths {
     settings: join(root, relativeToHome(HARNESS_PATHS.settings)),
     studioProjects: join(root, relativeToHome(HARNESS_PATHS.studioProjects)),
     agentMap: join(root, relativeToHome(HARNESS_PATHS.agentMap)),
+    plannerSessions: join(root, "agent-map", "planner-sessions"),
     generated: join(root, relativeToHome(HARNESS_PATHS.generated)),
     records: join(root, relativeToHome(HARNESS_PATHS.records)),
     sampleProject: join(root, relativeToHome(HARNESS_PATHS.sampleProject)),

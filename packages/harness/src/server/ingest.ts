@@ -56,6 +56,10 @@ export interface IngestDeps {
    *  enrichment), before it's persisted — e.g. to feed a tool.call event's
    *  command/output text to dev-server port detection. */
   onNormalizedEvent?: (event: AnalyticsEvent) => void;
+  /** Local-only annotation (for example planner control-turn correlation). */
+  decorateEvent?: (event: AnalyticsEvent) => AnalyticsEvent;
+  /** Content-free projection used only for remote product telemetry. */
+  projectTelemetryEvent?: (event: AnalyticsEvent) => AnalyticsEvent;
   /**
    * Called for every event AFTER it has been persisted to the local store —
    * the seam for consumers that need to read the store back and see this event
@@ -145,10 +149,11 @@ export async function processIngest(
     deps.onSessionReady?.(harnessSessionId);
   }
 
+  finalEvent = deps.decorateEvent?.(finalEvent) ?? finalEvent;
   deps.onNormalizedEvent?.(finalEvent);
   await deps.store.append(finalEvent);
   deps.onEventPersisted?.(finalEvent);
-  deps.batcher.enqueue(finalEvent);
+  deps.batcher.enqueue(deps.projectTelemetryEvent?.(finalEvent) ?? finalEvent);
 
   if (hookEvent === "SessionEnd") {
     seqCounter.reset(harnessSessionId);

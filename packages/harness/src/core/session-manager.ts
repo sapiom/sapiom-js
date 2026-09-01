@@ -21,6 +21,7 @@ import {
   type LaunchOpts,
   type SpawnSpec,
 } from "../shared/types.js";
+import type { PlannerSessionMetadata } from "../shared/agent-map.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -271,6 +272,7 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
   req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
+  context?: { promptAppendix?: string },
 ) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
@@ -331,6 +333,20 @@ export interface SessionManagerOptions {
    * (see `submitInput`) is provable from POSIX CI. Defaults to the real one.
    */
   platform?: NodeJS.Platform;
+}
+
+export interface TrustedSessionCreateOptions {
+  /** Server-authored only. Never populated from CreateSessionRequest. */
+  planning?: (sessionId: string) => PlannerSessionMetadata;
+  /** Focused trusted context composed into the existing system prompt. */
+  promptAppendix?: (sessionId: string) => string;
+}
+
+export interface TrustedSessionResumeOptions {
+  /** Server-authored only. Used to suppress fresh-only lifecycle work. */
+  planning?: PlannerSessionMetadata;
+  /** Recomputed focused context for the resumed process. */
+  promptAppendix?: string;
 }
 
 interface PtyHandle {
@@ -487,6 +503,11 @@ export class SessionManager {
     return this.sessions.get(id);
   }
 
+  /** True only when this process owns the live PTY behind the record. */
+  isLive(id: string): boolean {
+    return this.ptys.has(id);
+  }
+
   private getAdapter(harness: HarnessKind): HarnessAdapter {
     const adapter = this.adapters[harness];
     if (!adapter) {
@@ -503,13 +524,21 @@ export class SessionManager {
     return adapter;
   }
 
-  async create(req: CreateSessionRequest): Promise<HarnessSession> {
+  async create(
+    req: CreateSessionRequest,
+    trusted: TrustedSessionCreateOptions = {},
+  ): Promise<HarnessSession> {
     const id = this.generateId();
     const adapter = this.getAdapter(req.harness);
+    const planning = trusted.planning?.(id);
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: req.cwd,
-      ...(await this.buildLaunchOpts(id, req)),
+      ...(await (trusted.promptAppendix
+        ? this.buildLaunchOpts(id, req, {
+            promptAppendix: trusted.promptAppendix(id),
+          })
+        : this.buildLaunchOpts(id, req))),
     };
     const spec = adapter.launch(opts);
     const session: HarnessSession = {
@@ -533,6 +562,7 @@ export class SessionManager {
       // could lose contrast against a differently-themed terminal.
       ...(req.theme ? { theme: req.theme } : {}),
       ready: false,
+      ...(planning ? { planning } : {}),
     };
     this.sessions.set(id, session);
     await this.persist();
@@ -595,7 +625,10 @@ export class SessionManager {
     return session;
   }
 
-  async resume(id: string): Promise<HarnessSession> {
+  async resume(
+    id: string,
+    trusted: TrustedSessionResumeOptions = {},
+  ): Promise<HarnessSession> {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
@@ -620,10 +653,17 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
+    if (trusted.planning) {
+      session.planning = structuredClone(trusted.planning);
+    }
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: session.cwd,
-      ...(await this.buildLaunchOpts(id, session)),
+      ...(await (trusted.promptAppendix
+        ? this.buildLaunchOpts(id, session, {
+            promptAppendix: trusted.promptAppendix,
+          })
+        : this.buildLaunchOpts(id, session))),
     };
     const spec = adapter.resume(session.agentSessionId, opts);
     // Kept so the failure path below can put it back: `lastActiveAt` is
@@ -1061,6 +1101,18 @@ export class SessionManager {
     if (!session || session.ready) return;
     session.ready = true;
     void this.persist();
+    this.emitStatus(session);
+  }
+
+  /** Persist a coordinator-owned metadata projection before exposing it. */
+  async setPlanningMetadata(
+    id: string,
+    metadata: PlannerSessionMetadata,
+  ): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    session.planning = structuredClone(metadata);
+    await this.persist();
     this.emitStatus(session);
   }
 

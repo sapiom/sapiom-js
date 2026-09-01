@@ -79,7 +79,7 @@ const createSessionSchema = z.object({
   profile: z.string().optional(),
   rehydrateFrom: z.string().min(1).optional(),
   theme: z.enum(["light", "dark"]).optional(),
-}) satisfies z.ZodType<CreateSessionRequest>;
+}).strict() satisfies z.ZodType<CreateSessionRequest>;
 
 const injectInputSchema = z.object({
   text: z.string(),
@@ -774,6 +774,13 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   router.post("/sessions/:id/resume", async (req, res, next) => {
+    if (sessionManager.get(req.params.id)?.planning) {
+      res.status(409).json({
+        code: "planner_session_requires_scoped_route",
+        error: "Planner sessions must be resumed through their project route",
+      });
+      return;
+    }
     try {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
@@ -797,6 +804,13 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const parsed = injectInputSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    if (sessionManager.get(req.params.id)?.planning) {
+      res.status(409).json({
+        code: "planner_session_requires_scoped_route",
+        error: "Planner input must use the project-scoped message route",
+      });
       return;
     }
     try {

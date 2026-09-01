@@ -43,6 +43,9 @@ import {
 } from "@shared/system-graph";
 import type {
   AgentMapWorkspaceResponse,
+  PlannerMessageRequest,
+  PlannerSessionRequest,
+  PlannerSessionResponse,
   StudioProjectId,
   StudioProjectSummary,
 } from "@shared/agent-map";
@@ -357,6 +360,19 @@ export interface HarnessApi {
   getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
+  openPlannerSession(
+    projectId: StudioProjectId,
+    request: PlannerSessionRequest,
+  ): Promise<PlannerSessionResponse>;
+  sendPlannerMessage(
+    projectId: StudioProjectId,
+    sessionId: string,
+    request: PlannerMessageRequest,
+  ): Promise<void>;
+  retryPlannerGreeting(
+    projectId: StudioProjectId,
+    sessionId: string,
+  ): Promise<void>;
   /** Revisioned local dependency projection for one server-issued workspace key. */
   getSystemGraph(
     workspaceKey: WorkspaceKey,
@@ -593,6 +609,37 @@ class RealApi implements HarnessApi {
       `/api/projects/${encodeURIComponent(projectId)}/agent-map/workspace`,
     );
     return parseAgentMapWorkspaceResponse(value, projectId);
+  }
+
+  openPlannerSession(
+    projectId: StudioProjectId,
+    request: PlannerSessionRequest,
+  ): Promise<PlannerSessionResponse> {
+    return this.request<PlannerSessionResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  async sendPlannerMessage(
+    projectId: StudioProjectId,
+    sessionId: string,
+    request: PlannerMessageRequest,
+  ): Promise<void> {
+    await this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/messages`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  async retryPlannerGreeting(
+    projectId: StudioProjectId,
+    sessionId: string,
+  ): Promise<void> {
+    await this.request(
+      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/greeting/retry`,
+      { method: "POST", body: "{}" },
+    );
   }
 
   async getSystemGraph(
@@ -2021,6 +2068,80 @@ export class MockApi implements HarnessApi {
       },
       projectId,
     );
+  }
+
+  async openPlannerSession(
+    projectId: StudioProjectId,
+    request: PlannerSessionRequest,
+  ): Promise<PlannerSessionResponse> {
+    const existing = this.sessions
+      .filter(
+        (session) =>
+          session.planning?.identity.projectId === projectId &&
+          session.planning.identity.userId === "user_mock",
+      )
+      .sort((left, right) =>
+        right.lastActiveAt.localeCompare(left.lastActiveAt),
+      )[0];
+    if (request.mode === "resume-or-create" && existing) {
+      return { session: existing, resolution: "live" };
+    }
+    const root = [...this.studioProjectIds.entries()].find(
+      ([, id]) => id === projectId,
+    )?.[0];
+    if (!root) {
+      throw new ApiError(
+        404,
+        "Studio project not found",
+        "Studio project not found",
+      );
+    }
+    const session = await this.createSession({
+      cwd: root,
+      harness: request.harness ?? "claude-code",
+      ...(request.theme ? { theme: request.theme } : {}),
+    });
+    session.planning = {
+      identity: {
+        projectId,
+        sessionId: session.id,
+        userId: "user_mock",
+        role: "map-planner",
+      },
+      greeting: { status: "pending" },
+      queuedInputIds: [],
+    };
+    return { session, resolution: "created" };
+  }
+
+  async sendPlannerMessage(
+    projectId: StudioProjectId,
+    sessionId: string,
+    request: PlannerMessageRequest,
+  ): Promise<void> {
+    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.planning?.identity.projectId !== projectId) {
+      throw new ApiError(
+        403,
+        "Forbidden planner session",
+        "Forbidden planner session",
+      );
+    }
+    await this.injectInput(sessionId, { text: request.text });
+  }
+
+  async retryPlannerGreeting(
+    projectId: StudioProjectId,
+    sessionId: string,
+  ): Promise<void> {
+    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.planning?.identity.projectId !== projectId) {
+      throw new ApiError(
+        403,
+        "Forbidden planner session",
+        "Forbidden planner session",
+      );
+    }
   }
 
   async getSystemGraph(

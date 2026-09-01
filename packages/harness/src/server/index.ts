@@ -153,6 +153,8 @@ import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { PlanningSessionService } from "../core/planning-session.js";
+import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -497,7 +499,7 @@ function createDefaultBuildLaunchOpts(
    */
   loadSystemPrompt: () => Promise<string> = fetchSystemPromptForActiveEnvironment,
 ): LaunchOptsBuilder {
-  return async (harnessSessionId, req) => {
+  return async (harnessSessionId, req, context) => {
     // Portable continue (SAP-2059). Resolved before the prompt file is
     // written, because for a `launch-flag` harness the brief IS part of that
     // file. Best-effort throughout: a brief that can't be assembled leaves
@@ -558,10 +560,13 @@ function createDefaultBuildLaunchOpts(
       }),
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
+    const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
+      .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+      .join("\n\n");
     const systemPromptFile = await generateSystemPromptFile(harnessSessionId, {
       generatedRoot,
       prompt,
-      ...(viaSystemPrompt ? { appendix: brief } : {}),
+      ...(appendices ? { appendix: appendices } : {}),
     });
     return {
       settingsFile: settings.settingsPath,
@@ -1062,9 +1067,9 @@ export const startServer = async (
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
     );
-  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
+  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req, context) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
-    return innerBuildLaunchOpts(harnessSessionId, req);
+    return innerBuildLaunchOpts(harnessSessionId, req, context);
   };
 
   const sessionManager = new SessionManager({
@@ -2522,6 +2527,43 @@ export const startServer = async (
       },
     },
   );
+  const plannerGreeting = new PlannerGreetingCoordinator({
+    root: statePaths.plannerSessions,
+    sessionManager,
+  });
+  for (const session of sessionManager.list()) {
+    if (!session.planning) continue;
+    let emptyProject = true;
+    try {
+      const workspace = await agentMapWorkspaceStore.readOrCreate(
+        session.planning.identity.projectId,
+      );
+      emptyProject =
+        workspace.confirmedRevisionId === null &&
+        workspace.activeProposalId === null &&
+        workspace.projectBuildPlanId === null;
+    } catch {
+      // Registration still recovers generating state and preserves its FIFO;
+      // the project route will surface any unavailable workspace later.
+    }
+    await plannerGreeting.register(session, emptyProject);
+  }
+  const planningSessions = new PlanningSessionService({
+    catalog: studioProjectCatalog,
+    workspaceStore: agentMapWorkspaceStore,
+    sessionManager,
+    readRecord: (id) => sessionRecordReader.read(id),
+    userId: identity?.userId ?? null,
+    machineId,
+    defaultHarness: options.defaultHarnessKind ?? "claude-code",
+    onPlannerSession: (session, context) =>
+      plannerGreeting.register(session, context.emptyProject),
+  });
+  sessionManager.onStatusChange((session) => {
+    void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
+      console.error("[harness] planner greeting status transition failed:", error);
+    });
+  });
 
   const app: Express = express();
   app.disable("x-powered-by");
@@ -2612,6 +2654,8 @@ export const startServer = async (
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
+      planningSessions,
+      plannerGreeting,
     }),
   );
   app.use(
@@ -2991,6 +3035,9 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
+    decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
+    projectTelemetryEvent: (event) =>
+      plannerGreeting.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
@@ -3018,6 +3065,9 @@ export const startServer = async (
       }
     },
     onEventPersisted: (event: AnalyticsEvent) => {
+      void plannerGreeting.onEventPersisted(event).catch((error: unknown) => {
+        console.error("[harness] planner greeting completion failed:", error);
+      });
       // The normal end of a session: the SessionEnd hook's event is in the
       // store, so the archived record carries the whole conversation including
       // its `endedAt`. (The "exited" status handler archives too, for sessions
