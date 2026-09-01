@@ -41,7 +41,7 @@ disables collection entirely. Events are also written locally to
 
 Project planner sessions add content-free `planner_session.*` and
 `planner_greeting.*` lifecycle events. Those events contain bounded project,
-session, attempt, resolution, status, and error-code fields only. They never
+session, attempt, resolution, queue-depth, and error-code fields only. They never
 contain planner prompts, assistant text, local paths, or provider error text;
 the same telemetry opt-in controls whether they leave the machine.
 
@@ -54,8 +54,8 @@ from what its other components do on their own (the app's product analytics, and
 
 Planner-session bootstrap makes no additional network request. Its focused
 context, greeting coordination, FIFO, and lifecycle persistence stay inside the
-local server; only the coding agent's ordinary provider traffic and the
-opt-in telemetry described above can leave the machine.
+local server. Existing outbound surfaces remain the system-prompt fetch below,
+the coding agent's ordinary provider traffic, and opt-in telemetry.
 
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
