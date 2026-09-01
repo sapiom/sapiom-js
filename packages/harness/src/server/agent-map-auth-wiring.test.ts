@@ -255,8 +255,16 @@ describe("coding-agent authorization boundary", () => {
     let firstToken = "";
     let secondToken = "";
     await vi.waitFor(async () => {
-      firstToken = await fs.readFile(tokenFor(first.id), "utf8");
-      secondToken = await fs.readFile(tokenFor(second.id), "utf8");
+      firstToken = (
+        JSON.parse(await fs.readFile(tokenFor(first.id), "utf8")) as {
+          ingestToken: string;
+        }
+      ).ingestToken;
+      secondToken = (
+        JSON.parse(await fs.readFile(tokenFor(second.id), "utf8")) as {
+          ingestToken: string;
+        }
+      ).ingestToken;
       expect(firstToken).not.toBe("");
       expect(secondToken).not.toBe("");
     });
