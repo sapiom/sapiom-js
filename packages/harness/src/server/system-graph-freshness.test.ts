@@ -13,6 +13,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import type { SystemGraphSnapshot } from "../shared/system-graph.js";
+import { CachedAgentInvocationProvider } from "../core/system-graph-relationships.js";
 import type { RegistryWorkflowInfo } from "../core/workflow-registry.js";
 import { startServer, type HarnessServer } from "./index.js";
 
@@ -106,6 +107,7 @@ describe("workspace graph freshness wiring", () => {
     await server?.sessionManager.flush();
     await server?.close();
     server = undefined;
+    vi.restoreAllMocks();
     await fs.rm(tempRoot, {
       recursive: true,
       force: true,
@@ -118,6 +120,10 @@ describe("workspace graph freshness wiring", () => {
     "refreshes source invocations and agent inventory without a session",
     { retry: 1, timeout: 30_000 },
     async () => {
+      const invocationObservations = vi.spyOn(
+        CachedAgentInvocationProvider.prototype,
+        "invocationObservations",
+      );
       const researchRoot = await scaffoldAgent(workspaceRoot, "research");
       await scaffoldAgent(workspaceRoot, "growth");
       server = await startServer({
@@ -174,6 +180,7 @@ describe("workspace graph freshness wiring", () => {
         return JSON.parse(raw) as SystemGraphSnapshot;
       };
       const initial = await readGraph();
+      await vi.waitFor(() => expect(invocationObservations).toHaveBeenCalled());
       // Cold discovery is detached: cached inventory renders immediately,
       // conservatively degraded until this process accepts fresh evidence.
       expect(initial.state).toBe("degraded");

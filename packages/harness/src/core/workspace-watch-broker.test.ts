@@ -217,6 +217,352 @@ describe("SharedWorkspaceWatchBroker", () => {
     broker.unsubscribe(secondKey);
   });
 
+  it("rebases graph-only observation coverage without manufacturing a discovery edit", async () => {
+    const agentRoot = path.join(root, "agent");
+    const discoveryPath = path.join(agentRoot, "discovery.ts");
+    const invocationPath = path.join(agentRoot, "invocation.ts");
+    const discoveryObservation = {
+      workspaceRoot: root,
+      candidateRoot: agentRoot,
+      paths: [discoveryPath],
+    };
+    const invocationObservation = {
+      workspaceRoot: agentRoot,
+      candidateRoot: agentRoot,
+      paths: [invocationPath],
+    };
+    let discoveryVersion = "discovery-v1";
+    let invocationVersion = "invocation-v1";
+    let includeInvocation = true;
+    let releaseBaseline!: () => void;
+    const baselineGate = new Promise<void>((resolve) => {
+      releaseBaseline = resolve;
+    });
+    const snapshotSources = vi.fn(
+      async (
+        roots: readonly string[],
+        observations: readonly {
+          candidateRoot: string;
+          paths: readonly string[];
+        }[],
+      ) => {
+        const retainedRoots = new Set([
+          ...roots,
+          ...observations.map((observation) => observation.candidateRoot),
+        ]);
+        const observedPaths = new Set(
+          observations.flatMap((observation) => observation.paths),
+        );
+        const fingerprint = JSON.stringify(
+          [...observedPaths]
+            .sort()
+            .map((observedPath) => [
+              observedPath,
+              observedPath === discoveryPath
+                ? discoveryVersion
+                : invocationVersion,
+            ]),
+        );
+        return new Map(
+          [...retainedRoots]
+            .sort()
+            .map((sourceRoot) => [sourceRoot, fingerprint]),
+        );
+      },
+    );
+    const discoveryPotential = vi.fn();
+    const discoveryChange = vi.fn();
+    const graphPotential = vi.fn();
+    const graphChange = vi.fn();
+    const onLastLeaseReleased = vi.fn();
+    const broker = new SharedWorkspaceWatchBroker({
+      forcePolling: true,
+      beforeInitialSnapshot: () => baselineGate,
+      pollIntervalMs: 5,
+      sourceDebounceMs: 1,
+      snapshotWorkspace: async () => "inventory",
+      snapshotSources,
+      onLastLeaseReleased,
+    });
+    const discoveryKey = {};
+    const graphKey = {};
+
+    const discoveryStart = broker.subscribe(
+      discoveryKey,
+      subscriber({
+        listSourceRoots: () => [agentRoot],
+        listSourceObservations: () => [discoveryObservation],
+        onPotentialChange: discoveryPotential,
+        onSourceChange: discoveryChange,
+      }),
+    );
+    const graphStart = broker.subscribe(
+      graphKey,
+      subscriber({
+        listSourceRoots: () => [agentRoot],
+        listSourceObservations: () => [
+          discoveryObservation,
+          ...(includeInvocation ? [invocationObservation] : []),
+        ],
+        onPotentialChange: graphPotential,
+        onSourceChange: graphChange,
+      }),
+    );
+    releaseBaseline();
+    await Promise.all([discoveryStart, graphStart]);
+    await vi.waitFor(() => {
+      expect(discoveryChange).toHaveBeenCalledOnce();
+      expect(graphChange).toHaveBeenCalledOnce();
+    });
+    discoveryPotential.mockClear();
+    discoveryChange.mockClear();
+    graphPotential.mockClear();
+    graphChange.mockClear();
+
+    const waitForPollAfter = async (callCount: number): Promise<void> => {
+      await vi.waitFor(() => {
+        expect(snapshotSources.mock.calls.length).toBeGreaterThan(callCount);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    };
+
+    let callsBeforeCoverageChange = snapshotSources.mock.calls.length;
+    includeInvocation = false;
+    await waitForPollAfter(callsBeforeCoverageChange);
+    expect(discoveryPotential).not.toHaveBeenCalled();
+    expect(discoveryChange).not.toHaveBeenCalled();
+
+    callsBeforeCoverageChange = snapshotSources.mock.calls.length;
+    includeInvocation = true;
+    await waitForPollAfter(callsBeforeCoverageChange);
+    expect(discoveryPotential).not.toHaveBeenCalled();
+    expect(discoveryChange).not.toHaveBeenCalled();
+
+    invocationVersion = "invocation-v2";
+    await vi.waitFor(() => {
+      expect(graphPotential).toHaveBeenCalledWith([agentRoot]);
+      expect(graphChange).toHaveBeenCalledWith([agentRoot]);
+    });
+    discoveryPotential.mockClear();
+    discoveryChange.mockClear();
+    graphPotential.mockClear();
+    graphChange.mockClear();
+
+    callsBeforeCoverageChange = snapshotSources.mock.calls.length;
+    broker.unsubscribe(graphKey);
+    expect(broker.size).toBe(1);
+    expect(onLastLeaseReleased).not.toHaveBeenCalled();
+    await waitForPollAfter(callsBeforeCoverageChange);
+    expect(discoveryPotential).not.toHaveBeenCalled();
+    expect(discoveryChange).not.toHaveBeenCalled();
+
+    invocationVersion = "invocation-v3";
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(discoveryPotential).not.toHaveBeenCalled();
+    expect(discoveryChange).not.toHaveBeenCalled();
+
+    discoveryVersion = "discovery-v2";
+    await vi.waitFor(() => {
+      expect(discoveryPotential).toHaveBeenCalledWith([agentRoot]);
+      expect(discoveryChange).toHaveBeenCalledWith([agentRoot]);
+    });
+
+    broker.unsubscribe(discoveryKey);
+    expect(onLastLeaseReleased).toHaveBeenCalledOnce();
+  });
+
+  it("detects a real source edit racing an observation coverage rebase", async () => {
+    const agentRoot = path.join(root, "agent");
+    const discoveryPath = path.join(agentRoot, "discovery.ts");
+    const invocationPath = path.join(agentRoot, "invocation.ts");
+    const discoveryObservation = {
+      workspaceRoot: root,
+      candidateRoot: agentRoot,
+      paths: [discoveryPath],
+    };
+    const invocationObservation = {
+      workspaceRoot: agentRoot,
+      candidateRoot: agentRoot,
+      paths: [invocationPath],
+    };
+    let includeInvocation = false;
+    let discoveryVersion = "discovery-v1";
+    let mutateDuringExpandedSample = false;
+    let releaseBaseline!: () => void;
+    const baselineGate = new Promise<void>((resolve) => {
+      releaseBaseline = resolve;
+    });
+    const snapshotSources = vi.fn(
+      async (
+        roots: readonly string[],
+        observations: readonly { paths: readonly string[] }[],
+      ) => {
+        const paths = observations
+          .flatMap((observation) => observation.paths)
+          .sort();
+        const snapshot = new Map([
+          [
+            agentRoot,
+            JSON.stringify(
+              paths.map((observedPath) => [
+                observedPath,
+                observedPath === discoveryPath
+                  ? discoveryVersion
+                  : "invocation-v1",
+              ]),
+            ),
+          ],
+        ]);
+        if (mutateDuringExpandedSample && paths.includes(invocationPath)) {
+          mutateDuringExpandedSample = false;
+          discoveryVersion = "discovery-v2";
+        }
+        expect(roots).toContain(agentRoot);
+        return snapshot;
+      },
+    );
+    const discoveryPotential = vi.fn();
+    const discoveryChange = vi.fn();
+    const graphChange = vi.fn();
+    const broker = new SharedWorkspaceWatchBroker({
+      forcePolling: true,
+      beforeInitialSnapshot: () => baselineGate,
+      pollIntervalMs: 5,
+      sourceDebounceMs: 1,
+      snapshotWorkspace: async () => "inventory",
+      snapshotSources,
+    });
+    const discoveryKey = {};
+    const graphKey = {};
+    const discoveryStart = broker.subscribe(
+      discoveryKey,
+      subscriber({
+        listSourceRoots: () => [agentRoot],
+        listSourceObservations: () => [discoveryObservation],
+        onPotentialChange: discoveryPotential,
+        onSourceChange: discoveryChange,
+      }),
+    );
+    const graphStart = broker.subscribe(
+      graphKey,
+      subscriber({
+        listSourceRoots: () => [agentRoot],
+        listSourceObservations: () => [
+          discoveryObservation,
+          ...(includeInvocation ? [invocationObservation] : []),
+        ],
+        onSourceChange: graphChange,
+      }),
+    );
+    releaseBaseline();
+    await Promise.all([discoveryStart, graphStart]);
+    await vi.waitFor(() => {
+      expect(discoveryChange).toHaveBeenCalledOnce();
+      expect(graphChange).toHaveBeenCalledOnce();
+    });
+    discoveryPotential.mockClear();
+    discoveryChange.mockClear();
+    graphChange.mockClear();
+
+    mutateDuringExpandedSample = true;
+    includeInvocation = true;
+
+    await vi.waitFor(() => {
+      expect(discoveryPotential).toHaveBeenCalledWith([agentRoot]);
+      expect(discoveryChange).toHaveBeenCalledWith([agentRoot]);
+      expect(graphChange).toHaveBeenCalledWith([agentRoot]);
+    });
+
+    broker.unsubscribe(graphKey);
+    broker.unsubscribe(discoveryKey);
+  });
+
+  it("retires the final lease during an in-flight coverage rebase", async () => {
+    const agentRoot = path.join(root, "agent");
+    const discoveryPath = path.join(agentRoot, "discovery.ts");
+    const invocationPath = path.join(agentRoot, "invocation.ts");
+    let includeInvocation = false;
+    let holdExpandedSample = false;
+    let expandedSampleStarted!: () => void;
+    const expandedSample = new Promise<void>((resolve) => {
+      expandedSampleStarted = resolve;
+    });
+    let releaseExpandedSample!: () => void;
+    const expandedSampleGate = new Promise<void>((resolve) => {
+      releaseExpandedSample = resolve;
+    });
+    const snapshotSources = vi.fn(
+      async (
+        _roots: readonly string[],
+        observations: readonly { paths: readonly string[] }[],
+      ) => {
+        const observedPaths = observations
+          .flatMap((observation) => observation.paths)
+          .sort();
+        if (holdExpandedSample && observedPaths.includes(invocationPath)) {
+          holdExpandedSample = false;
+          expandedSampleStarted();
+          await expandedSampleGate;
+        }
+        return new Map([[agentRoot, JSON.stringify(observedPaths)]]);
+      },
+    );
+    const onPotentialChange = vi.fn();
+    const onSourceChange = vi.fn();
+    const onLastLeaseReleased = vi.fn();
+    const broker = new SharedWorkspaceWatchBroker({
+      forcePolling: true,
+      pollIntervalMs: 5,
+      sourceDebounceMs: 1,
+      snapshotWorkspace: async () => "inventory",
+      snapshotSources,
+      onLastLeaseReleased,
+    });
+    const key = {};
+
+    await broker.subscribe(
+      key,
+      subscriber({
+        listSourceRoots: () => [agentRoot],
+        listSourceObservations: () => [
+          {
+            workspaceRoot: root,
+            candidateRoot: agentRoot,
+            paths: [discoveryPath],
+          },
+          ...(includeInvocation
+            ? [
+                {
+                  workspaceRoot: agentRoot,
+                  candidateRoot: agentRoot,
+                  paths: [invocationPath],
+                },
+              ]
+            : []),
+        ],
+        onPotentialChange,
+        onSourceChange,
+      }),
+    );
+    await vi.waitFor(() => expect(onSourceChange).toHaveBeenCalledOnce());
+    onPotentialChange.mockClear();
+    onSourceChange.mockClear();
+
+    holdExpandedSample = true;
+    includeInvocation = true;
+    await expandedSample;
+
+    broker.unsubscribe(key);
+    expect(broker.size).toBe(0);
+    expect(onLastLeaseReleased).toHaveBeenCalledOnce();
+    releaseExpandedSample();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(onPotentialChange).not.toHaveBeenCalled();
+    expect(onSourceChange).not.toHaveBeenCalled();
+    expect(onLastLeaseReleased).toHaveBeenCalledOnce();
+  });
+
   it("cleans a failed lease so a later subscription can retry", async () => {
     let attempts = 0;
     const closes: Array<ReturnType<typeof vi.fn>> = [];

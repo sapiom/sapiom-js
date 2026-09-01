@@ -66,17 +66,60 @@ function changedSourceRoots(
   const changed = [...new Set([...previous.keys(), ...current.keys()])].filter(
     (root) => previous.get(root) !== current.get(root),
   );
+  return deepestSourceRoots(changed);
+}
+
+function deepestSourceRoots(roots: readonly string[]): string[] {
   // Nested registered projects appear in their parent's recursive snapshot.
   // Attribute the edit only to the deepest changed caller(s).
-  return changed
+  return [...new Set(roots)]
     .filter(
       (root) =>
-        !changed.some(
+        !roots.some(
           (candidate) =>
             candidate !== root && isNestedSourceRoot(root, candidate),
         ),
     )
     .sort();
+}
+
+interface SourceSnapshotRequest {
+  roots: readonly string[];
+  observations: readonly WorkflowSourceObservation[];
+  signature: string;
+}
+
+interface SourceSnapshotSample {
+  request: SourceSnapshotRequest;
+  snapshots: ReadonlyMap<string, string>;
+  changedRoots: readonly string[];
+  baselineRequest: SourceSnapshotRequest | null;
+  baselineSnapshots: ReadonlyMap<string, string> | null;
+}
+
+function sourceSnapshotRequest(
+  roots: readonly string[],
+  observations: readonly WorkflowSourceObservation[],
+): SourceSnapshotRequest {
+  const retainedRoots = [...roots];
+  const retainedObservations = observations.map((observation) => ({
+    workspaceRoot: observation.workspaceRoot,
+    candidateRoot: observation.candidateRoot,
+    paths: [...observation.paths],
+  }));
+  const samplingDeclaration = retainedObservations.map((observation) => [
+    path.resolve(observation.workspaceRoot),
+    path.resolve(observation.candidateRoot),
+    observation.paths,
+  ]);
+  return {
+    roots: retainedRoots,
+    observations: retainedObservations,
+    signature: JSON.stringify([
+      retainedRoots.map((root) => path.resolve(root)),
+      samplingDeclaration,
+    ]),
+  };
 }
 
 export interface WorkspaceWatchCallbacks {
@@ -151,6 +194,7 @@ export class WorkspaceRootWatcher {
   private sourcePaths = new Set<string>();
   private ambiguousSourceChange = false;
   private lastSourceSnapshots: ReadonlyMap<string, string> | null = null;
+  private lastSourceRequest: SourceSnapshotRequest | null = null;
   private lastInventorySnapshot: string | null;
   private failedInventorySnapshot: string | null = null;
   private inventoryGeneration = 0;
@@ -188,32 +232,25 @@ export class WorkspaceRootWatcher {
     const generation = this.rawGeneration;
     await this.options.beforeInitialSnapshot?.();
     if (this.closed) return;
-    let sourceRoots: readonly string[] = [];
-    let sourceObservations: readonly WorkflowSourceObservation[] = [];
-    try {
-      sourceRoots = this.callbacks.listSourceRoots();
-      sourceObservations = this.callbacks.listSourceObservations?.() ?? [];
-    } catch {
-      // The workspace baseline remains useful and the next poll retries.
-    }
-    const [initialInventorySnapshot, initialSourceSnapshots] =
-      await Promise.all([
-        this.snapshotWorkspace(this.root),
-        this.snapshotSources(sourceRoots, sourceObservations),
-      ]);
+    const [initialInventorySnapshot, initialSourceSample] = await Promise.all([
+      this.snapshotWorkspace(this.root),
+      this.sampleSourceSnapshots(),
+    ]);
     if (this.closed) return;
     if (this.lastInventorySnapshot === null) {
       this.lastInventorySnapshot = initialInventorySnapshot;
     } else if (this.lastInventorySnapshot !== initialInventorySnapshot) {
       this.checkInventoryAsync();
     }
-    if (this.lastSourceSnapshots === null) {
-      this.lastSourceSnapshots = initialSourceSnapshots;
-    } else if (
-      changedSourceRoots(this.lastSourceSnapshots, initialSourceSnapshots)
-        .length > 0
-    ) {
-      this.scheduleSourceChange(null);
+    if (this.sourceSampleIsCurrent(initialSourceSample)) {
+      if (
+        initialSourceSample.baselineSnapshots !== null &&
+        initialSourceSample.changedRoots.length > 0
+      ) {
+        this.scheduleSourceChange(null);
+      } else {
+        this.acceptSourceSample(initialSourceSample);
+      }
     }
     if (generation !== this.rawGeneration) {
       this.checkInventoryAsync();
@@ -230,7 +267,7 @@ export class WorkspaceRootWatcher {
       } catch {
         // The source callback below still performs the bounded reconciliation.
       }
-      const retainedRoots = [...initialSourceSnapshots.keys()].sort();
+      const retainedRoots = [...initialSourceSample.snapshots.keys()].sort();
       this.sourceGeneration += 1;
       // An empty concrete list still asks every production subscriber to scan
       // its containing workspace. Avoid null here: null intentionally performs
@@ -254,6 +291,85 @@ export class WorkspaceRootWatcher {
       roots,
       observations,
     );
+  }
+
+  private readSourceSnapshotRequest(): SourceSnapshotRequest {
+    try {
+      return sourceSnapshotRequest(
+        this.callbacks.listSourceRoots(),
+        this.callbacks.listSourceObservations?.() ?? [],
+      );
+    } catch {
+      // Source declarations are hints. A transient reader failure cannot erase
+      // accepted coverage or manufacture a source delta; the next sample
+      // retries while workspace inventory polling remains independent.
+      return this.lastSourceRequest ?? sourceSnapshotRequest([], []);
+    }
+  }
+
+  private async sampleSourceSnapshots(): Promise<SourceSnapshotSample> {
+    const request = this.readSourceSnapshotRequest();
+    const baselineRequest = this.lastSourceRequest;
+    const baselineSnapshots = this.lastSourceSnapshots;
+    if (
+      baselineRequest &&
+      baselineSnapshots &&
+      baselineRequest.signature !== request.signature
+    ) {
+      // Observation membership is consumer-owned configuration, not a
+      // filesystem mutation. Compare like-for-like against the accepted
+      // declaration first so a caller/subscriber retirement cannot manufacture
+      // a discovery edit. Sample the new declaration on both sides of that
+      // comparison so an edit racing the coverage transition is still visible.
+      const [comparableSnapshots, transitionSnapshots] = await Promise.all([
+        this.snapshotSources(
+          baselineRequest.roots,
+          baselineRequest.observations,
+        ),
+        this.snapshotSources(request.roots, request.observations),
+      ]);
+      const snapshots = await this.snapshotSources(
+        request.roots,
+        request.observations,
+      );
+      return {
+        request,
+        snapshots,
+        changedRoots: deepestSourceRoots([
+          ...changedSourceRoots(baselineSnapshots, comparableSnapshots),
+          ...changedSourceRoots(transitionSnapshots, snapshots),
+        ]),
+        baselineRequest,
+        baselineSnapshots,
+      };
+    }
+    const snapshots = await this.snapshotSources(
+      request.roots,
+      request.observations,
+    );
+    return {
+      request,
+      snapshots,
+      changedRoots: baselineSnapshots
+        ? changedSourceRoots(baselineSnapshots, snapshots)
+        : [],
+      baselineRequest,
+      baselineSnapshots,
+    };
+  }
+
+  private sourceSampleIsCurrent(sample: SourceSnapshotSample): boolean {
+    return (
+      this.lastSourceRequest === sample.baselineRequest &&
+      this.lastSourceSnapshots === sample.baselineSnapshots
+    );
+  }
+
+  private acceptSourceSample(sample: SourceSnapshotSample): boolean {
+    if (!this.sourceSampleIsCurrent(sample)) return false;
+    this.lastSourceRequest = sample.request;
+    this.lastSourceSnapshots = sample.snapshots;
+    return true;
   }
 
   private enqueue(
@@ -327,34 +443,30 @@ export class WorkspaceRootWatcher {
       async () => {
         if (generation !== this.sourceGeneration) return;
         let effectivePaths = paths;
-        let observedSnapshots: ReadonlyMap<string, string> | null = null;
+        let sourceSample: SourceSnapshotSample | null = null;
         if (paths === null) {
-          let roots: readonly string[] = [];
-          let observations: readonly WorkflowSourceObservation[] = [];
-          try {
-            roots = this.callbacks.listSourceRoots();
-            observations = this.callbacks.listSourceObservations?.() ?? [];
-          } catch {
-            // Keep the conservative scope-wide callback.
-          }
-          observedSnapshots = await this.snapshotSources(roots, observations);
-          if (this.lastSourceSnapshots) {
-            const changed = changedSourceRoots(
-              this.lastSourceSnapshots,
-              observedSnapshots,
-            );
-            effectivePaths = changed.length > 0 ? changed : null;
+          sourceSample = await this.sampleSourceSnapshots();
+          if (!this.sourceSampleIsCurrent(sourceSample)) {
+            // Another accepted sample won the race. The raw event still
+            // requires conservative reconciliation, but it must not overwrite
+            // that newer baseline when this callback settles.
+            effectivePaths = null;
+          } else if (sourceSample.baselineSnapshots) {
+            effectivePaths =
+              sourceSample.changedRoots.length > 0
+                ? sourceSample.changedRoots
+                : null;
           } else {
             // A raw event raced the initial baseline. The post-edit sample
             // cannot identify a delta, so reconcile every retained root rather
             // than only the parent scope (which may stop at repo/ignore roots).
-            const retainedRoots = [...observedSnapshots.keys()].sort();
+            const retainedRoots = [...sourceSample.snapshots.keys()].sort();
             effectivePaths = retainedRoots.length > 0 ? retainedRoots : null;
           }
         }
         await this.callbacks.onSourceChange(effectivePaths);
         if (generation !== this.sourceGeneration || this.closed) return;
-        if (observedSnapshots) this.lastSourceSnapshots = observedSnapshots;
+        if (sourceSample) this.acceptSourceSample(sourceSample);
       },
       () => {
         if (this.closed || generation !== this.sourceGeneration) return;
@@ -574,27 +686,20 @@ export class WorkspaceRootWatcher {
     const poll = (): void => {
       if (this.closed || this.pollInFlight || !this.initialized) return;
       this.pollInFlight = true;
-      let sourceRoots: readonly string[] = [];
-      let sourceObservations: readonly WorkflowSourceObservation[] = [];
-      try {
-        sourceRoots = this.callbacks.listSourceRoots();
-        sourceObservations = this.callbacks.listSourceObservations?.() ?? [];
-      } catch {
-        // Registry reads are hints too. Inventory polling still proceeds.
-      }
       void Promise.all([
-        this.snapshotSources(sourceRoots, sourceObservations),
+        this.sampleSourceSnapshots(),
         this.snapshotWorkspace(this.root),
       ])
-        .then(([sourceSnapshots, inventorySnapshot]) => {
+        .then(([sourceSample, inventorySnapshot]) => {
           if (this.closed) return;
-          const changedRoots = this.lastSourceSnapshots
-            ? changedSourceRoots(this.lastSourceSnapshots, sourceSnapshots)
+          const sourceSampleCurrent = this.sourceSampleIsCurrent(sourceSample);
+          const changedRoots = sourceSampleCurrent
+            ? sourceSample.changedRoots
             : [];
           const inventoryChanged =
             this.lastInventorySnapshot !== null &&
             inventorySnapshot !== this.lastInventorySnapshot;
-          this.lastSourceSnapshots = sourceSnapshots;
+          if (sourceSampleCurrent) this.acceptSourceSample(sourceSample);
           let sourceChanged = false;
           if (inventoryChanged) {
             // Structural evidence wins when both bounded channels move. A

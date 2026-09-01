@@ -597,6 +597,20 @@ describe("SystemGraphWatcherManager", () => {
     expect(graphPotential).toHaveBeenCalledOnce();
 
     sessions.stopAll();
+    expect(broker.size).toBe(1);
+    expect(close).not.toHaveBeenCalled();
+    sessionChange.mockClear();
+    graphSourceChange.mockClear();
+    watchListener(
+      "change",
+      path.relative(root, path.join(agentRoot, "index.ts")),
+    );
+    await vi.waitFor(() => expect(graphSourceChange).toHaveBeenCalledOnce(), {
+      timeout: 2_000,
+      interval: 10,
+    });
+    expect(sessionChange).not.toHaveBeenCalled();
+
     manager.retain(new Set());
     expect(broker.size).toBe(0);
     expect(close).toHaveBeenCalledTimes(1);

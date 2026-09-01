@@ -826,15 +826,13 @@ export const startServer = async (
     };
   };
 
-  const acceptedSourceObservationsForRoot = (
+  const discoveryObservationsForRoot = (
     root: string,
-  ): WorkflowSourceObservation[] => {
-    const canonicalRoot = acceptedCanonicalScopeRoot(root);
-    return sourceObservationsWithinScope(canonicalRoot, [
-      ...acceptedSourceObservations,
-      ...systemGraphInvocations.invocationObservations(),
-    ]);
-  };
+  ): WorkflowSourceObservation[] =>
+    sourceObservationsWithinScope(
+      acceptedCanonicalScopeRoot(root),
+      acceptedSourceObservations,
+    );
 
   const markAcceptedInventoryDirty = (root: string): void => {
     const canonicalRoot = acceptedCanonicalScopeRoot(root);
@@ -1130,6 +1128,13 @@ export const startServer = async (
       },
     },
   );
+  const legacyGraphObservationsForRoot = (
+    root: string,
+  ): WorkflowSourceObservation[] =>
+    sourceObservationsWithinScope(acceptedCanonicalScopeRoot(root), [
+      ...acceptedSourceObservations,
+      ...systemGraphInvocations.invocationObservations(),
+    ]);
   const systemGraphInventory = new HarnessRegistryInventoryProvider({
     listWorkflows: () => workflowsCache,
     inventorySnapshot: acceptedInventorySnapshot,
@@ -1372,8 +1377,10 @@ export const startServer = async (
         cwd,
         workflowsCache.map((workflow) => workflow.path),
       ),
+    // Session and rail discovery own accepted registry evidence only. Legacy
+    // invocation observations must remain removable with the System Graph.
     listSourceObservations: (_harnessSessionId, cwd) =>
-      acceptedSourceObservationsForRoot(cwd),
+      discoveryObservationsForRoot(cwd),
     onPotentialChange: (harnessSessionId) => {
       const session = sessionManager.get(harnessSessionId);
       if (session && session.status !== "exited") {
@@ -2200,8 +2207,10 @@ export const startServer = async (
   const systemGraphWatcher = new SystemGraphWatcherManager(
     {
       listSourceRoots: workflowRootsForGraphScope,
+      // Direct-invocation observations are a private legacy graph input during
+      // coexistence; they never participate in session/rail discovery.
       listSourceObservations: (scope) =>
-        acceptedSourceObservationsForRoot(scope.root),
+        legacyGraphObservationsForRoot(scope.root),
       onPotentialChange: (scope, sourcePaths) => {
         const discoveryBudget = workspaceDiscoveryBudget(scope.root);
         prepareDirtyWorkflowRoot(scope.root, undefined, discoveryBudget);
