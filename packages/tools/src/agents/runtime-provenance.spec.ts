@@ -630,6 +630,201 @@ describe("agents runtime provenance v1", () => {
     ).toBe("ECONNREFUSED");
   });
 
+  it("redacts nested ordinary diagnostics without mutating the original error graph", async () => {
+    const callsite = "callsite.nested-private";
+    interface NestedDiagnostics {
+      request: {
+        headers: Record<string, string>;
+        lazyDiagnostic?: string;
+      };
+      response: { status: number; retryable: boolean };
+      observedAt: Date;
+    }
+    let accessorReads = 0;
+    const observedAt = new Date("2026-09-01T00:00:00.000Z");
+    const diagnostics: NestedDiagnostics = {
+      request: {
+        headers: {
+          [AGENT_RUNTIME_CALLSITE_HEADER]: callsite,
+          "x-request-id": "request-public",
+        },
+      },
+      response: { status: 502, retryable: true },
+      observedAt,
+    };
+    Object.defineProperty(diagnostics.request, "lazyDiagnostic", {
+      configurable: true,
+      enumerable: false,
+      get() {
+        accessorReads += 1;
+        return "lazy-public";
+      },
+    });
+    class DiagnosticTransportError extends TypeError {
+      readonly code = "EAGENT";
+      constructor(readonly diagnostics: NestedDiagnostics) {
+        super("fetch failed with diagnostics");
+      }
+    }
+    const failure = new DiagnosticTransportError(diagnostics);
+    Object.defineProperty(failure, "stack", {
+      configurable: true,
+      enumerable: false,
+      value:
+        "DiagnosticTransportError: fetch failed with diagnostics\n    at preserved-frame.ts:1:1",
+      writable: true,
+    });
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      failure,
+      "diagnostics",
+    );
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-nested" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(DiagnosticTransportError);
+    expect((error as DiagnosticTransportError).code).toBe("EAGENT");
+    expect((error as DiagnosticTransportError).message).toBe(failure.message);
+    expect((error as DiagnosticTransportError).stack).toBe(failure.stack);
+    expect(
+      (error as DiagnosticTransportError).diagnostics.request.headers[
+        AGENT_RUNTIME_CALLSITE_HEADER
+      ],
+    ).toBe("[REDACTED runtime provenance]");
+    expect(
+      (error as DiagnosticTransportError).diagnostics.request.headers[
+        "x-request-id"
+      ],
+    ).toBe("request-public");
+    expect((error as DiagnosticTransportError).diagnostics.response).toEqual({
+      status: 502,
+      retryable: true,
+    });
+    expect((error as DiagnosticTransportError).diagnostics.observedAt).toBe(
+      observedAt,
+    );
+    expect(observedAt.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+    expect(accessorReads).toBe(0);
+    expect(
+      Object.getOwnPropertyDescriptor(
+        (error as DiagnosticTransportError).diagnostics.request,
+        "lazyDiagnostic",
+      )?.get,
+    ).toBe(
+      Object.getOwnPropertyDescriptor(
+        failure.diagnostics.request,
+        "lazyDiagnostic",
+      )?.get,
+    );
+    expect(Object.getOwnPropertyDescriptor(error, "diagnostics")).toEqual(
+      expect.objectContaining({
+        configurable: originalDescriptor?.configurable,
+        enumerable: originalDescriptor?.enumerable,
+        writable: originalDescriptor?.writable,
+      }),
+    );
+
+    expect(failure.diagnostics).toBe(diagnostics);
+    expect(
+      failure.diagnostics.request.headers[AGENT_RUNTIME_CALLSITE_HEADER],
+    ).toBe(callsite);
+    expect(failure.code).toBe("EAGENT");
+  });
+
+  it("preserves exact identity when supplied provenance does not occur in nested diagnostics", async () => {
+    const diagnostics = {
+      request: { headers: { "x-request-id": "request-public" } },
+    };
+    const failure = Object.assign(new TypeError("fetch failed"), {
+      code: "EAGENT",
+      diagnostics,
+    });
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-no-match" },
+          { version: 1, callsite: "callsite.not-reflected" },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).toBe(failure);
+    expect((error as typeof failure).diagnostics).toBe(diagnostics);
+  });
+
+  it("redacts arrays and preserves cycles and shared ordinary diagnostics", async () => {
+    const callsite = "callsite.cyclic-private";
+    const shared: Record<string, unknown> = {
+      privateValue: callsite,
+      publicValue: "shared-public",
+    };
+    const diagnostics: Record<string, unknown> = {
+      entries: [shared, shared],
+      shared,
+    };
+    diagnostics.self = diagnostics;
+    const failure = Object.assign(new TypeError("fetch failed"), {
+      code: "EAGENT",
+      diagnostics,
+    });
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented-cyclic" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    const sanitized = (error as typeof failure).diagnostics;
+    const sanitizedEntries = sanitized.entries as Record<string, unknown>[];
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as typeof failure).code).toBe("EAGENT");
+    expect(sanitized).not.toBe(diagnostics);
+    expect(sanitized.self).toBe(sanitized);
+    expect(sanitizedEntries[0]).toBe(sanitizedEntries[1]);
+    expect(sanitizedEntries[0]).toBe(sanitized.shared);
+    expect(sanitizedEntries[0]!.privateValue).toBe(
+      "[REDACTED runtime provenance]",
+    );
+    expect(sanitizedEntries[0]!.publicValue).toBe("shared-public");
+
+    expect(diagnostics.self).toBe(diagnostics);
+    expect((diagnostics.entries as object[])[0]).toBe(shared);
+    expect(shared.privateValue).toBe(callsite);
+  });
+
   it("preserves typed errors, causes, diagnostics, and stack frames while redacting", async () => {
     const callsite = "callsite.typed-private";
     class AgentTransportError extends TypeError {

@@ -124,45 +124,62 @@ function redactedAgentRuntimeError(
 
   const redactString = (value: string): string =>
     redactAgentRuntimeProvenance(value, values);
-  if (!(error instanceof Error)) {
+  const isTraversableDiagnostic = (value: unknown): value is object => {
+    if (value === null || typeof value !== "object") return false;
+    if (value instanceof Error || Array.isArray(value)) return true;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  };
+
+  if (!isTraversableDiagnostic(error)) {
     const message = String(error);
     const redacted = redactString(message);
     return redacted === message ? error : new Error(redacted);
   }
 
-  const sanitizedErrors = new WeakMap<Error, Error>();
-  const sanitizeError = (source: Error): Error => {
-    const cached = sanitizedErrors.get(source);
+  const inspected = new WeakSet<object>();
+  const containsPrivateValue = (value: unknown): boolean => {
+    if (typeof value === "string") return redactString(value) !== value;
+    if (!isTraversableDiagnostic(value) || inspected.has(value)) return false;
+    inspected.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (
+        descriptor &&
+        "value" in descriptor &&
+        containsPrivateValue(descriptor.value)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (!containsPrivateValue(error)) return error;
+
+  const sanitized = new WeakMap<object, object>();
+  const sanitizeValue = (value: unknown): unknown => {
+    if (typeof value === "string") return redactString(value);
+    if (!isTraversableDiagnostic(value)) return value;
+    const cached = sanitized.get(value);
     if (cached) return cached;
 
-    let changed = false;
-    const target = Object.create(Object.getPrototypeOf(source)) as Error;
-    sanitizedErrors.set(source, target);
-
-    for (const key of Reflect.ownKeys(source)) {
-      const descriptor = Object.getOwnPropertyDescriptor(source, key)!;
+    const target = Array.isArray(value)
+      ? Object.setPrototypeOf([], Object.getPrototypeOf(value))
+      : Object.create(Object.getPrototypeOf(value));
+    sanitized.set(value, target);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor) continue;
       if ("value" in descriptor) {
-        if (typeof descriptor.value === "string") {
-          const value = redactString(descriptor.value);
-          changed ||= value !== descriptor.value;
-          descriptor.value = value;
-        } else if (descriptor.value instanceof Error) {
-          const value = sanitizeError(descriptor.value);
-          changed ||= value !== descriptor.value;
-          descriptor.value = value;
-        }
+        descriptor.value = sanitizeValue(descriptor.value);
       }
       Object.defineProperty(target, key, descriptor);
-    }
-
-    if (!changed) {
-      sanitizedErrors.set(source, source);
-      return source;
     }
     return target;
   };
 
-  return sanitizeError(error);
+  return sanitizeValue(error);
 }
 
 export interface AgentRunSpec {
