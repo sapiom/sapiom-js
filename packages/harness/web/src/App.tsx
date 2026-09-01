@@ -2104,8 +2104,18 @@ export const App = (): JSX.Element => {
       agentId: binding.agentId,
     };
     restoredStudioProjectsRef.current.add(binding.projectId);
+    const generation = ++studioRestoreGenerationRef.current;
     setStudioSelection(selection);
-    void harness.api.putStudioCurrentWorkspace(binding.projectId, selection);
+    void harness.api
+      .putStudioCurrentWorkspace(binding.projectId, selection)
+      .then((current) => {
+        if (generation !== studioRestoreGenerationRef.current) return;
+        // The server is the durability authority. A complete scan may prove a
+        // stale click invalid; an incomplete one preserves a known binding.
+        // Reflect either answer so the optimistic UI never disagrees with disk.
+        setStudioSelection(current.selection);
+      })
+      .catch(() => {});
   };
 
   const handleFocusAgent = (

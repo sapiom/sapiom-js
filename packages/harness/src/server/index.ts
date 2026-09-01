@@ -2531,6 +2531,15 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
+  const isWorkflowScanComplete = async (
+    roots: readonly string[],
+  ): Promise<boolean> =>
+    roots.length > 0 &&
+    (
+      await Promise.all(
+        roots.map((root) => workflowRegistry.discoveryStatus(root)),
+      )
+    ).every((status) => status === "complete");
 
   const annotateStudioSelections = async (
     workflows: readonly RegistryWorkflowInfo[],
@@ -2546,13 +2555,7 @@ export const startServer = async (
       const roots = reconciled.workspaceScopes
         .filter((scope) => scope.projectId === project.projectId)
         .map((scope) => scope.cwd);
-      const scanComplete =
-        roots.length > 0 &&
-        (
-          await Promise.all(
-            roots.map((root) => workflowRegistry.discoveryStatus(root)),
-          )
-        ).every((status) => status === "complete");
+      const scanComplete = await isWorkflowScanComplete(roots);
       for (const [
         workflowPath,
         agentId,
@@ -2671,13 +2674,7 @@ export const startServer = async (
       preferences: studioWorkspacePreferences,
       userId: identity?.userId ?? machineId,
       listWorkflows: () => workflowsCache,
-      isWorkflowScanComplete: async (roots) =>
-        roots.length > 0 &&
-        (
-          await Promise.all(
-            roots.map((root) => workflowRegistry.discoveryStatus(root)),
-          )
-        ).every((status) => status === "complete"),
+      isWorkflowScanComplete,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
     }),
   );

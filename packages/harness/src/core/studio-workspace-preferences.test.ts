@@ -160,6 +160,69 @@ describe("StudioWorkspacePreferenceStore", () => {
     ).toMatchObject({ repaired: true, selection: { kind: "agent-map" } });
   });
 
+  it("preserves an agent preference when PUT races a degraded empty inventory", async () => {
+    const value = await fixture();
+    const projectRoot = path.join(value.root, "project");
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    const first = await store.current(
+      "user",
+      value.projectId,
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    const selection: StudioWorkspaceSelection = {
+      kind: "agent",
+      projectId: value.projectId,
+      agentId: first.agents[0]!.agentId,
+    };
+    await store.put(
+      "user",
+      value.projectId,
+      selection,
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+
+    const degradedPut = await store.put(
+      "user",
+      value.projectId,
+      selection,
+      [projectRoot],
+      [],
+      false,
+    );
+    expect(degradedPut).toMatchObject({
+      agents: [],
+      repaired: false,
+      selection: { kind: "agent", agentId: first.agents[0]!.agentId },
+    });
+
+    const restarted = new StudioWorkspacePreferenceStore(value.file);
+    expect(
+      await restarted.current(
+        "user",
+        value.projectId,
+        [projectRoot],
+        [],
+        false,
+      ),
+    ).toMatchObject({ repaired: false, selection: { kind: "agent-map" } });
+    expect(
+      await restarted.current(
+        "user",
+        value.projectId,
+        [projectRoot],
+        value.workflows,
+        true,
+      ),
+    ).toMatchObject({
+      repaired: false,
+      selection: { kind: "agent", agentId: first.agents[0]!.agentId },
+    });
+  });
+
   it("preserves a null-definition agent id and remembered selection across an authenticated move and restart", async () => {
     const value = await fixture();
     const projectRoot = path.join(value.root, "project");

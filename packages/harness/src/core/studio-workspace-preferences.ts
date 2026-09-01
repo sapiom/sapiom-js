@@ -330,33 +330,60 @@ export class StudioWorkspacePreferenceStore {
               agentId: requested.agentId,
             }
           : { kind: "agent-map", projectId: requested.projectId };
-      const valid =
-        normalized.projectId === projectId &&
-        (normalized.kind === "agent-map" ||
-          reconciled.agents.some(
-            (agent) => agent.agentId === normalized.agentId,
-          ));
-      const selection: StudioWorkspaceSelection = valid
-        ? normalized
-        : { kind: "agent-map", projectId };
-      const nextPreference: StudioWorkspacePreference = {
-        userId,
-        projectId,
-        selection,
-        updatedAt: this.now().toISOString(),
-      };
       const index = reconciled.state.preferences.findIndex(
         (candidate) =>
           candidate.userId === userId && candidate.projectId === projectId,
       );
-      if (index < 0) reconciled.state.preferences.push(nextPreference);
-      else reconciled.state.preferences[index] = nextPreference;
-      await this.persist(reconciled.state);
+      const sameProject = normalized.projectId === projectId;
+      const visibleAgent =
+        normalized.kind === "agent" &&
+        reconciled.agents.some(
+          (agent) => agent.agentId === normalized.agentId,
+        );
+      const privatelyKnownAgent =
+        normalized.kind === "agent" &&
+        reconciled.state.agentBindings.some(
+          (binding) =>
+            binding.projectId === projectId &&
+            binding.agentId === normalized.agentId,
+        );
+      // A degraded scan cannot disprove a server-issued opaque id. Accept a
+      // binding the private store still knows, and leave an unknown request's
+      // previous durable preference untouched until a complete scan can judge
+      // it. This is the PUT twin of current()'s non-destructive read fallback.
+      const accepted =
+        sameProject &&
+        (normalized.kind === "agent-map" ||
+          visibleAgent ||
+          (!scanComplete && privatelyKnownAgent));
+      const absenceUnproven =
+        sameProject && normalized.kind === "agent" && !scanComplete;
+      const selection: StudioWorkspaceSelection = accepted
+        ? normalized
+        : absenceUnproven
+          ? (reconciled.state.preferences[index]?.selection ?? {
+              kind: "agent-map",
+              projectId,
+            })
+          : { kind: "agent-map", projectId };
+      if (!absenceUnproven || accepted) {
+        const nextPreference: StudioWorkspacePreference = {
+          userId,
+          projectId,
+          selection,
+          updatedAt: this.now().toISOString(),
+        };
+        if (index < 0) reconciled.state.preferences.push(nextPreference);
+        else reconciled.state.preferences[index] = nextPreference;
+        await this.persist(reconciled.state);
+      } else if (reconciled.changed) {
+        await this.persist(reconciled.state);
+      }
       return {
         projectId,
         selection,
         agents: reconciled.agents,
-        repaired: !valid,
+        repaired: !accepted && !absenceUnproven,
       };
     });
   }

@@ -299,6 +299,51 @@ describe("createAgentMapRouter", () => {
     });
   });
 
+  it("strictly rejects malformed or over-posted workspace selections", async () => {
+    const fixture = await start();
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/current-workspace`;
+    const headers = {
+      "X-Harness-Token": "test-token",
+      "Content-Type": "application/json",
+    };
+    const invalidBodies = [
+      {
+        selection: {
+          kind: "agent",
+          projectId: fixture.project.projectId,
+          agentId: "agent_not-a-server-id",
+        },
+      },
+      {
+        selection: {
+          kind: "agent-map",
+          projectId: fixture.project.projectId,
+          agentId: "agent_00000000-0000-4000-8000-000000000001",
+        },
+      },
+      {
+        selection: {
+          kind: "agent-map",
+          projectId: fixture.project.projectId,
+        },
+        privatePath: fixture.privateRoot,
+      },
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await fetch(route, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        code: "malformed_state",
+        error: "Agent Map state is malformed",
+      });
+    }
+  });
+
   it("returns a bounded 404 before touching workspace storage", async () => {
     const fixture = await start();
     const unknown = "project_00000000-0000-4000-8000-000000000099";

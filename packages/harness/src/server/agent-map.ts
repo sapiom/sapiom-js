@@ -5,7 +5,6 @@ import {
   type AgentMapErrorCode,
   type AgentMapErrorResponse,
   type AgentMapWorkspaceResponse,
-  type PutStudioCurrentWorkspaceRequest,
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
 import type { WorkflowInfo } from "../shared/types.js";
@@ -55,6 +54,35 @@ function errorBody(code: AgentMapErrorCode): AgentMapErrorResponse {
 const rootAssociationSchema = z.object({ root: z.string().min(1) }).strict();
 const createProjectSchema = z
   .object({ displayName: z.string().min(1) })
+  .strict();
+const studioProjectIdSchema = z
+  .string()
+  .regex(
+    /^project_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+const studioAgentIdSchema = z
+  .string()
+  .regex(
+    /^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+const putCurrentWorkspaceSchema = z
+  .object({
+    selection: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("agent-map"),
+          projectId: studioProjectIdSchema,
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("agent"),
+          projectId: studioProjectIdSchema,
+          agentId: studioAgentIdSchema,
+        })
+        .strict(),
+    ]),
+  })
   .strict();
 
 async function allowlistedScope(
@@ -251,19 +279,12 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         res.status(404).json(errorBody("project_not_found"));
         return;
       }
-      const body = req.body as
-        | Partial<PutStudioCurrentWorkspaceRequest>
-        | undefined;
-      const selection = body?.selection as StudioWorkspaceSelection | undefined;
-      if (
-        !selection ||
-        (selection.kind !== "agent-map" && selection.kind !== "agent") ||
-        typeof selection.projectId !== "string" ||
-        (selection.kind === "agent" && typeof selection.agentId !== "string")
-      ) {
+      const parsed = putCurrentWorkspaceSchema.safeParse(req.body);
+      if (!parsed.success) {
         res.status(400).json(errorBody("malformed_state"));
         return;
       }
+      const selection: StudioWorkspaceSelection = parsed.data.selection;
       const current = await options.preferences.put(
         options.userId,
         context.project.projectId,
