@@ -302,7 +302,9 @@ elsewhere and passed by reference, so this would have slipped through to a runti
 rejection:
 
 ```typescript
-const opts = { prefer: "cheapest", requires: ["lipsync"] };
+// `as const` matters here: without it `prefer` widens to `string` and the call is
+// rejected for that instead, which would not demonstrate anything about `requires`.
+const opts = { prefer: "cheapest" as const, requires: ["lipsync"] };
 await sapiom.contentGeneration.images.create({ prompt, select: opts }); // caught
 ```
 
