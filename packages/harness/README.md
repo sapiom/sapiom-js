@@ -41,8 +41,10 @@ disables collection entirely. Events are also written locally to
 
 ## Outbound requests
 
-Beyond telemetry (above) and the Sapiom calls your own actions make (sign-in,
-Deploy, Prod Run), Agent Studio makes one request of its own:
+Agent Studio makes one Sapiom request of its own, separate from telemetry
+(above), from the calls your own actions make (sign-in, Deploy, Prod Run), and
+from what its other components do on their own (the app's product analytics, and
+`npx @sapiom/mcp@latest` fetching and running the local MCP server each session):
 
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
