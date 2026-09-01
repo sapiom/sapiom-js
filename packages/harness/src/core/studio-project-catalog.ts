@@ -608,6 +608,19 @@ export class StudioProjectCatalog {
     return project ? publicSummary(project) : null;
   }
 
+  /** Server-only resolution for trusted launch/binding consumers. */
+  async resolveIdentity(
+    projectId: StudioProjectId,
+  ): Promise<StudioProjectIdentity | null> {
+    if (!isStudioProjectId(projectId)) return null;
+    await this.mutationQueue;
+    await this.load();
+    const project = this.projects!.find(
+      (candidate) => candidate.projectId === projectId,
+    );
+    return project ? structuredClone(project) : null;
+  }
+
   /** Explicit move/rebind seam: identity survives path and WorkspaceKey churn. */
   async moveRootBinding(
     projectId: StudioProjectId,

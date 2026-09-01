@@ -466,6 +466,25 @@ describe("createRestRouter", () => {
       expect(onSessionCreated).not.toHaveBeenCalled();
     });
 
+    it("rejects role and project spoofing on generic session creation", async () => {
+      const sessionManager = fakeSessionManager();
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({
+          cwd: "/tmp/proj",
+          harness: "codex",
+          role: "map-planner",
+          projectId: "forged-project",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(sessionManager.create).not.toHaveBeenCalled();
+    });
+
     it("does not itself write the workspace context file — that's sessionManager.create()'s job now", async () => {
       // The initial write used to happen here, in this route, which meant
       // any caller that reached the session-creation path without going
@@ -739,6 +758,35 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
+    it("requires planner input to use the project-scoped FIFO", async () => {
+      const planner = exitedSession({
+        id: "planner-1",
+        planning: {
+          identity: {
+            projectId: "project-1",
+            sessionId: "planner-1",
+            userId: "user-1",
+            role: "map-planner",
+          },
+          greeting: { status: "pending" },
+          queuedInputIds: [],
+        },
+      });
+      const sessionManager = fakeSessionManager([planner]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/planner-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "bypass" }),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
     it("404s when submitInput reports no live pty for the session", async () => {
       const sessionManager = fakeSessionManager();
       (
@@ -908,6 +956,34 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
+    it("requires planner resume to use the trusted project resolver", async () => {
+      const planner = exitedSession({
+        id: "planner-1",
+        planning: {
+          identity: {
+            projectId: "project-1",
+            sessionId: "planner-1",
+            userId: "user-1",
+            role: "map-planner",
+          },
+          greeting: { status: "delivered", messageId: "message-1" },
+          queuedInputIds: [],
+        },
+      });
+      const sessionManager = fakeSessionManager([planner]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/planner-1/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "planner_session_requires_scoped_route",
+      });
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
     it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
       const sessionManager = fakeSessionManager();
       (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
