@@ -4,7 +4,9 @@ import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
-import type { AnalyticsEvent } from "../shared/types.js";
+import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import type { SessionManager } from "../core/session-manager.js";
+import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
 import { createIngestRouter, type IngestDeps, type IngestSessionContext } from "./ingest.js";
 
 const INGEST_TOKEN = "test-token";
@@ -51,9 +53,14 @@ describe("createIngestRouter", () => {
       normalize: normalizeHookEvent,
       resolveSession: (harnessSessionId) => sessions.get(harnessSessionId),
       onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
-        resolved.push({ harnessSessionId, agentSessionId });
         const session = sessions.get(harnessSessionId);
-        if (session) session.agentSessionId = agentSessionId;
+        if (!session) return false;
+        if (session.agentSessionId !== null) {
+          return session.agentSessionId === agentSessionId;
+        }
+        resolved.push({ harnessSessionId, agentSessionId });
+        session.agentSessionId = agentSessionId;
+        return true;
       },
       store: {
         append: async (event) => {
@@ -178,6 +185,26 @@ describe("createIngestRouter", () => {
     expect(resolved[0]).toEqual({ harnessSessionId: "session-1", agentSessionId: "agent-42" });
   });
 
+  it("ignores a SessionStart whose vendor identity conflicts with the pinned session", async () => {
+    const ready: string[] = [];
+    start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
+    sessions.get("session-1")!.agentSessionId = "agent-pinned";
+
+    const res = await postIngest(baseUrl, {
+      hookEvent: "SessionStart",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-forged", source: "startup" },
+    });
+    expect(res.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sessions.get("session-1")?.agentSessionId).toBe("agent-pinned");
+    expect(resolved).toEqual([]);
+    expect(ready).toEqual([]);
+    expect(stored).toEqual([]);
+    expect(enqueued).toEqual([]);
+  });
+
   it("calls onSessionReady on session.start — the readiness signal SessionManager gates programmatic input on", async () => {
     const ready: string[] = [];
     start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
@@ -300,6 +327,71 @@ describe("createIngestRouter", () => {
       origin: "infrastructure",
     });
     expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");
+  });
+
+  it("bounds hostile planner source, model, and usage before batching", async () => {
+    const planningSession = {
+      planning: {
+        identity: {
+          projectId: "project-1",
+          sessionId: "session-1",
+          userId: "user-1",
+          role: "map-planner",
+        },
+      },
+    } as unknown as HarnessSession;
+    const privacy = new PlannerGreetingCoordinator({
+      root: "/unused",
+      sessionManager: {
+        get: () => planningSession,
+      } as unknown as SessionManager,
+    });
+    start({
+      enrichFromTranscript: async (event) => ({
+        ...event,
+        payload: {
+          ...event.payload,
+          model: "secret/customer_key_123",
+          usage: {
+            inputTokens: 10 ** 30,
+            outputTokens: -7,
+            secret: "/private/customer-token",
+          },
+        },
+      }),
+      projectTelemetryEvent: (event) => privacy.redactForTelemetry(event),
+    });
+
+    await postIngest(baseUrl, {
+      hookEvent: "SessionStart",
+      harnessSessionId: "session-1",
+      payload: {
+        session_id: "agent-1",
+        source: "/private/customer-token",
+      },
+    });
+    await postIngest(baseUrl, {
+      hookEvent: "Stop",
+      harnessSessionId: "session-1",
+      payload: {
+        session_id: "agent-1",
+        transcript_path: "/private/transcript.jsonl",
+        last_assistant_message: "private assistant text",
+      },
+    });
+
+    await vi.waitFor(() => expect(enqueued).toHaveLength(2));
+    expect(enqueued.map((event) => event.payload)).toEqual([
+      { planner: true, source: "unknown" },
+      {
+        planner: true,
+        hasAssistantText: true,
+        modelReported: true,
+        usage: { inputTokens: 1_000_000_000_000, outputTokens: null },
+      },
+    ]);
+    expect(JSON.stringify(enqueued)).not.toContain("private");
+    expect(JSON.stringify(enqueued)).not.toContain("secret");
   });
 
   it("does not call onNormalizedEvent for a hook with no analytics mapping", async () => {

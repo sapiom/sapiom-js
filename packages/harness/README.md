@@ -43,7 +43,10 @@ Project planner sessions add content-free `planner_session.*` and
 `planner_greeting.*` lifecycle events. Those events contain bounded project,
 session, attempt, resolution, queue-depth, and error-code fields only. They never
 contain planner prompts, assistant text, local paths, or provider error text;
-the same telemetry opt-in controls whether they leave the machine.
+the same telemetry opt-in controls whether they leave the machine. Planner hook
+projections reduce session-start source to a fixed enum, model identity to a
+presence boolean, and usage to allowlisted, clamped token counters; arbitrary
+provider strings and usage fields remain local.
 
 ## Outbound requests
 
@@ -98,9 +101,20 @@ Planner metadata is part of the session registry. Its input FIFO and greeting
 attempt state live at
 `<state-root>/agent-map/planner-sessions/<sessionId>/input-queue.json`; corrupt
 queue files are quarantined beside that file so one session cannot block boot.
-The focused system context contains only bounded project IDs, revision digest
-and summaries, proposal/build-plan status, binding references, and warnings —
-never local root paths or source inventories.
+An adjacent content-free `accepted-inputs.json` ledger commits PTY-accepted FIFO
+entries before they are removed from the queue, so a failed queue rewrite can
+finish after restart without replaying the message. A write-ahead dispatch
+intent without that durable acknowledgement is never guessed or automatically
+replayed: it is resolved at-most-once with a bounded
+`planner_session.input_delivery_uncertain` event, then later FIFO entries may
+continue. A PTY write and a filesystem write cannot provide true exactly-once
+delivery without an idempotent external acknowledgement.
+
+The focused system context contains only bounded project/session identity,
+current workspace pointer IDs, and binding references. The E1 state stores do
+not yet own revision, proposal, or build-plan detail records, so their bounded
+digest, summary, status, and warning slots are honestly `null`/empty until those
+records land. Local root paths and source inventories are never included.
 
 The browser/host token gates every `/api` planner route and is never injected
 into a coding-agent PTY. Each PTY instead receives a random `/ingest` capability

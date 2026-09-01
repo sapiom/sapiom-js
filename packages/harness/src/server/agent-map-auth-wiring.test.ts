@@ -271,6 +271,25 @@ describe("coding-agent authorization boundary", () => {
     expect(firstToken).not.toBe(secondToken);
 
     const baseUrl = `http://127.0.0.1:${server.port}`;
+    const firstOwned = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${firstToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: first.id,
+        payload: { session_id: "first-agent-session", source: "startup" },
+      }),
+    });
+    expect(firstOwned.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(server?.sessionManager.get(first.id)?.agentSessionId).toBe(
+        "first-agent-session",
+      );
+    });
+
     const forged = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
       headers: {
@@ -304,5 +323,26 @@ describe("coding-agent authorization boundary", () => {
         "owned-agent-session",
       );
     });
+
+    const forgedResumePointer = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${firstToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        hookEvent: "SessionStart",
+        harnessSessionId: first.id,
+        payload: { session_id: "owned-agent-session", source: "resume" },
+      }),
+    });
+    expect(forgedResumePointer.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.sessionManager.get(first.id)?.agentSessionId).toBe(
+      "first-agent-session",
+    );
+    expect(server.sessionManager.get(second.id)?.agentSessionId).toBe(
+      "owned-agent-session",
+    );
   });
 });

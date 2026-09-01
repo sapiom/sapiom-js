@@ -1187,6 +1187,30 @@ describe("SessionManager", () => {
     await expect(manager.resume("does-not-exist")).rejects.toThrow(/Unknown session/);
   });
 
+  it("pins vendor session identity write-once for live and resumed records", async () => {
+    const { manager } = makeManager();
+    const live = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(manager.setAgentSessionId(live.id, "agent-live")).toBe(true);
+    expect(manager.setAgentSessionId(live.id, "agent-live")).toBe(true);
+    expect(manager.setAgentSessionId(live.id, "agent-other")).toBe(false);
+    expect(manager.get(live.id)?.agentSessionId).toBe("agent-live");
+
+    const resumed = manager.registerHistorical({
+      agentSessionId: "agent-resumed",
+      harness: "claude-code",
+      cwd: "/tmp/resumed",
+      title: "resumed",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(manager.setAgentSessionId(resumed.id, "agent-resumed")).toBe(true);
+    expect(manager.setAgentSessionId(resumed.id, "agent-other")).toBe(false);
+    expect(manager.get(resumed.id)?.agentSessionId).toBe("agent-resumed");
+  });
+
   it("awaits an async buildLaunchOpts and merges its result into launch opts", async () => {
     const buildLaunchOpts = vi.fn(async (harnessSessionId: string) => {
       await new Promise((resolve) => setTimeout(resolve, 5));

@@ -2531,6 +2531,12 @@ export const startServer = async (
               ...(event.name === "planner_greeting.skipped"
                 ? { reason: event.reason }
                 : {}),
+              ...(event.name === "planner_session.input_delivery_uncertain"
+                ? {
+                    input_id: event.inputId,
+                    error_code: event.errorCode,
+                  }
+                : {}),
             }),
       },
     };
@@ -2608,6 +2614,26 @@ export const startServer = async (
     userId: identity?.userId ?? null,
     machineId,
     defaultHarness: options.defaultHarnessKind ?? "claude-code",
+    // E1 owns the durable workspace pointers, but not the later revision,
+    // proposal, or build-plan detail records. Wire that shipped source
+    // explicitly so the focused-context contract emits honest null/empty
+    // detail slots today and has one allowlisted adapter boundary when those
+    // stores land; it must never fall back to scanning project files.
+    readFocusedContext: async (_projectId, workspace) => ({
+      confirmedRevision:
+        workspace.confirmedRevisionId === null
+          ? null
+          : { digest: null, summaries: [] },
+      activeProposal:
+        workspace.activeProposalId === null
+          ? null
+          : { status: null, summary: null },
+      projectBuildPlan:
+        workspace.projectBuildPlanId === null
+          ? null
+          : { status: null, summary: null },
+      warnings: [],
+    }),
     onPlannerSession: (session, context) =>
       plannerGreeting.register(session, context),
     onEvent: emitPlannerLifecycle,
@@ -3081,7 +3107,7 @@ export const startServer = async (
       // Record the agent session id — used by session-manager for resume
       // (agentSessionId feeds the --resume flag) and by the codex tailer for
       // exact-match rollout discovery.
-      sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+      return sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
     },
     onSessionReady: (harnessSessionId) => {
       sessionManager.setReady(harnessSessionId);

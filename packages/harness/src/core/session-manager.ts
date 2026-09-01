@@ -1086,12 +1086,20 @@ export class SessionManager {
     this.refreshImmediatePromptState(adapter, handle);
   }
 
-  setAgentSessionId(id: string, agentSessionId: string): void {
+  setAgentSessionId(id: string, agentSessionId: string): boolean {
     const session = this.sessions.get(id);
-    if (!session || session.agentSessionId === agentSessionId) return;
+    if (!session) return false;
+    // Vendor identity is learned once from this session's authenticated PTY.
+    // A resumed registry record is already pinned and may only repeat the exact
+    // value; allowing a later SessionStart to overwrite it would let session A
+    // redirect its next resume/tailer lookup to session B's vendor history.
+    if (session.agentSessionId !== null) {
+      return session.agentSessionId === agentSessionId;
+    }
     session.agentSessionId = agentSessionId;
     void this.persist();
     this.emitStatus(session);
+    return true;
   }
 
   /**

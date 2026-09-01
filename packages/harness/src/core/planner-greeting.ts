@@ -18,8 +18,19 @@ interface PersistedPlannerState {
   schemaVersion: 1;
   metadata: PlannerSessionMetadata;
   inputs: PlannerQueuedInput[];
+  /**
+   * Durable write-ahead intent for the one FIFO head that may be crossing the
+   * PTY boundary. An unresolved intent is never replayed automatically after a
+   * restart because the process cannot prove whether the PTY accepted it.
+   */
+  dispatchingInputId: string | null;
   retryCount: number;
   emptyProject: boolean;
+}
+
+interface AcceptedInputLedger {
+  schemaVersion: 1;
+  inputIds: string[];
 }
 
 interface ExpectedPrompt {
@@ -54,6 +65,8 @@ export interface PlannerGreetingCoordinatorOptions {
   deliveryTimeoutMs?: number;
   /** Test seam for classifying queue-store failures without exposing raw errors. */
   writeState?: (file: string, state: unknown) => Promise<void>;
+  /** Test seam for accepted-ledger cleanup/commit failures. */
+  writeAcceptedLedger?: (file: string, state: unknown) => Promise<void>;
   onEvent?: (event: PlannerLifecycleEvent) => Promise<void> | void;
 }
 
@@ -102,6 +115,9 @@ function isPersistedPlannerState(
       metadata.greeting.status,
     ) ||
     !Array.isArray(value.inputs) ||
+    (value.dispatchingInputId !== undefined &&
+      value.dispatchingInputId !== null &&
+      typeof value.dispatchingInputId !== "string") ||
     !Number.isSafeInteger(value.retryCount) ||
     (value.retryCount as number) < 0 ||
     (value.retryCount as number) > MAX_RETRIES ||
@@ -124,7 +140,10 @@ function isPersistedPlannerState(
     metadata.queuedInputIds.length !== inputs.length ||
     metadata.queuedInputIds.some(
       (id, index) => id !== (inputs[index] as Record<string, unknown>).id,
-    )
+    ) ||
+    (typeof value.dispatchingInputId === "string" &&
+      value.dispatchingInputId !==
+        (inputs[0] as Record<string, unknown> | undefined)?.id)
   ) {
     return false;
   }
@@ -169,10 +188,40 @@ export function plannerGreetingPrompt(emptyProject: boolean): string {
   ].join(" ");
 }
 
+const PLANNER_SESSION_SOURCES = new Set([
+  "startup",
+  "resume",
+  "clear",
+  "compact",
+  "codex",
+]);
+const MAX_TELEMETRY_TOKEN_COUNT = 1_000_000_000_000;
+
+function telemetrySource(value: unknown): string {
+  return typeof value === "string" && PLANNER_SESSION_SOURCES.has(value)
+    ? value
+    : "unknown";
+}
+
+function telemetryTokenCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.min(Math.trunc(value), MAX_TELEMETRY_TOKEN_COUNT);
+}
+
+function telemetryUsage(value: unknown): Record<string, number | null> | null {
+  if (!isRecord(value)) return null;
+  const inputTokens = telemetryTokenCount(value.inputTokens);
+  const outputTokens = telemetryTokenCount(value.outputTokens);
+  if (inputTokens === null && outputTokens === null) return null;
+  return { inputTokens, outputTokens };
+}
+
 function telemetryPayload(event: AnalyticsEvent): Record<string, unknown> {
   switch (event.type) {
     case "session.start":
-      return { source: event.payload.source ?? null, planner: true };
+      return { source: telemetrySource(event.payload.source), planner: true };
     case "prompt.submitted":
       return {
         planner: true,
@@ -192,8 +241,12 @@ function telemetryPayload(event: AnalyticsEvent): Record<string, unknown> {
         hasAssistantText:
           typeof event.payload.assistantText === "string" &&
           event.payload.assistantText.length > 0,
-        model: event.payload.model ?? null,
-        usage: event.payload.usage ?? null,
+        // Provider/model text is never remotely projected. Even a syntactically
+        // plausible model identifier is an attacker-controlled covert channel.
+        modelReported:
+          typeof event.payload.model === "string" &&
+          event.payload.model.length > 0,
+        usage: telemetryUsage(event.payload.usage),
       };
     default:
       return { planner: true };
@@ -218,6 +271,10 @@ export class PlannerGreetingCoordinator {
 
   private file(sessionId: string): string {
     return path.join(this.options.root, sessionId, "input-queue.json");
+  }
+
+  private acceptedFile(sessionId: string): string {
+    return path.join(this.options.root, sessionId, "accepted-inputs.json");
   }
 
   private emit(event: PlannerLifecycleEvent): void {
@@ -250,8 +307,15 @@ export class PlannerGreetingCoordinator {
     if (!session.planning) throw new Error("planner metadata missing");
     return {
       schemaVersion: 1,
-      metadata: structuredClone(session.planning),
+      metadata: {
+        ...structuredClone(session.planning),
+        // The queue file owns FIFO membership. If that file is missing or was
+        // quarantined, stale registry IDs cannot resurrect content we no
+        // longer possess or make the replacement state invalid on next boot.
+        queuedInputIds: [],
+      },
       inputs: [],
+      dispatchingInputId: null,
       retryCount: 0,
       emptyProject,
     };
@@ -280,7 +344,12 @@ export class PlannerGreetingCoordinator {
       if (!isPersistedPlannerState(parsed, session)) {
         throw new Error("invalid planner state");
       }
-      state = parsed;
+      state = {
+        ...parsed,
+        // Backward-compatible with queue files written by the first SAP-3055
+        // review head before dispatch intent became explicit.
+        dispatchingInputId: parsed.dispatchingInputId ?? null,
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         // A single damaged or unreadable session queue is local corruption,
@@ -307,6 +376,143 @@ export class PlannerGreetingCoordinator {
     await fs.rename(tmp, file);
   }
 
+  private async acceptedInputIds(
+    sessionId: string,
+  ): Promise<Set<string> | null> {
+    const file = this.acceptedFile(sessionId);
+    try {
+      const decoded: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+      if (
+        !isRecord(decoded) ||
+        decoded.schemaVersion !== 1 ||
+        !Array.isArray(decoded.inputIds) ||
+        !decoded.inputIds.every(
+          (inputId) => typeof inputId === "string" && inputId !== "",
+        )
+      ) {
+        throw new Error("invalid accepted-input ledger");
+      }
+      return new Set(decoded.inputIds);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+      // An unreadable acknowledgement is safety-significant. Keep the queue's
+      // write-ahead intent unresolved instead of guessing and replaying it.
+      const quarantine = path.join(
+        path.dirname(file),
+        `accepted-inputs.corrupt-${this.now().replace(/[^0-9A-Za-z]/g, "-")}-${randomUUID()}.json`,
+      );
+      await fs.rename(file, quarantine).catch(() => {});
+      return null;
+    }
+  }
+
+  private async writeAcceptedInputIds(
+    sessionId: string,
+    inputIds: readonly string[],
+  ): Promise<void> {
+    const file = this.acceptedFile(sessionId);
+    const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+    const ledger: AcceptedInputLedger = {
+      schemaVersion: 1,
+      inputIds: [...inputIds],
+    };
+    if (this.options.writeAcceptedLedger) {
+      await this.options.writeAcceptedLedger(file, structuredClone(ledger));
+      return;
+    }
+    try {
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      await fs.writeFile(temporary, `${JSON.stringify(ledger, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await fs.rename(temporary, file);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+
+  private async recordAcceptedInput(
+    state: PersistedPlannerState,
+    inputId: string,
+  ): Promise<void> {
+    const sessionId = state.metadata.identity.sessionId;
+    const accepted = await this.acceptedInputIds(sessionId);
+    if (accepted === null) {
+      throw new Error("planner input acceptance ledger unavailable");
+    }
+    // IDs whose queue entries were already durably removed are stale cleanup
+    // residue and can be compacted. The active FIFO is bounded by the request
+    // body limit, and only its IDs are retained here (never input content).
+    const queuedIds = new Set(state.inputs.map((input) => input.id));
+    const retained = [...accepted].filter((id) => queuedIds.has(id));
+    if (!retained.includes(inputId)) retained.push(inputId);
+    await this.writeAcceptedInputIds(sessionId, retained);
+  }
+
+  private async reconcileAcceptedInputs(
+    state: PersistedPlannerState,
+  ): Promise<PersistedPlannerState> {
+    const sessionId = state.metadata.identity.sessionId;
+    const accepted = await this.acceptedInputIds(sessionId);
+    if (accepted === null || accepted.size === 0) return state;
+    const remaining = state.inputs.filter((input) => !accepted.has(input.id));
+    if (remaining.length === state.inputs.length) return state;
+    const reconciled: PersistedPlannerState = {
+      ...structuredClone(state),
+      inputs: remaining,
+      dispatchingInputId:
+        state.dispatchingInputId && accepted.has(state.dispatchingInputId)
+          ? null
+          : state.dispatchingInputId,
+      metadata: {
+        ...structuredClone(state.metadata),
+        queuedInputIds: remaining.map((input) => input.id),
+      },
+    };
+    await this.persist(sessionId, reconciled);
+    // The queue commit is now authoritative. Ledger cleanup is best effort:
+    // stale accepted IDs are harmless and are compacted on the next accept.
+    await this.writeAcceptedInputIds(
+      sessionId,
+      [...accepted].filter((id) => remaining.some((input) => input.id === id)),
+    ).catch(() => {});
+    return reconciled;
+  }
+
+  private async resolveUncertainDispatch(
+    state: PersistedPlannerState,
+  ): Promise<PersistedPlannerState> {
+    const inputId = state.dispatchingInputId;
+    if (inputId === null || state.inputs[0]?.id !== inputId) return state;
+    const remaining = state.inputs.slice(1);
+    const resolved: PersistedPlannerState = {
+      ...structuredClone(state),
+      inputs: remaining,
+      dispatchingInputId: null,
+      metadata: {
+        ...structuredClone(state.metadata),
+        queuedInputIds: remaining.map((input) => input.id),
+      },
+    };
+    await this.persist(state.metadata.identity.sessionId, resolved);
+    this.emit({
+      name: "planner_session.input_delivery_uncertain",
+      projectId: state.metadata.identity.projectId,
+      sessionId: state.metadata.identity.sessionId,
+      inputId,
+      errorCode: "delivery_uncertain",
+      queueDepth: remaining.length,
+    });
+    // There was no readable acceptance proof for this ID. Any stale ledger is
+    // cleanup residue or was quarantined; reset it after the queue resolution.
+    await this.writeAcceptedInputIds(
+      state.metadata.identity.sessionId,
+      [],
+    ).catch(() => {});
+    return resolved;
+  }
+
   private clearTimer(sessionId: string, key?: string): void {
     const timer = this.timers.get(sessionId);
     if (!timer || (key !== undefined && timer.key !== key)) return;
@@ -322,6 +528,23 @@ export class PlannerGreetingCoordinator {
     }, this.deliveryTimeoutMs);
     handle.unref?.();
     this.timers.set(sessionId, { key, handle });
+  }
+
+  private dropAttemptCorrelation(sessionId: string, attemptId: string): void {
+    const expected = this.expected.get(sessionId);
+    if (expected) {
+      const retained = expected.filter(
+        (entry) => !(entry.kind === "greeting" && entry.id === attemptId),
+      );
+      if (retained.length > 0) this.expected.set(sessionId, retained);
+      else this.expected.delete(sessionId);
+    }
+    const observed = this.observedAttempts.get(sessionId);
+    if (observed) {
+      const retained = observed.filter((id) => id !== attemptId);
+      if (retained.length > 0) this.observedAttempts.set(sessionId, retained);
+      else this.observedAttempts.delete(sessionId);
+    }
   }
 
   private async persist(
@@ -544,6 +767,7 @@ export class PlannerGreetingCoordinator {
     const sessionId = state.metadata.identity.sessionId;
     const attemptId = greeting.status === "generating" ? greeting.attemptId : undefined;
     this.clearTimer(sessionId, expectedKey);
+    if (attemptId) this.dropAttemptCorrelation(sessionId, attemptId);
     if (state.inputs.length > 0) {
       state.metadata.greeting = { status: "skipped", reason: "user-proceeded" };
       await this.persist(sessionId, state);
@@ -627,11 +851,45 @@ export class PlannerGreetingCoordinator {
     });
   }
 
-  private async drain(state: PersistedPlannerState): Promise<void> {
+  private async drain(initialState: PersistedPlannerState): Promise<void> {
+    let state: PersistedPlannerState;
+    try {
+      // An accepted-input ledger is the commit/ack boundary. If the prior
+      // process reached the PTY but failed to rewrite the FIFO, finish that
+      // dequeue without submitting the prompt again.
+      state = await this.reconcileAcceptedInputs(initialState);
+    } catch {
+      return;
+    }
     while (state.inputs.length > 0) {
       const input = state.inputs[0]!;
       const session = this.options.sessionManager.get(input.sessionId);
       if (!session?.ready || session.status !== "running") return;
+
+      // A durable intent without a durable acceptance acknowledgement is
+      // irreducibly ambiguous across a crash. Never guess by replaying it: a
+      // later accepted ledger can complete the dequeue, while automatic replay
+      // could duplicate a user message already written to the PTY.
+      if (state.dispatchingInputId !== null) {
+        try {
+          state = await this.resolveUncertainDispatch(state);
+        } catch {
+          return;
+        }
+        continue;
+      }
+
+      const prepared: PersistedPlannerState = {
+        ...structuredClone(state),
+        dispatchingInputId: input.id,
+      };
+      try {
+        await this.persist(input.sessionId, prepared);
+      } catch {
+        // No external side effect occurred before the intent commit.
+        return;
+      }
+      state = prepared;
       let accepted = false;
       try {
         accepted = await this.options.sessionManager.submitInput(
@@ -640,16 +898,52 @@ export class PlannerGreetingCoordinator {
           true,
         );
       } catch {
+        const rollback: PersistedPlannerState = {
+          ...structuredClone(state),
+          dispatchingInputId: null,
+        };
+        await this.persist(input.sessionId, rollback).catch(() => {});
         return;
       }
-      if (!accepted) return;
-      // Register local correlation only after acceptance, then durably dequeue.
+      if (!accepted) {
+        const rollback: PersistedPlannerState = {
+          ...structuredClone(state),
+          dispatchingInputId: null,
+        };
+        await this.persist(input.sessionId, rollback).catch(() => {});
+        return;
+      }
+      // Register local correlation only after acceptance. The accepted ledger
+      // then commits the external side effect before the FIFO is rewritten.
       const queue = this.expected.get(input.sessionId) ?? [];
       queue.push({ kind: "user", id: input.id, text: input.text });
       this.expected.set(input.sessionId, queue);
-      state.inputs.shift();
-      state.metadata.queuedInputIds.shift();
-      await this.persist(input.sessionId, state);
+      try {
+        await this.recordAcceptedInput(state, input.id);
+      } catch {
+        // The durable intent remains unresolved and will not be replayed after
+        // restart. True PTY exactly-once is impossible without this ack.
+        return;
+      }
+
+      const committed: PersistedPlannerState = {
+        ...structuredClone(state),
+        inputs: state.inputs.slice(1),
+        dispatchingInputId: null,
+        metadata: {
+          ...structuredClone(state.metadata),
+          queuedInputIds: state.metadata.queuedInputIds.slice(1),
+        },
+      };
+      try {
+        await this.persist(input.sessionId, committed);
+      } catch {
+        // The accepted ledger is durable. A restart will finish this exact
+        // dequeue without submitting the input twice.
+        return;
+      }
+      state = committed;
+      await this.writeAcceptedInputIds(input.sessionId, []).catch(() => {});
     }
   }
 
@@ -689,18 +983,18 @@ export class PlannerGreetingCoordinator {
 
   async onEventPersisted(event: AnalyticsEvent): Promise<void> {
     if (event.type !== "turn.completed") return;
-    const observed = this.observedAttempts.get(event.harnessSessionId);
-    const attemptId = observed?.shift();
-    if (!attemptId) return;
     await this.serialize(event.harnessSessionId, async () => {
       const session = this.options.sessionManager.get(event.harnessSessionId);
       if (!session?.planning) return;
       const state = await this.load(session);
-      if (
-        state.metadata.greeting.status !== "generating" ||
-        state.metadata.greeting.attemptId !== attemptId
-      ) {
-        return;
+      if (state.metadata.greeting.status !== "generating") return;
+      const attemptId = state.metadata.greeting.attemptId;
+      const observed = this.observedAttempts.get(event.harnessSessionId);
+      const observedIndex = observed?.indexOf(attemptId) ?? -1;
+      if (!observed || observedIndex < 0) return;
+      observed.splice(observedIndex, 1);
+      if (observed.length === 0) {
+        this.observedAttempts.delete(event.harnessSessionId);
       }
       const text = event.payload.assistantText;
       if (typeof text !== "string" || text.trim() === "") {

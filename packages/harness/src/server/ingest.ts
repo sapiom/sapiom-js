@@ -35,7 +35,11 @@ export interface IngestDeps {
   /** Look up session context for a harnessSessionId. Undefined = unknown session, drop. */
   resolveSession: (harnessSessionId: string) => IngestSessionContext | undefined;
   /** Called once a session.start event reveals the agent's own session id. */
-  onAgentSessionResolved: (harnessSessionId: string, agentSessionId: string) => void;
+  /** False rejects a SessionStart whose vendor identity conflicts with its pin. */
+  onAgentSessionResolved: (
+    harnessSessionId: string,
+    agentSessionId: string,
+  ) => boolean;
   /**
    * Called once a SessionStart(-equivalent) event is actually processed for
    * a session — the signal that its TUI is genuinely interactive, not just
@@ -145,7 +149,19 @@ export async function processIngest(
   }
 
   if (hookEvent === "SessionStart") {
-    if (finalEvent.agentSessionId) deps.onAgentSessionResolved(harnessSessionId, finalEvent.agentSessionId);
+    if (
+      finalEvent.agentSessionId &&
+      !deps.onAgentSessionResolved(
+        harnessSessionId,
+        finalEvent.agentSessionId,
+      )
+    ) {
+      // The bearer capability authenticates the harness session, not an
+      // arbitrary vendor resume pointer inside its payload. Ignore the entire
+      // conflicting start event: it cannot mark the session ready or enter
+      // local/remote event history under the pinned identity.
+      return;
+    }
     deps.onSessionReady?.(harnessSessionId);
   }
 

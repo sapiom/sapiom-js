@@ -243,6 +243,181 @@ describe("PlannerGreetingCoordinator", () => {
     expect(submitted.at(-1)).toBe("continue from durable input");
   });
 
+  it("uses its accepted ledger to finish a failed dequeue after restart without duplicate or loss", async () => {
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    let failAcceptedDequeue = true;
+    const first = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+      writeState: async (file, value) => {
+        const state = value as {
+          dispatchingInputId: string | null;
+          inputs: unknown[];
+        };
+        if (
+          failAcceptedDequeue &&
+          submitted.length === 1 &&
+          state.dispatchingInputId === null &&
+          state.inputs.length === 0
+        ) {
+          failAcceptedDequeue = false;
+          throw new Error("injected queue cleanup failure");
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+      },
+    });
+    await first.register(session, { emptyProject: true, mode: "created" });
+
+    await expect(
+      first.enqueue(session.id, "deliver exactly once"),
+    ).resolves.toBeDefined();
+    expect(submitted).toEqual(["deliver exactly once"]);
+    const durableBeforeRestart = JSON.parse(
+      await fs.readFile(
+        path.join(root, session.id, "input-queue.json"),
+        "utf8",
+      ),
+    ) as { dispatchingInputId: string | null; inputs: Array<{ id: string }> };
+    expect(durableBeforeRestart.dispatchingInputId).toBe(
+      durableBeforeRestart.inputs[0]!.id,
+    );
+    const acceptedBeforeRestart = JSON.parse(
+      await fs.readFile(
+        path.join(root, session.id, "accepted-inputs.json"),
+        "utf8",
+      ),
+    ) as { inputIds: string[] };
+    expect(acceptedBeforeRestart.inputIds).toEqual([
+      durableBeforeRestart.inputs[0]!.id,
+    ]);
+
+    const restarted = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await restarted.register(session, { emptyProject: true, mode: "boot" });
+
+    expect(submitted).toEqual(["deliver exactly once"]);
+    expect(session.planning?.queuedInputIds).toEqual([]);
+    const durableAfterRestart = JSON.parse(
+      await fs.readFile(
+        path.join(root, session.id, "input-queue.json"),
+        "utf8",
+      ),
+    ) as { dispatchingInputId: string | null; inputs: unknown[] };
+    expect(durableAfterRestart).toMatchObject({
+      dispatchingInputId: null,
+      inputs: [],
+    });
+  });
+
+  it("resolves an orphaned dispatch as uncertain and lets the later FIFO continue", async () => {
+    session.ready = false;
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    let firstSubmitAttempted = false;
+    let failRollback = true;
+    manager.submitInput = async (_id: string, text: string) => {
+      if (!firstSubmitAttempted) {
+        firstSubmitAttempted = true;
+        throw new Error("process ended before PTY acceptance was knowable");
+      }
+      submitted.push(text);
+      return true;
+    };
+    const first = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      writeState: async (file, value) => {
+        const state = value as {
+          dispatchingInputId: string | null;
+          inputs: unknown[];
+        };
+        if (
+          failRollback &&
+          firstSubmitAttempted &&
+          state.dispatchingInputId === null &&
+          state.inputs.length === 2
+        ) {
+          failRollback = false;
+          throw new Error("simulated crash before intent rollback");
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+      },
+    });
+    await first.register(session, { emptyProject: true, mode: "created" });
+    await first.enqueue(session.id, "delivery became uncertain");
+    await first.enqueue(session.id, "must still make progress");
+    session.ready = true;
+    await first.onSessionStatus(session);
+
+    const lifecycle: unknown[] = [];
+    const restarted = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      onEvent: (value) => {
+        lifecycle.push(value);
+      },
+    });
+    await restarted.register(session, { emptyProject: true, mode: "boot" });
+
+    expect(submitted).toEqual(["must still make progress"]);
+    expect(session.planning?.queuedInputIds).toEqual([]);
+    expect(lifecycle).toContainEqual(
+      expect.objectContaining({
+        name: "planner_session.input_delivery_uncertain",
+        errorCode: "delivery_uncertain",
+        queueDepth: 1,
+      }),
+    );
+    expect(JSON.stringify(lifecycle)).not.toContain("delivery became uncertain");
+  });
+
+  it("compacts a stale accepted-ledger entry before acknowledging later input", async () => {
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    let failFirstCleanup = true;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      writeAcceptedLedger: async (file, value) => {
+        const ledger = value as { inputIds: string[] };
+        if (failFirstCleanup && ledger.inputIds.length === 0) {
+          failFirstCleanup = false;
+          throw new Error("injected accepted-ledger cleanup failure");
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+      },
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+
+    await coordinator.enqueue(session.id, "first accepted input");
+    await coordinator.enqueue(session.id, "second accepted input");
+
+    expect(submitted).toEqual(["first accepted input", "second accepted input"]);
+    expect(session.planning?.queuedInputIds).toEqual([]);
+    expect(
+      JSON.parse(
+        await fs.readFile(
+          path.join(root, session.id, "accepted-inputs.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ schemaVersion: 1, inputIds: [] });
+  });
+
   it("bounds pending readiness, then drains its durable FIFO when readiness arrives", async () => {
     vi.useFakeTimers();
     session.ready = false;
@@ -314,7 +489,7 @@ describe("PlannerGreetingCoordinator", () => {
     expect(decorated.payload).not.toHaveProperty("plannerOrigin");
   });
 
-  it("does not let an old attempt timeout fail a retry", async () => {
+  it("removes timed-out correlation so one retry completion delivers the greeting", async () => {
     vi.useFakeTimers();
     const ids = ["attempt-1", "attempt-2"];
     const coordinator = new PlannerGreetingCoordinator({
@@ -329,16 +504,30 @@ describe("PlannerGreetingCoordinator", () => {
     coordinator.decorateLocalEvent(
       event(session.id, "prompt.submitted", { prompt }),
     );
-    await vi.advanceTimersByTimeAsync(50);
-    await coordinator.onEventPersisted(
-      event(session.id, "turn.completed", { assistantText: null }),
-    );
-    await coordinator.retry(session.id);
-
-    await vi.advanceTimersByTimeAsync(51);
+    await vi.advanceTimersByTimeAsync(101);
+    await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
+      .writes.get(session.id);
     expect(session.planning?.greeting).toEqual({
-      status: "generating",
-      attemptId: "attempt-2",
+      status: "failed",
+      retryable: true,
+      errorCode: "delivery_timeout",
+    });
+
+    await coordinator.retry(session.id);
+    const retryPrompt = submitted[1]!;
+    const retryEvent = coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: retryPrompt }),
+    );
+    expect(retryEvent.payload.plannerAttemptId).toBe("attempt-2");
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", {
+        assistantText: "What kind of agent architecture should we build?",
+      }),
+    );
+
+    expect(session.planning?.greeting).toEqual({
+      status: "delivered",
+      messageId: "event-turn.completed",
     });
   });
 
@@ -369,6 +558,7 @@ describe("PlannerGreetingCoordinator", () => {
     const dir = path.join(root, session.id);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "input-queue.json"), "{secret-corrupt");
+    session.planning!.queuedInputIds = ["stale-registry-input"];
     const coordinator = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
@@ -381,6 +571,7 @@ describe("PlannerGreetingCoordinator", () => {
     const names = await fs.readdir(dir);
     expect(names).toContain("input-queue.json");
     expect(names.some((name) => name.startsWith("input-queue.corrupt-"))).toBe(true);
+    expect(session.planning?.queuedInputIds).toEqual([]);
   });
 
   it("durably classifies queue persistence failure without raw error content", async () => {

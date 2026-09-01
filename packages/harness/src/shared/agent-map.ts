@@ -168,4 +168,12 @@ export type PlannerLifecycleEvent =
       attemptId?: string;
       reason: "user-proceeded";
       queueDepth: number;
+    }
+  | {
+      name: "planner_session.input_delivery_uncertain";
+      projectId: StudioProjectId;
+      sessionId: string;
+      inputId: string;
+      errorCode: "delivery_uncertain";
+      queueDepth: number;
     };

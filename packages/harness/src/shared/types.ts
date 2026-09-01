@@ -796,6 +796,7 @@ export type AnalyticsEventType =
   | "agent_map.workspace_read_failed"
   | "planner_session.created"
   | "planner_session.resumed"
+  | "planner_session.input_delivery_uncertain"
   | "planner_greeting.attempted"
   | "planner_greeting.delivered"
   | "planner_greeting.failed"
