@@ -69,8 +69,12 @@ interface FlowValue {
   sources: SourceMap;
   properties: Map<string, FlowValue>;
   elements: Map<string, FlowValue>;
+  propertyHazards: Set<string>;
+  elementHazards: Set<string>;
   unknown: FlowValue | null;
   parameters: readonly ParameterReference[];
+  references: readonly string[];
+  opaque: boolean;
 }
 
 type Environment = Map<string, FlowValue>;
@@ -95,6 +99,7 @@ interface AnalysisContext {
   cycleStack: Set<string>;
   diagnostics: PackageGraphEvidenceDiagnostic[];
   coverageGaps: PackageGraphEvidenceCoverageGap[];
+  nextReferenceId: number;
   complete: boolean;
 }
 
@@ -376,8 +381,12 @@ function emptyValue(): FlowValue {
     sources: new Map(),
     properties: new Map(),
     elements: new Map(),
+    propertyHazards: new Set(),
+    elementHazards: new Set(),
     unknown: null,
     parameters: [],
+    references: [],
+    opaque: false,
   };
 }
 
@@ -412,11 +421,15 @@ function cloneValue(value: FlowValue): FlowValue {
         cloneValue(child),
       ]),
     ),
+    propertyHazards: new Set(value.propertyHazards),
+    elementHazards: new Set(value.elementHazards),
     unknown: value.unknown ? cloneValue(value.unknown) : null,
     parameters: value.parameters.map((param) => ({
       index: param.index,
       path: [...param.path],
     })),
+    references: [...value.references],
+    opaque: value.opaque,
   };
 }
 
@@ -460,6 +473,10 @@ function mergeValues(...values: readonly FlowValue[]): FlowValue {
       result.unknown = mergeValues(result.unknown ?? emptyValue(), value.unknown);
     }
     result.parameters = [...result.parameters, ...value.parameters];
+    result.references = [...result.references, ...value.references];
+    for (const key of value.propertyHazards) result.propertyHazards.add(key);
+    for (const key of value.elementHazards) result.elementHazards.add(key);
+    result.opaque ||= value.opaque;
   }
   const seen = new Set<string>();
   result.parameters = result.parameters.filter((param) => {
@@ -468,11 +485,13 @@ function mergeValues(...values: readonly FlowValue[]): FlowValue {
     seen.add(key);
     return true;
   });
+  result.references = [...new Set(result.references)].sort(compareText);
   return result;
 }
 
 function hasProvenance(value: FlowValue): boolean {
   return (
+    value.opaque ||
     value.sources.size > 0 ||
     value.parameters.length > 0 ||
     [...value.properties.values()].some(hasProvenance) ||
@@ -490,6 +509,16 @@ function hasParameterReferences(value: FlowValue): boolean {
   );
 }
 
+function hasConcreteProvenance(value: FlowValue): boolean {
+  return (
+    value.opaque ||
+    value.sources.size > 0 ||
+    [...value.properties.values()].some(hasConcreteProvenance) ||
+    [...value.elements.values()].some(hasConcreteProvenance) ||
+    (value.unknown ? hasConcreteProvenance(value.unknown) : false)
+  );
+}
+
 function allSources(value: FlowValue): SourceMap {
   return mergeSourceMaps(
     value.sources,
@@ -497,6 +526,10 @@ function allSources(value: FlowValue): SourceMap {
     ...[...value.elements.values()].map(allSources),
     ...(value.unknown ? [allSources(value.unknown)] : []),
   );
+}
+
+function hasOwnSources(value: FlowValue): boolean {
+  return value.sources.size > 0 || value.parameters.length > 0;
 }
 
 function selectPath(value: FlowValue, path: readonly string[]): FlowValue {
@@ -510,6 +543,9 @@ function selectPath(value: FlowValue, path: readonly string[]): FlowValue {
 }
 
 function selectProperty(value: FlowValue, key: string): FlowValue {
+  if (value.propertyHazards.has(key)) {
+    return { ...emptyValue(), opaque: true };
+  }
   const explicit = value.properties.get(key);
   return mergeValues(
     { ...emptyValue(), sources: new Map(value.sources) },
@@ -525,6 +561,9 @@ function selectProperty(value: FlowValue, key: string): FlowValue {
 }
 
 function selectElement(value: FlowValue, key: string): FlowValue {
+  if (value.elementHazards.has(key)) {
+    return { ...emptyValue(), opaque: true };
+  }
   const explicit = value.elements.get(key);
   return mergeValues(
     { ...emptyValue(), sources: new Map(value.sources) },
@@ -547,6 +586,9 @@ function objectRestWithout(value: FlowValue, keys: ReadonlySet<string>): FlowVal
         .filter(([key]) => !keys.has(key))
         .map(([key, child]) => [key, cloneValue(child)]),
     ),
+    propertyHazards: new Set(
+      [...value.propertyHazards].filter((key) => !keys.has(key)),
+    ),
   };
   return rest;
 }
@@ -555,13 +597,68 @@ function arrayRestFrom(value: FlowValue, start: number): FlowValue {
   const rest = {
     ...cloneValue(value),
     elements: new Map<string, FlowValue>(),
+    elementHazards: new Set<string>(),
   };
   for (const [key, child] of value.elements) {
     const index = Number(key);
     if (!Number.isInteger(index) || index < start) continue;
     rest.elements.set((index - start).toString(), cloneValue(child));
   }
+  for (const key of value.elementHazards) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < start) continue;
+    rest.elementHazards.add((index - start).toString());
+  }
   return rest;
+}
+
+function withReference(value: FlowValue, context: AnalysisContext): FlowValue {
+  return {
+    ...value,
+    references: [`ref:${context.nextReferenceId++}`],
+  };
+}
+
+function referencesOverlap(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length === 0 || right.length === 0) return false;
+  const rightSet = new Set(right);
+  return left.some((reference) => rightSet.has(reference));
+}
+
+function updateReferencedPath(
+  value: FlowValue,
+  references: readonly string[],
+  pathSegments: readonly AssignmentPathSegment[],
+  assigned: FlowValue,
+): FlowValue {
+  if (referencesOverlap(value.references, references)) {
+    return assignPath(value, pathSegments, assigned);
+  }
+  const next = cloneValue(value);
+  for (const [key, child] of value.properties) {
+    next.properties.set(
+      key,
+      updateReferencedPath(child, references, pathSegments, assigned),
+    );
+  }
+  for (const [key, child] of value.elements) {
+    next.elements.set(
+      key,
+      updateReferencedPath(child, references, pathSegments, assigned),
+    );
+  }
+  if (value.unknown) {
+    next.unknown = updateReferencedPath(
+      value.unknown,
+      references,
+      pathSegments,
+      assigned,
+    );
+  }
+  return next;
 }
 
 function symbolIdentity(
@@ -714,10 +811,22 @@ function assignExpression(
     return environment;
   }
   const next = new Map(environment);
-  next.set(
-    target.root,
-    assignPath(next.get(target.root) ?? emptyValue(), target.path, right),
-  );
+  const rootValue = next.get(target.root) ?? emptyValue();
+  if (target.path.length > 0 && rootValue.references.length > 0) {
+    for (const [key, value] of next) {
+      next.set(
+        key,
+        updateReferencedPath(
+          value,
+          rootValue.references,
+          target.path,
+          right,
+        ),
+      );
+    }
+  } else {
+    next.set(target.root, assignPath(rootValue, target.path, right));
+  }
   return next;
 }
 
@@ -774,6 +883,7 @@ function invocationInput(
   if (!options || seen.has(options)) return emptyValue();
   seen.add(options);
   let input = emptyValue();
+  let inputHazard: SourceEvidence | null = null;
   for (const property of options.properties) {
     if (ts.isSpreadAssignment(property)) {
       const object = resolvedObjectLiteral(
@@ -781,7 +891,7 @@ function invocationInput(
         property.expression,
       );
       if (object) {
-        input = invocationInput(
+        const spreadInput = invocationInput(
           {
             ...call,
             arguments: ts.factory.createNodeArray([object]),
@@ -791,6 +901,10 @@ function invocationInput(
           file,
           seen,
         );
+        if (hasProvenance(spreadInput)) {
+          input = spreadInput;
+          inputHazard = null;
+        }
         continue;
       }
       const spread = evaluateExpression(
@@ -800,10 +914,7 @@ function invocationInput(
         file,
       );
       if (hasProvenance(spread)) {
-        addPartialDiagnostic(context, "opaque-boundary", {
-          reason: "spread-options",
-          callsite: callsite(file, property),
-        });
+        inputHazard = callsite(file, property);
         input = emptyValue();
       }
       continue;
@@ -814,13 +925,22 @@ function invocationInput(
       objectPropertyName(property.name) === "input"
     ) {
       input = evaluateExpression(property.initializer, environment, context, file);
+      inputHazard = null;
     }
     if (
       ts.isShorthandPropertyAssignment(property) &&
       property.name.text === "input"
     ) {
       input = shorthandValue(context.compiler.checker, property, environment);
+      inputHazard = null;
     }
+  }
+  if (inputHazard) {
+    addPartialDiagnostic(context, "opaque-boundary", {
+      reason: "spread-options",
+      callsite: inputHazard,
+    });
+    return emptyValue();
   }
   return input;
 }
@@ -831,6 +951,13 @@ function emitSinkCandidates(
   input: FlowValue,
   destination: SourceEvidence,
 ): void {
+  if (input.opaque) {
+    addPartialDiagnostic(context, "opaque-boundary", {
+      reason: "opaque-selection",
+      destination,
+    });
+    return;
+  }
   if (hasParameterReferences(input)) {
     context.markerSinks.push({ targetAgentKey, destination, input });
   }
@@ -967,7 +1094,7 @@ function evaluateExpression(
       : selectProperty(owner, key);
   }
   if (ts.isObjectLiteralExpression(current)) {
-    const value = emptyValue();
+    const value = withReference(emptyValue(), context);
     for (const property of current.properties) {
       if (ts.isSpreadAssignment(property)) {
         const spread = evaluateExpression(
@@ -976,8 +1103,19 @@ function evaluateExpression(
           context,
           file,
         );
+        if (
+          value.properties.size > 0 &&
+          (hasOwnSources(spread) || spread.unknown || spread.opaque)
+        ) {
+          for (const key of value.properties.keys()) {
+            value.propertyHazards.add(key);
+          }
+        }
         for (const [key, child] of spread.properties) {
           value.properties.set(key, cloneValue(child));
+          if (!spread.unknown && !hasOwnSources(spread) && !spread.opaque) {
+            value.propertyHazards.delete(key);
+          }
         }
         value.unknown = mergeValues(
           value.unknown ?? emptyValue(),
@@ -1000,31 +1138,62 @@ function evaluateExpression(
             key,
             evaluateExpression(property.initializer, environment, context, file),
           );
+          value.propertyHazards.delete(key);
         }
       } else if (ts.isShorthandPropertyAssignment(property)) {
         value.properties.set(
           property.name.text,
           shorthandValue(context.compiler.checker, property, environment),
         );
+        value.propertyHazards.delete(property.name.text);
       }
     }
     return value;
   }
   if (ts.isArrayLiteralExpression(current)) {
-    const value = emptyValue();
-    current.elements.forEach((element, index) => {
+    const value = withReference(emptyValue(), context);
+    let nextIndex = 0;
+    for (const element of current.elements) {
       if (ts.isSpreadElement(element)) {
-        value.unknown = mergeValues(
-          value.unknown ?? emptyValue(),
-          evaluateExpression(element.expression, environment, context, file),
+        const spread = evaluateExpression(
+          element.expression,
+          environment,
+          context,
+          file,
         );
+        if (
+          spread.sources.size > 0 ||
+          spread.parameters.length > 0 ||
+          spread.unknown ||
+          spread.opaque
+        ) {
+          if (hasProvenance(spread)) {
+            addPartialDiagnostic(context, "opaque-boundary", {
+              reason: "unknown-array-spread",
+              callsite: callsite(file, element),
+            });
+          }
+          continue;
+        }
+        const indexes = [...spread.elements.keys()]
+          .map(Number)
+          .filter(Number.isInteger)
+          .sort((left, right) => left - right);
+        for (const index of indexes) {
+          const child = spread.elements.get(index.toString());
+          if (!child) continue;
+          value.elements.set((nextIndex + index).toString(), cloneValue(child));
+        }
+        if (indexes.length > 0) nextIndex += Math.max(...indexes) + 1;
       } else {
         value.elements.set(
-          index.toString(),
+          nextIndex.toString(),
           evaluateExpression(element, environment, context, file),
         );
+        value.elementHazards.delete(nextIndex.toString());
+        nextIndex += 1;
       }
-    });
+    }
     return value;
   }
   if (ts.isTemplateExpression(current)) {
@@ -1207,11 +1376,12 @@ function analyzeSwitchStatement(
     file,
   );
   const selectedCase = literalString(context.compiler.checker, statement.expression);
-  if (selectedCase === null && hasProvenance(expressionFlow)) {
+  if (selectedCase === null && hasConcreteProvenance(expressionFlow)) {
     addPartialDiagnostic(context, "opaque-boundary", {
       reason: "dynamic-switch",
       callsite: callsite(file, statement.expression),
     });
+    return { returns: [], fallthrough: true, breaks: false, environment };
   }
 
   const clauses = statement.caseBlock.clauses;
@@ -1258,6 +1428,60 @@ function analyzeSwitchStatement(
   };
 }
 
+function nodeReferencesProvenance(
+  node: ts.Node,
+  environment: Environment,
+  context: AnalysisContext,
+): boolean {
+  let found = false;
+  const visit = (child: ts.Node): void => {
+    if (found) return;
+    if (child !== node && ts.isFunctionLike(child)) return;
+    if (ts.isIdentifier(child)) {
+      const key = symbolIdentity(context.compiler.checker, child);
+      if (key && hasConcreteProvenance(environment.get(key) ?? emptyValue())) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function loopTouchesProvenance(
+  statement:
+    | ts.WhileStatement
+    | ts.DoStatement
+    | ts.ForStatement
+    | ts.ForOfStatement
+    | ts.ForInStatement,
+  environment: Environment,
+  context: AnalysisContext,
+  file: StaticDataflowSourceFile,
+): boolean {
+  const expressions: ts.Expression[] = [];
+  if (ts.isWhileStatement(statement) || ts.isDoStatement(statement)) {
+    expressions.push(statement.expression);
+  } else if (ts.isForStatement(statement)) {
+    if (statement.initializer && ts.isExpression(statement.initializer)) {
+      expressions.push(statement.initializer);
+    }
+    if (statement.condition) expressions.push(statement.condition);
+    if (statement.incrementor) expressions.push(statement.incrementor);
+  } else {
+    expressions.push(statement.expression);
+  }
+  return (
+    expressions.some((expression) =>
+      hasConcreteProvenance(
+        evaluateExpression(expression, environment, context, file),
+      ),
+    ) || nodeReferencesProvenance(statement.statement, environment, context)
+  );
+}
+
 function analyzeStatement(
   statement: ts.Statement,
   environment: Environment,
@@ -1267,6 +1491,34 @@ function analyzeStatement(
   if (ts.isVariableStatement(statement)) {
     const next = new Map(environment);
     for (const declaration of statement.declarationList.declarations) {
+      const initializer = declaration.initializer
+        ? unwrapTsExpression(declaration.initializer)
+        : undefined;
+      if (
+        initializer &&
+        ts.isBinaryExpression(initializer) &&
+        initializer.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isExpression(initializer.left)
+      ) {
+        const right = evaluateExpression(
+          initializer.right,
+          next,
+          context,
+          file,
+        );
+        const afterAssignment = assignExpression(
+          next,
+          context.compiler.checker,
+          unwrapTsExpression(initializer.left),
+          right,
+          context,
+          file,
+        );
+        next.clear();
+        for (const [key, value] of afterAssignment) next.set(key, value);
+        bindPattern(next, context.compiler.checker, declaration.name, right);
+        continue;
+      }
       bindPattern(
         next,
         context.compiler.checker,
@@ -1317,7 +1569,18 @@ function analyzeStatement(
     };
   }
   if (ts.isIfStatement(statement)) {
-    evaluateExpression(statement.expression, environment, context, file);
+    const condition = evaluateExpression(
+      statement.expression,
+      environment,
+      context,
+      file,
+    );
+    if (hasConcreteProvenance(condition)) {
+      addPartialDiagnostic(context, "opaque-boundary", {
+        reason: "provenance-condition",
+        callsite: callsite(file, statement.expression),
+      });
+    }
     const thenResult = analyzeStatements(
       ts.isBlock(statement.thenStatement)
         ? statement.thenStatement.statements
@@ -1355,6 +1618,21 @@ function analyzeStatement(
   }
   if (ts.isSwitchStatement(statement)) {
     return analyzeSwitchStatement(statement, environment, context, file);
+  }
+  if (
+    ts.isWhileStatement(statement) ||
+    ts.isDoStatement(statement) ||
+    ts.isForStatement(statement) ||
+    ts.isForOfStatement(statement) ||
+    ts.isForInStatement(statement)
+  ) {
+    if (loopTouchesProvenance(statement, environment, context, file)) {
+      addPartialDiagnostic(context, "opaque-boundary", {
+        reason: "unsupported-loop",
+        callsite: callsite(file, statement),
+      });
+    }
+    return { returns: [], fallthrough: true, breaks: false, environment };
   }
   if (ts.isBreakStatement(statement)) {
     return { returns: [], fallthrough: false, breaks: true, environment };
@@ -1559,6 +1837,7 @@ export function analyzeStaticDataflow(
     cycleStack: new Set(),
     diagnostics: [],
     coverageGaps: [],
+    nextReferenceId: 1,
     complete: true,
   };
   if (!input.compiler.complete) {

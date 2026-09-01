@@ -409,6 +409,46 @@ export async function run() {
     ).toEqual([["sales", "growth"]]);
   });
 
+  it("does not guess complete evidence when a trailing unknown object spread may overwrite a key", async () => {
+    const unsafe = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const sales = await agents.run({ definition: "sales" });
+  const payload = { value: sales, ...research };
+  await agents.run({ definition: "growth", input: payload.value });
+}
+`,
+    });
+    expect(unsafe.result.complete).toBe(false);
+    expect(unsafe.result.cacheable).toBe(false);
+    expect(unsafe.result.result.evidence).toEqual([]);
+
+    const safe = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const sales = await agents.run({ definition: "sales" });
+  const payload = { ...research, value: sales };
+  await agents.run({ definition: "growth", input: payload.value });
+}
+`,
+    });
+    expect(safe.result.complete).toBe(true);
+    expect(
+      projectPackageGraphEvidence(safe.inventory, [
+        safe.result.result,
+      ]).connectors.map(({ fromAgentKey, toAgentKey }) => [
+        fromAgentKey,
+        toAgentKey,
+      ]),
+    ).toEqual([["sales", "growth"]]);
+  });
+
   it("marks provenance-bearing unresolved option spreads partial without guessing overwritten input", async () => {
     const analysis = await analyze({
       "agents/coordinator/index.ts": `
@@ -455,6 +495,43 @@ export async function run() {
 `,
       }),
     ).toEqual([["research", "growth"]]);
+  });
+
+  it("propagates property writes through aliases and nested assignment expressions", async () => {
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const holder = {};
+  const alias = holder;
+  alias.value = research;
+  await agents.run({ definition: "growth", input: holder.value });
+}
+`,
+      }),
+    ).toEqual([["research", "growth"]]);
+
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const holder = {};
+  const assigned = (holder.value = research);
+  await agents.run({ definition: "growth", input: holder.value });
+  await agents.run({ definition: "sales", input: assigned });
+}
+`,
+      }),
+    ).toEqual([
+      ["research", "growth"],
+      ["research", "sales"],
+    ]);
   });
 
   it("degrades unsupported provenance-bearing writes and destructuring assignment forms", async () => {
@@ -527,6 +604,87 @@ export async function run() {
     });
     expect(dynamicSwitch.result.complete).toBe(false);
     expect(dynamicSwitch.result.cacheable).toBe(false);
+  });
+
+  it("marks unsupported provenance-bearing loops partial without guessing loop body edges", async () => {
+    const whileLoop = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  while (output) {
+    await agents.run({ definition: "growth", input: output });
+  }
+}
+`,
+    });
+    expect(whileLoop.result.complete).toBe(false);
+    expect(whileLoop.result.cacheable).toBe(false);
+    expect(whileLoop.result.result.evidence).toEqual([]);
+
+    const forOf = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  for (const item of [output]) {
+    await agents.run({ definition: "growth", input: item });
+  }
+}
+`,
+    });
+    expect(forOf.result.complete).toBe(false);
+    expect(forOf.result.cacheable).toBe(false);
+    expect(forOf.result.result.evidence).toEqual([]);
+
+    const safe = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  for (const item of ["static"]) {
+    await agents.run({ definition: "growth", input: item });
+  }
+}
+`,
+    });
+    expect(safe.result.complete).toBe(true);
+    expect(safe.result.result.evidence).toEqual([]);
+  });
+
+  it("preserves positional identity through known array spreads and degrades unknown-length spreads", async () => {
+    expect(
+      await edgePairs({
+        "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const research = await agents.run({ definition: "research" });
+  const sales = await agents.run({ definition: "sales" });
+  const values = [research, sales];
+  const combined = [...values];
+  await agents.run({ definition: "growth", input: combined[1] });
+}
+`,
+      }),
+    ).toEqual([["sales", "growth"]]);
+
+    const unknown = await analyze({
+      "agents/coordinator/index.ts": `
+import { agents } from "@sapiom/tools";
+
+export async function run() {
+  const output = await agents.run({ definition: "research" });
+  const combined = [...output];
+  await agents.run({ definition: "growth", input: combined[0] });
+}
+`,
+    });
+    expect(unknown.result.complete).toBe(false);
+    expect(unknown.result.cacheable).toBe(false);
+    expect(unknown.result.result.evidence).toEqual([]);
   });
 
   it("models statically bounded switch branches with fallthrough environment merging", async () => {
