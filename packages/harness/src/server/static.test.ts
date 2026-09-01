@@ -16,21 +16,25 @@ import { createStaticRouter } from "./static.js";
 // than 404ing — so the launch-critical `build → serve → npx` path can't
 // silently regress.
 //
-// SAP-1898: the router also bakes `window.__HARNESS__ = { token }` into every
-// HTML response so the SPA can always read the boot token without depending on
-// the `?token=` query param (which is lost on navigation/reload).
+// The router bakes `window.__HARNESS__.token` only into a UI-authorized HTML
+// response. A session cookie preserves SAP-1898 reload/deep-route behavior.
 // ---------------------------------------------------------------------------
 
 const TEST_BOOT_TOKEN = "test-boot-token-abc123";
+const TEST_UI_TOKEN = "test-ui-token-def456";
 
 describe("createStaticRouter", () => {
   let server: ReturnType<express.Express["listen"]>;
   let baseUrl: string;
   const tmpDirs: string[] = [];
 
-  function start(webDir: string, bootToken = TEST_BOOT_TOKEN): void {
+  function start(
+    webDir: string,
+    bootToken = TEST_BOOT_TOKEN,
+    uiToken = TEST_UI_TOKEN,
+  ): void {
     const app = express();
-    app.use(createStaticRouter(webDir, bootToken));
+    app.use(createStaticRouter(webDir, { bootToken, uiToken }));
     server = app.listen(0);
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -91,18 +95,36 @@ describe("createStaticRouter", () => {
       expect(html).toContain("<title>Agent Studio</title>");
     });
 
-    // SAP-1898: boot-token injection
-    it("injects window.__HARNESS__ script with the boot token before </head>", async () => {
+    it("does not expose the boot token to an unauthenticated root request", async () => {
       start(makeBuiltWebDir(), TEST_BOOT_TOKEN);
 
       const res = await fetch(`${baseUrl}/`);
       expect(res.status).toBe(200);
       const html = await res.text();
+      expect(html).toContain("window.__HARNESS__");
+      expect(html).not.toContain(JSON.stringify(TEST_BOOT_TOKEN));
+      expect(html).not.toContain(TEST_UI_TOKEN);
+    });
 
-      // The script must be present and contain the token JSON-encoded.
+    it("injects the boot token before </head> for a UI-credentialed launch", async () => {
+      start(makeBuiltWebDir(), TEST_BOOT_TOKEN);
+
+      const launch = await fetch(
+        `${baseUrl}/?uiToken=${encodeURIComponent(TEST_UI_TOKEN)}&agent=42&frame=macos`,
+        { redirect: "manual" },
+      );
+      expect(launch.status).toBe(303);
+      expect(launch.headers.get("location")).toBe("/?agent=42&frame=macos");
+      expect(launch.headers.get("location")).not.toContain("uiToken");
+      const cookie = launch.headers.get("set-cookie")?.split(";", 1)[0];
+      const res = await fetch(`${baseUrl}${launch.headers.get("location")!}`, {
+        headers: { cookie: cookie! },
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+
       expect(html).toContain("window.__HARNESS__");
       expect(html).toContain(JSON.stringify(TEST_BOOT_TOKEN));
-      // The script must appear before </head> so it runs before SPA modules load.
       const scriptPos = html.indexOf("window.__HARNESS__");
       const headClosePos = html.indexOf("</head>");
       expect(scriptPos).toBeGreaterThan(-1);
@@ -110,10 +132,21 @@ describe("createStaticRouter", () => {
       expect(scriptPos).toBeLessThan(headClosePos);
     });
 
-    it("injects window.__HARNESS__ on deep SPA routes too (navigation/reload safety)", async () => {
+    it("uses the HttpOnly UI cookie on deep SPA routes and reloads", async () => {
       start(makeBuiltWebDir(), TEST_BOOT_TOKEN);
 
-      const res = await fetch(`${baseUrl}/some/client/route`);
+      const launch = await fetch(
+        `${baseUrl}/?uiToken=${encodeURIComponent(TEST_UI_TOKEN)}`,
+        { redirect: "manual" },
+      );
+      const cookie = launch.headers.get("set-cookie")?.split(";", 1)[0];
+      expect(cookie).toContain("sapiom_studio_ui=");
+      expect(launch.headers.get("set-cookie")).toContain("HttpOnly");
+      expect(launch.headers.get("set-cookie")).toContain("SameSite=Strict");
+
+      const res = await fetch(`${baseUrl}/some/client/route`, {
+        headers: { cookie: cookie! },
+      });
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(html).toContain("window.__HARNESS__");
@@ -125,7 +158,14 @@ describe("createStaticRouter", () => {
       const weirdToken = 'tok"en</script><script>evil';
       start(makeBuiltWebDir(), weirdToken);
 
-      const res = await fetch(`${baseUrl}/`);
+      const launch = await fetch(
+        `${baseUrl}/?uiToken=${encodeURIComponent(TEST_UI_TOKEN)}`,
+        { redirect: "manual" },
+      );
+      const cookie = launch.headers.get("set-cookie")?.split(";", 1)[0];
+      const res = await fetch(`${baseUrl}${launch.headers.get("location")!}`, {
+        headers: { cookie: cookie! },
+      });
       const html = await res.text();
       // The raw string must NOT appear verbatim — it must be JSON-escaped.
       expect(html).not.toContain(weirdToken);

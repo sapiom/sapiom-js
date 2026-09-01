@@ -55,7 +55,9 @@ import {
 export interface BootResult {
   server: HarnessServer;
   mainWindow: BrowserWindow;
-  /** The tokened local URL the main window loaded (useful for dev smoke tests). */
+  /** Trusted-main-process copy used only by packaged smoke checks. */
+  bootToken: string;
+  /** The UI-credentialed local URL the main window loaded. */
   url: string;
 }
 
@@ -551,14 +553,17 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   });
 
   // 9. Load the SPA in the main window; close setup once it renders.
-  const url = withDeepLinkParams(`http://127.0.0.1:${server.port}/?token=${bootToken}`, mode.deepLink);
+  const url = withDeepLinkParams(
+    `http://127.0.0.1:${server.port}/?uiToken=${server.uiToken}`,
+    mode.deepLink,
+  );
   const mainWindow = createMainWindow(url);
   mainWindow.webContents.once("did-finish-load", () => {
     if (!setupWin.isDestroyed()) setupWin.close();
   });
   progress(setupWin, { phase: "ready", message: "Ready.", status: "done" });
 
-  return { server, mainWindow, url };
+  return { server, mainWindow, bootToken, url };
 }
 
 /**

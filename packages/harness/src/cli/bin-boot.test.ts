@@ -75,7 +75,7 @@ describe("printBanner — 'Agent Studio' name", () => {
     printBanner({
       dir: "/some/dir",
       port: 4000,
-      bootToken: "tok",
+      uiToken: "tok",
       identity: null,
       telemetryOptIn: false,
       serverStarted: false,
@@ -91,7 +91,7 @@ describe("printBanner — 'Agent Studio' name", () => {
     printBanner({
       dir: "/some/dir",
       port: 4000,
-      bootToken: "tok",
+      uiToken: "tok",
       identity: null,
       telemetryOptIn: false,
       serverStarted: true,
@@ -105,7 +105,7 @@ describe("printBanner — 'Agent Studio' name", () => {
     printBanner({
       dir: "/some/dir",
       port: 4000,
-      bootToken: "tok",
+      uiToken: "tok",
       identity: { organizationName: "Acme", userId: "u-1", source: "cached" },
       telemetryOptIn: true,
       serverStarted: true,
@@ -117,25 +117,25 @@ describe("printBanner — 'Agent Studio' name", () => {
     );
   });
 
-  it("banner shows the tokened URL when server started", () => {
+  it("banner shows the UI-authorized launch URL when server started", () => {
     printBanner({
       dir: "/some/dir",
       port: 4000,
-      bootToken: "abc123",
+      uiToken: "abc123",
       identity: null,
       telemetryOptIn: false,
       serverStarted: true,
     });
 
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines.some((l) => l.includes("http://localhost:4000/?token=abc123"))).toBe(true);
+    expect(lines.some((l) => l.includes("http://localhost:4000/?uiToken=abc123"))).toBe(true);
   });
 
   it("banner shows '(server not started)' when server failed to start", () => {
     printBanner({
       dir: "/some/dir",
       port: 4000,
-      bootToken: "abc123",
+      uiToken: "abc123",
       identity: null,
       telemetryOptIn: false,
       serverStarted: false,

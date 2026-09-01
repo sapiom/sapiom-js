@@ -343,6 +343,8 @@ export interface HarnessServerOptions {
 export interface HarnessServer {
   close(): Promise<void>;
   port: number;
+  /** Host-only credential used to authorize the initial browser HTML bootstrap. */
+  uiToken: string;
   sessionManager: SessionManager;
 }
 
@@ -592,6 +594,9 @@ export const startServer = async (
   // The registry is distinct from the host/browser boot token, process-local,
   // rotated on resume, and revoked on exit.
   const ingestCredentials = new IngestCredentialRegistry();
+  // The browser launch capability is separate again: it authorizes delivery
+  // of the boot token in initial HTML, but cannot call /api by itself.
+  const uiToken = randomUUID();
   const identity = options.identity ?? null;
   // The single source of truth for the Sapiom API key (`sk_…`) that Studio
   // actions authenticate with — distinct from the per-boot boot token that only
@@ -3251,7 +3256,9 @@ export const startServer = async (
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
-  app.use(createStaticRouter(webDir, options.bootToken));
+  app.use(
+    createStaticRouter(webDir, { bootToken: options.bootToken, uiToken }),
+  );
 
   app.use(unhandledRequestErrorHandler);
 
@@ -3313,6 +3320,7 @@ export const startServer = async (
 
   return {
     port: actualPort,
+    uiToken,
     sessionManager,
     close: async () => {
       coordinatorActive = false;

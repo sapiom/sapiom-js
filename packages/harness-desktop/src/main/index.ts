@@ -179,8 +179,8 @@ if (lock.action === "fail") {
       const coldTarget = coldLink ? parseDeepLink(coldLink) : null;
       bootResult = await boot(setupWin, { devMode, smoke: smokeMode, deepLink: coldTarget ?? undefined });
       if (devMode || smokeMode) {
-        // Dev/smoke hook: print the tokened URL so a harness can verify the
-        // server booted without driving the GUI.
+        // Dev/smoke hook: print the UI-authorized launch URL so a harness can
+        // verify the server booted without driving the GUI.
         console.log(`[harness-desktop] ready: ${bootResult.url}`);
       }
       // BEFORE the smoke branch, deliberately. initUpdater gates itself on

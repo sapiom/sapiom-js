@@ -40,6 +40,7 @@ function makeServer(): {
   const closeCalls: number[] = [];
   const server: HarnessServer = {
     port: 9999,
+    uiToken: "ui-token",
     sessionManager: {} as HarnessServer["sessionManager"],
     close: vi.fn().mockImplementation(async () => {
       closeCalls.push(Date.now());

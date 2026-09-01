@@ -4,7 +4,7 @@ import { AGENT_STUDIO_PRODUCT_NAME } from "../shared/branding.js";
 export interface PrintBannerOptions {
   dir: string;
   port: number;
-  bootToken: string;
+  uiToken: string;
   identity: Pick<
     HarnessIdentity,
     "organizationName" | "userId" | "source"
@@ -27,13 +27,13 @@ export function printBanner(opts: PrintBannerOptions): void {
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);
   console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
-  // Always the full tokened URL — with --no-open (or a browser that failed
+  // Always the full UI-authorized URL — with --no-open (or a browser that failed
   // to launch) this is the only way to reach the app; a bare host:port
-  // 401s on every /api call and can't open the WS connections.
+  // cannot receive the privileged browser bootstrap.
   console.log(
     `  url         ${
       opts.serverStarted
-        ? `http://localhost:${opts.port}/?token=${opts.bootToken}`
+        ? `http://localhost:${opts.port}/?uiToken=${opts.uiToken}`
         : "(server not started)"
     }`,
   );
