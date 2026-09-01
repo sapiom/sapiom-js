@@ -1,5 +1,6 @@
 import type {
   AgentMapWorkspaceState,
+  PlannerLifecycleEvent,
   PlannerGreetingState,
   PlannerSessionRequest,
   PlannerSessionResponse,
@@ -17,6 +18,23 @@ import type {
   StudioProjectCatalog,
   StudioProjectIdentity,
 } from "./studio-project-catalog.js";
+import type { PlannerRegistrationMode } from "./planner-greeting.js";
+
+export interface PlannerFocusedContextDetails {
+  confirmedRevision?: {
+    digest?: string | null;
+    summaries?: readonly string[];
+  } | null;
+  activeProposal?: {
+    status?: string | null;
+    summary?: string | null;
+  } | null;
+  projectBuildPlan?: {
+    status?: string | null;
+    summary?: string | null;
+  } | null;
+  warnings?: readonly string[];
+}
 
 export interface PlanningSessionServiceOptions {
   catalog: StudioProjectCatalog;
@@ -26,10 +44,15 @@ export interface PlanningSessionServiceOptions {
   userId: string | null;
   machineId: string;
   defaultHarness: CreateSessionRequest["harness"];
+  readFocusedContext?: (
+    projectId: StudioProjectId,
+    workspace: AgentMapWorkspaceState,
+  ) => Promise<PlannerFocusedContextDetails>;
   onPlannerSession?: (
     session: HarnessSession,
-    context: { emptyProject: boolean },
+    context: { emptyProject: boolean; mode: PlannerRegistrationMode },
   ) => Promise<void> | void;
+  onEvent?: (event: PlannerLifecycleEvent) => Promise<void> | void;
 }
 
 export class PlanningSessionError extends Error {
@@ -80,9 +103,11 @@ export function buildFocusedPlannerContext(input: {
   workspace: AgentMapWorkspaceState;
   sessionId: string;
   userId: string;
+  details?: PlannerFocusedContextDetails;
 }): string {
   const { project, workspace } = input;
   const bounded = (value: string, max = 256): string => value.slice(0, max);
+  const details = input.details ?? {};
   const context = {
     identity: {
       projectId: project.projectId,
@@ -96,15 +121,47 @@ export function buildFocusedPlannerContext(input: {
         workspace.confirmedRevisionId === null &&
         workspace.activeProposalId === null &&
         workspace.projectBuildPlanId === null,
-      confirmedRevisionId: workspace.confirmedRevisionId,
-      activeProposalId: workspace.activeProposalId,
-      projectBuildPlanId: workspace.projectBuildPlanId,
+      confirmedRevision: workspace.confirmedRevisionId
+        ? {
+            id: workspace.confirmedRevisionId,
+            digest: details.confirmedRevision?.digest
+              ? bounded(details.confirmedRevision.digest, 512)
+              : null,
+            summaries: (details.confirmedRevision?.summaries ?? [])
+              .slice(0, 32)
+              .map((summary) => bounded(summary)),
+          }
+        : null,
+      activeProposal: workspace.activeProposalId
+        ? {
+            id: workspace.activeProposalId,
+            status: details.activeProposal?.status
+              ? bounded(details.activeProposal.status, 64)
+              : null,
+            summary: details.activeProposal?.summary
+              ? bounded(details.activeProposal.summary)
+              : null,
+          }
+        : null,
+      projectBuildPlan: workspace.projectBuildPlanId
+        ? {
+            id: workspace.projectBuildPlanId,
+            status: details.projectBuildPlan?.status
+              ? bounded(details.projectBuildPlan.status, 64)
+              : null,
+            summary: details.projectBuildPlan?.summary
+              ? bounded(details.projectBuildPlan.summary)
+              : null,
+          }
+        : null,
       bindingRefs: project.rootBindings.slice(0, 64).map(({ id, repositoryId, status }) => ({
         id: bounded(id),
         repositoryId: repositoryId ? bounded(repositoryId) : null,
         status,
       })),
-      warnings: [] as string[],
+      warnings: (details.warnings ?? [])
+        .slice(0, 16)
+        .map((warning) => bounded(warning)),
     },
   };
   return [
@@ -132,6 +189,28 @@ export class PlanningSessionService {
     this.principal = localPlanningPrincipal(options.userId, options.machineId);
   }
 
+  private emit(event: PlannerLifecycleEvent): void {
+    try {
+      void Promise.resolve(this.options.onEvent?.(event)).catch(() => {});
+    } catch {
+      // Lifecycle telemetry is best effort and content-free.
+    }
+  }
+
+  private async focusedDetails(
+    project: StudioProjectIdentity,
+    workspace: AgentMapWorkspaceState,
+  ): Promise<PlannerFocusedContextDetails | undefined> {
+    try {
+      return await this.options.readFocusedContext?.(
+        project.projectId,
+        workspace,
+      );
+    } catch {
+      return { warnings: ["focused_context_unavailable"] };
+    }
+  }
+
   owns(session: HarnessSession, projectId: StudioProjectId): boolean {
     const identity = session.planning?.identity;
     return Boolean(
@@ -154,11 +233,13 @@ export class PlanningSessionService {
     request: PlannerSessionRequest,
     greeting: PlannerGreetingState,
     rehydrateFrom?: string,
+    mode: "created" | "rehydrated" = "created",
   ): Promise<HarnessSession> {
     const workspace = await this.options.workspaceStore.readOrCreate(
       project.projectId,
     );
     const cwd = launchRoot(project);
+    const details = await this.focusedDetails(project, workspace);
     const session = await this.options.sessionManager.create(
       {
         cwd,
@@ -175,6 +256,7 @@ export class PlanningSessionService {
             workspace,
             sessionId,
             userId: this.principal,
+            ...(details ? { details } : {}),
           }),
       },
     );
@@ -183,6 +265,13 @@ export class PlanningSessionService {
         workspace.confirmedRevisionId === null &&
         workspace.activeProposalId === null &&
         workspace.projectBuildPlanId === null,
+      mode,
+    });
+    this.emit({
+      name: mode === "created" ? "planner_session.created" : "planner_session.resumed",
+      projectId: project.projectId,
+      sessionId: session.id,
+      resolution: mode,
     });
     return session;
   }
@@ -205,7 +294,22 @@ export class PlanningSessionService {
       .sort(candidateOrder);
     for (const candidate of candidates) {
       if (this.options.sessionManager.isLive(candidate.id)) {
-        await this.options.onPlannerSession?.(candidate, { emptyProject: true });
+        const workspace = await this.options.workspaceStore.readOrCreate(
+          project.projectId,
+        );
+        await this.options.onPlannerSession?.(candidate, {
+          emptyProject:
+            workspace.confirmedRevisionId === null &&
+            workspace.activeProposalId === null &&
+            workspace.projectBuildPlanId === null,
+          mode: "live",
+        });
+        this.emit({
+          name: "planner_session.resumed",
+          projectId,
+          sessionId: candidate.id,
+          resolution: "live",
+        });
         return { session: candidate, resolution: "live" };
       }
       if (candidate.agentSessionId) {
@@ -220,6 +324,7 @@ export class PlanningSessionService {
               ? prior
               : ({ status: "skipped", reason: "user-proceeded" } as const),
           };
+          const details = await this.focusedDetails(project, workspace);
           const resumed = await this.options.sessionManager.resume(candidate.id, {
             planning,
             promptAppendix: buildFocusedPlannerContext({
@@ -227,17 +332,40 @@ export class PlanningSessionService {
               workspace,
               sessionId: candidate.id,
               userId: this.principal,
+              ...(details ? { details } : {}),
             }),
           });
-          await this.options.onPlannerSession?.(resumed, { emptyProject: true });
+          await this.options.onPlannerSession?.(resumed, {
+            emptyProject:
+              workspace.confirmedRevisionId === null &&
+              workspace.activeProposalId === null &&
+              workspace.projectBuildPlanId === null,
+            mode: "resumed",
+          });
+          this.emit({
+            name: "planner_session.resumed",
+            projectId,
+            sessionId: resumed.id,
+            resolution: "resumed",
+          });
           return { session: resumed, resolution: "resumed" };
         } catch {
           // A stale vendor record may still be safely rehydrated below.
         }
       }
       const record = await this.options.readRecord(candidate.id).catch(() => null);
-      if (!record || record.turnCount === 0) continue;
       const prior = candidate.planning!.greeting;
+      const greetingOnlyRecord = Boolean(
+        record &&
+          prior.status === "delivered" &&
+          record.turns?.some(
+            (turn) =>
+              turn.prompt === null &&
+              typeof turn.assistantText === "string" &&
+              turn.assistantText.trim() !== "",
+          ),
+      );
+      if (!record || (record.turnCount === 0 && !greetingOnlyRecord)) continue;
       const greeting = isTerminalGreeting(prior)
         ? prior
         : ({ status: "skipped", reason: "user-proceeded" } as const);
@@ -247,6 +375,7 @@ export class PlanningSessionService {
           { ...request, harness: candidate.harness },
           greeting,
           candidate.id,
+          "rehydrated",
         ),
         resolution: "rehydrated",
       };

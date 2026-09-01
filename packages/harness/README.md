@@ -39,6 +39,12 @@ session lifecycle) to improve Sapiom. Opt out any time; `--no-telemetry`
 disables collection entirely. Events are also written locally to
 `~/.sapiom/harness/events.ndjson` for your own inspection.
 
+Project planner sessions add content-free `planner_session.*` and
+`planner_greeting.*` lifecycle events. Those events contain bounded project,
+session, attempt, resolution, status, and error-code fields only. They never
+contain planner prompts, assistant text, local paths, or provider error text;
+the same telemetry opt-in controls whether they leave the machine.
+
 ## Outbound requests
 
 Agent Studio makes one Sapiom request of its own, separate from telemetry
@@ -67,6 +73,36 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+### Agent Map planner sessions
+
+The authenticated local API owns planner identity; a model or generic session
+request cannot assign itself the `map-planner` role. The public planner surface
+is project-scoped:
+
+- `POST /api/projects/:projectId/planner-sessions` with
+  `{ "mode": "resume-or-create" }` deterministically reuses the latest owned
+  live/resumable planner or creates one. Use `{ "mode": "fresh" }` to always
+  create a new planner.
+- `POST /api/projects/:projectId/planner-sessions/:sessionId/messages` durably
+  accepts planner input and releases it FIFO after greeting resolution.
+- `POST /api/projects/:projectId/planner-sessions/:sessionId/greeting/retry`
+  retries an eligible failed automatic greeting.
+
+Planner metadata is part of the session registry. Its input FIFO and greeting
+attempt state live at
+`<state-root>/agent-map/planner-sessions/<sessionId>/input-queue.json`; corrupt
+queue files are quarantined beside that file so one session cannot block boot.
+The focused system context contains only bounded project IDs, revision digest
+and summaries, proposal/build-plan status, binding references, and warnings —
+never local root paths or source inventories.
+
+**Migration note (breaking):** `POST /api/sessions` now rejects unknown fields,
+including client-authored planner metadata. Generic
+`POST /api/sessions/:id/input` and `POST /api/sessions/:id/resume` reject planner
+sessions. Clients must open, message, and retry planners through the
+project-scoped routes above; ordinary coding-agent sessions keep using the
+generic session API.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 

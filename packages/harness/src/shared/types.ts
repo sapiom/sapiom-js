@@ -793,7 +793,14 @@ export type AnalyticsEventType =
   | "mcp.install"
   | "plan.upgrade_clicked"
   | "agent_map.workspace_initialized"
-  | "agent_map.workspace_read_failed";
+  | "agent_map.workspace_read_failed"
+  | "planner_session.created"
+  | "planner_session.resumed"
+  | "planner_greeting.attempted"
+  | "planner_greeting.delivered"
+  | "planner_greeting.failed"
+  | "planner_greeting.skipped"
+  | "planner_greeting.retried";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the

@@ -126,3 +126,46 @@ export interface PlannerSessionResponse {
 export interface PlannerMessageRequest {
   text: string;
 }
+
+/**
+ * Content-free planner lifecycle telemetry. Callers may persist these fields,
+ * but must never add prompts, assistant text, local paths, or provider errors.
+ */
+export type PlannerLifecycleEvent =
+  | {
+      name: "planner_session.created" | "planner_session.resumed";
+      projectId: StudioProjectId;
+      sessionId: string;
+      resolution: PlannerSessionResponse["resolution"];
+    }
+  | {
+      name: "planner_greeting.attempted" | "planner_greeting.retried";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      queueDepth: number;
+    }
+  | {
+      name: "planner_greeting.delivered";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      queueDepth: number;
+    }
+  | {
+      name: "planner_greeting.failed";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId?: string;
+      errorCode: PlannerGreetingErrorCode;
+      retryable: boolean;
+      queueDepth: number;
+    }
+  | {
+      name: "planner_greeting.skipped";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId?: string;
+      reason: "user-proceeded";
+      queueDepth: number;
+    };

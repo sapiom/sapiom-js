@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import type {
   PlannerGreetingErrorCode,
+  PlannerLifecycleEvent,
   PlannerQueuedInput,
   PlannerSessionMetadata,
 } from "../shared/agent-map.js";
@@ -27,12 +28,33 @@ interface ExpectedPrompt {
   text: string;
 }
 
+interface AttemptTimer {
+  key: "pending" | string;
+  handle: ReturnType<typeof setTimeout>;
+}
+
+export type PlannerRegistrationMode =
+  | "boot"
+  | "created"
+  | "live"
+  | "resumed"
+  | "rehydrated";
+
+export interface PlannerRegistrationContext {
+  emptyProject: boolean;
+  mode: PlannerRegistrationMode;
+}
+
 export interface PlannerGreetingCoordinatorOptions {
   root: string;
   sessionManager: SessionManager;
   now?: () => string;
   generateId?: () => string;
+  /** Applies both while waiting for readiness and while awaiting a model turn. */
   deliveryTimeoutMs?: number;
+  /** Test seam for classifying queue-store failures without exposing raw errors. */
+  writeState?: (file: string, state: unknown) => Promise<void>;
+  onEvent?: (event: PlannerLifecycleEvent) => Promise<void> | void;
 }
 
 export class PlannerGreetingRetryUnavailableError extends Error {
@@ -48,6 +70,13 @@ const MAX_RETRIES = 2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTerminal(metadata: PlannerSessionMetadata): boolean {
+  return (
+    metadata.greeting.status === "delivered" ||
+    metadata.greeting.status === "skipped"
+  );
 }
 
 function isPersistedPlannerState(
@@ -179,7 +208,7 @@ export class PlannerGreetingCoordinator {
   private readonly writes = new Map<string, Promise<unknown>>();
   private readonly expected = new Map<string, ExpectedPrompt[]>();
   private readonly observedAttempts = new Map<string, string[]>();
-  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly timers = new Map<string, AttemptTimer>();
 
   constructor(private readonly options: PlannerGreetingCoordinatorOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -189,6 +218,14 @@ export class PlannerGreetingCoordinator {
 
   private file(sessionId: string): string {
     return path.join(this.options.root, sessionId, "input-queue.json");
+  }
+
+  private emit(event: PlannerLifecycleEvent): void {
+    try {
+      void Promise.resolve(this.options.onEvent?.(event)).catch(() => {});
+    } catch {
+      // Telemetry is best effort and must never change planner semantics.
+    }
   }
 
   private serialize<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
@@ -204,6 +241,29 @@ export class PlannerGreetingCoordinator {
       },
     );
     return next;
+  }
+
+  private newState(
+    session: HarnessSession,
+    emptyProject: boolean,
+  ): PersistedPlannerState {
+    if (!session.planning) throw new Error("planner metadata missing");
+    return {
+      schemaVersion: 1,
+      metadata: structuredClone(session.planning),
+      inputs: [],
+      retryCount: 0,
+      emptyProject,
+    };
+  }
+
+  private async quarantine(sessionId: string): Promise<void> {
+    const file = this.file(sessionId);
+    const quarantine = path.join(
+      path.dirname(file),
+      `input-queue.corrupt-${this.now().replace(/[^0-9A-Za-z]/g, "-")}-${randomUUID()}.json`,
+    );
+    await fs.rename(file, quarantine).catch(() => {});
   }
 
   private async load(
@@ -222,43 +282,132 @@ export class PlannerGreetingCoordinator {
       }
       state = parsed;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      if (!session.planning) throw new Error("planner metadata missing");
-      state = {
-        schemaVersion: 1,
-        metadata: structuredClone(session.planning),
-        inputs: [],
-        retryCount: 0,
-        emptyProject,
-      };
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        // A single damaged or unreadable session queue is local corruption,
+        // never a reason to prevent the rest of the harness from booting.
+        await this.quarantine(session.id);
+      }
+      state = this.newState(session, emptyProject);
     }
     this.states.set(session.id, state);
     return state;
   }
 
-  private async persist(sessionId: string, state: PersistedPlannerState): Promise<void> {
-    this.states.set(sessionId, state);
-    const file = this.file(sessionId);
+  private async writeState(file: string, state: PersistedPlannerState): Promise<void> {
+    if (this.options.writeState) {
+      await this.options.writeState(file, structuredClone(state));
+      return;
+    }
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const tmp = `${file}.tmp-${process.pid}-${this.generateId()}`;
+    const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
     await fs.writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
     await fs.rename(tmp, file);
-    await this.options.sessionManager.setPlanningMetadata(
-      sessionId,
-      state.metadata,
-    );
   }
 
-  async register(session: HarnessSession, emptyProject = true): Promise<void> {
+  private clearTimer(sessionId: string, key?: string): void {
+    const timer = this.timers.get(sessionId);
+    if (!timer || (key !== undefined && timer.key !== key)) return;
+    clearTimeout(timer.handle);
+    this.timers.delete(sessionId);
+  }
+
+  private armTimer(sessionId: string, key: "pending" | string): void {
+    this.clearTimer(sessionId);
+    const handle = setTimeout(() => {
+      void this.fail(sessionId, key, key === "pending" ? "session_not_ready" : "delivery_timeout", true);
+    }, this.deliveryTimeoutMs);
+    handle.unref?.();
+    this.timers.set(sessionId, { key, handle });
+  }
+
+  private async persist(
+    sessionId: string,
+    state: PersistedPlannerState,
+  ): Promise<void> {
+    this.states.set(sessionId, state);
+    try {
+      await this.writeState(this.file(sessionId), state);
+      await this.options.sessionManager.setPlanningMetadata(
+        sessionId,
+        state.metadata,
+      );
+    } catch {
+      if (
+        state.metadata.greeting.status === "pending" ||
+        state.metadata.greeting.status === "generating"
+      ) {
+        const attemptId =
+          state.metadata.greeting.status === "generating"
+            ? state.metadata.greeting.attemptId
+            : undefined;
+        this.clearTimer(sessionId);
+        state.metadata.greeting = {
+          status: "failed",
+          retryable: true,
+          errorCode: "persistence_failed",
+        };
+        // At least one of the two stores may still be available. Keep the
+        // bounded classification wherever possible; never persist raw errors.
+        await this.options.sessionManager
+          .setPlanningMetadata(sessionId, state.metadata)
+          .catch(() => {});
+        await this.writeState(this.file(sessionId), state).catch(() => {});
+        this.emit({
+          name: "planner_greeting.failed",
+          projectId: state.metadata.identity.projectId,
+          sessionId,
+          ...(attemptId ? { attemptId } : {}),
+          errorCode: "persistence_failed",
+          retryable: true,
+          queueDepth: state.inputs.length,
+        });
+      }
+      throw new Error("planner state persistence failed");
+    }
+  }
+
+  /**
+   * Merge the two durable stores under a single serialized registration CAS.
+   * Queue-file inputs are authoritative. A terminal manager greeting is newer
+   * than a non-terminal queue greeting (resume suppression), while a terminal
+   * queue greeting is newer than a stale non-terminal manager snapshot.
+   */
+  private mergeRegistration(
+    state: PersistedPlannerState,
+    session: HarnessSession,
+  ): void {
     if (!session.planning) return;
+    const managerTerminal = isTerminal(session.planning);
+    const queueTerminal = isTerminal(state.metadata);
+    if (managerTerminal && !queueTerminal) {
+      state.metadata.greeting = structuredClone(session.planning.greeting);
+    }
+    state.metadata.queuedInputIds = state.inputs.map((input) => input.id);
+  }
+
+  async register(
+    session: HarnessSession,
+    context: PlannerRegistrationContext,
+  ): Promise<void> {
+    if (!session.planning) return;
+    let shouldStart = false;
+    let shouldDrain = false;
     await this.serialize(session.id, async () => {
-      const state = await this.load(session, emptyProject);
-      // A generating write proves an attempt was dispatched before a restart.
-      // Never repeat it blindly: queued user work wins; otherwise expose retry.
-      if (state.metadata.greeting.status === "generating") {
+      const cached = this.states.has(session.id);
+      const state = await this.load(session, context.emptyProject);
+      this.mergeRegistration(state, session);
+
+      // Only a process-boot load proves an in-flight dispatch was abandoned.
+      // Live re-registration is idempotent and must not fail its active turn.
+      if (
+        context.mode === "boot" &&
+        !cached &&
+        state.metadata.greeting.status === "generating"
+      ) {
+        const attemptId = state.metadata.greeting.attemptId;
         state.metadata.greeting = state.inputs.length
           ? { status: "skipped", reason: "user-proceeded" }
           : {
@@ -266,23 +415,59 @@ export class PlannerGreetingCoordinator {
               retryable: true,
               errorCode: "delivery_timeout",
             };
+        if (state.inputs.length) {
+          this.emit({
+            name: "planner_greeting.skipped",
+            projectId: state.metadata.identity.projectId,
+            sessionId: session.id,
+            attemptId,
+            reason: "user-proceeded",
+            queueDepth: state.inputs.length,
+          });
+        } else {
+          this.emit({
+            name: "planner_greeting.failed",
+            projectId: state.metadata.identity.projectId,
+            sessionId: session.id,
+            attemptId,
+            errorCode: "delivery_timeout",
+            retryable: true,
+            queueDepth: 0,
+          });
+        }
       }
       await this.persist(session.id, state);
-      if (
-        state.metadata.greeting.status === "delivered" ||
-        state.metadata.greeting.status === "skipped"
-      ) {
-        await this.drain(state);
+      if (state.metadata.greeting.status === "pending") {
+        if (session.ready && session.status === "running") shouldStart = true;
+        else this.armTimer(session.id, "pending");
+      } else if (isTerminal(state.metadata)) {
+        shouldDrain = session.ready && session.status === "running";
       }
     });
+    if (shouldStart) await this.startGreeting(session.id, false);
+    else if (shouldDrain) await this.drainSession(session.id);
   }
 
   async onSessionStatus(session: HarnessSession): Promise<void> {
     if (!session.planning) return;
     if (session.ready && session.status === "running") {
-      await this.startGreeting(session.id, false);
-    } else if (session.status === "exited") {
-      await this.fail(session.id, "session_exited", false);
+      this.clearTimer(session.id, "pending");
+      const state = this.states.get(session.id);
+      if (state && isTerminal(state.metadata)) await this.drainSession(session.id);
+      else await this.startGreeting(session.id, false);
+      return;
+    }
+    if (session.status === "exited") {
+      const timer = this.timers.get(session.id);
+      this.clearTimer(session.id);
+      this.expected.delete(session.id);
+      this.observedAttempts.delete(session.id);
+      await this.fail(
+        session.id,
+        timer?.key ?? "pending",
+        "session_exited",
+        false,
+      );
     }
   }
 
@@ -304,13 +489,18 @@ export class PlannerGreetingCoordinator {
       } else if (state.metadata.greeting.status !== "pending") {
         return;
       }
+      this.clearTimer(sessionId, "pending");
       const attemptId = this.generateId();
       state.metadata.greeting = { status: "generating", attemptId };
       await this.persist(sessionId, state);
+      this.emit({
+        name: retry ? "planner_greeting.retried" : "planner_greeting.attempted",
+        projectId: state.metadata.identity.projectId,
+        sessionId,
+        attemptId,
+        queueDepth: state.inputs.length,
+      });
       const prompt = plannerGreetingPrompt(state.emptyProject);
-      const queue = this.expected.get(sessionId) ?? [];
-      queue.push({ kind: "greeting", id: attemptId, text: prompt });
-      this.expected.set(sessionId, queue);
       try {
         const accepted = await this.options.sessionManager.submitInput(
           sessionId,
@@ -318,17 +508,18 @@ export class PlannerGreetingCoordinator {
           true,
         );
         if (!accepted) {
-          await this.setFailure(state, "session_exited", false);
+          await this.setFailure(state, attemptId, "session_exited", false);
           return;
         }
-        const timer = setTimeout(() => {
-          void this.fail(sessionId, "delivery_timeout", true);
-        }, this.deliveryTimeoutMs);
-        timer.unref?.();
-        this.timers.set(sessionId, timer);
+        // Correlation is registered only after the PTY accepted the write.
+        const queue = this.expected.get(sessionId) ?? [];
+        queue.push({ kind: "greeting", id: attemptId, text: prompt });
+        this.expected.set(sessionId, queue);
+        this.armTimer(sessionId, attemptId);
       } catch (error) {
         await this.setFailure(
           state,
+          attemptId,
           error instanceof SessionNotReadyError
             ? "session_not_ready"
             : "injection_failed",
@@ -340,22 +531,48 @@ export class PlannerGreetingCoordinator {
 
   private async setFailure(
     state: PersistedPlannerState,
+    expectedKey: "pending" | string,
     errorCode: PlannerGreetingErrorCode,
     retryable: boolean,
   ): Promise<void> {
-    if (state.metadata.greeting.status !== "generating") return;
+    const greeting = state.metadata.greeting;
+    const matches =
+      (expectedKey === "pending" && greeting.status === "pending") ||
+      (greeting.status === "generating" && greeting.attemptId === expectedKey);
+    if (!matches) return;
+    const sessionId = state.metadata.identity.sessionId;
+    const attemptId = greeting.status === "generating" ? greeting.attemptId : undefined;
+    this.clearTimer(sessionId, expectedKey);
     if (state.inputs.length > 0) {
       state.metadata.greeting = { status: "skipped", reason: "user-proceeded" };
-      await this.persist(state.metadata.identity.sessionId, state);
+      await this.persist(sessionId, state);
+      this.emit({
+        name: "planner_greeting.skipped",
+        projectId: state.metadata.identity.projectId,
+        sessionId,
+        ...(attemptId ? { attemptId } : {}),
+        reason: "user-proceeded",
+        queueDepth: state.inputs.length,
+      });
       await this.drain(state);
       return;
     }
     state.metadata.greeting = { status: "failed", retryable, errorCode };
-    await this.persist(state.metadata.identity.sessionId, state);
+    await this.persist(sessionId, state);
+    this.emit({
+      name: "planner_greeting.failed",
+      projectId: state.metadata.identity.projectId,
+      sessionId,
+      ...(attemptId ? { attemptId } : {}),
+      errorCode,
+      retryable,
+      queueDepth: 0,
+    });
   }
 
   private async fail(
     sessionId: string,
+    expectedKey: "pending" | string,
     errorCode: PlannerGreetingErrorCode,
     retryable: boolean,
   ): Promise<void> {
@@ -363,7 +580,7 @@ export class PlannerGreetingCoordinator {
       const session = this.options.sessionManager.get(sessionId);
       if (!session?.planning) return;
       const state = await this.load(session);
-      await this.setFailure(state, errorCode, retryable);
+      await this.setFailure(state, expectedKey, errorCode, retryable);
     });
   }
 
@@ -386,24 +603,34 @@ export class PlannerGreetingCoordinator {
       state.metadata.queuedInputIds.push(input.id);
       if (state.metadata.greeting.status === "failed") {
         state.metadata.greeting = { status: "skipped", reason: "user-proceeded" };
+        this.emit({
+          name: "planner_greeting.skipped",
+          projectId: state.metadata.identity.projectId,
+          sessionId,
+          reason: "user-proceeded",
+          queueDepth: state.inputs.length,
+        });
       }
       await this.persist(sessionId, state);
-      if (
-        state.metadata.greeting.status === "delivered" ||
-        state.metadata.greeting.status === "skipped"
-      ) {
-        await this.drain(state);
-      }
+      if (isTerminal(state.metadata)) await this.drain(state);
       return structuredClone(state.metadata);
+    });
+  }
+
+  private async drainSession(sessionId: string): Promise<void> {
+    await this.serialize(sessionId, async () => {
+      const session = this.options.sessionManager.get(sessionId);
+      if (!session?.planning) return;
+      const state = await this.load(session);
+      if (isTerminal(state.metadata)) await this.drain(state);
     });
   }
 
   private async drain(state: PersistedPlannerState): Promise<void> {
     while (state.inputs.length > 0) {
       const input = state.inputs[0]!;
-      const queue = this.expected.get(input.sessionId) ?? [];
-      queue.push({ kind: "user", id: input.id, text: input.text });
-      this.expected.set(input.sessionId, queue);
+      const session = this.options.sessionManager.get(input.sessionId);
+      if (!session?.ready || session.status !== "running") return;
       let accepted = false;
       try {
         accepted = await this.options.sessionManager.submitInput(
@@ -415,6 +642,10 @@ export class PlannerGreetingCoordinator {
         return;
       }
       if (!accepted) return;
+      // Register local correlation only after acceptance, then durably dequeue.
+      const queue = this.expected.get(input.sessionId) ?? [];
+      queue.push({ kind: "user", id: input.id, text: input.text });
+      this.expected.set(input.sessionId, queue);
       state.inputs.shift();
       state.metadata.queuedInputIds.shift();
       await this.persist(input.sessionId, state);
@@ -472,16 +703,22 @@ export class PlannerGreetingCoordinator {
       }
       const text = event.payload.assistantText;
       if (typeof text !== "string" || text.trim() === "") {
-        await this.setFailure(state, "model_turn_failed", true);
+        await this.setFailure(state, attemptId, "model_turn_failed", true);
         return;
       }
-      const timer = this.timers.get(event.harnessSessionId);
-      if (timer) clearTimeout(timer);
+      this.clearTimer(event.harnessSessionId, attemptId);
       state.metadata.greeting = {
         status: "delivered",
         messageId: event.eventId,
       };
       await this.persist(event.harnessSessionId, state);
+      this.emit({
+        name: "planner_greeting.delivered",
+        projectId: state.metadata.identity.projectId,
+        sessionId: event.harnessSessionId,
+        attemptId,
+        queueDepth: state.inputs.length,
+      });
       await this.drain(state);
     });
   }

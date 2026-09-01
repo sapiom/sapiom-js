@@ -1,3 +1,7 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentMapWorkspaceState } from "../shared/agent-map.js";
@@ -10,6 +14,7 @@ import {
   PlanningSessionService,
 } from "./planning-session.js";
 import type { SessionManager } from "./session-manager.js";
+import { PlannerGreetingCoordinator } from "./planner-greeting.js";
 import type {
   StudioProjectCatalog,
   StudioProjectIdentity,
@@ -99,6 +104,14 @@ function fixture(existing: HarnessSession[] = []) {
     isLive: (id: string) =>
       existing.some((candidate) => candidate.id === id && candidate.status === "running"),
     get: (id: string) => [...existing, ...created].find((candidate) => candidate.id === id),
+    setPlanningMetadata: async (
+      id: string,
+      metadata: NonNullable<HarnessSession["planning"]>,
+    ) => {
+      const value = [...existing, ...created].find((candidate) => candidate.id === id);
+      if (value) value.planning = structuredClone(metadata);
+    },
+    submitInput: vi.fn(async () => true),
   } as unknown as SessionManager;
   const service = new PlanningSessionService({
     catalog: {
@@ -113,7 +126,7 @@ function fixture(existing: HarnessSession[] = []) {
     machineId: "machine-1",
     defaultHarness: "codex",
   });
-  return { service, create, resume, contexts };
+  return { service, create, resume, contexts, manager, created };
 }
 
 describe("planner session context and identity", () => {
@@ -138,6 +151,49 @@ describe("planner session context and identity", () => {
     expect(context).not.toContain("localRootRef");
     expect(context).not.toContain("prompt");
     expect(context.length).toBeLessThan(16_384);
+  });
+
+  it("bounds revision summaries, proposal/build status, and warnings", () => {
+    const populated: AgentMapWorkspaceState = {
+      ...workspace,
+      confirmedRevisionId: "revision-1",
+      activeProposalId: "proposal-1",
+      projectBuildPlanId: "build-plan-1",
+    };
+    const context = buildFocusedPlannerContext({
+      project,
+      workspace: populated,
+      sessionId: "session-1",
+      userId: "user-1",
+      details: {
+        confirmedRevision: {
+          digest: "d".repeat(2_000),
+          summaries: Array.from({ length: 80 }, (_, index) =>
+            `node-${index}-${"s".repeat(400)}`,
+          ),
+        },
+        activeProposal: { status: "draft", summary: "proposal summary" },
+        projectBuildPlan: { status: "pending", summary: "build summary" },
+        warnings: Array.from({ length: 40 }, (_, index) => `warning-${index}`),
+      },
+    });
+    const parsed = JSON.parse(context.split("\n")[2]!) as {
+      project: {
+        confirmedRevision: { digest: string; summaries: string[] };
+        activeProposal: { status: string };
+        projectBuildPlan: { status: string };
+        warnings: string[];
+      };
+    };
+
+    expect(parsed.project.confirmedRevision.digest).toHaveLength(512);
+    expect(parsed.project.confirmedRevision.summaries).toHaveLength(32);
+    expect(parsed.project.confirmedRevision.summaries[0]!.length).toBeLessThanOrEqual(256);
+    expect(parsed.project.activeProposal.status).toBe("draft");
+    expect(parsed.project.projectBuildPlan.status).toBe("pending");
+    expect(parsed.project.warnings).toHaveLength(16);
+    expect(context.length).toBeLessThan(16_384);
+    expect(context).not.toContain(project.rootBindings[0]!.localRootRef);
   });
 });
 
@@ -218,5 +274,74 @@ describe("PlanningSessionService", () => {
       expect.any(Object),
     );
     expect(result.session.planning?.greeting.status).toBe("skipped");
+  });
+
+  it("rehydrates a delivered greeting-only record without generating a duplicate", async () => {
+    const prior = session("greeting-only", {
+      status: "exited",
+      agentSessionId: "missing-vendor-history",
+    });
+    prior.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    const { service, resume, manager } = fixture([prior]);
+    resume.mockRejectedValueOnce(new Error("vendor history unavailable"));
+    const record: SessionRecord = {
+      harnessSessionId: prior.id,
+      mergedSessionIds: [prior.id],
+      agentSessionId: prior.agentSessionId,
+      harness: prior.harness,
+      cwd: null,
+      startedAt: "2026-09-01T00:00:00.000Z",
+      endedAt: "2026-09-01T00:01:00.000Z",
+      turns: [
+        {
+          index: 1,
+          prompt: null,
+          promptAt: null,
+          toolCalls: [],
+          assistantText: "What system should we plan together?",
+          model: null,
+          usage: null,
+          completedAt: "2026-09-01T00:00:30.000Z",
+          incomplete: false,
+        },
+      ],
+      turnCount: 0,
+      eventCount: 2,
+      reconstructed: true,
+      archivedAt: null,
+      limitations: [],
+    };
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "planner-wired-"));
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    const options = (
+      service as unknown as {
+        options: {
+          readRecord: () => Promise<SessionRecord>;
+          onPlannerSession: PlanningSessionService["options"]["onPlannerSession"];
+        };
+      }
+    ).options;
+    options.readRecord = async () => record;
+    options.onPlannerSession = (value, context) =>
+      coordinator.register(value, context);
+
+    try {
+      const result = await service.open(projectId, { mode: "resume-or-create" });
+      expect(result.resolution).toBe("rehydrated");
+      expect(result.session.planning?.greeting).toEqual({
+        status: "delivered",
+        messageId: "greeting-message",
+      });
+      expect(manager.submitInput).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

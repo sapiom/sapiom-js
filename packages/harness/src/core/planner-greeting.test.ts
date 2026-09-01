@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
 import type { SessionManager } from "./session-manager.js";
@@ -81,6 +81,7 @@ describe("PlannerGreetingCoordinator", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -90,7 +91,7 @@ describe("PlannerGreetingCoordinator", () => {
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await coordinator.register(session, true);
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
     await coordinator.onSessionStatus(session);
     expect(submitted).toHaveLength(1);
     const greeting = submitted[0]!;
@@ -137,7 +138,7 @@ describe("PlannerGreetingCoordinator", () => {
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await first.register(session, true);
+    await first.register(session, { emptyProject: true, mode: "created" });
     await first.onSessionStatus(session);
     await first.enqueue(session.id, "continue with my request");
     const greeting = submitted[0]!;
@@ -147,7 +148,7 @@ describe("PlannerGreetingCoordinator", () => {
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await restarted.register(session, true);
+    await restarted.register(session, { emptyProject: true, mode: "boot" });
 
     expect(submitted).toEqual([greeting, "continue with my request"]);
     expect(session.planning).toMatchObject({
@@ -162,7 +163,7 @@ describe("PlannerGreetingCoordinator", () => {
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await coordinator.register(session, false);
+    await coordinator.register(session, { emptyProject: false, mode: "created" });
     await coordinator.onSessionStatus(session);
     const greeting = submitted[0]!;
     await coordinator.enqueue(session.id, "review the existing plan");
@@ -192,13 +193,229 @@ describe("PlannerGreetingCoordinator", () => {
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await coordinator.register(session, true);
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
     await coordinator.retry(session.id);
     expect(submitted).toHaveLength(1);
     expect(session.planning?.greeting.status).toBe("generating");
     await expect(coordinator.retry(session.id)).rejects.toBeInstanceOf(
       PlannerGreetingRetryUnavailableError,
     );
+  });
+
+  it("keeps a same-process generating attempt live on idempotent registration", async () => {
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.onSessionStatus(session);
+    const generating = structuredClone(session.planning!.greeting);
+
+    await coordinator.register(session, { emptyProject: true, mode: "live" });
+
+    expect(session.planning?.greeting).toEqual(generating);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("keeps resume-suppressed skipped state authoritative over a stale queue file", async () => {
+    const first = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await first.register(session, { emptyProject: true, mode: "created" });
+    await first.onSessionStatus(session);
+    await first.enqueue(session.id, "continue from durable input");
+    session.planning!.greeting = { status: "skipped", reason: "user-proceeded" };
+
+    const resumed = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await resumed.register(session, { emptyProject: true, mode: "resumed" });
+
+    expect(session.planning).toMatchObject({
+      greeting: { status: "skipped", reason: "user-proceeded" },
+      queuedInputIds: [],
+    });
+    expect(submitted.at(-1)).toBe("continue from durable input");
+  });
+
+  it("bounds pending readiness, then drains its durable FIFO when readiness arrives", async () => {
+    vi.useFakeTimers();
+    session.ready = false;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 100,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.enqueue(session.id, "queued while booting");
+    await vi.advanceTimersByTimeAsync(101);
+    await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
+      .writes.get(session.id);
+    expect(session.planning?.greeting).toEqual({
+      status: "skipped",
+      reason: "user-proceeded",
+    });
+    expect(submitted).toEqual([]);
+
+    session.ready = true;
+    await coordinator.onSessionStatus(session);
+    expect(submitted).toEqual(["queued while booting"]);
+    expect(session.planning?.queuedInputIds).toEqual([]);
+  });
+
+  it("classifies an exit from pending and clears stale correlation state", async () => {
+    session.ready = false;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    session.status = "exited";
+    await coordinator.onSessionStatus(session);
+
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: false,
+      errorCode: "session_exited",
+    });
+    const decorated = coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", {
+        prompt: plannerGreetingPrompt(true),
+      }),
+    );
+    expect(decorated.payload).not.toHaveProperty("plannerOrigin");
+  });
+
+  it("does not let an old attempt timeout fail a retry", async () => {
+    vi.useFakeTimers();
+    const ids = ["attempt-1", "attempt-2"];
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      generateId: () => ids.shift() ?? "state-write",
+      deliveryTimeoutMs: 100,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.onSessionStatus(session);
+    const prompt = submitted[0]!;
+    coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt }),
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", { assistantText: null }),
+    );
+    await coordinator.retry(session.id);
+
+    await vi.advanceTimersByTimeAsync(51);
+    expect(session.planning?.greeting).toEqual({
+      status: "generating",
+      attemptId: "attempt-2",
+    });
+  });
+
+  it("adds expected correlation only after a submit is accepted", async () => {
+    manager.submitInput = async () => false;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.onSessionStatus(session);
+    const decorated = coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", {
+        prompt: plannerGreetingPrompt(true),
+      }),
+    );
+
+    expect(decorated.payload).not.toHaveProperty("plannerOrigin");
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: false,
+      errorCode: "session_exited",
+    });
+  });
+
+  it("quarantines a corrupt queue without preventing local registration", async () => {
+    const dir = path.join(root, session.id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "input-queue.json"), "{secret-corrupt");
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+
+    await expect(
+      coordinator.register(session, { emptyProject: true, mode: "boot" }),
+    ).resolves.toBeUndefined();
+    const names = await fs.readdir(dir);
+    expect(names).toContain("input-queue.json");
+    expect(names.some((name) => name.startsWith("input-queue.corrupt-"))).toBe(true);
+  });
+
+  it("durably classifies queue persistence failure without raw error content", async () => {
+    const events: unknown[] = [];
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      writeState: async () => {
+        throw new Error("/private/path provider secret");
+      },
+      onEvent: (value) => {
+        events.push(value);
+      },
+    });
+
+    await expect(
+      coordinator.register(session, { emptyProject: true, mode: "created" }),
+    ).rejects.toThrow("planner state persistence failed");
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "persistence_failed",
+    });
+    expect(JSON.stringify(events)).not.toContain("private/path");
+    expect(JSON.stringify(events)).not.toContain("provider secret");
+  });
+
+  it("emits bounded lifecycle codes without prompts, paths, or provider errors", async () => {
+    const lifecycle: unknown[] = [];
+    manager.submitInput = async () => {
+      throw new Error("provider said /private/customer secret-token");
+    };
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      onEvent: (value) => {
+        lifecycle.push(value);
+      },
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.onSessionStatus(session);
+
+    expect(lifecycle).toEqual([
+      expect.objectContaining({
+        name: "planner_greeting.attempted",
+        projectId: "project-1",
+        sessionId: session.id,
+      }),
+      expect.objectContaining({
+        name: "planner_greeting.failed",
+        errorCode: "injection_failed",
+      }),
+    ]);
+    const serialized = JSON.stringify(lifecycle);
+    expect(serialized).not.toContain("Agent Studio control turn");
+    expect(serialized).not.toContain("/private/customer");
+    expect(serialized).not.toContain("secret-token");
   });
 });
 

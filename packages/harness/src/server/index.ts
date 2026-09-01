@@ -31,6 +31,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
+import type { PlannerLifecycleEvent } from "../shared/agent-map.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -2494,6 +2495,44 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
+  const emitPlannerLifecycle = (event: PlannerLifecycleEvent): void => {
+    const session = sessionManager.get(event.sessionId);
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: seqCounter.next(event.sessionId),
+      ts: new Date().toISOString(),
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      harnessSessionId: event.sessionId,
+      agentSessionId: session?.agentSessionId ?? null,
+      harness: session?.harness ?? "claude-code",
+      type: event.name,
+      payload: {
+        project_id: event.projectId,
+        ...("resolution" in event
+          ? { resolution: event.resolution }
+          : {
+              queue_depth: Math.max(0, Math.min(10_000, event.queueDepth)),
+              ...("attemptId" in event && event.attemptId
+                ? { attempt_id: event.attemptId }
+                : {}),
+              ...(event.name === "planner_greeting.failed"
+                ? {
+                    error_code: event.errorCode,
+                    retryable: event.retryable,
+                  }
+                : {}),
+              ...(event.name === "planner_greeting.skipped"
+                ? { reason: event.reason }
+                : {}),
+            }),
+      },
+    };
+    void eventStore.append(analyticsEvent).catch(() => {});
+    batcher.enqueue(analyticsEvent);
+  };
+
   const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
     statePaths.agentMap,
     {
@@ -2530,6 +2569,7 @@ export const startServer = async (
   const plannerGreeting = new PlannerGreetingCoordinator({
     root: statePaths.plannerSessions,
     sessionManager,
+    onEvent: emitPlannerLifecycle,
   });
   for (const session of sessionManager.list()) {
     if (!session.planning) continue;
@@ -2546,7 +2586,14 @@ export const startServer = async (
       // Registration still recovers generating state and preserves its FIFO;
       // the project route will surface any unavailable workspace later.
     }
-    await plannerGreeting.register(session, emptyProject);
+    await plannerGreeting
+      .register(session, { emptyProject, mode: "boot" })
+      .catch((error: unknown) => {
+        console.error(
+          `[harness] planner registration failed for ${session.id}:`,
+          error instanceof Error ? error.message : "unknown error",
+        );
+      });
   }
   const planningSessions = new PlanningSessionService({
     catalog: studioProjectCatalog,
@@ -2557,7 +2604,8 @@ export const startServer = async (
     machineId,
     defaultHarness: options.defaultHarnessKind ?? "claude-code",
     onPlannerSession: (session, context) =>
-      plannerGreeting.register(session, context.emptyProject),
+      plannerGreeting.register(session, context),
+    onEvent: emitPlannerLifecycle,
   });
   sessionManager.onStatusChange((session) => {
     void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
