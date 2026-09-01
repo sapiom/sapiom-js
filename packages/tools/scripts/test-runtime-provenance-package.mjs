@@ -234,6 +234,40 @@ const attackPost = attackServer.calls.find(
 assert.equal(header(attackPost, CALLSITE_HEADER), null);
 await attackClient.shutdown();
 
+async function verifyStubSurface(label, stubModule) {
+  assert.equal("default" in stubModule, false);
+  assert.equal(typeof stubModule.createStubClient, "function");
+  const stub = stubModule.createStubClient();
+  const runResult = await stub.agents.run({
+    definition: `${label}-stub-run`,
+  });
+  assert.equal(runResult.status, "completed");
+  const handle = await stub.agents.launch({
+    definition: `${label}-stub-launch`,
+  });
+  assert.equal(handle.dispatch.resultSignal, cjsTools.AGENTS_RESULT_SIGNAL);
+  assert.equal((await handle.wait()).status, "completed");
+  await stub.shutdown();
+}
+
+const cjsStub = require("@sapiom/tools/stub");
+const esmStub = await import("@sapiom/tools/stub");
+await verifyStubSurface("cjs", cjsStub);
+await verifyStubSurface("esm", esmStub);
+
+const loadedAfterStub = Object.values(require.cache).filter((loaded) =>
+  loaded?.filename.includes("/packages/tools/dist/"),
+);
+for (const loaded of loadedAfterStub) {
+  for (const name of forbiddenHelperNames) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(loaded.exports ?? {}, name),
+      false,
+      `private helper ${name} exposed by ${loaded.filename}`,
+    );
+  }
+}
+
 console.log(
-  "runtime provenance package surfaces: cache-private CJS + ESM and four cross-format paths passed",
+  "runtime provenance package surfaces: cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
 );
