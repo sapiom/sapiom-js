@@ -14,7 +14,8 @@
  * use it for inline standalone calls, NOT to pause a step (it returns a result, not
  * a pausable handle). An orchestration is addressed by its **slug** (its stable handle).
  */
-import { Transport, defaultTransport } from "../_client/index.js";
+import { defaultTransport } from "../_client/index.js";
+import type { Transport } from "../_client/index.js";
 import { takeAgentRuntimeCallsite } from "./runtime-callsite-store.js";
 import type { DispatchHandle } from "../dispatch.js";
 
@@ -115,15 +116,53 @@ function redactAgentRuntimeProvenance(
 function redactedAgentRuntimeError(
   error: unknown,
   privateValues: readonly (string | null | undefined)[],
-): Error {
-  const redacted = new Error(
-    redactAgentRuntimeProvenance(
-      error instanceof Error ? error.message : String(error),
-      privateValues,
-    ),
+): unknown {
+  const values = [...new Set(privateValues.filter(supportedOpaqueToken))].sort(
+    (left, right) => right.length - left.length,
   );
-  if (error instanceof Error) redacted.name = error.name;
-  return redacted;
+  if (values.length === 0) return error;
+
+  const redactString = (value: string): string =>
+    redactAgentRuntimeProvenance(value, values);
+  if (!(error instanceof Error)) {
+    const message = String(error);
+    const redacted = redactString(message);
+    return redacted === message ? error : new Error(redacted);
+  }
+
+  const sanitizedErrors = new WeakMap<Error, Error>();
+  const sanitizeError = (source: Error): Error => {
+    const cached = sanitizedErrors.get(source);
+    if (cached) return cached;
+
+    let changed = false;
+    const target = Object.create(Object.getPrototypeOf(source)) as Error;
+    sanitizedErrors.set(source, target);
+
+    for (const key of Reflect.ownKeys(source)) {
+      const descriptor = Object.getOwnPropertyDescriptor(source, key)!;
+      if ("value" in descriptor) {
+        if (typeof descriptor.value === "string") {
+          const value = redactString(descriptor.value);
+          changed ||= value !== descriptor.value;
+          descriptor.value = value;
+        } else if (descriptor.value instanceof Error) {
+          const value = sanitizeError(descriptor.value);
+          changed ||= value !== descriptor.value;
+          descriptor.value = value;
+        }
+      }
+      Object.defineProperty(target, key, descriptor);
+    }
+
+    if (!changed) {
+      sanitizedErrors.set(source, source);
+      return source;
+    }
+    return target;
+  };
+
+  return sanitizeError(error);
 }
 
 export interface AgentRunSpec {

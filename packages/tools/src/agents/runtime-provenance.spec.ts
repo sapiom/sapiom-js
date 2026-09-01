@@ -40,6 +40,9 @@ function agentServer(
     init: RequestInit = {},
   ) => {
     const url = String(input);
+    // Mirror Fetch's header-value conversion so optional provenance can never
+    // make an otherwise valid invocation fail before the request is observed.
+    new Headers(init.headers);
     calls.push({ url, init });
     if (init.method === "POST") {
       nextExecution += 1;
@@ -288,6 +291,37 @@ describe("agents runtime provenance v1", () => {
       "callsite.safe",
     );
   });
+
+  it.each([
+    ["NUL/control", `opaque${String.fromCharCode(0)}token`],
+    [
+      "non-ByteString Unicode/emoji",
+      `opaque${String.fromCodePoint(0x1f680)}token`,
+    ],
+    ["leading whitespace", " opaque-token"],
+    ["trailing whitespace", "opaque-token "],
+  ])(
+    "omits unsupported %s callsite evidence without changing launch behavior",
+    async (_label, callsite) => {
+      const server = agentServer();
+      const client = createClient({ apiKey: "k", fetch: server.fetch });
+      const spec = carryAgentRuntimeProvenance(
+        { definition: "ordinary", input: { public: true } },
+        { version: 1, callsite },
+      );
+
+      const handle = await client.agents.launch(spec);
+      expect(handle.executionId).toBe("exec-1");
+      const launch = posts(server.calls)[0]!;
+      expect(
+        header(launch, AGENT_RUNTIME_PROVENANCE_VERSION_HEADER),
+      ).toBeUndefined();
+      expect(header(launch, AGENT_RUNTIME_CALLSITE_HEADER)).toBeUndefined();
+      expect(JSON.parse(String(launch.init.body))).toEqual({
+        input: { public: true },
+      });
+    },
+  );
 
   it("requires a build-carried callsite and consumes lineage at an uninstrumented boundary", async () => {
     const server = agentServer({
@@ -559,6 +593,113 @@ describe("agents runtime provenance v1", () => {
       "callsite.must-stay-private",
     );
     expect(String(posts(calls)[1]!.init.body)).not.toContain(receipt);
+  });
+
+  it("rethrows an uninstrumented typed transport error untouched", async () => {
+    const cause = Object.assign(new Error("connect refused"), {
+      code: "ECONNREFUSED",
+    });
+    const failure = new TypeError("fetch failed") as TypeError & {
+      cause: Error;
+    };
+    Object.defineProperty(failure, "cause", {
+      configurable: true,
+      value: cause,
+      writable: true,
+    });
+    const originalStack = failure.stack;
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch({ definition: "uninstrumented" });
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).toBe(failure);
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error & { cause: Error }).cause).toBe(cause);
+    expect((error as Error).stack).toBe(originalStack);
+    expect(
+      ((error as Error & { cause: Error }).cause as Error & { code: string })
+        .code,
+    ).toBe("ECONNREFUSED");
+  });
+
+  it("preserves typed errors, causes, diagnostics, and stack frames while redacting", async () => {
+    const callsite = "callsite.typed-private";
+    class AgentTransportError extends TypeError {
+      readonly diagnostic = "request transport failed";
+      readonly code = "EAGENT";
+    }
+    const cause = Object.assign(new Error(`connect failed for ${callsite}`), {
+      code: "ECONNREFUSED",
+    });
+    const failure = new AgentTransportError(
+      `fetch failed for ${callsite}`,
+    ) as AgentTransportError & { cause: Error };
+    Object.defineProperty(failure, "stack", {
+      configurable: true,
+      value:
+        `AgentTransportError: fetch failed for ${callsite}\n` +
+        "    at runtime-provenance.spec.ts:1:1",
+      writable: true,
+    });
+    Object.defineProperty(cause, "stack", {
+      configurable: true,
+      value:
+        `Error: connect failed for ${callsite}\n` +
+        "    at runtime-provenance.spec.ts:2:1",
+      writable: true,
+    });
+    Object.defineProperty(failure, "cause", {
+      configurable: true,
+      value: cause,
+      writable: true,
+    });
+    const fetch = (async () => {
+      throw failure;
+    }) as typeof globalThis.fetch;
+    const client = createClient({ apiKey: "k", fetch });
+
+    let error: unknown;
+    try {
+      await client.agents.launch(
+        carryAgentRuntimeProvenance(
+          { definition: "instrumented" },
+          { version: 1, callsite },
+        ),
+      );
+    } catch (value) {
+      error = value;
+    }
+
+    expect(error).not.toBe(failure);
+    expect(error).toBeInstanceOf(AgentTransportError);
+    expect(Object.getPrototypeOf(error)).toBe(AgentTransportError.prototype);
+    expect((error as AgentTransportError).name).toBe(failure.name);
+    expect((error as AgentTransportError).code).toBe("EAGENT");
+    expect((error as AgentTransportError).diagnostic).toBe(
+      "request transport failed",
+    );
+    expect((error as AgentTransportError).message).toContain("fetch failed");
+    expect((error as AgentTransportError).message).not.toContain(callsite);
+    expect((error as AgentTransportError).stack).toContain(
+      "runtime-provenance.spec.ts",
+    );
+    expect((error as AgentTransportError).stack).not.toContain(callsite);
+    const redactedCause = (error as AgentTransportError & { cause: Error })
+      .cause as Error & { code: string };
+    expect(redactedCause).not.toBe(cause);
+    expect(redactedCause).toBeInstanceOf(Error);
+    expect(redactedCause.code).toBe("ECONNREFUSED");
+    expect(redactedCause.message).toContain("connect failed");
+    expect(redactedCause.message).not.toContain(callsite);
+    expect(redactedCause.stack).not.toContain(callsite);
   });
 
   it("redacts reflected callsite and response receipt from status errors", async () => {

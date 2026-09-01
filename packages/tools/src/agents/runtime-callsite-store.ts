@@ -10,12 +10,14 @@ interface CallsiteRecord {
 
 const invocationCallsites = new WeakMap<object, CallsiteRecord>();
 
-function supportedOpaqueToken(value: unknown): value is string {
+function supportedCallsite(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_OPAQUE_TOKEN_LENGTH &&
-    !/[\r\n]/.test(value)
+    value.trim() === value &&
+    !/[\r\n]/.test(value) &&
+    /^[\x20-\x7e]+$/.test(value)
   );
 }
 
@@ -27,7 +29,7 @@ export function registerAgentRuntimeCallsite(
 ): void {
   if (
     version !== AGENT_RUNTIME_PROVENANCE_VERSION ||
-    !supportedOpaqueToken(callsite)
+    !supportedCallsite(callsite)
   ) {
     return;
   }
@@ -47,7 +49,7 @@ export function takeAgentRuntimeCallsite(spec: object): string | undefined {
   const record = invocationCallsites.get(spec);
   invocationCallsites.delete(spec);
   const callsite =
-    record?.active && supportedOpaqueToken(record.callsite)
+    record?.active && supportedCallsite(record.callsite)
       ? record.callsite
       : undefined;
   if (record) record.active = false;

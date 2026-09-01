@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
@@ -10,6 +11,63 @@ const CARRIER_EXPORT = "@sapiom/tools/_internal/agent-runtime-provenance";
 const VERSION_HEADER = "x-sapiom-runtime-provenance-version";
 const CALLSITE_HEADER = "x-sapiom-runtime-callsite-evidence";
 const LINEAGE_HEADER = "x-sapiom-runtime-lineage-receipt";
+
+function verifyIsolatedFormat(label, source, inputType) {
+  const result = spawnSync(
+    process.execPath,
+    [...(inputType ? ["--input-type", inputType] : []), "--eval", source],
+    {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: { ...process.env, SAPIOM_API_KEY: "isolated-format-key" },
+    },
+  );
+  assert.equal(
+    result.status,
+    0,
+    `${label} isolated probe failed\n${result.stdout}\n${result.stderr}`,
+  );
+}
+
+const isolatedServerSource = `
+let execution = 0;
+globalThis.fetch = async (_input, init = {}) => {
+  new Headers(init.headers);
+  if (init.method === "POST") {
+    execution += 1;
+    return new Response(JSON.stringify({ status: "enqueued", executionId: "isolated-" + execution }), { status: 201, headers: { "content-type": "application/json" } });
+  }
+  return new Response(JSON.stringify({ status: "completed", output: { ok: true }, error: null }), { status: 200, headers: { "content-type": "application/json" } });
+};`;
+
+verifyIsolatedFormat(
+  "ESM native transport",
+  `
+import { createRequire } from "node:module";
+${isolatedServerSource}
+const require = createRequire(import.meta.url);
+const tools = await import("@sapiom/tools");
+const handle = await tools.agents.launch({ definition: "esm-native-launch" });
+if ((await handle.wait({ pollMs: 1 })).status !== "completed") process.exit(2);
+if ((await tools.agents.run({ definition: "esm-native-run" })).status !== "completed") process.exit(3);
+if (Object.keys(require.cache).some((path) => path.endsWith("/dist/cjs/_client/index.js"))) process.exit(4);
+`,
+  "module",
+);
+
+verifyIsolatedFormat(
+  "CJS native transport",
+  `
+${isolatedServerSource}
+const tools = require("@sapiom/tools");
+(async () => {
+  const handle = await tools.agents.launch({ definition: "cjs-native-launch" });
+  if ((await handle.wait({ pollMs: 1 })).status !== "completed") process.exit(2);
+  if ((await tools.agents.run({ definition: "cjs-native-run" })).status !== "completed") process.exit(3);
+  if (Object.keys(require.cache).some((path) => path.includes("/dist/esm/"))) process.exit(4);
+})().catch((error) => { console.error(error); process.exit(5); });
+`,
+);
 
 function fakeAgentServer() {
   const calls = [];
@@ -75,8 +133,48 @@ async function verifySameFormat(label, tools, carrier) {
 
 const cjsTools = require("@sapiom/tools");
 const cjsCarrier = require(CARRIER_EXPORT);
+const cjsSandboxes = require("@sapiom/tools/sandboxes");
+const cjsRepositories = require("@sapiom/tools/repositories");
+const cjsMemory = require("@sapiom/tools/memory");
+const cjsFileStorage = require("@sapiom/tools/file-storage");
+const cjsContentGeneration = require("@sapiom/tools/content-generation");
+const cjsSearch = require("@sapiom/tools/search");
+const cjsDatabase = require("@sapiom/tools/database");
+const cjsRootSource = readFileSync(
+  resolve(packageRoot, "dist/cjs/index.js"),
+  "utf8",
+);
 assert.equal("default" in cjsTools, false);
 assert.equal("default" in cjsCarrier, false);
+assert.match(cjsRootSource, /require\("\.\/client\.js"\)/);
+assert.doesNotMatch(cjsRootSource, /runtime-provenance\.cjs/);
+assert.equal(cjsTools.Sandbox, cjsSandboxes.Sandbox);
+assert.equal(cjsTools.Repository, cjsRepositories.Repository);
+assert.equal(cjsTools.MemoryHttpError, cjsMemory.MemoryHttpError);
+assert.equal(
+  cjsTools.FileStorageHttpError,
+  cjsFileStorage.FileStorageHttpError,
+);
+assert.equal(
+  cjsTools.ContentGenerationHttpError,
+  cjsContentGeneration.ContentGenerationHttpError,
+);
+assert.equal(cjsTools.SearchHttpError, cjsSearch.SearchHttpError);
+assert.equal(cjsTools.DatabaseHttpError, cjsDatabase.DatabaseHttpError);
+assert.equal(cjsTools.sandboxes.create, cjsSandboxes.create);
+assert.equal(cjsTools.repositories.create, cjsRepositories.create);
+assert.equal(cjsTools.memory.recall, cjsMemory.recall);
+assert.equal(cjsTools.agents.launch.name, "launch");
+assert.equal(cjsTools.agents.launch.length, 1);
+assert.equal(cjsTools.agents.launch.constructor.name, "AsyncFunction");
+const cjsClientModules = Object.values(require.cache).filter((loaded) =>
+  loaded?.filename.endsWith("/dist/cjs/_client/index.js"),
+);
+assert.equal(cjsClientModules.length, 1);
+assert.equal(
+  cjsClientModules[0].exports.defaultTransport(),
+  cjsClientModules[0].exports.defaultTransport(),
+);
 assert.throws(
   () => require("@sapiom/tools/dist/cjs/agents/runtime-callsite-store.js"),
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
@@ -85,6 +183,13 @@ await verifySameFormat("cjs", cjsTools, cjsCarrier);
 
 const esmTools = await import("@sapiom/tools");
 const esmCarrier = await import(CARRIER_EXPORT);
+const esmSandboxes = await import("@sapiom/tools/sandboxes");
+const esmRepositories = await import("@sapiom/tools/repositories");
+const esmMemory = await import("@sapiom/tools/memory");
+const esmFileStorage = await import("@sapiom/tools/file-storage");
+const esmContentGeneration = await import("@sapiom/tools/content-generation");
+const esmSearch = await import("@sapiom/tools/search");
+const esmDatabase = await import("@sapiom/tools/database");
 await assert.rejects(
   import("@sapiom/tools/dist/esm/agents/runtime-callsite-store.js"),
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
@@ -92,12 +197,39 @@ await assert.rejects(
 assert.equal("default" in esmTools, false);
 assert.equal("default" in esmCarrier, false);
 assert.deepEqual(Object.keys(esmTools).sort(), Object.keys(cjsTools).sort());
-assert.equal(esmTools.createClient, cjsTools.createClient);
+assert.equal(esmTools.Sandbox, esmSandboxes.Sandbox);
+assert.equal(esmTools.Repository, esmRepositories.Repository);
+assert.equal(esmTools.MemoryHttpError, esmMemory.MemoryHttpError);
+assert.equal(
+  esmTools.FileStorageHttpError,
+  esmFileStorage.FileStorageHttpError,
+);
+assert.equal(
+  esmTools.ContentGenerationHttpError,
+  esmContentGeneration.ContentGenerationHttpError,
+);
+assert.equal(esmTools.SearchHttpError, esmSearch.SearchHttpError);
+assert.equal(esmTools.DatabaseHttpError, esmDatabase.DatabaseHttpError);
+assert.equal(esmTools.sandboxes.create, esmSandboxes.create);
+assert.equal(esmTools.repositories.create, esmRepositories.create);
+assert.equal(esmTools.memory.recall, esmMemory.recall);
+assert.equal(esmTools.agents.launch.name, "launch");
+assert.equal(esmTools.agents.launch.length, 1);
+assert.equal(esmTools.agents.launch.constructor.name, "AsyncFunction");
 assert.equal(
   esmCarrier.carryAgentRuntimeProvenance,
   cjsCarrier.carryAgentRuntimeProvenance,
 );
 await verifySameFormat("esm", esmTools, esmCarrier);
+
+const esmRootSource = readFileSync(
+  resolve(packageRoot, "dist/esm/index.js"),
+  "utf8",
+);
+assert.match(esmRootSource, /from "\.\/client\.js"/);
+assert.match(esmRootSource, /export \* as agents from "\.\/agents\/index\.js"/);
+assert.doesNotMatch(esmRootSource, /\.\.\/cjs\/index\.js/);
+assert.doesNotMatch(esmRootSource, /runtime-provenance\.cjs/);
 
 async function verifyCrossFormatCallsite(label, tools, carrier) {
   const server = fakeAgentServer();
@@ -192,14 +324,21 @@ const forbiddenHelperNames = [
 for (const name of forbiddenHelperNames) {
   assert.equal(loadedExportNames.includes(name), false);
 }
-const supportedCacheExports = new Set([
+const supportedProvenanceCacheExports = new Set([
   ...Object.keys(cjsTools),
+  ...Object.keys(cjsTools.agents),
   ...Object.keys(cjsCarrier),
 ]);
-for (const loaded of loadedToolsModules) {
+const loadedProvenanceModules = loadedToolsModules.filter(
+  (loaded) =>
+    loaded.filename.endsWith("/agents/index.js") ||
+    loaded.filename.includes("agent-runtime-provenance") ||
+    loaded.filename.includes("runtime-provenance.cjs"),
+);
+for (const loaded of loadedProvenanceModules) {
   assert.deepEqual(
     Object.keys(loaded.exports).filter(
-      (name) => !supportedCacheExports.has(name),
+      (name) => !supportedProvenanceCacheExports.has(name),
     ),
     [],
     `unsupported cache exports from ${loaded.filename}`,
@@ -269,5 +408,5 @@ for (const loaded of loadedAfterStub) {
 }
 
 console.log(
-  "runtime provenance package surfaces: cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
+  "runtime provenance package surfaces: native roots, constructor identity, cache-private CJS + ESM, four cross-format paths, and both stub formats passed",
 );

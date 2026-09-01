@@ -9,4 +9,7 @@ that receipt through a trusted, one-shot build callsite. Private receipt state i
 not package-exported; reflected values are redacted from errors. Request/result
 JSON and calls without metadata remain unchanged. CJS and ESM imports share one
 bundled lexical store, including mixed-format direct handoffs, without exposing
-private extraction or rebinding helpers through the module cache.
+private extraction or rebinding helpers through the module cache. Build tooling
+uses the unsupported implementation subpath
+`@sapiom/tools/_internal/agent-runtime-provenance`; that subpath may change in
+any release.

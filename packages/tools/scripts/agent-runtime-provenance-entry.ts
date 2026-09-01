@@ -1,4 +1,4 @@
-export * from "../src/index.js";
+export * as agents from "../src/agents/index.js";
 export {
   AGENT_RUNTIME_PROVENANCE_VERSION,
   carryAgentRuntimeProvenance,
