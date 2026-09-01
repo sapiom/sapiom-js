@@ -1,5 +1,12 @@
 # @sapiom/orchestration-runtime
 
+## 0.7.1
+
+### Patch Changes
+
+- Updated dependencies [917c930]
+  - @sapiom/agent@0.13.0
+
 ## 0.7.0
 
 ### Minor Changes

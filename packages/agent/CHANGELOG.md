@@ -1,5 +1,16 @@
 # @sapiom/orchestration
 
+## 0.13.0
+
+### Minor Changes
+
+- 917c930: Add `PACKAGE_INVENTORY_PROTOCOL`, `packageInventorySchema`, and the public package-inventory types for validating versioned working-tree and immutable-bundle agent inventories.
+
+### Patch Changes
+
+- Updated dependencies [41ce013]
+  - @sapiom/tools@0.34.0
+
 ## 0.12.2
 
 ### Patch Changes

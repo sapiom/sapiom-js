@@ -1,5 +1,28 @@
 # @sapiom/harness
 
+## 0.12.0
+
+### Minor Changes
+
+- 917c930: Project dependency graphs now open before source-name inspection finishes. They enrich identities in the background, retain per-agent identity warnings without holding an otherwise settled graph out of cache, and keep retryable reads recoverable. Navigation targets are served with the exact graph revision they belong to, so opening an agent from the map lands on the right one.
+- 1107764: Discover markerless `defineAgent` and legacy `defineOrchestration` projects plus literal direct source invocations with bounded syntax-only analysis, conservative reconciliation, and live rail/system-graph updates without importing, bundling, type-checking, or executing project code. Public direct invocation edges use `basis: "static-invocation"`. Markerless agents inside nested Git repositories are discovered when that repository is selected directly; package-wide output-to-input data flow remains a separate evidence provider.
+
+  **Breaking:** Public system-graph invocation edges that previously carried `basis: "static"` now carry `basis: "static-invocation"`.
+
+  **Migration:** Consumers that validate or deserialize `GET /api/workspaces/:workspaceKey/system-graph` responses must accept `"static-invocation"` as the invocation-edge `basis` value before upgrading.
+
+- a7d4185: `HarnessSettings.helpSeen` records that the first-run Studio explainer has been dismissed. The flag previously lived in browser `localStorage`, which is keyed by origin; hosts that bind an ephemeral port — the desktop app does, on every boot — presented a new origin with empty storage each launch and re-showed the card every time. It is now per-install and origin-independent, and it survives a reset of the client-side `ui-prefs` blob.
+
+  Also fixes `PATCH /api/settings` silently dropping `telemetryNoticeDismissed`: the field was absent from the request schema, which strips unknown keys, so the request succeeded and nothing was written. Because nothing was ever stored, there is no earlier dismissal to honour — installs will see the telemetry notice one final time after upgrading, and the next dismissal is the first one that persists. `settings.json` gains the key at that point.
+
+### Patch Changes
+
+- bf380c3: Agent Studio now packs agents without detected relationships into a labeled grid below connected graph components, keeping sparse project maps at a usable height.
+- 89430fa: Agent Studio's folder fields now open the operating system's folder browser on the desktop app, and fall back to path completion in the `npx` browser host; the in-app directory listing is removed. The Add a project dialog is reduced to one line of guidance and a single action — its second button, "Add every agent under this folder", is gone because adding a project already brings in the agents below it.
+- Updated dependencies [917c930]
+  - @sapiom/agent@0.13.0
+  - @sapiom/agent-core@0.13.3
+
 ## 0.11.0
 
 ### Minor Changes

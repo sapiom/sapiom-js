@@ -1,5 +1,15 @@
 # @sapiom/orchestration-core
 
+## 0.13.3
+
+### Patch Changes
+
+- Updated dependencies [917c930]
+- Updated dependencies [41ce013]
+  - @sapiom/agent@0.13.0
+  - @sapiom/tools@0.34.0
+  - @sapiom/agent-runtime@0.7.1
+
 ## 0.13.2
 
 ### Patch Changes
