@@ -268,6 +268,28 @@ describe("PlannerGreetingCoordinator", () => {
     expect(session.planning?.queuedInputIds).toEqual([]);
   });
 
+  it("does not extend the readiness deadline on live re-registration", async () => {
+    vi.useFakeTimers();
+    session.ready = false;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 100,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await vi.advanceTimersByTimeAsync(60);
+    await coordinator.register(session, { emptyProject: true, mode: "live" });
+    await vi.advanceTimersByTimeAsync(41);
+    await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
+      .writes.get(session.id);
+
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "session_not_ready",
+    });
+  });
+
   it("classifies an exit from pending and clears stale correlation state", async () => {
     session.ready = false;
     const coordinator = new PlannerGreetingCoordinator({

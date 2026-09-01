@@ -315,6 +315,7 @@ export class PlannerGreetingCoordinator {
   }
 
   private armTimer(sessionId: string, key: "pending" | string): void {
+    if (this.timers.get(sessionId)?.key === key) return;
     this.clearTimer(sessionId);
     const handle = setTimeout(() => {
       void this.fail(sessionId, key, key === "pending" ? "session_not_ready" : "delivery_timeout", true);
