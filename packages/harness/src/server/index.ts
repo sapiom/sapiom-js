@@ -89,6 +89,7 @@ import {
   type McpDevServerCommand,
 } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import {
   removeGeneratedSessionDir,
@@ -461,6 +462,10 @@ function readVersion(): string {
  * null when unauthenticated / --no-auth) flows into the generated mcp-config
  * so the remote `sapiom` MCP is actually authenticated — a factory rather
  * than a plain function since it's per-server-instance state.
+ *
+ * The system prompt itself is FETCHED per session (SAP-2810) rather than read from
+ * the bundled profile, so prompt improvements reach installs that never upgrade the
+ * package; the bundled profile remains the offline fallback inside that fetch.
  */
 function createDefaultBuildLaunchOpts(
   apiKey: string | null,
@@ -472,6 +477,12 @@ function createDefaultBuildLaunchOpts(
     deliveryFor: (harness: HarnessKind) => SystemPromptDelivery;
   },
   sapiomDevMcp?: McpDevServerCommand,
+  /**
+   * Loads the coding-agent system prompt for this session (SAP-2810). Defaults to
+   * the live fetch of GET /v1/harness/system-prompt, which resolves to the bundled
+   * DEFAULT_SYSTEM_PROMPT offline — injectable so tests never touch the network.
+   */
+  loadSystemPrompt: () => Promise<string> = fetchSystemPromptForActiveEnvironment,
 ): LaunchOptsBuilder {
   return async (harnessSessionId, req) => {
     // Portable continue (SAP-2059). Resolved before the prompt file is
@@ -510,26 +521,31 @@ function createDefaultBuildLaunchOpts(
           ? "dark-ansi"
           : undefined;
 
-    const [settings, mcpConfigFile, systemPromptFile, pluginDir] =
-      await Promise.all([
-        generateClaudeSettings({
-          harnessSessionId,
-          generatedRoot,
-          ...(claudeTheme ? { claudeTheme } : {}),
-        }),
-        generateMcpConfig(harnessSessionId, {
-          environment: process.env.SAPIOM_ENVIRONMENT,
-          apiKey,
-          generatedRoot,
-          harnessVersion: readVersion(),
-          ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
-        }),
-        generateSystemPromptFile(harnessSessionId, {
-          generatedRoot,
-          ...(viaSystemPrompt ? { appendix: brief } : {}),
-        }),
-        generateSkillsPlugin(harnessSessionId, { generatedRoot }),
-      ]);
+    // The served prompt (SAP-2810): loaded per session start, so a backend deploy
+    // reaches an install that never upgraded @sapiom/harness. Never throws — an
+    // offline, slow or erroring backend resolves to the bundled DEFAULT_SYSTEM_PROMPT,
+    // which is exactly what `generateSystemPromptFile` would have written anyway.
+    const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
+      generateClaudeSettings({
+        harnessSessionId,
+        generatedRoot,
+        ...(claudeTheme ? { claudeTheme } : {}),
+      }),
+      generateMcpConfig(harnessSessionId, {
+        environment: process.env.SAPIOM_ENVIRONMENT,
+        apiKey,
+        generatedRoot,
+        harnessVersion: readVersion(),
+        ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
+      }),
+      loadSystemPrompt(),
+      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
+    ]);
+    const systemPromptFile = await generateSystemPromptFile(harnessSessionId, {
+      generatedRoot,
+      prompt,
+      ...(viaSystemPrompt ? { appendix: brief } : {}),
+    });
     return {
       settingsFile: settings.settingsPath,
       mcpConfigFile,
