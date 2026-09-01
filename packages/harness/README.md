@@ -146,6 +146,12 @@ pre-`/resume` identity), before probing or spawning an agent.
 Clients must open, message, and retry planners through the project-scoped
 routes above. Generic coding-agent sessions also use the durable vendor-ID pin;
 their only rotation exception is the same trusted `/clear`/`/resume` gesture.
+On upgrade, if legacy `sessions.json` rows contain the same vendor resume
+pointer, the first persisted row keeps it and later duplicate rows are repaired
+to `agentSessionId: null`. This does not delete the provider's transcript or
+conversation history, but the losing local row can no longer resume or adopt
+that fenced identity. Start a fresh session in the losing row's directory to
+continue there.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 

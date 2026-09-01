@@ -24,3 +24,9 @@ vendor identity to a durable session owner: conflicting `SessionStart` claims
 are rejected. The only rotation exception is a short-lived, one-shot
 server-observed `/clear` or `/resume` terminal gesture; `/resume` picker input
 may refresh its soft window only within a bounded hard deadline.
+
+On upgrade, duplicate legacy vendor resume pointers are migrated with the first
+persisted `sessions.json` row as owner. Later duplicate rows are rewritten with
+`agentSessionId: null` and cannot resume or re-adopt that fenced identity under
+the losing row. Provider transcripts and conversation history are not deleted;
+start a fresh session in the losing row's directory to continue there.
