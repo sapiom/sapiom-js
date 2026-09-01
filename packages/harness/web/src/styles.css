@@ -39,6 +39,14 @@
      its glyphs land on the pane inset while the hover shape breathes around
      them. Mirrors the studio rail reference. */
   --row-bleed: var(--sp2);
+  /* ONE readable width for floating menus, capped to the viewport. Menus are
+     read as their own surface, so they take this width rather than the width
+     of whatever row opened them. Mirrors the studio rail reference. */
+  --menu-w: min(var(--col-w), calc(100vw - var(--sp4)));
+  /* A menu's own horizontal inset, the --pane-pad-x of a floating surface: its
+     rows bleed by --row-bleed inside it, so the well is inset by the
+     difference and the glyphs still land on one line. */
+  --menu-pad-x: var(--sp3);
   --font-sans: var(--font);
   --font-mono: var(--mono);
 
@@ -1303,6 +1311,10 @@ input {
   font-size: var(--type-meta);
   color: var(--text-dim);
   white-space: nowrap;
+  /* Clips like the name above it: the copy column shrinks with the rail, and a
+     value with nowhere left to go must end rather than run under the CTA. */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The Upgrade CTA rides the shared .pill surface but at a clickable height —
@@ -1479,6 +1491,17 @@ button.rail-footer-card:hover {
   min-width: 12rem;
 }
 
+/* Footer / profile menus: fixed readable width — never match the rail trigger,
+   whose width the user can drag down to the rail minimum, narrower than "Open
+   Sapiom dashboard". A menu is its own surface, so it is sized by what it has
+   to say, not by the row that opened it; the popover's measured pass shifts the
+   wider panel back into view. Mirrors the studio rail reference. */
+.profile-menu {
+  width: var(--menu-w);
+  min-width: 240px;
+  padding: var(--sp2) calc(var(--menu-pad-x) - var(--row-bleed));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .canvas-detail-menu,
   .canvas-run-menu,
@@ -1498,7 +1521,13 @@ button.rail-footer-card:hover {
   align-items: center;
   gap: var(--sp2);
   width: 100%;
-  height: var(--tree-row-h);
+  /* A floor, not a fixed height, and one line: at the fixed menu width a label
+     clips rather than wrapping on top of the row below it. */
+  height: auto;
+  min-height: var(--tree-row-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0 var(--sp2);
   border: 0;
   background: transparent;
@@ -2968,11 +2997,14 @@ button.rail-footer-card:hover {
    subtle shadow, and — in light mode — a solid accent fill on hover (the
    product's `hover:bg-accent`); dark mode keeps the more restrained neutral
    hover the outline variant uses there. */
-/* Portaled off the rail's profile row (AnchoredPopover, matchWidth): the
-   surface comes from the ONE popover recipe; only the roomier content
-   padding is its own. */
+/* Portaled off the rail's profile row and opened beside the rail: the surface
+   comes from the ONE popover recipe; only the roomier content padding and its
+   own readable width — the rail's width is the user's to drag, not this
+   panel's — are its own. Mirrors the studio rail reference. */
 .settings-popover {
   padding: var(--sp4);
+  width: min(320px, calc(100vw - var(--sp4)));
+  min-width: 280px;
 }
 
 .settings-identity {

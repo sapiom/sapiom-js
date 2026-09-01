@@ -64,10 +64,61 @@ test("profile menu opens uncropped off the rail footer", async ({ page }) => {
   await expectUncropped(page, page.getByTestId("profile-menu"));
 });
 
-test("settings popover opens uncropped off the rail footer", async ({ page }) => {
+/* The profile menu carries its own readable width; the narrowest rail is where
+   inheriting the trigger's width used to wrap labels over each other. */
+test("profile menu rows stay single-line at the rail's minimum width", async ({ page }) => {
+  await page.evaluate(() => {
+    localStorage.setItem("sapiom-harness-pane-widths", JSON.stringify({ rail: 180 }));
+  });
+  await page.reload();
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+
+  const trigger = page.getByTestId("brand-identity");
+  await trigger.click();
+  const menu = page.getByTestId("profile-menu");
+  await expect(menu).toBeVisible();
+
+  const rows = await menu.locator(".profile-menu-item").evaluateAll((els) =>
+    els.map((el) => {
+      const rect = el.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, height: rect.height, overflow: el.scrollHeight - el.clientHeight };
+    }),
+  );
+  expect(rows.length).toBeGreaterThan(2);
+  for (const row of rows) {
+    // --tree-row-h is 30px; a wrapped label would double this.
+    expect(row.height, "row is one line tall").toBeLessThanOrEqual(31);
+    // A wrapped label spilling past a fixed-height row is what reads as
+    // "overlapping menu items" on screen while the boxes still look fine.
+    expect(row.overflow, "label fits inside its row").toBeLessThanOrEqual(1);
+  }
+  for (let i = 1; i < rows.length; i += 1) {
+    expect(rows[i].top, "row starts below the one before it").toBeGreaterThanOrEqual(rows[i - 1].bottom - 0.5);
+  }
+  // The panel keeps its own width rather than squeezing into the narrow rail.
+  const triggerBox = await trigger.boundingBox();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox!.width).toBeGreaterThan(triggerBox!.width);
+  expect(menuBox!.width, "menu holds its readable floor").toBeGreaterThanOrEqual(240);
+  // And it opens beside the rail rather than over it: on the rail's own
+  // footprint a panel this shape reads as nothing having happened.
+  const railBox = await page.locator(".rail-workflows").boundingBox();
+  expect(menuBox!.x, "menu clears the rail's right edge").toBeGreaterThanOrEqual(railBox!.x + railBox!.width);
+  await expectUncropped(page, menu);
+});
+
+test("settings popover opens beside the rail, uncropped", async ({ page }) => {
   await page.getByTestId("brand-identity").click();
   await page.getByTestId("settings-trigger").click();
-  await expectUncropped(page, page.getByTestId("settings-popover"));
+  const popover = page.getByTestId("settings-popover");
+  await expectUncropped(page, popover);
+
+  const popoverBox = await popover.boundingBox();
+  expect(popoverBox!.width, "popover holds its readable floor").toBeGreaterThanOrEqual(280);
+  const railBox = await page.locator(".rail-workflows").boundingBox();
+  expect(popoverBox!.x, "popover clears the rail's right edge").toBeGreaterThanOrEqual(
+    railBox!.x + railBox!.width,
+  );
 });
 
 test("session bar menu opens uncropped at the header's right cluster", async ({ page }) => {
