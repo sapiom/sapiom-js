@@ -125,9 +125,20 @@ async function collectRegisteredExampleAssets(
 /** Directories never walked when discovering published markdown. */
 const UNWALKED_DIRECTORIES = new Set([
   "node_modules",
-  // Build output. Its markdown is generated from `src`, which IS audited, and whether it exists at
-  // all depends on build state — walking it would make the audited-file count differ between a
-  // fresh checkout and a built tree.
+  // Build output.
+  //
+  // INVARIANT: no published package emits markdown into `dist`, so `dist` markdown could only be a
+  // copy of `src`, which IS audited. Every published build is `tsc` plus a one-line `package.json`
+  // write, with ONE exception worth knowing: `@sapiom/harness` also runs `vite build` into
+  // `dist/web`, and vite copies its `publicDir` VERBATIM — so a `.md` dropped in `web/public` would
+  // publish unaudited. There is none today. (`harness-desktop` also has a copy step but is
+  // `private: true`, so it never publishes.)
+  //
+  // RE-CHECK THIS if a build starts emitting or copying docs into `dist` — the exclusion becomes a
+  // silent hole and this entry should go. Note the set is deliberately asymmetric: other published
+  // output directories (`agent-studio`'s `bin` / `lib`, `agent-core`'s `skills` / `templates`) ARE
+  // walked; only generated-from-`src` output is skipped. Secondary benefit — the audited-file count
+  // does not depend on whether the tree happens to be built.
   "dist",
 ]);
 

@@ -284,8 +284,9 @@ If no model satisfies the constraints, the request fails before any charge.
 
 `select` is typed per media type, because the two do not offer the same capabilities.
 **`requires` is video-only.** No image model in the catalog declares a capability tag, so
-`ImageSelect` is `{ prefer?: "cheapest" }` and asking an image call for `requires` is a
-compile error rather than a request that can only fail:
+`ImageSelect` declares `requires?: never` — a prohibition, not an option you can set —
+and asking an image call for `requires` is a compile error rather than a request that
+could only fail:
 
 ```typescript
 // Images: prefer is the whole surface.
@@ -295,8 +296,22 @@ await sapiom.contentGeneration.images.create({
 });
 ```
 
-If image conditioning is cataloged later, `requires` gets added to `ImageSelect` — a
-non-breaking change, which is why it is left off now rather than shipped unsatisfiable.
+It is declared as `never` rather than simply left out because omitting it only catches
+inline object literals. TypeScript's excess-property check does not apply to a value built
+elsewhere and passed by reference, so this would have slipped through to a runtime
+rejection:
+
+```typescript
+const opts = { prefer: "cheapest", requires: ["lipsync"] };
+await sapiom.contentGeneration.images.create({ prompt, select: opts }); // caught
+```
+
+Declaring the property makes it a type error however the value was assembled. (With
+`exactOptionalPropertyTypes` off, the compiler words that as "not assignable to type
+`undefined`" rather than naming `never`.)
+
+If image conditioning is cataloged later, `requires` becomes a real tag list on
+`ImageSelect` — a non-breaking change.
 
 Writing code generic over both media types? `MediaSelect` is the shape the two share
 (`{ prefer?: "cheapest" }`), and a value of that type is accepted by either call. It is
