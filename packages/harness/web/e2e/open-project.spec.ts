@@ -38,7 +38,7 @@ const projectRows = (
     );
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?mockFixtures=agent-map");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 

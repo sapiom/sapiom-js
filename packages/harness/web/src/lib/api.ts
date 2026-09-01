@@ -1979,16 +1979,16 @@ export class MockApi implements HarnessApi {
   }
 
   private studioProjects(): StudioProjectSummary[] {
-    // Keep one deterministic mock seam for the legacy System Graph fallback.
-    // Production authority is determined by the server response; this query
-    // parameter only lets browser tests model a server that has no durable
-    // Studio project summaries yet.
-    if (
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockStudioProjects") ===
-        "absent"
-    ) {
-      return [];
+    // Production authority is determined by the server response and always
+    // uses durable Studio project summaries. Mock mode keeps the historical
+    // fixtures stable unless a plan-first scenario opts in explicitly; the
+    // dedicated agent-map fixture is also an opt-in. This is test data
+    // selection, not a product feature flag.
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get("mockStudioProjects");
+      const fixture = params.get("mockFixtures");
+      if (mode !== "present" && fixture !== "agent-map") return [];
     }
     const timestamp = "2026-01-01T00:00:00.000Z";
     return this.workspaceScopes().map((scope, index) => ({
