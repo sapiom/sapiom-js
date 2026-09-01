@@ -17,6 +17,7 @@ import {
   createIngestRouter,
   processIngest,
   type IngestDeps,
+  type IngestRouterOptions,
   type IngestSessionContext,
 } from "./ingest.js";
 
@@ -59,7 +60,10 @@ describe("createIngestRouter", () => {
   }>;
   let sessions: Map<string, IngestSessionContext>;
 
-  function start(depsOverride: Partial<IngestDeps> = {}) {
+  function start(
+    depsOverride: Partial<IngestDeps> = {},
+    routerOptions: IngestRouterOptions = {},
+  ) {
     stored = [];
     enqueued = [];
     resolved = [];
@@ -105,7 +109,7 @@ describe("createIngestRouter", () => {
     };
 
     const app = express();
-    app.use(createIngestRouter(deps));
+    app.use(createIngestRouter(deps, routerOptions));
     server = app.listen(0);
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -129,6 +133,23 @@ describe("createIngestRouter", () => {
     const res = await postIngest(baseUrl, [], INGEST_TOKEN);
     expect(res.status).toBe(401);
     expect(stored).toEqual([]);
+  });
+
+  it("rate limits repeated ingest requests before unbounded processing", async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    start({}, { rateLimitMax: 1 });
+
+    const body = {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1", prompt: "hello" },
+    };
+    const accepted = await postIngest(baseUrl, body);
+    const limited = await postIngest(baseUrl, body);
+
+    expect(accepted.status).toBe(200);
+    expect(limited.status).toBe(429);
+    await vi.waitFor(() => expect(stored).toHaveLength(1));
   });
 
   it("binds a valid bearer token to the body session id", async () => {

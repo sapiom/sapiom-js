@@ -9,6 +9,7 @@
  */
 
 import express, { type Router } from "express";
+import rateLimit from "express-rate-limit";
 
 import type { AnalyticsEvent, HarnessKind } from "../shared/types.js";
 import type { NormalizeContext } from "../core/collector/normalizer.js";
@@ -104,6 +105,12 @@ export interface IngestRequestBody {
   receivedAt?: string;
   harnessSessionId?: string;
   payload?: Record<string, unknown>;
+}
+
+export interface IngestRouterOptions {
+  /** Test seam; production permits sustained hook traffic while bounding floods. */
+  rateLimitWindowMs?: number;
+  rateLimitMax?: number;
 }
 
 function bearerToken(header: string | undefined): string | null {
@@ -223,12 +230,24 @@ async function processIngestNow(
   }
 }
 
-export function createIngestRouter(deps: IngestDeps): Router {
+export function createIngestRouter(
+  deps: IngestDeps,
+  options: IngestRouterOptions = {},
+): Router {
   const seqCounter = deps.seqCounter ?? createSeqCounter();
   const router = express.Router();
+  const ingestRateLimiter = rateLimit({
+    windowMs: options.rateLimitWindowMs ?? 60 * 1000,
+    // One local Studio can run many hook-producing sessions concurrently.
+    // 100 requests/second leaves ample headroom without allowing an agent or
+    // invalid-token caller to spin an unbounded authorization/processing loop.
+    max: options.rateLimitMax ?? 6_000,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
   router.use(express.json({ limit: "1mb" }));
 
-  router.post("/ingest", (req, res) => {
+  router.post("/ingest", ingestRateLimiter, (req, res) => {
     const token = bearerToken(req.headers.authorization);
     const body: IngestRequestBody =
       typeof req.body === "object" && req.body !== null && !Array.isArray(req.body)

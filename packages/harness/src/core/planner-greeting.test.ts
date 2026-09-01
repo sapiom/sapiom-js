@@ -132,6 +132,20 @@ describe("PlannerGreetingCoordinator", () => {
     expect(durable.inputs).toEqual([]);
   });
 
+  it("rejects a planner session identity that could escape the queue root", async () => {
+    session = plannerSession("../outside-planner-root");
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+
+    await expect(
+      coordinator.register(session, { emptyProject: true, mode: "created" }),
+    ).rejects.toThrow("invalid planner session storage identity");
+    await expect(fs.readdir(root)).resolves.toEqual([]);
+  });
+
   it("recovers a generating restart without duplicating onboarding", async () => {
     const first = new PlannerGreetingCoordinator({
       root,

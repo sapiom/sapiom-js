@@ -9,6 +9,7 @@ import type {
   PlannerSessionMetadata,
 } from "../shared/agent-map.js";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
+import { childPath } from "./path-safety.js";
 import {
   SessionInputGuardRejectedError,
   SessionManager,
@@ -318,6 +319,7 @@ function telemetryPayload(event: AnalyticsEvent): Record<string, unknown> {
 }
 
 export class PlannerGreetingCoordinator {
+  private readonly root: string;
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly deliveryTimeoutMs: number;
@@ -340,17 +342,26 @@ export class PlannerGreetingCoordinator {
   private readonly adoptedSessions = new Set<string>();
 
   constructor(private readonly options: PlannerGreetingCoordinatorOptions) {
+    this.root = path.resolve(options.root);
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 45_000;
   }
 
+  private sessionDirectory(sessionId: string): string {
+    const directory = childPath(this.root, sessionId);
+    if (directory === null) {
+      throw new Error("invalid planner session storage identity");
+    }
+    return directory;
+  }
+
   private file(sessionId: string): string {
-    return path.join(this.options.root, sessionId, "input-queue.json");
+    return path.join(this.sessionDirectory(sessionId), "input-queue.json");
   }
 
   private acceptedFile(sessionId: string): string {
-    return path.join(this.options.root, sessionId, "accepted-inputs.json");
+    return path.join(this.sessionDirectory(sessionId), "accepted-inputs.json");
   }
 
   private emit(event: PlannerLifecycleEvent): void {
