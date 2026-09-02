@@ -190,4 +190,188 @@ describe("AgentMapProposalService", () => {
     });
     expect(accepted).not.toHaveBeenCalled();
   });
+
+  it("selects one first writer across independent service instances", async () => {
+    const { root } = await fixture();
+    const left = new AgentMapProposalService(new AgentMapWorkspaceStore(root), {
+      allocator: new Ids(),
+    });
+    const right = new AgentMapProposalService(
+      new AgentMapWorkspaceStore(root),
+      {
+        allocator: new Ids(),
+      },
+    );
+    const outcomes = await Promise.allSettled([
+      left.propose(identity("session-left"), addNode("left", 0, null)),
+      right.propose(identity("session-right"), addNode("right", 0, null)),
+    ]);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(1);
+    expect((await left.read(projectId)).proposal).toMatchObject({
+      version: 1,
+      nodes: [expect.any(Object)],
+    });
+  });
+
+  it("uses the same write path for planner, assigned, and unplanned builders", async () => {
+    const { service } = await fixture();
+    const first = await service.propose(
+      identity("planner"),
+      addNode("planner", 0, null),
+    );
+    const assigned: PlanningSessionIdentity = {
+      projectId,
+      userId: "user-1",
+      sessionId: "assigned",
+      role: "agent-builder",
+      assignment: { kind: "planned", agentId: "planned-agent" },
+    };
+    await service.propose(assigned, addNode("assigned", 1, first.proposalId));
+    const unplanned: PlanningSessionIdentity = {
+      projectId,
+      userId: "user-1",
+      sessionId: "unplanned",
+      role: "agent-builder",
+      assignment: { kind: "unplanned" },
+    };
+    await service.propose(unplanned, addNode("unplanned", 2, first.proposalId));
+    expect(
+      (await service.read(projectId)).proposal?.history.map(
+        ({ actor }) => actor,
+      ),
+    ).toEqual([
+      {
+        userId: "user-1",
+        sessionId: "planner",
+        role: "map-planner",
+        assignment: null,
+      },
+      {
+        userId: "user-1",
+        sessionId: "assigned",
+        role: "agent-builder",
+        assignment: { kind: "planned", agentId: "planned-agent" },
+      },
+      {
+        userId: "user-1",
+        sessionId: "unplanned",
+        role: "agent-builder",
+        assignment: { kind: "unplanned" },
+      },
+    ]);
+  });
+
+  it("rejects semantic-edge and delete/update stale conflicts", async () => {
+    const { service } = await fixture();
+    const initial = await service.propose(identity("planner"), {
+      schemaVersion: 1,
+      proposalId: null,
+      expectedVersion: 0,
+      requestId: "initial",
+      operations: [
+        {
+          kind: "add-node",
+          draftRef: "a" as DraftRef,
+          node: {
+            kind: "agent",
+            name: "A",
+            purpose: "A",
+            ownerAgent: null,
+            contractRefs: [],
+          },
+        },
+        {
+          kind: "add-node",
+          draftRef: "b" as DraftRef,
+          node: {
+            kind: "agent",
+            name: "B",
+            purpose: "B",
+            ownerAgent: null,
+            contractRefs: [],
+          },
+        },
+      ],
+    });
+    const relationship = (requestId: string): ProposalBatchRequest => ({
+      schemaVersion: 1,
+      proposalId: initial.proposalId,
+      expectedVersion: 1,
+      requestId,
+      operations: [
+        {
+          kind: "add-relationship",
+          draftRef: requestId as DraftRef,
+          relationship: {
+            from: { nodeId: initial.allocatedNodeIds["a" as DraftRef]! },
+            to: { nodeId: initial.allocatedNodeIds["b" as DraftRef]! },
+            kind: "invokes",
+            executionMode: "synchronous",
+            contractRef: null,
+            description: requestId,
+          },
+        },
+      ],
+    });
+    await service.propose(identity("one"), relationship("edge-one"));
+    await expect(
+      service.propose(identity("two"), relationship("edge-two")),
+    ).rejects.toMatchObject({ conflict: { code: "stale_version" } });
+
+    const current = (await service.read(projectId)).proposal!;
+    const nodeId = initial.allocatedNodeIds["a" as DraftRef]!;
+    await service.propose(identity("one"), {
+      schemaVersion: 1,
+      proposalId: initial.proposalId,
+      expectedVersion: current.version,
+      requestId: "delete",
+      operations: [
+        {
+          kind: "remove-relationship",
+          relationshipId: current.relationships[0]!.id,
+        },
+        { kind: "remove-node", nodeId },
+      ],
+    });
+    await expect(
+      service.propose(identity("two"), {
+        schemaVersion: 1,
+        proposalId: initial.proposalId,
+        expectedVersion: current.version,
+        requestId: "stale-update",
+        operations: [
+          { kind: "update-node", nodeId, changes: { name: "Changed" } },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      conflict: { code: "stale_version", affectedNodeIds: [nodeId] },
+    });
+  });
+
+  it("does not advance durable state when allocation fails", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agent-map-proposal-"),
+    );
+    roots.push(root);
+    const allocator = new Ids();
+    allocator.allocateNodeId = vi.fn(() => {
+      throw new Error("allocator unavailable");
+    });
+    const service = new AgentMapProposalService(
+      new AgentMapWorkspaceStore(root),
+      { allocator },
+    );
+    await expect(
+      service.propose(identity("session-1"), addNode("request-1", 0, null)),
+    ).rejects.toThrow("allocator unavailable");
+    expect(await service.read(projectId)).toMatchObject({
+      proposal: null,
+      workspace: { recordVersion: 1 },
+    });
+  });
 });
