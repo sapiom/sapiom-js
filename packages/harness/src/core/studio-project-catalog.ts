@@ -45,6 +45,13 @@ export interface ReconciledStudioProjects {
   workspaceScopes: WorkspaceScopeSummary[];
 }
 
+/** Path-free server result used to scope session capabilities. */
+export interface ResolvedStudioProjectIdentity {
+  projectId: StudioProjectId;
+  identityVersion: number;
+  displayName: string;
+}
+
 export class StudioProjectCatalogError extends Error {
   constructor(readonly code: Exclude<AgentMapErrorCode, "project_not_found">) {
     super(
@@ -410,6 +417,52 @@ export class StudioProjectCatalog {
     await this.mutationQueue;
     await this.load(true);
     return this.projects!.map(publicSummary);
+  }
+
+  /**
+   * Resolves a cwd to the most-specific active durable project root. Local
+   * roots remain private; ambiguous equal-specificity matches fail closed.
+   */
+  async resolveIdentityForPath(
+    cwd: string,
+  ): Promise<ResolvedStudioProjectIdentity | null> {
+    await this.mutationQueue;
+    await this.load(true);
+    let canonical: string;
+    try {
+      canonical = canonicalGraphPath(cwd);
+    } catch {
+      return null;
+    }
+    const matches = this.projects!.flatMap((project) =>
+      project.rootBindings
+        .filter(({ status }) => status === "active")
+        .flatMap((binding) => {
+          try {
+            const root = canonicalGraphPath(binding.localRootRef);
+            const relative = path.relative(root, canonical);
+            return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+              ? [{ project, specificity: root.length }]
+              : [];
+          } catch {
+            return [];
+          }
+        }),
+    );
+    if (matches.length === 0) return null;
+    const specificity = Math.max(...matches.map((match) => match.specificity));
+    const winners = new Map(
+      matches
+        .filter((match) => match.specificity === specificity)
+        .map(({ project }) => [project.projectId, project]),
+    );
+    if (winners.size !== 1) return null;
+    const project = [...winners.values()][0]!;
+    return {
+      projectId: project.projectId,
+      identityVersion: project.identityVersion,
+      displayName: project.displayName,
+    };
   }
 
   async create(displayName: string): Promise<StudioProjectSummary> {

@@ -103,6 +103,8 @@ describe("SessionManager", () => {
       adapter?: HarnessAdapter;
       spawnPty?: PtySpawnFn;
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
+      resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
+      onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -136,6 +138,8 @@ describe("SessionManager", () => {
       sessionsPath,
       spawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
+      resolveAgentMapIdentity: opts.resolveAgentMapIdentity,
+      onAgentMapSessionExit: opts.onAgentMapSessionExit,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -1862,6 +1866,44 @@ describe("SessionManager", () => {
     expect(adapter.resume).toHaveBeenLastCalledWith(
       "agent-uuid-1",
       expect.objectContaining({ mcpConfigFile: `/generated/${session.id}/mcp-config.json` }),
+    );
+  });
+
+  it("derives trusted Agent Map identity for create/resume and revokes it on exit", async () => {
+    const buildLaunchOpts = vi.fn(async () => ({}));
+    const onAgentMapSessionExit = vi.fn();
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId,
+      role: "agent-builder" as const,
+      assignment: { kind: "unplanned" as const },
+    }));
+    const { manager, spawns } = makeManager({
+      buildLaunchOpts,
+      resolveAgentMapIdentity,
+      onAgentMapSessionExit,
+    });
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    expect(session.agentMapIdentity).toMatchObject({
+      sessionId: session.id,
+      role: "agent-builder",
+      assignment: { kind: "unplanned" },
+    });
+    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
+      session.id,
+      expect.anything(),
+      expect.objectContaining({ agentMapIdentity: session.agentMapIdentity }),
+    );
+    await manager.setAgentSessionId(session.id, "agent-uuid-map");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+    await manager.resume(session.id);
+    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
+      session.id,
+      expect.anything(),
+      expect.objectContaining({ resume: true, agentMapIdentity: session.agentMapIdentity }),
     );
   });
 

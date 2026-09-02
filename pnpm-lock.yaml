@@ -368,6 +368,9 @@ importers:
 
   packages/harness:
     dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.26.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@sapiom/agent':
         specifier: workspace:^
         version: link:../agent

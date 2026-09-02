@@ -200,7 +200,7 @@ export function buildFocusedPlannerContext(input: {
   };
   return [
     "<agent-map-planner-context>",
-    "This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail.",
+    "This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose.",
     JSON.stringify(context),
     "</agent-map-planner-context>",
   ].join("\n");

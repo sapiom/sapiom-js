@@ -210,6 +210,8 @@ export interface HarnessSession {
   ready: boolean;
   /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
   planning?: import("./agent-map.js").PlannerSessionMetadata;
+  /** Server-authored, path-free identity used only to revalidate MCP scope. */
+  agentMapIdentity?: import("./agent-map.js").PlanningSessionIdentity;
 }
 
 /**
@@ -307,6 +309,8 @@ export interface LaunchOpts {
   systemPromptFile?: string;
   /** Absolute path to the generated MCP config file. */
   mcpConfigFile?: string;
+  /** Session-private embedded Agent Map MCP. Token must never enter argv. */
+  agentMapMcp?: { url: string; bearerToken: string };
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
   /**
@@ -809,6 +813,8 @@ export type AnalyticsEventType =
   | "agent_map.workspace_load_failed"
   | "agent_map.workspace_initialized"
   | "agent_map.workspace_read_failed"
+  | "agent_map.mcp_tool"
+  | "agent_map.capability"
   | "planner_session.created"
   | "planner_session.resumed"
   | "planner_session.input_delivery_uncertain"

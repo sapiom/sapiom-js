@@ -136,4 +136,22 @@ describe("generateMcpConfig", () => {
     const stat = await fs.stat(filePath);
     expect(stat.mode & 0o777).toBe(0o600);
   });
+
+  it("writes a private Agent Map HTTP entry without disturbing existing servers", async () => {
+    const filePath = await generateMcpConfig("session-map", {
+      agentMap: {
+        url: "http://127.0.0.1:4123/mcp/agent-map",
+        bearerToken: "map-secret",
+      },
+    });
+    const config = JSON.parse(await fs.readFile(filePath, "utf8"));
+    expect(config.mcpServers["agent-map"]).toEqual({
+      type: "http",
+      url: "http://127.0.0.1:4123/mcp/agent-map",
+      headers: { Authorization: "Bearer map-secret" },
+    });
+    expect(config.mcpServers.sapiom).toBeDefined();
+    expect(config.mcpServers["sapiom-dev"]).toBeDefined();
+    expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
+  });
 });

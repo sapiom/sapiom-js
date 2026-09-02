@@ -305,7 +305,9 @@ export class CodexAdapter implements HarnessAdapter {
       args: buildConfigArgs(opts),
       // Codex has no analog to Claude's CLAUDECODE nested-agent guard; no env
       // overrides are needed for a fresh launch.
-      env: {},
+      env: opts.agentMapMcp
+        ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
+        : {},
       cwd: opts.cwd,
     };
   }
@@ -314,7 +316,9 @@ export class CodexAdapter implements HarnessAdapter {
     return {
       command: this.binary,
       args: ["resume", agentSessionId, ...buildConfigArgs(opts)],
-      env: {},
+      env: opts.agentMapMcp
+        ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
+        : {},
       cwd: opts.cwd,
     };
   }
@@ -462,6 +466,14 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
     "-c",
     'sandbox_mode="workspace-write"',
   ];
+  if (opts.agentMapMcp) {
+    args.push(
+      "-c",
+      `mcp_servers.agent-map.url=${JSON.stringify(opts.agentMapMcp.url)}`,
+      "-c",
+      'mcp_servers.agent-map.bearer_token_env_var="SAPIOM_AGENT_MAP_CAPABILITY"',
+    );
+  }
   if (opts.systemPromptFile) {
     try {
       const prompt = readFileSync(opts.systemPromptFile, "utf8");

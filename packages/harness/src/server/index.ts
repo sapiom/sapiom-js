@@ -152,7 +152,16 @@ import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import {
+  AgentMapCapabilityRegistry,
+  type AgentMapCapabilityEvent,
+} from "../core/agent-map-capability-registry.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import {
+  createAgentMapMcpRouter,
+  type AgentMapMcpRouter,
+} from "./agent-map-mcp.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
   isPlannerDispatchAuthorized,
@@ -561,6 +570,7 @@ function createDefaultBuildLaunchOpts(
         generatedRoot,
         harnessVersion: readVersion(),
         ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
+        ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
       }),
       loadSystemPrompt().catch((err: unknown) => {
         console.error("[harness] system-prompt load failed:", err);
@@ -583,6 +593,7 @@ function createDefaultBuildLaunchOpts(
       settingsFile: settings.settingsPath,
       mcpConfigFile,
       systemPromptFile,
+      ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
       // Set on BOTH channels: the post-ready path hasn't delivered yet, but a
       // brief exists and will, and this is the flag that tells it to.
@@ -623,6 +634,15 @@ export const startServer = async (
     organizationName: identity?.organizationName ?? null,
   });
   const statePaths = resolveStatePaths(options.stateRoot);
+  const studioProjectCatalog = new StudioProjectCatalog(
+    statePaths.studioProjects,
+  );
+  let emitAgentMapCapabilityEvent = (_event: AgentMapCapabilityEvent): void => {};
+  const agentMapCapabilities = new AgentMapCapabilityRegistry({
+    onEvent: (event) => emitAgentMapCapabilityEvent(event),
+  });
+  let agentMapMcpUrl: string | null = null;
+  let agentMapMcp: AgentMapMcpRouter | null = null;
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
   // Authentication may change in-app without restarting Studio. Keep the
@@ -1088,7 +1108,30 @@ export const startServer = async (
     context,
   ) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
-    return innerBuildLaunchOpts(harnessSessionId, req, context);
+    if (!context?.agentMapIdentity) {
+      return innerBuildLaunchOpts(harnessSessionId, req, context);
+    }
+    if (!agentMapMcpUrl) {
+      throw new Error("Agent Map MCP endpoint is not bound");
+    }
+    if (context.resume) await agentMapMcp?.revokeSession(harnessSessionId);
+    const capability = context.resume
+      ? agentMapCapabilities.rotate(context.agentMapIdentity)
+      : agentMapCapabilities.issue(context.agentMapIdentity);
+    const agentMapMcpMetadata = {
+      url: agentMapMcpUrl,
+      bearerToken: capability.token,
+    };
+    try {
+      const generated = await innerBuildLaunchOpts(harnessSessionId, req, {
+        ...context,
+        agentMapMcp: agentMapMcpMetadata,
+      });
+      return { ...generated, agentMapMcp: agentMapMcpMetadata };
+    } catch (error) {
+      agentMapCapabilities.revokeSession(harnessSessionId);
+      throw error;
+    }
   };
 
   const sessionManager = new SessionManager({
@@ -1098,6 +1141,33 @@ export const startServer = async (
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
+    resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
+      const userId = planningUserId;
+      if (!userId) return undefined;
+      const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+      if (!project) return undefined;
+      if (
+        persisted?.sessionId === sessionId &&
+        persisted.projectId === project.projectId &&
+        persisted.userId === userId &&
+        (persisted.role === "map-planner" ||
+          (persisted.role === "agent-builder" &&
+            persisted.assignment.kind === "planned"))
+      ) {
+        return structuredClone(persisted);
+      }
+      return {
+        projectId: project.projectId,
+        sessionId,
+        userId,
+        role: "agent-builder",
+        assignment: { kind: "unplanned" },
+      };
+    },
+    onAgentMapSessionExit: async (sessionId) => {
+      agentMapCapabilities.revokeSession(sessionId);
+      await agentMapMcp?.revokeSession(sessionId);
+    },
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: initializeSessionContext,
@@ -1110,9 +1180,6 @@ export const startServer = async (
     ...(await loadSettings(statePaths.settings)).recentDirs,
     ...sessionManager.list().map((session) => session.cwd),
   ]);
-  const studioProjectCatalog = new StudioProjectCatalog(
-    statePaths.studioProjects,
-  );
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
@@ -2606,6 +2673,63 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
+  const agentMapProposalService = new AgentMapProposalService(
+    agentMapWorkspaceStore,
+  );
+  emitAgentMapCapabilityEvent = (event) => {
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: seqCounter.next("agent-map-capability"),
+      ts: new Date().toISOString(),
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      harnessSessionId: "agent-map-capability",
+      agentSessionId: null,
+      harness: "claude-code",
+      type: "agent_map.capability",
+      payload: {
+        name: event.name,
+        ...(event.role ? { role: event.role } : {}),
+        ...(event.reason ? { reason: event.reason } : {}),
+      },
+    };
+    void eventStore.append(analyticsEvent).catch(() => {});
+    batcher.enqueue(analyticsEvent);
+  };
+  agentMapMcp = createAgentMapMcpRouter({
+    capabilities: agentMapCapabilities,
+    service: agentMapProposalService,
+    readSnapshotFor: async ({ projectId }) => {
+      const project = await studioProjectCatalog.resolve(projectId);
+      if (!project) throw new Error("Agent Map project is unavailable");
+      const snapshot = await agentMapProposalService.read(projectId);
+      return { schemaVersion: 1 as const, project, ...snapshot };
+    },
+    onEvent: (event) => {
+      const analyticsEvent: AnalyticsEvent = {
+        eventId: randomUUID(),
+        seq: seqCounter.next("agent-map-mcp"),
+        ts: new Date().toISOString(),
+        userId: identity?.userId ?? null,
+        tenantId: identity?.tenantId ?? null,
+        machineId,
+        harnessSessionId: "agent-map-mcp",
+        agentSessionId: null,
+        harness: "claude-code",
+        type: "agent_map.mcp_tool",
+        payload: {
+          tool: event.tool,
+          outcome: event.outcome,
+          role: event.role,
+          latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
+          ...(event.errorCode ? { error_code: event.errorCode } : {}),
+        },
+      };
+      void eventStore.append(analyticsEvent).catch(() => {});
+      batcher.enqueue(analyticsEvent);
+    },
+  });
   const isWorkflowScanComplete = async (
     roots: readonly string[],
   ): Promise<boolean> =>
@@ -3195,6 +3319,10 @@ export const startServer = async (
       environment: process.env.SAPIOM_ENVIRONMENT,
       onPlanningUserChanged: (userId) => {
         planningUserId = userId;
+        for (const session of sessionManager.list()) {
+          agentMapCapabilities.revokeSession(session.id);
+          void agentMapMcp?.revokeSession(session.id);
+        }
       },
     }),
   );
@@ -3387,6 +3515,10 @@ export const startServer = async (
     }),
   );
 
+  // Capability-authenticated MCP is independent of browser boot-token auth.
+  // Keep it before static/SPA fallback so POST/GET/DELETE remain protocol routes.
+  app.use(agentMapMcp.router);
+
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
@@ -3424,6 +3556,13 @@ export const startServer = async (
     });
   });
 
+  const address = httpServer.address();
+  const actualPort =
+    typeof address === "object" && address ? address.port : options.port;
+  agentMapMcpUrl = `http://${host}:${actualPort}/mcp/agent-map`;
+  // Covers the ephemeral `port: 0` case where only the bound address is real.
+  portDetector.addExcludedPort(actualPort);
+
   // The app otherwise opens to an empty terminal pane — not fire-and-forget
   // because a spawn failure here (e.g. claude not on PATH) is worth
   // surfacing loudly, but also not awaited before returning: startServer()
@@ -3443,14 +3582,6 @@ export const startServer = async (
         console.error("[harness] auto-create boot session failed:", err);
       });
   }
-
-  const address = httpServer.address();
-  const actualPort =
-    typeof address === "object" && address ? address.port : options.port;
-  // Covers the ephemeral `port: 0` case (tests) where `options.port` above
-  // was 0 and therefore never a real port to exclude — the actual bound
-  // port is only known now.
-  portDetector.addExcludedPort(actualPort);
 
   return {
     port: actualPort,
@@ -3496,6 +3627,7 @@ export const startServer = async (
         shutdownTimerHandle.unref();
       });
       await Promise.race([killsSettled, shutdownTimeout]);
+      await agentMapMcp?.close();
       // Clear the timer when the kill path wins (common case) so it doesn't
       // linger ref'd in the background after shutdown completes.
       if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);

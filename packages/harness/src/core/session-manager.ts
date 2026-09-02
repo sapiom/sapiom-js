@@ -21,7 +21,10 @@ import {
   type LaunchOpts,
   type SpawnSpec,
 } from "../shared/types.js";
-import type { PlannerSessionMetadata } from "../shared/agent-map.js";
+import type {
+  PlannerSessionMetadata,
+  PlanningSessionIdentity,
+} from "../shared/agent-map.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -302,7 +305,13 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
   req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
-  context?: { promptAppendix?: string },
+  context?: {
+    promptAppendix?: string;
+    agentMapIdentity?: PlanningSessionIdentity;
+    /** Server-composed secret launch metadata, never accepted from REST. */
+    agentMapMcp?: { url: string; bearerToken: string };
+    resume?: boolean;
+  },
 ) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
@@ -320,6 +329,14 @@ export interface SessionManagerOptions {
   /** Injectable for tests. Defaults to a lazily-loaded node-pty. */
   spawnPty?: PtySpawnFn;
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Revalidates cwd containment and current principal before every spawn. */
+  resolveAgentMapIdentity?: (
+    sessionId: string,
+    cwd: string,
+    persisted?: PlanningSessionIdentity,
+  ) => Promise<PlanningSessionIdentity | undefined>;
+  /** Revokes launch capabilities/transports after every exit path. */
+  onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
   now?: () => string;
   generateId?: () => string;
   /** Test seam for deterministic registry persistence failures. Production
@@ -376,6 +393,8 @@ export interface SessionManagerOptions {
 export interface TrustedSessionCreateOptions {
   /** Server-authored only. Never populated from CreateSessionRequest. */
   planning?: (sessionId: string) => PlannerSessionMetadata;
+  /** Future E5 seam for a server-authored planned builder assignment. */
+  agentMapIdentity?: (sessionId: string) => PlanningSessionIdentity;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
   /** Server-owned coordinator predecessor. This may differ from the older
@@ -481,6 +500,10 @@ export class SessionManager {
   private readonly agentSessionOwnersPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
+  private readonly resolveAgentMapIdentity:
+    | SessionManagerOptions["resolveAgentMapIdentity"];
+  private readonly onAgentMapSessionExit:
+    | SessionManagerOptions["onAgentMapSessionExit"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -527,6 +550,8 @@ export class SessionManager {
     this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
     this.spawnPty = options.spawnPty;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
+    this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
+    this.onAgentMapSessionExit = options.onAgentMapSessionExit;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
@@ -619,16 +644,32 @@ export class SessionManager {
     const id = this.generateId();
     const adapter = this.getAdapter(req.harness);
     const planning = trusted.planning?.(id);
+    const trustedIdentity = trusted.agentMapIdentity?.(id) ?? planning?.identity;
+    const agentMapIdentity = this.resolveAgentMapIdentity
+      ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
+      : trustedIdentity;
+    const promptAppendix = trusted.promptAppendix?.(id);
+    const launchContext =
+      promptAppendix || agentMapIdentity
+        ? {
+            ...(promptAppendix ? { promptAppendix } : {}),
+            ...(agentMapIdentity ? { agentMapIdentity } : {}),
+          }
+        : undefined;
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: req.cwd,
-      ...(await (trusted.promptAppendix
-        ? this.buildLaunchOpts(id, req, {
-            promptAppendix: trusted.promptAppendix(id),
-          })
+      ...(await (launchContext
+        ? this.buildLaunchOpts(id, req, launchContext)
         : this.buildLaunchOpts(id, req))),
     };
-    const spec = adapter.launch(opts);
+    let spec: SpawnSpec;
+    try {
+      spec = adapter.launch(opts);
+    } catch (error) {
+      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
+      throw error;
+    }
     const session: HarnessSession = {
       id,
       agentSessionId: null,
@@ -651,10 +692,13 @@ export class SessionManager {
       ...(req.theme ? { theme: req.theme } : {}),
       ready: false,
       ...(planning ? { planning } : {}),
+      ...(agentMapIdentity
+        ? { agentMapIdentity: structuredClone(agentMapIdentity) }
+        : {}),
     };
     this.sessions.set(id, session);
-    await this.persist();
     try {
+      await this.persist();
       // Before spawning, not fire-and-forget: the agent's very first read of
       // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
       // regardless of which entry point called create() (REST, autoCreateSession).
@@ -764,16 +808,41 @@ export class SessionManager {
     if (trusted.planning) {
       session.planning = structuredClone(trusted.planning);
     }
+    const trustedIdentity = trusted.planning?.identity;
+    const agentMapIdentity = this.resolveAgentMapIdentity
+      ? await this.resolveAgentMapIdentity(
+          id,
+          session.cwd,
+          trustedIdentity ?? session.agentMapIdentity,
+        )
+      : trustedIdentity ?? session.agentMapIdentity;
+    if (agentMapIdentity)
+      session.agentMapIdentity = structuredClone(agentMapIdentity);
+    else delete session.agentMapIdentity;
+    const launchContext =
+      trusted.promptAppendix || agentMapIdentity
+        ? {
+            ...(trusted.promptAppendix
+              ? { promptAppendix: trusted.promptAppendix }
+              : {}),
+            ...(agentMapIdentity ? { agentMapIdentity } : {}),
+            resume: true as const,
+          }
+        : undefined;
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: session.cwd,
-      ...(await (trusted.promptAppendix
-        ? this.buildLaunchOpts(id, session, {
-            promptAppendix: trusted.promptAppendix,
-          })
+      ...(await (launchContext
+        ? this.buildLaunchOpts(id, session, launchContext)
         : this.buildLaunchOpts(id, session))),
     };
-    const spec = adapter.resume(session.agentSessionId, opts);
+    let spec: SpawnSpec;
+    try {
+      spec = adapter.resume(session.agentSessionId, opts);
+    } catch (error) {
+      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
+      throw error;
+    }
     // Kept so the failure path below can put it back: `lastActiveAt` is
     // stamped here only to keep sweepDeadSessions() from reaping this record
     // during the pre-pty window (it reaps non-exited records with no pty once
@@ -785,9 +854,9 @@ export class SessionManager {
     session.status = "starting";
     session.exitCode = null;
     session.lastActiveAt = this.now();
-    await this.persist();
-    this.emitStatus(session);
     try {
+      await this.persist();
+      this.emitStatus(session);
       // Schema-aware and strict: the caller leaves a valid current file
       // untouched, translates a valid legacy file, and reconstructs anything
       // missing/invalid from this session plus the live registry. Await it in
@@ -1937,6 +2006,11 @@ export class SessionManager {
     { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
   ): Promise<void> {
     this.revokeIngestToken(session.id);
+    try {
+      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(() => {});
+    } catch {
+      // Capability cleanup never delays durable session reconciliation.
+    }
     session.status = "exited";
     session.exitCode = exitCode;
     // Only markExited (a live-pty death) has output to preserve; every other

@@ -61,6 +61,27 @@ describe("StudioProjectCatalog", () => {
     expect(JSON.stringify(second.projects)).not.toContain("workspace-legacy");
   });
 
+  it("resolves cwd containment to the most-specific active project without paths", async () => {
+    const { root, catalogPath } = await fixture();
+    const parent = path.join(root, "workspace");
+    const child = path.join(parent, "nested");
+    await fs.mkdir(child, { recursive: true });
+    const catalog = new StudioProjectCatalog(catalogPath);
+    const reconciled = await catalog.reconcile([
+      { workspaceKey: "parent", cwd: parent },
+      { workspaceKey: "child", cwd: child },
+    ]);
+    const parentProject = reconciled.workspaceScopes.find(({ cwd }) => cwd === parent)?.projectId;
+    const childProject = reconciled.workspaceScopes.find(({ cwd }) => cwd === child)?.projectId;
+    expect((await catalog.resolveIdentityForPath(path.join(child, "src")))?.projectId).toBe(
+      childProject,
+    );
+    expect((await catalog.resolveIdentityForPath(path.join(parent, "other")))?.projectId).toBe(
+      parentProject,
+    );
+    expect(JSON.stringify(await catalog.resolveIdentityForPath(child))).not.toContain(root);
+  });
+
   it("keeps project identity across a root move and an additional repository binding", async () => {
     const { root, catalogPath } = await fixture();
     const originalRoot = path.join(root, "old-name");
