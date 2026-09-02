@@ -2235,6 +2235,19 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse> {
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.openPlannerSessionCalls as
+          | unknown[]
+          | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        openPlannerSessionCalls: [...previous, { projectId, request }],
+      };
+    }
     const failure =
       typeof window === "undefined"
         ? null

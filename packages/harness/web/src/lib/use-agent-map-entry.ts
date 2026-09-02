@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentMapWorkspaceResponse,
   PlannerSessionRequest,
   PlannerSessionResponse,
   StudioProjectId,
 } from "@shared/agent-map";
-import type { HarnessKind, UiTheme } from "@shared/types";
+import type { HarnessKind, HarnessSession, UiTheme } from "@shared/types";
 
 import { ApiError, errorMessage, type HarnessApi } from "./api";
 import { track } from "./track";
@@ -33,6 +33,9 @@ export interface AgentMapEntryState {
 
 interface AgentMapEntryOptions {
   projectId: StudioProjectId | null;
+  /** The user's explicit live planner selection, when it already belongs to
+   * this project. It is more specific than project-level resume ordering. */
+  selectedPlanner: HarnessSession | null;
   api: HarnessApi;
   /** Read at launch time so a theme/provider change made while the workspace
    * is open is honored by the next explicit fresh-session action. */
@@ -80,6 +83,18 @@ function failureDimensions(
   };
 }
 
+function selectedPlannerResponse(
+  projectId: StudioProjectId | null,
+  session: HarnessSession | null,
+): PlannerSessionResponse | null {
+  return projectId !== null &&
+    session?.status !== "exited" &&
+    session?.planning?.identity.role === "map-planner" &&
+    session.planning.identity.projectId === projectId
+    ? { session, resolution: "live" }
+    : null;
+}
+
 /**
  * Opens the two halves of the first Agent Map experience concurrently.
  *
@@ -92,6 +107,7 @@ function failureDimensions(
  */
 export function useAgentMapEntry({
   projectId,
+  selectedPlanner,
   api,
   harness,
   theme,
@@ -121,6 +137,11 @@ export function useAgentMapEntry({
   themeRef.current = theme;
   openPlannerRef.current = openPlannerSession;
   onPlannerReadyRef.current = onPlannerReady;
+
+  const selectedResponse = useMemo(
+    () => selectedPlannerResponse(projectId, selectedPlanner),
+    [projectId, selectedPlanner],
+  );
 
   const loadWorkspace = useCallback((target: StudioProjectId): void => {
     const request = ++workspaceRequestRef.current;
@@ -257,13 +278,15 @@ export function useAgentMapEntry({
     setState({
       projectId,
       workspace: { status: "loading" },
-      planner: { status: "loading" },
+      planner: selectedResponse
+        ? { status: "ready", value: selectedResponse }
+        : { status: "loading" },
       unavailable: null,
     });
     track("agent_map.entered", { project_id: projectId });
     loadWorkspace(projectId);
-    loadPlanner(projectId, "resume-or-create");
-  }, [loadPlanner, loadWorkspace, projectId]);
+    if (!selectedResponse) loadPlanner(projectId, "resume-or-create");
+  }, [loadPlanner, loadWorkspace, projectId, selectedResponse]);
 
   const retryWorkspace = useCallback((): void => {
     const target = currentProjectRef.current;
@@ -303,7 +326,9 @@ export function useAgentMapEntry({
           : {
               projectId,
               workspace: { status: "loading" },
-              planner: { status: "loading" },
+              planner: selectedResponse
+                ? { status: "ready", value: selectedResponse }
+                : { status: "loading" },
               unavailable: null,
             },
     retryWorkspace,

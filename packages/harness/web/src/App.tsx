@@ -325,8 +325,16 @@ export const App = (): JSX.Element => {
       harness.state?.sessions,
     ],
   );
+  const activePlannerForTranscript = harness.state?.sessions.find(
+    (session) =>
+      session.id === harness.activeSessionId &&
+      session.status !== "exited" &&
+      session.planning?.identity.role === "map-planner" &&
+      session.planning.identity.projectId === plannerProjectId,
+  );
   const agentMapEntry = useAgentMapEntry({
     projectId: plannerProjectId,
+    selectedPlanner: activePlannerForTranscript ?? null,
     api: harness.api,
     harness: () =>
       loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code",
@@ -334,18 +342,10 @@ export const App = (): JSX.Element => {
     openPlannerSession: harness.openPlannerSession,
     onPlannerReady: handlePlannerReady,
   });
-  const activePlannerForTranscript = harness.state?.sessions.find(
-    (session) =>
-      session.id === harness.activeSessionId &&
-      session.planning?.identity.role === "map-planner" &&
-      session.planning.identity.projectId === plannerProjectId,
-  );
   const plannerTranscript = usePlannerTranscript(
     activePlannerForTranscript?.id ?? null,
-    activePlannerForTranscript
-      ? (harness.sessionRecordRevisions.get(activePlannerForTranscript.id) ?? 0)
-      : 0,
     harness.sessionRecord,
+    harness.subscribeSessionRecordChanges,
   );
 
   // A project visit restores its server-owned preference before choosing an

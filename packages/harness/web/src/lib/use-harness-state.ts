@@ -366,9 +366,12 @@ export interface HarnessStateHook {
   showToast: (message: string, tone?: ToastTone) => void;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
-  /** Monotonic, content-free SessionRecord invalidations keyed by session.
-   * Unlike `lastMessage`, a later unrelated bus frame cannot overwrite one. */
-  sessionRecordRevisions: ReadonlyMap<string, number>;
+  /** Registers a targeted SessionRecord invalidation listener on the existing
+   * event-bus connection, without projecting every session's churn into App
+   * state. */
+  subscribeSessionRecordChanges: (
+    listener: (sessionId: string) => void,
+  ) => () => void;
   /** Latest monotonic graph invalidation per retained Project scope. */
   systemGraphAnnouncements: ReadonlyMap<WorkspaceKey, SystemGraphAnnouncement>;
   /** The run each session's Steps tab is showing (the latest observed by
@@ -516,9 +519,16 @@ export function useHarnessState(): HarnessStateHook {
   // inFlightHistory above.
   const inFlightDeploys = useRef<Map<string, Promise<void>>>(new Map());
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
-  const [sessionRecordRevisions, setSessionRecordRevisions] = useState<
-    Map<string, number>
-  >(new Map());
+  const sessionRecordChangeListeners = useRef(
+    new Set<(sessionId: string) => void>(),
+  );
+  const subscribeSessionRecordChanges = useCallback(
+    (listener: (sessionId: string) => void): (() => void) => {
+      sessionRecordChangeListeners.current.add(listener);
+      return () => sessionRecordChangeListeners.current.delete(listener);
+    },
+    [],
+  );
   // An HTTP planner mutation and its session.status projection can cross on
   // the network. The bus owns the newer full-session snapshot, so an older
   // response must not roll its planning metadata back after that snapshot.
@@ -1267,7 +1277,10 @@ export function useHarnessState(): HarnessStateHook {
 
   useEffect(() => {
     return subscribeEvents((message) => {
-      setLastMessage(message);
+      // SessionRecord invalidations have a targeted listener below. Keeping
+      // them out of the legacy last-message slot avoids repainting the entire
+      // Studio for records no mounted transcript is watching.
+      if (message.type !== "session.record.changed") setLastMessage(message);
       setSystemGraphAnnouncements((current) =>
         systemGraphAnnouncementsAfterMessage(current, message),
       );
@@ -1293,12 +1306,6 @@ export function useHarnessState(): HarnessStateHook {
         // that's about to move to the history menu.
         if (message.session.status === "exited") {
           const id = message.session.id;
-          setSessionRecordRevisions((current) => {
-            if (!current.has(id)) return current;
-            const next = new Map(current);
-            next.delete(id);
-            return next;
-          });
           const timer = busyTimers.current.get(id);
           if (timer) {
             clearTimeout(timer);
@@ -1312,11 +1319,8 @@ export function useHarnessState(): HarnessStateHook {
           });
         }
       } else if (message.type === "session.record.changed") {
-        setSessionRecordRevisions((current) =>
-          new Map(current).set(
-            message.harnessSessionId,
-            (current.get(message.harnessSessionId) ?? 0) + 1,
-          ),
+        sessionRecordChangeListeners.current.forEach((listener) =>
+          listener(message.harnessSessionId),
         );
       } else if (message.type === "workflows.changed") {
         // The workspace watcher saw a sapiom.json appear/change — the one
@@ -1752,12 +1756,6 @@ export function useHarnessState(): HarnessStateHook {
         (session) => session.id !== id,
       );
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
-      setSessionRecordRevisions((current) => {
-        if (!current.has(id)) return current;
-        const next = new Map(current);
-        next.delete(id);
-        return next;
-      });
       if (activeSessionId === id) {
         const closed = state?.sessions.find((session) => session.id === id);
         const nextPlanner =
@@ -2443,7 +2441,7 @@ export function useHarnessState(): HarnessStateHook {
     directActionSettleSeq,
     listDir,
     lastMessage,
-    sessionRecordRevisions,
+    subscribeSessionRecordChanges,
     systemGraphAnnouncements,
     runsBySession,
     runsByExecution,

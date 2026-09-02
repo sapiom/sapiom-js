@@ -66,20 +66,18 @@ export class CoalescedSessionRecordReader {
 /** Live planner transcript backed by the existing SessionRecord endpoint. */
 export function usePlannerTranscript(
   sessionId: string | null,
-  revision: number,
   loadRecord: (id: string) => Promise<SessionRecord | null>,
+  subscribeSessionRecordChanges: (
+    listener: (changedSessionId: string) => void,
+  ) => () => void,
 ): { state: SessionRecordState; retry: () => void } {
   const [state, setState] = useState<SessionRecordState>(
     sessionId === null ? { status: "empty" } : { status: "loading" },
   );
   const readerRef = useRef<CoalescedSessionRecordReader | null>(null);
-  const observedRevisionRef = useRef(revision);
-  const revisionRef = useRef(revision);
-  revisionRef.current = revision;
 
   useEffect(() => {
     readerRef.current?.dispose();
-    observedRevisionRef.current = revisionRef.current;
     if (sessionId === null) {
       readerRef.current = null;
       setState({ status: "empty" });
@@ -92,15 +90,15 @@ export function usePlannerTranscript(
       setState,
     );
     readerRef.current = reader;
+    const unsubscribe = subscribeSessionRecordChanges((changedSessionId) => {
+      if (changedSessionId === sessionId) reader.refresh();
+    });
     reader.refresh();
-    return () => reader.dispose();
-  }, [loadRecord, sessionId]);
-
-  useEffect(() => {
-    if (revision === observedRevisionRef.current) return;
-    observedRevisionRef.current = revision;
-    readerRef.current?.refresh();
-  }, [revision, sessionId]);
+    return () => {
+      unsubscribe();
+      reader.dispose();
+    };
+  }, [loadRecord, sessionId, subscribeSessionRecordChanges]);
 
   const retry = useCallback((): void => {
     if (!readerRef.current) return;

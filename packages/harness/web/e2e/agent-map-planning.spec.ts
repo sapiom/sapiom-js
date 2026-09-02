@@ -11,6 +11,17 @@ async function activeSessionId(page: Page): Promise<string | null> {
   return page.getByTestId("session-context").getAttribute("data-session-id");
 }
 
+async function openPlannerSessionCallCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __HARNESS_TEST__?: { openPlannerSessionCalls?: unknown[] };
+        }
+      ).__HARNESS_TEST__?.openPlannerSessionCalls?.length ?? 0,
+  );
+}
+
 test.describe("SAP-3058 Agent Map planning workspace", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
@@ -160,6 +171,8 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
 
     await page.getByTestId("session-tab-new").click();
     await expect.poll(() => activeSessionId(page)).not.toBe(first);
+    const callsBeforeExplicitSelection =
+      await openPlannerSessionCallCount(page);
 
     await page
       .getByTestId("workflow-dashboard-keeper")
@@ -175,11 +188,11 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .click();
 
     await expect(page.getByTestId("planning-conversation")).toBeVisible();
-    // The project-level resume request resolves asynchronously and prefers the
-    // newer sibling. Give it time to settle before asserting the explicit A
-    // selection remained authoritative.
-    await page.waitForTimeout(500);
     expect(await activeSessionId(page)).toBe(first);
+    await expect(page.getByTestId("planner-loading")).toHaveCount(0);
+    expect(await openPlannerSessionCallCount(page)).toBe(
+      callsBeforeExplicitSelection,
+    );
   });
 
   test("planner session chrome retains rename/end and omits path/editor actions", async ({
