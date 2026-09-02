@@ -22,7 +22,7 @@ describe("createAgentMapLoader", () => {
     pending.resolve(proposalSnapshot());
     const result = await first;
     expect(result).toMatchObject({ proposal: { version: 2 } });
-    expect(loader.includesQueuedProjection(result, delta)).toBe(true);
+    expect(loader.includesQueuedDelta(result, delta)).toBe(true);
     expect(source.getAgentMapWorkspace).toHaveBeenCalledTimes(1);
   });
 
@@ -59,8 +59,34 @@ describe("createAgentMapLoader", () => {
     expect(result.proposal?.history.map(({ id }) => id)).toContain(
       delta.operationIds[0],
     );
-    expect(loader.includesQueuedProjection(result, delta)).toBe(false);
+    expect(loader.includesQueuedDelta(result, delta)).toBe(false);
     expect(source.getAgentMapWorkspace).toHaveBeenCalledTimes(2);
+  });
+
+  it("recognizes an announcement already present in its original racing read", async () => {
+    const pending = deferred<ReturnType<typeof proposalSnapshot>>();
+    const source = { getAgentMapWorkspace: vi.fn(() => pending.promise) };
+    const loader = createAgentMapLoader();
+    const delta = renameDelta();
+    const current = structuredClone(proposalSnapshot());
+    if (!current.proposal) throw new Error("fixture requires a proposal");
+    current.proposal.version = delta.version;
+    current.proposal.history.push({
+      id: delta.operationIds[0]!,
+      requestId: "racing-read",
+      acceptedVersion: delta.version,
+      operation: delta.operations[0]!,
+      actor: delta.actor,
+      acceptedAt: delta.acceptedAt,
+    });
+
+    const load = loader.load(source, current.project.projectId);
+    expect(loader.accept(delta).status).toBe("queued");
+    pending.resolve(current);
+
+    const result = await load;
+    expect(loader.includesQueuedDelta(result, delta)).toBe(true);
+    expect(source.getAgentMapWorkspace).toHaveBeenCalledTimes(1);
   });
 
   it("discards browser state and asks for durable recovery on a version gap", async () => {

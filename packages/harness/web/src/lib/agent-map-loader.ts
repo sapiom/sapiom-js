@@ -24,9 +24,10 @@ export interface AgentMapLoader {
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
   accept(delta: AcceptedProposalDelta): AgentMapDeltaOutcome;
-  /** True only when this exact snapshot was produced by replaying the queued
-   * announcement locally. A durable recovery GET is deliberately false. */
-  includesQueuedProjection(
+  /** True only when the original shared cold load proved this queued
+   * announcement visible, through its read or local replay. A later durable
+   * recovery GET is deliberately false. */
+  includesQueuedDelta(
     snapshot: AgentMapWorkspaceResponse,
     delta: AcceptedProposalDelta,
   ): boolean;
@@ -44,7 +45,7 @@ export function createAgentMapLoader(): AgentMapLoader {
     { generation: number; promise: Promise<AgentMapWorkspaceResponse> }
   >();
   const queued = new Map<StudioProjectId, AcceptedProposalDelta[]>();
-  const queuedProjections = new WeakMap<
+  const visibleQueuedDeltas = new WeakMap<
     AgentMapWorkspaceResponse,
     ReadonlySet<string>
   >();
@@ -87,8 +88,13 @@ export function createAgentMapLoader(): AgentMapLoader {
           proposal &&
           proposal.id === delta.proposalId &&
           delta.version <= proposal.version
-        )
+        ) {
+          // The original read itself raced the announcement and already
+          // contains it. Count that as cold-load visibility; a recursive
+          // recovery read never sees this pending queue and remains unmarked.
+          appliedQueuedDeltas.add(deltaKey(delta));
           continue;
+        }
         const projected = applyAcceptedProposalDelta(next, delta);
         if (projected.status !== "applied") {
           generations.set(projectId, generation + 1);
@@ -100,7 +106,7 @@ export function createAgentMapLoader(): AgentMapLoader {
         appliedQueuedDeltas.add(deltaKey(delta));
       }
       if (appliedQueuedDeltas.size > 0)
-        queuedProjections.set(next, appliedQueuedDeltas);
+        visibleQueuedDeltas.set(next, appliedQueuedDeltas);
       snapshots.set(projectId, next);
       return next;
     });
@@ -149,8 +155,8 @@ export function createAgentMapLoader(): AgentMapLoader {
       snapshots.set(projectId, result.snapshot);
       return { status: "applied", snapshot: result.snapshot };
     },
-    includesQueuedProjection(snapshot, delta) {
-      return queuedProjections.get(snapshot)?.has(deltaKey(delta)) ?? false;
+    includesQueuedDelta(snapshot, delta) {
+      return visibleQueuedDeltas.get(snapshot)?.has(deltaKey(delta)) ?? false;
     },
     invalidate(projectId) {
       generations.set(projectId, generationFor(projectId) + 1);

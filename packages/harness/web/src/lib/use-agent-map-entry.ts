@@ -246,7 +246,6 @@ export function useAgentMapEntry({
       const showAcceptedDelta = (snapshot: AgentMapWorkspaceResponse): void => {
         if (
           currentProjectRef.current !== projectId ||
-          workspaceRequestRef.current !== workspaceRequest ||
           snapshot.proposal?.id !== delta.proposalId ||
           snapshot.proposal.version < delta.version
         )
@@ -265,17 +264,21 @@ export function useAgentMapEntry({
           0,
           Math.min(60_000, Date.now() - Date.parse(delta.acceptedAt)),
         );
-        setState((current) =>
-          current.projectId === projectId
-            ? {
-                ...current,
-                workspace: {
-                  status: "ready",
-                  value: snapshot,
-                },
-              }
-            : current,
-        );
+        // A newer load for this same project may share the loader promise and
+        // will own the render. Never let this older arm overwrite its state;
+        // the proven-visible announcement may still be measured once.
+        if (workspaceRequestRef.current === workspaceRequest)
+          setState((current) =>
+            current.projectId === projectId
+              ? {
+                  ...current,
+                  workspace: {
+                    status: "ready",
+                    value: snapshot,
+                  },
+                }
+              : current,
+          );
         track("agent_map.proposal_visible", {
           author_role: delta.actor.role,
           assignment_kind: delta.actor.assignment?.kind ?? "none",
@@ -290,7 +293,7 @@ export function useAgentMapEntry({
         // snapshot is actually ready, with the same dedupe as the direct path.
         void agentMapLoader.load(apiRef.current, projectId).then(
           (snapshot) => {
-            if (agentMapLoader.includesQueuedProjection(snapshot, delta))
+            if (agentMapLoader.includesQueuedDelta(snapshot, delta))
               showAcceptedDelta(snapshot);
           },
           () => undefined,
