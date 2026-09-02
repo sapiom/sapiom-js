@@ -102,13 +102,19 @@ export class AgentMapCapabilityRegistry {
         : "invalid_capability";
       this.reject(reason);
     }
-    if (entry.expiresAt <= this.now()) {
+    const resolvedAt = this.now();
+    if (entry.expiresAt <= resolvedAt) {
       this.active.delete(digest);
       this.currentBySession.delete(entry.identity.sessionId);
       this.revoked.add(digest);
       this.pruneRevoked();
       this.reject("expired_capability");
     }
+    // This is an inactivity lease, not a scheduled outage for a live agent.
+    // Successful authenticated use keeps the same private token viable while
+    // exit, principal change, resume rotation, and explicit revocation remain
+    // hard lifecycle boundaries.
+    entry.expiresAt = resolvedAt + this.ttlMs;
     return this.publicEntry(entry);
   }
 

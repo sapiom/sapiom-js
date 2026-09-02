@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import express, { Router, type Request, type Response } from "express";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  StreamableHTTPServerTransport,
+  type StreamableHTTPServerTransportOptions,
+} from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -26,6 +29,12 @@ export interface AgentMapMcpRouterOptions
   readSnapshotFor?: (identity: ResolvedAgentMapCapability["identity"]) => Promise<object>;
   maxSessions?: number;
   now?: () => number;
+  /** Deterministic lifecycle seam for transport-failure regression tests. */
+  createTransport?: (
+    options: StreamableHTTPServerTransportOptions,
+  ) => StreamableHTTPServerTransport;
+  /** Deterministic lifecycle seam for MCP-server cleanup regression tests. */
+  createToolServer?: typeof createAgentMapToolServer;
 }
 
 export interface AgentMapMcpRouter {
@@ -55,6 +64,11 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
   const sessions = new Map<string, BoundTransport>();
   const now = options.now ?? Date.now;
   const maxSessions = options.maxSessions ?? 64;
+  const createTransport =
+    options.createTransport ??
+    ((transportOptions: StreamableHTTPServerTransportOptions) =>
+      new StreamableHTTPServerTransport(transportOptions));
+  const createToolServer = options.createToolServer ?? createAgentMapToolServer;
 
   const authenticate = (request: Request, response: Response) => {
     const token = bearer(request);
@@ -93,8 +107,15 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
     return bound;
   };
 
-  const closeBound = async (sessionId: string, bound: BoundTransport) => {
-    if (sessions.get(sessionId) === bound) sessions.delete(sessionId);
+  const closeBound = async (
+    sessionId: string | undefined,
+    bound: BoundTransport,
+  ) => {
+    if (sessionId && sessions.get(sessionId) === bound) {
+      sessions.delete(sessionId);
+    }
+    // McpServer owns its connected transport. If its close fails during a
+    // partial connect, still make a direct best-effort transport close.
     await bound.server.close().catch(async () => {
       await bound.transport.close().catch(() => {});
     });
@@ -120,7 +141,7 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
       const oldest = [...sessions.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt)[0];
       if (oldest) await closeBound(oldest[0], oldest[1]);
     }
-    const transport = new StreamableHTTPServerTransport({
+    const transport = createTransport({
       sessionIdGenerator: randomUUID,
       onsessioninitialized: (sessionId) => {
         sessions.set(sessionId, bound);
@@ -130,7 +151,7 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
       const sessionId = transport.sessionId;
       if (sessionId) sessions.delete(sessionId);
     };
-    const server = createAgentMapToolServer(capability.identity, options.service, {
+    const server = createToolServer(capability.identity, options.service, {
       onEvent: options.onEvent,
       ...(options.readSnapshotFor
         ? {
@@ -139,10 +160,11 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
         : {}),
     });
     const bound: BoundTransport = { transport, server, capability, lastUsedAt: now() };
-    await server.connect(transport);
-    await transport.handleRequest(request, response, request.body).catch(async () => {
-      const sessionId = transport.sessionId;
-      if (sessionId) await closeBound(sessionId, bound);
+    await (async () => {
+      await server.connect(transport);
+      await transport.handleRequest(request, response, request.body);
+    })().catch(async () => {
+      await closeBound(transport.sessionId, bound);
       if (!response.headersSent) protocolError(response, 500, "Agent Map MCP request failed");
     });
   });

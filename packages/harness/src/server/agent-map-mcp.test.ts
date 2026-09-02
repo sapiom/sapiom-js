@@ -3,15 +3,23 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { PlanningSessionIdentity } from "../shared/agent-map.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
-import { createAgentMapMcpRouter } from "./agent-map-mcp.js";
+import {
+  createAgentMapMcpRouter,
+  type AgentMapMcpRouterOptions,
+} from "./agent-map-mcp.js";
+import {
+  AgentMapMcpProjectUnavailableError,
+  createAgentMapToolServer,
+} from "./agent-map-mcp-tools.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 const clients: Client[] = [];
@@ -22,11 +30,18 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
-async function fixture() {
+async function fixture(
+  options: Partial<
+    Pick<
+      AgentMapMcpRouterOptions,
+      "createToolServer" | "createTransport" | "readSnapshotFor"
+    >
+  > = {},
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-mcp-"));
   const capabilities = new AgentMapCapabilityRegistry();
   const service = new AgentMapProposalService(new AgentMapWorkspaceStore(root));
-  const mcp = createAgentMapMcpRouter({ capabilities, service });
+  const mcp = createAgentMapMcpRouter({ capabilities, service, ...options });
   const app = express();
   app.use(express.json());
   app.use(mcp.router);
@@ -124,5 +139,88 @@ describe("Agent Map Streamable HTTP MCP", () => {
 
     capabilities.rotate(identity);
     await expect(client.callTool({ name: "agent_map_read", arguments: {} })).rejects.toThrow();
+  });
+
+  it("returns a bounded terminal recovery when the capability project is unavailable", async () => {
+    const { capabilities, url } = await fixture({
+      readSnapshotFor: async () => {
+        throw new AgentMapMcpProjectUnavailableError();
+      },
+    });
+    const issued = capabilities.issue({
+      projectId,
+      sessionId: "missing-project",
+      userId: "user",
+      role: "map-planner",
+    });
+    const client = await connect(url, issued.token);
+
+    const result = await client.callTool({
+      name: "agent_map_read",
+      arguments: {},
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "project_unavailable",
+        recovery: "reread",
+      },
+    });
+  });
+
+  it("closes both resources when initialize fails before session registration", async () => {
+    const serverClose = vi.fn(async () => {});
+    const transportClose = vi.fn(async () => {});
+    const { capabilities, url } = await fixture({
+      createToolServer: (...args) => {
+        const server = createAgentMapToolServer(...args);
+        const close = server.close.bind(server);
+        vi.spyOn(server, "close").mockImplementation(async () => {
+          serverClose();
+          await close();
+        });
+        return server;
+      },
+      createTransport: (options) => {
+        const transport = new StreamableHTTPServerTransport(options);
+        const close = transport.close.bind(transport);
+        vi.spyOn(transport, "handleRequest").mockRejectedValue(
+          new Error("initialize failed before registration"),
+        );
+        vi.spyOn(transport, "close").mockImplementation(async () => {
+          await transportClose();
+          await close();
+        });
+        return transport;
+      },
+    });
+    const issued = capabilities.issue({
+      projectId,
+      sessionId: "failed-initialize",
+      userId: "user",
+      role: "map-planner",
+    });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${issued.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1" },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(serverClose).toHaveBeenCalledOnce();
+    expect(transportClose).toHaveBeenCalledOnce();
   });
 });

@@ -33,6 +33,13 @@ export interface AgentMapMcpToolsOptions {
   readSnapshot?: () => Promise<object>;
 }
 
+export class AgentMapMcpProjectUnavailableError extends Error {
+  constructor() {
+    super("Agent Map project is unavailable");
+    this.name = "AgentMapMcpProjectUnavailableError";
+  }
+}
+
 function errorResult(error: unknown) {
   const details =
     error instanceof AgentMapProposalValidationError
@@ -46,6 +53,8 @@ function errorResult(error: unknown) {
         ? { ...error.conflict }
         : error instanceof AgentMapProposalProjectError
           ? { code: "forbidden", recovery: "reread" }
+          : error instanceof AgentMapMcpProjectUnavailableError
+            ? { code: "project_unavailable", recovery: "reread" }
           : error instanceof AgentMapWorkspaceStoreError
             ? { code: "storage_unavailable", recovery: "retry" }
             : { code: "internal_error", recovery: "retry" };

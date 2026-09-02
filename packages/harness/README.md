@@ -153,6 +153,28 @@ conversation history, but the losing local row can no longer resume or adopt
 that fenced identity. Start a fresh session in the losing row's directory to
 continue there.
 
+### Agent Map MCP
+
+Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for
+the coding-agent processes it launches. `POST` initializes and calls the
+protocol; `GET` and `DELETE` support the protocol's live stream and session
+shutdown. This route is separate from the browser-token-protected `/api`
+surface. It requires a Studio-issued bearer capability scoped to one trusted
+project/session identity; callers cannot supply or change that identity.
+
+Studio injects the capability privately at process launch. Successful use
+renews its inactivity lease, while session exit, resume rotation, signed-in
+principal changes, and server shutdown revoke it. Consumers should not copy,
+persist, log, or reuse the capability outside the launched session.
+
+Every trusted Agent Map role receives the same three project-wide tools:
+
+- `agent_map_read` reads the current confirmed workspace and shared proposal.
+- `agent_map_validate` validates one complete operation batch without mutating
+  shared state or allocating permanent IDs.
+- `agent_map_propose` atomically and idempotently applies one validated batch
+  to the shared Proposed map.
+
 HTTP contracts that need more than a type to use are written up under `docs/`:
 
 - [`docs/agent-canvas-graph.md`](docs/agent-canvas-graph.md) — the session-free

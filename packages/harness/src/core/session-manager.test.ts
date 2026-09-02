@@ -2207,6 +2207,51 @@ describe("SessionManager", () => {
   });
 
   describe("ghost-session reconciliation (non-exited records with no live pty)", () => {
+    it("create() preserves its original persist error when exited reconciliation also fails", async () => {
+      const original = new Error("initial create persist failed");
+      const cleanup = new Error("create reconciliation persist failed");
+      let writes = 0;
+      const writeSessionRegistry = vi.fn(async () => {
+        writes += 1;
+        throw writes === 1 ? original : cleanup;
+      });
+      const { manager } = makeManager({ writeSessionRegistry });
+
+      await expect(
+        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+      ).rejects.toBe(original);
+      expect(writeSessionRegistry).toHaveBeenCalledTimes(2);
+      expect(manager.list()[0]?.status).toBe("exited");
+    });
+
+    it("resume() preserves its original persist error when exited reconciliation also fails", async () => {
+      const original = new Error("initial resume persist failed");
+      const cleanup = new Error("resume reconciliation persist failed");
+      let failWrites = false;
+      let failedWriteCount = 0;
+      const writeSessionRegistry = vi.fn(async () => {
+        if (!failWrites) return;
+        failedWriteCount += 1;
+        throw failedWriteCount === 1 ? original : cleanup;
+      });
+      const { manager } = makeManager({ writeSessionRegistry });
+      const session = await manager.registerHistorical({
+        agentSessionId: "agent-uuid-persist-failure",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "past session",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+      failWrites = true;
+
+      await expect(manager.resume(session.id)).rejects.toBe(original);
+      expect(failedWriteCount).toBe(2);
+      expect(manager.get(session.id)).toMatchObject({
+        status: "exited",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+    });
+
     it("create() reconciles the record to exited when ensureCanvasTemplate rejects", async () => {
       const ensureCanvasTemplate = vi.fn(async () => {
         throw new Error("read-only fs");
