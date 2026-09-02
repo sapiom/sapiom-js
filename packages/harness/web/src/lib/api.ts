@@ -2282,13 +2282,43 @@ export class MockApi implements HarnessApi {
   async getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse> {
-    await delay();
-    const failure =
+    const query =
       typeof window === "undefined"
         ? null
-        : new URLSearchParams(window.location.search).get(
-            "mockAgentMapWorkspace",
-          );
+        : new URLSearchParams(window.location.search);
+    const failure = query?.get("mockAgentMapWorkspace") ?? null;
+    const project = this.studioProjects().find(
+      (candidate) => candidate.projectId === projectId,
+    );
+    const goldenFixtureEnabled = query?.get("mockAgentMapGolden") === "1";
+    let seededGoldenFixture = false;
+    if (
+      failure === null &&
+      project &&
+      goldenFixtureEnabled &&
+      !this.agentMapSnapshots.has(projectId)
+    ) {
+      const fixture = goldenAgentMapFixture(
+        project,
+        new Date().toISOString(),
+        "user_mock",
+        "planner_mock",
+      );
+      this.agentMapSnapshots.set(projectId, fixture.snapshot);
+      seededGoldenFixture = true;
+      // Publish before the delayed GET settles so the golden journey covers the
+      // cold-open queue/replay path. Durable recovery already has the same
+      // fixture staged if delivery fails or the client reconnects.
+      setTimeout(() => {
+        void import("./events").then(({ publishMockBusMessage }) => {
+          publishMockBusMessage({
+            type: "agent-map.proposal.changed",
+            delta: fixture.delta,
+          });
+        });
+      }, 0);
+    }
+    await delay();
     if (failure === "error") {
       throw new ApiError(
         503,
@@ -2303,42 +2333,12 @@ export class MockApi implements HarnessApi {
         "Studio project is not available",
       );
     }
-    const project = this.studioProjects().find(
-      (candidate) => candidate.projectId === projectId,
-    );
     if (!project) {
       throw new ApiError(
         404,
         "Studio project not found",
         "Studio project not found",
       );
-    }
-    const goldenFixtureEnabled =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockAgentMapGolden") ===
-        "1";
-    let seededGoldenFixture = false;
-    if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
-      const fixture = goldenAgentMapFixture(
-        project,
-        new Date().toISOString(),
-        "user_mock",
-        "planner_mock",
-      );
-      this.agentMapSnapshots.set(projectId, fixture.snapshot);
-      seededGoldenFixture = true;
-      // The golden journey starts from the durable empty snapshot, then accepts
-      // the complete proposal through the same existing WebSocket used in
-      // production. Keeping the durable fixture ready first also makes any
-      // recovery GET authoritative if delivery races or reconnects.
-      setTimeout(() => {
-        void import("./events").then(({ publishMockBusMessage }) => {
-          publishMockBusMessage({
-            type: "agent-map.proposal.changed",
-            delta: fixture.delta,
-          });
-        });
-      }, 0);
     }
     const stored = this.agentMapSnapshots.get(projectId);
     if (stored && !seededGoldenFixture) {

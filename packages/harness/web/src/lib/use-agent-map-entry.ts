@@ -143,6 +143,9 @@ export function useAgentMapEntry({
   const openPlannerRef = useRef(openPlannerSession);
   const onPlannerReadyRef = useRef(onPlannerReady);
   const visibleProposalRef = useRef(new Map<StudioProjectId, string>());
+  const visibleDeltaRef = useRef(
+    new Map<StudioProjectId, { proposalId: string; version: number }>(),
+  );
 
   currentProjectRef.current = projectId;
   apiRef.current = api;
@@ -239,7 +242,23 @@ export function useAgentMapEntry({
       const delta = routed.delta;
       const outcome = agentMapLoader.accept(delta);
       if (delta.projectId !== projectId) return;
-      if (outcome.status === "applied") {
+      const showAcceptedDelta = (snapshot: AgentMapWorkspaceResponse): void => {
+        if (
+          currentProjectRef.current !== projectId ||
+          snapshot.proposal?.id !== delta.proposalId ||
+          snapshot.proposal.version < delta.version
+        )
+          return;
+        const previous = visibleDeltaRef.current.get(projectId);
+        if (
+          previous?.proposalId === delta.proposalId &&
+          previous.version >= delta.version
+        )
+          return;
+        visibleDeltaRef.current.set(projectId, {
+          proposalId: delta.proposalId,
+          version: delta.version,
+        });
         const visibleLatency = Math.max(
           0,
           Math.min(60_000, Date.now() - Date.parse(delta.acceptedAt)),
@@ -250,7 +269,7 @@ export function useAgentMapEntry({
                 ...current,
                 workspace: {
                   status: "ready",
-                  value: outcome.snapshot,
+                  value: snapshot,
                 },
               }
             : current,
@@ -260,6 +279,16 @@ export function useAgentMapEntry({
           assignment_kind: delta.actor.assignment?.kind ?? "none",
           visible_latency_ms: visibleLatency,
         });
+      };
+      if (outcome.status === "applied") {
+        showAcceptedDelta(outcome.snapshot);
+      } else if (outcome.status === "queued") {
+        // A delta can beat the cold GET. The loader replays it before settling
+        // that shared promise; report visibility only after the replayed
+        // snapshot is actually ready, with the same dedupe as the direct path.
+        void agentMapLoader
+          .load(apiRef.current, projectId)
+          .then(showAcceptedDelta, () => undefined);
       } else if (outcome.status === "needs-refetch") {
         loadWorkspace(projectId);
       }

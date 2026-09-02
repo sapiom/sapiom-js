@@ -69,6 +69,31 @@ describe("applyAcceptedProposalDelta", () => {
     });
   });
 
+  it("refetches rather than truncating a confirmed base during bootstrap", () => {
+    const source = proposalSnapshot();
+    const firstOperation = source.proposal!.history[0]!;
+    const snapshot = structuredClone(source);
+    snapshot.workspace.confirmedRevisionId = "revision-confirmed";
+    snapshot.workspace.activeProposalId = null;
+    snapshot.proposal = null;
+    const delta: AcceptedProposalDelta = {
+      schemaVersion: 1,
+      projectId: source.project.projectId,
+      proposalId: source.proposal!.id,
+      fromVersion: 0,
+      version: 1,
+      operationIds: [firstOperation.id],
+      operations: [firstOperation.operation],
+      actor: firstOperation.actor,
+      acceptedAt: firstOperation.acceptedAt,
+    };
+
+    expect(applyAcceptedProposalDelta(snapshot, delta)).toEqual({
+      status: "needs-refetch",
+      snapshot,
+    });
+  });
+
   it("applies one complete contiguous batch and preserves stable selection", () => {
     const result = applyAcceptedProposalDelta(
       proposalSnapshot(),

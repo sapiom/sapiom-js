@@ -140,6 +140,7 @@ export function applyAcceptedProposalDelta(
   const bootstrapsProposal =
     proposal === null &&
     snapshot.workspace.activeProposalId === null &&
+    snapshot.workspace.confirmedRevisionId === null &&
     delta.fromVersion === 0 &&
     delta.version === 1 &&
     delta.operations.length > 0 &&
