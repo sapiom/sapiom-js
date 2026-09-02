@@ -4,7 +4,29 @@
  */
 
 export * from "./shared/types.js";
-export * from "./shared/agent-map.js";
+export {
+  AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+  EXECUTION_MODES,
+  PLAN_NODE_KINDS,
+  RELATIONSHIP_KINDS,
+} from "./shared/agent-map.js";
+export type {
+  AcceptedProposalDelta,
+  ExecutionMode,
+  MapOperation,
+  MapProposalId,
+  PlanNode,
+  PlanNodeChanges,
+  PlanNodeId,
+  PlanNodeKind,
+  PlanRelationship,
+  PlanRelationshipId,
+  ProposalActor,
+  ProposalOperationId,
+  RelationshipChanges,
+  RelationshipKind,
+  StudioProjectId,
+} from "./shared/agent-map.js";
 export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {

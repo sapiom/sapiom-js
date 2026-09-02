@@ -55,7 +55,9 @@ export class AgentMapProposalConflictError extends Error {
     super(
       conflict.code === "request_id_reused"
         ? "Proposal request ID was reused"
-        : "Agent Map proposal changed",
+        : conflict.code === "request_id_expired"
+          ? "Proposal request result is no longer retained"
+          : "Agent Map proposal changed",
     );
     this.name = "AgentMapProposalConflictError";
   }
@@ -295,17 +297,17 @@ export class AgentMapProposalService {
     version: number,
   ): AgentMapGraph {
     if (!proposal || version === 0) return base;
-    let graph = base;
+    const operations: MapOperation[] = [];
     for (const record of proposal.history) {
       if (record.acceptedVersion > version) break;
-      graph = applyOperations(graph, [record.operation]);
+      operations.push(record.operation);
     }
-    return graph;
+    return applyOperations(base, operations);
   }
 
   /** History is authoritative; receipt retention cannot change stale conflicts. */
   private touchSetAfter(
-    base: AgentMapGraph,
+    readGraph: AgentMapGraph,
     proposal: MapChangeProposal | null,
     expectedVersion: number,
   ): ProposalTouchSet {
@@ -313,7 +315,7 @@ export class AgentMapProposalService {
     const semantics = new Set<string>();
     if (!proposal || expectedVersion >= proposal.version)
       return { entityKeys: [], semanticRelationshipKeys: [] };
-    let graph = this.graphAt(base, proposal, expectedVersion);
+    let graph = readGraph;
     let version = -1;
     let operations: MapOperation[] = [];
     const applyBatch = () => {
@@ -396,7 +398,7 @@ export class AgentMapProposalService {
       throw new AgentMapProposalValidationError(atRead.issues, currentVersion);
     if (parsed.value.expectedVersion < currentVersion) {
       const prior = this.touchSetAfter(
-        base,
+        readGraph,
         aggregate.proposal,
         parsed.value.expectedVersion,
       );
@@ -489,11 +491,11 @@ export class AgentMapProposalService {
             // retry window. History remains a permanent, compact tombstone:
             // an older retry fails closed instead of applying twice.
             throw new AgentMapProposalConflictError({
-              code: "request_id_reused",
+              code: "request_id_expired",
               currentVersion,
               affectedNodeIds: [],
               affectedRelationshipIds: [],
-              recovery: "reread",
+              recovery: "new_request",
             });
           this.assertProposalPointer(aggregate, request, currentVersion);
           if (request.expectedVersion > currentVersion)
@@ -514,7 +516,7 @@ export class AgentMapProposalService {
 
           if (request.expectedVersion < currentVersion) {
             const prior = this.touchSetAfter(
-              base,
+              readGraph,
               aggregate.proposal,
               request.expectedVersion,
             );

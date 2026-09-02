@@ -175,7 +175,9 @@ describe("AgentMapProposalService", () => {
     expect(JSON.stringify(aggregate.receipts)).not.toContain('"touchSet"');
     await expect(
       service.propose(identity("session-1"), firstRequest),
-    ).rejects.toMatchObject({ conflict: { code: "request_id_reused" } });
+    ).rejects.toMatchObject({
+      conflict: { code: "request_id_expired", recovery: "new_request" },
+    });
     await expect(
       service.propose(identity("session-1"), secondRequest),
     ).resolves.toEqual(second);
