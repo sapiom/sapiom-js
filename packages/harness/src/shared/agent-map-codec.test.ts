@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  mapChangeProposalSchema,
-  proposalReceiptSchema,
+  parseAgentMapProposalReceipt,
+  parseMapChangeProposal,
+  parseProposalActor,
 } from "./agent-map-codec.js";
 
 const nodeId = "node_00000000-0000-7000-8000-000000000001";
@@ -26,21 +27,10 @@ const operation = {
     contractRefs: [],
   },
 };
-const delta = {
-  schemaVersion: 1,
-  projectId: "project_00000000-0000-4000-8000-000000000001",
-  proposalId,
-  fromVersion: 0,
-  version: 1,
-  operationIds: [operationId],
-  operations: [operation],
-  actor,
-  acceptedAt,
-};
 const proposal = {
   schemaVersion: 1,
   id: proposalId,
-  projectId: delta.projectId,
+  projectId: "project_00000000-0000-4000-8000-000000000001",
   baseRevisionId: null,
   version: 1,
   nodes: [operation.node],
@@ -62,22 +52,15 @@ const receipt = {
   sessionId: "session-1",
   requestId: "request-1",
   requestDigest: "a".repeat(64),
-  result: {
-    schemaVersion: 1,
-    proposalId,
-    version: 1,
-    operationIds: [operationId],
-    allocatedNodeIds: { research: nodeId },
-    allocatedRelationshipIds: {},
-    delta,
-  },
-  touchSet: { entityKeys: [], semanticRelationshipKeys: [] },
+  version: 1,
+  allocatedNodeIds: { research: nodeId },
+  allocatedRelationshipIds: {},
 };
 
 describe("Agent Map persisted/public codecs", () => {
   it("accepts the complete exact nested proposal and receipt", () => {
-    expect(mapChangeProposalSchema.safeParse(proposal).success).toBe(true);
-    expect(proposalReceiptSchema.safeParse(receipt).success).toBe(true);
+    expect(parseMapChangeProposal(proposal)).toEqual(proposal);
+    expect(parseAgentMapProposalReceipt(receipt)).toEqual(receipt);
   });
 
   it.each([
@@ -97,12 +80,18 @@ describe("Agent Map persisted/public codecs", () => {
   ])("rejects %s in public history", (_name, mutate) => {
     const value = structuredClone(proposal);
     mutate(value);
-    expect(mapChangeProposalSchema.safeParse(value).success).toBe(false);
+    expect(() => parseMapChangeProposal(value)).toThrow();
   });
 
-  it("rejects corrupt private receipt results", () => {
+  it("rejects corrupt private receipt allocations", () => {
     const value = structuredClone(receipt) as any;
-    value.result.delta.operations[0].node.ownerAgentId = "foreign";
-    expect(proposalReceiptSchema.safeParse(value).success).toBe(false);
+    value.allocatedNodeIds.research = "foreign";
+    expect(() => parseAgentMapProposalReceipt(value)).toThrow();
+  });
+
+  it("uses the same DEL-safe actor boundary as proposal requests", () => {
+    expect(() =>
+      parseProposalActor({ ...actor, sessionId: "session\u007f1" }),
+    ).toThrow();
   });
 });

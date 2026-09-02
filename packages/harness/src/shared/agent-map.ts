@@ -205,12 +205,8 @@ export interface AgentMapWorkspaceState {
   updatedAt: string;
 }
 
-export interface AgentMapWorkspaceResponse {
-  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
-  project: StudioProjectSummary;
-  workspace: AgentMapWorkspaceState;
-  proposal: MapChangeProposal | null;
-}
+/** Backwards-compatible route name for the canonical Agent Map read shape. */
+export type AgentMapWorkspaceResponse = AgentMapReadSnapshot;
 
 /** Stable, path-free identity for the workspace currently open in Studio. */
 export type StudioWorkspaceSelection =

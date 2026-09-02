@@ -15,7 +15,6 @@ import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
 } from "../core/agent-map-workspace-store.js";
-import type { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
@@ -38,8 +37,6 @@ import {
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
   store: AgentMapWorkspaceStore;
-  /** Transport-neutral proposal authority, consumed by SAP-3060's MCP router. */
-  proposalService?: AgentMapProposalService;
   preferences: StudioWorkspacePreferenceStore;
   /** Current trusted principal; authentication can change without a restart. */
   currentUserId: () => string;

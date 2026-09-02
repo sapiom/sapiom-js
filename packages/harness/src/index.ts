@@ -4,6 +4,7 @@
  */
 
 export * from "./shared/types.js";
+export * from "./shared/agent-map.js";
 export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {
@@ -59,4 +60,9 @@ export type { SpawnTarget } from "./core/spawn-target.js";
 // desktop app's --smoke mode to create a REAL session against a stub agent, so
 // per-OS session coverage doesn't require Claude Code installed on a CI runner.
 export { createClaudeCodeAdapter } from "./core/adapters/claude-code.js";
-export { loadSettings, saveSettings, recordRecentDir, hasStoredSettings } from "./cli/settings.js";
+export {
+  loadSettings,
+  saveSettings,
+  recordRecentDir,
+  hasStoredSettings,
+} from "./cli/settings.js";

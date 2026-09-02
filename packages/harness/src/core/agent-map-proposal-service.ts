@@ -19,9 +19,11 @@ import {
   type ProposalValidationIssue,
   type StudioProjectId,
 } from "../shared/agent-map.js";
+import { parseProposalActor } from "../shared/agent-map-codec.js";
 import { parseProposalBatchRequest } from "./agent-map-proposal-schema.js";
 import {
   canonicalizeAgentMapGraph,
+  derivePersistedMapOperationTouchSet,
   materializeValidatedMapBatch,
   proposalTouchSetsOverlap,
   validateMapOperationBatch,
@@ -31,8 +33,11 @@ import {
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
+  type AgentMapProposalReceipt,
   type AgentMapProjectAggregate,
 } from "./agent-map-workspace-store.js";
+
+export const AGENT_MAP_PROPOSAL_RECEIPT_RETENTION_LIMIT = 256;
 
 export class AgentMapProposalValidationError extends Error {
   readonly code = "validation_failed" as const;
@@ -100,17 +105,35 @@ export interface AgentMapProposalServiceOptions {
     operationCount: number;
     latencyMs: number;
   }) => void | Promise<void>;
+  /** Test seam; production receipts stay bounded by the exported hard limit. */
+  receiptRetentionLimit?: number;
 }
 
-const actorFor = (identity: PlanningSessionIdentity): ProposalActor => ({
-  userId: identity.userId,
-  sessionId: identity.sessionId,
-  role: identity.role,
-  assignment:
-    identity.role === "agent-builder"
-      ? structuredClone(identity.assignment)
-      : null,
-});
+const actorFor = (identity: PlanningSessionIdentity): ProposalActor => {
+  try {
+    return parseProposalActor({
+      userId: identity.userId,
+      sessionId: identity.sessionId,
+      role: identity.role,
+      assignment:
+        identity.role === "agent-builder"
+          ? structuredClone(identity.assignment)
+          : null,
+    });
+  } catch {
+    throw new AgentMapProposalValidationError(
+      [
+        {
+          code: "malformed_input",
+          operationIndex: null,
+          path: ["identity"],
+          recovery: "retry",
+        },
+      ],
+      0,
+    );
+  }
+};
 
 function canonicalRequest(request: ProposalBatchRequest): ProposalBatchRequest {
   return {
@@ -219,6 +242,7 @@ function affectedFromTouchSets(
 export class AgentMapProposalService {
   private readonly allocator: AgentMapPermanentIdAllocator;
   private readonly now: () => Date;
+  private readonly receiptRetentionLimit: number;
 
   constructor(
     private readonly store: AgentMapWorkspaceStore,
@@ -226,6 +250,15 @@ export class AgentMapProposalService {
   ) {
     this.allocator = options.allocator ?? new UuidV7AgentMapIdAllocator();
     this.now = options.now ?? (() => new Date());
+    const requestedLimit =
+      options.receiptRetentionLimit ??
+      AGENT_MAP_PROPOSAL_RECEIPT_RETENTION_LIMIT;
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1)
+      throw new RangeError("receiptRetentionLimit must be a positive integer");
+    this.receiptRetentionLimit = Math.min(
+      requestedLimit,
+      AGENT_MAP_PROPOSAL_RECEIPT_RETENTION_LIMIT,
+    );
   }
 
   read(projectId: StudioProjectId) {
@@ -270,7 +303,81 @@ export class AgentMapProposalService {
     return graph;
   }
 
+  /** History is authoritative; receipt retention cannot change stale conflicts. */
+  private touchSetAfter(
+    base: AgentMapGraph,
+    proposal: MapChangeProposal | null,
+    expectedVersion: number,
+  ): ProposalTouchSet {
+    const entities = new Set<string>();
+    const semantics = new Set<string>();
+    if (!proposal || expectedVersion >= proposal.version)
+      return { entityKeys: [], semanticRelationshipKeys: [] };
+    let graph = this.graphAt(base, proposal, expectedVersion);
+    let version = -1;
+    let operations: MapOperation[] = [];
+    const applyBatch = () => {
+      if (operations.length === 0) return;
+      const next = applyOperations(graph, operations);
+      const touchSet = derivePersistedMapOperationTouchSet(
+        graph,
+        operations,
+        next,
+      );
+      touchSet.entityKeys.forEach((key) => entities.add(key));
+      touchSet.semanticRelationshipKeys.forEach((key) => semantics.add(key));
+      graph = next;
+    };
+    for (const record of proposal.history) {
+      if (record.acceptedVersion <= expectedVersion) continue;
+      if (version !== -1 && record.acceptedVersion !== version) {
+        applyBatch();
+        operations = [];
+      }
+      version = record.acceptedVersion;
+      operations.push(record.operation);
+    }
+    applyBatch();
+    return {
+      entityKeys: [...entities].sort(),
+      semanticRelationshipKeys: [...semantics].sort(),
+    };
+  }
+
+  private resultForReceipt(
+    proposal: MapChangeProposal,
+    receipt: AgentMapProposalReceipt,
+  ): ProposalBatchResult {
+    const records = proposal.history.filter(
+      ({ acceptedVersion }) => acceptedVersion === receipt.version,
+    );
+    const first = records[0]!;
+    const operationIds = records.map(({ id }) => id);
+    return {
+      schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+      proposalId: proposal.id,
+      version: receipt.version,
+      operationIds,
+      allocatedNodeIds: structuredClone(receipt.allocatedNodeIds),
+      allocatedRelationshipIds: structuredClone(
+        receipt.allocatedRelationshipIds,
+      ),
+      delta: {
+        schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+        projectId: proposal.projectId,
+        proposalId: proposal.id,
+        fromVersion: receipt.version - 1,
+        version: receipt.version,
+        operationIds,
+        operations: records.map(({ operation }) => structuredClone(operation)),
+        actor: structuredClone(first.actor),
+        acceptedAt: first.acceptedAt,
+      },
+    };
+  }
+
   async validate(identity: PlanningSessionIdentity, input: unknown) {
+    actorFor(identity);
     const parsed = parseProposalBatchRequest(input);
     if (!parsed.ok) throw new AgentMapProposalValidationError(parsed.issues, 0);
     const aggregate = await this.store.readAggregate(identity.projectId);
@@ -288,17 +395,18 @@ export class AgentMapProposalService {
     if (!atRead.ok)
       throw new AgentMapProposalValidationError(atRead.issues, currentVersion);
     if (parsed.value.expectedVersion < currentVersion) {
-      for (const prior of aggregate.receipts.filter(
-        (candidate) => candidate.result.version > parsed.value.expectedVersion,
-      )) {
-        if (proposalTouchSetsOverlap(atRead.value.touchSet, prior.touchSet))
-          throw new AgentMapProposalConflictError({
-            code: "stale_version",
-            currentVersion,
-            ...affectedFromTouchSets(atRead.value.touchSet, prior.touchSet),
-            recovery: "reread",
-          });
-      }
+      const prior = this.touchSetAfter(
+        base,
+        aggregate.proposal,
+        parsed.value.expectedVersion,
+      );
+      if (proposalTouchSetsOverlap(atRead.value.touchSet, prior))
+        throw new AgentMapProposalConflictError({
+          code: "stale_version",
+          currentVersion,
+          ...affectedFromTouchSets(atRead.value.touchSet, prior),
+          recovery: "reread",
+        });
     }
     const currentGraph = aggregate.proposal
       ? {
@@ -328,6 +436,7 @@ export class AgentMapProposalService {
     input: unknown,
   ): Promise<ProposalBatchResult> {
     const startedAt = Date.now();
+    const actor = actorFor(identity);
     const parsed = parseProposalBatchRequest(input);
     if (!parsed.ok) {
       this.emitOutcome(
@@ -365,8 +474,27 @@ export class AgentMapProposalService {
                 recovery: "reread",
               });
             replayed = true;
-            return { value: receipt.result };
+            return {
+              value: this.resultForReceipt(aggregate.proposal!, receipt),
+            };
           }
+          if (
+            aggregate.proposal?.history.some(
+              (record) =>
+                record.actor.sessionId === identity.sessionId &&
+                record.requestId === request.requestId,
+            )
+          )
+            // Exact results retain draftRef allocations only for the bounded
+            // retry window. History remains a permanent, compact tombstone:
+            // an older retry fails closed instead of applying twice.
+            throw new AgentMapProposalConflictError({
+              code: "request_id_reused",
+              currentVersion,
+              affectedNodeIds: [],
+              affectedRelationshipIds: [],
+              recovery: "reread",
+            });
           this.assertProposalPointer(aggregate, request, currentVersion);
           if (request.expectedVersion > currentVersion)
             throw this.stale(currentVersion);
@@ -385,23 +513,18 @@ export class AgentMapProposalService {
             );
 
           if (request.expectedVersion < currentVersion) {
-            for (const prior of aggregate.receipts.filter(
-              (candidate) => candidate.result.version > request.expectedVersion,
-            )) {
-              if (
-                proposalTouchSetsOverlap(atRead.value.touchSet, prior.touchSet)
-              ) {
-                throw new AgentMapProposalConflictError({
-                  code: "stale_version",
-                  currentVersion,
-                  ...affectedFromTouchSets(
-                    atRead.value.touchSet,
-                    prior.touchSet,
-                  ),
-                  recovery: "reread",
-                });
-              }
-            }
+            const prior = this.touchSetAfter(
+              base,
+              aggregate.proposal,
+              request.expectedVersion,
+            );
+            if (proposalTouchSetsOverlap(atRead.value.touchSet, prior))
+              throw new AgentMapProposalConflictError({
+                code: "stale_version",
+                currentVersion,
+                ...affectedFromTouchSets(atRead.value.touchSet, prior),
+                recovery: "reread",
+              });
           }
           const currentGraph = aggregate.proposal
             ? {
@@ -456,7 +579,6 @@ export class AgentMapProposalService {
               currentVersion,
             );
           const acceptedAt = this.now().toISOString();
-          const actor = actorFor(identity);
           const delta: AcceptedProposalDelta = {
             schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
             projectId: identity.projectId,
@@ -514,10 +636,11 @@ export class AgentMapProposalService {
                 sessionId: identity.sessionId,
                 requestId: request.requestId,
                 requestDigest: digest,
-                result: batchResult,
-                touchSet: materialized.touchSet,
+                version,
+                allocatedNodeIds: materialized.allocatedNodeIds,
+                allocatedRelationshipIds: materialized.allocatedRelationshipIds,
               },
-            ],
+            ].slice(-this.receiptRetentionLimit),
           };
           acceptedDelta = delta;
           return { value: batchResult, next };

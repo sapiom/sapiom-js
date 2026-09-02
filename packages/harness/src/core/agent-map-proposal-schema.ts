@@ -14,27 +14,21 @@ import {
   type ProposalValidationIssue,
   type ProposalValidationResult,
 } from "../shared/agent-map.js";
-
-const UUID_V7 =
-  "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const hasControlCharacter = (value: string): boolean =>
-  [...value].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || codePoint === 0x7f;
-  });
+import {
+  AGENT_MAP_UUID_V7_PATTERN,
+  isAgentMapBoundedText,
+} from "../shared/agent-map-codec.js";
 
 const boundedText = (maximum: number, allowEmpty = false) =>
   z
     .string()
     .max(maximum)
-    .refine((value) => (allowEmpty ? true : value.length > 0))
-    .refine((value) => value.trim() === value)
-    .refine((value) => !hasControlCharacter(value));
+    .refine((value) => isAgentMapBoundedText(value, maximum, allowEmpty));
 
 const opaqueId = <T>(prefix: string) =>
   z
     .string()
-    .regex(new RegExp(`^${prefix}_${UUID_V7}$`, "u"))
+    .regex(new RegExp(`^${prefix}_${AGENT_MAP_UUID_V7_PATTERN}$`, "u"))
     .transform((value) => value as T);
 
 export const planNodeIdSchema = opaqueId<PlanNodeId>("node");

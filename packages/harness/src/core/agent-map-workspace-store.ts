@@ -8,26 +8,19 @@ import {
   type AgentMapErrorCode,
   type AgentMapWorkspaceState,
   type MapChangeProposal,
-  type ProposalBatchResult,
   type StudioProjectId,
 } from "../shared/agent-map.js";
 import {
+  parseAgentMapProposalReceipt,
   parseMapChangeProposal,
-  proposalReceiptSchema,
+  type PersistedAgentMapProposalReceipt,
 } from "../shared/agent-map-codec.js";
-import type { ProposalTouchSet } from "./agent-map-proposal-validator.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 
 export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = 1;
 
-export interface AgentMapProposalReceipt {
-  sessionId: string;
-  requestId: string;
-  requestDigest: string;
-  result: ProposalBatchResult;
-  touchSet: ProposalTouchSet;
-}
+export type AgentMapProposalReceipt = PersistedAgentMapProposalReceipt;
 
 export interface AgentMapProjectAggregate {
   storageSchemaVersion: typeof AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION;
@@ -192,16 +185,42 @@ function parseAggregate(
   }
   const receipts: AgentMapProposalReceipt[] = [];
   for (const receipt of value.receipts) {
-    const parsed = proposalReceiptSchema.safeParse(receipt);
+    let parsed: AgentMapProposalReceipt;
+    try {
+      parsed = parseAgentMapProposalReceipt(receipt);
+    } catch {
+      throw new AgentMapWorkspaceStoreError("malformed_state");
+    }
+    const records =
+      proposal?.history.filter(
+        ({ acceptedVersion }) => acceptedVersion === parsed.version,
+      ) ?? [];
+    const actor = records[0]?.actor;
+    const acceptedAt = records[0]?.acceptedAt;
+    const allocatedNodeIds = records.flatMap(({ operation }) =>
+      operation.kind === "add-node" ? [operation.node.id] : [],
+    );
+    const allocatedRelationshipIds = records.flatMap(({ operation }) =>
+      operation.kind === "add-relationship" ? [operation.relationship.id] : [],
+    );
     if (
-      !parsed.success ||
       proposal === null ||
-      parsed.data.result.proposalId !== proposal.id ||
-      parsed.data.result.delta.projectId !== projectId ||
-      parsed.data.result.version > proposal.version
+      parsed.version > proposal.version ||
+      records.length === 0 ||
+      records.some(
+        (record) =>
+          record.requestId !== parsed.requestId ||
+          record.actor.sessionId !== parsed.sessionId ||
+          JSON.stringify(record.actor) !== JSON.stringify(actor) ||
+          record.acceptedAt !== acceptedAt,
+      ) ||
+      JSON.stringify(Object.values(parsed.allocatedNodeIds).sort()) !==
+        JSON.stringify(allocatedNodeIds.sort()) ||
+      JSON.stringify(Object.values(parsed.allocatedRelationshipIds).sort()) !==
+        JSON.stringify(allocatedRelationshipIds.sort())
     )
       throw new AgentMapWorkspaceStoreError("malformed_state");
-    receipts.push(parsed.data as AgentMapProposalReceipt);
+    receipts.push(parsed);
   }
   if (
     new Set(
@@ -380,8 +399,12 @@ export class AgentMapWorkspaceStore {
       try {
         const loaded = await this.readDisk(projectId);
         const outcome = await operation(structuredClone(loaded.aggregate));
-        if (loaded.needsWrite || outcome.next)
-          await this.persist(projectId, outcome.next ?? loaded.aggregate);
+        if (loaded.needsWrite || outcome.next) {
+          const next = outcome.next
+            ? parseAggregate(outcome.next, projectId)
+            : loaded.aggregate;
+          await this.persist(projectId, next);
+        }
         if (loaded.created)
           this.emit({ name: "agent_map.workspace_initialized", projectId });
         return structuredClone(outcome.value);

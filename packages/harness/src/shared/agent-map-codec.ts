@@ -1,226 +1,410 @@
-import { z } from "zod";
-
 import {
   AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
   EXECUTION_MODES,
   PLAN_NODE_KINDS,
   RELATIONSHIP_KINDS,
+  type DraftRef,
   type MapChangeProposal,
+  type MapOperation,
+  type PlanNode,
+  type PlanNodeId,
+  type PlanRelationship,
+  type PlanRelationshipId,
+  type ProposalActor,
   type ProposalBatchResult,
 } from "./agent-map.js";
 
-const UUID_V7 =
+export const AGENT_MAP_UUID_V7_PATTERN =
   "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const bounded = (maximum = 2_000, empty = false) =>
-  z
-    .string()
-    .max(maximum)
-    .refine(
-      (value) =>
-        (empty || value.length > 0) &&
-        value === value.trim() &&
-        ![...value].some(
-          (character) => (character.codePointAt(0) ?? 0) <= 0x1f,
-        ),
-    );
-const id = (prefix: string) =>
-  z.string().regex(new RegExp(`^${prefix}_${UUID_V7}$`, "u"));
-const nodeId = id("node");
-const relationshipId = id("rel");
-const proposalId = id("proposal");
-const operationId = id("operation");
-const timestamp = z.string().datetime({ offset: false });
-const contractRefs = z
-  .array(bounded(512))
-  .max(64)
-  .refine((values) => new Set(values).size === values.length);
 
-const node = z
-  .object({
-    id: nodeId,
-    kind: z.enum(PLAN_NODE_KINDS),
-    name: bounded(160),
-    purpose: bounded(2_000),
-    ownerAgentId: nodeId.nullable(),
-    contractRefs,
-  })
-  .strict();
-
-const relationship = z
-  .object({
-    id: relationshipId,
-    fromNodeId: nodeId,
-    toNodeId: nodeId,
-    kind: z.enum(RELATIONSHIP_KINDS),
-    executionMode: z.enum(EXECUTION_MODES).nullable(),
-    contractRef: bounded(512).nullable(),
-    description: bounded(2_000, true),
-  })
-  .strict();
-
-const nodeChanges = z
-  .object({
-    name: bounded(160).optional(),
-    purpose: bounded(2_000).optional(),
-    contractRefs: contractRefs.optional(),
-  })
-  .strict()
-  .refine((value) => Object.keys(value).length > 0);
-const relationshipChanges = z
-  .object({
-    description: bounded(2_000, true).optional(),
-    executionMode: z.enum(EXECUTION_MODES).nullable().optional(),
-    contractRef: bounded(512).nullable().optional(),
-  })
-  .strict()
-  .refine((value) => Object.keys(value).length > 0);
-
-export const persistedMapOperationSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("add-node"), node }).strict(),
-  z
-    .object({ kind: z.literal("update-node"), nodeId, changes: nodeChanges })
-    .strict(),
-  z.object({ kind: z.literal("remove-node"), nodeId }).strict(),
-  z.object({ kind: z.literal("add-relationship"), relationship }).strict(),
-  z
-    .object({
-      kind: z.literal("update-relationship"),
-      relationshipId,
-      changes: relationshipChanges,
-    })
-    .strict(),
-  z.object({ kind: z.literal("remove-relationship"), relationshipId }).strict(),
-]);
-
-const assignment = z.union([
-  z.object({ kind: z.literal("planned"), agentId: bounded(256) }).strict(),
-  z.object({ kind: z.literal("unplanned") }).strict(),
-]);
-export const proposalActorSchema = z.union([
-  z
-    .object({
-      userId: bounded(256),
-      sessionId: bounded(256),
-      role: z.literal("map-planner"),
-      assignment: z.null(),
-    })
-    .strict(),
-  z
-    .object({
-      userId: bounded(256),
-      sessionId: bounded(256),
-      role: z.literal("agent-builder"),
-      assignment,
-    })
-    .strict(),
-]);
-
-const operationRecord = z
-  .object({
-    id: operationId,
-    requestId: bounded(128),
-    acceptedVersion: z.number().int().positive(),
-    operation: persistedMapOperationSchema,
-    actor: proposalActorSchema,
-    acceptedAt: timestamp,
-  })
-  .strict();
-
-export const acceptedProposalDeltaSchema = z
-  .object({
-    schemaVersion: z.literal(AGENT_MAP_PROPOSAL_SCHEMA_VERSION),
-    projectId: bounded(128),
-    proposalId,
-    fromVersion: z.number().int().nonnegative(),
-    version: z.number().int().positive(),
-    operationIds: z.array(operationId).min(1),
-    operations: z.array(persistedMapOperationSchema).min(1),
-    actor: proposalActorSchema,
-    acceptedAt: timestamp,
-  })
-  .strict()
-  .refine(
-    (value) =>
-      value.version === value.fromVersion + 1 &&
-      value.operationIds.length === value.operations.length,
-  );
-
-export const proposalBatchResultSchema = z
-  .object({
-    schemaVersion: z.literal(AGENT_MAP_PROPOSAL_SCHEMA_VERSION),
-    proposalId,
-    version: z.number().int().positive(),
-    operationIds: z.array(operationId).min(1),
-    allocatedNodeIds: z.record(bounded(128), nodeId),
-    allocatedRelationshipIds: z.record(bounded(128), relationshipId),
-    delta: acceptedProposalDeltaSchema,
-  })
-  .strict()
-  .refine(
-    (value) =>
-      value.proposalId === value.delta.proposalId &&
-      value.version === value.delta.version &&
-      JSON.stringify(value.operationIds) ===
-        JSON.stringify(value.delta.operationIds),
-  );
-
-export const mapChangeProposalSchema = z
-  .object({
-    schemaVersion: z.literal(AGENT_MAP_PROPOSAL_SCHEMA_VERSION),
-    id: proposalId,
-    projectId: bounded(128),
-    baseRevisionId: bounded(256).nullable(),
-    version: z.number().int().positive(),
-    nodes: z.array(node),
-    relationships: z.array(relationship),
-    history: z.array(operationRecord).min(1),
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  })
-  .strict()
-  .superRefine((value, context) => {
-    const nodeIds = value.nodes.map(({ id }) => id);
-    const relationshipIds = value.relationships.map(({ id }) => id);
-    const operationIds = value.history.map(({ id }) => id);
-    if (
-      new Set(nodeIds).size !== nodeIds.length ||
-      new Set(relationshipIds).size !== relationshipIds.length ||
-      new Set(operationIds).size !== operationIds.length ||
-      value.history.some((record) => record.acceptedVersion > value.version) ||
-      value.history.at(-1)?.acceptedVersion !== value.version
-    )
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "inconsistent proposal",
-      });
+export function hasAgentMapControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
   });
+}
 
-export const proposalReceiptSchema = z
-  .object({
-    sessionId: bounded(256),
-    requestId: bounded(128),
-    requestDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-    result: proposalBatchResultSchema,
-    touchSet: z
-      .object({
-        entityKeys: z.array(bounded(1_000, true)),
-        semanticRelationshipKeys: z.array(bounded(2_000, true)),
-      })
-      .strict(),
-  })
-  .strict();
+export function isAgentMapBoundedText(
+  value: unknown,
+  maximum: number,
+  allowEmpty = false,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= maximum &&
+    (allowEmpty || value.length > 0) &&
+    value.trim() === value &&
+    !hasAgentMapControlCharacter(value)
+  );
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasExactKeys = (
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return (
+    actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+  );
+};
+
+const isPlanId = (value: unknown, prefix: string): value is string =>
+  typeof value === "string" &&
+  new RegExp(`^${prefix}_${AGENT_MAP_UUID_V7_PATTERN}$`, "u").test(value);
+
+const isTimestamp = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
+};
+
+const isContractRefs = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length <= 64 &&
+  value.every((entry) => isAgentMapBoundedText(entry, 512)) &&
+  new Set(value).size === value.length;
+
+function parseNode(value: unknown): PlanNode {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "id",
+      "kind",
+      "name",
+      "purpose",
+      "ownerAgentId",
+      "contractRefs",
+    ]) ||
+    !isPlanId(value.id, "node") ||
+    !PLAN_NODE_KINDS.includes(value.kind as (typeof PLAN_NODE_KINDS)[number]) ||
+    !isAgentMapBoundedText(value.name, 160) ||
+    !isAgentMapBoundedText(value.purpose, 2_000) ||
+    (value.ownerAgentId !== null && !isPlanId(value.ownerAgentId, "node")) ||
+    !isContractRefs(value.contractRefs)
+  )
+    throw new Error("invalid Agent Map node");
+  return structuredClone(value) as unknown as PlanNode;
+}
+
+function parseRelationship(value: unknown): PlanRelationship {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "id",
+      "fromNodeId",
+      "toNodeId",
+      "kind",
+      "executionMode",
+      "contractRef",
+      "description",
+    ]) ||
+    !isPlanId(value.id, "rel") ||
+    !isPlanId(value.fromNodeId, "node") ||
+    !isPlanId(value.toNodeId, "node") ||
+    !RELATIONSHIP_KINDS.includes(
+      value.kind as (typeof RELATIONSHIP_KINDS)[number],
+    ) ||
+    (value.executionMode !== null &&
+      !EXECUTION_MODES.includes(
+        value.executionMode as (typeof EXECUTION_MODES)[number],
+      )) ||
+    (value.contractRef !== null &&
+      !isAgentMapBoundedText(value.contractRef, 512)) ||
+    !isAgentMapBoundedText(value.description, 2_000, true)
+  )
+    throw new Error("invalid Agent Map relationship");
+  return structuredClone(value) as unknown as PlanRelationship;
+}
+
+function parseNodeChanges(value: unknown) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length === 0 ||
+    !Object.keys(value).every((key) =>
+      ["name", "purpose", "contractRefs"].includes(key),
+    ) ||
+    ("name" in value && !isAgentMapBoundedText(value.name, 160)) ||
+    ("purpose" in value && !isAgentMapBoundedText(value.purpose, 2_000)) ||
+    ("contractRefs" in value && !isContractRefs(value.contractRefs))
+  )
+    throw new Error("invalid Agent Map node changes");
+  return structuredClone(value);
+}
+
+function parseRelationshipChanges(value: unknown) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length === 0 ||
+    !Object.keys(value).every((key) =>
+      ["description", "executionMode", "contractRef"].includes(key),
+    ) ||
+    ("description" in value &&
+      !isAgentMapBoundedText(value.description, 2_000, true)) ||
+    ("executionMode" in value &&
+      value.executionMode !== null &&
+      !EXECUTION_MODES.includes(
+        value.executionMode as (typeof EXECUTION_MODES)[number],
+      )) ||
+    ("contractRef" in value &&
+      value.contractRef !== null &&
+      !isAgentMapBoundedText(value.contractRef, 512))
+  )
+    throw new Error("invalid Agent Map relationship changes");
+  return structuredClone(value);
+}
+
+function parseMapOperation(value: unknown): MapOperation {
+  if (!isRecord(value) || typeof value.kind !== "string")
+    throw new Error("invalid Agent Map operation");
+  switch (value.kind) {
+    case "add-node":
+      if (!hasExactKeys(value, ["kind", "node"]))
+        throw new Error("invalid Agent Map operation");
+      return { kind: value.kind, node: parseNode(value.node) };
+    case "update-node":
+      if (
+        !hasExactKeys(value, ["kind", "nodeId", "changes"]) ||
+        !isPlanId(value.nodeId, "node")
+      )
+        throw new Error("invalid Agent Map operation");
+      return {
+        kind: value.kind,
+        nodeId: value.nodeId as PlanNodeId,
+        changes: parseNodeChanges(value.changes),
+      } as MapOperation;
+    case "remove-node":
+      if (
+        !hasExactKeys(value, ["kind", "nodeId"]) ||
+        !isPlanId(value.nodeId, "node")
+      )
+        throw new Error("invalid Agent Map operation");
+      return { kind: value.kind, nodeId: value.nodeId as PlanNodeId };
+    case "add-relationship":
+      if (!hasExactKeys(value, ["kind", "relationship"]))
+        throw new Error("invalid Agent Map operation");
+      return {
+        kind: value.kind,
+        relationship: parseRelationship(value.relationship),
+      };
+    case "update-relationship":
+      if (
+        !hasExactKeys(value, ["kind", "relationshipId", "changes"]) ||
+        !isPlanId(value.relationshipId, "rel")
+      )
+        throw new Error("invalid Agent Map operation");
+      return {
+        kind: value.kind,
+        relationshipId: value.relationshipId as PlanRelationshipId,
+        changes: parseRelationshipChanges(value.changes),
+      } as MapOperation;
+    case "remove-relationship":
+      if (
+        !hasExactKeys(value, ["kind", "relationshipId"]) ||
+        !isPlanId(value.relationshipId, "rel")
+      )
+        throw new Error("invalid Agent Map operation");
+      return {
+        kind: value.kind,
+        relationshipId: value.relationshipId as PlanRelationshipId,
+      };
+    default:
+      throw new Error("invalid Agent Map operation");
+  }
+}
+
+export function parseProposalActor(value: unknown): ProposalActor {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["userId", "sessionId", "role", "assignment"]) ||
+    !isAgentMapBoundedText(value.userId, 256) ||
+    !isAgentMapBoundedText(value.sessionId, 256)
+  )
+    throw new Error("invalid Agent Map actor");
+  if (value.role === "map-planner" && value.assignment === null)
+    return structuredClone(value) as unknown as ProposalActor;
+  if (
+    value.role !== "agent-builder" ||
+    !isRecord(value.assignment) ||
+    (value.assignment.kind === "planned"
+      ? !hasExactKeys(value.assignment, ["kind", "agentId"]) ||
+        !isAgentMapBoundedText(value.assignment.agentId, 256)
+      : value.assignment.kind !== "unplanned" ||
+        !hasExactKeys(value.assignment, ["kind"]))
+  )
+    throw new Error("invalid Agent Map actor");
+  return structuredClone(value) as unknown as ProposalActor;
+}
 
 export function parseMapChangeProposal(
   value: unknown,
-  projectId: string,
-  activeProposalId: string,
+  projectId?: string,
+  activeProposalId?: string,
 ): MapChangeProposal {
-  const parsed = mapChangeProposalSchema.parse(value);
-  if (parsed.projectId !== projectId || parsed.id !== activeProposalId)
-    throw new Error("proposal identity mismatch");
-  return parsed as MapChangeProposal;
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "schemaVersion",
+      "id",
+      "projectId",
+      "baseRevisionId",
+      "version",
+      "nodes",
+      "relationships",
+      "history",
+      "createdAt",
+      "updatedAt",
+    ]) ||
+    value.schemaVersion !== AGENT_MAP_PROPOSAL_SCHEMA_VERSION ||
+    !isPlanId(value.id, "proposal") ||
+    !isAgentMapBoundedText(value.projectId, 128) ||
+    (projectId !== undefined && value.projectId !== projectId) ||
+    (activeProposalId !== undefined && value.id !== activeProposalId) ||
+    (value.baseRevisionId !== null &&
+      !isAgentMapBoundedText(value.baseRevisionId, 256)) ||
+    !Number.isSafeInteger(value.version) ||
+    (value.version as number) < 1 ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.relationships) ||
+    !Array.isArray(value.history) ||
+    value.history.length === 0 ||
+    !isTimestamp(value.createdAt) ||
+    !isTimestamp(value.updatedAt)
+  )
+    throw new Error("invalid Agent Map proposal");
+
+  const nodes = value.nodes.map(parseNode);
+  const relationships = value.relationships.map(parseRelationship);
+  const history = value.history.map((record) => {
+    if (
+      !isRecord(record) ||
+      !hasExactKeys(record, [
+        "id",
+        "requestId",
+        "acceptedVersion",
+        "operation",
+        "actor",
+        "acceptedAt",
+      ]) ||
+      !isPlanId(record.id, "operation") ||
+      !isAgentMapBoundedText(record.requestId, 128) ||
+      !Number.isSafeInteger(record.acceptedVersion) ||
+      (record.acceptedVersion as number) < 1 ||
+      !isTimestamp(record.acceptedAt)
+    )
+      throw new Error("invalid Agent Map history");
+    return {
+      id: record.id,
+      requestId: record.requestId,
+      acceptedVersion: record.acceptedVersion as number,
+      operation: parseMapOperation(record.operation),
+      actor: parseProposalActor(record.actor),
+      acceptedAt: record.acceptedAt,
+    };
+  });
+  const versions = history.map(({ acceptedVersion }) => acceptedVersion);
+  const uniqueVersions = [...new Set(versions)];
+  const nodeIds = new Set(nodes.map(({ id }) => id));
+  if (
+    new Set(nodes.map(({ id }) => id)).size !== nodes.length ||
+    new Set(relationships.map(({ id }) => id)).size !== relationships.length ||
+    new Set(history.map(({ id }) => id)).size !== history.length ||
+    uniqueVersions.some((version, index) => version !== index + 1) ||
+    versions.some(
+      (version, index) => index > 0 && version < versions[index - 1]!,
+    ) ||
+    versions.at(-1) !== value.version ||
+    nodes.some(
+      ({ ownerAgentId }) => ownerAgentId !== null && !nodeIds.has(ownerAgentId),
+    ) ||
+    relationships.some(
+      ({ fromNodeId, toNodeId }) =>
+        !nodeIds.has(fromNodeId) || !nodeIds.has(toNodeId),
+    )
+  )
+    throw new Error("inconsistent Agent Map proposal");
+  return {
+    schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+    id: value.id,
+    projectId: value.projectId,
+    baseRevisionId: value.baseRevisionId,
+    version: value.version as number,
+    nodes,
+    relationships,
+    history,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  } as MapChangeProposal;
 }
 
-export function parseProposalBatchResult(value: unknown): ProposalBatchResult {
-  return proposalBatchResultSchema.parse(value) as ProposalBatchResult;
+export interface PersistedAgentMapProposalReceipt {
+  sessionId: string;
+  requestId: string;
+  requestDigest: string;
+  version: number;
+  allocatedNodeIds: ProposalBatchResult["allocatedNodeIds"];
+  allocatedRelationshipIds: ProposalBatchResult["allocatedRelationshipIds"];
+}
+
+const parseAllocationMap = (
+  value: unknown,
+  prefix: "node" | "rel",
+): Record<DraftRef, PlanNodeId | PlanRelationshipId> => {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length > 256 ||
+    !Object.entries(value).every(
+      ([draftRef, id]) =>
+        isAgentMapBoundedText(draftRef, 128) && isPlanId(id, prefix),
+    )
+  )
+    throw new Error("invalid Agent Map allocation map");
+  return structuredClone(value) as Record<
+    DraftRef,
+    PlanNodeId | PlanRelationshipId
+  >;
+};
+
+export function parseAgentMapProposalReceipt(
+  value: unknown,
+): PersistedAgentMapProposalReceipt {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "sessionId",
+      "requestId",
+      "requestDigest",
+      "version",
+      "allocatedNodeIds",
+      "allocatedRelationshipIds",
+    ]) ||
+    !isAgentMapBoundedText(value.sessionId, 256) ||
+    !isAgentMapBoundedText(value.requestId, 128) ||
+    typeof value.requestDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.requestDigest) ||
+    !Number.isSafeInteger(value.version) ||
+    (value.version as number) < 1
+  )
+    throw new Error("invalid Agent Map receipt");
+  return {
+    sessionId: value.sessionId,
+    requestId: value.requestId,
+    requestDigest: value.requestDigest,
+    version: value.version as number,
+    allocatedNodeIds: parseAllocationMap(
+      value.allocatedNodeIds,
+      "node",
+    ) as ProposalBatchResult["allocatedNodeIds"],
+    allocatedRelationshipIds: parseAllocationMap(
+      value.allocatedRelationshipIds,
+      "rel",
+    ) as ProposalBatchResult["allocatedRelationshipIds"],
+  };
 }

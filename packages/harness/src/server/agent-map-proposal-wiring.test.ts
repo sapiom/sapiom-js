@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, it } from "vitest";
 
-import type { BusMessage } from "../shared/types.js";
+import type { AcceptedProposalDelta, BusMessage } from "../index.js";
 import { EventBus } from "../core/event-bus.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
@@ -13,11 +13,12 @@ it("publishes exactly one accepted proposal delta after durable commit", async (
   const bus = new EventBus();
   const messages: BusMessage[] = [];
   bus.subscribe((message) => messages.push(message));
+  const publishAccepted = (delta: AcceptedProposalDelta) =>
+    bus.publish({ type: "agent-map.proposal.changed", delta });
   const service = new AgentMapProposalService(
     new AgentMapWorkspaceStore(root),
     {
-      onAccepted: (delta) =>
-        bus.publish({ type: "agent-map.proposal.changed", delta }),
+      onAccepted: publishAccepted,
     },
   );
   const identity = {

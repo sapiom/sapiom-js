@@ -152,7 +152,6 @@ import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
@@ -2607,35 +2606,6 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
-  const agentMapProposalService = new AgentMapProposalService(
-    agentMapWorkspaceStore,
-    {
-      onAccepted: (delta) =>
-        bus.publish({ type: "agent-map.proposal.changed", delta }),
-      onOutcome: (event) => {
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(event.sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: event.sessionId,
-          agentSessionId: null,
-          harness: "claude-code",
-          type: event.name,
-          payload: {
-            project_id: event.projectId,
-            role: event.role,
-            operation_count: Math.max(0, Math.min(256, event.operationCount)),
-            latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
   const isWorkflowScanComplete = async (
     roots: readonly string[],
   ): Promise<boolean> =>
@@ -2855,7 +2825,6 @@ export const startServer = async (
     createAgentMapRouter({
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
-      proposalService: agentMapProposalService,
       preferences: studioWorkspacePreferences,
       currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
       listWorkflows: () => workflowsCache,

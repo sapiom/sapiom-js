@@ -344,7 +344,8 @@ export function proposalTouchSetsOverlap(
   );
 }
 
-function deriveMaterializedTouchSet(
+/** Derive conservative conflict keys from already materialized operations. */
+export function derivePersistedMapOperationTouchSet(
   current: AgentMapGraph,
   operations: readonly MapOperation[],
   prospective: AgentMapGraph,
@@ -940,6 +941,10 @@ export function materializeValidatedMapBatch(
     graph,
     allocatedNodeIds,
     allocatedRelationshipIds,
-    touchSet: deriveMaterializedTouchSet(validated.current, operations, graph),
+    touchSet: derivePersistedMapOperationTouchSet(
+      validated.current,
+      operations,
+      graph,
+    ),
   };
 }

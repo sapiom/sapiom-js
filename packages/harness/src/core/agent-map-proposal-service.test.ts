@@ -75,7 +75,7 @@ describe("AgentMapProposalService", () => {
     ),
   );
 
-  async function fixture() {
+  async function fixture(receiptRetentionLimit?: number) {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-proposal-"),
     );
@@ -91,6 +91,9 @@ describe("AgentMapProposalService", () => {
         now: () => new Date("2026-09-02T12:00:00.000Z"),
         onAccepted: accepted,
         onOutcome: outcomes,
+        ...(receiptRetentionLimit === undefined
+          ? {}
+          : { receiptRetentionLimit }),
       }),
     };
   }
@@ -151,8 +154,48 @@ describe("AgentMapProposalService", () => {
     ]);
   });
 
-  it("rejects changed reuse of a session request ID", async () => {
+  it("bounds compact receipts and fails closed after exact replay retention", async () => {
+    const { root, service, accepted } = await fixture(1);
+    const firstRequest = addNode("request-1", 0, null);
+    const first = await service.propose(identity("session-1"), firstRequest);
+    const secondRequest = addNode("request-2", 1, first.proposalId);
+    const second = await service.propose(identity("session-1"), secondRequest);
+    const aggregate = await new AgentMapWorkspaceStore(root).readAggregate(
+      projectId,
+    );
+
+    expect(aggregate.receipts).toEqual([
+      expect.objectContaining({
+        sessionId: "session-1",
+        requestId: "request-2",
+        version: 2,
+      }),
+    ]);
+    expect(JSON.stringify(aggregate.receipts)).not.toContain('"delta"');
+    expect(JSON.stringify(aggregate.receipts)).not.toContain('"touchSet"');
+    await expect(
+      service.propose(identity("session-1"), firstRequest),
+    ).rejects.toMatchObject({ conflict: { code: "request_id_reused" } });
+    await expect(
+      service.propose(identity("session-1"), secondRequest),
+    ).resolves.toEqual(second);
+    expect(accepted).toHaveBeenCalledTimes(2);
+    expect((await service.read(projectId)).proposal?.version).toBe(2);
+  });
+
+  it("rejects actor identities that the durable codec cannot read", async () => {
     const { service } = await fixture();
+    await expect(
+      service.propose(
+        identity("session\u007f1"),
+        addNode("request-1", 0, null),
+      ),
+    ).rejects.toBeInstanceOf(AgentMapProposalValidationError);
+    expect(await service.read(projectId)).toMatchObject({ proposal: null });
+  });
+
+  it("rejects changed reuse of a session request ID", async () => {
+    const { service } = await fixture(1);
     await service.propose(identity("session-1"), addNode("request-1", 0, null));
     await expect(
       service.propose(
@@ -163,7 +206,7 @@ describe("AgentMapProposalService", () => {
   });
 
   it("rebases disjoint stale additions and rejects overlapping stale edits", async () => {
-    const { service } = await fixture();
+    const { service } = await fixture(1);
     const first = await service.propose(
       identity("session-1"),
       addNode("request-1", 0, null),
@@ -198,6 +241,42 @@ describe("AgentMapProposalService", () => {
       },
     });
     expect((await service.read(projectId)).proposal?.nodes).toHaveLength(3);
+  });
+
+  it("derives stale conflicts from history after the conflicting receipt is pruned", async () => {
+    const { service } = await fixture(1);
+    const first = await service.propose(
+      identity("session-1"),
+      addNode("request-1", 0, null),
+    );
+    const nodeId = first.allocatedNodeIds["request-1" as DraftRef]!;
+    await service.propose(identity("session-1"), {
+      schemaVersion: 1,
+      proposalId: first.proposalId,
+      expectedVersion: 1,
+      requestId: "edit",
+      operations: [
+        { kind: "update-node", nodeId, changes: { name: "Changed" } },
+      ],
+    });
+    await service.propose(
+      identity("session-1"),
+      addNode("disjoint", 2, first.proposalId),
+    );
+
+    await expect(
+      service.propose(identity("session-2"), {
+        schemaVersion: 1,
+        proposalId: first.proposalId,
+        expectedVersion: 1,
+        requestId: "stale-edit",
+        operations: [
+          { kind: "update-node", nodeId, changes: { purpose: "Stale" } },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      conflict: { code: "stale_version", affectedNodeIds: [nodeId] },
+    });
   });
 
   it("commits nothing when validation fails", async () => {

@@ -48,6 +48,58 @@ describe("parseAgentMapWorkspaceResponse", () => {
     );
   });
 
+  it("accepts and strictly parses a populated proposal", () => {
+    const value = validResponse() as any;
+    const proposalId = "proposal_00000000-0000-7000-8000-000000000001";
+    const nodeId = "node_00000000-0000-7000-8000-000000000002";
+    const operationId = "operation_00000000-0000-7000-8000-000000000003";
+    const operation = {
+      kind: "add-node",
+      node: {
+        id: nodeId,
+        kind: "agent",
+        name: "Research",
+        purpose: "Research",
+        ownerAgentId: null,
+        contractRefs: [],
+      },
+    };
+    value.workspace.activeProposalId = proposalId;
+    value.workspace.recordVersion = 2;
+    value.proposal = {
+      schemaVersion: 1,
+      id: proposalId,
+      projectId,
+      baseRevisionId: null,
+      version: 1,
+      nodes: [operation.node],
+      relationships: [],
+      history: [
+        {
+          id: operationId,
+          requestId: "request-1",
+          acceptedVersion: 1,
+          operation,
+          actor: {
+            userId: "user-1",
+            sessionId: "session-1",
+            role: "map-planner",
+            assignment: null,
+          },
+          acceptedAt: timestamp,
+        },
+      ],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    expect(parseAgentMapWorkspaceResponse(value, projectId)).toEqual(value);
+    value.proposal.history[0].operation.node.privatePath = "/secret";
+    expect(() => parseAgentMapWorkspaceResponse(value, projectId)).toThrow(
+      "Invalid Agent Map workspace response",
+    );
+  });
+
   it("uses the same public shape in mock mode", async () => {
     const api = new MockApi();
     const state = await api.getState();
