@@ -43,7 +43,7 @@ describe("createApiKeyProvider", () => {
     expect(readApiKeyForEnv).toHaveBeenCalledWith("staging");
   });
 
-  it("keeps the current key when the store has no credential (does not clobber to null)", async () => {
+  it("clears the current key when a successful store read confirms no credential", async () => {
     const provider = createApiKeyProvider("sk-current", {
       resolveEnvironmentName: () => Promise.resolve("production"),
       readApiKeyForEnv: () => Promise.resolve(null),
@@ -51,11 +51,11 @@ describe("createApiKeyProvider", () => {
 
     const refreshed = await provider.refresh();
 
-    expect(refreshed).toBe("sk-current");
-    expect(provider.getKey()).toBe("sk-current");
+    expect(refreshed).toBeNull();
+    expect(provider.getKey()).toBeNull();
   });
 
-  it("keeps the current key when the store returns an empty string", async () => {
+  it("clears the current key when the store returns an empty string", async () => {
     const provider = createApiKeyProvider("sk-current", {
       resolveEnvironmentName: () => Promise.resolve("production"),
       readApiKeyForEnv: () => Promise.resolve(""),
@@ -63,7 +63,8 @@ describe("createApiKeyProvider", () => {
 
     const refreshed = await provider.refresh();
 
-    expect(refreshed).toBe("sk-current");
+    expect(refreshed).toBeNull();
+    expect(provider.getKey()).toBeNull();
   });
 
   it("keeps the current key when reading the store throws (unreadable HOME, bad file)", async () => {
@@ -105,6 +106,34 @@ describe("createApiKeyProvider", () => {
     expect(provider.getKey()).toBe("sk-just-logged-in");
   });
 
+  it("serializes concurrent refreshes so an older read cannot win last", async () => {
+    let resolveFirst!: (key: string | null) => void;
+    const readApiKeyForEnv = vi
+      .fn<() => Promise<string | null>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce("key-c");
+    const provider = createApiKeyProvider("key-a", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv,
+    });
+
+    const first = provider.refresh();
+    const second = provider.refresh();
+    await vi.waitFor(() => expect(readApiKeyForEnv).toHaveBeenCalledTimes(1));
+
+    resolveFirst("key-b");
+
+    await expect(first).resolves.toBe("key-b");
+    await expect(second).resolves.toBe("key-c");
+    expect(provider.getKey()).toBe("key-c");
+    expect(readApiKeyForEnv).toHaveBeenCalledTimes(2);
+  });
+
   it("clear() sets the in-memory key to null unconditionally", () => {
     const provider = createApiKeyProvider("sk-live", {
       resolveEnvironmentName: () => Promise.resolve("production"),
@@ -127,7 +156,7 @@ describe("createApiKeyProvider", () => {
     expect(provider.getKey()).toBeNull();
   });
 
-  it("refresh() after clear() does NOT re-adopt a non-null store value (clear is permanent until refresh finds a key)", async () => {
+  it("refresh() after clear() re-adopts a non-null store value", async () => {
     // This test documents that refresh() WILL re-adopt a key after clear()
     // if the store has one — clear() only zeros in-memory; the store is
     // separate and managed by clearCredentials().

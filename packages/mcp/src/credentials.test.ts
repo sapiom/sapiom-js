@@ -10,6 +10,7 @@ vi.mock("node:os");
 import {
   resolveEnvironment,
   readCredentials,
+  readCredentialsOrThrow,
   writeCredentials,
   clearCredentials,
 } from "./credentials.js";
@@ -42,7 +43,9 @@ const sampleFile = {
 
 beforeEach(() => {
   vi.mocked(os.homedir).mockReturnValue(mockHomedir);
-  vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+  vi.mocked(fs.readFile).mockRejectedValue(
+    Object.assign(new Error("credentials file not found"), { code: "ENOENT" }),
+  );
   vi.mocked(fs.writeFile).mockResolvedValue();
   vi.mocked(fs.mkdir).mockResolvedValue(undefined);
 });
@@ -171,6 +174,49 @@ describe("readCredentials", () => {
 
     const creds = await readCredentials("nonexistent");
     expect(creds).toBeNull();
+  });
+
+  it("should remain forgiving when the file is malformed", async () => {
+    vi.mocked(fs.readFile).mockResolvedValue("{not-json");
+
+    await expect(readCredentials("production")).resolves.toBeNull();
+  });
+});
+
+describe("readCredentialsOrThrow", () => {
+  it("returns credentials when the store is valid", async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sampleFile));
+
+    await expect(readCredentialsOrThrow("production")).resolves.toEqual(
+      sampleCredentials,
+    );
+  });
+
+  it("returns null when the credentials file does not exist", async () => {
+    await expect(readCredentialsOrThrow("production")).resolves.toBeNull();
+  });
+
+  it("returns null when the selected environment has no credential", async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sampleFile));
+
+    await expect(readCredentialsOrThrow("staging")).resolves.toBeNull();
+  });
+
+  it("throws when the credentials file contains malformed JSON", async () => {
+    vi.mocked(fs.readFile).mockResolvedValue("{not-json");
+
+    await expect(readCredentialsOrThrow("production")).rejects.toBeInstanceOf(
+      SyntaxError,
+    );
+  });
+
+  it("throws when the credentials file cannot be read", async () => {
+    const error = Object.assign(new Error("permission denied"), {
+      code: "EACCES",
+    });
+    vi.mocked(fs.readFile).mockRejectedValue(error);
+
+    await expect(readCredentialsOrThrow("production")).rejects.toBe(error);
   });
 });
 

@@ -148,7 +148,11 @@ import {
   resolveManifestName,
 } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
-import { createApiKeyProvider } from "../core/api-key-provider.js";
+import {
+  createApiKeyProvider,
+  staticApiKeyProvider,
+  type ApiKeyProvider,
+} from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
@@ -235,6 +239,8 @@ export interface HarnessServerOptions {
    */
   bootToken: string;
   telemetryOptIn: boolean;
+  /** Shared Sapiom authentication policy. Defaults to enabled. */
+  authMode?: "enabled" | "disabled";
   /** Sapiom identity from CLI auth; omit/null when unauthenticated or --no-auth. */
   identity?: HarnessIdentity | null;
   /** Stable per-install id for analytics. Defaults to a freshly loaded/created one. */
@@ -492,17 +498,16 @@ function readVersion(): string {
  * and --append-system-prompt source files. Generated uniformly for every
  * harness kind — an adapter that doesn't use one of these fields (codex,
  * today) simply ignores it, same as the claude-code adapter already does for
- * whichever of the three a given launch doesn't set. `apiKey` (from CLI auth,
- * null when unauthenticated / --no-auth) flows into the generated mcp-config
- * so the remote `sapiom` MCP is actually authenticated — a factory rather
- * than a plain function since it's per-server-instance state.
+ * whichever of the three a given launch doesn't set. The live API-key provider
+ * is refreshed at this common boundary so every new process receives the
+ * latest confirmed credential (or no header when signed out / --no-auth).
  *
  * The system prompt itself is FETCHED per session (SAP-2810) rather than read from
  * the bundled profile, so prompt improvements reach installs that never upgrade the
  * package; the bundled profile remains the offline fallback inside that fetch.
  */
 function createDefaultBuildLaunchOpts(
-  apiKey: string | null,
+  apiKeyProvider: ApiKeyProvider,
   generatedRoot?: string,
   rehydration?: {
     /** Brief text for a prior session id, or null when nothing was recorded. */
@@ -554,6 +559,10 @@ function createDefaultBuildLaunchOpts(
         : req.theme === "dark"
           ? "dark-ansi"
           : undefined;
+
+    // Reconcile with the shared credential store at the common launch
+    // boundary. Create, resume, and background tasks all await this builder.
+    const apiKey = await apiKeyProvider.refresh();
 
     // The served prompt (SAP-2810): loaded per session start, so a backend deploy
     // reaches an install that never upgraded @sapiom/harness. The default loader
@@ -626,15 +635,20 @@ export const startServer = async (
   // The browser launch capability is separate again: it authorizes delivery
   // of the boot token in initial HTML, but cannot call /api by itself.
   const uiToken = randomUUID();
-  const identity = options.identity ?? null;
+  const authEnabled = options.authMode !== "disabled";
+  // Disabled mode is a process-wide hard opt-out: even a programmatic caller
+  // that supplies a cached boot identity cannot seed auth state or injection.
+  const identity = authEnabled ? (options.identity ?? null) : null;
   // The single source of truth for the Sapiom API key (`sk_…`) that Studio
   // actions authenticate with — distinct from the per-boot boot token that only
   // gates the local /api surface. Seeded from the boot-time identity; its
   // refresh() re-reads the shared credential store so a rotated/re-logged-in key
   // recovers a 401 in place instead of locking the Studio.
-  const apiKeyProvider = createApiKeyProvider(identity?.apiKey ?? null, {
-    environment: process.env.SAPIOM_ENVIRONMENT,
-  });
+  const apiKeyProvider = authEnabled
+    ? createApiKeyProvider(identity?.apiKey ?? null, {
+        environment: process.env.SAPIOM_ENVIRONMENT,
+      })
+    : staticApiKeyProvider(null);
 
   // Mutable auth state — seeded from the boot-time identity and updated by the
   // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
@@ -1104,7 +1118,7 @@ export const startServer = async (
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ??
     createDefaultBuildLaunchOpts(
-      identity?.apiKey ?? null,
+      apiKeyProvider,
       generatedRoot,
       {
         buildBrief: resolveRehydrationBrief,
@@ -3337,6 +3351,7 @@ export const startServer = async (
       authState,
       apiKeyProvider,
       bus,
+      authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
       onPlanningUserChanged: (userId) => {
         planningUserId = userId;

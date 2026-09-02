@@ -7,6 +7,7 @@ export { performBrowserAuth, type AuthResult } from "./auth.js";
 export {
   resolveEnvironment,
   readCredentials,
+  readCredentialsOrThrow,
   writeCredentials,
   clearCredentials,
   type CredentialEntry,
