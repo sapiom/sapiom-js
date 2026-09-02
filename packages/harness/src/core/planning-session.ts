@@ -20,6 +20,7 @@ import type {
 } from "./studio-project-catalog.js";
 import type { PlannerRegistrationMode } from "./planner-greeting.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
+import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
 
 export interface PlannerFocusedContextDetails {
   confirmedRevision?: {
@@ -330,12 +331,13 @@ export class PlanningSessionService {
       workspace.confirmedRevisionId === null &&
       workspace.activeProposalId === null &&
       workspace.projectBuildPlanId === null;
+    const harness = request.harness ?? this.options.defaultHarness;
     const cwd = launchRoot(project);
     const details = await this.focusedDetails(project, workspace);
     const session = await this.options.sessionManager.create(
       {
         cwd,
-        harness: request.harness ?? this.options.defaultHarness,
+        harness,
         ...(request.theme ? { theme: request.theme } : {}),
         ...(rehydrateFrom ? { rehydrateFrom } : {}),
       },
@@ -348,9 +350,19 @@ export class PlanningSessionService {
             workspace,
             sessionId,
             userId: principal,
-            onboardOnFirstResponse: mode === "created" && emptyProject,
+            // Claude gets native SessionStart orientation before turn one.
+            // Other CLIs retain the hidden first-response instruction until
+            // they expose an equivalent display-only startup channel.
+            onboardOnFirstResponse:
+              mode === "created" && emptyProject && harness !== "claude-code",
             ...(details ? { details } : {}),
           }),
+        ...(mode === "created" && harness === "claude-code"
+          ? {
+              sessionStartSystemMessage: () =>
+                AGENT_MAP_PLANNER_SESSION_START_MESSAGE,
+            }
+          : {}),
         ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
       },
     );

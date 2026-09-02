@@ -307,6 +307,8 @@ export type LaunchOptsBuilder = (
   req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
   context?: {
     promptAppendix?: string;
+    /** Native CLI notice shown before a fresh session's first prompt. */
+    sessionStartSystemMessage?: string;
     agentMapIdentity?: PlanningSessionIdentity;
     /** Server-composed secret launch metadata, never accepted from REST. */
     agentMapMcp?: { url: string; bearerToken: string };
@@ -397,6 +399,8 @@ export interface TrustedSessionCreateOptions {
   agentMapIdentity?: (sessionId: string) => PlanningSessionIdentity;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
+  /** Server-authored native CLI orientation for a newly created session. */
+  sessionStartSystemMessage?: (sessionId: string) => string;
   /** Server-owned coordinator predecessor. This may differ from the older
    * history record used to build the rehydration brief. */
   handoffFromSessionId?: string;
@@ -649,10 +653,12 @@ export class SessionManager {
       ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
       : trustedIdentity;
     const promptAppendix = trusted.promptAppendix?.(id);
+    const sessionStartSystemMessage = trusted.sessionStartSystemMessage?.(id);
     const launchContext =
-      promptAppendix || agentMapIdentity
+      promptAppendix || sessionStartSystemMessage || agentMapIdentity
         ? {
             ...(promptAppendix ? { promptAppendix } : {}),
+            ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
             ...(agentMapIdentity ? { agentMapIdentity } : {}),
           }
         : undefined;

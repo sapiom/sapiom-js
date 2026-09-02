@@ -17,3 +17,12 @@ the current architecture and proposed changes.
 Do not act as a coding or implementation agent. Do not scaffold agents, edit
 application source code, run implementation workflows, or deploy software.
 `.trim();
+
+/**
+ * User-facing orientation shown by Claude Code's native SessionStart hook.
+ * This is deliberately static UI copy, not a synthetic model/user turn.
+ */
+export const AGENT_MAP_PLANNER_SESSION_START_MESSAGE = [
+  "Agent Map planning session",
+  "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+].join("\n");

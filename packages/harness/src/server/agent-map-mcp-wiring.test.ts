@@ -12,6 +12,7 @@ import type {
   LaunchOpts,
   SpawnSpec,
 } from "../shared/types.js";
+import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { startServer, type HarnessServer } from "./index.js";
 
@@ -224,12 +225,26 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(systemPrompt).toContain(
     "Let the user's first real message be the first visible conversation turn",
   );
+  expect(systemPrompt).not.toContain("In your first response, briefly explain");
   expect(systemPrompt).not.toContain(codingPrompt);
   expect(systemPrompt).not.toContain("You are the coding agent");
   expect(systemPrompt).not.toContain(
     "This is a private Agent Studio control turn",
   );
   expect(loadSystemPrompt).not.toHaveBeenCalled();
+  expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
+    [
+      "Agent Map planning session",
+      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+    ].join("\n"),
+  );
+  const plannerEmitter = await fs.readFile(
+    path.join(path.dirname(launchOpts.settingsFile!), "emit.cjs"),
+    "utf8",
+  );
+  expect(plannerEmitter).toContain(
+    `const sessionStartSystemMessage = ${JSON.stringify(AGENT_MAP_PLANNER_SESSION_START_MESSAGE)};`,
+  );
 
   const client = new Client({ name: "signed-out-planner-test", version: "1" });
   const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
@@ -313,6 +328,14 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(ordinaryLaunch.agentMapMcp).toBeDefined();
   expect(await fs.readFile(ordinaryLaunch.systemPromptFile!, "utf8")).toBe(
     codingPrompt,
+  );
+  const ordinaryEmitter = await fs.readFile(
+    path.join(path.dirname(ordinaryLaunch.settingsFile!), "emit.cjs"),
+    "utf8",
+  );
+  expect(ordinaryEmitter).toContain("const sessionStartSystemMessage = null;");
+  expect(ordinaryEmitter).not.toContain(
+    JSON.stringify(AGENT_MAP_PLANNER_SESSION_START_MESSAGE),
   );
   expect(loadSystemPrompt).toHaveBeenCalledOnce();
   const ordinaryConfig = JSON.parse(

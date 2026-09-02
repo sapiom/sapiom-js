@@ -572,6 +572,11 @@ function createDefaultBuildLaunchOpts(
         harnessSessionId,
         generatedRoot,
         ...(claudeTheme ? { claudeTheme } : {}),
+        ...(context?.sessionStartSystemMessage
+          ? {
+              sessionStartSystemMessage: context.sessionStartSystemMessage,
+            }
+          : {}),
       }),
       generateMcpConfig(harnessSessionId, {
         environment: process.env.SAPIOM_ENVIRONMENT,

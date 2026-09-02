@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -5,6 +6,32 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { generateClaudeSettings } from "./claude-settings.js";
+
+async function runGeneratedHook(
+  emitScriptPath: string,
+  hookEvent: string,
+  payload: Record<string, unknown>,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return await new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.SAPIOM_HARNESS_INGEST_URL;
+    delete env.SAPIOM_HARNESS_INGEST_TOKEN;
+    const child = spawn(process.execPath, [emitScriptPath, hookEvent], { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
 
 describe("generateClaudeSettings", () => {
   let tmpDir: string;
@@ -34,6 +61,39 @@ describe("generateClaudeSettings", () => {
       const command = settings.hooks[event][0].hooks[0].command;
       expect(command).toBe(`node "${emitScriptPath}" ${event}`);
     }
+  });
+
+  it("shows planner onboarding only for a fresh SessionStart hook", async () => {
+    const message = [
+      "Agent Map planning session",
+      "Use this session to scope what you want to build—not to implement it yet.",
+    ].join("\n");
+    const { emitScriptPath } = await generateClaudeSettings({
+      harnessSessionId: "planner-session",
+      generatedRoot: tmpDir,
+      sessionStartSystemMessage: message,
+    });
+
+    const startup = await runGeneratedHook(emitScriptPath, "SessionStart", {
+      source: "startup",
+    });
+    expect(startup).toEqual({
+      code: 0,
+      stdout: `${JSON.stringify({ systemMessage: message })}\n`,
+      stderr: "",
+    });
+
+    const resume = await runGeneratedHook(emitScriptPath, "SessionStart", {
+      source: "resume",
+    });
+    expect(resume).toEqual({ code: 0, stdout: "", stderr: "" });
+
+    const firstPrompt = await runGeneratedHook(
+      emitScriptPath,
+      "UserPromptSubmit",
+      { prompt: "hello" },
+    );
+    expect(firstPrompt).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 
   it("double-quotes the hook command's script path so a home dir with a space still runs", async () => {

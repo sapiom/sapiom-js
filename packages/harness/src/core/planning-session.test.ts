@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
 import type { AgentMapWorkspaceState } from "../shared/agent-map.js";
 import type { HarnessSession, SessionRecord } from "../shared/types.js";
 import type { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
@@ -85,10 +86,12 @@ function fixture(
   let resolvedProject = initialProject;
   let currentUserId: string | null = "user-1";
   const contexts: string[] = [];
+  const sessionStartMessages: Array<string | null> = [];
   const created: HarnessSession[] = [];
   const create = vi.fn(async (request, trusted) => {
     const id = `new-${++next}`;
     contexts.push(trusted.promptAppendix(id));
+    sessionStartMessages.push(trusted.sessionStartSystemMessage?.(id) ?? null);
     const value = session(id, {
       harness: request.harness,
       cwd: request.cwd,
@@ -152,6 +155,7 @@ function fixture(
     resume,
     kill,
     contexts,
+    sessionStartMessages,
     manager,
     created,
     setProject: (value: StudioProjectIdentity) => {
@@ -255,7 +259,7 @@ describe("planner session context and identity", () => {
 
 describe("PlanningSessionService", () => {
   it("always creates a new, server-scoped planner for explicit fresh", async () => {
-    const { service, create, contexts } = fixture();
+    const { service, create, contexts, sessionStartMessages } = fixture();
     const first = await service.open(projectId, { mode: "fresh" });
     const second = await service.open(projectId, { mode: "fresh" });
 
@@ -283,6 +287,23 @@ describe("PlanningSessionService", () => {
     ]);
     expect(contexts.join("\n")).not.toContain(
       "This is a private Agent Studio control turn",
+    );
+    expect(sessionStartMessages).toEqual([null, null]);
+  });
+
+  it("uses native Claude startup orientation without repeating it in turn one", async () => {
+    const { service, contexts, sessionStartMessages } = fixture();
+
+    await service.open(projectId, {
+      mode: "fresh",
+      harness: "claude-code",
+    });
+
+    expect(sessionStartMessages).toEqual([
+      AGENT_MAP_PLANNER_SESSION_START_MESSAGE,
+    ]);
+    expect(contexts[0]).not.toContain(
+      "In your first response, briefly explain",
     );
   });
 
@@ -490,7 +511,9 @@ describe("PlanningSessionService", () => {
       status: "exited",
       agentSessionId: "stale-vendor-session",
     });
-    const { service, resume, create, contexts } = fixture([prior]);
+    const { service, resume, create, contexts, sessionStartMessages } = fixture([
+      prior,
+    ]);
     resume.mockRejectedValueOnce(new Error("not resumable"));
     (service as unknown as { options: { readRecord: () => Promise<SessionRecord> } }).options.readRecord =
       async () => ({ turnCount: 1 } as SessionRecord);
@@ -506,6 +529,7 @@ describe("PlanningSessionService", () => {
     expect(contexts[0]).not.toContain(
       "In your first response, briefly explain",
     );
+    expect(sessionStartMessages).toEqual([null]);
   });
 
   it("hands a restarted pre-ready FIFO to a rehydrated planner exactly once and retires the old queue", async () => {
