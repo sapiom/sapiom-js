@@ -5,7 +5,7 @@
  * isolation — the same pattern used by bin.test.ts for signal handlers.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { parseArgs } from "./args.js";
+import { parseArgs, resolveCliAuthMode } from "./args.js";
 import { printBanner } from "./banner.js";
 import { AGENT_STUDIO_PRODUCT_NAME } from "../shared/branding.js";
 
@@ -24,15 +24,23 @@ describe("parseArgs — --state-root flag", () => {
   });
 
   it("captures the directory it is given", () => {
-    expect(parseArgs(["--state-root", "/tmp/throwaway"]).stateRoot).toBe("/tmp/throwaway");
+    expect(parseArgs(["--state-root", "/tmp/throwaway"]).stateRoot).toBe(
+      "/tmp/throwaway",
+    );
   });
 
   it("rejects a missing value rather than silently ignoring the flag", () => {
-    expect(() => parseArgs(["--state-root"])).toThrow(/requires a directory path/);
+    expect(() => parseArgs(["--state-root"])).toThrow(
+      /requires a directory path/,
+    );
   });
 
   it("composes with a working directory argument", () => {
-    const options = parseArgs(["/Users/demo/scratch", "--state-root", "/tmp/throwaway"]);
+    const options = parseArgs([
+      "/Users/demo/scratch",
+      "--state-root",
+      "/tmp/throwaway",
+    ]);
     expect(options.dir).toBe("/Users/demo/scratch");
     expect(options.stateRoot).toBe("/tmp/throwaway");
   });
@@ -60,7 +68,9 @@ describe("parseArgs — --login flag", () => {
   });
 
   it("--port requires a value", () => {
-    expect(() => parseArgs(["--port"])).toThrow("--port requires a numeric value");
+    expect(() => parseArgs(["--port"])).toThrow(
+      "--port requires a numeric value",
+    );
   });
 });
 
@@ -112,9 +122,11 @@ describe("printBanner — 'Agent Studio' name", () => {
     });
 
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines.some((l) => l.includes("Acme") && l.includes("u-1") && l.includes("cached"))).toBe(
-      true,
-    );
+    expect(
+      lines.some(
+        (l) => l.includes("Acme") && l.includes("u-1") && l.includes("cached"),
+      ),
+    ).toBe(true);
   });
 
   it("banner shows the UI-authorized launch URL when server started", () => {
@@ -128,7 +140,9 @@ describe("printBanner — 'Agent Studio' name", () => {
     });
 
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines.some((l) => l.includes("http://localhost:4000/?uiToken=abc123"))).toBe(true);
+    expect(
+      lines.some((l) => l.includes("http://localhost:4000/?uiToken=abc123")),
+    ).toBe(true);
   });
 
   it("banner shows '(server not started)' when server failed to start", () => {
@@ -169,5 +183,10 @@ describe("boot-auth deferral — interactive: false when --login is absent", () 
     const opts = parseArgs(["--no-auth"]);
     expect(opts.noAuth).toBe(true);
     expect(opts.login).toBe(false);
+    expect(resolveCliAuthMode(opts)).toBe("disabled");
+  });
+
+  it("auth remains enabled by default", () => {
+    expect(resolveCliAuthMode(parseArgs([]))).toBe("enabled");
   });
 });

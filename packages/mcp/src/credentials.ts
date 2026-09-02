@@ -16,10 +16,17 @@ const ENVIRONMENT_ALIASES: Record<string, string> = {
  * environment defined in the file always takes precedence over a preset (so a
  * custom override, or one carrying credentials, still wins).
  */
-const ENVIRONMENT_PRESETS: Record<string, { appURL: string; apiURL: string }> = {
-  production: { appURL: "https://app.sapiom.ai", apiURL: "https://api.sapiom.ai" },
-  staging: { appURL: "https://app.sapiom.dev", apiURL: "https://api.sapiom.dev" },
-};
+const ENVIRONMENT_PRESETS: Record<string, { appURL: string; apiURL: string }> =
+  {
+    production: {
+      appURL: "https://app.sapiom.ai",
+      apiURL: "https://api.sapiom.ai",
+    },
+    staging: {
+      appURL: "https://app.sapiom.dev",
+      apiURL: "https://api.sapiom.dev",
+    },
+  };
 
 function canonicalEnvironmentName(name: string): string {
   return ENVIRONMENT_ALIASES[name] ?? name;
@@ -56,10 +63,36 @@ function getCredentialsPath(): string {
   return path.join(os.homedir(), ".sapiom", "credentials.json");
 }
 
-async function readCredentialsFile(): Promise<CredentialsFile | null> {
+function isMissingCredentialsFile(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
+}
+
+/**
+ * Read and parse the shared credential store without hiding failures.
+ * A genuinely absent file is a valid signed-out state; every other failure
+ * must stay distinguishable so live consumers do not erase a last-known key
+ * because of a transient I/O or parse problem.
+ */
+async function readCredentialsFileOrThrow(): Promise<CredentialsFile | null> {
   try {
     const content = await fs.readFile(getCredentialsPath(), "utf-8");
     return JSON.parse(content) as CredentialsFile;
+  } catch (error) {
+    if (isMissingCredentialsFile(error)) return null;
+    throw error;
+  }
+}
+
+/** Compatibility reader for existing MCP callers that treat any store
+ * failure as signed out. New reconciliation code should use the strict read. */
+async function readCredentialsFile(): Promise<CredentialsFile | null> {
+  try {
+    return await readCredentialsFileOrThrow();
   } catch {
     return null;
   }
@@ -142,6 +175,20 @@ export async function readCredentials(
   envName: string,
 ): Promise<CredentialEntry | null> {
   const file = await readCredentialsFile();
+  return file?.environments[envName]?.credentials ?? null;
+}
+
+/**
+ * Read one environment's cached credential while preserving the difference
+ * between a confirmed absence and a store failure.
+ *
+ * Returns `null` for a missing file or missing credential. Permission, I/O,
+ * and JSON parsing failures are allowed to throw.
+ */
+export async function readCredentialsOrThrow(
+  envName: string,
+): Promise<CredentialEntry | null> {
+  const file = await readCredentialsFileOrThrow();
   return file?.environments[envName]?.credentials ?? null;
 }
 

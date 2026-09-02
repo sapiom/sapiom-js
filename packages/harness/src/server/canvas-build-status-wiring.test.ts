@@ -65,7 +65,9 @@ describe("Canvas build-status wiring", () => {
         return;
       }
       definitionRequests += 1;
-      definitionApiKeys.push(req.headers["x-sapiom-api-key"] as string | undefined);
+      definitionApiKeys.push(
+        req.headers["x-sapiom-api-key"] as string | undefined,
+      );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -128,6 +130,10 @@ describe("Canvas build-status wiring", () => {
         source: "cached",
       },
       adapters: { "claude-code": fakeClaudeAdapter() },
+      // This test exercises Canvas's cloud-status request, not the default
+      // launch builder. Keep its synthetic boot identity in memory without a
+      // real ~/.sapiom credential fixture for launch-time reconciliation.
+      buildLaunchOpts: () => ({}),
       stateRoot,
       launchDir: sessionDir,
       autoCreateSession: false,

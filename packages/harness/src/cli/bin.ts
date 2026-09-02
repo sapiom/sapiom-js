@@ -28,7 +28,7 @@ import { ensureConsent } from "./consent.js";
 import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
 import { resolveStatePaths } from "../core/paths.js";
-import { parseArgs } from "./args.js";
+import { parseArgs, resolveCliAuthMode } from "./args.js";
 import { startServer, type HarnessServer } from "../server/index.js";
 
 const main = async (): Promise<void> => {
@@ -72,9 +72,13 @@ const main = async (): Promise<void> => {
   // out explicitly so "auth silently worked" doesn't read as "nothing
   // happened" (a fresh login is its own visible browser flow already).
   if (identity?.source === "cached") {
-    console.log(`\nSigned in as ${identity.organizationName} (cached credential).`);
+    console.log(
+      `\nSigned in as ${identity.organizationName} (cached credential).`,
+    );
   }
-  const consentResult = await ensureConsent({ noTelemetry: options.noTelemetry });
+  const consentResult = await ensureConsent({
+    noTelemetry: options.noTelemetry,
+  });
   const { telemetryOptIn } = consentResult;
   // First run = no recent directories recorded before this boot. Must be read
   // BEFORE recordRecentDir below stamps the launch dir in — after that the
@@ -82,7 +86,8 @@ const main = async (): Promise<void> => {
   // and suppresses the auto-created boot session, so a brand-new user lands on
   // the welcome panel rather than a bare terminal in whatever directory they
   // happened to launch from.
-  const firstRun = (await loadSettings(statePaths.settings)).recentDirs.length === 0;
+  const firstRun =
+    (await loadSettings(statePaths.settings)).recentDirs.length === 0;
   await recordRecentDir(options.dir, statePaths.settings);
 
   const bootToken = crypto.randomBytes(32).toString("hex");
@@ -93,6 +98,7 @@ const main = async (): Promise<void> => {
       port: options.port,
       bootToken,
       telemetryOptIn,
+      authMode: resolveCliAuthMode(options),
       consentSource: consentResult.source,
       consentEnvReason: consentResult.envReason,
       identity,

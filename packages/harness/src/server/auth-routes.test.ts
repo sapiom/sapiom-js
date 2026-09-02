@@ -33,14 +33,21 @@ vi.mock("@sapiom/mcp/auth", () => ({
   clearCredentials: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { writeCredentials, clearCredentials } from "@sapiom/mcp/auth";
+import {
+  clearCredentials,
+  resolveEnvironment,
+  writeCredentials,
+} from "@sapiom/mcp/auth";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** A minimal ApiKeyProvider spy — records refresh() and clear() calls. */
-function makeProvider(refreshResult: string | null = null, initialKey: string | null = null) {
+function makeProvider(
+  refreshResult: string | null = null,
+  initialKey: string | null = null,
+) {
   const calls = { refresh: 0, clear: 0 };
   let currentKey: string | null = initialKey;
   return {
@@ -67,7 +74,9 @@ function collectBusEvents(bus: EventBus): BusMessage[] {
 
 /** Build and start a minimal express app mounting the auth router. */
 function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
-  const authState = opts.authState ?? createMutableAuthState({ authenticated: false, organizationName: null });
+  const authState =
+    opts.authState ??
+    createMutableAuthState({ authenticated: false, organizationName: null });
   const apiKeyProvider = opts.apiKeyProvider ?? makeProvider();
   const app = express();
   app.use(express.json());
@@ -78,6 +87,7 @@ function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
       apiKeyProvider,
       bus: opts.bus,
       environment: "production",
+      authEnabled: opts.authEnabled,
       performBrowserAuthImpl: opts.performBrowserAuthImpl,
       onPlanningUserChanged: opts.onPlanningUserChanged,
     }),
@@ -94,18 +104,33 @@ function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
 
 describe("createMutableAuthState", () => {
   it("returns initial state", () => {
-    const state = createMutableAuthState({ authenticated: true, organizationName: "Acme" });
-    expect(state.get()).toEqual({ authenticated: true, organizationName: "Acme" });
+    const state = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
+    expect(state.get()).toEqual({
+      authenticated: true,
+      organizationName: "Acme",
+    });
   });
 
   it("updates on set()", () => {
-    const state = createMutableAuthState({ authenticated: false, organizationName: null });
+    const state = createMutableAuthState({
+      authenticated: false,
+      organizationName: null,
+    });
     state.set({ authenticated: true, organizationName: "Acme" });
-    expect(state.get()).toEqual({ authenticated: true, organizationName: "Acme" });
+    expect(state.get()).toEqual({
+      authenticated: true,
+      organizationName: "Acme",
+    });
   });
 
   it("returns a copy — mutating the returned object does not affect internal state", () => {
-    const state = createMutableAuthState({ authenticated: false, organizationName: null });
+    const state = createMutableAuthState({
+      authenticated: false,
+      organizationName: null,
+    });
     const snap = state.get();
     snap.authenticated = true;
     expect(state.get().authenticated).toBe(false);
@@ -138,7 +163,10 @@ describe("GET /api/auth/status", () => {
 
   it("reflects authenticated state when seeded as authenticated", async () => {
     const bus = new EventBus();
-    const authState = createMutableAuthState({ authenticated: true, organizationName: "Acme" });
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
     const result = startApp({ bus, authState });
     server = result.server;
     baseUrl = result.baseUrl;
@@ -147,6 +175,74 @@ describe("GET /api/auth/status", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toEqual({ authenticated: true, organizationName: "Acme" });
+  });
+
+  it("reports unauthenticated when server authentication is disabled", async () => {
+    const bus = new EventBus();
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
+    const result = startApp({ bus, authState, authEnabled: false });
+    server = result.server;
+    baseUrl = result.baseUrl;
+
+    const res = await fetch(`${baseUrl}/api/auth/status`);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      authenticated: false,
+      organizationName: null,
+    });
+  });
+});
+
+describe("disabled authentication", () => {
+  let server: ReturnType<typeof express.application.listen>;
+
+  afterEach(() => {
+    server?.close();
+    vi.clearAllMocks();
+  });
+
+  it("rejects sign-in without resolving an environment or opening a browser", async () => {
+    const browserAuth = vi.fn();
+    const result = startApp({
+      bus: new EventBus(),
+      authEnabled: false,
+      performBrowserAuthImpl: browserAuth,
+    });
+    server = result.server;
+
+    const res = await fetch(`${result.baseUrl}/api/auth/start`, {
+      method: "POST",
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({
+      error: "authentication is disabled for this Studio process",
+    });
+    expect(resolveEnvironment).not.toHaveBeenCalled();
+    expect(browserAuth).not.toHaveBeenCalled();
+    expect(writeCredentials).not.toHaveBeenCalled();
+  });
+
+  it("rejects disconnect without reading or modifying the credential store", async () => {
+    const provider = makeProvider(null, "ignored-key");
+    const result = startApp({
+      bus: new EventBus(),
+      authEnabled: false,
+      apiKeyProvider: provider,
+    });
+    server = result.server;
+
+    const res = await fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
+
+    expect(res.status).toBe(403);
+    expect(resolveEnvironment).not.toHaveBeenCalled();
+    expect(clearCredentials).not.toHaveBeenCalled();
+    expect(provider.calls.clear).toBe(0);
   });
 });
 
@@ -226,7 +322,10 @@ describe("POST /api/auth/start — success", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     // Auth state updated.
-    expect(authState.get()).toEqual({ authenticated: true, organizationName: "Acme Corp" });
+    expect(authState.get()).toEqual({
+      authenticated: true,
+      organizationName: "Acme Corp",
+    });
 
     // Credentials were written.
     expect(writeCredentials).toHaveBeenCalledWith(
@@ -258,7 +357,10 @@ describe("POST /api/auth/start — success", () => {
   it("rejects a concurrent start with 409", async () => {
     // A slow browser auth — never resolves during the test.
     const mockBrowserAuth = vi.fn().mockImplementation(
-      () => new Promise<never>(() => {/* never resolves */}),
+      () =>
+        new Promise<never>(() => {
+          /* never resolves */
+        }),
     );
 
     const result = startApp({ bus, performBrowserAuthImpl: mockBrowserAuth });
@@ -299,19 +401,25 @@ describe("POST /api/auth/start — failure", () => {
   });
 
   it("broadcasts auth.changed with authenticated:false on OAuth failure and does not crash", async () => {
-    const mockBrowserAuth = vi.fn().mockRejectedValue(
-      new Error("Authentication timed out after 5 minutes."),
-    );
+    const mockBrowserAuth = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("Authentication timed out after 5 minutes."),
+      );
 
     const provider = makeProvider();
-    const result = startApp({ bus, performBrowserAuthImpl: mockBrowserAuth, apiKeyProvider: provider });
+    const result = startApp({
+      bus,
+      performBrowserAuthImpl: mockBrowserAuth,
+      apiKeyProvider: provider,
+    });
     server = result.server;
     baseUrl = result.baseUrl;
     const { authState } = result;
 
     const res = await fetch(`${baseUrl}/api/auth/start`, { method: "POST" });
     expect(res.status).toBe(200);
-    expect((await res.json() as Record<string, unknown>).started).toBe(true);
+    expect(((await res.json()) as Record<string, unknown>).started).toBe(true);
 
     // Let the async rejection settle.
     await new Promise((r) => setTimeout(r, 20));
@@ -328,7 +436,10 @@ describe("POST /api/auth/start — failure", () => {
     // Bus still broadcasts so the SPA knows the flow ended.
     const authEvents = busEvents.filter((e) => e.type === "auth.changed");
     expect(authEvents).toHaveLength(1);
-    expect(authEvents[0]).toMatchObject({ type: "auth.changed", authenticated: false });
+    expect(authEvents[0]).toMatchObject({
+      type: "auth.changed",
+      authenticated: false,
+    });
   });
 
   it("allows a new start after a failed one (pendingAuth is cleared)", async () => {
@@ -385,7 +496,10 @@ describe("POST /api/auth/disconnect", () => {
   });
 
   it("clears credentials, resets auth state, broadcasts auth.changed, returns { ok: true }", async () => {
-    const authState = createMutableAuthState({ authenticated: true, organizationName: "Acme" });
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
     const provider = makeProvider();
     const onPlanningUserChanged = vi.fn();
     const result = startApp({
@@ -397,7 +511,9 @@ describe("POST /api/auth/disconnect", () => {
     server = result.server;
     baseUrl = result.baseUrl;
 
-    const res = await fetch(`${baseUrl}/api/auth/disconnect`, { method: "POST" });
+    const res = await fetch(`${baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toEqual({ ok: true });
@@ -406,7 +522,10 @@ describe("POST /api/auth/disconnect", () => {
     expect(clearCredentials).toHaveBeenCalledWith("production");
 
     // Auth state set to unauthenticated.
-    expect(authState.get()).toEqual({ authenticated: false, organizationName: null });
+    expect(authState.get()).toEqual({
+      authenticated: false,
+      organizationName: null,
+    });
     expect(onPlanningUserChanged).toHaveBeenCalledWith(null);
 
     // Bus notified.
@@ -424,7 +543,9 @@ describe("POST /api/auth/disconnect", () => {
     server = result.server;
     baseUrl = result.baseUrl;
 
-    const res = await fetch(`${baseUrl}/api/auth/disconnect`, { method: "POST" });
+    const res = await fetch(`${baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
     expect(res.status).toBe(200);
     expect(clearCredentials).toHaveBeenCalledOnce();
     expect(result.authState.get().authenticated).toBe(false);
@@ -433,7 +554,10 @@ describe("POST /api/auth/disconnect", () => {
   it("zeroes the in-memory key immediately after disconnect", async () => {
     // Seed the provider with a live key (simulates an authenticated session).
     const provider = makeProvider(null, "sk-live-key");
-    const authState = createMutableAuthState({ authenticated: true, organizationName: "Acme" });
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
     const result = startApp({ bus, authState, apiKeyProvider: provider });
     server = result.server;
     baseUrl = result.baseUrl;
@@ -441,7 +565,9 @@ describe("POST /api/auth/disconnect", () => {
     // Confirm the key is present before disconnect.
     expect(provider.getKey()).toBe("sk-live-key");
 
-    const res = await fetch(`${baseUrl}/api/auth/disconnect`, { method: "POST" });
+    const res = await fetch(`${baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
     expect(res.status).toBe(200);
 
     // clear() must have been called exactly once.
@@ -467,14 +593,20 @@ describe("POST /api/auth/disconnect", () => {
     );
 
     const provider = makeProvider("sk-fresh", null);
-    const result = startApp({ bus, performBrowserAuthImpl: mockBrowserAuth, apiKeyProvider: provider });
+    const result = startApp({
+      bus,
+      performBrowserAuthImpl: mockBrowserAuth,
+      apiKeyProvider: provider,
+    });
     server = result.server;
     baseUrl = result.baseUrl;
     const { authState } = result;
     const busEvents = collectBusEvents(bus);
 
     // Start an in-flight sign-in.
-    const startRes = await fetch(`${baseUrl}/api/auth/start`, { method: "POST" });
+    const startRes = await fetch(`${baseUrl}/api/auth/start`, {
+      method: "POST",
+    });
     expect(startRes.status).toBe(200);
 
     // Give the async chain time to reach performBrowserAuthImpl.
@@ -482,7 +614,9 @@ describe("POST /api/auth/disconnect", () => {
     expect(capturedResolve).toBeDefined();
 
     // Disconnect while the browser flow is still pending.
-    const disconnectRes = await fetch(`${baseUrl}/api/auth/disconnect`, { method: "POST" });
+    const disconnectRes = await fetch(`${baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
     expect(disconnectRes.status).toBe(200);
 
     // Confirm disconnect zeroed the key and set state to unauthenticated.
@@ -510,7 +644,9 @@ describe("POST /api/auth/disconnect", () => {
     // The bus should have exactly two auth.changed events:
     // one from disconnect (authenticated: false) — the cancelled chain emits nothing.
     const authEvents = busEvents.filter((e) => e.type === "auth.changed");
-    const unauthEvents = authEvents.filter((e) => "authenticated" in e && !e.authenticated);
+    const unauthEvents = authEvents.filter(
+      (e) => "authenticated" in e && !e.authenticated,
+    );
     expect(unauthEvents.length).toBeGreaterThanOrEqual(1);
   });
 });
