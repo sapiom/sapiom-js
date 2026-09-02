@@ -29,6 +29,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./experimental/managed-agent-spike": {
+      "types": "./dist/experimental/managed-agent-spike/index.d.ts",
+      "import": "./dist/experimental/managed-agent-spike/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -54,6 +58,7 @@
     "test:mutation": "stryker run",
     "test:ui": "playwright test --config web/e2e/playwright.config.ts",
     "test:canvas": "playwright test --config e2e/playwright.config.ts",
+    "probe:managed-agent": "tsx src/experimental/managed-agent-spike/probe-cli.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "pnpm build",
@@ -63,6 +68,9 @@
     "e2e:live": "tsx scripts/e2e-live.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.228",
+    "@anthropic-ai/sdk": "0.116.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
@@ -74,7 +82,7 @@
     "open": "^10.1.0",
     "typescript": "~5.9.3",
     "ws": "^8.18.0",
-    "zod": "^3.25.0"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",

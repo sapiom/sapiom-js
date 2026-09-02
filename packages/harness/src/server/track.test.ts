@@ -165,6 +165,31 @@ describe("POST /api/track", () => {
       body: JSON.stringify({ event: "unknown.event" }),
     });
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: JSON.stringify(
+        [
+          {
+            received: "unknown.event",
+            code: "invalid_enum_value",
+            options: [
+              "prompt.submitted",
+              "session.switched",
+              "macro.invoked",
+              "visualize.triggered",
+              "consent.changed",
+              "session.created",
+              "mcp.install",
+              "plan.upgrade_clicked",
+            ],
+            path: ["event"],
+            message:
+              "Invalid enum value. Expected 'prompt.submitted' | 'session.switched' | 'macro.invoked' | 'visualize.triggered' | 'consent.changed' | 'session.created' | 'mcp.install' | 'plan.upgrade_clicked', received 'unknown.event'",
+          },
+        ],
+        null,
+        2,
+      ),
+    });
     expect(stored).toHaveLength(0);
   });
 

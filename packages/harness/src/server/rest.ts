@@ -6,7 +6,10 @@
 
 import express, { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { z } from "zod";
+// Harness's public validation-error bodies predate the Agent SDK dependency
+// and serialize Zod v3 issues verbatim. Keep that wire contract stable while
+// the experimental managed-agent runtime uses root Zod v4 for SDK tool schemas.
+import { z } from "zod/v3";
 
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
