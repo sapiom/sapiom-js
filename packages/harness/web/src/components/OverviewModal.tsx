@@ -56,7 +56,10 @@ export function OverviewModal({
   useEffect(() => {
     if (addOpen) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") dismissRef.current();
+      if (e.key !== "Escape") return;
+      // Claim Escape for the card before the shell's pane shortcut sees it.
+      e.preventDefault();
+      dismissRef.current();
     };
     // Attached a tick late: the Esc that closes the nested picker flushes
     // state mid-dispatch, so listening immediately would catch the SAME

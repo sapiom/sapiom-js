@@ -2172,6 +2172,19 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
   ): Promise<StudioCurrentWorkspaceResponse> {
     await delay();
+    const failure =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get(
+            "mockStudioPreference",
+          );
+    if (failure === "error") {
+      throw new ApiError(
+        503,
+        "Studio preference storage is unavailable",
+        "Studio preference storage is unavailable",
+      );
+    }
     const agents = this.studioWorkflows().flatMap((workflow) => {
       const binding = workflow.studioBindings?.find(
         (candidate) => candidate.projectId === projectId,

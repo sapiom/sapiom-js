@@ -154,10 +154,10 @@ export function useAgentMapEntry({
           workspaceRequestRef.current !== request
         )
           return;
-        track(
-          "agent_map.workspace_load_failed",
-          failureDimensions(target, error),
-        );
+        track("agent_map.workspace_load_failed", {
+          ...failureDimensions(target, error),
+          pane: "map",
+        });
         const message = errorMessage(
           error,
           "Agent Map state could not be loaded.",
@@ -217,6 +217,10 @@ export function useAgentMapEntry({
               plannerRequestRef.current !== request
             )
               return;
+            track("agent_map.workspace_load_failed", {
+              ...failureDimensions(target, error),
+              pane: "planner",
+            });
             const message = errorMessage(
               error,
               "The planning conversation could not be opened.",
@@ -286,6 +290,7 @@ export function useAgentMapEntry({
   const openFreshPlanner = useCallback((): void => {
     const target = currentProjectRef.current;
     if (!target) return;
+    setState((current) => ({ ...current, unavailable: null }));
     loadPlanner(target, "fresh");
   }, [loadPlanner]);
 

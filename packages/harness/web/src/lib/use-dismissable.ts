@@ -37,6 +37,9 @@ export function useDismissable(open: boolean, { onDismiss, containerRef, trigger
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
+      // Claim the key for the nearest layer. Window-level shell shortcuts can
+      // then honor `defaultPrevented` instead of dismissing a second surface.
+      event.preventDefault();
       onDismiss();
       triggerRef?.current?.focus();
     };

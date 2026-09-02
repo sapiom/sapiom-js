@@ -58,6 +58,7 @@ import type {
 } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
 import type {
+  PlannerSessionRequest,
   StudioProjectId,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
@@ -297,10 +298,32 @@ export const App = (): JSX.Element => {
   const plannerProjectId =
     studioSelection?.kind === "agent-map" ? studioSelection.projectId : null;
   const handlePlannerReady = useCallback(
-    (response: { session: HarnessSession }): void => {
+    (
+      response: { session: HarnessSession },
+      mode: PlannerSessionRequest["mode"],
+    ): void => {
+      const selected = harness.state?.sessions.find(
+        (session) => session.id === harness.activeSessionId,
+      );
+      // An explicit palette/history selection is more specific than the
+      // project-level resume ordering. Keep that chosen live tab; fresh mode
+      // remains an explicit request to select the newly-created planner.
+      if (
+        mode === "resume-or-create" &&
+        selected?.status !== "exited" &&
+        selected?.planning?.identity.role === "map-planner" &&
+        selected.planning.identity.projectId ===
+          response.session.planning?.identity.projectId
+      ) {
+        return;
+      }
       harness.setActiveSessionId(response.session.id);
     },
-    [harness.setActiveSessionId],
+    [
+      harness.activeSessionId,
+      harness.setActiveSessionId,
+      harness.state?.sessions,
+    ],
   );
   const agentMapEntry = useAgentMapEntry({
     projectId: plannerProjectId,
@@ -378,10 +401,9 @@ export const App = (): JSX.Element => {
       })
       .catch(() => {
         if (generation !== studioRestoreGenerationRef.current) return;
-        restoredStudioProjectsRef.current.delete(project.projectId);
         // Preference storage is not either pane's authority. Fall back to the
-        // project's default Agent Map so its workspace/planner retries remain
-        // available instead of dropping into the legacy graph silently.
+        // project's default Agent Map once so later session-status frames do
+        // not repeatedly reset selection or close the mobile map sheet.
         setStudioSelection({ kind: "agent-map", projectId: project.projectId });
         setSelectedProject(null);
         setFocusedAgentPath(scope.cwd);
@@ -749,6 +771,21 @@ export const App = (): JSX.Element => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       const key = e.key.toLowerCase();
       if (key === "escape" && isMobile && !rightCollapsed) {
+        // The nearest open layer owns Escape. Dismissable menus/dialogs mark
+        // the event handled at document; App-owned overlays are guarded by
+        // state so their own focus restoration wins over the sheet trigger.
+        if (
+          e.defaultPrevented ||
+          paletteOpen ||
+          settingsOpen ||
+          templatesOpen ||
+          overviewOpen ||
+          document.querySelector(
+            '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"]',
+          )
+        ) {
+          return;
+        }
         e.preventDefault();
         setRightCollapsed(true);
         window.requestAnimationFrame(() =>
@@ -828,6 +865,10 @@ export const App = (): JSX.Element => {
     studioSelection,
     isMobile,
     rightCollapsed,
+    paletteOpen,
+    settingsOpen,
+    templatesOpen,
+    overviewOpen,
   ]);
 
   // Where NEW agent projects are created — ONE value, shared by every surface
@@ -2711,10 +2752,8 @@ export const App = (): JSX.Element => {
                 if (restoringProject) {
                   // Preference restoration is best-effort. The project itself
                   // opened successfully, so fall back to its stable map rather
-                  // than leaving the previous workspace selected.
-                  restoredStudioProjectsRef.current.delete(
-                    restoringProject.projectId,
-                  );
+                  // than leaving the previous workspace selected. Keep the
+                  // restore guard so later session frames cannot repeat it.
                   studioRestoreGenerationRef.current += 1;
                   setStudioSelection({
                     kind: "agent-map",

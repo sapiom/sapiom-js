@@ -1293,6 +1293,12 @@ export function useHarnessState(): HarnessStateHook {
         // that's about to move to the history menu.
         if (message.session.status === "exited") {
           const id = message.session.id;
+          setSessionRecordRevisions((current) => {
+            if (!current.has(id)) return current;
+            const next = new Map(current);
+            next.delete(id);
+            return next;
+          });
           const timer = busyTimers.current.get(id);
           if (timer) {
             clearTimeout(timer);
@@ -1746,6 +1752,12 @@ export function useHarnessState(): HarnessStateHook {
         (session) => session.id !== id,
       );
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
+      setSessionRecordRevisions((current) => {
+        if (!current.has(id)) return current;
+        const next = new Map(current);
+        next.delete(id);
+        return next;
+      });
       if (activeSessionId === id) {
         const closed = state?.sessions.find((session) => session.id === id);
         const nextPlanner =

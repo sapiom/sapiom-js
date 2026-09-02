@@ -144,6 +144,44 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("planning-conversation")).toBeVisible();
   });
 
+  test("an explicitly selected planner tab wins over project resume ordering", async ({
+    page,
+  }) => {
+    await openDashboardMap(page);
+    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    const first = await activeSessionId(page);
+    expect(first).toBeTruthy();
+
+    await page.getByTestId("session-menu").click();
+    await page.getByTestId("session-rename").click();
+    const rename = page.getByTestId("session-rename-input");
+    await rename.fill("Planner A");
+    await rename.press("Enter");
+
+    await page.getByTestId("session-tab-new").click();
+    await expect.poll(() => activeSessionId(page)).not.toBe(first);
+
+    await page
+      .getByTestId("workflow-dashboard-keeper")
+      .locator("button")
+      .click();
+    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
+
+    await page.getByTestId("palette-trigger").click();
+    await page.getByTestId("command-palette-input").fill("Planner A");
+    await page
+      .getByTestId("command-palette-list")
+      .getByText("Planner A", { exact: true })
+      .click();
+
+    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    // The project-level resume request resolves asynchronously and prefers the
+    // newer sibling. Give it time to settle before asserting the explicit A
+    // selection remained authoritative.
+    await page.waitForTimeout(500);
+    expect(await activeSessionId(page)).toBe(first);
+  });
+
   test("planner session chrome retains rename/end and omits path/editor actions", async ({
     page,
   }) => {
@@ -215,6 +253,28 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("planning-conversation")).toBeVisible();
     await expect(page.getByTestId("agent-map-load-error")).toBeVisible();
     await expect(page.getByTestId("planner-composer-input")).toBeEnabled();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  trackEvents?: Array<{
+                    event: string;
+                    data?: Record<string, unknown>;
+                  }>;
+                };
+              }
+            ).__HARNESS_TEST__?.trackEvents ?? []
+          ).some(
+            (event) =>
+              event.event === "agent_map.workspace_load_failed" &&
+              event.data?.pane === "map",
+          ),
+        ),
+      )
+      .toBe(true);
 
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockPlanner=error",
@@ -223,6 +283,28 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await openDashboardMap(page);
     await expect(page.getByTestId("planner-load-error")).toBeVisible();
     await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  trackEvents?: Array<{
+                    event: string;
+                    data?: Record<string, unknown>;
+                  }>;
+                };
+              }
+            ).__HARNESS_TEST__?.trackEvents ?? []
+          ).some(
+            (event) =>
+              event.event === "agent_map.workspace_load_failed" &&
+              event.data?.pane === "planner",
+          ),
+        ),
+      )
+      .toBe(true);
 
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapWorkspace=unauthorized",
@@ -257,6 +339,12 @@ test.describe("SAP-3058 mobile Agent Map", () => {
     await expect(page.getByTestId("agent-map-empty")).toBeVisible();
     await expect(page.getByTestId("right-sheet-scrim")).toBeVisible();
 
+    await page.keyboard.press("Control+K");
+    await expect(page.getByTestId("command-palette-input")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
+    await expect(page.locator(".right-pane")).toBeVisible();
+
     await page.getByTestId("right-collapse").click();
     await expect(page.locator(".right-pane")).toBeHidden();
     await expect(page.getByTestId("right-expand")).toBeFocused();
@@ -264,5 +352,26 @@ test.describe("SAP-3058 mobile Agent Map", () => {
       path: "web/e2e/screenshots/agent-map-planning-mobile.png",
       fullPage: true,
     });
+  });
+
+  test("a failed preference restore cannot repeatedly close the map sheet", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockStudioPreference=error",
+    );
+    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".right-pane")).toBeHidden();
+
+    const composer = page.getByTestId("planner-composer-input");
+    await composer.fill("Keep the Agent Map open while this turn starts.");
+    await page.getByTestId("planner-composer-send").click();
+    await page.getByTestId("right-expand").click();
+    await expect(page.locator(".right-pane")).toBeVisible();
+
+    await expect(page.getByTestId("planner-transcript-prompt")).toHaveText(
+      "Keep the Agent Map open while this turn starts.",
+    );
+    await expect(page.locator(".right-pane")).toBeVisible();
   });
 });

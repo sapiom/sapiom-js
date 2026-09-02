@@ -286,6 +286,9 @@ export function CommandPalette({
       const item = items[selectedIndex];
       if (item) activate(item);
     } else if (e.key === "Escape") {
+      // Claim Escape for this layer so window-level shell shortcuts cannot
+      // also collapse a pane after the palette handles the same key.
+      e.preventDefault();
       // A typed query is the nearer state to undo — clear it first, close on
       // the second press.
       if (query) setQuery("");
