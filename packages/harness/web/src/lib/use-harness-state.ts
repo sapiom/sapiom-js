@@ -24,6 +24,13 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
+import type {
+  PlannerMessageRequest,
+  PlannerSessionMetadata,
+  PlannerSessionRequest,
+  PlannerSessionResponse,
+  StudioProjectId,
+} from "@shared/agent-map";
 
 import {
   ApiError,
@@ -178,6 +185,24 @@ export interface HarnessStateHook {
   /** A past session's reconstructed transcript (null when nothing was
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
+  /** Opens the trusted map-planner for a project and publishes the returned
+   * session into the same store that backs the normal session strip. */
+  openPlannerSession: (
+    projectId: StudioProjectId,
+    request: PlannerSessionRequest,
+  ) => Promise<PlannerSessionResponse>;
+  /** Enqueues an ordinary planner message and applies the coordinator's
+   * authoritative queue/greeting metadata immediately. */
+  sendPlannerMessage: (
+    projectId: StudioProjectId,
+    sessionId: string,
+    request: PlannerMessageRequest,
+  ) => Promise<PlannerSessionMetadata>;
+  /** Retries only the automatic greeting operation. */
+  retryPlannerGreeting: (
+    projectId: StudioProjectId,
+    sessionId: string,
+  ) => Promise<PlannerSessionMetadata>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
@@ -341,6 +366,9 @@ export interface HarnessStateHook {
   showToast: (message: string, tone?: ToastTone) => void;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
+  /** Monotonic, content-free SessionRecord invalidations keyed by session.
+   * Unlike `lastMessage`, a later unrelated bus frame cannot overwrite one. */
+  sessionRecordRevisions: ReadonlyMap<string, number>;
   /** Latest monotonic graph invalidation per retained Project scope. */
   systemGraphAnnouncements: ReadonlyMap<WorkspaceKey, SystemGraphAnnouncement>;
   /** The run each session's Steps tab is showing (the latest observed by
@@ -488,6 +516,13 @@ export function useHarnessState(): HarnessStateHook {
   // inFlightHistory above.
   const inFlightDeploys = useRef<Map<string, Promise<void>>>(new Map());
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
+  const [sessionRecordRevisions, setSessionRecordRevisions] = useState<
+    Map<string, number>
+  >(new Map());
+  // An HTTP planner mutation and its session.status projection can cross on
+  // the network. The bus owns the newer full-session snapshot, so an older
+  // response must not roll its planning metadata back after that snapshot.
+  const sessionStatusRevisions = useRef<Map<string, number>>(new Map());
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -1136,6 +1171,100 @@ export function useHarnessState(): HarnessStateHook {
     return [...(workflowProjectionOrder.current() ?? workflowsRef.current)];
   }, [workflowProjectionOrder]);
 
+  /** One session projection for REST mutations and bus updates alike. */
+  const upsertSession = useCallback((next: HarnessSession): void => {
+    setState((prev) => {
+      if (!prev) return prev;
+      const sessions = prev.sessions.some((session) => session.id === next.id)
+        ? prev.sessions.map((session) =>
+            session.id === next.id ? next : session,
+          )
+        : [...prev.sessions, next];
+      return { ...prev, sessions };
+    });
+  }, []);
+
+  const applyPlannerMetadata = useCallback(
+    (sessionId: string, metadata: PlannerSessionMetadata): void => {
+      setState((prev) => {
+        if (!prev) return prev;
+        let changed = false;
+        const sessions = prev.sessions.map((session) => {
+          if (session.id !== sessionId) return session;
+          changed = true;
+          return { ...session, planning: metadata };
+        });
+        return changed ? { ...prev, sessions } : prev;
+      });
+    },
+    [],
+  );
+
+  const openPlannerSession = useCallback(
+    async (
+      projectId: StudioProjectId,
+      request: PlannerSessionRequest,
+    ): Promise<PlannerSessionResponse> => {
+      const response = await api.openPlannerSession(projectId, request);
+      // A launch can emit session.status before its HTTP response crosses the
+      // wire. Preserve that newer full-session projection when it is already
+      // present; still insert the response if no bus-backed row exists.
+      if (!sessionStatusRevisions.current.has(response.session.id)) {
+        upsertSession(response.session);
+      } else {
+        setState((prev) => {
+          if (!prev) return prev;
+          return prev.sessions.some(
+            (session) => session.id === response.session.id,
+          )
+            ? prev
+            : { ...prev, sessions: [...prev.sessions, response.session] };
+        });
+      }
+      return response;
+    },
+    [upsertSession],
+  );
+
+  const sendPlannerMessage = useCallback(
+    async (
+      projectId: StudioProjectId,
+      sessionId: string,
+      request: PlannerMessageRequest,
+    ): Promise<PlannerSessionMetadata> => {
+      const statusRevision = sessionStatusRevisions.current.get(sessionId) ?? 0;
+      const { metadata } = await api.sendPlannerMessage(
+        projectId,
+        sessionId,
+        request,
+      );
+      if (
+        (sessionStatusRevisions.current.get(sessionId) ?? 0) === statusRevision
+      ) {
+        applyPlannerMetadata(sessionId, metadata);
+      }
+      return metadata;
+    },
+    [applyPlannerMetadata],
+  );
+
+  const retryPlannerGreeting = useCallback(
+    async (
+      projectId: StudioProjectId,
+      sessionId: string,
+    ): Promise<PlannerSessionMetadata> => {
+      const statusRevision = sessionStatusRevisions.current.get(sessionId) ?? 0;
+      const { metadata } = await api.retryPlannerGreeting(projectId, sessionId);
+      if (
+        (sessionStatusRevisions.current.get(sessionId) ?? 0) === statusRevision
+      ) {
+        applyPlannerMetadata(sessionId, metadata);
+      }
+      return metadata;
+    },
+    [applyPlannerMetadata],
+  );
+
   useEffect(() => {
     return subscribeEvents((message) => {
       setLastMessage(message);
@@ -1143,6 +1272,10 @@ export function useHarnessState(): HarnessStateHook {
         systemGraphAnnouncementsAfterMessage(current, message),
       );
       if (message.type === "session.status") {
+        sessionStatusRevisions.current.set(
+          message.session.id,
+          (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
+        );
         setState((prev) => {
           if (!prev) return prev;
           const exists = prev.sessions.some(
@@ -1172,6 +1305,13 @@ export function useHarnessState(): HarnessStateHook {
             return next;
           });
         }
+      } else if (message.type === "session.record.changed") {
+        setSessionRecordRevisions((current) =>
+          new Map(current).set(
+            message.harnessSessionId,
+            (current.get(message.harnessSessionId) ?? 0) + 1,
+          ),
+        );
       } else if (message.type === "workflows.changed") {
         // The workspace watcher saw a sapiom.json appear/change — the one
         // client signal for an agent built in-app. Emit agent.created for any
@@ -1607,9 +1747,20 @@ export function useHarnessState(): HarnessStateHook {
       );
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
-        const nextRunning = remaining.find(
-          (session) => session.status !== "exited",
-        );
+        const closed = state?.sessions.find((session) => session.id === id);
+        const nextPlanner =
+          closed?.planning?.identity.role === "map-planner"
+            ? remaining.find(
+                (session) =>
+                  session.status !== "exited" &&
+                  session.planning?.identity.role === "map-planner" &&
+                  session.planning.identity.projectId ===
+                    closed.planning?.identity.projectId,
+              )
+            : undefined;
+        const nextRunning =
+          nextPlanner ??
+          remaining.find((session) => session.status !== "exited");
         selectSession(nextRunning ? nextRunning.id : null);
       }
     },
@@ -2247,6 +2398,9 @@ export function useHarnessState(): HarnessStateHook {
     getTemplate,
     getWorkflowInputContract,
     sessionRecord,
+    openPlannerSession,
+    sendPlannerMessage,
+    retryPlannerGreeting,
     resumeSession,
     rehydrateSession,
     resumeFromHistory,
@@ -2277,6 +2431,7 @@ export function useHarnessState(): HarnessStateHook {
     directActionSettleSeq,
     listDir,
     lastMessage,
+    sessionRecordRevisions,
     systemGraphAnnouncements,
     runsBySession,
     runsByExecution,

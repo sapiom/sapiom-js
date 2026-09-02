@@ -522,6 +522,12 @@ export type TerminalControlMessage = TerminalResizeMessage;
 
 export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
+  /**
+   * A prompt or completed turn is now durable in the local event store.
+   * Consumers refetch the existing SessionRecord snapshot; conversation
+   * content never rides the event bus.
+   */
+  | { type: "session.record.changed"; harnessSessionId: string }
   | { type: "canvas.reload"; harnessSessionId: string }
   | {
       type: "port.detected";
@@ -763,7 +769,9 @@ export type UiEventName =
   | "consent.changed"
   | "session.created"
   | "mcp.install"
-  | "plan.upgrade_clicked";
+  | "plan.upgrade_clicked"
+  | "agent_map.entered"
+  | "agent_map.workspace_load_failed";
 
 export interface UiTrackRequest {
   /** Dot-canonical event name — one of the UiEventName literals. */
@@ -793,6 +801,8 @@ export type AnalyticsEventType =
   | "session.created"
   | "mcp.install"
   | "plan.upgrade_clicked"
+  | "agent_map.entered"
+  | "agent_map.workspace_load_failed"
   | "agent_map.workspace_initialized"
   | "agent_map.workspace_read_failed"
   | "planner_session.created"

@@ -60,6 +60,7 @@ import {
   createClaudeTranscriptEnricher,
   createSessionRecordReader,
 } from "../core/session-record.js";
+import { sessionRecordChangedMessage } from "../core/session-record-invalidation.js";
 import {
   buildRehydrationBrief,
   systemPromptDeliveryFor,
@@ -3236,6 +3237,8 @@ export const startServer = async (
       void plannerGreeting.onEventPersisted(event).catch((error: unknown) => {
         console.error("[harness] planner greeting completion failed:", error);
       });
+      const recordChanged = sessionRecordChangedMessage(event);
+      if (recordChanged) bus.publish(recordChanged);
       // The normal end of a session: the SessionEnd hook's event is in the
       // store, so the archived record carries the whole conversation including
       // its `endedAt`. (The "exited" status handler archives too, for sessions

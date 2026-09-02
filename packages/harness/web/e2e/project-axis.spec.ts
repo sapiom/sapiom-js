@@ -26,10 +26,8 @@ test.beforeEach(async ({ page }, testInfo) => {
   // A server without durable Studio project summaries remains on the legacy
   // System Graph path. Every other deep fixture exercises the plan-first path.
   const studioProjects =
-    testInfo.title === LEGACY_CONTAINMENT_TEST
-      ? "&mockStudioProjects=absent"
-      : "";
-  await page.goto(`/?mockFixtures=deep${studioProjects}`);
+    testInfo.title === LEGACY_CONTAINMENT_TEST ? "absent" : "present";
+  await page.goto(`/?mockFixtures=deep&mockStudioProjects=${studioProjects}`);
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });

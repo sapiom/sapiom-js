@@ -207,6 +207,43 @@ describe("createIngestRouter", () => {
     expect(enqueued).toHaveLength(1);
   });
 
+  it("notifies transcript consumers only after the event is durably appended", async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const appendEntered = deferred();
+    const appendCommit = deferred();
+    const order: string[] = [];
+    start({
+      store: {
+        append: async (event) => {
+          order.push(`append:${event.type}`);
+          appendEntered.resolve();
+          await appendCommit.promise;
+          stored.push(event);
+          order.push(`persisted:${event.type}`);
+        },
+      },
+      onEventPersisted: (event) => order.push(`notify:${event.type}`),
+    });
+
+    const res = await postIngest(baseUrl, {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1", prompt: "hello" },
+    });
+    expect(res.status).toBe(200);
+    await appendEntered.promise;
+    expect(order).toEqual(["append:prompt.submitted"]);
+
+    appendCommit.resolve();
+    await vi.waitFor(() =>
+      expect(order).toEqual([
+        "append:prompt.submitted",
+        "persisted:prompt.submitted",
+        "notify:prompt.submitted",
+      ]),
+    );
+  });
+
   it("assigns a monotonically increasing seq per harnessSessionId, server-side", async () => {
     await postIngest(baseUrl, {
       hookEvent: "UserPromptSubmit",

@@ -44,6 +44,7 @@ import {
 import type {
   AgentMapWorkspaceResponse,
   PlannerMessageRequest,
+  PlannerSessionMetadataResponse,
   PlannerSessionRequest,
   PlannerSessionResponse,
   PutStudioCurrentWorkspaceRequest,
@@ -381,11 +382,11 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     sessionId: string,
     request: PlannerMessageRequest,
-  ): Promise<void>;
+  ): Promise<PlannerSessionMetadataResponse>;
   retryPlannerGreeting(
     projectId: StudioProjectId,
     sessionId: string,
-  ): Promise<void>;
+  ): Promise<PlannerSessionMetadataResponse>;
   /** Revisioned local dependency projection for one server-issued workspace key. */
   getSystemGraph(
     workspaceKey: WorkspaceKey,
@@ -663,8 +664,8 @@ class RealApi implements HarnessApi {
     projectId: StudioProjectId,
     sessionId: string,
     request: PlannerMessageRequest,
-  ): Promise<void> {
-    await this.request(
+  ): Promise<PlannerSessionMetadataResponse> {
+    return this.request<PlannerSessionMetadataResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/messages`,
       { method: "POST", body: JSON.stringify(request) },
     );
@@ -673,8 +674,8 @@ class RealApi implements HarnessApi {
   async retryPlannerGreeting(
     projectId: StudioProjectId,
     sessionId: string,
-  ): Promise<void> {
-    await this.request(
+  ): Promise<PlannerSessionMetadataResponse> {
+    return this.request<PlannerSessionMetadataResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/greeting/retry`,
       { method: "POST", body: "{}" },
     );
@@ -1824,6 +1825,9 @@ export class MockApi implements HarnessApi {
     this.fresh || this.noLiveSessions
       ? []
       : MOCK_SESSIONS.map((session) => ({ ...session }));
+  /** Live planner records are mutable mock state, unlike the fixed history
+   * fixtures. They exercise the same record-refetch path as the real server. */
+  private plannerSessionRecords = new Map<string, SessionRecord>();
   private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
@@ -1979,16 +1983,16 @@ export class MockApi implements HarnessApi {
   }
 
   private studioProjects(): StudioProjectSummary[] {
-    // Keep one deterministic mock seam for the legacy System Graph fallback.
-    // Production authority is determined by the server response; this query
-    // parameter only lets browser tests model a server that has no durable
-    // Studio project summaries yet.
-    if (
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockStudioProjects") ===
-        "absent"
-    ) {
-      return [];
+    // Production authority is determined by the server response and always
+    // uses durable Studio project summaries. Mock mode keeps the historical
+    // fixtures stable unless a plan-first scenario opts in explicitly; the
+    // dedicated agent-map fixture is also an opt-in. This is test data
+    // selection, not a product feature flag.
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get("mockStudioProjects");
+      const fixture = params.get("mockFixtures");
+      if (mode !== "present" && fixture !== "agent-map") return [];
     }
     const timestamp = "2026-01-01T00:00:00.000Z";
     return this.workspaceScopes().map((scope, index) => ({
@@ -2116,6 +2120,26 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse> {
     await delay();
+    const failure =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get(
+            "mockAgentMapWorkspace",
+          );
+    if (failure === "error") {
+      throw new ApiError(
+        503,
+        "Agent Map storage is unavailable",
+        "Agent Map storage is unavailable",
+      );
+    }
+    if (failure === "unauthorized") {
+      throw new ApiError(
+        403,
+        "Studio project is not available",
+        "Studio project is not available",
+      );
+    }
     const project = this.studioProjects().find(
       (candidate) => candidate.projectId === projectId,
     );
@@ -2198,9 +2222,28 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse> {
+    const failure =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("mockPlanner");
+    if (failure === "error") {
+      throw new ApiError(
+        503,
+        "Planner service is unavailable",
+        "Planner service is unavailable",
+      );
+    }
+    if (failure === "unauthorized") {
+      throw new ApiError(
+        403,
+        "Planner project is not available",
+        "Planner project is not available",
+      );
+    }
     const existing = this.sessions
       .filter(
         (session) =>
+          session.status !== "exited" &&
           session.planning?.identity.projectId === projectId &&
           session.planning.identity.userId === "user_mock",
       )
@@ -2225,6 +2268,10 @@ export class MockApi implements HarnessApi {
       harness: request.harness ?? "claude-code",
       ...(request.theme ? { theme: request.theme } : {}),
     });
+    const greetingFixture =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("mockGreeting");
     session.planning = {
       identity: {
         projectId,
@@ -2232,9 +2279,53 @@ export class MockApi implements HarnessApi {
         userId: "user_mock",
         role: "map-planner",
       },
-      greeting: { status: "pending" },
+      greeting:
+        greetingFixture === "generating"
+          ? { status: "generating", attemptId: "attempt_mock" }
+          : greetingFixture === "failed"
+            ? {
+                status: "failed",
+                retryable: true,
+                errorCode: "model_turn_failed",
+              }
+            : {
+                status: "delivered",
+                messageId: "message_mock_greeting",
+              },
       queuedInputIds: [],
     };
+    const now = new Date().toISOString();
+    this.plannerSessionRecords.set(session.id, {
+      harnessSessionId: session.id,
+      mergedSessionIds: [session.id],
+      agentSessionId: session.agentSessionId,
+      harness: session.harness,
+      cwd: session.cwd,
+      startedAt: now,
+      endedAt: null,
+      turns:
+        session.planning.greeting.status === "delivered"
+          ? [
+              {
+                index: 1,
+                prompt: null,
+                promptAt: null,
+                toolCalls: [],
+                assistantText:
+                  "I’m your project planning agent. We’ll plan the agents, responsibilities, data flow, resources, and connectors together. What kind of agent architecture do you want to build?",
+                model: "mock-planner",
+                usage: null,
+                completedAt: now,
+                incomplete: false,
+              },
+            ]
+          : [],
+      turnCount: 0,
+      eventCount: session.planning.greeting.status === "delivered" ? 2 : 0,
+      reconstructed: true,
+      archivedAt: null,
+      limitations: [],
+    });
     return { session, resolution: "created" };
   }
 
@@ -2242,7 +2333,7 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
     sessionId: string,
     request: PlannerMessageRequest,
-  ): Promise<void> {
+  ): Promise<PlannerSessionMetadataResponse> {
     const session = this.sessions.find(
       (candidate) => candidate.id === sessionId,
     );
@@ -2253,13 +2344,67 @@ export class MockApi implements HarnessApi {
         "Forbidden planner session",
       );
     }
+    const inputId = `input_mock_${Date.now()}`;
+    session.planning = {
+      ...session.planning,
+      greeting:
+        session.planning.greeting.status === "delivered" ||
+        session.planning.greeting.status === "skipped"
+          ? session.planning.greeting
+          : { status: "skipped", reason: "user-proceeded" },
+      queuedInputIds: [...session.planning.queuedInputIds, inputId],
+    };
     await this.injectInput(sessionId, { text: request.text });
+    const accepted = structuredClone(session.planning);
+    setTimeout(() => {
+      const current = this.sessions.find(
+        (candidate) => candidate.id === sessionId,
+      );
+      const record = this.plannerSessionRecords.get(sessionId);
+      if (!current?.planning || !record) return;
+      const completedAt = new Date().toISOString();
+      const turns = [
+        ...record.turns,
+        {
+          index: record.turns.length + 1,
+          prompt: request.text,
+          promptAt: completedAt,
+          toolCalls: [],
+          assistantText:
+            "Let’s start by clarifying the outcome, the actors involved, and the information they need to exchange.",
+          model: "mock-planner",
+          usage: null,
+          completedAt,
+          incomplete: false,
+        },
+      ];
+      this.plannerSessionRecords.set(sessionId, {
+        ...record,
+        turns,
+        turnCount: record.turnCount + 1,
+        eventCount: record.eventCount + 2,
+      });
+      current.planning = {
+        ...current.planning,
+        queuedInputIds: current.planning.queuedInputIds.filter(
+          (candidate) => candidate !== inputId,
+        ),
+      };
+      void import("./events").then(({ publishMockBusMessage }) => {
+        publishMockBusMessage({ type: "session.status", session: current });
+        publishMockBusMessage({
+          type: "session.record.changed",
+          harnessSessionId: sessionId,
+        });
+      });
+    }, 250);
+    return { metadata: accepted };
   }
 
   async retryPlannerGreeting(
     projectId: StudioProjectId,
     sessionId: string,
-  ): Promise<void> {
+  ): Promise<PlannerSessionMetadataResponse> {
     const session = this.sessions.find(
       (candidate) => candidate.id === sessionId,
     );
@@ -2270,6 +2415,77 @@ export class MockApi implements HarnessApi {
         "Forbidden planner session",
       );
     }
+    const retryFailure =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get(
+            "mockGreetingRetry",
+          );
+    if (retryFailure === "error") {
+      throw new ApiError(
+        503,
+        "Greeting retry is temporarily unavailable",
+        "Greeting retry is temporarily unavailable",
+      );
+    }
+    if (
+      session.planning.greeting.status !== "failed" ||
+      !session.planning.greeting.retryable ||
+      session.planning.queuedInputIds.length > 0
+    ) {
+      throw new ApiError(
+        409,
+        "Greeting retry is not available",
+        "Greeting retry is not available",
+      );
+    }
+    session.planning = {
+      ...session.planning,
+      greeting: { status: "generating", attemptId: "attempt_mock_retry" },
+    };
+    const retrying = structuredClone(session.planning);
+    setTimeout(() => {
+      const current = this.sessions.find(
+        (candidate) => candidate.id === sessionId,
+      );
+      const record = this.plannerSessionRecords.get(sessionId);
+      if (!current?.planning || !record) return;
+      const completedAt = new Date().toISOString();
+      current.planning = {
+        ...current.planning,
+        greeting: {
+          status: "delivered",
+          messageId: "message_mock_greeting_retry",
+        },
+      };
+      this.plannerSessionRecords.set(sessionId, {
+        ...record,
+        turns: [
+          ...record.turns,
+          {
+            index: record.turns.length + 1,
+            prompt: null,
+            promptAt: null,
+            toolCalls: [],
+            assistantText:
+              "I’m your project planning agent. What kind of agent architecture do you want to build?",
+            model: "mock-planner",
+            usage: null,
+            completedAt,
+            incomplete: false,
+          },
+        ],
+        eventCount: record.eventCount + 2,
+      });
+      void import("./events").then(({ publishMockBusMessage }) => {
+        publishMockBusMessage({ type: "session.status", session: current });
+        publishMockBusMessage({
+          type: "session.record.changed",
+          harnessSessionId: sessionId,
+        });
+      });
+    }, 250);
+    return { metadata: retrying };
   }
 
   async getSystemGraph(
@@ -2618,7 +2834,9 @@ export class MockApi implements HarnessApi {
     await delay();
     // Null for an id with no fixture — the same "nothing recorded" answer the
     // real client returns for a 404, so the empty state is exercised too.
-    return MOCK_SESSION_RECORDS[id] ?? null;
+    return (
+      this.plannerSessionRecords.get(id) ?? MOCK_SESSION_RECORDS[id] ?? null
+    );
   }
 
   async resumeSession(id: string): Promise<HarnessSession> {

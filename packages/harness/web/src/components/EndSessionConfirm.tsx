@@ -17,11 +17,15 @@ export function EndSessionConfirm({
   onCancel,
   onConfirm,
   triggerRef,
+  description =
+    "This kills the live terminal; anything the agent is doing right now stops. The session stays resumable from history once it has an agent session id.",
 }: {
   onCancel: () => void;
   onConfirm: () => void;
   /** Focus returns here on Escape. */
   triggerRef?: RefObject<HTMLElement | null>;
+  /** Surface-specific consequence while retaining one confirmation primitive. */
+  description?: string;
 }): JSX.Element {
   const confirmRef = useRef<HTMLDivElement>(null);
   useDismissable(true, { onDismiss: onCancel, containerRef: confirmRef, triggerRef });
@@ -48,10 +52,7 @@ export function EndSessionConfirm({
           </button>
         </div>
         <div className="modal-body">
-          <p className="modal-copy">
-            This kills the live terminal; anything the agent is doing right now stops. The session
-            stays resumable from history once it has an agent session id.
-          </p>
+          <p className="modal-copy">{description}</p>
         </div>
         <div className="modal-actions">
           {/* Initial focus lands on the SAFE action: Enter keeps the session;

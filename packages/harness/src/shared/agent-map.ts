@@ -160,6 +160,11 @@ export interface PlannerMessageRequest {
   text: string;
 }
 
+/** Authoritative coordinator state returned after a planner mutation. */
+export interface PlannerSessionMetadataResponse {
+  metadata: PlannerSessionMetadata;
+}
+
 /**
  * Content-free planner lifecycle telemetry. Callers may persist these fields,
  * but must never add prompts, assistant text, local paths, or provider errors.

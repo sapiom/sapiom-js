@@ -262,6 +262,10 @@ describe("POST /api/track", () => {
       "visualize.triggered",
       "consent.changed",
       "session.created",
+      "mcp.install",
+      "plan.upgrade_clicked",
+      "agent_map.entered",
+      "agent_map.workspace_load_failed",
     ] as const;
 
     for (const event of events) {

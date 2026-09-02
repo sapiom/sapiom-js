@@ -472,12 +472,38 @@ describe("createAgentMapRouter", () => {
       greeting: { status: "pending" as const },
       queuedInputIds: ["input-1"],
     }));
-    const retry = vi.fn(async () => {});
+    const retry = vi.fn(async () => {
+      if (!plannerSession.planning) throw new Error("missing planner metadata");
+      plannerSession.planning = {
+        ...plannerSession.planning,
+        greeting: { status: "generating", attemptId: "attempt-2" },
+      };
+    });
     const fixture = await start({
-      planningSessions: { open, requireOwned } as unknown as PlanningSessionService,
-      plannerGreeting: { enqueue, retry } as unknown as PlannerGreetingCoordinator,
+      planningSessions: {
+        open,
+        requireOwned,
+      } as unknown as PlanningSessionService,
+      plannerGreeting: {
+        enqueue,
+        retry,
+      } as unknown as PlannerGreetingCoordinator,
     });
     fixtureProjectId = fixture.project.projectId;
+    plannerSession.planning = {
+      identity: {
+        projectId: fixtureProjectId,
+        sessionId: plannerSession.id,
+        userId: "user-1",
+        role: "map-planner",
+      },
+      greeting: {
+        status: "failed",
+        retryable: true,
+        errorCode: "model_turn_failed",
+      },
+      queuedInputIds: [],
+    };
     const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions`;
 
     expect(
@@ -517,6 +543,56 @@ describe("createAgentMapRouter", () => {
       mode: "fresh",
       harness: "codex",
     });
+
+    const message = await fetch(`${route}/${plannerSession.id}/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ text: "Build a support triage system" }),
+    });
+    expect(message.status).toBe(202);
+    expect(await message.json()).toEqual({
+      metadata: {
+        identity: {
+          projectId: fixture.project.projectId,
+          sessionId: plannerSession.id,
+          userId: "user-1",
+          role: "map-planner",
+        },
+        greeting: { status: "pending" },
+        queuedInputIds: ["input-1"],
+      },
+    });
+    expect(requireOwned).toHaveBeenCalledWith(
+      fixture.project.projectId,
+      plannerSession.id,
+    );
+    expect(enqueue).toHaveBeenCalledWith(
+      plannerSession.id,
+      "Build a support triage system",
+    );
+
+    const retryResponse = await fetch(
+      `${route}/${plannerSession.id}/greeting/retry`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: "{}",
+      },
+    );
+    expect(retryResponse.status).toBe(202);
+    expect(await retryResponse.json()).toEqual({
+      metadata: {
+        ...plannerSession.planning,
+        greeting: { status: "generating", attemptId: "attempt-2" },
+      },
+    });
+    expect(retry).toHaveBeenCalledWith(plannerSession.id);
   });
 
   it("rejects foreign planner messages and bounds unavailable retries", async () => {

@@ -129,6 +129,8 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
   "session.created",
   "mcp.install",
   "plan.upgrade_clicked",
+  "agent_map.entered",
+  "agent_map.workspace_load_failed",
 ];
 
 /**
