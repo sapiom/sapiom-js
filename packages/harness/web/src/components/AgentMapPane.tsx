@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
 
 import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
@@ -69,17 +69,32 @@ function PopulatedAgentMap({
 }): JSX.Element {
   const proposal = value.proposal!;
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
+  const mapRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (selected && !proposal.nodes.some((node) => node.id === selected)) {
       setSelected(null);
     }
   }, [proposal.nodes, selected]);
+  const closeInspector = (): void => {
+    const selectedNode = mapRef.current?.querySelector<HTMLButtonElement>(
+      ".agent-map-node.is-selected",
+    );
+    setSelected(null);
+    selectedNode?.focus();
+  };
   return (
     <div
+      ref={mapRef}
       className="agent-map-live"
       data-testid="agent-map-live"
       data-project-id={value.project.projectId}
       {...trackingAttrs({ surface: "agent_map" })}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !selected) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeInspector();
+      }}
     >
       <div className="agent-map-live-header">
         <span className="status-tag">Proposed</span>
@@ -93,7 +108,13 @@ function PopulatedAgentMap({
           selectedNodeId={selected}
           onSelectNode={setSelected}
         />
-        {selected && <AgentMapInspector snapshot={value} nodeId={selected} />}
+        {selected && (
+          <AgentMapInspector
+            snapshot={value}
+            nodeId={selected}
+            onClose={closeInspector}
+          />
+        )}
       </div>
       <p className="sr-only" aria-live="polite">
         {selected

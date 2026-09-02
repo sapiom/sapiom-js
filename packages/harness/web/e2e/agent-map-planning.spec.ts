@@ -122,11 +122,22 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       page.getByTestId("agent-map-live").getByText(/capability/i),
     ).toHaveCount(0);
 
-    await page.getByText("ResearchReport", { exact: true }).click();
+    const researchReport = page.getByRole("button", {
+      name: "ResearchReport, artifact, Proposed",
+    });
+    await researchReport.click();
     const inspector = page.getByTestId("agent-map-inspector");
     await expect(inspector).toContainText("Purpose");
     await expect(inspector).toContainText("Contracts");
     await expect(inspector).toContainText("Map planner");
+    await page.getByRole("button", { name: "Close node details" }).click();
+    await expect(inspector).toHaveCount(0);
+    await expect(researchReport).toBeFocused();
+
+    await researchReport.click();
+    await page.keyboard.press("Escape");
+    await expect(inspector).toHaveCount(0);
+    await expect(researchReport).toBeFocused();
 
     await page.getByRole("button", { name: "Zoom in" }).click();
     const mapSubject = page.getByTestId("agent-map-subject");

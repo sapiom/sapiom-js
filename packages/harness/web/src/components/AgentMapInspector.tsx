@@ -3,15 +3,18 @@ import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
 
 import { latestNodeAttribution } from "../lib/agent-map-projector";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+import { Icon } from "./Icon";
 
 interface AgentMapInspectorProps {
   snapshot: AgentMapWorkspaceResponse;
   nodeId: PlanNodeId;
+  onClose: () => void;
 }
 
 export function AgentMapInspector({
   snapshot,
   nodeId,
+  onClose,
 }: AgentMapInspectorProps): JSX.Element | null {
   const proposal = snapshot.proposal;
   const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
@@ -39,7 +42,19 @@ export function AgentMapInspector({
           <p className="system-graph-node-meta">{node.kind}</p>
           <h3>{node.name}</h3>
         </div>
-        <span className="status-tag">Proposed</span>
+        <div className="agent-map-inspector-actions">
+          <span className="status-tag">Proposed</span>
+          <button
+            type="button"
+            className="theme-toggle"
+            data-testid="agent-map-inspector-close"
+            aria-label="Close node details"
+            data-tooltip="Close node details (Esc)"
+            onClick={onClose}
+          >
+            <Icon name="X" size={13} />
+          </button>
+        </div>
       </div>
       <section>
         <h4>Purpose</h4>

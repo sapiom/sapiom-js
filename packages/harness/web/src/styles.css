@@ -4591,6 +4591,13 @@ button.system-graph-node.is-navigable:focus-visible {
   gap: var(--sp3);
 }
 
+.agent-map-inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex: 0 0 auto;
+}
+
 .agent-map-inspector h3,
 .agent-map-inspector h4,
 .agent-map-inspector p,
