@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createAgentMapLoader } from "./agent-map-loader";
-import { proposalSnapshot, renameDelta } from "./agent-map-projector.test";
+import { proposalSnapshot, renameDelta } from "./agent-map-test-fixture";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
