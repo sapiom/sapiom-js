@@ -26,10 +26,27 @@ describe("generateMcpConfig", () => {
     else process.env.SAPIOM_ENVIRONMENT = originalEnv;
   });
 
+  async function writeCredentialsFile(file: unknown): Promise<void> {
+    const sapiomDir = path.join(tmpDir, ".sapiom");
+    await fs.mkdir(sapiomDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sapiomDir, "credentials.json"),
+      JSON.stringify(file),
+      "utf-8",
+    );
+  }
+
   it("writes a config file under generated/<sessionId>/", async () => {
     const filePath = await generateMcpConfig("session-123");
     expect(filePath).toBe(
-      path.join(tmpDir, ".sapiom", "harness", "generated", "session-123", "mcp-config.json"),
+      path.join(
+        tmpDir,
+        ".sapiom",
+        "harness",
+        "generated",
+        "session-123",
+        "mcp-config.json",
+      ),
     );
 
     const raw = await fs.readFile(filePath, "utf-8");
@@ -73,14 +90,79 @@ describe("generateMcpConfig", () => {
   });
 
   it("passes SAPIOM_ENVIRONMENT through to the sapiom-dev entry when set", async () => {
-    const filePath = await generateMcpConfig("session-456", { environment: "staging" });
+    const filePath = await generateMcpConfig("session-456", {
+      environment: "staging",
+    });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
-    expect(config.mcpServers["sapiom-dev"].env).toEqual({ SAPIOM_ENVIRONMENT: "staging" });
+    expect(config.mcpServers["sapiom-dev"].env).toEqual({
+      SAPIOM_ENVIRONMENT: "staging",
+    });
+  });
+
+  it.each(["staging", "dev"])(
+    "routes the remote sapiom MCP to staging for the %s environment",
+    async (environment) => {
+      const filePath = await generateMcpConfig(`session-${environment}`, {
+        environment,
+      });
+      const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+      expect(config.mcpServers.sapiom.url).toBe(
+        "https://api.sapiom.dev/v1/mcp",
+      );
+    },
+  );
+
+  it("preserves the prod alias for the production endpoint", async () => {
+    const filePath = await generateMcpConfig("session-prod-alias", {
+      environment: "prod",
+    });
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers.sapiom.url).toBe("https://api.sapiom.ai/v1/mcp");
+  });
+
+  it("uses SAPIOM_ENVIRONMENT before the credential file's current environment", async () => {
+    await writeCredentialsFile({
+      currentEnvironment: "staging",
+      environments: {},
+    });
+    process.env.SAPIOM_ENVIRONMENT = "production";
+
+    const filePath = await generateMcpConfig("session-process-env");
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers.sapiom.url).toBe("https://api.sapiom.ai/v1/mcp");
+  });
+
+  it("uses the credential file's current custom environment and normalizes its API URL", async () => {
+    await writeCredentialsFile({
+      currentEnvironment: "local",
+      environments: {
+        local: {
+          appURL: "http://localhost:2999",
+          apiURL: "http://localhost:3000/",
+        },
+      },
+    });
+
+    const filePath = await generateMcpConfig("session-custom");
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers.sapiom.url).toBe("http://localhost:3000/v1/mcp");
+  });
+
+  it("rejects an unknown custom environment instead of routing it to production", async () => {
+    await expect(
+      generateMcpConfig("session-unknown", { environment: "unknown" }),
+    ).rejects.toThrow('Unknown environment "unknown"');
   });
 
   it("advertises the harness version so feedback records can name the build", async () => {
-    const filePath = await generateMcpConfig("session-457", { harnessVersion: "0.2.5" });
+    const filePath = await generateMcpConfig("session-457", {
+      harnessVersion: "0.2.5",
+    });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
     expect(config.mcpServers["sapiom-dev"].env).toEqual({
@@ -108,7 +190,9 @@ describe("generateMcpConfig", () => {
   });
 
   it("adds an x-api-key header to the remote sapiom entry when an apiKey is given", async () => {
-    const filePath = await generateMcpConfig("session-auth", { apiKey: "sk_live_test123" });
+    const filePath = await generateMcpConfig("session-auth", {
+      apiKey: "sk_live_test123",
+    });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
     expect(config.mcpServers.sapiom).toEqual({
@@ -122,17 +206,24 @@ describe("generateMcpConfig", () => {
   });
 
   it("omits headers entirely when apiKey is null or absent", async () => {
-    const withoutOption = JSON.parse(await fs.readFile(await generateMcpConfig("session-1"), "utf-8"));
+    const withoutOption = JSON.parse(
+      await fs.readFile(await generateMcpConfig("session-1"), "utf-8"),
+    );
     expect(withoutOption.mcpServers.sapiom.headers).toBeUndefined();
 
     const withNull = JSON.parse(
-      await fs.readFile(await generateMcpConfig("session-2", { apiKey: null }), "utf-8"),
+      await fs.readFile(
+        await generateMcpConfig("session-2", { apiKey: null }),
+        "utf-8",
+      ),
     );
     expect(withNull.mcpServers.sapiom.headers).toBeUndefined();
   });
 
   it("writes the config file with owner-only permissions (it can carry a live API key)", async () => {
-    const filePath = await generateMcpConfig("session-perm", { apiKey: "sk_live_test123" });
+    const filePath = await generateMcpConfig("session-perm", {
+      apiKey: "sk_live_test123",
+    });
     const stat = await fs.stat(filePath);
     expect(stat.mode & 0o777).toBe(0o600);
   });

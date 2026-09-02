@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { resolveEnvironment } from "@sapiom/mcp/auth";
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../../cli/paths.js";
 
@@ -63,10 +64,14 @@ export async function generateMcpConfig(
   harnessSessionId: string,
   options: McpConfigOptions = {},
 ): Promise<string> {
-  const dir = path.join(expandHome(options.generatedRoot ?? HARNESS_PATHS.generated), harnessSessionId);
+  const dir = path.join(
+    expandHome(options.generatedRoot ?? HARNESS_PATHS.generated),
+    harnessSessionId,
+  );
   await fs.mkdir(dir, { recursive: true });
 
-  const sapiomEnvironment = options.environment ?? process.env.SAPIOM_ENVIRONMENT;
+  const sapiomEnvironment =
+    options.environment ?? process.env.SAPIOM_ENVIRONMENT;
   const devEnvEntries: Record<string, string> = {
     ...(sapiomEnvironment ? { SAPIOM_ENVIRONMENT: sapiomEnvironment } : {}),
     ...(options.harnessVersion
@@ -75,12 +80,14 @@ export async function generateMcpConfig(
   };
   const devEnv: Record<string, string> | undefined =
     Object.keys(devEnvEntries).length > 0 ? devEnvEntries : undefined;
+  const { apiURL } = await resolveEnvironment(sapiomEnvironment);
+  const remoteMcpUrl = `${apiURL.replace(/\/+$/, "")}/v1/mcp`;
 
   const config = {
     mcpServers: {
       sapiom: {
         type: "http",
-        url: "https://api.sapiom.ai/v1/mcp",
+        url: remoteMcpUrl,
         ...(options.apiKey ? { headers: { "x-api-key": options.apiKey } } : {}),
       },
       "sapiom-dev": options.devServer
@@ -112,6 +119,8 @@ export async function generateMcpConfig(
   const filePath = path.join(dir, "mcp-config.json");
   // May now carry a live API key (the `sapiom` entry's headers) — restrict
   // to the owner, matching how ~/.sapiom/credentials.json is written.
-  await fs.writeFile(filePath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  await fs.writeFile(filePath, JSON.stringify(config, null, 2) + "\n", {
+    mode: 0o600,
+  });
   return filePath;
 }

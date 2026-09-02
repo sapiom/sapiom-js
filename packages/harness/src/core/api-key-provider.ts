@@ -24,11 +24,11 @@
  *
  * NOT in scope (deliberately, per the ticket): triggering an interactive
  * browser re-login from the server, or a broader session-auth redesign. Refresh
- * here is a silent re-read of already-cached credentials; if the store has no
- * newer key, the call surfaces the auth error honestly.
+ * here is a silent re-read of already-cached credentials. A confirmed absence
+ * becomes signed out; a store failure preserves the last-known value.
  */
 
-import { readCredentials, resolveEnvironment } from "@sapiom/mcp/auth";
+import { readCredentialsOrThrow, resolveEnvironment } from "@sapiom/mcp/auth";
 
 /**
  * Reads the currently-held API key and can refresh it from the shared
@@ -41,17 +41,15 @@ export interface ApiKeyProvider {
   /** The current API key, or null when the harness is not signed in. */
   getKey(): string | null;
   /**
-   * Re-read the shared credential store and adopt any newer key found there.
-   * Returns the (possibly updated) current key, or null if none is available.
+   * Re-read the shared credential store and adopt its authoritative result.
+   * Returns the updated current key, or null when signed out.
    * Never throws — a read failure leaves the current key untouched and is
    * reported by returning the existing value.
    */
   refresh(): Promise<string | null>;
   /**
    * Unconditionally zero the in-memory key (sets it to null). Called on
-   * disconnect so that {@link getKey} returns null immediately — distinct from
-   * {@link refresh}, whose `if (latest)` guard deliberately preserves the
-   * cached key when the credential store has nothing to offer.
+   * disconnect so that {@link getKey} returns null immediately.
    */
   clear(): void;
 }
@@ -61,7 +59,7 @@ export interface ApiKeyProvider {
 export interface ApiKeyProviderDeps {
   /** Resolve the active environment name (governs which cached entry to read). */
   resolveEnvironmentName?: () => Promise<string>;
-  /** Read the cached API key for a given environment, or null if absent. */
+  /** Strictly read the cached API key for an environment, or null if absent. */
   readApiKeyForEnv?: (envName: string) => Promise<string | null>;
   /** Overrides SAPIOM_ENVIRONMENT for environment resolution. */
   environment?: string;
@@ -79,15 +77,15 @@ async function defaultResolveEnvironmentName(
 async function defaultReadApiKeyForEnv(
   envName: string,
 ): Promise<string | null> {
-  const entry = await readCredentials(envName);
+  const entry = await readCredentialsOrThrow(envName);
   return entry?.apiKey ?? null;
 }
 
 /**
  * Build an {@link ApiKeyProvider} seeded with the boot-time key. `refresh()`
- * re-reads the shared credential store for the active environment and adopts a
- * newer key when one is present — the reconciliation point between the key the
- * CLI captured at boot and any key rotated/re-logged-in afterward.
+ * re-reads the shared credential store for the active environment and adopts
+ * its current state — including a confirmed signed-out state. Store failures
+ * preserve the last-known key.
  */
 export function createApiKeyProvider(
   initialKey: string | null,
@@ -98,25 +96,36 @@ export function createApiKeyProvider(
     deps.resolveEnvironmentName ??
     (() => defaultResolveEnvironmentName(deps.environment));
   const readApiKey = deps.readApiKeyForEnv ?? defaultReadApiKeyForEnv;
+  let refreshQueue: Promise<void> = Promise.resolve();
+
+  const refreshFromStore = async (): Promise<string | null> => {
+    try {
+      const envName = await resolveEnvName();
+      const latest = await readApiKey(envName);
+      // A completed strict read is authoritative. Null/empty means the
+      // credential was deliberately removed; only a thrown read preserves the
+      // last-known key.
+      current = latest?.trim() ? latest : null;
+    } catch {
+      // Store unreadable (permissions, malformed JSON, transient I/O) or an
+      // invalid environment — preserve the last-known key.
+    }
+    return current;
+  };
 
   return {
     getKey(): string | null {
       return current;
     },
-    async refresh(): Promise<string | null> {
-      try {
-        const envName = await resolveEnvName();
-        const latest = await readApiKey(envName);
-        // Only adopt a real, non-empty key. A missing/emptied credential must
-        // not clobber a key that's simply been rotated out from under us but is
-        // still the best value we have to report an honest auth error with.
-        if (latest) current = latest;
-      } catch {
-        // Store unreadable (HOME missing, malformed file, …) — keep the current
-        // key. The caller's retry will simply hit the same auth error, which is
-        // the correct, honest outcome.
-      }
-      return current;
+    refresh(): Promise<string | null> {
+      // Queue the whole resolve+read+adopt transaction. Without this, a slower
+      // older refresh can finish after a newer one and restore stale state.
+      const result = refreshQueue.then(refreshFromStore);
+      refreshQueue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     },
     clear(): void {
       current = null;

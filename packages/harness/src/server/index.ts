@@ -147,7 +147,11 @@ import {
   resolveManifestName,
 } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
-import { createApiKeyProvider } from "../core/api-key-provider.js";
+import {
+  createApiKeyProvider,
+  staticApiKeyProvider,
+  type ApiKeyProvider,
+} from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
@@ -224,6 +228,8 @@ export interface HarnessServerOptions {
    */
   bootToken: string;
   telemetryOptIn: boolean;
+  /** Shared Sapiom authentication policy. Defaults to enabled. */
+  authMode?: "enabled" | "disabled";
   /** Sapiom identity from CLI auth; omit/null when unauthenticated or --no-auth. */
   identity?: HarnessIdentity | null;
   /** Stable per-install id for analytics. Defaults to a freshly loaded/created one. */
@@ -481,17 +487,16 @@ function readVersion(): string {
  * and --append-system-prompt source files. Generated uniformly for every
  * harness kind — an adapter that doesn't use one of these fields (codex,
  * today) simply ignores it, same as the claude-code adapter already does for
- * whichever of the three a given launch doesn't set. `apiKey` (from CLI auth,
- * null when unauthenticated / --no-auth) flows into the generated mcp-config
- * so the remote `sapiom` MCP is actually authenticated — a factory rather
- * than a plain function since it's per-server-instance state.
+ * whichever of the three a given launch doesn't set. The live API-key provider
+ * is refreshed at this common boundary so every new process receives the
+ * latest confirmed credential (or no header when signed out / --no-auth).
  *
  * The system prompt itself is FETCHED per session (SAP-2810) rather than read from
  * the bundled profile, so prompt improvements reach installs that never upgrade the
  * package; the bundled profile remains the offline fallback inside that fetch.
  */
 function createDefaultBuildLaunchOpts(
-  apiKey: string | null,
+  apiKeyProvider: ApiKeyProvider,
   generatedRoot?: string,
   rehydration?: {
     /** Brief text for a prior session id, or null when nothing was recorded. */
@@ -549,6 +554,9 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
+    // Reconcile with the shared credential store at the common launch
+    // boundary. Create, resume, and background tasks all await this builder.
+    const apiKey = await apiKeyProvider.refresh();
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -569,7 +577,10 @@ function createDefaultBuildLaunchOpts(
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
     const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
-      .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+      .filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim() !== "",
+      )
       .join("\n\n");
     const systemPromptFile = await generateSystemPromptFile(harnessSessionId, {
       generatedRoot,
@@ -601,15 +612,20 @@ export const startServer = async (
   // The browser launch capability is separate again: it authorizes delivery
   // of the boot token in initial HTML, but cannot call /api by itself.
   const uiToken = randomUUID();
-  const identity = options.identity ?? null;
+  const authEnabled = options.authMode !== "disabled";
+  // Disabled mode is a process-wide hard opt-out: even a programmatic caller
+  // that supplies a cached boot identity cannot seed auth state or injection.
+  const identity = authEnabled ? (options.identity ?? null) : null;
   // The single source of truth for the Sapiom API key (`sk_…`) that Studio
   // actions authenticate with — distinct from the per-boot boot token that only
   // gates the local /api surface. Seeded from the boot-time identity; its
   // refresh() re-reads the shared credential store so a rotated/re-logged-in key
   // recovers a 401 in place instead of locking the Studio.
-  const apiKeyProvider = createApiKeyProvider(identity?.apiKey ?? null, {
-    environment: process.env.SAPIOM_ENVIRONMENT,
-  });
+  const apiKeyProvider = authEnabled
+    ? createApiKeyProvider(identity?.apiKey ?? null, {
+        environment: process.env.SAPIOM_ENVIRONMENT,
+      })
+    : staticApiKeyProvider(null);
 
   // Mutable auth state — seeded from the boot-time identity and updated by the
   // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
@@ -1070,7 +1086,7 @@ export const startServer = async (
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ??
     createDefaultBuildLaunchOpts(
-      identity?.apiKey ?? null,
+      apiKeyProvider,
       generatedRoot,
       {
         buildBrief: resolveRehydrationBrief,
@@ -1079,7 +1095,11 @@ export const startServer = async (
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
     );
-  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req, context) => {
+  const buildLaunchOpts: LaunchOptsBuilder = async (
+    harnessSessionId,
+    req,
+    context,
+  ) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
     return innerBuildLaunchOpts(harnessSessionId, req, context);
   };
@@ -2721,7 +2741,10 @@ export const startServer = async (
   });
   sessionManager.onStatusChange((session) => {
     void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
-      console.error("[harness] planner greeting status transition failed:", error);
+      console.error(
+        "[harness] planner greeting status transition failed:",
+        error,
+      );
     });
   });
 
@@ -2816,8 +2839,7 @@ export const startServer = async (
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
-      currentUserId: () =>
-        localPlanningPrincipal(planningUserId, machineId),
+      currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
@@ -3183,6 +3205,7 @@ export const startServer = async (
       authState,
       apiKeyProvider,
       bus,
+      authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
       onPlanningUserChanged: (userId) => {
         planningUserId = userId;
@@ -3214,8 +3237,7 @@ export const startServer = async (
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
     decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
-    projectTelemetryEvent: (event) =>
-      plannerGreeting.redactForTelemetry(event),
+    projectTelemetryEvent: (event) => plannerGreeting.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
