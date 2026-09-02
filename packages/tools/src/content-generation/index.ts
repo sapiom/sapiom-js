@@ -703,10 +703,13 @@ export interface ImageResultPayload extends MediaResumeFields {
      * errored, was cancelled, or completed with an error, so no asset ever existed. Carries
      * the provider's own reason.
      *
-     * Mutually exclusive with `fileId` / `downloadUrl` / `storageError` — there is nothing
-     * to store when nothing was generated. Branch on this field to tell "generation failed"
-     * from "storage failed"; before SAP-3097 a terminal generation failure arrived as
-     * `storageError`, which reported the opposite of what happened.
+     * The platform sends this INSTEAD of the storage fields, not alongside them — there is
+     * nothing to store when nothing was generated — so branching on it tells "generation
+     * failed" from "storage failed" without reading an error message. Populated by the
+     * platform; nothing in this package produces it, and a resumed step running against a
+     * gateway that predates the change still sees the old shape, where a terminal
+     * generation failure arrived as `storageError` and reported the opposite of what
+     * happened. Check `generationError` first and fall back to `storageError`.
      */
     generationError?: string;
   }>;
@@ -1283,10 +1286,13 @@ export interface VideoResultPayload extends MediaResumeFields {
      * errored, was cancelled, or completed with an error, so no asset ever existed. Carries
      * the provider's own reason.
      *
-     * Mutually exclusive with `fileId` / `downloadUrl` / `storageError` — there is nothing
-     * to store when nothing was generated. Branch on this field to tell "generation failed"
-     * from "storage failed"; before SAP-3097 a terminal generation failure arrived as
-     * `storageError`, which reported the opposite of what happened.
+     * The platform sends this INSTEAD of the storage fields, not alongside them — there is
+     * nothing to store when nothing was generated — so branching on it tells "generation
+     * failed" from "storage failed" without reading an error message. Populated by the
+     * platform; nothing in this package produces it, and a resumed step running against a
+     * gateway that predates the change still sees the old shape, where a terminal
+     * generation failure arrived as `storageError` and reported the opposite of what
+     * happened. Check `generationError` first and fall back to `storageError`.
      */
     generationError?: string;
   }>;

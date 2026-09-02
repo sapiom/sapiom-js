@@ -14,13 +14,14 @@
  *
  * 1. **The polled body itself.** A queue response carries `status` plus (on a
  *    completed-with-error job) `error` / `error_type`. {@link terminalFailureFrom}
- *    classifies it, mirroring the gateway's own `terminalStatusFromQueueResponse`.
- * 2. **The status endpoint**, consulted only when the result endpoint answered non-OK.
- *    That answer is ambiguous on its own — a failed job never publishes a result body,
- *    but neither does a job that is merely still running, and neither does a gateway
- *    that just blipped. The status endpoint is the canonical terminal channel (it is
- *    what the platform's own settlement path reads), so it is what disambiguates
- *    "terminally failed" from "keep polling".
+ *    classifies it, mirroring the gateway's own terminal-status classification of the
+ *    same wire contract.
+ * 2. **The status endpoint**, consulted when the result endpoint answers non-OK. That
+ *    answer is ambiguous on its own — a failed job never publishes a result body, but
+ *    neither does a job that is merely still running, and neither does a gateway that
+ *    just blipped. The status endpoint reports terminal state unambiguously, so it is
+ *    what breaks the tie between "terminally failed" and "keep polling". It is a tie
+ *    break, not a second poll: see {@link STATUS_PROBE_EVERY}.
  */
 import type { Transport } from "../_client/index.js";
 import { ContentGenerationFailedError } from "./errors.js";
@@ -28,6 +29,19 @@ import { ContentGenerationFailedError } from "./errors.js";
 /** Wait between polls. */
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How often to spend a status request while the result endpoint keeps answering non-OK:
+ * on the first such poll, then every Nth after it.
+ *
+ * Some queues report "not ready yet" as a non-OK result response, so an unthrottled probe
+ * would double the request count for a job's entire lifetime — a 5-minute video at the 5s
+ * default goes from ~60 gateway requests to ~120, per waiting caller. The probe exists to
+ * break a tie, not to be a second poll: probing on the first non-OK still catches a job
+ * that failed immediately, and every 4th after that bounds detection to four poll
+ * intervals while holding the extra load to ~25%.
+ */
+const STATUS_PROBE_EVERY = 4;
 
 /**
  * Read a response body as JSON without ever throwing, and without leaving an unread
@@ -83,8 +97,8 @@ function providerErrorMessage(
  *
  * Deliberately conservative. Only an explicit terminal marker ends the poll, so an
  * unfamiliar body or a transport blip never gets reported to the caller as a generation
- * failure. Mirrors `terminalStatusFromQueueResponse` in the x402 gateway — the two read
- * the same wire contract and must agree.
+ * failure. Mirrors the gateway's own classification of the same wire contract — the two
+ * must agree.
  *
  * @internal Exported for tests.
  */
@@ -181,33 +195,40 @@ export async function pollForResult<T>({
   finished,
 }: PollForResultOptions<T>): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  let nonOkPolls = 0;
   while (Date.now() < deadline) {
     const res = await transport.fetch(resultUrl, { method: "GET" });
     const body = await readJsonBody(res);
 
-    // A body that actually carries the asset wins over any failure marker beside it —
-    // if the output is here, hand it back rather than throwing about how it got here.
-    if (res.ok) {
-      const result = finished(body);
-      if (result !== undefined) return result;
-    }
-
+    // The failure marker is read BEFORE the result predicate. A terminal body can still
+    // carry an empty container for the asset it never produced — `{ status: "COMPLETED",
+    // error: "…", images: [] }` — and reporting that as a successful empty result is the
+    // exact ambiguity this module exists to remove.
     const failure = terminalFailureFrom(body);
     if (failure !== null)
       throw new ContentGenerationFailedError(label, requestId, failure, body);
 
-    if (!res.ok && statusUrl) {
+    if (res.ok) {
+      const result = finished(body);
+      if (result !== undefined) return result;
+      // A 2xx that isn't the finished asset is an in-progress status body. Keep polling.
+      nonOkPolls = 0;
+    } else {
       // Non-OK is ambiguous — a terminally failed job publishes no result, but neither
-      // does one that is simply not done yet, nor a gateway that briefly blipped. Ask
-      // the status endpoint, which reports terminal state unambiguously.
-      const statusFailure = await probeStatusForFailure(transport, statusUrl);
-      if (statusFailure !== null)
-        throw new ContentGenerationFailedError(
-          label,
-          requestId,
-          statusFailure,
-          body,
-        );
+      // does one that is simply not done yet, nor a gateway that briefly blipped. The
+      // status endpoint breaks the tie; it is consulted on a slower cadence than the
+      // poll so a queue that reports in-progress this way doesn't cost double.
+      nonOkPolls += 1;
+      if (statusUrl && nonOkPolls % STATUS_PROBE_EVERY === 1) {
+        const statusFailure = await probeStatusForFailure(transport, statusUrl);
+        if (statusFailure !== null)
+          throw new ContentGenerationFailedError(
+            label,
+            requestId,
+            statusFailure,
+            body,
+          );
+      }
     }
 
     await sleep(pollMs);

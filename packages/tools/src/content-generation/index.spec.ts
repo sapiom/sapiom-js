@@ -2258,6 +2258,39 @@ describe("async media wait() — terminal generation failure (SAP-3097)", () => 
       });
     });
 
+    it("reports a terminal body carrying an EMPTY images[] as a failure, not an empty result", async () => {
+      // `images: []` is a container for the asset the job never produced. Resolving it as
+      // a success hands the caller back the exact ambiguity this change removes.
+      const { transport } = makePollScript(submit, [
+        {
+          body: {
+            status: "COMPLETED",
+            error: "content policy violation",
+            images: [],
+          },
+        },
+      ]);
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).rejects.toMatchObject({
+        name: "ContentGenerationFailedError",
+        providerError: "content policy violation",
+      });
+    });
+
+    it("still resolves an empty images[] when nothing marks the job as failed", async () => {
+      // Unchanged from before SAP-3097: an `images: []` with no failure marker is a
+      // finished (if empty) result, not a reason to poll to the deadline.
+      const { transport } = makePollScript(submit, [{ body: { images: [] } }]);
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).resolves.toMatchObject({ images: [] });
+    });
+
     it("consults the status endpoint when the result endpoint answers non-OK, and fails on a terminal status", async () => {
       const { transport, calls } = makePollScript(
         submit,
@@ -2304,6 +2337,37 @@ describe("async media wait() — terminal generation failure (SAP-3097)", () => 
       });
       expect(calls.some((c) => c.url.endsWith("/status"))).toBe(false);
     });
+  });
+
+  it("probes the status endpoint on a slower cadence than the poll, not on every tick", async () => {
+    // A queue that reports "not ready yet" as a non-OK result response must not cost two
+    // gateway requests per tick for the job's whole lifetime.
+    const { transport, calls } = makePollScript(
+      {
+        requestId: "img-slow",
+        responseUrl: `${BASE}/queue/img-slow`,
+        statusUrl: `${BASE}/queue/img-slow/status`,
+        resolvedModel: "flux-fast",
+      },
+      [
+        {
+          body: { detail: "Request is still in progress" },
+          init: { status: 400 },
+        },
+      ],
+      [{ body: { status: "IN_PROGRESS" } }],
+    );
+
+    const handle = await launchImage({ prompt: "x" }, transport, BASE);
+    await expect(handle.wait({ timeoutMs: 30, pollMs: 1 })).rejects.toThrow(
+      /did not complete within/,
+    );
+
+    const polls = pollCount(calls);
+    const probes = calls.filter((c) => c.url.endsWith("/status")).length;
+    expect(polls).toBeGreaterThan(4);
+    // First non-OK poll, then every 4th — never one probe per poll.
+    expect(probes).toBe(Math.ceil(polls / 4));
   });
 
   describe("video", () => {

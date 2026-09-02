@@ -287,11 +287,10 @@ interface VideoResultPayload {
 
 `ImageResultPayload` is the same shape (`images.launch` resumes through the same rail).
 
-`storageError` and `generationError` are different failures and never both apply to one
-output. Branch on `generationError` for "the model failed" — retrying the same prompt will
-probably fail the same way — and on `storageError` for "the model succeeded but we couldn't
-keep the result". Before v0.35 a terminal generation failure arrived as `storageError`,
-which said the opposite of what happened.
+`storageError` and `generationError` are different failures, and the platform sends one or
+the other, never both. Branch on `generationError` for "the model failed" — retrying the
+same prompt will probably fail the same way — and on `storageError` for "the model
+succeeded but we couldn't keep the result".
 
 ```typescript
 const out = result.outputs[0];
@@ -301,9 +300,18 @@ if (out?.storageError)
   throw new Error(`could not persist the output: ${out.storageError}`);
 ```
 
+`generationError` is populated by the platform, so it appears once the gateway change that
+emits it is deployed. Until then a terminal generation failure still arrives on
+`storageError`, saying the opposite of what happened — which is the reason for the split.
+Checking `generationError` first and falling back to `storageError`, as above, reads
+correctly on both sides of that deploy.
+
 Import `VideoResultPayload` from `@sapiom/tools` to annotate the resumed step's
 `input` type; import `toVideoResumePayload` to map a live `VideoGenerationResult`
-to this shape when wiring local tests.
+to this shape when wiring local tests. The mappers carry no `generationError`: a live
+`wait()` throws `ContentGenerationFailedError` on a terminal failure rather than
+returning one, so a `VideoGenerationResult` has no failure to map. Build that payload
+literally when you want to exercise the branch.
 
 ## Input params
 
