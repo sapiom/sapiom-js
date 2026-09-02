@@ -4,8 +4,14 @@ import * as path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { WebSocket } from "ws";
 
-import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
+import type {
+  BusMessage,
+  HarnessAdapter,
+  LaunchOpts,
+  SpawnSpec,
+} from "../shared/types.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { startServer, type HarnessServer } from "./index.js";
 
@@ -74,9 +80,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     harness: "claude-code",
   });
   const metadata = launchOpts?.agentMapMcp;
-  expect(metadata?.url).toBe(
-    `http://127.0.0.1:${server.port}/mcp/agent-map`,
-  );
+  expect(metadata?.url).toBe(`http://127.0.0.1:${server.port}/mcp/agent-map`);
   expect(metadata?.url).not.toContain(":0/");
   expect(launchOpts?.mcpConfigFile).toBeDefined();
   const config = JSON.parse(
@@ -240,8 +244,62 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "agent_map_read",
     "agent_map_validate",
   ]);
-  await client.close();
 
+  const proposalEvents: BusMessage[] = [];
+  const events = new WebSocket(
+    `ws://127.0.0.1:${server.port}/ws/events?token=boot-token`,
+  );
+  await new Promise<void>((resolve, reject) => {
+    events.once("open", () => resolve());
+    events.once("error", reject);
+  });
+  events.on("message", (data) => {
+    try {
+      proposalEvents.push(JSON.parse(data.toString()) as BusMessage);
+    } catch {
+      // The production browser also ignores malformed event frames.
+    }
+  });
+  try {
+    const proposed = await client.callTool({
+      name: "agent_map_propose",
+      arguments: {
+        schemaVersion: 1,
+        requestId: "request-live-proposal-1",
+        proposalId: null,
+        expectedVersion: 0,
+        operations: [
+          {
+            kind: "add-node",
+            draftRef: "worker",
+            node: {
+              kind: "agent",
+              name: "Worker",
+              purpose: "Own the planned work",
+              ownerAgent: null,
+              contractRefs: [],
+            },
+          },
+        ],
+      },
+    });
+    expect(proposed.isError).not.toBe(true);
+    await vi.waitFor(
+      () => {
+        expect(proposalEvents).toContainEqual({
+          type: "agent-map.proposal.changed",
+          delta: expect.objectContaining({
+            projectId,
+            version: 1,
+          }),
+        });
+      },
+      { timeout: 1_000 },
+    );
+  } finally {
+    events.close();
+    await client.close();
+  }
   const ordinary = await server.sessionManager.create({
     cwd: projectRoot,
     harness: "claude-code",

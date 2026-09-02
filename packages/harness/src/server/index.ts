@@ -2684,6 +2684,13 @@ export const startServer = async (
   );
   const agentMapProposalService = new AgentMapProposalService(
     agentMapWorkspaceStore,
+    {
+      // Persistence is authoritative and completes before this callback. The
+      // shared event socket gives an already-open map the accepted delta; a
+      // disconnected browser recovers from the durable snapshot on reconnect.
+      onAccepted: (delta) =>
+        bus.publish({ type: "agent-map.proposal.changed", delta }),
+    },
   );
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
