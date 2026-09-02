@@ -50,6 +50,13 @@ const contractRefsSchema = z
   .max(64)
   .refine((values) => new Set(values).size === values.length);
 
+const stripUndefinedProperties = <T extends Record<string, unknown>>(
+  value: T,
+): T =>
+  Object.fromEntries(
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
+  ) as T;
+
 export const nodeRefSchema = z.union([
   z.object({ nodeId: planNodeIdSchema }).strict(),
   z.object({ draftRef: draftRefSchema }).strict(),
@@ -62,6 +69,7 @@ const nodeChangesSchema = z
     contractRefs: contractRefsSchema.optional(),
   })
   .strict()
+  .transform(stripUndefinedProperties)
   .refine((changes) => Object.keys(changes).length > 0);
 
 const relationshipChangesSchema = z
@@ -71,6 +79,7 @@ const relationshipChangesSchema = z
     contractRef: contractRefSchema.nullable().optional(),
   })
   .strict()
+  .transform(stripUndefinedProperties)
   .refine((changes) => Object.keys(changes).length > 0);
 
 const addNodeSchema = z

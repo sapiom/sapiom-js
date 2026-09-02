@@ -12,7 +12,9 @@ import type {
   RelationshipKind,
 } from "../shared/agent-map.js";
 import {
+  canonicalizeAgentMapGraph,
   materializeValidatedMapBatch,
+  proposalTouchSetsOverlap,
   RELATIONSHIP_ENDPOINT_MATRIX,
   semanticRelationshipKey,
   validateMapOperationBatch,
@@ -359,6 +361,252 @@ describe("validateMapOperationBatch", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.issues[0]?.code).toBe("duplicate_target");
   });
+
+  it("drops undefined patch values and rejects an empty direct patch", () => {
+    const existing = nodeId(1);
+    const mixed = validateMapOperationBatch(
+      { nodes: [node(existing, "agent")], relationships: [] },
+      request([
+        {
+          kind: "update-node",
+          nodeId: existing,
+          changes: { name: undefined, purpose: "Defined purpose" },
+        },
+      ]),
+    );
+    expect(mixed.ok).toBe(true);
+    if (mixed.ok) {
+      expect(mixed.value.request.operations[0]).toMatchObject({
+        changes: { purpose: "Defined purpose" },
+      });
+      expect(mixed.value.request.operations[0]).not.toHaveProperty(
+        "changes.name",
+      );
+    }
+
+    const emptyPatch = validateMapOperationBatch(
+      { nodes: [node(existing, "agent")], relationships: [] },
+      request([
+        {
+          kind: "update-node",
+          nodeId: existing,
+          changes: { name: undefined },
+        },
+      ]),
+    );
+    expect(emptyPatch).toEqual({
+      ok: false,
+      issues: [
+        {
+          code: "malformed_input",
+          operationIndex: 0,
+          path: ["operations", 0, "changes"],
+          recovery: "correct",
+        },
+      ],
+    });
+  });
+
+  it("marks invalid persisted graph state for reread, not caller correction", () => {
+    const invalidStoredGraph: AgentMapGraph = {
+      nodes: [node(nodeId(1), "subagent")],
+      relationships: [],
+    };
+    const result = validateMapOperationBatch(
+      invalidStoredGraph,
+      request([addNode("unrelated", "agent")]),
+    );
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        {
+          code: "invalid_owner",
+          operationIndex: null,
+          path: ["current", "nodes"],
+          recovery: "reread",
+        },
+      ],
+    });
+  });
+});
+
+describe("proposal touch sets and canonicalization", () => {
+  const baseGraph = (): AgentMapGraph => {
+    const owner = nodeId(1);
+    const target = nodeId(2);
+    const artifact = nodeId(3);
+    return {
+      nodes: [
+        node(owner, "agent"),
+        node(target, "agent"),
+        node(artifact, "artifact"),
+      ],
+      relationships: [
+        {
+          id: relationshipId(1),
+          fromNodeId: owner,
+          toNodeId: target,
+          kind: "invokes",
+          executionMode: null,
+          contractRef: null,
+          description: "existing",
+        },
+      ],
+    };
+  };
+
+  it("overlaps node deletion with new endpoint and owner dependencies", () => {
+    const graph = baseGraph();
+    const removedNode = graph.nodes[0]!.id;
+    const otherAgent = graph.nodes[1]!.id;
+    const incidentEdge = graph.relationships[0]!.id;
+    const deletion = validateMapOperationBatch(
+      graph,
+      request([
+        { kind: "remove-node", nodeId: removedNode },
+        { kind: "remove-relationship", relationshipId: incidentEdge },
+      ]),
+    );
+    const newEdge = validateMapOperationBatch(
+      graph,
+      request([
+        addRelationship(
+          "new_dependency",
+          { nodeId: removedNode },
+          { nodeId: otherAgent },
+          "invokes",
+          { executionMode: "asynchronous" },
+        ),
+      ]),
+    );
+    const newOwnedNode = validateMapOperationBatch(
+      graph,
+      request([addNode("new_child", "subagent", { nodeId: removedNode })]),
+    );
+
+    expect(deletion.ok).toBe(true);
+    expect(newEdge.ok).toBe(true);
+    expect(newOwnedNode.ok).toBe(true);
+    if (!deletion.ok || !newEdge.ok || !newOwnedNode.ok) return;
+    expect(
+      proposalTouchSetsOverlap(deletion.value.touchSet, newEdge.value.touchSet),
+    ).toBe(true);
+    expect(
+      proposalTouchSetsOverlap(
+        deletion.value.touchSet,
+        newOwnedNode.value.touchSet,
+      ),
+    ).toBe(true);
+    expect(newEdge.value.touchSet.entityKeys).toContain(`node:${removedNode}`);
+    expect(newOwnedNode.value.touchSet.entityKeys).toEqual([
+      `node:${removedNode}`,
+    ]);
+  });
+
+  it("keeps independent additions disjoint and semantic duplicates overlapping", () => {
+    const graph = baseGraph();
+    const first = graph.nodes[0]!.id;
+    const second = graph.nodes[1]!.id;
+    const agentEdge = validateMapOperationBatch(
+      graph,
+      request([
+        addRelationship(
+          "agent_edge",
+          { nodeId: first },
+          { nodeId: second },
+          "invokes",
+          { executionMode: "asynchronous" },
+        ),
+      ]),
+    );
+    const duplicateAgentEdge = validateMapOperationBatch(
+      graph,
+      request([
+        addRelationship(
+          "same_semantics",
+          { nodeId: first },
+          { nodeId: second },
+          "invokes",
+          { executionMode: "asynchronous", description: "different prose" },
+        ),
+      ]),
+    );
+    expect(agentEdge.ok).toBe(true);
+    expect(duplicateAgentEdge.ok).toBe(true);
+    if (!agentEdge.ok || !duplicateAgentEdge.ok) return;
+    expect(
+      proposalTouchSetsOverlap(
+        agentEdge.value.touchSet,
+        duplicateAgentEdge.value.touchSet,
+      ),
+    ).toBe(true);
+    expect(agentEdge.value.touchSet.semanticRelationshipKeys).toEqual(
+      duplicateAgentEdge.value.touchSet.semanticRelationshipKeys,
+    );
+    const updateFirst = validateMapOperationBatch(
+      graph,
+      request([
+        { kind: "update-node", nodeId: first, changes: { name: "First" } },
+      ]),
+    );
+    const updateSecond = validateMapOperationBatch(
+      graph,
+      request([
+        { kind: "update-node", nodeId: second, changes: { name: "Second" } },
+      ]),
+    );
+    expect(updateFirst.ok).toBe(true);
+    expect(updateSecond.ok).toBe(true);
+    if (updateFirst.ok && updateSecond.ok) {
+      expect(
+        proposalTouchSetsOverlap(
+          updateFirst.value.touchSet,
+          updateSecond.value.touchSet,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("canonicalizes graph order without mutating the input", () => {
+    const graph: AgentMapGraph = {
+      nodes: [
+        { ...node(nodeId(2), "agent"), contractRefs: ["z", "a"] },
+        node(nodeId(1), "agent"),
+      ],
+      relationships: [
+        {
+          id: relationshipId(2),
+          fromNodeId: nodeId(2),
+          toNodeId: nodeId(1),
+          kind: "invokes",
+          executionMode: null,
+          contractRef: null,
+          description: "second",
+        },
+        {
+          id: relationshipId(1),
+          fromNodeId: nodeId(1),
+          toNodeId: nodeId(2),
+          kind: "invokes",
+          executionMode: null,
+          contractRef: null,
+          description: "first",
+        },
+      ],
+    };
+    const canonical = canonicalizeAgentMapGraph(graph);
+
+    expect(canonical.nodes.map((entry) => entry.id)).toEqual([
+      nodeId(1),
+      nodeId(2),
+    ]);
+    expect(canonical.nodes[1]!.contractRefs).toEqual(["a", "z"]);
+    expect(canonical.relationships.map((entry) => entry.id)).toEqual([
+      relationshipId(1),
+      relationshipId(2),
+    ]);
+    expect(graph.nodes[0]!.contractRefs).toEqual(["z", "a"]);
+  });
 });
 
 describe("materializeValidatedMapBatch", () => {
@@ -469,7 +717,7 @@ describe("materializeValidatedMapBatch", () => {
         { contractRef: "ResearchReport/v1" },
       ),
       addNode("publisher", "agent"),
-      addNode("tiktok", "connector"),
+      addNode("distribution_channel", "connector"),
       addNode("research_store", "resource"),
       addNode("report", "artifact"),
       addNode("researcher", "agent"),
@@ -482,7 +730,7 @@ describe("materializeValidatedMapBatch", () => {
       addRelationship(
         "publish",
         { draftRef: draftRef("publisher") },
-        { draftRef: draftRef("tiktok") },
+        { draftRef: draftRef("distribution_channel") },
         "uses",
       ),
     ]);
@@ -559,6 +807,82 @@ describe("materializeValidatedMapBatch", () => {
       contractRefs: ["a", "z"],
     });
     expect(allocator.allocateNodeId).not.toHaveBeenCalled();
+  });
+
+  it("keeps validated and materialized touch sets aligned for existing refs", () => {
+    const first = nodeId(1);
+    const resource = nodeId(2);
+    const graph = {
+      nodes: [node(first, "agent"), node(resource, "resource")],
+      relationships: [],
+    };
+    const validated = validateMapOperationBatch(
+      graph,
+      request([
+        addRelationship(
+          "storage",
+          { nodeId: first },
+          { nodeId: resource },
+          "uses",
+        ),
+      ]),
+    );
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+    const materialized = materializeValidatedMapBatch(validated.value, {
+      allocateNodeId: () => nodeId(10),
+      allocateRelationshipId: () => relationshipId(10),
+    });
+    expect(materialized.touchSet).toEqual(validated.value.touchSet);
+  });
+
+  it("rejects node and relationship ID allocator collisions", () => {
+    const duplicateNodes = validateMapOperationBatch(
+      empty,
+      request([addNode("one", "agent"), addNode("two", "resource")]),
+    );
+    expect(duplicateNodes.ok).toBe(true);
+    if (duplicateNodes.ok) {
+      expect(() =>
+        materializeValidatedMapBatch(duplicateNodes.value, {
+          allocateNodeId: () => nodeId(10),
+          allocateRelationshipId: () => relationshipId(10),
+        }),
+      ).toThrowError("duplicate node ID");
+    }
+
+    const first = nodeId(1);
+    const second = nodeId(2);
+    const duplicateRelationships = validateMapOperationBatch(
+      {
+        nodes: [node(first, "agent"), node(second, "agent")],
+        relationships: [],
+      },
+      request([
+        addRelationship(
+          "one",
+          { nodeId: first },
+          { nodeId: second },
+          "invokes",
+        ),
+        addRelationship(
+          "two",
+          { nodeId: first },
+          { nodeId: second },
+          "invokes",
+          { executionMode: "asynchronous" },
+        ),
+      ]),
+    );
+    expect(duplicateRelationships.ok).toBe(true);
+    if (duplicateRelationships.ok) {
+      expect(() =>
+        materializeValidatedMapBatch(duplicateRelationships.value, {
+          allocateNodeId: () => nodeId(10),
+          allocateRelationshipId: () => relationshipId(10),
+        }),
+      ).toThrowError("duplicate relationship ID");
+    }
   });
 
   it("derives semantic keys without using mutable descriptions", () => {

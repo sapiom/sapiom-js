@@ -123,6 +123,66 @@ describe("Agent Map proposal caller schema", () => {
     });
   });
 
+  it("drops explicit undefined patch fields before accepting updates", () => {
+    const parsed = parseProposalBatchRequest({
+      ...allOperations,
+      operations: [
+        {
+          kind: "update-node",
+          nodeId,
+          changes: { name: undefined, purpose: "Defined purpose" },
+        },
+        {
+          kind: "update-relationship",
+          relationshipId,
+          changes: { description: undefined, executionMode: null },
+        },
+      ],
+    });
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        ...allOperations,
+        operations: [
+          {
+            kind: "update-node",
+            nodeId,
+            changes: { purpose: "Defined purpose" },
+          },
+          {
+            kind: "update-relationship",
+            relationshipId,
+            changes: { executionMode: null },
+          },
+        ],
+      },
+    });
+  });
+
+  it("rejects a patch containing only explicit undefined values", () => {
+    const parsed = parseProposalBatchRequest({
+      ...allOperations,
+      operations: [
+        {
+          kind: "update-node",
+          nodeId,
+          changes: { name: undefined },
+        },
+      ],
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.issues).toEqual([
+        {
+          code: "malformed_input",
+          operationIndex: 0,
+          path: ["operations", 0, "changes"],
+          recovery: "correct",
+        },
+      ]);
+    }
+  });
+
   it.each([
     ["empty batch", { ...allOperations, operations: [] }, "empty_batch"],
     [

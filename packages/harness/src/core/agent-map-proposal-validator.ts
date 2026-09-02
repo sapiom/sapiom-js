@@ -101,6 +101,13 @@ const compareStrings = (left: string, right: string): number =>
 const canonicalStrings = (values: readonly string[]): string[] =>
   [...values].sort(compareStrings);
 
+const stripUndefinedProperties = <T extends Record<string, unknown>>(
+  value: T,
+): T =>
+  Object.fromEntries(
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
+  ) as T;
+
 const canonicalNode = (node: PlanNode): PlanNode => ({
   ...node,
   contractRefs: canonicalStrings(node.contractRefs),
@@ -153,7 +160,10 @@ const issue = (
   code,
   operationIndex,
   path,
-  recovery: "correct",
+  // A caller cannot correct persisted graph state through an unrelated
+  // operation batch. Keep those failures distinct from caller-authored ones
+  // so the service can fail closed and direct the session back to its source.
+  recovery: path[0] === "current" ? "reread" : "correct",
 });
 
 function deduplicateIssues(
@@ -197,7 +207,7 @@ function cloneRequest(request: ProposalBatchRequest): ProposalBatchRequest {
           return {
             ...operation,
             changes: {
-              ...operation.changes,
+              ...stripUndefinedProperties(operation.changes),
               ...(operation.changes.contractRefs
                 ? {
                     contractRefs: canonicalStrings(
@@ -217,7 +227,10 @@ function cloneRequest(request: ProposalBatchRequest): ProposalBatchRequest {
             },
           };
         case "update-relationship":
-          return { ...operation, changes: { ...operation.changes } };
+          return {
+            ...operation,
+            changes: stripUndefinedProperties(operation.changes),
+          };
         case "remove-node":
         case "remove-relationship":
           return { ...operation };
@@ -288,6 +301,12 @@ function deriveTouchSet(
         break;
       }
       case "add-relationship": {
+        if ("nodeId" in operation.relationship.from) {
+          entityKeys.add(`node:${operation.relationship.from.nodeId}`);
+        }
+        if ("nodeId" in operation.relationship.to) {
+          entityKeys.add(`node:${operation.relationship.to.nodeId}`);
+        }
         const next = prospectiveByKey.get(
           relationshipDraftKey(operation.draftRef),
         );
@@ -295,6 +314,12 @@ function deriveTouchSet(
         break;
       }
       case "add-node":
+        if (
+          operation.node.ownerAgent &&
+          "nodeId" in operation.node.ownerAgent
+        ) {
+          entityKeys.add(`node:${operation.node.ownerAgent.nodeId}`);
+        }
         break;
     }
   }
@@ -336,6 +361,11 @@ function deriveMaterializedTouchSet(
   );
   const entityKeys = new Set<string>();
   const semanticKeys = new Set<string>();
+  const addedNodeIds = new Set(
+    operations.flatMap((operation) =>
+      operation.kind === "add-node" ? [operation.node.id] : [],
+    ),
+  );
 
   for (const operation of operations) {
     switch (operation.kind) {
@@ -344,8 +374,20 @@ function deriveMaterializedTouchSet(
         entityKeys.add(`node:${operation.nodeId}`);
         break;
       case "add-node":
+        if (
+          operation.node.ownerAgentId !== null &&
+          !addedNodeIds.has(operation.node.ownerAgentId)
+        ) {
+          entityKeys.add(`node:${operation.node.ownerAgentId}`);
+        }
         break;
       case "add-relationship":
+        if (!addedNodeIds.has(operation.relationship.fromNodeId)) {
+          entityKeys.add(`node:${operation.relationship.fromNodeId}`);
+        }
+        if (!addedNodeIds.has(operation.relationship.toNodeId)) {
+          entityKeys.add(`node:${operation.relationship.toNodeId}`);
+        }
         semanticKeys.add(semanticRelationshipKey(operation.relationship));
         break;
       case "update-relationship": {
@@ -412,6 +454,20 @@ export function validateMapOperationBatch(
   const removedRelationshipIds = new Set<PlanRelationshipId>();
 
   request.operations.forEach((operation, operationIndex) => {
+    if (
+      (operation.kind === "update-node" ||
+        operation.kind === "update-relationship") &&
+      Object.keys(operation.changes).length === 0
+    ) {
+      issues.push(
+        issue("malformed_input", operationIndex, [
+          "operations",
+          operationIndex,
+          "changes",
+        ]),
+      );
+    }
+
     if (
       operation.kind === "add-node" ||
       operation.kind === "add-relationship"
@@ -733,16 +789,31 @@ export function materializeValidatedMapBatch(
     DraftRef,
     PlanRelationshipId
   >;
+  const usedNodeIds = new Set(validated.current.nodes.map((node) => node.id));
+  const usedRelationshipIds = new Set(
+    validated.current.relationships.map((relationship) => relationship.id),
+  );
 
   for (const operation of validated.request.operations) {
     if (operation.kind === "add-node") {
-      allocatedNodeIds[operation.draftRef] = allocator.allocateNodeId();
+      const allocatedId = allocator.allocateNodeId();
+      if (usedNodeIds.has(allocatedId)) {
+        throw new Error("Agent Map allocator returned a duplicate node ID");
+      }
+      usedNodeIds.add(allocatedId);
+      allocatedNodeIds[operation.draftRef] = allocatedId;
     }
   }
   for (const operation of validated.request.operations) {
     if (operation.kind === "add-relationship") {
-      allocatedRelationshipIds[operation.draftRef] =
-        allocator.allocateRelationshipId();
+      const allocatedId = allocator.allocateRelationshipId();
+      if (usedRelationshipIds.has(allocatedId)) {
+        throw new Error(
+          "Agent Map allocator returned a duplicate relationship ID",
+        );
+      }
+      usedRelationshipIds.add(allocatedId);
+      allocatedRelationshipIds[operation.draftRef] = allocatedId;
     }
   }
 
