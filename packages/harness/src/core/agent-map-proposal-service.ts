@@ -30,6 +30,7 @@ import {
 } from "./agent-map-proposal-validator.js";
 import {
   AgentMapWorkspaceStore,
+  AgentMapWorkspaceStoreError,
   type AgentMapProjectAggregate,
 } from "./agent-map-workspace-store.js";
 
@@ -86,6 +87,19 @@ export interface AgentMapProposalServiceOptions {
     revisionId: string,
   ) => Promise<AgentMapGraph | null>;
   onAccepted?: (delta: AcceptedProposalDelta) => void | Promise<void>;
+  onOutcome?: (event: {
+    name:
+      | "agent_map.proposal.accepted"
+      | "agent_map.proposal.replayed"
+      | "agent_map.proposal.validation_failed"
+      | "agent_map.proposal.conflict"
+      | "agent_map.proposal.storage_failed";
+    projectId: StudioProjectId;
+    sessionId: string;
+    role: PlanningSessionIdentity["role"];
+    operationCount: number;
+    latencyMs: number;
+  }) => void | Promise<void>;
 }
 
 const actorFor = (identity: PlanningSessionIdentity): ProposalActor => ({
@@ -98,8 +112,37 @@ const actorFor = (identity: PlanningSessionIdentity): ProposalActor => ({
       : null,
 });
 
+function canonicalRequest(request: ProposalBatchRequest): ProposalBatchRequest {
+  return {
+    ...request,
+    operations: request.operations.map((operation) => {
+      if (operation.kind === "add-node")
+        return {
+          ...operation,
+          node: {
+            ...operation.node,
+            contractRefs: [...operation.node.contractRefs].sort(),
+          },
+        };
+      if (operation.kind === "update-node")
+        return {
+          ...operation,
+          changes: {
+            ...operation.changes,
+            ...(operation.changes.contractRefs
+              ? { contractRefs: [...operation.changes.contractRefs].sort() }
+              : {}),
+          },
+        };
+      return operation;
+    }),
+  };
+}
+
 const requestDigest = (request: ProposalBatchRequest): string =>
-  createHash("sha256").update(JSON.stringify(request)).digest("hex");
+  createHash("sha256")
+    .update(JSON.stringify(canonicalRequest(request)))
+    .digest("hex");
 
 function applyOperations(
   graph: AgentMapGraph,
@@ -233,18 +276,45 @@ export class AgentMapProposalService {
     const aggregate = await this.store.readAggregate(identity.projectId);
     const currentVersion = aggregate.proposal?.version ?? 0;
     this.assertProposalPointer(aggregate, parsed.value, currentVersion);
+    if (parsed.value.expectedVersion > currentVersion)
+      throw this.stale(currentVersion);
     const base = await this.baseGraph(aggregate);
-    const graph = this.graphAt(
+    const readGraph = this.graphAt(
       base,
       aggregate.proposal,
       parsed.value.expectedVersion,
     );
-    const validated = validateMapOperationBatch(graph, parsed.value);
-    if (!validated.ok)
+    const atRead = validateMapOperationBatch(readGraph, parsed.value);
+    if (!atRead.ok)
+      throw new AgentMapProposalValidationError(atRead.issues, currentVersion);
+    if (parsed.value.expectedVersion < currentVersion) {
+      for (const prior of aggregate.receipts.filter(
+        (candidate) => candidate.result.version > parsed.value.expectedVersion,
+      )) {
+        if (proposalTouchSetsOverlap(atRead.value.touchSet, prior.touchSet))
+          throw new AgentMapProposalConflictError({
+            code: "stale_version",
+            currentVersion,
+            ...affectedFromTouchSets(atRead.value.touchSet, prior.touchSet),
+            recovery: "reread",
+          });
+      }
+    }
+    const currentGraph = aggregate.proposal
+      ? {
+          nodes: aggregate.proposal.nodes,
+          relationships: aggregate.proposal.relationships,
+        }
+      : base;
+    const validated = validateMapOperationBatch(currentGraph, parsed.value);
+    if (!validated.ok) {
+      if (parsed.value.expectedVersion < currentVersion)
+        throw this.stale(currentVersion);
       throw new AgentMapProposalValidationError(
         validated.issues,
         currentVersion,
       );
+    }
     return {
       schemaVersion: 1 as const,
       valid: true as const,
@@ -257,177 +327,215 @@ export class AgentMapProposalService {
     identity: PlanningSessionIdentity,
     input: unknown,
   ): Promise<ProposalBatchResult> {
+    const startedAt = Date.now();
     const parsed = parseProposalBatchRequest(input);
-    if (!parsed.ok) throw new AgentMapProposalValidationError(parsed.issues, 0);
+    if (!parsed.ok) {
+      this.emitOutcome(
+        identity,
+        "agent_map.proposal.validation_failed",
+        0,
+        startedAt,
+      );
+      throw new AgentMapProposalValidationError(parsed.issues, 0);
+    }
     const request = parsed.value;
     let acceptedDelta: AcceptedProposalDelta | null = null;
-    const result = await this.store.transact(
-      identity.projectId,
-      async (aggregate) => {
-        if (aggregate.workspace.projectId !== identity.projectId)
-          throw new AgentMapProposalProjectError();
-        const currentVersion = aggregate.proposal?.version ?? 0;
-        const digest = requestDigest(request);
-        const receipt = aggregate.receipts.find(
-          (candidate) =>
-            candidate.sessionId === identity.sessionId &&
-            candidate.requestId === request.requestId,
-        );
-        if (receipt) {
-          if (receipt.requestDigest !== digest)
-            throw new AgentMapProposalConflictError({
-              code: "request_id_reused",
-              currentVersion,
-              affectedNodeIds: [],
-              affectedRelationshipIds: [],
-              recovery: "reread",
-            });
-          return { value: receipt.result };
-        }
-        this.assertProposalPointer(aggregate, request, currentVersion);
-        if (request.expectedVersion > currentVersion)
-          throw this.stale(currentVersion);
-
-        const base = await this.baseGraph(aggregate);
-        const readGraph = this.graphAt(
-          base,
-          aggregate.proposal,
-          request.expectedVersion,
-        );
-        const atRead = validateMapOperationBatch(readGraph, request);
-        if (!atRead.ok)
-          throw new AgentMapProposalValidationError(
-            atRead.issues,
-            currentVersion,
+    let replayed = false;
+    let result: ProposalBatchResult;
+    try {
+      result = await this.store.transact(
+        identity.projectId,
+        async (aggregate) => {
+          if (aggregate.workspace.projectId !== identity.projectId)
+            throw new AgentMapProposalProjectError();
+          const currentVersion = aggregate.proposal?.version ?? 0;
+          const digest = requestDigest(request);
+          const receipt = aggregate.receipts.find(
+            (candidate) =>
+              candidate.sessionId === identity.sessionId &&
+              candidate.requestId === request.requestId,
           );
-
-        if (request.expectedVersion < currentVersion) {
-          for (const prior of aggregate.receipts.filter(
-            (candidate) => candidate.result.version > request.expectedVersion,
-          )) {
-            if (
-              proposalTouchSetsOverlap(atRead.value.touchSet, prior.touchSet)
-            ) {
+          if (receipt) {
+            if (receipt.requestDigest !== digest)
               throw new AgentMapProposalConflictError({
-                code: "stale_version",
+                code: "request_id_reused",
                 currentVersion,
-                ...affectedFromTouchSets(atRead.value.touchSet, prior.touchSet),
+                affectedNodeIds: [],
+                affectedRelationshipIds: [],
                 recovery: "reread",
               });
+            replayed = true;
+            return { value: receipt.result };
+          }
+          this.assertProposalPointer(aggregate, request, currentVersion);
+          if (request.expectedVersion > currentVersion)
+            throw this.stale(currentVersion);
+
+          const base = await this.baseGraph(aggregate);
+          const readGraph = this.graphAt(
+            base,
+            aggregate.proposal,
+            request.expectedVersion,
+          );
+          const atRead = validateMapOperationBatch(readGraph, request);
+          if (!atRead.ok)
+            throw new AgentMapProposalValidationError(
+              atRead.issues,
+              currentVersion,
+            );
+
+          if (request.expectedVersion < currentVersion) {
+            for (const prior of aggregate.receipts.filter(
+              (candidate) => candidate.result.version > request.expectedVersion,
+            )) {
+              if (
+                proposalTouchSetsOverlap(atRead.value.touchSet, prior.touchSet)
+              ) {
+                throw new AgentMapProposalConflictError({
+                  code: "stale_version",
+                  currentVersion,
+                  ...affectedFromTouchSets(
+                    atRead.value.touchSet,
+                    prior.touchSet,
+                  ),
+                  recovery: "reread",
+                });
+              }
             }
           }
-        }
-        const currentGraph = aggregate.proposal
-          ? {
-              nodes: aggregate.proposal.nodes,
-              relationships: aggregate.proposal.relationships,
-            }
-          : base;
-        const rebased = validateMapOperationBatch(currentGraph, request);
-        if (!rebased.ok) {
-          if (request.expectedVersion < currentVersion)
-            throw this.stale(currentVersion);
-          throw new AgentMapProposalValidationError(
-            rebased.issues,
-            currentVersion,
+          const currentGraph = aggregate.proposal
+            ? {
+                nodes: aggregate.proposal.nodes,
+                relationships: aggregate.proposal.relationships,
+              }
+            : base;
+          const rebased = validateMapOperationBatch(currentGraph, request);
+          if (!rebased.ok) {
+            if (request.expectedVersion < currentVersion)
+              throw this.stale(currentVersion);
+            throw new AgentMapProposalValidationError(
+              rebased.issues,
+              currentVersion,
+            );
+          }
+          const materialized = materializeValidatedMapBatch(
+            rebased.value,
+            this.allocator,
           );
-        }
-        const materialized = materializeValidatedMapBatch(
-          rebased.value,
-          this.allocator,
-        );
-        const proposalId =
-          aggregate.proposal?.id ?? this.allocator.allocateProposalId();
-        const version = currentVersion + 1;
-        const operationIds = materialized.operations.map(() =>
-          this.allocator.allocateOperationId(),
-        );
-        const ids = [
-          proposalId,
-          ...operationIds,
-          ...Object.values(materialized.allocatedNodeIds),
-          ...Object.values(materialized.allocatedRelationshipIds),
-        ];
-        if (new Set(ids).size !== ids.length)
-          throw new AgentMapProposalValidationError(
-            [
+          const proposalId =
+            aggregate.proposal?.id ?? this.allocator.allocateProposalId();
+          const version = currentVersion + 1;
+          const operationIds = materialized.operations.map(() =>
+            this.allocator.allocateOperationId(),
+          );
+          const ids = [
+            ...(aggregate.proposal ? [] : [proposalId]),
+            ...operationIds,
+            ...Object.values(materialized.allocatedNodeIds),
+            ...Object.values(materialized.allocatedRelationshipIds),
+          ];
+          const existingIds = new Set([
+            ...(aggregate.proposal ? [aggregate.proposal.id] : []),
+            ...(aggregate.proposal?.nodes.map(({ id }) => id) ?? []),
+            ...(aggregate.proposal?.relationships.map(({ id }) => id) ?? []),
+            ...(aggregate.proposal?.history.map(({ id }) => id) ?? []),
+          ]);
+          if (
+            new Set(ids).size !== ids.length ||
+            ids.some((id) => existingIds.has(id))
+          )
+            throw new AgentMapProposalValidationError(
+              [
+                {
+                  code: "malformed_input",
+                  operationIndex: null,
+                  path: ["allocator"],
+                  recovery: "retry",
+                },
+              ],
+              currentVersion,
+            );
+          const acceptedAt = this.now().toISOString();
+          const actor = actorFor(identity);
+          const delta: AcceptedProposalDelta = {
+            schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+            projectId: identity.projectId,
+            proposalId,
+            fromVersion: currentVersion,
+            version,
+            operationIds,
+            operations: materialized.operations,
+            actor,
+            acceptedAt,
+          };
+          const batchResult: ProposalBatchResult = {
+            schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+            proposalId,
+            version,
+            operationIds,
+            allocatedNodeIds: materialized.allocatedNodeIds,
+            allocatedRelationshipIds: materialized.allocatedRelationshipIds,
+            delta,
+          };
+          const proposal: MapChangeProposal = {
+            schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+            id: proposalId,
+            projectId: identity.projectId,
+            baseRevisionId: aggregate.workspace.confirmedRevisionId,
+            version,
+            nodes: materialized.graph.nodes,
+            relationships: materialized.graph.relationships,
+            history: [
+              ...(aggregate.proposal?.history ?? []),
+              ...materialized.operations.map((operation, index) => ({
+                id: operationIds[index]!,
+                requestId: request.requestId,
+                acceptedVersion: version,
+                operation,
+                actor,
+                acceptedAt,
+              })),
+            ],
+            createdAt: aggregate.proposal?.createdAt ?? acceptedAt,
+            updatedAt: acceptedAt,
+          };
+          const next: AgentMapProjectAggregate = {
+            ...aggregate,
+            workspace: {
+              ...aggregate.workspace,
+              recordVersion: aggregate.workspace.recordVersion + 1,
+              activeProposalId: proposalId,
+              updatedAt: acceptedAt,
+            },
+            proposal,
+            receipts: [
+              ...aggregate.receipts,
               {
-                code: "malformed_input",
-                operationIndex: null,
-                path: ["allocator"],
-                recovery: "retry",
+                sessionId: identity.sessionId,
+                requestId: request.requestId,
+                requestDigest: digest,
+                result: batchResult,
+                touchSet: materialized.touchSet,
               },
             ],
-            currentVersion,
-          );
-        const acceptedAt = this.now().toISOString();
-        const actor = actorFor(identity);
-        const delta: AcceptedProposalDelta = {
-          schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
-          projectId: identity.projectId,
-          proposalId,
-          fromVersion: currentVersion,
-          version,
-          operationIds,
-          operations: materialized.operations,
-          actor,
-          acceptedAt,
-        };
-        const batchResult: ProposalBatchResult = {
-          schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
-          proposalId,
-          version,
-          operationIds,
-          allocatedNodeIds: materialized.allocatedNodeIds,
-          allocatedRelationshipIds: materialized.allocatedRelationshipIds,
-          delta,
-        };
-        const proposal: MapChangeProposal = {
-          schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
-          id: proposalId,
-          projectId: identity.projectId,
-          baseRevisionId: aggregate.workspace.confirmedRevisionId,
-          version,
-          nodes: materialized.graph.nodes,
-          relationships: materialized.graph.relationships,
-          history: [
-            ...(aggregate.proposal?.history ?? []),
-            ...materialized.operations.map((operation, index) => ({
-              id: operationIds[index]!,
-              requestId: request.requestId,
-              acceptedVersion: version,
-              operation,
-              actor,
-              acceptedAt,
-            })),
-          ],
-          createdAt: aggregate.proposal?.createdAt ?? acceptedAt,
-          updatedAt: acceptedAt,
-        };
-        const next: AgentMapProjectAggregate = {
-          ...aggregate,
-          workspace: {
-            ...aggregate.workspace,
-            recordVersion: aggregate.workspace.recordVersion + 1,
-            activeProposalId: proposalId,
-            updatedAt: acceptedAt,
-          },
-          proposal,
-          receipts: [
-            ...aggregate.receipts,
-            {
-              sessionId: identity.sessionId,
-              requestId: request.requestId,
-              requestDigest: digest,
-              result: batchResult,
-              touchSet: materialized.touchSet,
-            },
-          ],
-        };
-        acceptedDelta = delta;
-        return { value: batchResult, next };
-      },
-    );
+          };
+          acceptedDelta = delta;
+          return { value: batchResult, next };
+        },
+      );
+    } catch (error) {
+      this.emitOutcome(
+        identity,
+        error instanceof AgentMapProposalConflictError
+          ? "agent_map.proposal.conflict"
+          : error instanceof AgentMapWorkspaceStoreError
+            ? "agent_map.proposal.storage_failed"
+            : "agent_map.proposal.validation_failed",
+        request.operations.length,
+        startedAt,
+      );
+      throw error;
+    }
     if (acceptedDelta) {
       try {
         await this.options.onAccepted?.(acceptedDelta);
@@ -435,7 +543,37 @@ export class AgentMapProposalService {
         // Durable state is authoritative; subscribers recover by refetching.
       }
     }
+    this.emitOutcome(
+      identity,
+      replayed ? "agent_map.proposal.replayed" : "agent_map.proposal.accepted",
+      request.operations.length,
+      startedAt,
+    );
     return result;
+  }
+
+  private emitOutcome(
+    identity: PlanningSessionIdentity,
+    name: Parameters<
+      NonNullable<AgentMapProposalServiceOptions["onOutcome"]>
+    >[0]["name"],
+    operationCount: number,
+    startedAt: number,
+  ): void {
+    try {
+      void Promise.resolve(
+        this.options.onOutcome?.({
+          name,
+          projectId: identity.projectId,
+          sessionId: identity.sessionId,
+          role: identity.role,
+          operationCount,
+          latencyMs: Math.max(0, Date.now() - startedAt),
+        }),
+      ).catch(() => {});
+    } catch {
+      // Content-free observability cannot change proposal semantics.
+    }
   }
 
   private assertProposalPointer(

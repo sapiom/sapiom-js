@@ -157,6 +157,36 @@ describe("AgentMapWorkspaceStore", () => {
     expect(await fs.readFile(workspacePath, "utf8")).toBe(raw);
   });
 
+  it.each(["write", "file-sync", "rename", "directory-sync"] as const)(
+    "does not expose a partial aggregate when %s fails",
+    async (failedStep) => {
+      const root = await fixture();
+      let fail = false;
+      const store = new AgentMapWorkspaceStore(root, {
+        beforePersistStep: (step) => {
+          if (fail && step === failedStep) throw new Error("injected failure");
+        },
+      });
+      await store.readOrCreate(projectId);
+      fail = true;
+      await expect(
+        store.transact(projectId, async (aggregate) => ({
+          value: undefined,
+          next: {
+            ...aggregate,
+            workspace: { ...aggregate.workspace, recordVersion: 2 },
+          },
+        })),
+      ).rejects.toMatchObject({ code: "storage_unavailable" });
+      const restarted = await new AgentMapWorkspaceStore(root).readOrCreate(
+        projectId,
+      );
+      expect(restarted.recordVersion).toBe(
+        failedStep === "directory-sync" ? 2 : 1,
+      );
+    },
+  );
+
   it.each([
     ["malformed JSON", "{", "malformed_state"],
     [

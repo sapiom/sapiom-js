@@ -28,7 +28,9 @@ const STUDIO_VERSION = (
 ).version;
 
 const DS_PACKAGE = "@sapiom/design-system";
-const DS_NEUTRAL_DIR = fileURLToPath(new URL("./src/styles/ds-neutral", import.meta.url));
+const DS_NEUTRAL_DIR = fileURLToPath(
+  new URL("./src/styles/ds-neutral", import.meta.url),
+);
 
 /**
  * Resolve the design-system seam: prefer the private `@sapiom/design-system`
@@ -88,25 +90,40 @@ export default defineConfig({
       // resolves to the package's own canonical shared contract
       // (packages/harness/src/shared/types.ts) so the web and server always
       // build against one source of truth — no vendored copy to drift.
-      "@shared/types": fileURLToPath(new URL("../src/shared/types.ts", import.meta.url)),
-      "@shared/system-graph": fileURLToPath(new URL("../src/shared/system-graph.ts", import.meta.url)),
-      "@shared/agent-map": fileURLToPath(new URL("../src/shared/agent-map.ts", import.meta.url)),
+      "@shared/types": fileURLToPath(
+        new URL("../src/shared/types.ts", import.meta.url),
+      ),
+      "@shared/system-graph": fileURLToPath(
+        new URL("../src/shared/system-graph.ts", import.meta.url),
+      ),
+      "@shared/agent-map": fileURLToPath(
+        new URL("../src/shared/agent-map.ts", import.meta.url),
+      ),
+      "@shared/agent-map-codec": fileURLToPath(
+        new URL("../src/shared/agent-map-codec.ts", import.meta.url),
+      ),
       // One agent-name rule for the dialog and the create route: a name the
       // field accepts and the server refuses reads as a broken app.
-      "@shared/agent-name": fileURLToPath(new URL("../src/shared/agent-name.ts", import.meta.url)),
+      "@shared/agent-name": fileURLToPath(
+        new URL("../src/shared/agent-name.ts", import.meta.url),
+      ),
       // The local-run mapper is a pure fn shared with the server (its canonical
       // home is src/core/render-local-run.ts, per the ticket). The SPA imports
       // the SAME implementation to map an offline stub run's NDJSON traces into
       // the RunView the inspector renders — one mapper, no client/server drift.
       // It pulls in only the `LocalStepTrace` *type* from agent-core (erased at
       // build), so no agent-core runtime code enters the browser bundle.
-      "@shared/render-local-run": fileURLToPath(new URL("../src/core/render-local-run.ts", import.meta.url)),
+      "@shared/render-local-run": fileURLToPath(
+        new URL("../src/core/render-local-run.ts", import.meta.url),
+      ),
       // The stub-feedback derivations (stubbed-chip + read-only stub notice) are
       // pure fns over RunView; the SPA imports the SAME canonical implementation
       // the unit tests target so the inspector can never disagree with the tests.
       // Types-only import of RunView (erased at build) — no server code enters
       // the browser bundle.
-      "@shared/stub-feedback": fileURLToPath(new URL("../src/core/stub-feedback.ts", import.meta.url)),
+      "@shared/stub-feedback": fileURLToPath(
+        new URL("../src/core/stub-feedback.ts", import.meta.url),
+      ),
       // The design system is a private package. Official builds (private
       // package installed) render branded; public clones fall back to a
       // committed neutral token set. See designSystemAlias() above.

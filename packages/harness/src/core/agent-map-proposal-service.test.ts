@@ -81,13 +81,16 @@ describe("AgentMapProposalService", () => {
     );
     roots.push(root);
     const accepted = vi.fn();
+    const outcomes = vi.fn();
     return {
       root,
       accepted,
+      outcomes,
       service: new AgentMapProposalService(new AgentMapWorkspaceStore(root), {
         allocator: new Ids(),
         now: () => new Date("2026-09-02T12:00:00.000Z"),
         onAccepted: accepted,
+        onOutcome: outcomes,
       }),
     };
   }
@@ -121,14 +124,31 @@ describe("AgentMapProposalService", () => {
   });
 
   it("returns the durable original receipt without duplicating or rebroadcasting", async () => {
-    const { service, accepted } = await fixture();
+    const { service, accepted, outcomes } = await fixture();
     const request = addNode("request-1", 0, null);
+    if (request.operations[0]?.kind === "add-node")
+      request.operations[0].node.contractRefs = ["z-contract", "a-contract"];
     const first = await service.propose(identity("session-1"), request);
+    const reordered = structuredClone(request);
+    if (reordered.operations[0]?.kind === "add-node")
+      reordered.operations[0].node.contractRefs.reverse();
     await expect(
-      service.propose(identity("session-1"), structuredClone(request)),
+      service.propose(identity("session-1"), reordered),
     ).resolves.toEqual(first);
     expect((await service.read(projectId)).proposal?.history).toHaveLength(1);
     expect(accepted).toHaveBeenCalledOnce();
+    expect(outcomes.mock.calls.map(([event]) => event.name)).toEqual([
+      "agent_map.proposal.accepted",
+      "agent_map.proposal.replayed",
+    ]);
+    expect(Object.keys(outcomes.mock.calls[0]![0]).sort()).toEqual([
+      "latencyMs",
+      "name",
+      "operationCount",
+      "projectId",
+      "role",
+      "sessionId",
+    ]);
   });
 
   it("rejects changed reuse of a session request ID", async () => {
@@ -165,6 +185,9 @@ describe("AgentMapProposalService", () => {
       operations: [{ kind: "update-node", nodeId, changes: { name } }],
     });
     await service.propose(identity("session-1"), edit("edit-1", "One"));
+    await expect(
+      service.validate(identity("session-2"), edit("edit-2", "Two")),
+    ).rejects.toMatchObject({ conflict: { code: "stale_version" } });
     await expect(
       service.propose(identity("session-2"), edit("edit-2", "Two")),
     ).rejects.toMatchObject({
@@ -373,5 +396,56 @@ describe("AgentMapProposalService", () => {
       proposal: null,
       workspace: { recordVersion: 1 },
     });
+  });
+
+  it("rejects an injected allocator collision with existing proposal state", async () => {
+    const { root, service } = await fixture();
+    const first = await service.propose(
+      identity("session-1"),
+      addNode("request-1", 0, null),
+    );
+    const existingNodeId = first.allocatedNodeIds["request-1" as DraftRef]!;
+    const allocator = new Ids();
+    allocator.allocateNodeId = () => existingNodeId;
+    const colliding = new AgentMapProposalService(
+      new AgentMapWorkspaceStore(root),
+      { allocator },
+    );
+    await expect(
+      colliding.propose(
+        identity("session-2"),
+        addNode("request-2", 1, first.proposalId),
+      ),
+    ).rejects.toThrow("duplicate node ID");
+    expect((await service.read(projectId)).proposal?.version).toBe(1);
+  });
+
+  it("fails closed when a confirmed base revision cannot be supplied", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agent-map-proposal-"),
+    );
+    roots.push(root);
+    const file = path.join(root, "projects", projectId, "workspace.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      `${JSON.stringify({
+        projectId,
+        schemaVersion: 1,
+        recordVersion: 2,
+        confirmedRevisionId: "revision-1",
+        activeProposalId: null,
+        projectBuildPlanId: null,
+        createdAt: "2026-09-02T12:00:00.000Z",
+        updatedAt: "2026-09-02T12:00:00.000Z",
+      })}\n`,
+    );
+    const service = new AgentMapProposalService(
+      new AgentMapWorkspaceStore(root),
+    );
+    await expect(
+      service.propose(identity("session-1"), addNode("request-1", 0, null)),
+    ).rejects.toMatchObject({ code: "validation_failed" });
+    expect(await service.read(projectId)).toMatchObject({ proposal: null });
   });
 });

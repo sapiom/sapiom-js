@@ -11,6 +11,10 @@ import {
   type ProposalBatchResult,
   type StudioProjectId,
 } from "../shared/agent-map.js";
+import {
+  parseMapChangeProposal,
+  proposalReceiptSchema,
+} from "../shared/agent-map-codec.js";
 import type { ProposalTouchSet } from "./agent-map-proposal-validator.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
@@ -172,49 +176,44 @@ function parseAggregate(
   )
     throw new AgentMapWorkspaceStoreError("malformed_state");
   const workspace = parseAgentMapWorkspaceState(value.workspace, projectId);
-  const proposal = value.proposal as MapChangeProposal | null;
-  if (
-    proposal !== null &&
-    (!isRecord(proposal) ||
-      proposal.projectId !== projectId ||
-      proposal.id !== workspace.activeProposalId ||
-      proposal.schemaVersion !== 1 ||
-      !Number.isSafeInteger(proposal.version) ||
-      (proposal.version as number) < 1 ||
-      !Array.isArray(proposal.nodes) ||
-      !Array.isArray(proposal.relationships) ||
-      !Array.isArray(proposal.history) ||
-      !isTimestamp(proposal.createdAt) ||
-      !isTimestamp(proposal.updatedAt))
-  )
+  let proposal: MapChangeProposal | null = null;
+  if ((value.proposal === null) !== (workspace.activeProposalId === null))
     throw new AgentMapWorkspaceStoreError("malformed_state");
-  for (const receipt of value.receipts) {
-    if (
-      !isRecord(receipt) ||
-      !hasExactKeys(receipt, [
-        "sessionId",
-        "requestId",
-        "requestDigest",
-        "result",
-        "touchSet",
-      ]) ||
-      !isOpaqueId(receipt.sessionId) ||
-      !isOpaqueId(receipt.requestId) ||
-      typeof receipt.requestDigest !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(receipt.requestDigest) ||
-      !isRecord(receipt.result) ||
-      !isRecord(receipt.touchSet) ||
-      !Array.isArray(receipt.touchSet.entityKeys) ||
-      !Array.isArray(receipt.touchSet.semanticRelationshipKeys)
-    ) {
+  if (value.proposal !== null && workspace.activeProposalId !== null) {
+    try {
+      proposal = parseMapChangeProposal(
+        value.proposal,
+        projectId,
+        workspace.activeProposalId,
+      );
+    } catch {
       throw new AgentMapWorkspaceStoreError("malformed_state");
     }
   }
+  const receipts: AgentMapProposalReceipt[] = [];
+  for (const receipt of value.receipts) {
+    const parsed = proposalReceiptSchema.safeParse(receipt);
+    if (
+      !parsed.success ||
+      proposal === null ||
+      parsed.data.result.proposalId !== proposal.id ||
+      parsed.data.result.delta.projectId !== projectId ||
+      parsed.data.result.version > proposal.version
+    )
+      throw new AgentMapWorkspaceStoreError("malformed_state");
+    receipts.push(parsed.data as AgentMapProposalReceipt);
+  }
+  if (
+    new Set(
+      receipts.map(({ sessionId, requestId }) => `${sessionId}\0${requestId}`),
+    ).size !== receipts.length
+  )
+    throw new AgentMapWorkspaceStoreError("malformed_state");
   return structuredClone({
     storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
     workspace,
     proposal,
-    receipts: value.receipts,
+    receipts,
   }) as AgentMapProjectAggregate;
 }
 
@@ -227,6 +226,10 @@ export class AgentMapWorkspaceStore {
     private readonly options: {
       now?: () => Date;
       onEvent?: (event: AgentMapWorkspaceStoreEvent) => void | Promise<void>;
+      /** Deterministic crash-boundary seam for storage fault tests. */
+      beforePersistStep?: (
+        step: "write" | "file-sync" | "rename" | "directory-sync",
+      ) => void | Promise<void>;
     } = {},
   ) {}
 
@@ -266,9 +269,7 @@ export class AgentMapWorkspaceStore {
     };
   }
 
-  private async readDisk(
-    projectId: StudioProjectId,
-  ): Promise<{
+  private async readDisk(projectId: StudioProjectId): Promise<{
     aggregate: AgentMapProjectAggregate;
     needsWrite: boolean;
     created: boolean;
@@ -324,13 +325,17 @@ export class AgentMapWorkspaceStore {
     try {
       await fs.mkdir(directory, { recursive: true });
       handle = await fs.open(temporary, "wx", 0o600);
+      await this.options.beforePersistStep?.("write");
       await handle.writeFile(`${JSON.stringify(aggregate, null, 2)}\n`, "utf8");
+      await this.options.beforePersistStep?.("file-sync");
       await handle.sync();
       await handle.close();
       handle = undefined;
+      await this.options.beforePersistStep?.("rename");
       await fs.rename(temporary, file);
       const directoryHandle = await fs.open(directory, "r");
       try {
+        await this.options.beforePersistStep?.("directory-sync");
         await directoryHandle.sync();
       } finally {
         await directoryHandle.close();

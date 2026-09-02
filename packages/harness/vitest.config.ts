@@ -16,10 +16,21 @@ export default defineConfig({
       // Resolve "@shared/types" to the package's canonical contract so web
       // unit tests and server tests always build against the same source of
       // truth. Mirrors the alias in web/vite.config.ts.
-      "@shared/types": fileURLToPath(new URL("src/shared/types.ts", import.meta.url)),
-      "@shared/system-graph": fileURLToPath(new URL("src/shared/system-graph.ts", import.meta.url)),
-      "@shared/agent-map": fileURLToPath(new URL("src/shared/agent-map.ts", import.meta.url)),
-      "@shared/agent-name": fileURLToPath(new URL("src/shared/agent-name.ts", import.meta.url)),
+      "@shared/types": fileURLToPath(
+        new URL("src/shared/types.ts", import.meta.url),
+      ),
+      "@shared/system-graph": fileURLToPath(
+        new URL("src/shared/system-graph.ts", import.meta.url),
+      ),
+      "@shared/agent-map": fileURLToPath(
+        new URL("src/shared/agent-map.ts", import.meta.url),
+      ),
+      "@shared/agent-map-codec": fileURLToPath(
+        new URL("src/shared/agent-map-codec.ts", import.meta.url),
+      ),
+      "@shared/agent-name": fileURLToPath(
+        new URL("src/shared/agent-name.ts", import.meta.url),
+      ),
     },
   },
   test: {

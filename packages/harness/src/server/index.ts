@@ -2612,6 +2612,28 @@ export const startServer = async (
     {
       onAccepted: (delta) =>
         bus.publish({ type: "agent-map.proposal.changed", delta }),
+      onOutcome: (event) => {
+        const analyticsEvent: AnalyticsEvent = {
+          eventId: randomUUID(),
+          seq: seqCounter.next(event.sessionId),
+          ts: new Date().toISOString(),
+          userId: identity?.userId ?? null,
+          tenantId: identity?.tenantId ?? null,
+          machineId,
+          harnessSessionId: event.sessionId,
+          agentSessionId: null,
+          harness: "claude-code",
+          type: event.name,
+          payload: {
+            project_id: event.projectId,
+            role: event.role,
+            operation_count: Math.max(0, Math.min(256, event.operationCount)),
+            latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
+          },
+        };
+        void eventStore.append(analyticsEvent).catch(() => {});
+        batcher.enqueue(analyticsEvent);
+      },
     },
   );
   const isWorkflowScanComplete = async (
