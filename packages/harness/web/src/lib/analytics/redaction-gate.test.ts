@@ -136,6 +136,30 @@ describe("redaction gate — realistic clicks must not carry user names or paths
     );
   });
 
+  it("Agent Map connector node — name in text and aria-label (object=agent)", () => {
+    expectNoLeak(
+      beforeSend(
+        capture({
+          object: "agent",
+          surface: "agent_map",
+          $el_text: AGENT,
+          $elements: [
+            {
+              tag_name: "button",
+              attr__class: "agent-map-node",
+              [`attr__aria-label`]: `${AGENT}, connector, Proposed`,
+              $el_text: AGENT,
+            },
+          ],
+          $elements_chain:
+            `span.system-graph-node-label:attr__class="system-graph-node-label"text="${AGENT}"nth-child="1";` +
+            `button.agent-map-node:attr__class="agent-map-node"attr__aria-label="${AGENT}, connector, Proposed"text="${AGENT}"nth-child="1";` +
+            `div.agent-map-live:attr__class="agent-map-live"nth-child="1"`,
+        }),
+      ),
+    );
+  });
+
   it("terminal masthead — cwd rendered as text AND title (object=workspace)", () => {
     expectNoLeak(
       beforeSend(

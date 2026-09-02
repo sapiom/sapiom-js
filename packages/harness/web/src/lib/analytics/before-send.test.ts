@@ -109,21 +109,6 @@ describe("beforeSend", () => {
       expect(props.surface).toBe("agent_rail");
     });
 
-    it("drops an Agent Map connector name while retaining its map surface", () => {
-      const out = beforeSend(
-        capture("$autocapture", {
-          $el_text: "Private customer connector",
-          object: "agent",
-          surface: "agent_map",
-          $elements: [{ "attr__aria-label": "Private customer connector, connector, Proposed" }],
-        }),
-      )!;
-      const props = out.properties as Record<string, unknown>;
-      expect(props.$el_text).toBeUndefined();
-      expect(props.surface).toBe("agent_map");
-      expect((props.$elements as Record<string, unknown>[])[0]?.["attr__aria-label"]).toBeUndefined();
-    });
-
     it("strips the name from both element carriers, not just $el_text", () => {
       const out = beforeSend(
         capture("$autocapture", {

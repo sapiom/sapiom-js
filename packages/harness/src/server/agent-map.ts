@@ -411,6 +411,7 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     },
   );
 
+  /** @deprecated Compatibility-only for sessions created before synthetic greeting removal. */
   router.post(
     "/projects/:projectId/planner-sessions/:sessionId/greeting/retry",
     async (req, res, next) => {
