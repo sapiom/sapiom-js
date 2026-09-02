@@ -781,6 +781,8 @@ export type UiEventName =
   | "agent_map.entered"
   | "agent_map.workspace_load_failed"
   | "agent_map.proposal_created"
+  /** Emitted only when the request that renders the announced delta owns the
+   * snapshot; superseded and recovery loads are intentionally not counted. */
   | "agent_map.proposal_visible"
   | "agent_map.validation_failed";
 

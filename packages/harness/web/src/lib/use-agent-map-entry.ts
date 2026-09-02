@@ -105,6 +105,23 @@ function selectedPlannerResponse(
     : null;
 }
 
+/** The shared gate before an accepted delta may mutate state or telemetry. */
+export function shouldCommitAcceptedDelta(
+  currentProjectId: StudioProjectId | null,
+  projectId: StudioProjectId,
+  currentWorkspaceRequest: number,
+  workspaceRequest: number,
+  snapshot: AgentMapWorkspaceResponse,
+  delta: AcceptedProposalDelta,
+): boolean {
+  return (
+    currentProjectId === projectId &&
+    currentWorkspaceRequest === workspaceRequest &&
+    snapshot.proposal?.id === delta.proposalId &&
+    snapshot.proposal.version >= delta.version
+  );
+}
+
 /**
  * Opens the two halves of the first Agent Map experience concurrently.
  *
@@ -245,10 +262,14 @@ export function useAgentMapEntry({
       if (delta.projectId !== projectId) return;
       const showAcceptedDelta = (snapshot: AgentMapWorkspaceResponse): void => {
         if (
-          currentProjectRef.current !== projectId ||
-          workspaceRequestRef.current !== workspaceRequest ||
-          snapshot.proposal?.id !== delta.proposalId ||
-          snapshot.proposal.version < delta.version
+          !shouldCommitAcceptedDelta(
+            currentProjectRef.current,
+            projectId,
+            workspaceRequestRef.current,
+            workspaceRequest,
+            snapshot,
+            delta,
+          )
         )
           return;
         const previous = visibleDeltaRef.current.get(projectId);
