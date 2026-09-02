@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 
 import {
   STUDIO_PROJECT_CATALOG_SCHEMA_VERSION,
@@ -12,6 +11,10 @@ import {
 } from "../shared/agent-map.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
+import {
+  DurableFileLock,
+  type DurableFileLockTestHooks,
+} from "./durable-file-lock.js";
 
 export interface ProjectRootBinding {
   id: string;
@@ -293,33 +296,8 @@ function storageError(): StudioProjectCatalogError {
   return new StudioProjectCatalogError("storage_unavailable");
 }
 
-const CATALOG_LOCK_TIMEOUT_MS = 5_000;
-const CATALOG_LOCK_RETRY_MS = 10;
-
-interface CatalogLockOwner {
-  ownerId: string;
-  pid: number;
-}
-
-function sameLockOwner(
-  left: CatalogLockOwner | null,
-  right: CatalogLockOwner,
-): left is CatalogLockOwner {
-  return (
-    left !== null &&
-    left.ownerId === right.ownerId &&
-    left.pid === right.pid
-  );
-}
-
 /** Internal deterministic seams used only by file-lock race regressions. */
-export interface StudioProjectCatalogLockTestHooks {
-  afterDeadOwnerObserved?: (owner: CatalogLockOwner) => void | Promise<void>;
-  afterObservedOwnerChanged?: () => void | Promise<void>;
-  afterLiveOwnerObserved?: (owner: CatalogLockOwner) => void | Promise<void>;
-  afterLockAcquired?: (ownerId: string) => void | Promise<void>;
-  isPidAlive?: (pid: number) => boolean;
-}
+export type StudioProjectCatalogLockTestHooks = DurableFileLockTestHooks;
 
 /**
  * Durable, serialized owner of Studio project identity. Catalog reads never
@@ -359,193 +337,10 @@ export class StudioProjectCatalog {
   }
 
   private async acquireFileLock(): Promise<() => Promise<void>> {
-    const lockPath = `${this.catalogPath}.lock`;
-    const owner: CatalogLockOwner = {
-      ownerId: randomUUID(),
-      pid: process.pid,
-    };
-    const deadline = Date.now() + CATALOG_LOCK_TIMEOUT_MS;
-    try {
-      await fs.mkdir(path.dirname(this.catalogPath), { recursive: true });
-    } catch {
-      throw storageError();
-    }
-    await this.cleanupDeadLockArtifacts(lockPath);
-    for (;;) {
-      if (await this.tryCreateLockFile(lockPath, owner)) {
-        try {
-          await this.lockTestHooks.afterLockAcquired?.(owner.ownerId);
-        } catch (error) {
-          await this.releaseFileLock(lockPath, owner);
-          throw error;
-        }
-        return () => this.releaseFileLock(lockPath, owner);
-      }
-
-      const observedOwner = await this.readLockOwner(lockPath);
-      if (observedOwner === null) {
-        // Another process may be between exclusive create and owner write.
-        // Never evict an owner whose PID cannot be proven dead.
-        if (Date.now() >= deadline) throw storageError();
-        await delay(CATALOG_LOCK_RETRY_MS);
-        continue;
-      }
-      if (this.isPidAlive(observedOwner.pid)) {
-        await this.lockTestHooks.afterLiveOwnerObserved?.(observedOwner);
-        if (Date.now() >= deadline) throw storageError();
-        await delay(CATALOG_LOCK_RETRY_MS);
-        continue;
-      }
-
-      await this.lockTestHooks.afterDeadOwnerObserved?.(observedOwner);
-      const claimPath = `${lockPath}.claim-${observedOwner.ownerId}`;
-      if (!(await this.tryCreateLockFile(claimPath, owner))) {
-        if (Date.now() >= deadline) throw storageError();
-        await delay(CATALOG_LOCK_RETRY_MS);
-        continue;
-      }
-
-      try {
-        // Every waiter that observed this dead owner competes for the same
-        // claim. Re-read under that claim: a delayed waiter must not rename a
-        // newer live owner's fixed lock.
-        const currentOwner = await this.readLockOwner(lockPath);
-        if (
-          !sameLockOwner(currentOwner, observedOwner) ||
-          this.isPidAlive(currentOwner.pid)
-        ) {
-          await this.lockTestHooks.afterObservedOwnerChanged?.();
-          continue;
-        }
-
-        const tombstone = `${lockPath}.reclaim-${owner.ownerId}`;
-        try {
-          await fs.rename(lockPath, tombstone);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw storageError();
-        }
-
-        // The fixed name is the fence. A normal contender may win this gap;
-        // this reclaimer proceeds only if its own exclusive create wins.
-        if (!(await this.tryCreateLockFile(lockPath, owner))) {
-          await fs.rm(tombstone, { force: true }).catch(() => {});
-          continue;
-        }
-
-        await fs.rm(tombstone, { force: true });
-        try {
-          await this.lockTestHooks.afterLockAcquired?.(owner.ownerId);
-        } catch (error) {
-          await this.releaseFileLock(lockPath, owner);
-          throw error;
-        }
-        return () => this.releaseFileLock(lockPath, owner);
-      } finally {
-        await this.releaseFileLock(claimPath, owner);
-      }
-    }
-  }
-
-  private async tryCreateLockFile(
-    lockPath: string,
-    owner: CatalogLockOwner,
-  ): Promise<boolean> {
-    try {
-      await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-      });
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw storageError();
-    }
-  }
-
-  private async readLockOwner(lockPath: string): Promise<CatalogLockOwner | null> {
-    let raw: string;
-    try {
-      raw = await fs.readFile(lockPath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw storageError();
-    }
-    try {
-      const decoded = JSON.parse(raw) as unknown;
-      if (
-        !isRecord(decoded) ||
-        !hasExactKeys(decoded, ["ownerId", "pid"]) ||
-        !isOpaqueId(decoded.ownerId) ||
-        !Number.isSafeInteger(decoded.pid) ||
-        (decoded.pid as number) <= 0
-      ) {
-        return null;
-      }
-      return {
-        ownerId: decoded.ownerId,
-        pid: decoded.pid as number,
-      };
-    } catch {
-      // An exclusive creator may still be writing its owner record. Unknown
-      // ownership waits and fails closed; it is never reclaimed by age.
-      return null;
-    }
-  }
-
-  private isPidAlive(pid: number): boolean {
-    if (this.lockTestHooks.isPidAlive) {
-      return this.lockTestHooks.isPidAlive(pid);
-    }
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== "ESRCH";
-    }
-  }
-
-  private async cleanupDeadLockArtifacts(lockPath: string): Promise<void> {
-    const directory = path.dirname(lockPath);
-    const base = path.basename(lockPath);
-    let entries: string[];
-    try {
-      entries = await fs.readdir(directory);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw storageError();
-    }
-    await Promise.all(
-      entries
-        .filter(
-          (entry) =>
-            entry.startsWith(`${base}.reclaim-`) ||
-            entry.startsWith(`${base}.claim-`),
-        )
-        .map(async (entry) => {
-          const artifact = path.join(directory, entry);
-          const artifactOwner = await this.readLockOwner(artifact);
-          if (artifactOwner && !this.isPidAlive(artifactOwner.pid)) {
-            await fs.rm(artifact, { force: true });
-          }
-        }),
-    );
-  }
-
-  /** A live PID cannot be reclaimed, so this read-then-unlink is owner-safe. */
-  private async releaseFileLock(
-    lockPath: string,
-    owner: CatalogLockOwner,
-  ): Promise<void> {
-    const currentOwner = await this.readLockOwner(lockPath);
-    if (!sameLockOwner(currentOwner, owner)) return;
-    try {
-      await fs.unlink(lockPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw storageError();
-      }
-    }
+    return new DurableFileLock(this.catalogPath, {
+      hooks: this.lockTestHooks,
+      storageError,
+    }).acquire();
   }
 
   private async load(force = false): Promise<void> {

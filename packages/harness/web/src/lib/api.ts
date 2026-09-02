@@ -2152,6 +2152,7 @@ export class MockApi implements HarnessApi {
     }
     return parseAgentMapWorkspaceResponse(
       {
+        schemaVersion: 1,
         project,
         workspace: {
           projectId,
@@ -2163,6 +2164,7 @@ export class MockApi implements HarnessApi {
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,
         },
+        proposal: null,
       },
       projectId,
     );
@@ -2444,9 +2446,7 @@ export class MockApi implements HarnessApi {
     const retryFailure =
       typeof window === "undefined"
         ? null
-        : new URLSearchParams(window.location.search).get(
-            "mockGreetingRetry",
-          );
+        : new URLSearchParams(window.location.search).get("mockGreetingRetry");
     if (retryFailure === "error") {
       throw new ApiError(
         503,

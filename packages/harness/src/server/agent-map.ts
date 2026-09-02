@@ -9,15 +9,13 @@ import {
   type PlannerSessionRequest,
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
-import {
-  SPAWNABLE_HARNESS_KINDS,
-  type WorkflowInfo,
-} from "../shared/types.js";
+import { SPAWNABLE_HARNESS_KINDS, type WorkflowInfo } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
 } from "../core/agent-map-workspace-store.js";
+import type { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
@@ -40,6 +38,8 @@ import {
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
   store: AgentMapWorkspaceStore;
+  /** Transport-neutral proposal authority, consumed by SAP-3060's MCP router. */
+  proposalService?: AgentMapProposalService;
   preferences: StudioWorkspacePreferenceStore;
   /** Current trusted principal; authentication can change without a restart. */
   currentUserId: () => string;
@@ -276,11 +276,18 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
 
       // Project resolution intentionally happens before the lazy initializer:
       // an arbitrary/cross-instance ID can never create a state directory.
-      const workspace = await options.store.readOrCreate(project.projectId);
+      const { workspace, proposal } = await options.store.readSnapshot(
+        project.projectId,
+      );
       res
         .status(200)
         .setHeader("Cache-Control", "no-store")
-        .json({ project, workspace } satisfies AgentMapWorkspaceResponse);
+        .json({
+          schemaVersion: 1,
+          project,
+          workspace,
+          proposal,
+        } satisfies AgentMapWorkspaceResponse);
     } catch (error) {
       const bounded =
         error instanceof AgentMapWorkspaceStoreError ||
@@ -354,27 +361,30 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     }
   });
 
-  router.post("/projects/:projectId/planner-sessions", async (req, res, next) => {
-    if (!options.planningSessions || !options.plannerGreeting) {
-      res.status(501).json({ error: "Planner sessions are unavailable" });
-      return;
-    }
-    const parsed = plannerSessionSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: "Invalid planner session request" });
-      return;
-    }
-    try {
-      await options.catalog.reconcile(await options.listWorkspaceScopes());
-      const result = await options.planningSessions.open(
-        req.params.projectId,
-        parsed.data,
-      );
-      res.status(result.resolution === "created" ? 201 : 200).json(result);
-    } catch (error) {
-      if (!sendPlanningError(res, error)) next(error);
-    }
-  });
+  router.post(
+    "/projects/:projectId/planner-sessions",
+    async (req, res, next) => {
+      if (!options.planningSessions || !options.plannerGreeting) {
+        res.status(501).json({ error: "Planner sessions are unavailable" });
+        return;
+      }
+      const parsed = plannerSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid planner session request" });
+        return;
+      }
+      try {
+        await options.catalog.reconcile(await options.listWorkspaceScopes());
+        const result = await options.planningSessions.open(
+          req.params.projectId,
+          parsed.data,
+        );
+        res.status(result.resolution === "created" ? 201 : 200).json(result);
+      } catch (error) {
+        if (!sendPlanningError(res, error)) next(error);
+      }
+    },
+  );
 
   router.post(
     "/projects/:projectId/planner-sessions/:sessionId/messages",

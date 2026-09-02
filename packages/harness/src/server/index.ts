@@ -152,6 +152,7 @@ import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
@@ -569,7 +570,10 @@ function createDefaultBuildLaunchOpts(
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
     const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
-      .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+      .filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim() !== "",
+      )
       .join("\n\n");
     const systemPromptFile = await generateSystemPromptFile(harnessSessionId, {
       generatedRoot,
@@ -1079,7 +1083,11 @@ export const startServer = async (
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
     );
-  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req, context) => {
+  const buildLaunchOpts: LaunchOptsBuilder = async (
+    harnessSessionId,
+    req,
+    context,
+  ) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
     return innerBuildLaunchOpts(harnessSessionId, req, context);
   };
@@ -2599,6 +2607,13 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
+  const agentMapProposalService = new AgentMapProposalService(
+    agentMapWorkspaceStore,
+    {
+      onAccepted: (delta) =>
+        bus.publish({ type: "agent-map.proposal.changed", delta }),
+    },
+  );
   const isWorkflowScanComplete = async (
     roots: readonly string[],
   ): Promise<boolean> =>
@@ -2721,7 +2736,10 @@ export const startServer = async (
   });
   sessionManager.onStatusChange((session) => {
     void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
-      console.error("[harness] planner greeting status transition failed:", error);
+      console.error(
+        "[harness] planner greeting status transition failed:",
+        error,
+      );
     });
   });
 
@@ -2815,9 +2833,9 @@ export const startServer = async (
     createAgentMapRouter({
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
+      proposalService: agentMapProposalService,
       preferences: studioWorkspacePreferences,
-      currentUserId: () =>
-        localPlanningPrincipal(planningUserId, machineId),
+      currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
@@ -3214,8 +3232,7 @@ export const startServer = async (
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
     decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
-    projectTelemetryEvent: (event) =>
-      plannerGreeting.redactForTelemetry(event),
+    projectTelemetryEvent: (event) => plannerGreeting.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.

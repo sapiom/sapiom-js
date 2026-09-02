@@ -206,8 +206,10 @@ export interface AgentMapWorkspaceState {
 }
 
 export interface AgentMapWorkspaceResponse {
+  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
   project: StudioProjectSummary;
   workspace: AgentMapWorkspaceState;
+  proposal: MapChangeProposal | null;
 }
 
 /** Stable, path-free identity for the workspace currently open in Studio. */

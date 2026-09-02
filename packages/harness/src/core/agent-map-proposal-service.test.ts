@@ -1,0 +1,193 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  DraftRef,
+  MapProposalId,
+  PlanNodeId,
+  PlanRelationshipId,
+  PlanningSessionIdentity,
+  ProposalBatchRequest,
+  ProposalOperationId,
+} from "../shared/agent-map.js";
+import {
+  AgentMapProposalConflictError,
+  AgentMapProposalService,
+  AgentMapProposalValidationError,
+  type AgentMapPermanentIdAllocator,
+} from "./agent-map-proposal-service.js";
+import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+
+const projectId = "project_00000000-0000-4000-8000-000000000001";
+
+class Ids implements AgentMapPermanentIdAllocator {
+  private value = 1;
+  private next(prefix: string) {
+    return `${prefix}_00000000-0000-7000-8000-${String(this.value++).padStart(12, "0")}`;
+  }
+  allocateNodeId = () => this.next("node") as PlanNodeId;
+  allocateRelationshipId = () => this.next("rel") as PlanRelationshipId;
+  allocateProposalId = () => this.next("proposal") as MapProposalId;
+  allocateOperationId = () => this.next("operation") as ProposalOperationId;
+}
+
+const identity = (sessionId: string): PlanningSessionIdentity => ({
+  projectId,
+  userId: "user-1",
+  sessionId,
+  role: "map-planner",
+});
+
+const addNode = (
+  requestId: string,
+  expectedVersion: number,
+  proposalId: MapProposalId | null,
+  draftRef = requestId,
+): ProposalBatchRequest => ({
+  schemaVersion: 1,
+  proposalId,
+  expectedVersion,
+  requestId,
+  operations: [
+    {
+      kind: "add-node",
+      draftRef: draftRef as DraftRef,
+      node: {
+        kind: "agent",
+        name: draftRef,
+        purpose: "Research",
+        ownerAgent: null,
+        contractRefs: [],
+      },
+    },
+  ],
+});
+
+describe("AgentMapProposalService", () => {
+  const roots: string[] = [];
+  afterEach(async () =>
+    Promise.all(
+      roots
+        .splice(0)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  async function fixture() {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agent-map-proposal-"),
+    );
+    roots.push(root);
+    const accepted = vi.fn();
+    return {
+      root,
+      accepted,
+      service: new AgentMapProposalService(new AgentMapWorkspaceStore(root), {
+        allocator: new Ids(),
+        now: () => new Date("2026-09-02T12:00:00.000Z"),
+        onAccepted: accepted,
+      }),
+    };
+  }
+
+  it("atomically persists one attributed proposal and survives restart", async () => {
+    const { root, service, accepted } = await fixture();
+    const result = await service.propose(
+      identity("session-1"),
+      addNode("request-1", 0, null),
+    );
+    const restarted = new AgentMapProposalService(
+      new AgentMapWorkspaceStore(root),
+    );
+    const snapshot = await restarted.read(projectId);
+
+    expect(snapshot.workspace).toMatchObject({
+      recordVersion: 2,
+      activeProposalId: result.proposalId,
+    });
+    expect(snapshot.proposal).toMatchObject({
+      id: result.proposalId,
+      version: 1,
+    });
+    expect(snapshot.proposal?.history[0]?.actor).toEqual({
+      userId: "user-1",
+      sessionId: "session-1",
+      role: "map-planner",
+      assignment: null,
+    });
+    expect(accepted).toHaveBeenCalledOnce();
+  });
+
+  it("returns the durable original receipt without duplicating or rebroadcasting", async () => {
+    const { service, accepted } = await fixture();
+    const request = addNode("request-1", 0, null);
+    const first = await service.propose(identity("session-1"), request);
+    await expect(
+      service.propose(identity("session-1"), structuredClone(request)),
+    ).resolves.toEqual(first);
+    expect((await service.read(projectId)).proposal?.history).toHaveLength(1);
+    expect(accepted).toHaveBeenCalledOnce();
+  });
+
+  it("rejects changed reuse of a session request ID", async () => {
+    const { service } = await fixture();
+    await service.propose(identity("session-1"), addNode("request-1", 0, null));
+    await expect(
+      service.propose(
+        identity("session-1"),
+        addNode("request-1", 0, null, "different"),
+      ),
+    ).rejects.toBeInstanceOf(AgentMapProposalConflictError);
+  });
+
+  it("rebases disjoint stale additions and rejects overlapping stale edits", async () => {
+    const { service } = await fixture();
+    const first = await service.propose(
+      identity("session-1"),
+      addNode("request-1", 0, null),
+    );
+    const second = await service.propose(
+      identity("session-1"),
+      addNode("request-2", 1, first.proposalId),
+    );
+    await service.propose(
+      identity("session-2"),
+      addNode("request-3", 1, first.proposalId),
+    );
+    const nodeId = second.allocatedNodeIds["request-2" as DraftRef]!;
+    const edit = (session: string, name: string): ProposalBatchRequest => ({
+      schemaVersion: 1,
+      proposalId: first.proposalId,
+      expectedVersion: 3,
+      requestId: session,
+      operations: [{ kind: "update-node", nodeId, changes: { name } }],
+    });
+    await service.propose(identity("session-1"), edit("edit-1", "One"));
+    await expect(
+      service.propose(identity("session-2"), edit("edit-2", "Two")),
+    ).rejects.toMatchObject({
+      conflict: {
+        code: "stale_version",
+        currentVersion: 4,
+        affectedNodeIds: [nodeId],
+      },
+    });
+    expect((await service.read(projectId)).proposal?.nodes).toHaveLength(3);
+  });
+
+  it("commits nothing when validation fails", async () => {
+    const { service, accepted } = await fixture();
+    const request = addNode("request-1", 0, null);
+    request.operations.push(structuredClone(request.operations[0]!));
+    await expect(
+      service.propose(identity("session-1"), request),
+    ).rejects.toBeInstanceOf(AgentMapProposalValidationError);
+    expect(await service.read(projectId)).toMatchObject({
+      proposal: null,
+      workspace: { recordVersion: 1 },
+    });
+    expect(accepted).not.toHaveBeenCalled();
+  });
+});

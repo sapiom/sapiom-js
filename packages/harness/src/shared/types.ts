@@ -554,6 +554,10 @@ export type BusMessage =
       revision: number;
       state: SystemGraphLifecycleState;
     }
+  | {
+      type: "agent-map.proposal.changed";
+      delta: import("./agent-map.js").AcceptedProposalDelta;
+    }
   /**
    * Full snapshot of one background task, re-broadcast on every change
    * (spawn, each new status line, completion/failure). Tasks are rare and
