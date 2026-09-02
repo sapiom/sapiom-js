@@ -428,6 +428,57 @@ describe("validateMapOperationBatch", () => {
       ],
     });
   });
+
+  it("attributes an update-created duplicate to the contributing operation", () => {
+    const first = nodeId(1);
+    const second = nodeId(2);
+    const lowerId = relationshipId(1);
+    const higherId = relationshipId(2);
+    const graph: AgentMapGraph = {
+      nodes: [node(first, "agent"), node(second, "agent")],
+      relationships: [
+        {
+          id: lowerId,
+          fromNodeId: first,
+          toNodeId: second,
+          kind: "invokes",
+          executionMode: null,
+          contractRef: null,
+          description: "lower",
+        },
+        {
+          id: higherId,
+          fromNodeId: first,
+          toNodeId: second,
+          kind: "invokes",
+          executionMode: "asynchronous",
+          contractRef: null,
+          description: "higher",
+        },
+      ],
+    };
+    const result = validateMapOperationBatch(
+      graph,
+      request([
+        {
+          kind: "update-relationship",
+          relationshipId: lowerId,
+          changes: { executionMode: "asynchronous" },
+        },
+      ]),
+    );
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        {
+          code: "duplicate_relationship",
+          operationIndex: 0,
+          path: ["operations", 0, "relationship"],
+          recovery: "correct",
+        },
+      ],
+    });
+  });
 });
 
 describe("proposal touch sets and canonicalization", () => {

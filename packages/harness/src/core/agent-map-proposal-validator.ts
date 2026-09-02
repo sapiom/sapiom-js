@@ -65,6 +65,8 @@ interface WorkingRelationship extends Omit<
   fromKey: string;
   toKey: string;
   operationIndex: number | null;
+  /** The operation that introduced or changed this relationship's semantic key. */
+  semanticOperationIndex: number | null;
 }
 
 export interface ValidatedMapOperationBatch {
@@ -600,6 +602,7 @@ export function validateMapOperationBatch(
         contractRef: relationship.contractRef,
         description: relationship.description,
         operationIndex: null,
+        semanticOperationIndex: null,
       });
     }
   }
@@ -612,6 +615,11 @@ export function validateMapOperationBatch(
           ...relationship,
           ...operation.changes,
           operationIndex,
+          semanticOperationIndex:
+            "executionMode" in operation.changes ||
+            "contractRef" in operation.changes
+              ? operationIndex
+              : relationship.semanticOperationIndex,
         });
       }
       return;
@@ -644,6 +652,7 @@ export function validateMapOperationBatch(
       contractRef: operation.relationship.contractRef,
       description: operation.relationship.description,
       operationIndex,
+      semanticOperationIndex: operationIndex,
     });
   });
 
@@ -733,9 +742,25 @@ export function validateMapOperationBatch(
       continue;
     }
     const semanticKey = workingSemanticKey(relationship);
-    if (semanticKeys.has(semanticKey)) {
+    const duplicateKey = semanticKeys.get(semanticKey);
+    if (duplicateKey !== undefined) {
+      const duplicate = workingRelationships.get(duplicateKey);
+      const contributor =
+        relationship.semanticOperationIndex !== null ||
+        duplicate === undefined ||
+        duplicate.semanticOperationIndex === null
+          ? relationship
+          : duplicate;
+      const contributorPath =
+        contributor.operationIndex === null
+          ? ["current", "relationships"]
+          : ["operations", contributor.operationIndex, "relationship"];
       issues.push(
-        issue("duplicate_relationship", relationship.operationIndex, path),
+        issue(
+          "duplicate_relationship",
+          contributor.operationIndex,
+          contributorPath,
+        ),
       );
     } else {
       semanticKeys.set(semanticKey, relationship.key);
