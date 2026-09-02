@@ -17,10 +17,50 @@ describe("createAgentMapLoader", () => {
     const projectId = proposalSnapshot().project.projectId;
     const first = loader.load(source, projectId);
     expect(loader.load(source, projectId)).toBe(first);
-    expect(loader.accept(renameDelta()).status).toBe("queued");
+    const delta = renameDelta();
+    expect(loader.accept(delta).status).toBe("queued");
     pending.resolve(proposalSnapshot());
-    await expect(first).resolves.toMatchObject({ proposal: { version: 2 } });
+    const result = await first;
+    expect(result).toMatchObject({ proposal: { version: 2 } });
+    expect(loader.includesQueuedProjection(result, delta)).toBe(true);
     expect(source.getAgentMapWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not label a recovery GET as a queued live projection", async () => {
+    const initial = proposalSnapshot();
+    const delta = renameDelta(4);
+    const recovered = structuredClone(initial);
+    if (!recovered.proposal) throw new Error("fixture requires a proposal");
+    recovered.proposal.version = delta.version;
+    recovered.proposal.history.push({
+      id: delta.operationIds[0]!,
+      requestId: "durable-recovery",
+      acceptedVersion: delta.version,
+      operation: delta.operations[0]!,
+      actor: delta.actor,
+      acceptedAt: delta.acceptedAt,
+    });
+    const source = {
+      getAgentMapWorkspace: vi
+        .fn()
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(recovered),
+    };
+    const loader = createAgentMapLoader();
+    const projectId = initial.project.projectId;
+    const load = loader.load(source, projectId);
+    expect(loader.accept(delta).status).toBe("queued");
+
+    const result = await load;
+    expect(result.proposal).toMatchObject({
+      id: delta.proposalId,
+      version: delta.version,
+    });
+    expect(result.proposal?.history.map(({ id }) => id)).toContain(
+      delta.operationIds[0],
+    );
+    expect(loader.includesQueuedProjection(result, delta)).toBe(false);
+    expect(source.getAgentMapWorkspace).toHaveBeenCalledTimes(2);
   });
 
   it("discards browser state and asks for durable recovery on a version gap", async () => {

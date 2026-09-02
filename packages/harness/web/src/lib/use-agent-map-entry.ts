@@ -240,11 +240,13 @@ export function useAgentMapEntry({
         return;
       }
       const delta = routed.delta;
+      const workspaceRequest = workspaceRequestRef.current;
       const outcome = agentMapLoader.accept(delta);
       if (delta.projectId !== projectId) return;
       const showAcceptedDelta = (snapshot: AgentMapWorkspaceResponse): void => {
         if (
           currentProjectRef.current !== projectId ||
+          workspaceRequestRef.current !== workspaceRequest ||
           snapshot.proposal?.id !== delta.proposalId ||
           snapshot.proposal.version < delta.version
         )
@@ -286,9 +288,13 @@ export function useAgentMapEntry({
         // A delta can beat the cold GET. The loader replays it before settling
         // that shared promise; report visibility only after the replayed
         // snapshot is actually ready, with the same dedupe as the direct path.
-        void agentMapLoader
-          .load(apiRef.current, projectId)
-          .then(showAcceptedDelta, () => undefined);
+        void agentMapLoader.load(apiRef.current, projectId).then(
+          (snapshot) => {
+            if (agentMapLoader.includesQueuedProjection(snapshot, delta))
+              showAcceptedDelta(snapshot);
+          },
+          () => undefined,
+        );
       } else if (outcome.status === "needs-refetch") {
         loadWorkspace(projectId);
       }

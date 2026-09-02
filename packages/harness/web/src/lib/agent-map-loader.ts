@@ -24,6 +24,12 @@ export interface AgentMapLoader {
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
   accept(delta: AcceptedProposalDelta): AgentMapDeltaOutcome;
+  /** True only when this exact snapshot was produced by replaying the queued
+   * announcement locally. A durable recovery GET is deliberately false. */
+  includesQueuedProjection(
+    snapshot: AgentMapWorkspaceResponse,
+    delta: AcceptedProposalDelta,
+  ): boolean;
   invalidate(projectId: StudioProjectId): void;
   retain(projectIds: ReadonlySet<StudioProjectId>): void;
   peek(projectId: StudioProjectId): AgentMapWorkspaceResponse | null;
@@ -38,6 +44,13 @@ export function createAgentMapLoader(): AgentMapLoader {
     { generation: number; promise: Promise<AgentMapWorkspaceResponse> }
   >();
   const queued = new Map<StudioProjectId, AcceptedProposalDelta[]>();
+  const queuedProjections = new WeakMap<
+    AgentMapWorkspaceResponse,
+    ReadonlySet<string>
+  >();
+
+  const deltaKey = (delta: AcceptedProposalDelta): string =>
+    `${delta.proposalId}:${delta.version}:${delta.operationIds.join(",")}`;
 
   const generationFor = (projectId: StudioProjectId): number =>
     generations.get(projectId) ?? 0;
@@ -65,6 +78,7 @@ export function createAgentMapLoader(): AgentMapLoader {
       // Let the original caller settle, but never resurrect the evicted cache.
       if (requests.get(projectId)?.promise !== promise) return read;
       let next = read;
+      const appliedQueuedDeltas = new Set<string>();
       const pending = queued.get(projectId) ?? [];
       queued.delete(projectId);
       for (const delta of pending) {
@@ -83,7 +97,10 @@ export function createAgentMapLoader(): AgentMapLoader {
           return load(source, projectId);
         }
         next = projected.snapshot;
+        appliedQueuedDeltas.add(deltaKey(delta));
       }
+      if (appliedQueuedDeltas.size > 0)
+        queuedProjections.set(next, appliedQueuedDeltas);
       snapshots.set(projectId, next);
       return next;
     });
@@ -131,6 +148,9 @@ export function createAgentMapLoader(): AgentMapLoader {
       }
       snapshots.set(projectId, result.snapshot);
       return { status: "applied", snapshot: result.snapshot };
+    },
+    includesQueuedProjection(snapshot, delta) {
+      return queuedProjections.get(snapshot)?.has(deltaKey(delta)) ?? false;
     },
     invalidate(projectId) {
       generations.set(projectId, generationFor(projectId) + 1);
