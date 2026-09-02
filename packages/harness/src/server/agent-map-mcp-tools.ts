@@ -8,15 +8,41 @@ import {
   AgentMapProposalService,
   AgentMapProposalValidationError,
 } from "../core/agent-map-proposal-service.js";
+import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
 import { AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
+
+/**
+ * MCP discovery sees the complete SAP-3061 input contract. Field-level `catch`
+ * deliberately returns invalid values unchanged at execution time so the
+ * proposal service, rather than the SDK's generic InvalidParams path, can
+ * translate them into our bounded validation issues and recovery guidance.
+ * zod-to-json-schema renders each ZodCatch from its inner schema; the final
+ * refinement keeps every envelope field required in the advertised contract.
+ */
+const preserveInvalidForService = <Schema extends z.ZodTypeAny>(schema: Schema) =>
+  schema
+    .catch(
+      (context: { input: unknown }) => context.input as z.output<Schema>,
+    )
+    .refine((value) => value !== undefined);
 
 const batchSchema = z
   .object({
-    schemaVersion: z.literal(1),
-    proposalId: z.string().nullable(),
-    expectedVersion: z.number().int().nonnegative(),
-    requestId: z.string().min(1),
-    operations: z.array(z.unknown()).min(1),
+    schemaVersion: preserveInvalidForService(
+      proposalBatchRequestSchema.shape.schemaVersion,
+    ),
+    proposalId: preserveInvalidForService(
+      proposalBatchRequestSchema.shape.proposalId,
+    ),
+    expectedVersion: preserveInvalidForService(
+      proposalBatchRequestSchema.shape.expectedVersion,
+    ),
+    requestId: preserveInvalidForService(
+      proposalBatchRequestSchema.shape.requestId,
+    ),
+    operations: preserveInvalidForService(
+      proposalBatchRequestSchema.shape.operations,
+    ),
   })
   .strict();
 

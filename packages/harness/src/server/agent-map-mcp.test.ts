@@ -97,6 +97,34 @@ describe("Agent Map Streamable HTTP MCP", () => {
       "agent_map_validate",
     ]);
     expect(tools.tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
+    const validate = tools.tools.find(({ name }) => name === "agent_map_validate")!;
+    const propose = tools.tools.find(({ name }) => name === "agent_map_propose")!;
+    const operationItems = (
+      validate.inputSchema as {
+        properties?: {
+          operations?: {
+            items?: {
+              anyOf?: Array<{
+                properties?: { kind?: { const?: string } };
+              }>;
+            };
+          };
+        };
+      }
+    ).properties?.operations?.items;
+    expect(
+      operationItems?.anyOf?.map(
+        (operation) => operation.properties?.kind?.const,
+      ),
+    ).toEqual([
+      "add-node",
+      "update-node",
+      "remove-node",
+      "add-relationship",
+      "update-relationship",
+      "remove-relationship",
+    ]);
+    expect(propose.inputSchema).toEqual(validate.inputSchema);
   });
 
   it("reads, validates without mutation, proposes once, and rejects a rotated token", async () => {
@@ -109,6 +137,31 @@ describe("Agent Map Streamable HTTP MCP", () => {
     };
     const first = capabilities.issue(identity);
     const client = await connect(url, first.token);
+    const malformed = await client.callTool({
+      name: "agent_map_validate",
+      arguments: {
+        schemaVersion: 1,
+        proposalId: null,
+        expectedVersion: 0,
+        requestId: "malformed-request",
+        operations: [{ kind: "invented-operation" }],
+      },
+    });
+    expect(malformed).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "validation_failed",
+        issues: [
+          {
+            code: "malformed_input",
+            operationIndex: 0,
+            path: ["operations", 0, "kind"],
+            recovery: "correct",
+          },
+        ],
+        recovery: "correct",
+      },
+    });
     const request = {
       schemaVersion: 1,
       proposalId: null,
