@@ -174,6 +174,7 @@ describe("planner session context and identity", () => {
       workspace,
       sessionId: "session-1",
       userId: "user-1",
+      onboardOnFirstResponse: true,
     });
     expect(context).toContain(projectId);
     expect(context).toContain(project.rootBindings[0]!.id);
@@ -198,6 +199,7 @@ describe("planner session context and identity", () => {
       workspace: populated,
       sessionId: "session-1",
       userId: "user-1",
+      onboardOnFirstResponse: false,
       details: {
         confirmedRevision: {
           digest: "d".repeat(2_000),
@@ -462,6 +464,9 @@ describe("PlanningSessionService", () => {
       reason: "user-proceeded",
     });
     expect(contexts[0]).toContain(projectId);
+    expect(contexts[0]).not.toContain(
+      "In your first response, briefly explain",
+    );
     expect(contexts[0]).not.toContain(project.rootBindings[0]!.localRootRef);
   });
 
@@ -470,7 +475,7 @@ describe("PlanningSessionService", () => {
       status: "exited",
       agentSessionId: "stale-vendor-session",
     });
-    const { service, resume, create } = fixture([prior]);
+    const { service, resume, create, contexts } = fixture([prior]);
     resume.mockRejectedValueOnce(new Error("not resumable"));
     (service as unknown as { options: { readRecord: () => Promise<SessionRecord> } }).options.readRecord =
       async () => ({ turnCount: 1 } as SessionRecord);
@@ -483,6 +488,9 @@ describe("PlanningSessionService", () => {
       expect.any(Object),
     );
     expect(result.session.planning?.greeting.status).toBe("skipped");
+    expect(contexts[0]).not.toContain(
+      "In your first response, briefly explain",
+    );
   });
 
   it("hands a restarted pre-ready FIFO to a rehydrated planner exactly once and retires the old queue", async () => {

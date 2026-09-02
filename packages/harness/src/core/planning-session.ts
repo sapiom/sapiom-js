@@ -137,6 +137,7 @@ export function buildFocusedPlannerContext(input: {
   workspace: AgentMapWorkspaceState;
   sessionId: string;
   userId: string;
+  onboardOnFirstResponse: boolean;
   details?: PlannerFocusedContextDetails;
 }): string {
   const { project, workspace } = input;
@@ -201,7 +202,7 @@ export function buildFocusedPlannerContext(input: {
   };
   return [
     "<agent-map-planner-context>",
-    "This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive Claude Code transcript is user-visible. Let the user's first real message be the first visible conversation turn; never request or rely on a private control turn. In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to their request. Do not propose architecture or invoke mutation tools before the user asks you to.",
+    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive Claude Code transcript is user-visible. Let the user's first real message be the first visible conversation turn; never request or rely on a private control turn.${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to their request." : ""} Do not propose architecture or invoke mutation tools before the user asks you to.`,
     JSON.stringify(context),
     "</agent-map-planner-context>",
   ].join("\n");
@@ -343,6 +344,7 @@ export class PlanningSessionService {
             workspace,
             sessionId,
             userId: principal,
+            onboardOnFirstResponse: mode === "created",
             ...(details ? { details } : {}),
           }),
         ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
@@ -506,6 +508,7 @@ export class PlanningSessionService {
               workspace,
               sessionId: candidate.id,
               userId: principal,
+              onboardOnFirstResponse: false,
               ...(details ? { details } : {}),
             }),
           })

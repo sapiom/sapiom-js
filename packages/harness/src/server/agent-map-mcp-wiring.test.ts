@@ -134,9 +134,9 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
 });
 
 it("gives a signed-out local planner its scoped Agent Map tools", async () => {
-  let launchOpts: LaunchOpts | undefined;
+  const launches: LaunchOpts[] = [];
   const launch = (opts: LaunchOpts): SpawnSpec => {
-    launchOpts = opts;
+    launches.push(opts);
     return { command: "bash", args: [], env: {}, cwd: opts.cwd };
   };
   const adapter: HarnessAdapter = {
@@ -199,7 +199,8 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     reason: "user-proceeded",
   });
 
-  const metadata = launchOpts?.agentMapMcp;
+  const launchOpts = launches[0]!;
+  const metadata = launchOpts.agentMapMcp;
   expect(metadata?.url).toBe(`http://127.0.0.1:${server.port}/mcp/agent-map`);
   expect(metadata?.url).not.toContain(":0/");
   const config = JSON.parse(
@@ -230,4 +231,22 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "agent_map_validate",
   ]);
   await client.close();
+
+  const ordinary = await server.sessionManager.create({
+    cwd: projectRoot,
+    harness: "claude-code",
+  });
+  expect(ordinary.agentMapIdentity).toMatchObject({
+    role: "agent-builder",
+    userId: "local:machine-1",
+    assignment: { kind: "unplanned" },
+  });
+  const ordinaryLaunch = launches[1]!;
+  expect(ordinaryLaunch.agentMapMcp).toBeDefined();
+  const ordinaryConfig = JSON.parse(
+    await fs.readFile(ordinaryLaunch.mcpConfigFile!, "utf8"),
+  );
+  expect(ordinaryConfig.mcpServers["agent-map"].headers.Authorization).toBe(
+    `Bearer ${ordinaryLaunch.agentMapMcp!.bearerToken}`,
+  );
 });
