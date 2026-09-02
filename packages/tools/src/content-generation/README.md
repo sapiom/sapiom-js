@@ -82,6 +82,9 @@ const out = await handle.wait(); // polls until ready
 out.images?.[0]?.fileId; // + .downloadUrl for a ready-to-use URL
 ```
 
+To suspend an agent step until the image is ready instead, pause on the handle —
+see [`IMAGE_RESULT_SIGNAL`](#image_result_signal) below.
+
 The handle is `{ requestId, resolvedModel, cost?, preferSatisfied?, dispatch,
 wait() }`. `requestId` is the queue request id, and it is also the
 `dispatch.correlationId` a workflow resumes on. `resolvedModel`, `cost`, and
@@ -117,7 +120,7 @@ const renderImage = defineStep({
   async run(_input: unknown, ctx) {
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: "a red bicycle",
-      storage: { visibility: "public" },
+      storage: { visibility: "private" },
     });
     return pauseUntilSignal(handle, { resumeStep: "collectImage" });
   },
