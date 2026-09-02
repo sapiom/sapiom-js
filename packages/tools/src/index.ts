@@ -175,7 +175,6 @@ export type { MintScopedInput, ScopedKey } from "./keys/index.js";
 
 export * as google from "./google/index.js";
 export type {
-  AuthClientLike,
   DriveFile,
   DrivePermission,
   DriveShareFileArgs,

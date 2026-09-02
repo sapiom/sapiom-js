@@ -169,7 +169,6 @@ import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
 import * as google from "./google/index.js";
 import type {
-  AuthClientLike,
   DriveFile,
   DrivePermission,
   DriveShareFileArgs,
@@ -178,6 +177,12 @@ import type {
   SendEmailArgs,
   SendEmailResult,
 } from "./google/index.js";
+// Type-only (erased at emit): the return type of `google.authClient()`. Referencing it
+// here does not make `google-auth-library` a runtime dependency of this module —
+// `authClient()` loads it dynamically, and only when called. Agent tsconfigs use
+// `skipLibCheck`, so this reference in the emitted `.d.ts` never forces the peer on agents
+// that only use `token()`.
+import type { OAuth2Client } from "google-auth-library";
 import * as github from "./github/index.js";
 import type { ListReposArgs, GitHubRepo } from "./github/index.js";
 
@@ -488,12 +493,17 @@ export interface Sapiom {
     /** Pull a fresh Google `LiveCredential` (server-side refresh). Throws 404 when no Google connector is connected. */
     token(): Promise<LiveCredential>;
     /**
-     * A googleapis-style auth client that refreshes itself: `getRequestHeaders()`
-     * returns `{ Authorization: "Bearer <token>" }`, caching the credential and
-     * re-materializing only near its `expiresAt` — pass it where a Google client
-     * library expects an `AuthClient`.
+     * A GENUINE `google-auth-library` `OAuth2Client` for the Google vendor SDKs
+     * (`googleapis`, `@googleapis/*`) — pass it straight to `drive({ version, auth })`.
+     * Its `refreshHandler` sources every token from `token()` (server-side refresh), so
+     * the OAuth token is minted on demand and never lives in the run. A real client is
+     * required because the vendor SDKs call `authClient.request(...)` and type `auth` as
+     * `OAuth2Client | …`; it is also a superset of a header-only client
+     * (`getRequestHeaders()`). For a raw-bearer path with no extra dependency, use
+     * `token()`. `google-auth-library` is an optional peer, imported dynamically — it
+     * ships with `googleapis`/`@googleapis/*`, and this throws a clear error if missing.
      */
-    authClient(): AuthClientLike;
+    authClient(): Promise<OAuth2Client>;
     /**
      * Google Drive server-side methods (Path 2). The gateway resolves the tenant's
      * Google credential internally and calls Drive — the token never reaches the run.

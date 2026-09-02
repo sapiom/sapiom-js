@@ -4,9 +4,9 @@
  *
  *   import { google } from "@sapiom/tools";
  *   const cred = await google.token();                 // { kind: "bearer", value, expiresAt? }
- *   // …or a googleapis-style auth client that refreshes itself:
- *   const auth = google.authClient();
- *   const { Authorization } = await auth.getRequestHeaders(); // "Bearer <token>"
+ *   // …or a real google-auth-library OAuth2 client, ready for the vendor SDKs:
+ *   import { drive } from "@googleapis/drive";
+ *   const res = await drive({ version: "v3", auth: await google.authClient() }).files.list();
  *
  * Or on the step context: `ctx.sapiom.google.token()` / `ctx.sapiom.google.authClient()`.
  *
@@ -22,6 +22,11 @@
  * provider. Non-2xx throws (Transport.request), carrying the server body.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+// Type-only: erased at emit, so importing it adds NO runtime dependency. The value
+// `OAuth2Client` is pulled in at runtime by {@link authClient} via a dynamic import,
+// keeping `google-auth-library` an OPTIONAL peer that only loads when a builder actually
+// builds a client (agents that only use {@link token} pull none of it).
+import type { OAuth2Client } from "google-auth-library";
 
 // Same tools host agents/models resolve — via SAPIOM_TOOLS_BASE. No new per-cap config.
 const DEFAULT_BASE_URL =
@@ -59,54 +64,68 @@ export async function token(
 }
 
 /**
- * The minimal structural shape a googleapis / google-auth-library `AuthClient`
- * satisfies — the client libraries call `getRequestHeaders()` before each request to
- * attach the bearer. Declared structurally (no `googleapis` import, no runtime
- * dependency) so our object type-checks where an `AuthClient` is expected, by
- * duck-typing at the call site. Returns exactly `{ Authorization: "Bearer <token>" }`.
- */
-export interface AuthClientLike {
-  getRequestHeaders(): Promise<{ Authorization: string }>;
-}
-
-/**
- * Refresh a cached credential this many ms BEFORE its `expiresAt`, so a token is
- * never served on the edge of expiry (clock skew + in-flight request time).
- */
-const REFRESH_SKEW_MS = 60_000;
-
-/**
- * A googleapis-style auth client backed by server-side credential materialization.
- * `getRequestHeaders()` returns a `Bearer` header for the tenant's Google connector,
- * CACHING the last `LiveCredential` and only re-calling {@link token} when the cache
- * is within {@link REFRESH_SKEW_MS} of its `expiresAt` — or on every call when the
- * credential carries no `expiresAt`. This lets a long-running Google client survive a
- * token refresh WITHOUT a materialize round-trip per request, and without serving a
- * token past its expiry. The raw token is returned to the caller only — never logged,
- * persisted, or written to env; the cache lives only in this object's closure.
+ * The tenant's Google auth client for the vendor SDKs — a GENUINE `google-auth-library`
+ * `OAuth2Client`, backed by server-side credential materialization. Pass it straight to
+ * any Google client library: `drive({ version: "v3", auth: await authClient() })`.
  *
- * `now` is injectable purely for deterministic tests; production uses `Date.now`.
+ * WHY a real client (not a `{ getRequestHeaders }` duck-type): `googleapis` /
+ * `@googleapis/*` route every request through `authClient.request(...)`, which a bare
+ * duck-type lacks ("authClient.request is not a function"), and they type `auth` as
+ * `OAuth2Client | GoogleAuth | …` — so only the real client both runs and type-checks. A
+ * real `OAuth2Client` is a superset (it also has `getRequestHeaders()`), so header-only
+ * callers are covered too; for a pure raw-bearer path with no extra dependency, use
+ * {@link token}.
+ *
+ * The client's `refreshHandler` — google-auth-library's official "bring your own token
+ * source" hook — sources EVERY token from {@link token}, so the OAuth token is minted on
+ * demand and refreshed transparently server-side; the library caches it and re-mints only
+ * when it needs to (initial call and near expiry). The raw token is returned to the caller
+ * only — never logged, persisted, or written to env.
+ *
+ * `google-auth-library` is an OPTIONAL peer dependency, imported DYNAMICALLY so it never
+ * weighs on agents that only use {@link token} (raw bearer + `fetch`) and never build a
+ * client. It ships transitively with `googleapis` and the `@googleapis/*` clients, so a
+ * builder using those already has it; called without it installed, this throws a clear
+ * error naming the package to add.
+ *
+ * @example
+ *   import { drive } from "@googleapis/drive";
+ *   const auth = await ctx.sapiom.google.authClient();
+ *   const res = await drive({ version: "v3", auth }).files.list({ pageSize: 10 });
  */
-export function authClient(
+export async function authClient(
   transport: Transport = defaultTransport(),
   baseUrl: string = DEFAULT_BASE_URL,
-  now: () => number = Date.now,
-): AuthClientLike {
-  let cached: LiveCredential | undefined;
+): Promise<OAuth2Client> {
+  let mod: typeof import("google-auth-library");
+  try {
+    mod = await import("google-auth-library");
+  } catch {
+    throw new Error(
+      "google.authClient() needs the 'google-auth-library' package, which ships with " +
+        "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
+        "`npm i @googleapis/drive`) to use the vendor SDKs. For a token-only path that " +
+        "needs no extra dependency, use google.token() instead.",
+    );
+  }
 
-  const isFresh = (cred: LiveCredential | undefined): cred is LiveCredential =>
-    cred !== undefined &&
-    typeof cred.expiresAt === "string" &&
-    Date.parse(cred.expiresAt) - now() > REFRESH_SKEW_MS;
-
-  return {
-    async getRequestHeaders() {
-      const current = isFresh(cached)
-        ? cached
-        : (cached = await token(transport, baseUrl));
-      return { Authorization: `Bearer ${current.value}` };
-    },
+  const client = new mod.OAuth2Client();
+  // The single source of tokens: every mint is a server-side materialize, so no OAuth
+  // token or refresh token ever lives in this process beyond the returned bearer.
+  const mint = async () => {
+    const cred = await token(transport, baseUrl);
+    return {
+      access_token: cred.value,
+      // google-auth-library requires a numeric epoch expiry. Google always sends one;
+      // fall back to +1h so refresh timing stays well-defined for a static connector.
+      expiry_date: cred.expiresAt
+        ? Date.parse(cred.expiresAt)
+        : Date.now() + 3_600_000,
+    };
   };
+  client.refreshHandler = mint; // library calls this whenever it needs a fresh token
+  client.setCredentials(await mint()); // prime so the first request needs no round-trip guess
+  return client;
 }
 
 /**

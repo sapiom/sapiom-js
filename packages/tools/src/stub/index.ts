@@ -121,7 +121,6 @@ import type {
 import type { ScopedKey } from "../keys/index.js";
 import type {
   LiveCredential,
-  AuthClientLike,
   DrivePermission,
   DriveFile,
   SendEmailResult,
@@ -1913,16 +1912,33 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             baseUrl: "https://www.googleapis.com",
           })) as LiveCredential,
         ),
-      // Shape-faithful auth client: `getRequestHeaders()` returns the same fake
-      // bearer, so an offline run drives a googleapis-style client without a network
-      // call. The `Authorization` value is an obvious placeholder, never usable.
-      authClient: () =>
-        r("google.authClient", [], () => ({
-          getRequestHeaders: () =>
-            Promise.resolve({
-              Authorization: "Bearer ya29.stub-google-token",
-            }),
-        })) as AuthClientLike,
+      // A REAL google-auth-library OAuth2 client wired to the stub's fake bearer — an
+      // offline `check`/run drives a genuine vendor-SDK client (googleapis, @googleapis/*)
+      // with no network and no Google connector. `google-auth-library` ships with those
+      // SDKs, so it is present whenever an agent references `authClient()`; absent it, the
+      // dynamic import throws the same clear error as production.
+      authClient: async () => {
+        r("google.authClient", [], () => "google-auth-library OAuth2Client (stub)");
+        let mod: typeof import("google-auth-library");
+        try {
+          mod = await import("google-auth-library");
+        } catch {
+          throw new Error(
+            "google.authClient() needs the 'google-auth-library' package, which ships with " +
+              "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
+              "`npm i @googleapis/drive`) to use the vendor SDKs. For a token-only path that " +
+              "needs no extra dependency, use google.token() instead.",
+          );
+        }
+        const client = new mod.OAuth2Client();
+        const mint = async () => ({
+          access_token: "ya29.stub-google-token",
+          expiry_date: Date.parse("2099-01-01T00:00:00.000Z"),
+        });
+        client.refreshHandler = mint;
+        client.setCredentials(await mint());
+        return client;
+      },
       // Drive methods run server-side in the gateway in production; the stub returns
       // shape-faithful, obviously-fake results so an offline run can exercise the call
       // graph without a Google connector or network call.
