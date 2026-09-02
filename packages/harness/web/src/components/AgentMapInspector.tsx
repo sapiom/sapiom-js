@@ -1,16 +1,22 @@
 import type { JSX } from "react";
-import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
+import type {
+  AcceptedProposalDelta,
+  AgentMapWorkspaceResponse,
+  PlanNodeId,
+} from "@shared/agent-map";
 
 import { latestNodeAttribution } from "../lib/agent-map-projector";
 
 interface AgentMapInspectorProps {
   snapshot: AgentMapWorkspaceResponse;
   nodeId: PlanNodeId;
+  latestDelta?: AcceptedProposalDelta;
 }
 
 export function AgentMapInspector({
   snapshot,
   nodeId,
+  latestDelta,
 }: AgentMapInspectorProps): JSX.Element | null {
   const proposal = snapshot.proposal;
   const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
@@ -22,7 +28,7 @@ export function AgentMapInspector({
     (relationship) =>
       relationship.fromNodeId === node.id || relationship.toNodeId === node.id,
   );
-  const latest = latestNodeAttribution(snapshot, node.id);
+  const latest = latestNodeAttribution(snapshot, node.id, latestDelta);
   const assignment = latest?.actor.assignment;
   return (
     <aside

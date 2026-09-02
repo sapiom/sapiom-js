@@ -5,7 +5,7 @@ import type {
   PlanNode,
   PlanNodeId,
   PlanRelationship,
-  ProposalOperationRecord,
+  ProposalActor,
 } from "@shared/agent-map";
 
 export type AgentMapProjectionResult =
@@ -166,16 +166,6 @@ export function applyAcceptedProposalDelta(
     return { status: "needs-refetch", snapshot };
   }
 
-  const appendedHistory: ProposalOperationRecord[] = delta.operations.map(
-    (operation, index) => ({
-      id: delta.operationIds[index]!,
-      requestId: "live-delta",
-      acceptedVersion: delta.version,
-      operation: structuredClone(operation),
-      actor: structuredClone(delta.actor),
-      acceptedAt: delta.acceptedAt,
-    }),
-  );
   const selectionRemoved = selection !== null && !nodes.has(selection);
   return {
     status: "applied",
@@ -193,7 +183,6 @@ export function applyAcceptedProposalDelta(
         version: delta.version,
         nodes: [...nodes.values()],
         relationships: [...relationships.values()],
-        history: [...proposal.history, ...appendedHistory],
         updatedAt: delta.acceptedAt,
       },
     },
@@ -201,18 +190,23 @@ export function applyAcceptedProposalDelta(
 }
 
 /** Latest bounded attribution affecting a node or one of its incident edges. */
+export interface LatestNodeAttribution {
+  actor: ProposalActor;
+  acceptedAt: string;
+}
+
 export function latestNodeAttribution(
   snapshot: AgentMapWorkspaceResponse,
   nodeId: PlanNodeId,
-): ProposalOperationRecord | null {
+  latestDelta?: AcceptedProposalDelta,
+): LatestNodeAttribution | null {
   const proposal = snapshot.proposal;
   if (!proposal) return null;
   const relationships = new Map(
     proposal.relationships.map((edge) => [edge.id, edge]),
   );
-  return (
-    [...proposal.history].reverse().find(({ operation }) => {
-      switch (operation.kind) {
+  const affectsNode = (operation: MapOperation): boolean => {
+    switch (operation.kind) {
         case "add-node":
           return operation.node.id === nodeId;
         case "update-node":
@@ -229,6 +223,11 @@ export function latestNodeAttribution(
           return edge?.fromNodeId === nodeId || edge?.toNodeId === nodeId;
         }
       }
-    }) ?? null
-  );
+  };
+  if (latestDelta?.operations.some(affectsNode)) {
+    return { actor: latestDelta.actor, acceptedAt: latestDelta.acceptedAt };
+  }
+  return [...proposal.history].reverse().find(({ operation }) =>
+    affectsNode(operation),
+  ) ?? null;
 }

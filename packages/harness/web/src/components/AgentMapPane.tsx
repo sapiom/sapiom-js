@@ -49,7 +49,9 @@ export function AgentMapPane({
   }
   const proposal = state.value.proposal;
   if (proposal && proposal.nodes.length > 0) {
-    return <PopulatedAgentMap value={state.value} />;
+    return (
+      <PopulatedAgentMap value={state.value} latestDelta={state.latestDelta} />
+    );
   }
   return (
     <EmptyState
@@ -63,8 +65,10 @@ export function AgentMapPane({
 
 function PopulatedAgentMap({
   value,
+  latestDelta,
 }: {
   value: AgentMapWorkspaceResponse;
+  latestDelta?: import("@shared/agent-map").AcceptedProposalDelta;
 }): JSX.Element {
   const proposal = value.proposal!;
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
@@ -91,7 +95,13 @@ function PopulatedAgentMap({
           selectedNodeId={selected}
           onSelectNode={setSelected}
         />
-        {selected && <AgentMapInspector snapshot={value} nodeId={selected} />}
+        {selected && (
+          <AgentMapInspector
+            snapshot={value}
+            nodeId={selected}
+            latestDelta={latestDelta}
+          />
+        )}
       </div>
       <p className="sr-only" aria-live="polite">
         {selected

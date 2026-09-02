@@ -16,7 +16,11 @@ import { parseAcceptedProposalDelta } from "./agent-map";
 export type AgentMapWorkspacePaneState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; value: AgentMapWorkspaceResponse }
+  | {
+      status: "ready";
+      value: AgentMapWorkspaceResponse;
+      latestDelta?: AcceptedProposalDelta;
+    }
   | { status: "error"; message: string };
 
 export type AgentMapPlannerPaneState =
@@ -240,7 +244,11 @@ export function useAgentMapEntry({
           current.projectId === projectId
             ? {
                 ...current,
-                workspace: { status: "ready", value: outcome.snapshot },
+                workspace: {
+                  status: "ready",
+                  value: outcome.snapshot,
+                  latestDelta: delta,
+                },
               }
             : current,
         );

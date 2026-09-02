@@ -26,14 +26,9 @@ vi.mock("node:os", async (importOriginal) => {
 import type { AnalyticsEvent } from "../shared/types.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
-const TOKEN_HEADER = {
-  "Content-Type": "application/json",
-  "X-Harness-Token": "unused-in-router-tests",
-};
+const TOKEN_HEADER = { "Content-Type": "application/json", "X-Harness-Token": "unused-in-router-tests" };
 
-function makeBaseOptions(
-  overrides: Partial<RestRouterOptions> = {},
-): RestRouterOptions {
+function makeBaseOptions(overrides: Partial<RestRouterOptions> = {}): RestRouterOptions {
   return {
     sessionManager: {
       list: () => [],
@@ -137,26 +132,17 @@ describe("POST /api/track", () => {
     await fetch(`${baseUrl}/track`, {
       method: "POST",
       headers: TOKEN_HEADER,
-      body: JSON.stringify({
-        event: "macro.invoked",
-        data: { macroId: "visualize" },
-      }),
+      body: JSON.stringify({ event: "macro.invoked", data: { macroId: "visualize" } }),
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(stored[0].payload).toMatchObject({
-      macroId: "visualize",
-      surface: "ui",
-    });
+    expect(stored[0].payload).toMatchObject({ macroId: "visualize", surface: "ui" });
   });
 
   it("uses harnessSessionId from body in the event", async () => {
     await fetch(`${baseUrl}/track`, {
       method: "POST",
       headers: TOKEN_HEADER,
-      body: JSON.stringify({
-        event: "session.switched",
-        harnessSessionId: "sess-abc",
-      }),
+      body: JSON.stringify({ event: "session.switched", harnessSessionId: "sess-abc" }),
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(stored[0].harnessSessionId).toBe("sess-abc");
@@ -218,10 +204,7 @@ describe("POST /api/track", () => {
     const res = await fetch(`${baseUrl}/track`, {
       method: "POST",
       headers: TOKEN_HEADER,
-      body: JSON.stringify({
-        event: "prompt.submitted",
-        data: { nested: { foo: "bar" } },
-      }),
+      body: JSON.stringify({ event: "prompt.submitted", data: { nested: { foo: "bar" } } }),
     });
     expect(res.status).toBe(400);
     expect(stored).toHaveLength(0);
@@ -231,10 +214,7 @@ describe("POST /api/track", () => {
     const res = await fetch(`${baseUrl}/track`, {
       method: "POST",
       headers: TOKEN_HEADER,
-      body: JSON.stringify({
-        event: "prompt.submitted",
-        data: { tags: ["a", "b"] },
-      }),
+      body: JSON.stringify({ event: "prompt.submitted", data: { tags: ["a", "b"] } }),
     });
     expect(res.status).toBe(400);
     expect(stored).toHaveLength(0);
@@ -256,10 +236,7 @@ describe("POST /api/track", () => {
     const res = await fetch(`${baseUrl}/track`, {
       method: "POST",
       headers: TOKEN_HEADER,
-      body: JSON.stringify({
-        event: "prompt.submitted",
-        data: { label: "x".repeat(257) },
-      }),
+      body: JSON.stringify({ event: "prompt.submitted", data: { label: "x".repeat(257) } }),
     });
     expect(res.status).toBe(400);
     expect(stored).toHaveLength(0);

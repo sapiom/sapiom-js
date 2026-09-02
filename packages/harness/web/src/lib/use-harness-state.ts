@@ -1308,156 +1308,153 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   useEffect(() => {
-    return subscribeEvents(
-      (message) => {
-        // SessionRecord invalidations have a targeted listener below. Keeping
-        // them out of the legacy last-message slot avoids repainting the entire
-        // Studio for records no mounted transcript is watching.
-        if (message.type !== "session.record.changed") setLastMessage(message);
-        setSystemGraphAnnouncements((current) =>
-          systemGraphAnnouncementsAfterMessage(current, message),
+    return subscribeEvents((message) => {
+      // SessionRecord invalidations have a targeted listener below. Keeping
+      // them out of the legacy last-message slot avoids repainting the entire
+      // Studio for records no mounted transcript is watching.
+      if (message.type !== "session.record.changed") setLastMessage(message);
+      setSystemGraphAnnouncements((current) =>
+        systemGraphAnnouncementsAfterMessage(current, message),
+      );
+      if (message.type === "session.status") {
+        sessionStatusRevisions.current.set(
+          message.session.id,
+          (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
         );
-        if (message.type === "session.status") {
-          sessionStatusRevisions.current.set(
-            message.session.id,
-            (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
+        setState((prev) => {
+          if (!prev) return prev;
+          const exists = prev.sessions.some(
+            (session) => session.id === message.session.id,
           );
-          setState((prev) => {
-            if (!prev) return prev;
-            const exists = prev.sessions.some(
-              (session) => session.id === message.session.id,
-            );
-            const sessions = exists
-              ? prev.sessions.map((session) =>
-                  session.id === message.session.id ? message.session : session,
-                )
-              : [...prev.sessions, message.session];
-            return { ...prev, sessions };
+          const sessions = exists
+            ? prev.sessions.map((session) =>
+                session.id === message.session.id ? message.session : session,
+              )
+            : [...prev.sessions, message.session];
+          return { ...prev, sessions };
+        });
+        // An exited session can never produce more output — drop any pending
+        // busy state/timer for it rather than leaving a stale pulse on a tab
+        // that's about to move to the history menu.
+        if (message.session.status === "exited") {
+          const id = message.session.id;
+          const timer = busyTimers.current.get(id);
+          if (timer) {
+            clearTimeout(timer);
+            busyTimers.current.delete(id);
+          }
+          setBusySessionIds((prev) => {
+            if (!prev.has(id)) return prev;
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
           });
-          // An exited session can never produce more output — drop any pending
-          // busy state/timer for it rather than leaving a stale pulse on a tab
-          // that's about to move to the history menu.
-          if (message.session.status === "exited") {
-            const id = message.session.id;
-            const timer = busyTimers.current.get(id);
-            if (timer) {
-              clearTimeout(timer);
-              busyTimers.current.delete(id);
+        }
+      } else if (message.type === "session.record.changed") {
+        sessionRecordChangeListeners.current.forEach((listener) =>
+          listener(message.harnessSessionId),
+        );
+      } else if (message.type === "workflows.changed") {
+        // The workspace watcher saw a sapiom.json appear/change — the one
+        // client signal for an agent built in-app. Emit agent.created for any
+        // path we haven't already baselined (load) or imported (scan/connect).
+        // Capture this at message receipt, not response settlement: boot can
+        // resolve while this list is in flight. Anything announced before boot
+        // established its baseline belongs to that baseline regardless of HTTP
+        // completion order.
+        const baselineOnly = seenAgentPathsRef.current === null;
+        void refreshWorkflows()
+          .then((workflows) => {
+            const seen = seenAgentPathsRef.current;
+            if (baselineOnly || seen === null) {
+              // Lost the race with the initial load — baseline, don't emit.
+              const baseline = (seenAgentPathsRef.current ??= new Set());
+              for (const workflow of workflows) baseline.add(workflow.path);
+              return;
             }
+            for (const path of newAgentPaths(seen, workflows)) {
+              seen.add(path);
+              trackProduct("agent.created", {
+                workflow_slug: slugFromPath(path),
+                ...agentProvenance(workflows.find((w) => w.path === path)),
+              });
+            }
+          })
+          // A bus refresh is best-effort. Keep the last successful projection
+          // and let the next event/auth/manual refresh retry; never create an
+          // unhandled rejection from the event callback.
+          .catch(() => undefined);
+      } else if (message.type === "system-graph.changed") {
+        // Invalidate even while its workspace destination is closed. The next
+        // open must never resurrect a pre-edit process-lifetime promise.
+        systemGraphLoader.invalidate(message.workspaceKey, message.revision);
+      } else if (message.type === "agent-map.proposal.changed") {
+        agentMapProposalChangeListeners.current.forEach((listener) =>
+          listener(message.delta),
+        );
+      } else if (message.type === "execution.started") {
+        startRunPolling(
+          message.harnessSessionId,
+          message.executionId,
+          message.target,
+        );
+      } else if (message.type === "port.detected") {
+        setPreviewBySession((prev) =>
+          new Map(prev).set(message.harnessSessionId, {
+            port: message.port,
+            url: message.url,
+          }),
+        );
+      } else if (message.type === "task.status") {
+        // Each frame is a full snapshot of one task — upsert by id.
+        setTasks((prev) => {
+          const exists = prev.some((task) => task.id === message.task.id);
+          return exists
+            ? prev.map((task) =>
+                task.id === message.task.id ? message.task : task,
+              )
+            : [...prev, message.task];
+        });
+      } else if (message.type === "session.activity") {
+        const id = message.harnessSessionId;
+        setBusySessionIds((prev) =>
+          prev.has(id) ? prev : new Set(prev).add(id),
+        );
+        const existingTimer = busyTimers.current.get(id);
+        if (existingTimer) clearTimeout(existingTimer);
+        busyTimers.current.set(
+          id,
+          setTimeout(() => {
+            busyTimers.current.delete(id);
             setBusySessionIds((prev) => {
               if (!prev.has(id)) return prev;
               const next = new Set(prev);
               next.delete(id);
               return next;
             });
-          }
-        } else if (message.type === "session.record.changed") {
-          sessionRecordChangeListeners.current.forEach((listener) =>
-            listener(message.harnessSessionId),
-          );
-        } else if (message.type === "workflows.changed") {
-          // The workspace watcher saw a sapiom.json appear/change — the one
-          // client signal for an agent built in-app. Emit agent.created for any
-          // path we haven't already baselined (load) or imported (scan/connect).
-          // Capture this at message receipt, not response settlement: boot can
-          // resolve while this list is in flight. Anything announced before boot
-          // established its baseline belongs to that baseline regardless of HTTP
-          // completion order.
-          const baselineOnly = seenAgentPathsRef.current === null;
-          void refreshWorkflows()
-            .then((workflows) => {
-              const seen = seenAgentPathsRef.current;
-              if (baselineOnly || seen === null) {
-                // Lost the race with the initial load — baseline, don't emit.
-                const baseline = (seenAgentPathsRef.current ??= new Set());
-                for (const workflow of workflows) baseline.add(workflow.path);
-                return;
+          }, BUSY_WINDOW_MS),
+        );
+      } else if (message.type === "auth.changed") {
+        // Real-time auth state update from the server — update AppState in
+        // place so SettingsPopover, WorkflowsRail, and deploy gating all
+        // react without a full reload or polling.
+        setState((prev) =>
+          prev
+            ? {
+                ...prev,
+                authenticated: message.authenticated,
+                organizationName: message.organizationName,
               }
-              for (const path of newAgentPaths(seen, workflows)) {
-                seen.add(path);
-                trackProduct("agent.created", {
-                  workflow_slug: slugFromPath(path),
-                  ...agentProvenance(workflows.find((w) => w.path === path)),
-                });
-              }
-            })
-            // A bus refresh is best-effort. Keep the last successful projection
-            // and let the next event/auth/manual refresh retry; never create an
-            // unhandled rejection from the event callback.
-            .catch(() => undefined);
-        } else if (message.type === "system-graph.changed") {
-          // Invalidate even while its workspace destination is closed. The next
-          // open must never resurrect a pre-edit process-lifetime promise.
-          systemGraphLoader.invalidate(message.workspaceKey, message.revision);
-        } else if (message.type === "agent-map.proposal.changed") {
-          agentMapProposalChangeListeners.current.forEach((listener) =>
-            listener(message.delta),
-          );
-        } else if (message.type === "execution.started") {
-          startRunPolling(
-            message.harnessSessionId,
-            message.executionId,
-            message.target,
-          );
-        } else if (message.type === "port.detected") {
-          setPreviewBySession((prev) =>
-            new Map(prev).set(message.harnessSessionId, {
-              port: message.port,
-              url: message.url,
-            }),
-          );
-        } else if (message.type === "task.status") {
-          // Each frame is a full snapshot of one task — upsert by id.
-          setTasks((prev) => {
-            const exists = prev.some((task) => task.id === message.task.id);
-            return exists
-              ? prev.map((task) =>
-                  task.id === message.task.id ? message.task : task,
-                )
-              : [...prev, message.task];
-          });
-        } else if (message.type === "session.activity") {
-          const id = message.harnessSessionId;
-          setBusySessionIds((prev) =>
-            prev.has(id) ? prev : new Set(prev).add(id),
-          );
-          const existingTimer = busyTimers.current.get(id);
-          if (existingTimer) clearTimeout(existingTimer);
-          busyTimers.current.set(
-            id,
-            setTimeout(() => {
-              busyTimers.current.delete(id);
-              setBusySessionIds((prev) => {
-                if (!prev.has(id)) return prev;
-                const next = new Set(prev);
-                next.delete(id);
-                return next;
-              });
-            }, BUSY_WINDOW_MS),
-          );
-        } else if (message.type === "auth.changed") {
-          // Real-time auth state update from the server — update AppState in
-          // place so SettingsPopover, WorkflowsRail, and deploy gating all
-          // react without a full reload or polling.
-          setState((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  authenticated: message.authenticated,
-                  organizationName: message.organizationName,
-                }
-              : prev,
-          );
-          // Definition build evidence is authenticated enrichment. Re-list on
-          // both sign-in and sign-out so a post-boot login can enable a ready
-          // agent and a logout cannot leave tenant metadata pinned in memory.
-          void refreshWorkflows().catch(() => undefined);
-        }
-      },
-      () => {
-        eventReconnectListeners.current.forEach((listener) => listener());
-      },
-    );
+            : prev,
+        );
+        // Definition build evidence is authenticated enrichment. Re-list on
+        // both sign-in and sign-out so a post-boot login can enable a ready
+        // agent and a logout cannot leave tenant metadata pinned in memory.
+        void refreshWorkflows().catch(() => undefined);
+      }
+    }, () => {
+      eventReconnectListeners.current.forEach((listener) => listener());
+    });
   }, [refreshWorkflows, startRunPolling]);
 
   /**

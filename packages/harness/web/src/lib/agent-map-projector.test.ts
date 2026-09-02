@@ -113,9 +113,9 @@ describe("applyAcceptedProposalDelta", () => {
     expect(result.snapshot.proposal?.version).toBe(2);
     expect(result.snapshot.proposal?.nodes[0]?.name).toBe("Market Research");
     expect(result.selection).toBe(nodeId);
-    expect(latestNodeAttribution(result.snapshot, nodeId)?.actor.role).toBe(
-      "agent-builder",
-    );
+    expect(
+      latestNodeAttribution(result.snapshot, nodeId, renameDelta())?.actor.role,
+    ).toBe("agent-builder");
   });
 
   it("rejects gaps atomically without changing the prior snapshot", () => {
