@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -134,6 +134,9 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
 });
 
 it("gives a signed-out local planner its scoped Agent Map tools", async () => {
+  const codingPrompt =
+    "You are the coding agent running in Agent Studio. Follow the scaffold, run, and deploy authoring loop.";
+  const loadSystemPrompt = vi.fn(async () => codingPrompt);
   const launches: LaunchOpts[] = [];
   const launch = (opts: LaunchOpts): SpawnSpec => {
     launches.push(opts);
@@ -162,7 +165,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     launchDir: projectRoot,
     webDir,
     autoCreateSession: false,
-    loadSystemPrompt: async () => "",
+    loadSystemPrompt,
   });
 
   const response = await fetch(
@@ -210,12 +213,19 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     `Bearer ${metadata!.bearerToken}`,
   );
   const systemPrompt = await fs.readFile(launchOpts!.systemPromptFile!, "utf8");
+  expect(systemPrompt).toContain("<agent-map-planner-context>");
+  expect(systemPrompt).toContain(
+    "Do not act as a coding or implementation agent",
+  );
   expect(systemPrompt).toContain(
     "Let the user's first real message be the first visible conversation turn",
   );
+  expect(systemPrompt).not.toContain(codingPrompt);
+  expect(systemPrompt).not.toContain("You are the coding agent");
   expect(systemPrompt).not.toContain(
     "This is a private Agent Studio control turn",
   );
+  expect(loadSystemPrompt).not.toHaveBeenCalled();
 
   const client = new Client({ name: "signed-out-planner-test", version: "1" });
   const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
@@ -243,6 +253,10 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   });
   const ordinaryLaunch = launches[1]!;
   expect(ordinaryLaunch.agentMapMcp).toBeDefined();
+  expect(await fs.readFile(ordinaryLaunch.systemPromptFile!, "utf8")).toBe(
+    codingPrompt,
+  );
+  expect(loadSystemPrompt).toHaveBeenCalledOnce();
   const ordinaryConfig = JSON.parse(
     await fs.readFile(ordinaryLaunch.mcpConfigFile!, "utf8"),
   );

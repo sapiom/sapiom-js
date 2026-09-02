@@ -98,6 +98,7 @@ import {
   sweepGeneratedDirs,
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
+import { AGENT_MAP_PLANNER_SYSTEM_PROMPT } from "../profiles/agent-map-planner.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -559,6 +560,13 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
+    const promptPromise =
+      context?.agentMapIdentity?.role === "map-planner"
+        ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
+        : loadSystemPrompt().catch((err: unknown) => {
+            console.error("[harness] system-prompt load failed:", err);
+            return DEFAULT_SYSTEM_PROMPT;
+          });
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -573,10 +581,7 @@ function createDefaultBuildLaunchOpts(
         ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
         ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
       }),
-      loadSystemPrompt().catch((err: unknown) => {
-        console.error("[harness] system-prompt load failed:", err);
-        return DEFAULT_SYSTEM_PROMPT;
-      }),
+      promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
     const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
