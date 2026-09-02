@@ -134,6 +134,12 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(inspector).toContainText("Contracts");
     await expect(inspector).toContainText("Map planner");
 
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    const mapSubject = page.getByTestId("agent-map-subject");
+    const transformedView = await mapSubject.evaluate(
+      (element) => (element as HTMLElement).style.transform,
+    );
+
     const projectId = await page
       .getByTestId("agent-map-live")
       .getAttribute("data-project-id");
@@ -173,6 +179,13 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(
       page.getByText("Campaign Marketing", { exact: true }),
     ).toBeVisible();
+    await expect
+      .poll(() =>
+        mapSubject.evaluate(
+          (element) => (element as HTMLElement).style.transform,
+        ),
+      )
+      .toBe(transformedView);
     await page.getByText("Campaign Marketing", { exact: true }).click();
     await expect(
       page.getByTestId("agent-map-latest-attribution"),
@@ -180,6 +193,45 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator("[data-proposal-state='proposed']")).toHaveCount(
       6,
     );
+
+    await page.evaluate((activeProjectId) => {
+      const test = (
+        window as unknown as {
+          __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+        }
+      ).__HARNESS_TEST__;
+      test?.publish?.({
+        type: "agent-map.proposal.changed",
+        delta: {
+          schemaVersion: 1,
+          projectId: activeProjectId,
+          proposalId: "proposal_00000000-0000-7000-8000-000000000101",
+          fromVersion: 2,
+          version: 3,
+          operationIds: ["operation_00000000-0000-7000-8000-000000000402"],
+          operations: [
+            {
+              kind: "update-node",
+              nodeId: "node_00000000-0000-7000-8000-000000000101",
+              changes: { name: "Equity Research" },
+            },
+          ],
+          actor: {
+            userId: "user_mock",
+            sessionId: "planner_mock",
+            role: "map-planner",
+            assignment: null,
+          },
+          acceptedAt: new Date().toISOString(),
+        },
+      });
+    }, projectId);
+    await expect(
+      page.getByText("Equity Research", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("agent-map-latest-attribution"),
+    ).toContainText("Agent builder · unplanned");
   });
 
   test("a user can proceed while the greeting is generating and the record refetches", async ({

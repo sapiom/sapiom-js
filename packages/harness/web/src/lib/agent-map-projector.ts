@@ -167,6 +167,18 @@ export function applyAcceptedProposalDelta(
   }
 
   const selectionRemoved = selection !== null && !nodes.has(selection);
+  // AcceptedProposalDelta deliberately omits the idempotency requestId. The
+  // browser projection is disposable, so use the first permanent operation
+  // id as a stable local batch key until the next durable GET replaces it.
+  const projectedRequestId = delta.operationIds[0]!;
+  const appendedHistory = delta.operations.map((operation, index) => ({
+    id: delta.operationIds[index]!,
+    requestId: projectedRequestId,
+    acceptedVersion: delta.version,
+    operation: structuredClone(operation),
+    actor: structuredClone(delta.actor),
+    acceptedAt: delta.acceptedAt,
+  }));
   return {
     status: "applied",
     selection: selectionRemoved ? null : selection,
@@ -183,6 +195,7 @@ export function applyAcceptedProposalDelta(
         version: delta.version,
         nodes: [...nodes.values()],
         relationships: [...relationships.values()],
+        history: [...proposal.history, ...appendedHistory],
         updatedAt: delta.acceptedAt,
       },
     },
@@ -198,7 +211,6 @@ export interface LatestNodeAttribution {
 export function latestNodeAttribution(
   snapshot: AgentMapWorkspaceResponse,
   nodeId: PlanNodeId,
-  latestDelta?: AcceptedProposalDelta,
 ): LatestNodeAttribution | null {
   const proposal = snapshot.proposal;
   if (!proposal) return null;
@@ -207,27 +219,26 @@ export function latestNodeAttribution(
   );
   const affectsNode = (operation: MapOperation): boolean => {
     switch (operation.kind) {
-        case "add-node":
-          return operation.node.id === nodeId;
-        case "update-node":
-        case "remove-node":
-          return operation.nodeId === nodeId;
-        case "add-relationship":
-          return (
-            operation.relationship.fromNodeId === nodeId ||
-            operation.relationship.toNodeId === nodeId
-          );
-        case "update-relationship":
-        case "remove-relationship": {
-          const edge = relationships.get(operation.relationshipId);
-          return edge?.fromNodeId === nodeId || edge?.toNodeId === nodeId;
-        }
+      case "add-node":
+        return operation.node.id === nodeId;
+      case "update-node":
+      case "remove-node":
+        return operation.nodeId === nodeId;
+      case "add-relationship":
+        return (
+          operation.relationship.fromNodeId === nodeId ||
+          operation.relationship.toNodeId === nodeId
+        );
+      case "update-relationship":
+      case "remove-relationship": {
+        const edge = relationships.get(operation.relationshipId);
+        return edge?.fromNodeId === nodeId || edge?.toNodeId === nodeId;
       }
+    }
   };
-  if (latestDelta?.operations.some(affectsNode)) {
-    return { actor: latestDelta.actor, acceptedAt: latestDelta.acceptedAt };
-  }
-  return [...proposal.history].reverse().find(({ operation }) =>
-    affectsNode(operation),
-  ) ?? null;
+  return (
+    [...proposal.history]
+      .reverse()
+      .find(({ operation }) => affectsNode(operation)) ?? null
+  );
 }

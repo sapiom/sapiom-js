@@ -81,6 +81,7 @@ export function AgentMapCanvas({
   const [panning, setPanning] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const fittedProposalRef = useRef<string | null>(null);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
   const nodesById = useMemo(
@@ -107,10 +108,13 @@ export function AgentMapCanvas({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
-    let initialized = false;
     const measure = (): void => {
-      if (initialized || viewport.getBoundingClientRect().width <= 0) return;
-      initialized = true;
+      if (
+        fittedProposalRef.current === proposal.id ||
+        viewport.getBoundingClientRect().width <= 0
+      )
+        return;
+      fittedProposalRef.current = proposal.id;
       fit();
     };
     measure();

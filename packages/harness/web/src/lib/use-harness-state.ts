@@ -58,6 +58,7 @@ import { loadUiPrefs, saveUiPrefs } from "./ui-prefs";
 import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
+import { agentMapLoader } from "./agent-map-loader";
 import { systemGraphLoader } from "./system-graph-loader";
 import { WorkflowProjectionOrder } from "./workflow-projection-order";
 import {
@@ -440,11 +441,15 @@ export function useHarnessState(): HarnessStateHook {
     const workspaceKeys = new Set(
       (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey),
     );
+    const projectIds = new Set(
+      (state.studioProjects ?? []).map((project) => project.projectId),
+    );
     systemGraphLoader.retain(workspaceKeys);
+    agentMapLoader.retain(projectIds);
     setSystemGraphAnnouncements((current) =>
       retainSystemGraphAnnouncements(current, workspaceKeys),
     );
-  }, [state?.workspaceScopes]);
+  }, [state?.studioProjects, state?.workspaceScopes]);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   /**
    * Mirror of `settings` for the one reader that cannot wait for a re-render:

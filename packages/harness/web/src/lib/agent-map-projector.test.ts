@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type {
+  AcceptedProposalDelta,
+  PlanNodeId,
+  ProposalOperationId,
+} from "@shared/agent-map";
 import {
   applyAcceptedProposalDelta,
   latestNodeAttribution,
@@ -21,9 +26,48 @@ describe("applyAcceptedProposalDelta", () => {
     expect(result.snapshot.proposal?.version).toBe(2);
     expect(result.snapshot.proposal?.nodes[0]?.name).toBe("Market Research");
     expect(result.selection).toBe(nodeId);
-    expect(
-      latestNodeAttribution(result.snapshot, nodeId, renameDelta())?.actor.role,
-    ).toBe("agent-builder");
+    expect(latestNodeAttribution(result.snapshot, nodeId)?.actor.role).toBe(
+      "agent-builder",
+    );
+  });
+
+  it("retains earlier node attribution after a later delta touches another node", () => {
+    const first = applyAcceptedProposalDelta(proposalSnapshot(), renameDelta());
+    expect(first.status).toBe("applied");
+    if (first.status !== "applied") return;
+    const second: AcceptedProposalDelta = {
+      ...renameDelta(2),
+      operationIds: [
+        "operation_00000000-0000-7000-8000-000000000005" as ProposalOperationId,
+      ],
+      operations: [
+        {
+          kind: "add-node",
+          node: {
+            id: "node_00000000-0000-7000-8000-000000000006" as PlanNodeId,
+            kind: "artifact",
+            name: "Brief",
+            purpose: "Carry a later result",
+            ownerAgentId: null,
+            contractRefs: [],
+          },
+        },
+      ],
+      actor: {
+        userId: "user",
+        sessionId: "planner",
+        role: "map-planner",
+        assignment: null,
+      },
+      acceptedAt: "2026-09-02T10:00:02.000Z",
+    };
+    const projected = applyAcceptedProposalDelta(first.snapshot, second);
+    expect(projected.status).toBe("applied");
+    if (projected.status !== "applied") return;
+    expect(projected.snapshot.proposal?.history).toHaveLength(3);
+    expect(latestNodeAttribution(projected.snapshot, nodeId)?.actor.role).toBe(
+      "agent-builder",
+    );
   });
 
   it("rejects gaps atomically without changing the prior snapshot", () => {

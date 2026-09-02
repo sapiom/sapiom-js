@@ -61,6 +61,9 @@ export function createAgentMapLoader(): AgentMapLoader {
           requests.delete(projectId);
         return load(source, projectId);
       }
+      // retain() may retire this project while its read is still in flight.
+      // Let the original caller settle, but never resurrect the evicted cache.
+      if (requests.get(projectId)?.promise !== promise) return read;
       let next = read;
       const pending = queued.get(projectId) ?? [];
       queued.delete(projectId);
@@ -97,6 +100,10 @@ export function createAgentMapLoader(): AgentMapLoader {
     accept(delta) {
       const projectId = delta.projectId;
       const snapshot = snapshots.get(projectId);
+      // Queuing is only useful while an initial/refetch request can consume
+      // the announcement. A never-opened project gets a fresh durable GET when
+      // selected, without retaining an event-only cache entry indefinitely.
+      if (!snapshot && !requests.has(projectId)) return { status: "ignored" };
       if (!snapshot || requests.has(projectId)) {
         const pending = queued.get(projectId) ?? [];
         if (

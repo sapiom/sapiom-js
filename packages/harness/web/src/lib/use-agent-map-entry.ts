@@ -19,7 +19,6 @@ export type AgentMapWorkspacePaneState =
   | {
       status: "ready";
       value: AgentMapWorkspaceResponse;
-      latestDelta?: AcceptedProposalDelta;
     }
   | { status: "error"; message: string };
 
@@ -228,13 +227,24 @@ export function useAgentMapEntry({
     const unsubscribeChanges = subscribeProposalChanges((rawDelta) => {
       let delta: AcceptedProposalDelta;
       try {
-        delta = parseAcceptedProposalDelta(rawDelta, projectId);
+        // Parse the announced project before comparing it with the active
+        // view. A foreign but valid delta still belongs in that project's
+        // loader cache; it must never invalidate or refetch this project.
+        delta = parseAcceptedProposalDelta(rawDelta);
       } catch {
-        agentMapLoader.invalidate(projectId);
-        loadWorkspace(projectId);
+        if (
+          typeof rawDelta === "object" &&
+          rawDelta !== null &&
+          "projectId" in rawDelta &&
+          rawDelta.projectId === projectId
+        ) {
+          agentMapLoader.invalidate(projectId);
+          loadWorkspace(projectId);
+        }
         return;
       }
       const outcome = agentMapLoader.accept(delta);
+      if (delta.projectId !== projectId) return;
       if (outcome.status === "applied") {
         const visibleLatency = Math.max(
           0,
@@ -247,7 +257,6 @@ export function useAgentMapEntry({
                 workspace: {
                   status: "ready",
                   value: outcome.snapshot,
-                  latestDelta: delta,
                 },
               }
             : current,

@@ -6,7 +6,7 @@ import type {
   ProposalOperationId,
 } from "@shared/agent-map";
 
-const projectId = "project_00000000-0000-4000-8000-000000000001";
+export const proposalProjectId = "project_00000000-0000-4000-8000-000000000001";
 const proposalId =
   "proposal_00000000-0000-7000-8000-000000000001" as MapProposalId;
 export const proposalNodeId =
@@ -15,7 +15,9 @@ const operationId =
   "operation_00000000-0000-7000-8000-000000000003" as ProposalOperationId;
 const at = "2026-09-02T10:00:00.000Z";
 
-export function proposalSnapshot(): AgentMapWorkspaceResponse {
+export function proposalSnapshot(
+  projectId = proposalProjectId,
+): AgentMapWorkspaceResponse {
   const node = {
     id: proposalNodeId,
     kind: "agent" as const,
@@ -73,7 +75,10 @@ export function proposalSnapshot(): AgentMapWorkspaceResponse {
   };
 }
 
-export function renameDelta(fromVersion = 1): AcceptedProposalDelta {
+export function renameDelta(
+  fromVersion = 1,
+  projectId = proposalProjectId,
+): AcceptedProposalDelta {
   return {
     schemaVersion: 1,
     projectId,
