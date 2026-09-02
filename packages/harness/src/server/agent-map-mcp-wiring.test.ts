@@ -11,15 +11,21 @@ import { startServer, type HarnessServer } from "./index.js";
 
 let root: string;
 let projectRoot: string;
+let projectId: string;
 let server: HarnessServer | undefined;
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-mcp-wiring-"));
   projectRoot = path.join(root, "project");
   await fs.mkdir(projectRoot);
-  await new StudioProjectCatalog(path.join(root, "studio-projects.json")).reconcile([
-    { workspaceKey: "project", cwd: projectRoot },
-  ]);
+  const reconciled = await new StudioProjectCatalog(
+    path.join(root, "studio-projects.json"),
+  ).reconcile([{ workspaceKey: "project", cwd: projectRoot }]);
+  projectId = reconciled.projects[0]!.projectId;
+  await fs.writeFile(
+    path.join(root, "settings.json"),
+    JSON.stringify({ recentDirs: [projectRoot] }),
+  );
 });
 
 afterEach(async () => {
@@ -125,4 +131,103 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     }),
   });
   expect(rejected.status).toBe(401);
+});
+
+it("gives a signed-out local planner its scoped Agent Map tools", async () => {
+  let launchOpts: LaunchOpts | undefined;
+  const launch = (opts: LaunchOpts): SpawnSpec => {
+    launchOpts = opts;
+    return { command: "bash", args: [], env: {}, cwd: opts.cwd };
+  };
+  const adapter: HarnessAdapter = {
+    id: "claude-code",
+    eventSource: "hooks",
+    doctor: async () => [],
+    launch,
+    resume: (_id, opts) => launch(opts),
+    listPastSessions: async () => [],
+    canResume: async () => true,
+  };
+  const webDir = path.join(root, "web");
+  await fs.mkdir(webDir);
+  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
+  server = await startServer({
+    port: 0,
+    bootToken: "boot-token",
+    telemetryOptIn: false,
+    identity: null,
+    machineId: "machine-1",
+    adapters: { "claude-code": adapter },
+    stateRoot: root,
+    launchDir: projectRoot,
+    webDir,
+    autoCreateSession: false,
+    loadSystemPrompt: async () => "",
+  });
+
+  const response = await fetch(
+    `http://127.0.0.1:${server.port}/api/projects/${projectId}/planner-sessions`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-harness-token": "boot-token",
+      },
+      body: JSON.stringify({ mode: "fresh", harness: "claude-code" }),
+    },
+  );
+  expect(response.status).toBe(201);
+  const created = (await response.json()) as {
+    session: {
+      id: string;
+      planning: {
+        identity: { role: string; userId: string };
+        greeting: { status: string; reason?: string };
+      };
+      agentMapIdentity?: { role: string; userId: string };
+    };
+  };
+  expect(created.session.planning.identity).toMatchObject({
+    role: "map-planner",
+    userId: "local:machine-1",
+  });
+  expect(created.session.agentMapIdentity).toEqual(
+    created.session.planning.identity,
+  );
+  expect(created.session.planning.greeting).toEqual({
+    status: "skipped",
+    reason: "user-proceeded",
+  });
+
+  const metadata = launchOpts?.agentMapMcp;
+  expect(metadata?.url).toBe(`http://127.0.0.1:${server.port}/mcp/agent-map`);
+  expect(metadata?.url).not.toContain(":0/");
+  const config = JSON.parse(
+    await fs.readFile(launchOpts!.mcpConfigFile!, "utf8"),
+  );
+  expect(config.mcpServers["agent-map"].headers.Authorization).toBe(
+    `Bearer ${metadata!.bearerToken}`,
+  );
+  const systemPrompt = await fs.readFile(launchOpts!.systemPromptFile!, "utf8");
+  expect(systemPrompt).toContain(
+    "Let the user's first real message be the first visible conversation turn",
+  );
+  expect(systemPrompt).not.toContain(
+    "This is a private Agent Studio control turn",
+  );
+
+  const client = new Client({ name: "signed-out-planner-test", version: "1" });
+  const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
+    requestInit: {
+      headers: { Authorization: `Bearer ${metadata!.bearerToken}` },
+    },
+  });
+  await client.connect(transport);
+  const tools = await client.listTools();
+  expect(tools.tools.map(({ name }) => name).sort()).toEqual([
+    "agent_map_propose",
+    "agent_map_read",
+    "agent_map_validate",
+  ]);
+  await client.close();
 });

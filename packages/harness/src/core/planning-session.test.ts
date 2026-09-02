@@ -265,10 +265,21 @@ describe("PlanningSessionService", () => {
         userId: "user-1",
         role: "map-planner",
       },
-      greeting: { status: "pending" },
+      greeting: { status: "skipped", reason: "user-proceeded" },
       queuedInputIds: [],
     });
     expect(contexts.every((value) => !value.includes(project.rootBindings[0]!.localRootRef))).toBe(true);
+    expect(contexts).toEqual([
+      expect.stringContaining(
+        "Let the user's first real message be the first visible conversation turn",
+      ),
+      expect.stringContaining(
+        "Let the user's first real message be the first visible conversation turn",
+      ),
+    ]);
+    expect(contexts.join("\n")).not.toContain(
+      "This is a private Agent Studio control turn",
+    );
   });
 
   it("serializes concurrent resume-or-create so both callers resolve one planner", async () => {

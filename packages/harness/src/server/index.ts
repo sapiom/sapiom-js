@@ -1143,8 +1143,11 @@ export const startServer = async (
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
-      const userId = planningUserId;
-      if (!userId) return undefined;
+      // Planner ownership already uses a stable machine-local principal when
+      // Studio runs with --no-auth. Capability issuance must use that same
+      // identity; requiring an authenticated user here silently removed the
+      // Agent Map server from every signed-out planner's MCP config.
+      const userId = localPlanningPrincipal(planningUserId, machineId);
       const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
       if (!project) return undefined;
       if (
