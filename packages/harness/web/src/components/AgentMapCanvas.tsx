@@ -268,6 +268,8 @@ export function AgentMapCanvas({
             const owner = node.ownerAgentId
               ? nodesById.get(node.ownerAgentId)
               : null;
+            // Every map-node name is user-authored. Keep the privacy marker
+            // on a USER_NAMED_OBJECTS value even when node.kind is not agent.
             return (
               <button
                 key={node.id}

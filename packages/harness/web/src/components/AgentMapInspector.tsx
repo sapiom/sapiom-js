@@ -25,6 +25,8 @@ export function AgentMapInspector({
   );
   const latest = latestNodeAttribution(snapshot, node.id);
   const assignment = latest?.actor.assignment;
+  // Plan-node names are user-authored across every kind; `agent` is the
+  // USER_NAMED_OBJECTS privacy marker, not a claim about node.kind.
   return (
     <aside
       className="agent-map-inspector"

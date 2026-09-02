@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
 
 import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { AgentMapCanvas } from "./AgentMapCanvas";
 import { AgentMapInspector } from "./AgentMapInspector";
@@ -78,6 +79,7 @@ function PopulatedAgentMap({
       className="agent-map-live"
       data-testid="agent-map-live"
       data-project-id={value.project.projectId}
+      {...trackingAttrs({ surface: "agent_map" })}
     >
       <div className="agent-map-live-header">
         <span className="status-tag">Proposed</span>
