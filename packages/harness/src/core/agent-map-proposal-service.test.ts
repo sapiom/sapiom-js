@@ -13,7 +13,6 @@ import type {
   ProposalOperationId,
 } from "../shared/agent-map.js";
 import {
-  AgentMapProposalConflictError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
   type AgentMapPermanentIdAllocator,
@@ -204,7 +203,9 @@ describe("AgentMapProposalService", () => {
         identity("session-1"),
         addNode("request-1", 0, null, "different"),
       ),
-    ).rejects.toBeInstanceOf(AgentMapProposalConflictError);
+    ).rejects.toMatchObject({
+      conflict: { code: "request_id_reused", recovery: "new_request" },
+    });
   });
 
   it("rebases disjoint stale additions and rejects overlapping stale edits", async () => {
