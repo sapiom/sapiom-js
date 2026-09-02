@@ -41,10 +41,8 @@ export interface ApiKeyProvider {
   /** The current API key, or null when the harness is not signed in. */
   getKey(): string | null;
   /**
-   * Re-read the shared credential store and adopt its authoritative result.
-   * Returns the updated current key, or null when signed out.
-   * Never throws — a read failure leaves the current key untouched and is
-   * reported by returning the existing value.
+   * Re-read the shared credential store. A successful read is authoritative;
+   * a failed read preserves and returns the last-known key. Never throws.
    */
   refresh(): Promise<string | null>;
   /**
