@@ -82,7 +82,6 @@ import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
-import { PlanningConversationPane } from "./components/PlanningConversationPane";
 import { HelpOverlay } from "./components/HelpOverlay";
 import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import { OverviewModal } from "./components/OverviewModal";
@@ -176,7 +175,6 @@ import {
   type RunTarget,
 } from "./lib/use-harness-state";
 import { useAgentMapEntry } from "./lib/use-agent-map-entry";
-import { usePlannerTranscript } from "./lib/use-planner-transcript";
 import {
   isWorkflowRunnable,
   workflowDeploymentState,
@@ -325,7 +323,7 @@ export const App = (): JSX.Element => {
       harness.state?.sessions,
     ],
   );
-  const activePlannerForTranscript = harness.state?.sessions.find(
+  const activePlannerForProject = harness.state?.sessions.find(
     (session) =>
       session.id === harness.activeSessionId &&
       session.status !== "exited" &&
@@ -334,7 +332,7 @@ export const App = (): JSX.Element => {
   );
   const agentMapEntry = useAgentMapEntry({
     projectId: plannerProjectId,
-    selectedPlanner: activePlannerForTranscript ?? null,
+    selectedPlanner: activePlannerForProject ?? null,
     api: harness.api,
     harness: () =>
       loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code",
@@ -344,11 +342,6 @@ export const App = (): JSX.Element => {
     subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
-  const plannerTranscript = usePlannerTranscript(
-    activePlannerForTranscript?.id ?? null,
-    harness.sessionRecord,
-    harness.subscribeSessionRecordChanges,
-  );
 
   // A project visit restores its server-owned preference before choosing an
   // altitude. Once map is chosen, `useAgentMapEntry` owns the independent map
@@ -3094,25 +3087,23 @@ export const App = (): JSX.Element => {
                     title="Opening planning conversation…"
                   />
                 ) : activePlannerSession?.planning ? (
-                  <PlanningConversationPane
-                    metadata={activePlannerSession.planning}
-                    transcript={plannerTranscript.state}
-                    onRetryTranscript={plannerTranscript.retry}
-                    onSend={async (text) => {
-                      await harness.sendPlannerMessage(
-                        studioView.projectId,
-                        activePlannerSession.id,
-                        { text },
-                      );
-                    }}
-                    onRetryGreeting={async () => {
-                      await harness.retryPlannerGreeting(
-                        studioView.projectId,
-                        activePlannerSession.id,
-                      );
-                    }}
-                    disabled={activePlannerSession.status === "exited"}
-                  />
+                  /* Agent Map planning is still an ordinary coding-agent
+                     session. Keep the exact same raw CLI surface used for
+                     every agent: trust/auth prompts, slash commands, tool
+                     output, and provider chrome must remain visible rather
+                     than being replaced by a transcript/composer facsimile. */
+                  <div className="agent-view" data-testid="agent-view">
+                    <div
+                      className="agent-view-panel"
+                      id="agent-panel-terminal"
+                    >
+                      <Terminal
+                        sessionId={activePlannerSession.id}
+                        token={harness.bootToken}
+                        cwd={activePlannerSession.cwd}
+                      />
+                    </div>
+                  </div>
                 ) : (
                   <EmptyState
                     className="terminal-empty"

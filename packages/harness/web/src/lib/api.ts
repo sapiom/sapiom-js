@@ -2310,6 +2310,19 @@ export class MockApi implements HarnessApi {
         "Studio project not found",
       );
     }
+    const goldenFixtureEnabled =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockAgentMapGolden") ===
+        "1";
+    if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
+      const fixture = goldenAgentMapFixture(
+        project,
+        new Date().toISOString(),
+        "user_mock",
+        "planner_mock",
+      );
+      this.agentMapSnapshots.set(projectId, fixture.snapshot);
+    }
     const stored = this.agentMapSnapshots.get(projectId);
     if (stored) return parseAgentMapWorkspaceResponse(stored, projectId);
     return parseAgentMapWorkspaceResponse(

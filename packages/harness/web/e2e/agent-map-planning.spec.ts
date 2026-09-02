@@ -28,38 +28,25 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("first open starts a planner beside the honest empty map", async ({
+  test("first open starts the raw planner CLI beside the honest empty map", async ({
     page,
   }) => {
     await openDashboardMap(page);
 
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    const terminal = page.locator(".harness-terminal");
+    await expect(terminal).toBeVisible();
+    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
     await expect(page.getByTestId("agent-map-empty")).toHaveText(
       "Nothing generated yet",
     );
-    await expect(
-      page.getByTestId("planner-transcript-assistant"),
-    ).toContainText("What kind of agent architecture do you want to build?");
-    // The automatic greeting is assistant-initiated. No fake user/control
-    // instruction is projected into the conversation.
-    await expect(
-      page
-        .getByTestId("planner-transcript-turn")
-        .first()
-        .locator(".transcript-role-user"),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("planner-composer-input")).toBeEnabled();
-    await expect(page.locator(".harness-terminal")).toHaveCount(0);
 
-    const [conversation, map] = await Promise.all([
-      page.getByTestId("planning-conversation").boundingBox(),
+    const [cli, map] = await Promise.all([
+      terminal.boundingBox(),
       page.getByTestId("agent-map-empty").boundingBox(),
     ]);
-    expect(conversation?.width ?? 0).toBeGreaterThan(200);
+    expect(cli?.width ?? 0).toBeGreaterThan(200);
     expect(map?.width ?? 0).toBeGreaterThan(200);
-    expect(map?.x ?? 0).toBeGreaterThan(
-      (conversation?.x ?? 0) + (conversation?.width ?? 0) - 2,
-    );
+    expect(map?.x ?? 0).toBeGreaterThan((cli?.x ?? 0) + (cli?.width ?? 0) - 2);
     await page.screenshot({
       path: "web/e2e/screenshots/agent-map-planning.png",
       fullPage: true,
@@ -88,16 +75,10 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
-    const composer = page.getByTestId("planner-composer-input");
-    await composer.fill(
-      "Build stock research and marketing agents with a database, TikTok, and a ResearchReport.",
-    );
-    const startedAt = Date.now();
-    await page.getByTestId("planner-composer-send").click();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
 
     const nodes = page.locator("[data-proposal-state='proposed']");
     await expect(nodes).toHaveCount(6);
@@ -234,7 +215,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     ).toContainText("Agent builder · unplanned");
   });
 
-  test("a user can proceed while the greeting is generating and the record refetches", async ({
+  test("greeting lifecycle state never replaces the raw planner CLI", async ({
     page,
   }) => {
     await page.goto(
@@ -243,36 +224,19 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
 
-    await expect(page.getByTestId("planner-greeting-generating")).toBeVisible();
-    const composer = page.getByTestId("planner-composer-input");
-    await expect(composer).toBeEnabled();
-    await composer.fill("A support triage system for customer requests.");
-    await page.getByTestId("planner-composer-send").click();
-    await composer.fill("A follow-up I started while that was queued.");
-
-    await expect(page.getByTestId("planner-queued-inputs")).toContainText(
-      "Message queued",
-    );
-    await expect(composer).toHaveValue(
-      "A follow-up I started while that was queued.",
-    );
-    await expect(page.getByTestId("planner-transcript-prompt")).toHaveText(
-      "A support triage system for customer requests.",
-    );
-    await expect(
-      page.getByTestId("planner-transcript-assistant"),
-    ).toContainText("clarifying the outcome");
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
     await expect(page.getByTestId("planner-greeting-generating")).toHaveCount(
       0,
     );
-    await expect(page.getByTestId("planner-queued-inputs")).toHaveCount(0);
+    await expect(page.getByTestId("planner-composer-input")).toHaveCount(0);
   });
 
   test("return resumes the same planner and plus creates a fresh planner tab", async ({
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     const first = await activeSessionId(page);
     expect(first).toBeTruthy();
 
@@ -280,13 +244,20 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .getByTestId("workflow-dashboard-keeper")
       .locator("button")
       .click();
-    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
+    // Moving down from the project map to an agent changes only the right-hand
+    // subject. The coding-agent CLI stays mounted in the centre and the
+    // selected agent's canvas/step graph becomes available beside it.
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
+    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
-    expect(await activeSessionId(page)).toBe(first);
-    await expect(page.getByTestId("planner-transcript-assistant")).toHaveCount(
-      1,
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("right-tab-canvas")).toContainText(
+      "Agent Map",
     );
+    await expect(page.getByTestId("right-tab-steps")).toBeDisabled();
+    expect(await activeSessionId(page)).toBe(first);
 
     await page.getByTestId("session-tab-new").click();
     await expect.poll(() => activeSessionId(page)).not.toBe(first);
@@ -294,9 +265,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(
       page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
     ).toHaveCount(2);
-    await expect(
-      page.getByTestId("planner-transcript-assistant"),
-    ).toContainText("What kind of agent architecture do you want to build?");
+    await expect(page.locator(".harness-terminal")).toBeVisible();
 
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-end-btn").click();
@@ -306,14 +275,14 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(
       page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
     ).toHaveCount(1);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
   });
 
   test("an explicitly selected planner tab wins over project resume ordering", async ({
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     const first = await activeSessionId(page);
     expect(first).toBeTruthy();
 
@@ -332,7 +301,9 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .getByTestId("workflow-dashboard-keeper")
       .locator("button")
       .click();
-    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
+    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
 
     await page.getByTestId("palette-trigger").click();
     await page.getByTestId("command-palette-input").fill("Planner A");
@@ -341,7 +312,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .getByText("Planner A", { exact: true })
       .click();
 
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     expect(await activeSessionId(page)).toBe(first);
     await expect(page.getByTestId("planner-loading")).toHaveCount(0);
     expect(await openPlannerSessionCallCount(page)).toBe(
@@ -353,7 +324,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
 
     await page.getByTestId("session-menu").click();
     const menu = page.getByTestId("session-menu-popover");
@@ -367,7 +338,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     const ended = await activeSessionId(page);
 
     await page.getByTestId("session-menu").click();
@@ -388,25 +359,22 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     );
     await startFresh.click();
 
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect.poll(() => activeSessionId(page)).not.toBe(ended);
   });
 
-  test("greeting retry failures stay local to the greeting", async ({
+  test("a failed greeting still leaves the raw planner CLI visible", async ({
     page,
   }) => {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockGreeting=failed&mockGreetingRetry=error",
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockGreeting=failed",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
 
-    await page.getByTestId("planner-greeting-retry").click();
-    await expect(
-      page.getByTestId("planner-greeting-retry-error"),
-    ).toContainText("temporarily unavailable");
-    await expect(page.getByTestId("planner-greeting-failed")).toBeVisible();
-    await expect(page.getByTestId("planner-composer-input")).toBeEnabled();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
+    await expect(page.getByTestId("planner-greeting-retry")).toHaveCount(0);
   });
 
   test("workspace and planner failures stay local, while unauthorized is whole-workspace", async ({
@@ -417,9 +385,8 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("agent-map-load-error")).toBeVisible();
-    await expect(page.getByTestId("planner-composer-input")).toBeEnabled();
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -487,7 +454,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
 test.describe("SAP-3058 mobile Agent Map", () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test("conversation stays primary and the explicit sheet restores focus on close", async ({
+  test("the raw CLI stays primary and the explicit sheet restores focus on close", async ({
     page,
   }) => {
     await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
@@ -495,7 +462,7 @@ test.describe("SAP-3058 mobile Agent Map", () => {
     await page.getByTestId("rail-expand").click();
     await openDashboardMap(page);
 
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.locator(".right-pane")).toBeHidden();
     await expect(page.getByTestId("session-menu")).toBeVisible();
     const openMap = page.getByTestId("right-expand");
@@ -527,18 +494,27 @@ test.describe("SAP-3058 mobile Agent Map", () => {
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockStudioPreference=error",
     );
-    await expect(page.getByTestId("planning-conversation")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.locator(".right-pane")).toBeHidden();
 
-    const composer = page.getByTestId("planner-composer-input");
-    await composer.fill("Keep the Agent Map open while this turn starts.");
-    await page.getByTestId("planner-composer-send").click();
+    // The mock preference read has one 180 ms round trip. Let its one-shot
+    // failure settle before the user explicitly opens the sheet; the assertion
+    // below then guards against later session updates closing it again.
+    await page.waitForTimeout(250);
+    const first = await activeSessionId(page);
+    const newSession = page.getByTestId("session-tab-new");
+    await expect(newSession).toBeEnabled();
+    await newSession.click();
+    await expect.poll(() => activeSessionId(page)).not.toBe(first);
+
+    // Open the sheet while the new planner is still launching. Its automatic
+    // ready/status event arrives later and must not replay the failed preference
+    // restore or collapse the user-opened Agent Map.
     await page.getByTestId("right-expand").click();
     await expect(page.locator(".right-pane")).toBeVisible();
-
-    await expect(page.getByTestId("planner-transcript-prompt")).toHaveText(
-      "Keep the Agent Map open while this turn starts.",
-    );
+    await expect(
+      page.locator(".session-dot[data-status='running']"),
+    ).toBeVisible();
     await expect(page.locator(".right-pane")).toBeVisible();
   });
 });
