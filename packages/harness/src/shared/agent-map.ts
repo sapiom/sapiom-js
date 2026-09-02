@@ -12,6 +12,164 @@ export const STUDIO_PROJECT_CATALOG_SCHEMA_VERSION = 1;
 export const AGENT_MAP_WORKSPACE_SCHEMA_VERSION = 1;
 export const AGENT_MAP_INITIAL_RECORD_VERSION = 1;
 export const STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION = 1;
+export const AGENT_MAP_PROPOSAL_SCHEMA_VERSION = 1 as const;
+
+type AgentMapBrand<TBrand extends string> = string & {
+  readonly __brand: TBrand;
+};
+
+/** Opaque, service-allocated identities. Callers must never derive these. */
+export type PlanNodeId = AgentMapBrand<"PlanNodeId">;
+export type PlanRelationshipId = AgentMapBrand<"PlanRelationshipId">;
+export type MapProposalId = AgentMapBrand<"MapProposalId">;
+export type ProposalOperationId = AgentMapBrand<"ProposalOperationId">;
+/** A caller-authored alias whose lifetime is exactly one operation batch. */
+export type DraftRef = AgentMapBrand<"DraftRef">;
+
+export const PLAN_NODE_KINDS = [
+  "agent",
+  "subagent",
+  "resource",
+  "connector",
+  "artifact",
+] as const;
+export type PlanNodeKind = (typeof PLAN_NODE_KINDS)[number];
+
+export const RELATIONSHIP_KINDS = [
+  "invokes",
+  "feeds",
+  "reads",
+  "writes",
+  "uses",
+  "triggers",
+] as const;
+export type RelationshipKind = (typeof RELATIONSHIP_KINDS)[number];
+
+export const EXECUTION_MODES = [
+  "synchronous",
+  "asynchronous",
+  "scheduled",
+  "human-triggered",
+] as const;
+export type ExecutionMode = (typeof EXECUTION_MODES)[number];
+
+export interface PlanNode {
+  id: PlanNodeId;
+  kind: PlanNodeKind;
+  name: string;
+  purpose: string;
+  ownerAgentId: PlanNodeId | null;
+  contractRefs: string[];
+}
+
+export interface PlanRelationship {
+  id: PlanRelationshipId;
+  fromNodeId: PlanNodeId;
+  toNodeId: PlanNodeId;
+  kind: RelationshipKind;
+  executionMode: ExecutionMode | null;
+  contractRef: string | null;
+  description: string;
+}
+
+export interface AgentMapGraph {
+  nodes: PlanNode[];
+  relationships: PlanRelationship[];
+}
+
+export type NodeRef = { nodeId: PlanNodeId } | { draftRef: DraftRef };
+
+export type PlanNodeChanges = Partial<
+  Pick<PlanNode, "name" | "purpose" | "contractRefs">
+>;
+export type RelationshipChanges = Partial<
+  Pick<PlanRelationship, "description" | "executionMode" | "contractRef">
+>;
+
+/** Caller-facing operations. Authority and permanent IDs are intentionally absent. */
+export type MapOperationInput =
+  | {
+      kind: "add-node";
+      draftRef: DraftRef;
+      node: Omit<PlanNode, "id" | "ownerAgentId"> & {
+        ownerAgent: NodeRef | null;
+      };
+    }
+  | { kind: "update-node"; nodeId: PlanNodeId; changes: PlanNodeChanges }
+  | { kind: "remove-node"; nodeId: PlanNodeId }
+  | {
+      kind: "add-relationship";
+      draftRef: DraftRef;
+      relationship: Omit<PlanRelationship, "id" | "fromNodeId" | "toNodeId"> & {
+        from: NodeRef;
+        to: NodeRef;
+      };
+    }
+  | {
+      kind: "update-relationship";
+      relationshipId: PlanRelationshipId;
+      changes: RelationshipChanges;
+    }
+  | { kind: "remove-relationship"; relationshipId: PlanRelationshipId };
+
+/** Persistable operations after the service allocates every permanent ID. */
+export type MapOperation =
+  | { kind: "add-node"; node: PlanNode }
+  | { kind: "update-node"; nodeId: PlanNodeId; changes: PlanNodeChanges }
+  | { kind: "remove-node"; nodeId: PlanNodeId }
+  | { kind: "add-relationship"; relationship: PlanRelationship }
+  | {
+      kind: "update-relationship";
+      relationshipId: PlanRelationshipId;
+      changes: RelationshipChanges;
+    }
+  | { kind: "remove-relationship"; relationshipId: PlanRelationshipId };
+
+export interface ProposalBatchRequest {
+  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
+  proposalId: MapProposalId | null;
+  expectedVersion: number;
+  requestId: string;
+  operations: MapOperationInput[];
+}
+
+export type ProposalValidationRecovery = "reread" | "correct" | "retry";
+
+export type ProposalValidationIssueCode =
+  | "malformed_input"
+  | "unsupported_schema"
+  | "empty_batch"
+  | "duplicate_draft_ref"
+  | "unknown_reference"
+  | "duplicate_target"
+  | "invalid_owner"
+  | "self_relationship"
+  | "invalid_relationship_endpoints"
+  | "duplicate_relationship"
+  | "immutable_field"
+  | "dependent_entity";
+
+/** Bounded and field-addressable. It never echoes caller values or prose. */
+export interface ProposalValidationIssue {
+  code: ProposalValidationIssueCode;
+  operationIndex: number | null;
+  path: Array<string | number>;
+  recovery: ProposalValidationRecovery;
+}
+
+export type ProposalValidationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; issues: ProposalValidationIssue[] };
+
+export type ProposalConflictCode = "stale_version" | "request_id_reused";
+
+export interface ProposalConflict {
+  code: ProposalConflictCode;
+  currentVersion: number;
+  affectedNodeIds: PlanNodeId[];
+  affectedRelationshipIds: PlanRelationshipId[];
+  recovery: "reread" | "retry";
+}
 
 export type ProjectRootBindingStatus = "active" | "missing";
 
@@ -112,6 +270,67 @@ export type PlanningSessionIdentity =
       role: "agent-builder";
       assignment: { kind: "unplanned" };
     });
+
+export interface ProposalActor {
+  userId: string;
+  sessionId: string;
+  role: PlanningSessionIdentity["role"];
+  assignment:
+    | { kind: "planned"; agentId: string }
+    | { kind: "unplanned" }
+    | null;
+}
+
+export interface ProposalOperationRecord {
+  id: ProposalOperationId;
+  requestId: string;
+  acceptedVersion: number;
+  operation: MapOperation;
+  actor: ProposalActor;
+  acceptedAt: string;
+}
+
+export interface AcceptedProposalDelta {
+  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
+  projectId: StudioProjectId;
+  proposalId: MapProposalId;
+  fromVersion: number;
+  version: number;
+  operationIds: ProposalOperationId[];
+  operations: MapOperation[];
+  actor: ProposalActor;
+  acceptedAt: string;
+}
+
+export interface ProposalBatchResult {
+  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
+  proposalId: MapProposalId;
+  version: number;
+  operationIds: ProposalOperationId[];
+  allocatedNodeIds: Record<DraftRef, PlanNodeId>;
+  allocatedRelationshipIds: Record<DraftRef, PlanRelationshipId>;
+  delta: AcceptedProposalDelta;
+}
+
+export interface MapChangeProposal {
+  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
+  id: MapProposalId;
+  projectId: StudioProjectId;
+  baseRevisionId: string | null;
+  version: number;
+  nodes: PlanNode[];
+  relationships: PlanRelationship[];
+  history: ProposalOperationRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentMapReadSnapshot {
+  schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;
+  project: StudioProjectSummary;
+  workspace: AgentMapWorkspaceState;
+  proposal: MapChangeProposal | null;
+}
 
 export type PlannerGreetingErrorCode =
   | "session_not_ready"
