@@ -25,6 +25,13 @@ export interface CliOptions {
   stateRoot?: string;
 }
 
+/** Translate the CLI flag into the server's explicit process-wide policy. */
+export function resolveCliAuthMode(
+  options: Pick<CliOptions, "noAuth">,
+): "enabled" | "disabled" {
+  return options.noAuth ? "disabled" : "enabled";
+}
+
 export function parseArgs(argv: string[]): CliOptions {
   let dir: string | undefined;
   let port = DEFAULT_PORT;

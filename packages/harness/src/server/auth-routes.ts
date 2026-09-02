@@ -104,6 +104,8 @@ export interface AuthRoutesOptions {
   apiKeyProvider: AuthKeyTarget;
   /** The server event bus — broadcasts `auth.changed` after every state transition. */
   bus: EventBus;
+  /** Whether this Studio process may read or mutate shared authentication. */
+  authEnabled?: boolean;
   /**
    * Overrides SAPIOM_ENVIRONMENT for the OAuth flow. Defaults to
    * `process.env.SAPIOM_ENVIRONMENT` (the same override the CLI uses).
@@ -131,6 +133,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     authState,
     apiKeyProvider,
     bus,
+    authEnabled = true,
     environment,
     performBrowserAuthImpl = performBrowserAuth,
     onPlanningUserChanged,
@@ -148,7 +151,11 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
   // ---------------------------------------------------------------------------
 
   router.get("/auth/status", (_req, res) => {
-    res.json(authState.get());
+    res.json(
+      authEnabled
+        ? authState.get()
+        : { authenticated: false, organizationName: null },
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -156,6 +163,13 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
   // ---------------------------------------------------------------------------
 
   router.post("/auth/start", (_req, res) => {
+    if (!authEnabled) {
+      res.status(403).json({
+        error: "authentication is disabled for this Studio process",
+      });
+      return;
+    }
+
     if (pendingAuth !== null) {
       res.status(409).json({ error: "authentication already in progress" });
       return;
@@ -230,6 +244,13 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
   // ---------------------------------------------------------------------------
 
   router.post("/auth/disconnect", async (_req, res, next) => {
+    if (!authEnabled) {
+      res.status(403).json({
+        error: "authentication is disabled for this Studio process",
+      });
+      return;
+    }
+
     try {
       const env = await resolveEnvironment(
         environment ?? process.env.SAPIOM_ENVIRONMENT,
@@ -244,10 +265,8 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
       // Clear the credential store — the next refresh() call will find nothing.
       await clearCredentials(env.name);
 
-      // Zero the in-memory key immediately so getKey() returns null right away.
-      // This is distinct from refresh(), whose `if (latest)` guard deliberately
-      // keeps the cached key when the store has nothing to offer — we want an
-      // unconditional zero on disconnect.
+      // Zero the in-memory key immediately so getKey() returns null right away,
+      // without waiting for the next launch-time or request-retry refresh.
       apiKeyProvider.clear();
 
       authState.set({ authenticated: false, organizationName: null });
