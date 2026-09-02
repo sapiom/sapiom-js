@@ -473,7 +473,7 @@ export class AgentMapProposalService {
                 currentVersion,
                 affectedNodeIds: [],
                 affectedRelationshipIds: [],
-                recovery: "reread",
+                recovery: "new_request",
               });
             replayed = true;
             return {
