@@ -29,6 +29,7 @@ import {
   type GraphArrowKey,
   type GraphView,
 } from "../lib/graph-viewport";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { Icon, type IconName } from "./Icon";
 
@@ -275,6 +276,7 @@ export function AgentMapCanvas({
                 data-testid={`agent-map-node-${node.id}`}
                 data-node-kind={node.kind}
                 data-proposal-state="proposed"
+                {...trackingAttrs({ object: "agent" })}
                 style={
                   {
                     left: placed.x,

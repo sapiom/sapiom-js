@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
 
 import { latestNodeAttribution } from "../lib/agent-map-projector";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface AgentMapInspectorProps {
   snapshot: AgentMapWorkspaceResponse;
@@ -29,6 +30,7 @@ export function AgentMapInspector({
       className="agent-map-inspector"
       data-testid="agent-map-inspector"
       aria-label={`${node.name} details`}
+      {...trackingAttrs({ object: "agent" })}
     >
       <div className="agent-map-inspector-heading">
         <div>

@@ -326,6 +326,10 @@ export class PlanningSessionService {
     const workspace = await this.options.workspaceStore.readOrCreate(
       project.projectId,
     );
+    const emptyProject =
+      workspace.confirmedRevisionId === null &&
+      workspace.activeProposalId === null &&
+      workspace.projectBuildPlanId === null;
     const cwd = launchRoot(project);
     const details = await this.focusedDetails(project, workspace);
     const session = await this.options.sessionManager.create(
@@ -344,7 +348,7 @@ export class PlanningSessionService {
             workspace,
             sessionId,
             userId: principal,
-            onboardOnFirstResponse: mode === "created",
+            onboardOnFirstResponse: mode === "created" && emptyProject,
             ...(details ? { details } : {}),
           }),
         ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
@@ -365,10 +369,7 @@ export class PlanningSessionService {
     });
     try {
       await this.options.onPlannerSession?.(session, {
-        emptyProject:
-          workspace.confirmedRevisionId === null &&
-          workspace.activeProposalId === null &&
-          workspace.projectBuildPlanId === null,
+        emptyProject,
         mode,
       });
       await this.assertRunnable(project.projectId, session.cwd, principal);

@@ -79,6 +79,7 @@ function session(
 function fixture(
   existing: HarnessSession[] = [],
   initialProject: StudioProjectIdentity = project,
+  initialWorkspace: AgentMapWorkspaceState = workspace,
 ) {
   let next = 0;
   let resolvedProject = initialProject;
@@ -136,7 +137,7 @@ function fixture(
         id === projectId ? resolvedProject : null,
     } as unknown as StudioProjectCatalog,
     workspaceStore: {
-      readOrCreate: async () => workspace,
+      readOrCreate: async () => initialWorkspace,
     } as unknown as AgentMapWorkspaceStore,
     sessionManager: manager,
     readRecord: async () => null,
@@ -180,6 +181,7 @@ describe("planner session context and identity", () => {
     expect(context).toContain(project.rootBindings[0]!.id);
     expect(context).toContain('"role":"map-planner"');
     expect(context).toContain('"empty":true');
+    expect(context).toContain("In your first response, briefly explain");
     expect(context).not.toContain("/Users/private");
     expect(context).not.toContain("private-workspace-key");
     expect(context).not.toContain("localRootRef");
@@ -281,6 +283,19 @@ describe("PlanningSessionService", () => {
     ]);
     expect(contexts.join("\n")).not.toContain(
       "This is a private Agent Studio control turn",
+    );
+  });
+
+  it("does not replay first-time onboarding for an already-planned project", async () => {
+    const { service, contexts } = fixture([], project, {
+      ...workspace,
+      confirmedRevisionId: "revision-1",
+    });
+
+    await service.open(projectId, { mode: "fresh" });
+
+    expect(contexts[0]).not.toContain(
+      "In your first response, briefly explain",
     );
   });
 
