@@ -103,7 +103,8 @@ export function createAgentMapLoader(): AgentMapLoader {
       // Queuing is only useful while an initial/refetch request can consume
       // the announcement. A never-opened project gets a fresh durable GET when
       // selected, without retaining an event-only cache entry indefinitely.
-      if (!snapshot && !requests.has(projectId)) return { status: "ignored" };
+      if (!snapshot && !requests.has(projectId))
+        return { status: "needs-refetch" };
       if (!snapshot || requests.has(projectId)) {
         const pending = queued.get(projectId) ?? [];
         if (
@@ -145,7 +146,6 @@ export function createAgentMapLoader(): AgentMapLoader {
         ...queued.keys(),
       ])) {
         if (projectIds.has(projectId)) continue;
-        generations.delete(projectId);
         snapshots.delete(projectId);
         requests.delete(projectId);
         queued.delete(projectId);

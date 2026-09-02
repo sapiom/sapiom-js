@@ -6,6 +6,7 @@ import {
   parseAcceptedProposalDelta,
   parseAgentMapWorkspaceResponse,
   resolveStudioWorkspaceSelection,
+  routeAcceptedProposalDelta,
 } from "./agent-map";
 import { MockApi } from "./api";
 
@@ -186,6 +187,26 @@ describe("parseAcceptedProposalDelta", () => {
     expect(() =>
       parseAcceptedProposalDelta({ ...delta, version: 3 }, projectId),
     ).toThrow("Invalid Agent Map proposal delta");
+
+    const foreignProjectId = "project_00000000-0000-4000-8000-000000000002";
+    expect(
+      routeAcceptedProposalDelta(
+        { ...delta, projectId: foreignProjectId },
+        projectId,
+      ),
+    ).toMatchObject({
+      status: "accepted",
+      delta: { projectId: foreignProjectId },
+    });
+    expect(
+      routeAcceptedProposalDelta(
+        { ...delta, projectId: foreignProjectId, version: 3 },
+        projectId,
+      ),
+    ).toEqual({ status: "ignored" });
+    expect(
+      routeAcceptedProposalDelta({ ...delta, version: 3 }, projectId),
+    ).toEqual({ status: "malformed-active" });
   });
 });
 

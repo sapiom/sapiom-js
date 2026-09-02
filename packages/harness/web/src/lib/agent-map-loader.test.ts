@@ -44,7 +44,7 @@ describe("createAgentMapLoader", () => {
     };
     const loader = createAgentMapLoader();
     expect(loader.accept(renameDelta(1, foreignProjectId)).status).toBe(
-      "ignored",
+      "needs-refetch",
     );
     await loader.load(source, activeProjectId);
     await loader.load(source, foreignProjectId);
@@ -65,12 +65,14 @@ describe("createAgentMapLoader", () => {
     const source = { getAgentMapWorkspace: vi.fn(() => pending.promise) };
     const loader = createAgentMapLoader();
     const projectId = proposalSnapshot().project.projectId;
+    loader.invalidate(projectId);
     const load = loader.load(source, projectId);
 
     loader.retain(new Set());
     pending.resolve(proposalSnapshot());
 
     await expect(load).resolves.toMatchObject({ project: { projectId } });
+    expect(source.getAgentMapWorkspace).toHaveBeenCalledTimes(1);
     expect(loader.peek(projectId)).toBeNull();
   });
 });

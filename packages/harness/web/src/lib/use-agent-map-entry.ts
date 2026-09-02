@@ -11,7 +11,7 @@ import type { HarnessKind, HarnessSession, UiTheme } from "@shared/types";
 import { ApiError, errorMessage, type HarnessApi } from "./api";
 import { track } from "./track";
 import { agentMapLoader } from "./agent-map-loader";
-import { parseAcceptedProposalDelta } from "./agent-map";
+import { routeAcceptedProposalDelta } from "./agent-map";
 
 export type AgentMapWorkspacePaneState =
   | { status: "idle" }
@@ -225,24 +225,18 @@ export function useAgentMapEntry({
   useEffect(() => {
     if (!projectId) return;
     const unsubscribeChanges = subscribeProposalChanges((rawDelta) => {
-      let delta: AcceptedProposalDelta;
-      try {
-        // Parse the announced project before comparing it with the active
-        // view. A foreign but valid delta still belongs in that project's
-        // loader cache; it must never invalidate or refetch this project.
-        delta = parseAcceptedProposalDelta(rawDelta);
-      } catch {
-        if (
-          typeof rawDelta === "object" &&
-          rawDelta !== null &&
-          "projectId" in rawDelta &&
-          rawDelta.projectId === projectId
-        ) {
-          agentMapLoader.invalidate(projectId);
-          loadWorkspace(projectId);
-        }
+      // Route before comparing with the active view. A foreign but valid delta
+      // still belongs in that project's cache and must never refetch this one.
+      const routed = routeAcceptedProposalDelta(rawDelta, projectId);
+      if (routed.status === "malformed-active") {
+        agentMapLoader.invalidate(projectId);
+        loadWorkspace(projectId);
         return;
       }
+      if (routed.status === "ignored") {
+        return;
+      }
+      const delta = routed.delta;
       const outcome = agentMapLoader.accept(delta);
       if (delta.projectId !== projectId) return;
       if (outcome.status === "applied") {

@@ -221,6 +221,25 @@ export function parseAcceptedProposalDelta(
   }
 }
 
+export type AgentMapDeltaRoute =
+  | { status: "accepted"; delta: AcceptedProposalDelta }
+  | { status: "malformed-active" }
+  | { status: "ignored" };
+
+/** Route by the announced project before deciding whether parse failure is visible. */
+export function routeAcceptedProposalDelta(
+  value: unknown,
+  activeProjectId: string,
+): AgentMapDeltaRoute {
+  try {
+    return { status: "accepted", delta: parseAcceptedProposalDelta(value) };
+  } catch {
+    return isRecord(value) && value.projectId === activeProjectId
+      ? { status: "malformed-active" }
+      : { status: "ignored" };
+  }
+}
+
 function parseSelection(
   value: unknown,
   projectId: string,
