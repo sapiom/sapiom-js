@@ -4,6 +4,7 @@ import {
   PLAN_NODE_KINDS,
   RELATIONSHIP_KINDS,
   type DraftRef,
+  type AcceptedProposalDelta,
   type MapChangeProposal,
   type MapOperation,
   type PlanNode,
@@ -161,7 +162,7 @@ function parseRelationshipChanges(value: unknown) {
   return structuredClone(value);
 }
 
-function parseMapOperation(value: unknown): MapOperation {
+export function parseMapOperation(value: unknown): MapOperation {
   if (!isRecord(value) || typeof value.kind !== "string")
     throw new Error("invalid Agent Map operation");
   switch (value.kind) {
@@ -218,6 +219,58 @@ function parseMapOperation(value: unknown): MapOperation {
     default:
       throw new Error("invalid Agent Map operation");
   }
+}
+
+/** Strict, path-free parser for post-commit proposal notifications. */
+export function parseAcceptedProposalDelta(
+  value: unknown,
+  expectedProjectId?: string,
+): AcceptedProposalDelta {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "schemaVersion",
+      "projectId",
+      "proposalId",
+      "fromVersion",
+      "version",
+      "operationIds",
+      "operations",
+      "actor",
+      "acceptedAt",
+    ]) ||
+    value.schemaVersion !== AGENT_MAP_PROPOSAL_SCHEMA_VERSION ||
+    !isAgentMapBoundedText(value.projectId, 128) ||
+    (expectedProjectId !== undefined &&
+      value.projectId !== expectedProjectId) ||
+    !isPlanId(value.proposalId, "proposal") ||
+    !Number.isSafeInteger(value.fromVersion) ||
+    (value.fromVersion as number) < 0 ||
+    !Number.isSafeInteger(value.version) ||
+    value.version !== (value.fromVersion as number) + 1 ||
+    !Array.isArray(value.operationIds) ||
+    !Array.isArray(value.operations) ||
+    value.operationIds.length === 0 ||
+    value.operationIds.length !== value.operations.length ||
+    !value.operationIds.every((id) => isPlanId(id, "operation")) ||
+    new Set(value.operationIds).size !== value.operationIds.length ||
+    !isTimestamp(value.acceptedAt)
+  ) {
+    throw new Error("invalid Agent Map proposal delta");
+  }
+  return {
+    schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+    projectId: value.projectId,
+    proposalId: value.proposalId,
+    fromVersion: value.fromVersion as number,
+    version: value.version as number,
+    operationIds: structuredClone(
+      value.operationIds,
+    ) as AcceptedProposalDelta["operationIds"],
+    operations: value.operations.map(parseMapOperation),
+    actor: parseProposalActor(value.actor),
+    acceptedAt: value.acceptedAt,
+  } as AcceptedProposalDelta;
 }
 
 export function parseProposalActor(value: unknown): ProposalActor {

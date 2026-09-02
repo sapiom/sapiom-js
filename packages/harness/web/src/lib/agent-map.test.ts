@@ -3,6 +3,7 @@ import type { StudioProjectSummary } from "@shared/agent-map";
 
 import {
   mostSpecificStudioScope,
+  parseAcceptedProposalDelta,
   parseAgentMapWorkspaceResponse,
   resolveStudioWorkspaceSelection,
 } from "./agent-map";
@@ -148,6 +149,43 @@ describe("parseAgentMapWorkspaceResponse", () => {
     expect(() => parseAgentMapWorkspaceResponse(value, projectId)).toThrow(
       "Invalid Agent Map workspace response",
     );
+  });
+});
+
+describe("parseAcceptedProposalDelta", () => {
+  it("accepts only the exact attributed contiguous shape", () => {
+    const delta = {
+      schemaVersion: 1,
+      projectId,
+      proposalId: "proposal_00000000-0000-7000-8000-000000000001",
+      fromVersion: 1,
+      version: 2,
+      operationIds: ["operation_00000000-0000-7000-8000-000000000003"],
+      operations: [
+        {
+          kind: "update-node",
+          nodeId: "node_00000000-0000-7000-8000-000000000002",
+          changes: { purpose: "Find sources" },
+        },
+      ],
+      actor: {
+        userId: "user-1",
+        sessionId: "session-1",
+        role: "agent-builder",
+        assignment: { kind: "unplanned" },
+      },
+      acceptedAt: timestamp,
+    };
+    expect(parseAcceptedProposalDelta(delta, projectId)).toEqual(delta);
+    expect(() =>
+      parseAcceptedProposalDelta(
+        { ...delta, privatePath: "/secret" },
+        projectId,
+      ),
+    ).toThrow("Invalid Agent Map proposal delta");
+    expect(() =>
+      parseAcceptedProposalDelta({ ...delta, version: 3 }, projectId),
+    ).toThrow("Invalid Agent Map proposal delta");
   });
 });
 

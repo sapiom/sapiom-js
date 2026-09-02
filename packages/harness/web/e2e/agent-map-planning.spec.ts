@@ -80,6 +80,108 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .toContain("agent_map.entered");
   });
 
+  test("renders the stock-research proposal and a coding-agent follow-up live", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+    );
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openDashboardMap(page);
+    const composer = page.getByTestId("planner-composer-input");
+    await composer.fill(
+      "Build stock research and marketing agents with a database, TikTok, and a ResearchReport.",
+    );
+    const startedAt = Date.now();
+    await page.getByTestId("planner-composer-send").click();
+    await expect(page.getByTestId("agent-map-live")).toBeVisible({
+      timeout: 1_000,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+
+    const nodes = page.locator("[data-proposal-state='proposed']");
+    await expect(nodes).toHaveCount(6);
+    for (const kind of [
+      "agent",
+      "subagent",
+      "resource",
+      "connector",
+      "artifact",
+    ]) {
+      await expect(
+        page.locator(`[data-node-kind='${kind}']`).first(),
+      ).toBeVisible();
+    }
+    await expect(
+      page.getByText("Stock Research", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Marketing", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Research Database", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("TikTok", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("ResearchReport", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("News Editor", { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId("agent-map-live").getByText(/capability/i),
+    ).toHaveCount(0);
+
+    await page.getByText("ResearchReport", { exact: true }).click();
+    const inspector = page.getByTestId("agent-map-inspector");
+    await expect(inspector).toContainText("Purpose");
+    await expect(inspector).toContainText("Contracts");
+    await expect(inspector).toContainText("Map planner");
+
+    const projectId = await page
+      .getByTestId("agent-map-live")
+      .getAttribute("data-project-id");
+    expect(projectId).toBeTruthy();
+    await page.evaluate((activeProjectId) => {
+      const test = (
+        window as unknown as {
+          __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+        }
+      ).__HARNESS_TEST__;
+      test?.publish?.({
+        type: "agent-map.proposal.changed",
+        delta: {
+          schemaVersion: 1,
+          projectId: activeProjectId,
+          proposalId: "proposal_00000000-0000-7000-8000-000000000101",
+          fromVersion: 1,
+          version: 2,
+          operationIds: ["operation_00000000-0000-7000-8000-000000000401"],
+          operations: [
+            {
+              kind: "update-node",
+              nodeId: "node_00000000-0000-7000-8000-000000000102",
+              changes: { name: "Campaign Marketing" },
+            },
+          ],
+          actor: {
+            userId: "user_mock",
+            sessionId: "builder_mock",
+            role: "agent-builder",
+            assignment: { kind: "unplanned" },
+          },
+          acceptedAt: new Date().toISOString(),
+        },
+      });
+    }, projectId);
+    await expect(
+      page.getByText("Campaign Marketing", { exact: true }),
+    ).toBeVisible();
+    await page.getByText("Campaign Marketing", { exact: true }).click();
+    await expect(
+      page.getByTestId("agent-map-latest-attribution"),
+    ).toContainText("Agent builder · unplanned");
+    await expect(page.locator("[data-proposal-state='proposed']")).toHaveCount(
+      6,
+    );
+  });
+
   test("a user can proceed while the greeting is generating and the record refetches", async ({
     page,
   }) => {

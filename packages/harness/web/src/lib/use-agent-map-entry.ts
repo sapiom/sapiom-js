@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentMapWorkspaceResponse,
+  AcceptedProposalDelta,
   PlannerSessionRequest,
   PlannerSessionResponse,
   StudioProjectId,
@@ -9,6 +10,8 @@ import type { HarnessKind, HarnessSession, UiTheme } from "@shared/types";
 
 import { ApiError, errorMessage, type HarnessApi } from "./api";
 import { track } from "./track";
+import { agentMapLoader } from "./agent-map-loader";
+import { parseAcceptedProposalDelta } from "./agent-map";
 
 export type AgentMapWorkspacePaneState =
   | { status: "idle" }
@@ -49,6 +52,10 @@ interface AgentMapEntryOptions {
     response: PlannerSessionResponse,
     mode: PlannerSessionRequest["mode"],
   ) => void;
+  subscribeProposalChanges: (
+    listener: (delta: AcceptedProposalDelta) => void,
+  ) => () => void;
+  subscribeReconnects: (listener: () => void) => () => void;
 }
 
 const EMPTY_ENTRY: AgentMapEntryState = {
@@ -113,6 +120,8 @@ export function useAgentMapEntry({
   theme,
   openPlannerSession,
   onPlannerReady,
+  subscribeProposalChanges,
+  subscribeReconnects,
 }: AgentMapEntryOptions): {
   state: AgentMapEntryState;
   retryWorkspace: () => void;
@@ -130,6 +139,7 @@ export function useAgentMapEntry({
   const themeRef = useRef(theme);
   const openPlannerRef = useRef(openPlannerSession);
   const onPlannerReadyRef = useRef(onPlannerReady);
+  const visibleProposalRef = useRef(new Map<StudioProjectId, string>());
 
   currentProjectRef.current = projectId;
   apiRef.current = api;
@@ -156,13 +166,24 @@ export function useAgentMapEntry({
       projectId: target,
       workspace: { status: "loading" },
     }));
-    void apiRef.current.getAgentMapWorkspace(target).then(
+    void agentMapLoader.load(apiRef.current, target).then(
       (value) => {
         if (
           currentProjectRef.current !== target ||
           workspaceRequestRef.current !== request
         )
           return;
+        if (
+          value.proposal &&
+          visibleProposalRef.current.get(target) !== value.proposal.id
+        ) {
+          visibleProposalRef.current.set(target, value.proposal.id);
+          const latest = value.proposal.history.at(-1);
+          track("agent_map.proposal_created", {
+            author_role: latest?.actor.role ?? "unknown",
+            assignment_kind: latest?.actor.assignment?.kind ?? "none",
+          });
+        }
         setState((current) =>
           current.projectId === target
             ? { ...current, workspace: { status: "ready", value } }
@@ -197,6 +218,50 @@ export function useAgentMapEntry({
       },
     );
   }, []);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const unsubscribeChanges = subscribeProposalChanges((rawDelta) => {
+      let delta: AcceptedProposalDelta;
+      try {
+        delta = parseAcceptedProposalDelta(rawDelta, projectId);
+      } catch {
+        agentMapLoader.invalidate(projectId);
+        loadWorkspace(projectId);
+        return;
+      }
+      const outcome = agentMapLoader.accept(delta);
+      if (outcome.status === "applied") {
+        const visibleLatency = Math.max(
+          0,
+          Math.min(60_000, Date.now() - Date.parse(delta.acceptedAt)),
+        );
+        setState((current) =>
+          current.projectId === projectId
+            ? {
+                ...current,
+                workspace: { status: "ready", value: outcome.snapshot },
+              }
+            : current,
+        );
+        track("agent_map.proposal_visible", {
+          author_role: delta.actor.role,
+          assignment_kind: delta.actor.assignment?.kind ?? "none",
+          visible_latency_ms: visibleLatency,
+        });
+      } else if (outcome.status === "needs-refetch") {
+        loadWorkspace(projectId);
+      }
+    });
+    const unsubscribeReconnects = subscribeReconnects(() => {
+      agentMapLoader.invalidate(projectId);
+      loadWorkspace(projectId);
+    });
+    return () => {
+      unsubscribeChanges();
+      unsubscribeReconnects();
+    };
+  }, [loadWorkspace, projectId, subscribeProposalChanges, subscribeReconnects]);
 
   const loadPlanner = useCallback(
     (target: StudioProjectId, mode: PlannerSessionRequest["mode"]): void => {

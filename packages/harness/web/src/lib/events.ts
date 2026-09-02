@@ -5,10 +5,16 @@
  */
 import type { BusMessage } from "@shared/types";
 
-import { DEMO_SESSION_ID, getBootToken, isDemoSeedEnabled, isMockMode } from "./api";
+import {
+  DEMO_SESSION_ID,
+  getBootToken,
+  isDemoSeedEnabled,
+  isMockMode,
+} from "./api";
 import { MOCK_ACTIVITY_SESSION_ID } from "./mock-data";
 
 export type BusListener = (message: BusMessage) => void;
+export type EventReconnectListener = () => void;
 
 const RECONNECT_DELAY_MS = 2000;
 /** Delay before the one-shot simulated `session.activity` fixture fires —
@@ -44,15 +50,21 @@ if (isMockMode() && typeof window !== "undefined") {
   // Merge rather than replace — api.ts's mock runMacro attaches its own key
   // (lastMacroRun) to the same test-only object, and module init order isn't
   // guaranteed either way.
-  const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+  const win = window as unknown as {
+    __HARNESS_TEST__?: Record<string, unknown>;
+  };
   win.__HARNESS_TEST__ = {
     ...(win.__HARNESS_TEST__ ?? {}),
-    publish: ((message) => mockListeners.forEach((listener) => listener(message))) as BusListener,
+    publish: ((message) =>
+      mockListeners.forEach((listener) => listener(message))) as BusListener,
   };
 }
 
 /** Subscribes and returns an unsubscribe function. */
-export function subscribeEvents(onMessage: BusListener): () => void {
+export function subscribeEvents(
+  onMessage: BusListener,
+  onReconnect?: EventReconnectListener,
+): () => void {
   if (isMockMode()) {
     mockListeners.add(onMessage);
     if (!mockActivitySimulated) {
@@ -100,9 +112,14 @@ export function subscribeEvents(onMessage: BusListener): () => void {
   let socket: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  let opened = false;
 
   const connect = (): void => {
     socket = new WebSocket(url);
+    socket.addEventListener("open", () => {
+      if (opened) onReconnect?.();
+      opened = true;
+    });
     socket.addEventListener("message", (event) => {
       try {
         onMessage(JSON.parse(event.data as string) as BusMessage);

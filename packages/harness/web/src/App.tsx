@@ -341,6 +341,8 @@ export const App = (): JSX.Element => {
     theme: getTheme,
     openPlannerSession: harness.openPlannerSession,
     onPlannerReady: handlePlannerReady,
+    subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
+    subscribeReconnects: harness.subscribeEventReconnects,
   });
   const plannerTranscript = usePlannerTranscript(
     activePlannerForTranscript?.id ?? null,
@@ -483,20 +485,23 @@ export const App = (): JSX.Element => {
    * this epic removes, one click later. A functional updater so the rule can
    * be applied from handlers that do not close over the current selection.
    */
-  const leaveProjectUnlessInside = useCallback((cwd: string | null): void => {
-    setSelectedProject((current) =>
-      current && cwd && rootContains(current.root, cwd) ? current : null,
-    );
-    setStudioSelection((current) => {
-      if (!current || !cwd) return null;
-      const ownsTarget = (harness.state?.workspaceScopes ?? []).some(
-        (scope) =>
-          scope.projectId === current.projectId &&
-          rootContains(scope.cwd, cwd),
+  const leaveProjectUnlessInside = useCallback(
+    (cwd: string | null): void => {
+      setSelectedProject((current) =>
+        current && cwd && rootContains(current.root, cwd) ? current : null,
       );
-      return ownsTarget ? current : null;
-    });
-  }, [harness.state]);
+      setStudioSelection((current) => {
+        if (!current || !cwd) return null;
+        const ownsTarget = (harness.state?.workspaceScopes ?? []).some(
+          (scope) =>
+            scope.projectId === current.projectId &&
+            rootContains(scope.cwd, cwd),
+        );
+        return ownsTarget ? current : null;
+      });
+    },
+    [harness.state],
+  );
   // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
   // because it needs `state`/`handleFocusAgent`, which exist only past the loading
   // guard; the effects below reach it through the ref. The cold-start target rides
@@ -1865,8 +1870,7 @@ export const App = (): JSX.Element => {
           ) ?? null)
         : null;
       const session =
-        existing ??
-        (await createSessionAt(request.root, preferredHarness()));
+        existing ?? (await createSessionAt(request.root, preferredHarness()));
       await harness.bindWorkflow(session.id, created.path);
       harness.setActiveSessionId(session.id);
       setFocusedAgentPath(created.path);
@@ -2030,7 +2034,9 @@ export const App = (): JSX.Element => {
       // the dialog shows it verbatim.
       const parent = parentOf(cwd);
       if (!parent)
-        throw new Error(`Can't create an agent at ${cwd} — pick a folder inside a project.`);
+        throw new Error(
+          `Can't create an agent at ${cwd} — pick a folder inside a project.`,
+        );
       const created = await harness.scaffoldAgent(
         parent,
         basenameOf(cwd),
@@ -2630,9 +2636,7 @@ export const App = (): JSX.Element => {
             sessions={state.sessions}
             pendingWorkspaces={harness.pendingWorkspaces}
             activeSessionId={harness.activeSessionId}
-            focusedAgentPath={
-              atMapAltitude ? null : effectiveFocusedAgentPath
-            }
+            focusedAgentPath={atMapAltitude ? null : effectiveFocusedAgentPath}
             workspaceScopes={state.workspaceScopes}
             studioProjects={state.studioProjects}
             studioSelection={planFirstSelection}
@@ -2685,10 +2689,7 @@ export const App = (): JSX.Element => {
             closedProjects={harness.closedProjects}
             unsearchedCheckouts={harness.unsearchedCheckouts}
             onRemoveProject={async (root) => {
-              if (
-                selectedProject &&
-                samePath(selectedProject.root, root)
-              ) {
+              if (selectedProject && samePath(selectedProject.root, root)) {
                 setSelectedProject(null);
               }
               const removedProjectId = workspaceScopes.find((scope) =>
@@ -3454,109 +3455,112 @@ export const App = (): JSX.Element => {
                 }
                 data-testid="right-panel-board"
               >
-              <CanvasPane
-                sessionId={harness.activeSessionId}
-                lastMessage={harness.lastMessage}
-                subjectWorkflow={rightPaneWorkflow}
-                source={canvasSource}
-                loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
-                overviewActive={showComposer}
-                sessionExited={showDead}
-                onCanvasState={(hasContent) => {
-                  // The board keeps its mount behind the map; its probe must
-                  // not reveal or collapse the pane while the PROJECT is what
-                  // the pane is showing — the map is the answer to selecting a
-                  // project and cannot be closed under it.
-                  if (atMapAltitude) return;
-                  // The pane follows the active session's board: open it whenever
-                  // the session has one, close it when it doesn't. This fires on
-                  // the mount probe, on every canvas.reload, and on each session
-                  // switch — so a board an agent just rendered (a finished build,
-                  // a switch to a populated agent) opens the pane on its own, even
-                  // one you'd collapsed, and an empty session keeps it closed.
-                  // Mobile drives its sheet with its own control, not this.
-                  if (isMobile) return;
-                  // An exited session keeps the pane open even with no board, so
-                  // its "resume to see it" invite stays visible.
-                  const activeExited =
-                    state.sessions.find((s) => s.id === harness.activeSessionId)
-                      ?.status === "exited";
-                  if (hasContent || activeExited) {
-                    // Content present (or an exited session's invite) → always
-                    // reveal, re-opening even a pane the user had collapsed.
-                    emptyCollapsedKeyRef.current = null;
-                    setRightCollapsed(false);
-                    return;
+                <CanvasPane
+                  sessionId={harness.activeSessionId}
+                  lastMessage={harness.lastMessage}
+                  subjectWorkflow={rightPaneWorkflow}
+                  source={canvasSource}
+                  loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
+                  overviewActive={showComposer}
+                  sessionExited={showDead}
+                  onCanvasState={(hasContent) => {
+                    // The board keeps its mount behind the map; its probe must
+                    // not reveal or collapse the pane while the PROJECT is what
+                    // the pane is showing — the map is the answer to selecting a
+                    // project and cannot be closed under it.
+                    if (atMapAltitude) return;
+                    // The pane follows the active session's board: open it whenever
+                    // the session has one, close it when it doesn't. This fires on
+                    // the mount probe, on every canvas.reload, and on each session
+                    // switch — so a board an agent just rendered (a finished build,
+                    // a switch to a populated agent) opens the pane on its own, even
+                    // one you'd collapsed, and an empty session keeps it closed.
+                    // Mobile drives its sheet with its own control, not this.
+                    if (isMobile) return;
+                    // An exited session keeps the pane open even with no board, so
+                    // its "resume to see it" invite stays visible.
+                    const activeExited =
+                      state.sessions.find(
+                        (s) => s.id === harness.activeSessionId,
+                      )?.status === "exited";
+                    if (hasContent || activeExited) {
+                      // Content present (or an exited session's invite) → always
+                      // reveal, re-opening even a pane the user had collapsed.
+                      emptyCollapsedKeyRef.current = null;
+                      setRightCollapsed(false);
+                      return;
+                    }
+                    // Empty board → collapse once per (session, bound workflow). A
+                    // redundant probe for the same one must not re-close a pane the
+                    // user just expanded; a new session or binding still collapses.
+                    if (manualExpandPendingRef.current) {
+                      manualExpandPendingRef.current = false;
+                      manualExpandSessionRef.current =
+                        harness.activeSessionId ?? null;
+                      return;
+                    }
+                    const claimed = manualExpandSessionRef.current;
+                    if (claimed != null && claimed === harness.activeSessionId)
+                      return;
+                    if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
+                    emptyCollapsedKeyRef.current = emptyBoardKey;
+                    setRightCollapsed(true);
+                  }}
+                  onGraphChange={(workflowPath, graph) => {
+                    const contract = inputContractFromCanvasGraph(graph);
+                    if (contract)
+                      visibleInputContractsRef.current.set(
+                        workflowPath,
+                        contract,
+                      );
+                  }}
+                  expanded={canvasExpanded}
+                  onToggleExpanded={() => setCanvasExpanded((v) => !v)}
+                  macros={state.macros}
+                  tasks={harness.tasks}
+                  surface={shownTab === "steps" ? "steps" : "board"}
+                  onOpenSteps={() => setRightTab("steps")}
+                  run={activeObservedRun?.run ?? null}
+                  runTarget={activeObservedRun?.target ?? null}
+                  runs={activeSessionRuns}
+                  onSelectRun={(executionId) => {
+                    if (harness.activeSessionId)
+                      harness.selectRun(harness.activeSessionId, executionId);
+                  }}
+                  preview={
+                    harness.activeSessionId
+                      ? (harness.previewBySession.get(
+                          harness.activeSessionId,
+                        ) ?? null)
+                      : null
                   }
-                  // Empty board → collapse once per (session, bound workflow). A
-                  // redundant probe for the same one must not re-close a pane the
-                  // user just expanded; a new session or binding still collapses.
-                  if (manualExpandPendingRef.current) {
-                    manualExpandPendingRef.current = false;
-                    manualExpandSessionRef.current =
-                      harness.activeSessionId ?? null;
-                    return;
+                  deployState={
+                    rightPaneWorkflow
+                      ? (harness.deployStateByPath.get(
+                          rightPaneWorkflow.path,
+                        ) ?? null)
+                      : null
                   }
-                  const claimed = manualExpandSessionRef.current;
-                  if (claimed != null && claimed === harness.activeSessionId)
-                    return;
-                  if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
-                  emptyCollapsedKeyRef.current = emptyBoardKey;
-                  setRightCollapsed(true);
-                }}
-                onGraphChange={(workflowPath, graph) => {
-                  const contract = inputContractFromCanvasGraph(graph);
-                  if (contract)
-                    visibleInputContractsRef.current.set(
-                      workflowPath,
-                      contract,
-                    );
-                }}
-                expanded={canvasExpanded}
-                onToggleExpanded={() => setCanvasExpanded((v) => !v)}
-                macros={state.macros}
-                tasks={harness.tasks}
-                surface={shownTab === "steps" ? "steps" : "board"}
-                onOpenSteps={() => setRightTab("steps")}
-                run={activeObservedRun?.run ?? null}
-                runTarget={activeObservedRun?.target ?? null}
-                runs={activeSessionRuns}
-                onSelectRun={(executionId) => {
-                  if (harness.activeSessionId)
-                    harness.selectRun(harness.activeSessionId, executionId);
-                }}
-                preview={
-                  harness.activeSessionId
-                    ? (harness.previewBySession.get(harness.activeSessionId) ??
-                      null)
-                    : null
-                }
-                deployState={
-                  rightPaneWorkflow
-                    ? (harness.deployStateByPath.get(rightPaneWorkflow.path) ??
-                      null)
-                    : null
-                }
-                onDismissDeploy={() => {
-                  if (rightPaneWorkflow)
-                    harness.dismissDeployState(rightPaneWorkflow.path);
-                }}
-                agentsBaseUrl={state.agentsBaseUrl}
-                onOpenCode={() => setRightTab("steps")}
-                workflows={state.workflows}
-                onOpenWorkflow={(path) => void handleBindWorkflow(path)}
-                /* The pane's own CTAs (Visualize, a failed task's Retry) act on
+                  onDismissDeploy={() => {
+                    if (rightPaneWorkflow)
+                      harness.dismissDeployState(rightPaneWorkflow.path);
+                  }}
+                  agentsBaseUrl={state.agentsBaseUrl}
+                  onOpenCode={() => setRightTab("steps")}
+                  workflows={state.workflows}
+                  onOpenWorkflow={(path) => void handleBindWorkflow(path)}
+                  /* The pane's own CTAs (Visualize, a failed task's Retry) act on
                    what the pane is DRAWING, not on what the session is bound
                    to — otherwise the empty state for F renders F's board. */
-                onRunMacro={(macro) =>
-                  handleRunMacroForWorkflow(rightPaneWorkflow, macro)
-                }
-                onInjectPrompt={(text) => {
-                  if (harness.activeSessionId)
-                    void harness.injectInput(harness.activeSessionId, text);
-                }}
-                onDescribeWorkflow={handleDescribeWithAI}
-              />
+                  onRunMacro={(macro) =>
+                    handleRunMacroForWorkflow(rightPaneWorkflow, macro)
+                  }
+                  onInjectPrompt={(text) => {
+                    if (harness.activeSessionId)
+                      void harness.injectInput(harness.activeSessionId, text);
+                  }}
+                  onDescribeWorkflow={handleDescribeWithAI}
+                />
               </div>
             </div>
           </div>

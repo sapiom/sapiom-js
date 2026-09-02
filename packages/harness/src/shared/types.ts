@@ -779,7 +779,10 @@ export type UiEventName =
   | "mcp.install"
   | "plan.upgrade_clicked"
   | "agent_map.entered"
-  | "agent_map.workspace_load_failed";
+  | "agent_map.workspace_load_failed"
+  | "agent_map.proposal_created"
+  | "agent_map.proposal_visible"
+  | "agent_map.validation_failed";
 
 export interface UiTrackRequest {
   /** Dot-canonical event name — one of the UiEventName literals. */
@@ -811,6 +814,9 @@ export type AnalyticsEventType =
   | "plan.upgrade_clicked"
   | "agent_map.entered"
   | "agent_map.workspace_load_failed"
+  | "agent_map.proposal_created"
+  | "agent_map.proposal_visible"
+  | "agent_map.validation_failed"
   | "agent_map.workspace_initialized"
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"

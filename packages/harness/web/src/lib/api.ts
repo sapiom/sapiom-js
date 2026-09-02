@@ -42,7 +42,9 @@ import {
   type WorkspaceScopeSummary,
 } from "@shared/system-graph";
 import type {
+  AcceptedProposalDelta,
   AgentMapWorkspaceResponse,
+  MapOperation,
   PlannerMessageRequest,
   PlannerSessionMetadataResponse,
   PlannerSessionRequest,
@@ -1731,6 +1733,160 @@ export function projectMockSystemGraphInventory(
   };
 }
 
+function goldenAgentMapFixture(
+  project: StudioProjectSummary,
+  acceptedAt: string,
+  userId: string,
+  sessionId: string,
+): { snapshot: AgentMapWorkspaceResponse; delta: AcceptedProposalDelta } {
+  const proposalId = "proposal_00000000-0000-7000-8000-000000000101";
+  const ids = {
+    research: "node_00000000-0000-7000-8000-000000000101",
+    marketing: "node_00000000-0000-7000-8000-000000000102",
+    database: "node_00000000-0000-7000-8000-000000000103",
+    tiktok: "node_00000000-0000-7000-8000-000000000104",
+    report: "node_00000000-0000-7000-8000-000000000105",
+    editor: "node_00000000-0000-7000-8000-000000000106",
+  } as const;
+  const nodes = [
+    {
+      id: ids.research,
+      kind: "agent",
+      name: "Stock Research",
+      purpose: "Research public-market signals and produce sourced findings.",
+      ownerAgentId: null,
+      contractRefs: ["ResearchRequest", "ResearchReport"],
+    },
+    {
+      id: ids.marketing,
+      kind: "agent",
+      name: "Marketing",
+      purpose: "Turn approved findings into audience-ready campaigns.",
+      ownerAgentId: null,
+      contractRefs: ["ResearchReport", "CampaignBrief"],
+    },
+    {
+      id: ids.database,
+      kind: "resource",
+      name: "Research Database",
+      purpose: "Persist sources, observations, and approved reports.",
+      ownerAgentId: null,
+      contractRefs: ["ResearchRecord"],
+    },
+    {
+      id: ids.tiktok,
+      kind: "connector",
+      name: "TikTok",
+      purpose: "Publish approved short-form campaign content.",
+      ownerAgentId: null,
+      contractRefs: ["TikTokPublishRequest"],
+    },
+    {
+      id: ids.report,
+      kind: "artifact",
+      name: "ResearchReport",
+      purpose:
+        "Carry sourced findings from research into review and marketing.",
+      ownerAgentId: null,
+      contractRefs: ["ResearchReport"],
+    },
+    {
+      id: ids.editor,
+      kind: "subagent",
+      name: "News Editor",
+      purpose: "Check source quality and tighten the report narrative.",
+      ownerAgentId: ids.research,
+      contractRefs: ["EditorialReview"],
+    },
+  ];
+  const relationships = [
+    ["invokes", ids.research, ids.editor, "synchronous", "EditorialReview"],
+    ["feeds", ids.report, ids.marketing, "asynchronous", "ResearchReport"],
+    ["reads", ids.marketing, ids.report, "synchronous", "ResearchReport"],
+    ["writes", ids.research, ids.report, "synchronous", "ResearchReport"],
+    ["uses", ids.research, ids.database, "synchronous", "ResearchRecord"],
+    [
+      "uses",
+      ids.marketing,
+      ids.tiktok,
+      "human-triggered",
+      "TikTokPublishRequest",
+    ],
+    ["triggers", ids.report, ids.marketing, "asynchronous", "CampaignBrief"],
+    ["writes", ids.editor, ids.report, "synchronous", "EditorialReview"],
+  ].map(([kind, fromNodeId, toNodeId, executionMode, contractRef], index) => ({
+    id: `rel_00000000-0000-7000-8000-${String(index + 201).padStart(12, "0")}`,
+    fromNodeId,
+    toNodeId,
+    kind,
+    executionMode,
+    contractRef,
+    description: `${kind} through the declared contract.`,
+  }));
+  const operations = [
+    ...nodes.map((node) => ({ kind: "add-node", node })),
+    ...relationships.map((relationship) => ({
+      kind: "add-relationship",
+      relationship,
+    })),
+  ] as unknown as MapOperation[];
+  const operationIds = operations.map(
+    (_, index) =>
+      `operation_00000000-0000-7000-8000-${String(index + 301).padStart(12, "0")}`,
+  ) as AcceptedProposalDelta["operationIds"];
+  const actor = {
+    userId,
+    sessionId,
+    role: "map-planner" as const,
+    assignment: null,
+  };
+  const delta: AcceptedProposalDelta = {
+    schemaVersion: 1,
+    projectId: project.projectId,
+    proposalId: proposalId as AcceptedProposalDelta["proposalId"],
+    fromVersion: 0,
+    version: 1,
+    operationIds,
+    operations,
+    actor,
+    acceptedAt,
+  };
+  const snapshot = {
+    schemaVersion: 1,
+    project,
+    workspace: {
+      projectId: project.projectId,
+      schemaVersion: 1,
+      recordVersion: 2,
+      confirmedRevisionId: null,
+      activeProposalId: proposalId,
+      projectBuildPlanId: null,
+      createdAt: project.createdAt,
+      updatedAt: acceptedAt,
+    },
+    proposal: {
+      schemaVersion: 1,
+      id: proposalId,
+      projectId: project.projectId,
+      baseRevisionId: null,
+      version: 1,
+      nodes,
+      relationships,
+      history: operations.map((operation, index) => ({
+        id: operationIds[index],
+        requestId: "golden-stock-research",
+        acceptedVersion: 1,
+        operation,
+        actor,
+        acceptedAt,
+      })),
+      createdAt: acceptedAt,
+      updatedAt: acceptedAt,
+    },
+  } as unknown as AgentMapWorkspaceResponse;
+  return { snapshot, delta };
+}
+
 export class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
@@ -1746,6 +1902,10 @@ export class MockApi implements HarnessApi {
   private studioPreferences = new Map<
     StudioProjectId,
     StudioWorkspaceSelection
+  >();
+  private agentMapSnapshots = new Map<
+    StudioProjectId,
+    AgentMapWorkspaceResponse
   >();
   private systemGraphSnapshots = new Map<WorkspaceKey, SystemGraphSnapshot>();
   private systemGraphNavigation = new Map<
@@ -2150,6 +2310,8 @@ export class MockApi implements HarnessApi {
         "Studio project not found",
       );
     }
+    const stored = this.agentMapSnapshots.get(projectId);
+    if (stored) return parseAgentMapWorkspaceResponse(stored, projectId);
     return parseAgentMapWorkspaceResponse(
       {
         schemaVersion: 1,
@@ -2384,48 +2546,72 @@ export class MockApi implements HarnessApi {
     };
     await this.injectInput(sessionId, { text: request.text });
     const accepted = structuredClone(session.planning);
-    setTimeout(() => {
-      const current = this.sessions.find(
-        (candidate) => candidate.id === sessionId,
-      );
-      const record = this.plannerSessionRecords.get(sessionId);
-      if (!current?.planning || !record) return;
-      const completedAt = new Date().toISOString();
-      const turns = [
-        ...record.turns,
-        {
-          index: record.turns.length + 1,
-          prompt: request.text,
-          promptAt: completedAt,
-          toolCalls: [],
-          assistantText:
-            "Let’s start by clarifying the outcome, the actors involved, and the information they need to exchange.",
-          model: "mock-planner",
-          usage: null,
-          completedAt,
-          incomplete: false,
-        },
-      ];
-      this.plannerSessionRecords.set(sessionId, {
-        ...record,
-        turns,
-        turnCount: record.turnCount + 1,
-        eventCount: record.eventCount + 2,
-      });
-      current.planning = {
-        ...current.planning,
-        queuedInputIds: current.planning.queuedInputIds.filter(
-          (candidate) => candidate !== inputId,
-        ),
-      };
-      void import("./events").then(({ publishMockBusMessage }) => {
-        publishMockBusMessage({ type: "session.status", session: current });
-        publishMockBusMessage({
-          type: "session.record.changed",
-          harnessSessionId: sessionId,
+    const project = this.studioProjects().find(
+      (candidate) => candidate.projectId === projectId,
+    );
+    const goldenFixtureEnabled =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockAgentMapGolden") ===
+        "1";
+    setTimeout(
+      () => {
+        const current = this.sessions.find(
+          (candidate) => candidate.id === sessionId,
+        );
+        const record = this.plannerSessionRecords.get(sessionId);
+        if (!current?.planning || !record) return;
+        const completedAt = new Date().toISOString();
+        const turns = [
+          ...record.turns,
+          {
+            index: record.turns.length + 1,
+            prompt: request.text,
+            promptAt: completedAt,
+            toolCalls: [],
+            assistantText:
+              "Let’s start by clarifying the outcome, the actors involved, and the information they need to exchange.",
+            model: "mock-planner",
+            usage: null,
+            completedAt,
+            incomplete: false,
+          },
+        ];
+        this.plannerSessionRecords.set(sessionId, {
+          ...record,
+          turns,
+          turnCount: record.turnCount + 1,
+          eventCount: record.eventCount + 2,
         });
-      });
-    }, 250);
+        current.planning = {
+          ...current.planning,
+          queuedInputIds: current.planning.queuedInputIds.filter(
+            (candidate) => candidate !== inputId,
+          ),
+        };
+        void import("./events").then(({ publishMockBusMessage }) => {
+          if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
+            if (!project) return;
+            const fixture = goldenAgentMapFixture(
+              project,
+              new Date().toISOString(),
+              accepted.identity.userId,
+              sessionId,
+            );
+            this.agentMapSnapshots.set(projectId, fixture.snapshot);
+            publishMockBusMessage({
+              type: "agent-map.proposal.changed",
+              delta: fixture.delta,
+            });
+          }
+          publishMockBusMessage({ type: "session.status", session: current });
+          publishMockBusMessage({
+            type: "session.record.changed",
+            harnessSessionId: sessionId,
+          });
+        });
+      },
+      goldenFixtureEnabled ? 0 : 250,
+    );
     return { metadata: accepted };
   }
 

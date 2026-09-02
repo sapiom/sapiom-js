@@ -49,10 +49,17 @@ import {
   SessionNotResumeableError,
   SpawnTargetError,
 } from "../core/errors.js";
-import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import {
+  SessionNotReadyError,
+  UnknownSessionError,
+  type SessionManager,
+} from "../core/session-manager.js";
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
-import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
+import {
+  getHarnessAdapter,
+  listHarnessAdapters,
+} from "../core/adapters/registry.js";
 import { resolveWithinRoot } from "../core/path-safety.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
@@ -80,13 +87,15 @@ function decodedBase64Size(encoded: string): number | null {
 // validation and the TypeScript type can never drift from each other.
 // Adding a new spawnable harness means updating that one constant; the
 // validator here and the HarnessKind type both pick up the change automatically.
-const createSessionSchema = z.object({
-  cwd: z.string().min(1),
-  harness: z.enum(SPAWNABLE_HARNESS_KINDS),
-  profile: z.string().optional(),
-  rehydrateFrom: z.string().min(1).optional(),
-  theme: z.enum(["light", "dark"]).optional(),
-}).strict() satisfies z.ZodType<CreateSessionRequest>;
+const createSessionSchema = z
+  .object({
+    cwd: z.string().min(1),
+    harness: z.enum(SPAWNABLE_HARNESS_KINDS),
+    profile: z.string().optional(),
+    rehydrateFrom: z.string().min(1).optional(),
+    theme: z.enum(["light", "dark"]).optional(),
+  })
+  .strict() satisfies z.ZodType<CreateSessionRequest>;
 
 const injectInputSchema = z.object({
   text: z.string(),
@@ -131,6 +140,9 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
   "plan.upgrade_clicked",
   "agent_map.entered",
   "agent_map.workspace_load_failed",
+  "agent_map.proposal_created",
+  "agent_map.proposal_visible",
+  "agent_map.validation_failed",
 ];
 
 /**
@@ -192,7 +204,11 @@ export interface RestRouterOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
   /** Sapiom identity from CLI auth; null when unauthenticated / --no-auth. */
-  identity: { userId: string; tenantId: string; organizationName: string } | null;
+  identity: {
+    userId: string;
+    tenantId: string;
+    organizationName: string;
+  } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
   /** Workspace identities backing the folder projection and system-graph route. */
   listWorkspaceScopes?: () =>
@@ -444,7 +460,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(201).json(session);
       options.onSessionCreated?.(request.cwd, session.id);
     } catch (err) {
-      if (err instanceof AdapterNotFoundError || err instanceof SpawnTargetError) {
+      if (
+        err instanceof AdapterNotFoundError ||
+        err instanceof SpawnTargetError
+      ) {
         // Both are user-actionable ("install claude", "restart to repair") —
         // the dialog renders this message verbatim, so a 500 here buried the
         // one string that tells the user what to do.
@@ -616,7 +635,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // agent session — they carry live status the transcript can't know.
       const registryRows = sessionManager
         .list()
-        .filter((session) => session.cwd === cwd && session.agentSessionId != null);
+        .filter(
+          (session) => session.cwd === cwd && session.agentSessionId != null,
+        );
       // Only rows the scan did NOT account for need a direct probe — the
       // phantoms, plus the narrow case of a transcript that exists but holds
       // no line our parser understands (see ClaudeCodeAdapter.canResume, which
@@ -625,7 +646,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
         registryRows.map(async (session) =>
           foundInStore.has(`${session.harness}\u0000${session.agentSessionId!}`)
             ? true
-            : agentHoldsConversation(adapters, session.harness, session.agentSessionId!, session.cwd),
+            : agentHoldsConversation(
+                adapters,
+                session.harness,
+                session.agentSessionId!,
+                session.cwd,
+              ),
         ),
       );
 
@@ -644,7 +670,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       });
       for (const record of transcripts) {
         if (byAgentSessionId.has(record.agentSessionId)) continue;
-        byAgentSessionId.set(record.agentSessionId, { ...record, resumeMode: "agent-resume" });
+        byAgentSessionId.set(record.agentSessionId, {
+          ...record,
+          resumeMode: "agent-resume",
+        });
       }
 
       const merged = Array.from(byAgentSessionId.values()).sort((a, b) =>
@@ -665,7 +694,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
         for (const summary of merged) {
           const turnCount =
             turnCounts.get(summary.agentSessionId) ??
-            (summary.harnessSessionId ? turnCounts.get(summary.harnessSessionId) : undefined);
+            (summary.harnessSessionId
+              ? turnCounts.get(summary.harnessSessionId)
+              : undefined);
           if (turnCount !== undefined) summary.turnCount = turnCount;
         }
       }
@@ -688,7 +719,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(404).json({ error: err.message });
       return true;
     }
-    if (err instanceof AdapterNotFoundError || err instanceof SpawnTargetError) {
+    if (
+      err instanceof AdapterNotFoundError ||
+      err instanceof SpawnTargetError
+    ) {
       // AdapterNotFoundError: a persisted session with an unknown harness kind
       // (e.g. from a future or removed harness type) cannot be resumed.
       // SpawnTargetError: the agent binary can't be spawned on Windows (not on
@@ -703,7 +737,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionNotResumeableError
     ) {
-      res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+      res
+        .status(409)
+        .json({ error: err.message, code: (err as { code: string }).code });
       return true;
     }
     return false;
@@ -718,7 +754,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
   router.post("/sessions/adopt", async (req, res, next) => {
     const parsed = adoptSessionSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
+      res
+        .status(400)
+        .json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
       return;
     }
     const { agentSessionId, harness, title, lastActiveAt } = parsed.data;
@@ -762,7 +800,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // Never take the client's word for resumability — it's re-derived from
       // the agent's own store here, so a stale history row (transcript deleted
       // between the list and the click) can't leave a phantom record behind.
-      if (!(await agentHoldsConversation(adapters, harness, agentSessionId, cwd))) {
+      if (
+        !(await agentHoldsConversation(adapters, harness, agentSessionId, cwd))
+      ) {
         const label = getHarnessAdapter(harness).label;
         res.status(409).json({
           error: `${label} no longer has the conversation for session ${agentSessionId} in ${cwd} — there is nothing to resume. Start a new session in this directory instead.`,
@@ -805,7 +845,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
    */
   router.get("/sessions/:id/record", async (req, res, next) => {
     if (!options.sessionRecords) {
-      res.status(501).json({ error: "session records are not available on this server" });
+      res
+        .status(501)
+        .json({ error: "session records are not available on this server" });
       return;
     }
     try {
