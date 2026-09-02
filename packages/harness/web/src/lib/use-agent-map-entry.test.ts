@@ -6,7 +6,7 @@ import { shouldCommitAcceptedDelta } from "./use-agent-map-entry";
 describe("shouldCommitAcceptedDelta", () => {
   it("rejects a superseded request before either state or telemetry can commit", () => {
     const snapshot = proposalSnapshot();
-    const delta = renameDelta();
+    const delta = renameDelta(0);
     const projectId = snapshot.project.projectId;
 
     expect(
