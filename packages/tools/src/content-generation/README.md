@@ -230,7 +230,10 @@ defaults when `wait()` is called without arguments, so the two APIs stay in sync
 
 The capability-stable signal constant — declare it in the **pausing** step's
 static `pause` edge (`signal` and `resumeStep` are both required) so the engine
-knows which signal to listen for and which step to resume with the result:
+knows which signal to listen for and which step to resume with the result. It
+fires on **either** terminal outcome, ready or failed, and the payload carries
+which one it was (`generationError` on a failure), so the resumed step always
+runs and branches:
 
 ```typescript
 import { defineStep, pauseUntilSignal, terminate } from "@sapiom/agent";
@@ -276,9 +279,26 @@ interface VideoResultPayload {
     downloadUrl?: string; // ready-to-use short-lived URL (may have expired by resume)
     downloadUrlExpiresAt?: string; // ISO expiry of downloadUrl, when present
     downloadUrlUnavailable?: boolean; // fileId is set but no URL could be minted — re-fetch from fileId
-    storageError?: string; // present when storage was requested but failed
+    storageError?: string; // the asset WAS generated, but persisting it failed
+    generationError?: string; // the generation itself failed — no asset ever existed
   }>;
 }
+```
+
+`ImageResultPayload` is the same shape (`images.launch` resumes through the same rail).
+
+`storageError` and `generationError` are different failures and never both apply to one
+output. Branch on `generationError` for "the model failed" — retrying the same prompt will
+probably fail the same way — and on `storageError` for "the model succeeded but we couldn't
+keep the result". Before v0.35 a terminal generation failure arrived as `storageError`,
+which said the opposite of what happened.
+
+```typescript
+const out = result.outputs[0];
+if (out?.generationError)
+  throw new Error(`generation failed: ${out.generationError}`);
+if (out?.storageError)
+  throw new Error(`could not persist the output: ${out.storageError}`);
 ```
 
 Import `VideoResultPayload` from `@sapiom/tools` to annotate the resumed step's
@@ -465,4 +485,9 @@ name the specific `VideoSelect` when you need `requires`.
 
 - **Failed requests throw `ContentGenerationHttpError`** (carries `status` +
   parsed `body`), exported from `@sapiom/tools`.
+- **A failed _generation_ throws `ContentGenerationFailedError`** from `wait()` (and
+  from `video.create`), as soon as the job terminally fails rather than at `timeoutMs`.
+  It carries `requestId` and the provider's own `providerError`. A plain `Error`
+  (`"… did not complete within …ms"`) now means only what it says: the job was still
+  running when you stopped waiting.
 - **`storage` is reserved** — a same-named field in `params` is ignored.

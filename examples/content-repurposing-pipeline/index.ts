@@ -811,9 +811,13 @@ const collectGraphic = defineStep({
 
     const img = result.outputs?.[0];
     if (!img?.fileId && !img?.downloadUrl) {
-      const storageError = img?.storageError ? `: ${img.storageError}` : "";
+      // `generationError` means the model itself failed (no asset was ever made);
+      // `storageError` means it was made but we couldn't keep it. Report whichever applies.
+      const reason = img?.generationError ?? img?.storageError;
       throw new Error(
-        `quote graphic generation completed without a usable output for quote ${index + 1}${storageError}`,
+        img?.generationError
+          ? `quote graphic generation failed for quote ${index + 1}: ${img.generationError}`
+          : `quote graphic generation completed without a usable output for quote ${index + 1}${reason ? `: ${reason}` : ""}`,
       );
     }
     const graphic: Graphic = {

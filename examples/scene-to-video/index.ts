@@ -475,9 +475,13 @@ const collectKeyframe = defineStep({
 
     const img = result.outputs?.[0];
     if (!img?.fileId && !img?.downloadUrl) {
-      const storageError = img?.storageError ? `: ${img.storageError}` : "";
+      // `generationError` means the model itself failed (no asset was ever made);
+      // `storageError` means it was made but we couldn't keep it. Report whichever applies.
+      const reason = img?.generationError ?? img?.storageError;
       throw new Error(
-        `keyframe generation completed without a usable output for shot ${index + 1}${storageError}`,
+        img?.generationError
+          ? `keyframe generation failed for shot ${index + 1}: ${img.generationError}`
+          : `keyframe generation completed without a usable output for shot ${index + 1}${reason ? `: ${reason}` : ""}`,
       );
     }
     const frame: Keyframe = {
@@ -553,9 +557,11 @@ const collect = defineStep({
 
     const out = result.outputs?.[0];
     if (!out?.fileId && !out?.downloadUrl) {
-      const storageError = out?.storageError ? `: ${out.storageError}` : "";
+      const reason = out?.generationError ?? out?.storageError;
       throw new Error(
-        `video generation completed without a usable output for shot ${index + 1}${storageError}`,
+        out?.generationError
+          ? `video generation failed for shot ${index + 1}: ${out.generationError}`
+          : `video generation completed without a usable output for shot ${index + 1}${reason ? `: ${reason}` : ""}`,
       );
     }
     const clip: Clip = {

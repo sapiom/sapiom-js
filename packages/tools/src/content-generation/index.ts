@@ -25,25 +25,33 @@ import {
   defaultTransport,
   resolveCoreBaseUrl,
 } from "../_client/index.js";
-import { ContentGenerationHttpError } from "./errors.js";
+import {
+  ContentGenerationFailedError,
+  ContentGenerationHttpError,
+} from "./errors.js";
+import { pollForResult, statusUrlFromResultUrl } from "./poll.js";
 import type { DispatchHandle } from "../dispatch.js";
 
-export { ContentGenerationHttpError };
+export { ContentGenerationFailedError, ContentGenerationHttpError };
 
 /**
  * Capability-stable signal a video launch fires when the video reaches a terminal
- * state (ready OR failed — it carries the result either way, the resumed step
- * branches). A workflow step paused on a launch handle resumes on this; it is the
- * value carried in the handle's `dispatch.resultSignal`.
+ * state — ready OR failed. It carries the result either way and the resumed step
+ * branches: a failed generation arrives as `outputs: [{ generationError }]` on the
+ * {@link VideoResultPayload} (SAP-3097), which is what makes that "either way" true.
+ * A workflow step paused on a launch handle resumes on this; it is the value carried
+ * in the handle's `dispatch.resultSignal`.
  */
 export const VIDEO_RESULT_SIGNAL = "contentGeneration.video.result";
 
 /**
  * Capability-stable signal an image launch fires when the image reaches a terminal
- * state. The async completion→resume path is media-agnostic: the engine reads this
- * name off the paused step row and matches the resume on `correlationId` (the launch
- * `requestId`), so images resume through the exact same rail as video — this name is
- * just the label carried in the handle's `dispatch.resultSignal`.
+ * state — ready OR failed, the same contract as {@link VIDEO_RESULT_SIGNAL} (a failed
+ * generation arrives as `outputs: [{ generationError }]`). The async completion→resume
+ * path is media-agnostic: the engine reads this name off the paused step row and matches
+ * the resume on `correlationId` (the launch `requestId`), so images resume through the
+ * exact same rail as video — this name is just the label carried in the handle's
+ * `dispatch.resultSignal`.
  */
 export const IMAGE_RESULT_SIGNAL = "contentGeneration.images.result";
 
@@ -684,8 +692,23 @@ export interface ImageResultPayload extends MediaResumeFields {
      * `fileStorage.getPublicUrl(fileId)` — rather than treating a missing `downloadUrl` as "no asset".
      */
     downloadUrlUnavailable?: boolean;
-    /** Present when storage was requested but persisting this output failed. */
+    /**
+     * Present when storage was requested but persisting this output failed. The asset WAS
+     * generated — this is about keeping it, not making it. For "the model never produced
+     * anything" see {@link generationError}.
+     */
     storageError?: string;
+    /**
+     * Present when the generation itself terminally failed (SAP-3097): the provider job
+     * errored, was cancelled, or completed with an error, so no asset ever existed. Carries
+     * the provider's own reason.
+     *
+     * Mutually exclusive with `fileId` / `downloadUrl` / `storageError` — there is nothing
+     * to store when nothing was generated. Branch on this field to tell "generation failed"
+     * from "storage failed"; before SAP-3097 a terminal generation failure arrived as
+     * `storageError`, which reported the opposite of what happened.
+     */
+    generationError?: string;
   }>;
 }
 
@@ -730,7 +753,9 @@ export function toImageResumePayload(
  * router cap — the failure mode the blocking sync path hits under a fan-out.
  *
  * Pass `storage` to persist the output (the result then carries `fileId`). Throws
- * {@link ContentGenerationHttpError} when the submit fails.
+ * {@link ContentGenerationHttpError} when the submit fails. `wait()` throws
+ * {@link ContentGenerationFailedError} as soon as the job terminally fails, and a plain
+ * `Error` only when `timeoutMs` elapses with the job still running.
  */
 export async function launchImage(
   input: ImageCreateInput,
@@ -784,31 +809,24 @@ export async function launchImage(
   }: {
     timeoutMs?: number;
     pollMs?: number;
-  } = {}): Promise<ImageGenerationResult> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const res = await transport.fetch(responseUrl, { method: "GET" });
-      if (res.ok) {
-        const raw = (await res.json()) as RawImageResult;
-        // Thread the submit handle's SAP-2576 cost + resolvedModel and E5 preferSatisfied
-        // onto the polled result.
-        if (Array.isArray(raw.images))
-          return withDispatchMetadata(mapResult(raw), handle);
-      } else {
-        // Still generating, or a transient error. Drain the unread body so the
-        // connection can be reused, then keep polling — `timeoutMs` is the backstop.
-        try {
-          await res.body?.cancel();
-        } catch {
-          // best-effort drain
-        }
-      }
-      await sleep(pollMs);
-    }
-    throw new Error(
-      `Image generation did not complete within ${timeoutMs}ms (request id: ${requestId})`,
-    );
-  };
+  } = {}): Promise<ImageGenerationResult> =>
+    pollForResult({
+      transport,
+      resultUrl: responseUrl,
+      statusUrl: handle.statusUrl || statusUrlFromResultUrl(responseUrl),
+      requestId,
+      timeoutMs,
+      pollMs,
+      label: "Image",
+      // Thread the submit handle's SAP-2576 cost + resolvedModel and E5 preferSatisfied
+      // onto the polled result.
+      finished: (body) => {
+        const raw = body as RawImageResult;
+        return Array.isArray(raw?.images)
+          ? withDispatchMetadata(mapResult(raw), handle)
+          : undefined;
+      },
+    });
 
   return {
     requestId,
@@ -1114,16 +1132,14 @@ function mapVideoResult(raw: RawVideoResult): {
     : { ...rest, video: mapVideo(video) };
 }
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
  * Generate a video from a prompt. Video generation is asynchronous: this submits the
  * job, then polls the result through Sapiom until it's ready and returns it — so you
  * `await` it just like {@link createImage}, it just takes longer. Pass `storage` to
  * persist the output (the returned `video` then carries `fileId`). Throws
- * {@link ContentGenerationHttpError} on a failed submit, or an `Error` if the result
- * isn't ready within `timeoutMs`.
+ * {@link ContentGenerationHttpError} on a failed submit,
+ * {@link ContentGenerationFailedError} as soon as the generation terminally fails, or a
+ * plain `Error` when the job is still running at `timeoutMs`.
  *
  * Routed (SAP-2575): the submit goes through the shared {@link capabilityCall} seam to
  * `POST /v1/capabilities/content.generation.video` on the single Core base URL — the
@@ -1180,32 +1196,23 @@ export async function createVideo(
 
   // Poll the result THROUGH Sapiom until it's ready. The poll is what persists the
   // output when `storage` was requested, so `fileId` is filled in by the time it returns.
-  const intervalMs = input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS;
-  const timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const res = await transport.fetch(responseUrl, { method: "GET" });
-    if (res.ok) {
-      const raw = (await res.json()) as RawVideoResult;
-      // Thread the submit handle's SAP-2576 cost + resolvedModel and E5 preferSatisfied onto
-      // the polled result — the queue passthrough (this `raw`) carries none of them.
-      if (raw.video?.url)
-        return withDispatchMetadata(mapVideoResult(raw), handle);
-    } else {
-      // Still generating, or a transient error. Drain the unread body so the
-      // connection can be reused, then keep polling — `timeoutMs` is the backstop
-      // for a result that never arrives.
-      try {
-        await res.body?.cancel();
-      } catch {
-        // best-effort drain
-      }
-    }
-    await sleep(intervalMs);
-  }
-  throw new Error(
-    `Video generation did not complete within ${timeoutMs}ms (request id: ${handle.requestId ?? "unknown"})`,
-  );
+  return pollForResult({
+    transport,
+    resultUrl: responseUrl,
+    statusUrl: handle.statusUrl || statusUrlFromResultUrl(responseUrl),
+    requestId: handle.requestId ?? "unknown",
+    timeoutMs: input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
+    pollMs: input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS,
+    label: "Video",
+    // Thread the submit handle's SAP-2576 cost + resolvedModel and E5 preferSatisfied onto
+    // the polled result — the queue passthrough (this `raw`) carries none of them.
+    finished: (body) => {
+      const raw = body as RawVideoResult;
+      return raw?.video?.url
+        ? withDispatchMetadata(mapVideoResult(raw), handle)
+        : undefined;
+    },
+  });
 }
 
 /**
@@ -1265,8 +1272,23 @@ export interface VideoResultPayload extends MediaResumeFields {
      * `fileStorage.getPublicUrl(fileId)` — rather than treating a missing `downloadUrl` as "no asset".
      */
     downloadUrlUnavailable?: boolean;
-    /** Present when storage was requested but persisting this output failed. */
+    /**
+     * Present when storage was requested but persisting this output failed. The asset WAS
+     * generated — this is about keeping it, not making it. For "the model never produced
+     * anything" see {@link generationError}.
+     */
     storageError?: string;
+    /**
+     * Present when the generation itself terminally failed (SAP-3097): the provider job
+     * errored, was cancelled, or completed with an error, so no asset ever existed. Carries
+     * the provider's own reason.
+     *
+     * Mutually exclusive with `fileId` / `downloadUrl` / `storageError` — there is nothing
+     * to store when nothing was generated. Branch on this field to tell "generation failed"
+     * from "storage failed"; before SAP-3097 a terminal generation failure arrived as
+     * `storageError`, which reported the opposite of what happened.
+     */
+    generationError?: string;
   }>;
 }
 
@@ -1316,7 +1338,9 @@ export function toVideoResumePayload(
  * with the ability to suspend a running workflow.
  *
  * Pass `storage` to persist the output (the result then carries `fileId`).
- * Throws {@link ContentGenerationHttpError} when the submit fails.
+ * Throws {@link ContentGenerationHttpError} when the submit fails. `wait()` throws
+ * {@link ContentGenerationFailedError} as soon as the job terminally fails, and a plain
+ * `Error` only when `timeoutMs` elapses with the job still running.
  *
  * Routed (SAP-2575): the submit is identical to {@link createVideo}'s — same body,
  * same `POST /v1/capabilities/content.generation.video` call through the shared
@@ -1382,29 +1406,24 @@ export async function launchVideo(
   }: {
     timeoutMs?: number;
     pollMs?: number;
-  } = {}): Promise<VideoGenerationResult> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const res = await transport.fetch(responseUrl, { method: "GET" });
-      if (res.ok) {
-        const raw = (await res.json()) as RawVideoResult;
-        // Thread the submit handle's SAP-2576 cost + resolvedModel and E5 preferSatisfied
-        // onto the polled result.
-        if (raw.video?.url)
-          return withDispatchMetadata(mapVideoResult(raw), handle);
-      } else {
-        try {
-          await res.body?.cancel();
-        } catch {
-          // best-effort drain
-        }
-      }
-      await sleep(pollMs);
-    }
-    throw new Error(
-      `Video generation did not complete within ${timeoutMs}ms (request id: ${requestId})`,
-    );
-  };
+  } = {}): Promise<VideoGenerationResult> =>
+    pollForResult({
+      transport,
+      resultUrl: responseUrl,
+      statusUrl: handle.statusUrl || statusUrlFromResultUrl(responseUrl),
+      requestId,
+      timeoutMs,
+      pollMs,
+      label: "Video",
+      // Thread the submit handle's SAP-2576 cost + resolvedModel and E5 preferSatisfied
+      // onto the polled result.
+      finished: (body) => {
+        const raw = body as RawVideoResult;
+        return raw?.video?.url
+          ? withDispatchMetadata(mapVideoResult(raw), handle)
+          : undefined;
+      },
+    });
 
   return {
     requestId,

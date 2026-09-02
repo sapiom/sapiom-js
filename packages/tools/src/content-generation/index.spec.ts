@@ -14,7 +14,9 @@ import {
   IMAGE_MODELS,
   VIDEO_MODEL_ALIASES,
   ContentGenerationHttpError,
+  ContentGenerationFailedError,
 } from "./index.js";
+import { terminalFailureFrom } from "./poll.js";
 import type {
   ImageGenerationResult,
   VideoGenerationResult,
@@ -2159,4 +2161,259 @@ describe("prompt-guard — createImage, launchImage, createVideo, launchVideo th
       ).rejects.toMatchObject({ status: 400 });
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Terminal generation failure (SAP-3097)
+//
+// A job that terminally fails must surface promptly, with the provider's reason,
+// and must stay distinguishable from a transport blip that should keep polling.
+// ---------------------------------------------------------------------------
+
+/**
+ * A submit + scripted poll sequence. Each poll response is consumed in order; the last
+ * one repeats. `/status` requests are answered from `statusResponses` when supplied,
+ * which is how the terminal channel is exercised.
+ */
+function makePollScript(
+  submitResponse: unknown,
+  pollResponses: Array<{ body: unknown; init?: ResponseInit }>,
+  statusResponses?: Array<{ body: unknown; init?: ResponseInit }>,
+): { transport: Transport; calls: FetchCall[] } {
+  const calls: FetchCall[] = [];
+  let poll = 0;
+  let status = 0;
+  const fetchMock = (async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init: RequestInit = {},
+  ): Promise<Response> => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (init.method === "POST") return jsonResponse(submitResponse);
+    if (url.endsWith("/status")) {
+      if (!statusResponses?.length)
+        return jsonResponse({ status: "IN_PROGRESS" });
+      const next =
+        statusResponses[Math.min(status, statusResponses.length - 1)]!;
+      status += 1;
+      return jsonResponse(next.body, next.init);
+    }
+    const next = pollResponses[Math.min(poll, pollResponses.length - 1)]!;
+    poll += 1;
+    return jsonResponse(next.body, next.init);
+  }) as typeof globalThis.fetch;
+  return {
+    transport: new Transport({ apiKey: "test-key", fetch: fetchMock }),
+    calls,
+  };
+}
+
+const pollCount = (calls: FetchCall[]): number =>
+  calls.filter((c) => c.init.method !== "POST" && !c.url.endsWith("/status"))
+    .length;
+
+describe("async media wait() — terminal generation failure (SAP-3097)", () => {
+  describe("image", () => {
+    const submit = {
+      requestId: "img-fail",
+      responseUrl: `${BASE}/queue/img-fail`,
+      statusUrl: `${BASE}/queue/img-fail/status`,
+      resolvedModel: "flux-fast",
+    };
+
+    it("fails fast with the provider's message when the polled body reports a terminal error", async () => {
+      const { transport, calls } = makePollScript(submit, [
+        { body: { status: "ERROR", error: "content policy violation" } },
+      ]);
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      const wait = handle.wait({ timeoutMs: 60_000, pollMs: 1 });
+
+      await expect(wait).rejects.toBeInstanceOf(ContentGenerationFailedError);
+      await expect(wait).rejects.toMatchObject({
+        requestId: "img-fail",
+        providerError: "content policy violation",
+      });
+      await expect(wait).rejects.toThrow(/content policy violation/);
+      // Gave up on the first observation — it did not poll to `timeoutMs`.
+      expect(pollCount(calls)).toBe(1);
+    });
+
+    it("reports a COMPLETED-with-error job as a failure, not as a finished result", async () => {
+      const { transport } = makePollScript(submit, [
+        {
+          body: {
+            status: "COMPLETED",
+            error: { message: "upstream model crashed" },
+          },
+        },
+      ]);
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).rejects.toMatchObject({
+        name: "ContentGenerationFailedError",
+        providerError: "upstream model crashed",
+      });
+    });
+
+    it("consults the status endpoint when the result endpoint answers non-OK, and fails on a terminal status", async () => {
+      const { transport, calls } = makePollScript(
+        submit,
+        [{ body: { detail: "no result" }, init: { status: 400 } }],
+        [{ body: { status: "FAILED", error: "invalid duration enum" } }],
+      );
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).rejects.toMatchObject({ providerError: "invalid duration enum" });
+      expect(calls.some((c) => c.url.endsWith("/status"))).toBe(true);
+    });
+
+    it("keeps polling through a transient non-OK blip and resolves once the result lands", async () => {
+      const { transport, calls } = makePollScript(
+        submit,
+        [
+          { body: { error: "bad gateway" }, init: { status: 502 } },
+          { body: { images: [{ url: "https://media/x.png" }] } },
+        ],
+        // The job is still running, so the terminal channel says so.
+        [{ body: { status: "IN_PROGRESS" } }],
+      );
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).resolves.toMatchObject({ images: [{ url: "https://media/x.png" }] });
+      expect(pollCount(calls)).toBe(2);
+    });
+
+    it("still resolves a clean success without touching the status endpoint", async () => {
+      const { transport, calls } = makePollScript(submit, [
+        { body: { status: "IN_PROGRESS" } },
+        { body: { images: [{ url: "https://media/x.png", fileId: "f-1" }] } },
+      ]);
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).resolves.toMatchObject({
+        images: [{ url: "https://media/x.png", fileId: "f-1" }],
+      });
+      expect(calls.some((c) => c.url.endsWith("/status"))).toBe(false);
+    });
+  });
+
+  describe("video", () => {
+    const submit = {
+      requestId: "vid-fail",
+      responseUrl: `${BASE}/queue/vid-fail`,
+      statusUrl: `${BASE}/queue/vid-fail/status`,
+      resolvedModel: "veo3-fast",
+    };
+
+    it("launch().wait() fails fast with the provider's message", async () => {
+      const { transport, calls } = makePollScript(submit, [
+        { body: { status: "ERROR", error: "safety filter triggered" } },
+      ]);
+
+      const handle = await launchVideo({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).rejects.toMatchObject({
+        name: "ContentGenerationFailedError",
+        requestId: "vid-fail",
+        providerError: "safety filter triggered",
+      });
+      expect(pollCount(calls)).toBe(1);
+    });
+
+    it("create() fails fast too — the sync-looking path polls the same way", async () => {
+      const { transport } = makePollScript(submit, [
+        { body: { status: "CANCELLED" } },
+      ]);
+
+      await expect(
+        createVideo(
+          { prompt: "x", timeoutMs: 60_000, pollIntervalMs: 1 },
+          transport,
+          BASE,
+        ),
+      ).rejects.toBeInstanceOf(ContentGenerationFailedError);
+    });
+
+    it("keeps polling through a transient non-OK blip and resolves once the result lands", async () => {
+      const { transport, calls } = makePollScript(
+        submit,
+        [
+          { body: { error: "service unavailable" }, init: { status: 503 } },
+          { body: { video: { url: "https://media/v.mp4" } } },
+        ],
+        [{ body: { status: "IN_QUEUE" } }],
+      );
+
+      const handle = await launchVideo({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).resolves.toMatchObject({ video: { url: "https://media/v.mp4" } });
+      expect(pollCount(calls)).toBe(2);
+    });
+
+    it("still times out — with the timeout error, not a failure error — when the job never finishes", async () => {
+      const { transport } = makePollScript(
+        submit,
+        [{ body: { status: "IN_PROGRESS" } }],
+        [{ body: { status: "IN_PROGRESS" } }],
+      );
+
+      const handle = await launchVideo({ prompt: "x" }, transport, BASE);
+      const wait = handle.wait({ timeoutMs: 20, pollMs: 1 });
+      await expect(wait).rejects.toThrow(/did not complete within/);
+      await expect(wait).rejects.not.toBeInstanceOf(
+        ContentGenerationFailedError,
+      );
+    });
+  });
+});
+
+describe("terminalFailureFrom()", () => {
+  it.each([
+    ["IN_QUEUE", { status: "IN_QUEUE" }],
+    ["IN_PROGRESS", { status: "IN_PROGRESS" }],
+    ["COMPLETED without an error", { status: "COMPLETED" }],
+    ["an unrecognized status", { status: "SOMETHING_NEW" }],
+    [
+      "a body with no status at all",
+      { detail: "Request is still in progress" },
+    ],
+    ["a non-object body", "plain text"],
+    ["an absent body", undefined],
+  ])("keeps polling on %s", (_label, body) => {
+    expect(terminalFailureFrom(body)).toBeNull();
+  });
+
+  it.each([
+    ["FAILED", { status: "FAILED", error: "boom" }, "boom"],
+    ["ERROR", { status: "error", error_type: "ModelError" }, "ModelError"],
+    [
+      "COMPLETED with an error",
+      { status: "COMPLETED", error: { message: "no capacity" } },
+      "no capacity",
+    ],
+    [
+      "a serialized error object with no message",
+      { status: "FAILED", error: { code: 42 } },
+      '{"code":42}',
+    ],
+  ])("reports %s as terminal", (_label, body, expected) => {
+    expect(terminalFailureFrom(body)).toBe(expected);
+  });
+
+  it("names the status when a terminal response carries no error detail", () => {
+    expect(terminalFailureFrom({ status: "CANCELLED" })).toBe(
+      "job reported cancelled",
+    );
+  });
 });

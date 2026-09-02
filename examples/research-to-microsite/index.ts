@@ -919,10 +919,18 @@ const collectIllustration = defineStep({
     } else {
       // Best-effort, same as a failed launch: no usable image for this
       // section, never a failed run.
-      const storageError = img?.storageError ? `: ${img.storageError}` : "";
       ctx.logger.warn(
         "illustration generation returned no usable output; continuing without it",
-        { heading: section.heading, storageError },
+        {
+          heading: section.heading,
+          // The model failed vs. we failed to keep what it made — distinct fields.
+          ...(img?.generationError !== undefined && {
+            generationError: img.generationError,
+          }),
+          ...(img?.storageError !== undefined && {
+            storageError: img.storageError,
+          }),
+        },
       );
     }
 

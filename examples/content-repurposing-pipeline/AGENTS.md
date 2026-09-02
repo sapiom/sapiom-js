@@ -73,7 +73,7 @@ that wall no longer applies.
   suspends the step until the job's signal arrives. The step must also **declare**
   the edge: `pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep }` (or
   `VIDEO_RESULT_SIGNAL`). The resumed step receives an `ImageResultPayload` /
-  `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl? }] }`).
+  `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl?, generationError? }] }` — the signal fires on either terminal outcome, so check `generationError` before treating a missing `fileId` as a storage problem).
 - **Structured output, never a hand parse.** `repurpose` sets `output: { name, schema }`
   on the `llm.run` spec — which appends that tool and forces `tool_choice` onto it — and
   reads the pack back with `ctx.sapiom.llm.structuredOf(res, name)`. There is no prose to
