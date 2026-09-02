@@ -709,10 +709,11 @@ export class SessionManager {
       await this.ensureCanvasTemplate(session.cwd);
       await this.spawn(session, spec);
     } catch (err) {
-      // The record was already persisted as "starting" above; a failure
-      // anywhere before the pty is live must reconcile it to "exited" or it
-      // lingers forever as a ghost tab (non-exited status, no pty behind it).
-      await this.transitionExited(session, null);
+      // The first persist may itself be the failure, so reconciliation is
+      // best-effort: always repair the in-memory record to "exited", attempt
+      // the durable repair, and preserve the original actionable failure if
+      // that second write also fails.
+      await this.transitionExited(session, null).catch(() => {});
       throw err;
     }
     return session;
@@ -869,14 +870,15 @@ export class SessionManager {
       await this.ensureCanvasTemplate(session.cwd);
       await this.spawn(session, spec);
     } catch (err) {
-      // Same reconciliation as create(): the record just went back to
-      // "starting" and was persisted — a failure before the new pty is live
-      // must not leave it stranded there with nothing behind it. Roll the
-      // pre-pty `lastActiveAt` stamp back at the same time: no pty ever ran,
-      // so the session's last real activity is still where it was, and the
-      // dead pane's "Ran for" stays truthful.
+      // Same best-effort reconciliation as create(): the first persist can be
+      // the failure, and a failed repair must not replace that original error.
+      // Roll the pre-pty `lastActiveAt` stamp back at the same time: no pty
+      // ever ran, so the session's last real activity is still where it was,
+      // and the dead pane's "Ran for" stays truthful.
       session.lastActiveAt = lastActiveBeforeResume;
-      await this.transitionExited(session, null, { stampLastActive: false });
+      await this.transitionExited(session, null, {
+        stampLastActive: false,
+      }).catch(() => {});
       throw err;
     }
     return session;

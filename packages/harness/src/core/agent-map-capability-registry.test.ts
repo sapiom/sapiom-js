@@ -44,4 +44,45 @@ describe("AgentMapCapabilityRegistry", () => {
     );
     expect(JSON.stringify(onEvent.mock.calls)).not.toContain("secret-token");
   });
+
+  it("slides expiry on authenticated use but remains bounded by lifecycle revocation", () => {
+    let now = 100;
+    const registry = new AgentMapCapabilityRegistry({
+      ttlMs: 10,
+      now: () => now,
+      randomToken: () => "long-lived-session-token",
+    });
+    const issued = registry.issue(identity());
+    expect(issued.expiresAt).toBe(110);
+
+    now = 109;
+    expect(registry.resolve(issued.token).expiresAt).toBe(119);
+    now = 118;
+    expect(registry.resolve(issued.token).expiresAt).toBe(128);
+    expect(
+      registry.isGenerationLive(identity().sessionId, issued.generation),
+    ).toBe(true);
+
+    registry.revokeSession(identity().sessionId);
+    expect(() => registry.resolve(issued.token)).toThrowError(
+      expect.objectContaining({ code: "revoked_capability" }),
+    );
+  });
+
+  it("expires a capability after a full inactivity window", () => {
+    let now = 100;
+    const registry = new AgentMapCapabilityRegistry({
+      ttlMs: 10,
+      now: () => now,
+      randomToken: () => "inactive-session-token",
+    });
+    const issued = registry.issue(identity());
+
+    now = 109;
+    registry.resolve(issued.token);
+    now = 119;
+    expect(() => registry.resolve(issued.token)).toThrowError(
+      expect.objectContaining({ code: "expired_capability" }),
+    );
+  });
 });

@@ -162,6 +162,7 @@ import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouter,
 } from "./agent-map-mcp.js";
+import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
   isPlannerDispatchAuthorized,
@@ -2702,7 +2703,7 @@ export const startServer = async (
     service: agentMapProposalService,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
-      if (!project) throw new Error("Agent Map project is unavailable");
+      if (!project) throw new AgentMapMcpProjectUnavailableError();
       const snapshot = await agentMapProposalService.read(projectId);
       return { schemaVersion: 1 as const, project, ...snapshot };
     },

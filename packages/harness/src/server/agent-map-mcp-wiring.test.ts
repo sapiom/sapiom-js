@@ -2,6 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
@@ -78,6 +80,31 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     `Bearer ${metadata!.bearerToken}`,
   );
   expect((await fs.stat(launchOpts!.mcpConfigFile!)).mode & 0o777).toBe(0o600);
+
+  const client = new Client({ name: "full-server-wiring-test", version: "1" });
+  const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
+    requestInit: {
+      headers: { Authorization: `Bearer ${metadata!.bearerToken}` },
+    },
+  });
+  await client.connect(transport);
+  const tools = await client.listTools();
+  expect(tools.tools.map(({ name }) => name).sort()).toEqual([
+    "agent_map_propose",
+    "agent_map_read",
+    "agent_map_validate",
+  ]);
+  const snapshot = await client.callTool({
+    name: "agent_map_read",
+    arguments: {},
+  });
+  expect(snapshot.isError).not.toBe(true);
+  expect(snapshot.structuredContent).toMatchObject({
+    schemaVersion: 1,
+    project: { projectId: session.agentMapIdentity!.projectId },
+    proposal: null,
+  });
+  await client.close();
 
   await server.sessionManager.kill(session.id);
   const rejected = await fetch(metadata!.url, {
