@@ -380,6 +380,9 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse>;
+  /** Compatibility surface for coordinator-driven clients. The Studio renders
+   * the planner's raw CLI and does not project this protocol into a second
+   * transcript/composer UI. */
   sendPlannerMessage(
     projectId: StudioProjectId,
     sessionId: string,
@@ -2314,6 +2317,7 @@ export class MockApi implements HarnessApi {
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("mockAgentMapGolden") ===
         "1";
+    let seededGoldenFixture = false;
     if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
       const fixture = goldenAgentMapFixture(
         project,
@@ -2322,9 +2326,24 @@ export class MockApi implements HarnessApi {
         "planner_mock",
       );
       this.agentMapSnapshots.set(projectId, fixture.snapshot);
+      seededGoldenFixture = true;
+      // The golden journey starts from the durable empty snapshot, then accepts
+      // the complete proposal through the same existing WebSocket used in
+      // production. Keeping the durable fixture ready first also makes any
+      // recovery GET authoritative if delivery races or reconnects.
+      setTimeout(() => {
+        void import("./events").then(({ publishMockBusMessage }) => {
+          publishMockBusMessage({
+            type: "agent-map.proposal.changed",
+            delta: fixture.delta,
+          });
+        });
+      }, 350);
     }
     const stored = this.agentMapSnapshots.get(projectId);
-    if (stored) return parseAgentMapWorkspaceResponse(stored, projectId);
+    if (stored && !seededGoldenFixture) {
+      return parseAgentMapWorkspaceResponse(stored, projectId);
+    }
     return parseAgentMapWorkspaceResponse(
       {
         schemaVersion: 1,

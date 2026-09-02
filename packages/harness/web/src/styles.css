@@ -673,8 +673,8 @@ input {
   outline-offset: 2px;
 }
 
-/* Mobile's planner-primary layout names the sheet it opens. Desktop keeps the
-   compact icon because the map is already visibly beside the conversation. */
+/* Mobile's CLI-primary layout names the sheet it opens. Desktop keeps the
+   compact icon because the map is already visibly beside the coding-agent CLI. */
 .theme-toggle.right-expand-labeled {
   width: auto;
   min-width: max-content;
@@ -4096,118 +4096,6 @@ button.rail-footer-card:hover {
   text-transform: uppercase;
 }
 
-/* Live Agent Map planning conversation ---------------------------------- */
-
-.planning-conversation {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-}
-
-.planner-transcript-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--sp5) var(--pane-pad-x) var(--sp3);
-}
-
-.planner-transcript-turns {
-  max-width: var(--assistant-measure);
-  margin: 0 auto;
-}
-
-.planner-transcript-turn {
-  padding-bottom: var(--sp2);
-}
-
-.planner-inline-status,
-.planner-transcript-error {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  max-width: var(--assistant-measure);
-  margin: var(--sp3) auto 0;
-  color: var(--text-faint);
-  font-size: var(--type-label);
-  line-height: 1.5;
-}
-
-.planner-inline-status.is-error,
-.planner-transcript-error {
-  color: var(--text-dim);
-}
-
-.planner-inline-status.is-error > svg {
-  flex: 0 0 auto;
-  color: var(--amber-text);
-}
-
-.planner-inline-retry {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.planner-transcript-error {
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-.planner-tool-calls {
-  align-self: flex-start;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-}
-
-.planner-tool-calls summary {
-  cursor: pointer;
-}
-
-.planner-tool-calls ul {
-  margin: var(--sp1) 0 0;
-  padding-left: var(--sp4);
-}
-
-.planner-composer {
-  flex: 0 0 auto;
-  padding: var(--sp3) var(--pane-pad-x) var(--sp4);
-}
-
-.planner-composer > .composer-box {
-  max-width: var(--assistant-measure);
-  margin: 0 auto;
-}
-
-.planner-composer-input {
-  min-height: 3em;
-  max-height: 10em;
-}
-
-.planner-composer .composer-box-right {
-  width: auto;
-  margin-left: auto;
-}
-
-.planner-send-error {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--red);
-  font-size: var(--type-meta);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-width: 768px) {
-  .planner-transcript-scroll {
-    padding: var(--sp4) var(--sp3) var(--sp2);
-  }
-
-  .planner-composer {
-    padding: var(--sp2) var(--sp3) var(--sp3);
-  }
-}
-
 /* Canvas pane ---------------------------------------------------------- */
 
 .canvas-pane {
@@ -4219,7 +4107,7 @@ button.rail-footer-card:hover {
 
 /* Workspace dependency map ----------------------------------------------
    The project's altitude of the ONE canvas — it fills the right pane beside
-   the conversation, not the whole shell. It was a full-main destination, which
+   the coding-agent CLI, not the whole shell. It was a full-main destination, which
    made selecting a project a mode switch: your chat vanished to show you a
    picture of it. The field and cards use the design repository's flow geometry
    and existing Studio tokens; there is deliberately no legend, metrics, status

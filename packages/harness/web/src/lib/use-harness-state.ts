@@ -25,8 +25,6 @@ import type {
   TemplateListResponse,
 } from "@shared/types";
 import type {
-  PlannerMessageRequest,
-  PlannerSessionMetadata,
   PlannerSessionRequest,
   PlannerSessionResponse,
   StudioProjectId,
@@ -192,18 +190,6 @@ export interface HarnessStateHook {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ) => Promise<PlannerSessionResponse>;
-  /** Enqueues an ordinary planner message and applies the coordinator's
-   * authoritative queue/greeting metadata immediately. */
-  sendPlannerMessage: (
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ) => Promise<PlannerSessionMetadata>;
-  /** Retries only the automatic greeting operation. */
-  retryPlannerGreeting: (
-    projectId: StudioProjectId,
-    sessionId: string,
-  ) => Promise<PlannerSessionMetadata>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
@@ -1231,22 +1217,6 @@ export function useHarnessState(): HarnessStateHook {
     });
   }, []);
 
-  const applyPlannerMetadata = useCallback(
-    (sessionId: string, metadata: PlannerSessionMetadata): void => {
-      setState((prev) => {
-        if (!prev) return prev;
-        let changed = false;
-        const sessions = prev.sessions.map((session) => {
-          if (session.id !== sessionId) return session;
-          changed = true;
-          return { ...session, planning: metadata };
-        });
-        return changed ? { ...prev, sessions } : prev;
-      });
-    },
-    [],
-  );
-
   const openPlannerSession = useCallback(
     async (
       projectId: StudioProjectId,
@@ -1271,45 +1241,6 @@ export function useHarnessState(): HarnessStateHook {
       return response;
     },
     [upsertSession],
-  );
-
-  const sendPlannerMessage = useCallback(
-    async (
-      projectId: StudioProjectId,
-      sessionId: string,
-      request: PlannerMessageRequest,
-    ): Promise<PlannerSessionMetadata> => {
-      const statusRevision = sessionStatusRevisions.current.get(sessionId) ?? 0;
-      const { metadata } = await api.sendPlannerMessage(
-        projectId,
-        sessionId,
-        request,
-      );
-      if (
-        (sessionStatusRevisions.current.get(sessionId) ?? 0) === statusRevision
-      ) {
-        applyPlannerMetadata(sessionId, metadata);
-      }
-      return metadata;
-    },
-    [applyPlannerMetadata],
-  );
-
-  const retryPlannerGreeting = useCallback(
-    async (
-      projectId: StudioProjectId,
-      sessionId: string,
-    ): Promise<PlannerSessionMetadata> => {
-      const statusRevision = sessionStatusRevisions.current.get(sessionId) ?? 0;
-      const { metadata } = await api.retryPlannerGreeting(projectId, sessionId);
-      if (
-        (sessionStatusRevisions.current.get(sessionId) ?? 0) === statusRevision
-      ) {
-        applyPlannerMetadata(sessionId, metadata);
-      }
-      return metadata;
-    },
-    [applyPlannerMetadata],
   );
 
   useEffect(() => {
@@ -2452,8 +2383,6 @@ export function useHarnessState(): HarnessStateHook {
     getWorkflowInputContract,
     sessionRecord,
     openPlannerSession,
-    sendPlannerMessage,
-    retryPlannerGreeting,
     resumeSession,
     rehydrateSession,
     resumeFromHistory,

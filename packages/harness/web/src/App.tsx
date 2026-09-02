@@ -28,7 +28,7 @@
  *                  session is project-scoped and cannot reach outside it.
  *
  * A project row FILLS the workbench rather than replacing it (SAP-2980): the
- * conversation stays in the centre and the project's map draws on the right.
+ * coding-agent CLI stays in the centre and the project's map draws on the right.
  * The graph used to be a full-main destination, inheriting the pattern from the
  * template gallery by analogy — but browsing a gallery is a detour, and looking
  * at your project's shape while talking to it is not. The centre pane vanishing
@@ -980,7 +980,7 @@ export const App = (): JSX.Element => {
   // agent board closes the pane) would otherwise leave a project selection
   // with nothing on screen but a chat — the mode switch inverted.
   useEffect(() => {
-    // On mobile the planning conversation is primary. Agent Map selection and
+    // On mobile the coding-agent CLI is primary. Agent Map selection and
     // background loading never open the bottom sheet; its explicit button does.
     // Legacy System Graph selection keeps its established auto-open behavior.
     if (
@@ -3066,7 +3066,7 @@ export const App = (): JSX.Element => {
                     className="terminal-empty"
                     testId="planner-load-error"
                     icon="TriangleAlert"
-                    title="Planning conversation couldn't open"
+                    title="Planning session couldn't open"
                     body={agentMapEntry.state.planner.message}
                     cta={
                       <button
@@ -3075,7 +3075,7 @@ export const App = (): JSX.Element => {
                         data-testid="planner-retry"
                         onClick={agentMapEntry.retryPlanner}
                       >
-                        Retry conversation
+                        Retry session
                       </button>
                     }
                   />
@@ -3084,7 +3084,7 @@ export const App = (): JSX.Element => {
                     className="terminal-empty"
                     testId="planner-loading"
                     icon="Radio"
-                    title="Opening planning conversation…"
+                    title="Opening planning session…"
                   />
                 ) : activePlannerSession?.planning ? (
                   /* Agent Map planning is still an ordinary coding-agent

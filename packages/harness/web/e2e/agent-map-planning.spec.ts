@@ -35,7 +35,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
 
     const terminal = page.locator(".harness-terminal");
     await expect(terminal).toBeVisible();
-    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
+    await expect(terminal.locator(".xterm")).toBeVisible();
     await expect(page.getByTestId("agent-map-empty")).toHaveText(
       "Nothing generated yet",
     );
@@ -76,6 +76,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
     await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
@@ -215,7 +216,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     ).toContainText("Agent builder · unplanned");
   });
 
-  test("greeting lifecycle state never replaces the raw planner CLI", async ({
+  test("a generating greeting still renders the raw planner CLI", async ({
     page,
   }) => {
     await page.goto(
@@ -224,12 +225,9 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
 
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
-    await expect(page.getByTestId("planner-greeting-generating")).toHaveCount(
-      0,
-    );
-    await expect(page.getByTestId("planner-composer-input")).toHaveCount(0);
+    const terminal = page.locator(".harness-terminal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal.locator(".xterm")).toBeVisible();
   });
 
   test("return resumes the same planner and plus creates a fresh planner tab", async ({
@@ -372,9 +370,9 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
 
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("planning-conversation")).toHaveCount(0);
-    await expect(page.getByTestId("planner-greeting-retry")).toHaveCount(0);
+    const terminal = page.locator(".harness-terminal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal.locator(".xterm")).toBeVisible();
   });
 
   test("workspace and planner failures stay local, while unauthorized is whole-workspace", async ({
