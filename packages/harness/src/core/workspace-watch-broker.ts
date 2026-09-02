@@ -319,15 +319,18 @@ export class WorkspaceRootWatcher {
       // Observation membership is consumer-owned configuration, not a
       // filesystem mutation. Compare like-for-like against the accepted
       // declaration first so a caller/subscriber retirement cannot manufacture
-      // a discovery edit. The concurrent current-declaration sample becomes the
-      // next baseline; edits after it remain visible to the next normal sample.
-      const [comparableSnapshots, snapshots] = await Promise.all([
-        this.snapshotSources(
-          baselineRequest.roots,
-          baselineRequest.observations,
-        ),
-        this.snapshotSources(request.roots, request.observations),
-      ]);
+      // a discovery edit. Sample the current declaration before the comparable
+      // old declaration: a common-coverage edit between those walks is then
+      // reported by the old comparison, while a later edit remains visible
+      // against the earlier current-declaration baseline on the next sample.
+      const snapshots = await this.snapshotSources(
+        request.roots,
+        request.observations,
+      );
+      const comparableSnapshots = await this.snapshotSources(
+        baselineRequest.roots,
+        baselineRequest.observations,
+      );
       return {
         request,
         snapshots,

@@ -371,7 +371,7 @@ describe("SharedWorkspaceWatchBroker", () => {
     expect(onLastLeaseReleased).toHaveBeenCalledOnce();
   });
 
-  it("detects a real source edit racing an observation coverage rebase", async () => {
+  it("does not swallow a source edit between current and baseline coverage walks", async () => {
     const agentRoot = path.join(root, "agent");
     const discoveryPath = path.join(agentRoot, "discovery.ts");
     const invocationPath = path.join(agentRoot, "invocation.ts");
@@ -387,7 +387,9 @@ describe("SharedWorkspaceWatchBroker", () => {
     };
     let includeInvocation = false;
     let discoveryVersion = "discovery-v1";
-    let mutateDuringExpandedSample = false;
+    let mutateAfterCurrentSample = false;
+    let coverageRebaseActive = false;
+    const coverageWalks: string[] = [];
     let releaseBaseline!: () => void;
     const baselineGate = new Promise<void>((resolve) => {
       releaseBaseline = resolve;
@@ -400,6 +402,11 @@ describe("SharedWorkspaceWatchBroker", () => {
         const paths = observations
           .flatMap((observation) => observation.paths)
           .sort();
+        if (coverageRebaseActive) {
+          coverageWalks.push(
+            paths.includes(invocationPath) ? "current" : "baseline",
+          );
+        }
         const snapshot = new Map([
           [
             agentRoot,
@@ -413,8 +420,8 @@ describe("SharedWorkspaceWatchBroker", () => {
             ),
           ],
         ]);
-        if (mutateDuringExpandedSample && paths.includes(invocationPath)) {
-          mutateDuringExpandedSample = false;
+        if (mutateAfterCurrentSample && paths.includes(invocationPath)) {
+          mutateAfterCurrentSample = false;
           discoveryVersion = "discovery-v2";
         }
         expect(roots).toContain(agentRoot);
@@ -464,9 +471,19 @@ describe("SharedWorkspaceWatchBroker", () => {
     discoveryChange.mockClear();
     graphChange.mockClear();
 
-    mutateDuringExpandedSample = true;
+    let resolvePotential!: () => void;
+    const potentialObserved = new Promise<void>((resolve) => {
+      resolvePotential = resolve;
+    });
+    discoveryPotential.mockImplementation(resolvePotential);
+    const callsBeforeRebase = snapshotSources.mock.calls.length;
+    coverageRebaseActive = true;
+    mutateAfterCurrentSample = true;
     includeInvocation = true;
 
+    await potentialObserved;
+    expect(snapshotSources.mock.calls.length - callsBeforeRebase).toBe(2);
+    expect(coverageWalks).toEqual(["current", "baseline"]);
     await vi.waitFor(() => {
       expect(discoveryPotential).toHaveBeenCalledWith([agentRoot]);
       expect(discoveryChange).toHaveBeenCalledWith([agentRoot]);
