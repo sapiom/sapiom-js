@@ -61,14 +61,10 @@ async function readJsonBody(res: Response): Promise<unknown> {
   }
 }
 
-/** `error` / `error_type` on a queue response mean the job produced no asset. */
-function hasQueueError(body: Record<string, unknown>): boolean {
-  return body.error != null || body.error_type != null;
-}
-
 /**
  * The provider's own words for why a job failed, from whichever field carries them.
- * `undefined` when the response reported a failure but said nothing useful about it.
+ * `undefined` when the response carries no error content — which covers both "said nothing
+ * useful" and the empty `error: ""` / `error_type: ""` a queue can emit on the happy path.
  */
 function providerErrorMessage(
   body: Record<string, unknown>,
@@ -115,12 +111,13 @@ export function terminalFailureFrom(body: unknown): string | null {
       return (
         providerErrorMessage(record) ?? `job reported ${status.toLowerCase()}`
       );
-    case "COMPLETED":
-      // A completed job that still carries an error produced no asset.
-      if (!hasQueueError(record)) return null;
-      return (
-        providerErrorMessage(record) ?? "job completed with an unnamed error"
-      );
+    case "COMPLETED": {
+      // Unlike the statuses above, COMPLETED is terminal-SUCCESS by default: the error
+      // content is the only thing that makes it a failure. So it has to be real content,
+      // not merely a present key — a queue that emits `error: ""` on a clean completion
+      // would otherwise fail a job while it is handing back the asset.
+      return providerErrorMessage(record) ?? null;
+    }
     default:
       // IN_QUEUE / IN_PROGRESS / no status at all — not terminal, keep polling.
       return null;

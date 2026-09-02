@@ -2280,6 +2280,25 @@ describe("async media wait() — terminal generation failure (SAP-3097)", () => 
       });
     });
 
+    it("resolves a completed job that carries an empty error string alongside the asset", async () => {
+      // Some queues emit `error: ""` on the happy path. Since the terminal check now runs
+      // ahead of the result predicate, a present-but-empty key must not fail the job.
+      const { transport } = makePollScript(submit, [
+        {
+          body: {
+            status: "COMPLETED",
+            error: "",
+            images: [{ url: "https://media/x.png" }],
+          },
+        },
+      ]);
+
+      const handle = await launchImage({ prompt: "x" }, transport, BASE);
+      await expect(
+        handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+      ).resolves.toMatchObject({ images: [{ url: "https://media/x.png" }] });
+    });
+
     it("still resolves an empty images[] when nothing marks the job as failed", async () => {
       // Unchanged from before SAP-3097: an `images: []` with no failure marker is a
       // finished (if empty) result, not a reason to poll to the deadline.
@@ -2341,7 +2360,12 @@ describe("async media wait() — terminal generation failure (SAP-3097)", () => 
 
   it("probes the status endpoint on a slower cadence than the poll, not on every tick", async () => {
     // A queue that reports "not ready yet" as a non-OK result response must not cost two
-    // gateway requests per tick for the job's whole lifetime.
+    // gateway requests per tick for the job's whole lifetime. Driven by a scripted poll
+    // count, not a time budget, so the assertion doesn't depend on how fast CI runs.
+    const inProgress = {
+      body: { detail: "Request is still in progress" },
+      init: { status: 400 },
+    };
     const { transport, calls } = makePollScript(
       {
         requestId: "img-slow",
@@ -2350,24 +2374,20 @@ describe("async media wait() — terminal generation failure (SAP-3097)", () => 
         resolvedModel: "flux-fast",
       },
       [
-        {
-          body: { detail: "Request is still in progress" },
-          init: { status: 400 },
-        },
+        ...Array.from({ length: 8 }, () => inProgress),
+        { body: { images: [{ url: "https://media/x.png" }] } },
       ],
       [{ body: { status: "IN_PROGRESS" } }],
     );
 
     const handle = await launchImage({ prompt: "x" }, transport, BASE);
-    await expect(handle.wait({ timeoutMs: 30, pollMs: 1 })).rejects.toThrow(
-      /did not complete within/,
-    );
+    await expect(
+      handle.wait({ timeoutMs: 60_000, pollMs: 1 }),
+    ).resolves.toMatchObject({ images: [{ url: "https://media/x.png" }] });
 
-    const polls = pollCount(calls);
-    const probes = calls.filter((c) => c.url.endsWith("/status")).length;
-    expect(polls).toBeGreaterThan(4);
-    // First non-OK poll, then every 4th — never one probe per poll.
-    expect(probes).toBe(Math.ceil(polls / 4));
+    // 8 non-OK polls then the result: probed on non-OK #1 and #5 only, never per-poll.
+    expect(pollCount(calls)).toBe(9);
+    expect(calls.filter((c) => c.url.endsWith("/status"))).toHaveLength(2);
   });
 
   describe("video", () => {
@@ -2480,4 +2500,16 @@ describe("terminalFailureFrom()", () => {
       "job reported cancelled",
     );
   });
+
+  it.each([
+    ["an empty error string", { status: "COMPLETED", error: "" }],
+    ["an empty error_type", { status: "COMPLETED", error_type: "" }],
+    ["a whitespace-only error", { status: "COMPLETED", error: "   " }],
+    ["a contentless error object", { status: "COMPLETED", error: {} }],
+  ])(
+    "does not fail a COMPLETED job on %s — only real error content is terminal",
+    (_label, body) => {
+      expect(terminalFailureFrom(body)).toBeNull();
+    },
+  );
 });
