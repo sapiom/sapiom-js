@@ -76,10 +76,22 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
     await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: { trackEvents?: Array<{ event: string }> };
+              }
+            ).__HARNESS_TEST__?.trackEvents ?? []
+          ).map((event) => event.event),
+        ),
+      )
+      .toContain("agent_map.proposal_visible");
 
     const nodes = page.locator("[data-proposal-state='proposed']");
     await expect(nodes).toHaveCount(6);

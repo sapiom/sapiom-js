@@ -15,6 +15,60 @@ import {
 } from "./agent-map-test-fixture";
 
 describe("applyAcceptedProposalDelta", () => {
+  it("bootstraps the first proposal atomically from an all-add version-zero delta", () => {
+    const source = proposalSnapshot();
+    const firstOperation = source.proposal!.history[0]!;
+    expect(firstOperation.operation.kind).toBe("add-node");
+    if (firstOperation.operation.kind !== "add-node") return;
+    const snapshot = structuredClone(source);
+    snapshot.workspace.recordVersion = 1;
+    snapshot.workspace.activeProposalId = null;
+    snapshot.proposal = null;
+    const delta: AcceptedProposalDelta = {
+      schemaVersion: 1,
+      projectId: source.project.projectId,
+      proposalId: source.proposal!.id,
+      fromVersion: 0,
+      version: 1,
+      operationIds: [firstOperation.id],
+      operations: [firstOperation.operation],
+      actor: firstOperation.actor,
+      acceptedAt: firstOperation.acceptedAt,
+    };
+
+    const result = applyAcceptedProposalDelta(snapshot, delta);
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.snapshot.workspace).toMatchObject({
+      recordVersion: 2,
+      activeProposalId: delta.proposalId,
+    });
+    expect(result.snapshot.proposal).toMatchObject({
+      id: delta.proposalId,
+      version: 1,
+      nodes: [firstOperation.operation.node],
+      history: [{ id: firstOperation.id, acceptedVersion: 1 }],
+    });
+    expect(
+      latestNodeAttribution(result.snapshot, firstOperation.operation.node.id)
+        ?.actor.role,
+    ).toBe("map-planner");
+  });
+
+  it("refetches rather than bootstrapping an empty proposal with a mutation", () => {
+    const source = proposalSnapshot();
+    const snapshot = structuredClone(source);
+    snapshot.workspace.activeProposalId = null;
+    snapshot.proposal = null;
+    const delta = renameDelta(0);
+
+    expect(applyAcceptedProposalDelta(snapshot, delta)).toEqual({
+      status: "needs-refetch",
+      snapshot,
+    });
+  });
+
   it("applies one complete contiguous batch and preserves stable selection", () => {
     const result = applyAcceptedProposalDelta(
       proposalSnapshot(),

@@ -2338,7 +2338,7 @@ export class MockApi implements HarnessApi {
             delta: fixture.delta,
           });
         });
-      }, 350);
+      }, 0);
     }
     const stored = this.agentMapSnapshots.get(projectId);
     if (stored && !seededGoldenFixture) {

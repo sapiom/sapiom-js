@@ -137,11 +137,23 @@ export function applyAcceptedProposalDelta(
   if (delta.projectId !== snapshot.project.projectId) {
     return { status: "ignored", snapshot };
   }
+  const bootstrapsProposal =
+    proposal === null &&
+    snapshot.workspace.activeProposalId === null &&
+    delta.fromVersion === 0 &&
+    delta.version === 1 &&
+    delta.operations.length > 0 &&
+    delta.operations.every(
+      (operation) =>
+        operation.kind === "add-node" || operation.kind === "add-relationship",
+    );
+  const extendsProposal =
+    proposal !== null &&
+    proposal.id === delta.proposalId &&
+    snapshot.workspace.activeProposalId === delta.proposalId &&
+    delta.fromVersion === proposal.version;
   if (
-    !proposal ||
-    proposal.id !== delta.proposalId ||
-    snapshot.workspace.activeProposalId !== delta.proposalId ||
-    delta.fromVersion !== proposal.version ||
+    (!bootstrapsProposal && !extendsProposal) ||
     delta.version !== delta.fromVersion + 1 ||
     delta.operations.length !== delta.operationIds.length
   ) {
@@ -149,10 +161,10 @@ export function applyAcceptedProposalDelta(
   }
 
   const nodes = new Map(
-    proposal.nodes.map((node) => [node.id, structuredClone(node)]),
+    (proposal?.nodes ?? []).map((node) => [node.id, structuredClone(node)]),
   );
   const relationships = new Map(
-    proposal.relationships.map((relationship) => [
+    (proposal?.relationships ?? []).map((relationship) => [
       relationship.id,
       structuredClone(relationship),
     ]),
@@ -188,14 +200,21 @@ export function applyAcceptedProposalDelta(
       workspace: {
         ...snapshot.workspace,
         recordVersion: snapshot.workspace.recordVersion + 1,
+        activeProposalId: delta.proposalId,
         updatedAt: delta.acceptedAt,
       },
       proposal: {
-        ...proposal,
+        schemaVersion: 1,
+        id: delta.proposalId,
+        projectId: delta.projectId,
+        baseRevisionId: proposal
+          ? proposal.baseRevisionId
+          : snapshot.workspace.confirmedRevisionId,
         version: delta.version,
         nodes: [...nodes.values()],
         relationships: [...relationships.values()],
-        history: [...proposal.history, ...appendedHistory],
+        history: [...(proposal?.history ?? []), ...appendedHistory],
+        createdAt: proposal?.createdAt ?? delta.acceptedAt,
         updatedAt: delta.acceptedAt,
       },
     },
