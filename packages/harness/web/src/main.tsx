@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { agentMapDemoFixtureEnabled } from "./lib/agent-map-demo.js";
 import { interceptMockTrack } from "./lib/api.js";
 import { observeWindowFocus } from "./lib/window-focus.js";
 import { appFrameFromSearch } from "./lib/window-frame.js";
@@ -46,8 +47,29 @@ window.addEventListener("drop", (e) => {
   if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById("root")!);
+
+// Experiment seam: both gates are load-bearing. The Agent Map fixture is a
+// browser-only concept surface and must never replace the ordinary Harness in
+// a real build or merely because a query string was carried into one.
+if (
+  import.meta.env.VITE_MOCK === "1" &&
+  agentMapDemoFixtureEnabled(import.meta.env.VITE_MOCK, window.location.search)
+) {
+  void Promise.all([
+    import("./components/AgentMapDemo.js"),
+    import("./styles/agent-map-demo.css"),
+  ]).then(([{ AgentMapDemo }]) => {
+    root.render(
+      <StrictMode>
+        <AgentMapDemo />
+      </StrictMode>,
+    );
+  });
+} else {
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
