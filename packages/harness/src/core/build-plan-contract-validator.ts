@@ -172,22 +172,6 @@ function validateBrief(
     consumerAgentId: PlanNodeId,
   ): boolean => {
     if (evidence.length === 0) return false;
-    const isAllowedNode = (nodeId: PlanNodeId): boolean => {
-      const root = ownershipRoot(nodeId);
-      return (
-        root === producerAgentId ||
-        root === consumerAgentId ||
-        (root === null && isCarrierNode(nodeId))
-      );
-    };
-    if (
-      evidence.some(
-        ({ fromNodeId, toNodeId }) =>
-          !isAllowedNode(fromNodeId) || !isAllowedNode(toNodeId),
-      )
-    )
-      return false;
-
     const isActorFor = (nodeId: PlanNodeId, agentId: PlanNodeId): boolean => {
       const kind = nodes.get(nodeId)?.kind;
       return (

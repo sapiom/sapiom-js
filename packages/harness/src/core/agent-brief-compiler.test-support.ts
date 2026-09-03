@@ -32,6 +32,8 @@ export const DATA_ID =
   "node_10000000-0000-7000-8000-000000000005" as PlanNodeId;
 export const CHANNEL_ID =
   "node_10000000-0000-7000-8000-000000000006" as PlanNodeId;
+export const RELAY_ID =
+  "node_10000000-0000-7000-8000-000000000009" as PlanNodeId;
 export const REPORT_CONTRACT = "contract-research-report";
 
 export const stockResearchGraph = (): AgentMapGraph => ({
@@ -279,6 +281,78 @@ export const stockAssignments = () => [
     plannedAgentId: MARKETING_ID,
   },
 ];
+
+export function stockResearchRelayFixture() {
+  const graph = stockResearchGraph();
+  graph.nodes.push({
+    id: RELAY_ID,
+    kind: "agent",
+    name: "Report Relay",
+    purpose: "Relay the typed report without changing its contract",
+    ownerAgentId: null,
+    contractRefs: [REPORT_CONTRACT],
+  });
+  graph.nodes.find((node) => node.id === REPORT_ID)!.ownerAgentId = RELAY_ID;
+  const base = stockResearchPlan(graph);
+  const relayCriterionId =
+    "criterion_10000000-0000-7000-8000-000000000009" as AcceptanceCriterionId;
+  const plan = stockResearchPlan(graph, {
+    assignments: [
+      ...base.assignments.map((assignment) =>
+        assignment.plannedAgentId === RESEARCH_ID
+          ? {
+              ...assignment,
+              deliverables: assignment.deliverables.map((deliverable) => ({
+                ...deliverable,
+                artifactNodeIds: [],
+              })),
+            }
+          : assignment,
+      ),
+      {
+        plannedAgentId: RELAY_ID,
+        mission: "Relay the research report to Marketing",
+        scope: {
+          inScope: ["Typed report relay"],
+          nonGoals: ["Research and campaign creation"],
+        },
+        deliverables: [
+          {
+            deliverableId:
+              "deliverable_10000000-0000-7000-8000-000000000009" as DeliverableId,
+            description: "A relayed research report",
+            artifactNodeIds: [REPORT_ID],
+            acceptanceCriterionIds: [relayCriterionId],
+          },
+        ],
+        constraints: [],
+        acceptanceCriteria: [
+          {
+            criterionId: relayCriterionId,
+            ordinal: 1,
+            description: "The report reaches Marketing unchanged",
+            verification: "Match the shared contract reference",
+          },
+        ],
+        milestoneIds: [],
+        unresolvedDecisions: [],
+      },
+    ],
+  });
+  return {
+    graph,
+    plan,
+    assignments: [
+      ...stockAssignments(),
+      {
+        plannedAgentId: RELAY_ID,
+        assignmentId:
+          "assignment_10000000-0000-7000-8000-000000000009" as PlanningAssignmentId,
+        briefId: "brief_10000000-0000-7000-8000-000000000009" as AgentBriefId,
+      },
+    ],
+  };
+}
 
 export function reviseStockPlan(
   previous: ProjectBuildPlanVersion,

@@ -19,6 +19,7 @@ import {
   stockAssignments,
   stockResearchGraph,
   stockResearchPlan,
+  stockResearchRelayFixture,
   reviseStockPlan,
 } from "./agent-brief-compiler.test-support.js";
 import { canonicalJson } from "./build-plan-canonicalization.js";
@@ -253,76 +254,13 @@ describe("agent brief compiler", () => {
   });
 
   it("accepts a connected typed contract path through a third agent relay", () => {
-    const graph = stockResearchGraph();
-    const relayId = "node_10000000-0000-7000-8000-000000000009" as PlanNodeId;
-    graph.nodes.push({
-      id: relayId,
-      kind: "agent",
-      name: "Report Relay",
-      purpose: "Relay the typed report without changing its contract",
-      ownerAgentId: null,
-      contractRefs: [REPORT_CONTRACT],
-    });
-    graph.nodes.find((node) => node.id === REPORT_ID)!.ownerAgentId = relayId;
-    const base = stockResearchPlan(graph);
-    const relayCriterionId = "criterion_10000000-0000-7000-8000-000000000009";
-    const plan = stockResearchPlan(graph, {
-      assignments: [
-        ...base.assignments.map((assignment) =>
-          assignment.plannedAgentId === RESEARCH_ID
-            ? {
-                ...assignment,
-                deliverables: assignment.deliverables.map((deliverable) => ({
-                  ...deliverable,
-                  artifactNodeIds: [],
-                })),
-              }
-            : assignment,
-        ),
-        {
-          plannedAgentId: relayId,
-          mission: "Relay the research report to Marketing",
-          scope: {
-            inScope: ["Typed report relay"],
-            nonGoals: ["Research and campaign creation"],
-          },
-          deliverables: [
-            {
-              deliverableId:
-                "deliverable_10000000-0000-7000-8000-000000000009" as never,
-              description: "A relayed research report",
-              artifactNodeIds: [REPORT_ID],
-              acceptanceCriterionIds: [relayCriterionId as never],
-            },
-          ],
-          constraints: [],
-          acceptanceCriteria: [
-            {
-              criterionId: relayCriterionId as never,
-              ordinal: 1,
-              description: "The report reaches Marketing unchanged",
-              verification: "Match the shared contract reference",
-            },
-          ],
-          milestoneIds: [],
-          unresolvedDecisions: [],
-        },
-      ],
-    });
+    const { graph, plan, assignments } = stockResearchRelayFixture();
     const result = compileAgentBriefs({
       projectId: STOCK_PROJECT_ID,
       source: plan.source,
       graph,
       plan,
-      assignments: [
-        ...stockAssignments(),
-        {
-          plannedAgentId: relayId,
-          assignmentId:
-            "assignment_10000000-0000-7000-8000-000000000009" as never,
-          briefId: "brief_10000000-0000-7000-8000-000000000009" as never,
-        },
-      ],
+      assignments,
     });
 
     expect(result.diagnostics).toEqual([]);

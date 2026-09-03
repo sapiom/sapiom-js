@@ -28,6 +28,7 @@ import {
   RESEARCH_ID,
   stockResearchGraph,
   stockResearchPlan,
+  stockResearchRelayFixture,
 } from "./agent-brief-compiler.test-support.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {
@@ -2246,6 +2247,82 @@ describe("BuildPlanService", () => {
         resolutions: [],
       }),
     ).resolves.toEqual({ ...rebased, replayed: true });
+  });
+
+  it("persists real compiler briefs across a third-agent-owned relay", async () => {
+    const { store } = await fixture();
+    const relay = stockResearchRelayFixture();
+    const source = {
+      kind: "revision" as const,
+      revisionId: "revision_10000000-0000-7000-8000-000000000041" as never,
+      revisionNumber: 1,
+      graphDigest: computeArchitectureGraphDigest(relay.graph),
+    };
+    const resolver = {
+      resolve: async () => ({
+        projectId: PROJECT_ID,
+        source,
+        graph: relay.graph,
+      }),
+    };
+    const service = new BuildPlanService({
+      store,
+      sourceResolver: resolver,
+      contractValidator: new BuildPlanContractValidator(resolver),
+      briefCompiler: new DeterministicAgentBriefCompiler(),
+      impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
+      clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
+    });
+
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: source,
+      requestId: "relay-create",
+      operations: [
+        { op: "set-project-outcome", outcome: relay.plan.outcome },
+        ...relay.plan.assignments.map((assignment) => ({
+          op: "create-agent-assignment" as const,
+          assignment: {
+            plannedAgentId: assignment.plannedAgentId,
+            mission: assignment.mission,
+            scope: assignment.scope,
+            deliverables: assignment.deliverables.map((deliverable) => ({
+              clientRef: `deliverable-${assignment.plannedAgentId}`,
+              description: deliverable.description,
+              artifactNodeIds: deliverable.artifactNodeIds,
+              acceptanceCriterionRefs: [
+                { clientRef: `criterion-${assignment.plannedAgentId}` },
+              ],
+            })),
+            constraints: assignment.constraints,
+            acceptanceCriteria: assignment.acceptanceCriteria.map(
+              (criterion) => ({
+                clientRef: `criterion-${assignment.plannedAgentId}`,
+                ordinal: criterion.ordinal,
+                description: criterion.description,
+                verification: criterion.verification,
+              }),
+            ),
+            milestoneRefs: [],
+            unresolvedDecisions: [],
+          },
+        })),
+      ],
+    });
+
+    expect(created).toMatchObject({
+      completeness: { status: "complete", issues: [] },
+      eligibility: {
+        planningEligible: true,
+        implementationEligible: true,
+      },
+    });
+    expect(created.briefChanges).toHaveLength(3);
+    expect(
+      Object.keys((await store.read(PROJECT_ID)).currentBriefByAgentId).sort(),
+    ).toEqual(relay.plan.assignments.map((item) => item.plannedAgentId).sort());
   });
 
   it("validates effective two-agent briefs while persisting only semantic changes", async () => {
