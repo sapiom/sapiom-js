@@ -133,7 +133,7 @@ export function SecretsPanel({
          the credential. */
       {...trackingAttrs({ surface: "secrets_panel" })}
     >
-      <div className="workflow-actions-header" data-testid="secrets-toolbar">
+      <div className="secrets-header" data-testid="secrets-toolbar">
         <Pill>{agentName}</Pill>
         <Pill variant="count" title="Secrets on this agent">
           <span data-testid="secrets-count">{view.secrets.length}</span>

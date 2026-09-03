@@ -311,7 +311,7 @@
     "id": "web-api-local-workflow-routes",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^/api/workflows(?:/(?:connect|scan)?)?$",
-    "occurrences": 6,
+    "occurrences": 7,
     "reason": "Studio localhost API routes remain stable for existing clients."
   },
   {
@@ -530,5 +530,19 @@
     "pattern": "^workflows\\.changed$",
     "occurrences": 3,
     "reason": "The internal WebSocket event name remains stable for existing clients. The mock announces source discovery, moves, and scaffolds through this signal."
+  },
+  {
+    "id": "core-vault-secrets-definition-route",
+    "path": "packages/harness/src/core/vault-secrets.ts",
+    "pattern": "^/v1/workflows/definitions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that stores an agent's credentials. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "server-secrets-local-routes",
+    "path": "packages/harness/src/server/secrets.ts",
+    "pattern": "^/api/workflows/:id/secrets(?:/(?:import|flush|:key))?$",
+    "occurrences": 5,
+    "reason": "Studio localhost API routes remain stable for existing clients, and these sit beside the existing /api/workflows/:id/deploy family."
   }
 ]
