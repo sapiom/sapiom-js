@@ -2236,12 +2236,14 @@ export class MockApi implements HarnessApi {
     // Production authority is determined by the server response and always
     // uses durable Studio project summaries. Mock mode keeps the historical
     // fixtures stable unless a plan-first scenario opts in explicitly; the
-    // dedicated agent-map fixture is also an opt-in. This is test data
-    // selection, not a product feature flag.
+    // dedicated agent-map fixture is also an opt-in. `absent` names the
+    // legacy-server compatibility contract exercised by the remaining direct
+    // creation specs. This is test data selection, not a product feature flag.
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get("mockStudioProjects");
       const fixture = params.get("mockFixtures");
+      if (mode === "absent") return [];
       if (mode !== "present" && fixture !== "agent-map") return [];
     }
     const timestamp = "2026-01-01T00:00:00.000Z";
@@ -3814,7 +3816,11 @@ export class MockApi implements HarnessApi {
   ): Promise<{ state: AgentSecret["state"] }> {
     await delay(150);
     if (mockErrorTargets().has("secretWrite")) {
-      throw new ApiError(502, `mock: ${key} refused`, `${key} could not be stored.`);
+      throw new ApiError(
+        502,
+        `mock: ${key} refused`,
+        `${key} could not be stored.`,
+      );
     }
     const state: AgentSecret["state"] = this.mockLinked(workflowPath)
       ? "synced"

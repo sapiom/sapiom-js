@@ -1,5 +1,10 @@
 /**
- * SAP-2981 — the canonical create-agent flow.
+ * SAP-2981 — the legacy-server create-agent compatibility flow.
+ *
+ * Current Studio servers return durable project summaries and route creation
+ * through Agent Map planning. These specs deliberately use
+ * `mockStudioProjects=absent` to protect clients connected to older servers
+ * whose state payloads have no Studio project catalog.
  *
  * The defect these specs guard: every create door in the Studio ended in an
  * English sentence injected into a terminal ("call the
@@ -45,9 +50,9 @@ const createOrder = (page: Page): Promise<string[]> =>
         .__HARNESS_TEST__?.createOrder ?? []) as string[],
   );
 
-test.describe("create an agent in a project", () => {
+test.describe("legacy-server agent creation compatibility", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/?seed=0");
+    await page.goto("/?seed=0&mockStudioProjects=absent");
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
@@ -61,7 +66,9 @@ test.describe("create an agent in a project", () => {
     await expect(dialog).toBeVisible();
     // Stated, not chosen: you clicked that row, and the dialog spells the
     // folder out because a rail label can be widened or shared.
-    await expect(page.getByTestId("create-agent-project")).toHaveText("acme-app");
+    await expect(page.getByTestId("create-agent-project")).toHaveText(
+      "acme-app",
+    );
     await expect(dialog).toContainText(ROOT);
     // There is no folder picker here — asking "where" again is the subject
     // confusion this epic removes.
@@ -129,7 +136,9 @@ test.describe("create an agent in a project", () => {
     // The server's own sentence, not the wire shape it arrives in.
     const error = page.getByTestId("create-agent-error");
     await expect(error).toBeVisible();
-    await expect(error).toHaveText("acme-app already has an agent called leasing.");
+    await expect(error).toHaveText(
+      "acme-app already has an agent called leasing.",
+    );
     await expect(error).not.toContainText("/api/agents/scaffold");
 
     // The dialog stays up holding what was typed, and no session was started
@@ -154,7 +163,9 @@ test.describe("create an agent in a project", () => {
       await expect(submit).toBeDisabled();
     }
     await name.fill(".hidden");
-    await expect(page.getByTestId("create-agent-name-error")).toContainText("dot");
+    await expect(page.getByTestId("create-agent-name-error")).toContainText(
+      "dot",
+    );
     await expect(submit).toBeDisabled();
 
     // An empty field is not a mistake yet — it says nothing and offers nothing.
@@ -192,7 +203,9 @@ test.describe("create an agent in a project", () => {
     // One create flow, not one per door: the empty project's CTA is the same
     // subject and must not be a second mechanism that drifts.
     await page.getByTestId("rail-add-project").click();
-    await page.getByTestId("folder-field-input").fill("/Users/demo/blank-slate");
+    await page
+      .getByTestId("folder-field-input")
+      .fill("/Users/demo/blank-slate");
     await page.getByTestId("open-project").click();
     await page.getByTestId("project-empty-blank-slate").click();
 

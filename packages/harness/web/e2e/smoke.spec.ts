@@ -11,7 +11,11 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { focusRfqAgent, openProjectMenu, selectMockSessionFromPalette } from "./mock-navigation";
+import {
+  focusRfqAgent,
+  openProjectMenu,
+  selectMockSessionFromPalette,
+} from "./mock-navigation";
 
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
@@ -352,9 +356,15 @@ test("inject macros are enabled once the boot session and a deployed workflow ar
 });
 
 test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
-  test("rail is project > agent only, with no session rows", async ({
+  test("legacy-server rail is project > agent only, with no session rows", async ({
     page,
   }) => {
+    // This assertion preserves the scaffold affordance for older state
+    // payloads without a durable Studio project catalog. Current Studio
+    // projects intentionally expose only Agent Map planning.
+    await page.goto("/?seed=0&mockStudioProjects=absent");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
     // Zone 1 is a pure explorer: project rows and agent rows, no sessions
     // anywhere in the tree.
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
@@ -507,7 +517,9 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     const mapBounds = await page
       .getByTestId("workspace-graph-view")
       .boundingBox();
-    const paneBounds = await page.getByTestId("right-panel-canvas").boundingBox();
+    const paneBounds = await page
+      .getByTestId("right-panel-canvas")
+      .boundingBox();
     expect(mapBounds).toEqual(paneBounds);
     const appBounds = await page.locator(".app").boundingBox();
     expect(mapBounds?.width ?? 0).toBeLessThan(appBounds?.width ?? 0);

@@ -23,11 +23,15 @@ import type { Page } from "@playwright/test";
 import { openProjectMenu } from "./mock-navigation";
 
 const ROW = (page: Page, label: string) =>
-  page.getByTestId(`workspace-group-${label}`).locator(":scope > .workspace-row");
+  page
+    .getByTestId(`workspace-group-${label}`)
+    .locator(":scope > .workspace-row");
 
-test.describe("project row grammar", () => {
+test.describe("legacy-server project row grammar", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/?seed=0");
+    // Direct create/scaffold controls survive only for older server payloads
+    // that do not include the durable Studio project catalog.
+    await page.goto("/?seed=0&mockStudioProjects=absent");
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
@@ -87,14 +91,19 @@ test.describe("project row grammar", () => {
     const order = (): Promise<string[]> =>
       page.evaluate(
         () =>
-          ((window as unknown as { __HARNESS_TEST__?: { createOrder?: string[] } })
-            .__HARNESS_TEST__?.createOrder ?? []) as string[],
+          ((
+            window as unknown as {
+              __HARNESS_TEST__?: { createOrder?: string[] };
+            }
+          ).__HARNESS_TEST__?.createOrder ?? []) as string[],
       );
 
     await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     await expect(page.getByTestId("project-menu-card-acme-app")).toHaveCount(0);
-    await expect(page.getByTestId("create-agent-project")).toHaveText("acme-app");
+    await expect(page.getByTestId("create-agent-project")).toHaveText(
+      "acme-app",
+    );
     // Nothing has started yet — the old handler started a pty on this click.
     expect(await order()).toEqual([]);
 
@@ -143,7 +152,6 @@ test.describe("double-click toggles disclosure", () => {
     await expect(row).toHaveClass(/is-collapsed/);
     await expect(row).toHaveClass(/is-selected/);
   });
-
 });
 
 test.describe("double-click on a folder row", () => {
@@ -193,9 +201,7 @@ test.describe("first-run explainer", () => {
       "Folders you chose that hold agents",
     );
     await expect(page.getByTestId("help-agents")).toContainText("Agents");
-    await expect(page.getByTestId("help-agents")).toContainText(
-      "What you run",
-    );
+    await expect(page.getByTestId("help-agents")).toContainText("What you run");
     // The upgrade line: an existing user opens 0.4.0 to a rearranged rail.
     await expect(page.getByTestId("help-upgrade-note")).toContainText(
       "Your projects were rebuilt from the folders you opened",
