@@ -102,7 +102,7 @@ describe("BuilderPlanningSessionService durable spawn claim", () => {
         contractValidator: {} as never,
         sessionManager: {} as never,
         currentUserId: () => "user-test",
-        latestAcceptedPlannerUserInputId: async () => null,
+        latestAcceptedPlannerUserInput: async () => null,
         resolveProjectRoot: async () => "/tmp/project",
         defaultHarness: "codex",
         now: () => now,
@@ -394,10 +394,20 @@ function publicFixture(
     role: "map-planner" as const,
   };
   const preparationUserInputId = "planner-input-preparation";
-  let acceptedPlannerUserInputId = includeConsent
-    ? "planner-input-confirmation-1"
-    : preparationUserInputId;
-  let confirmationTurn = 1;
+  let acceptedPlannerUserInput: { inputId: string; acceptedAt: string } | null =
+    includeConsent
+      ? {
+          inputId: "planner-input-confirmation-1",
+          acceptedAt: "2026-09-03T11:00:01.000Z",
+        }
+      : {
+          inputId: preparationUserInputId,
+          acceptedAt: "2026-09-03T10:59:59.000Z",
+        };
+  let confirmationTurn = includeConsent ? 1 : 0;
+  let currentTime = includeConsent
+    ? "2026-09-03T11:00:02.000Z"
+    : "2026-09-03T11:00:00.000Z";
   const consentBriefs = [...specs]
     .sort((left, right) => left.assignmentId.localeCompare(right.assignmentId))
     .map((spec) => {
@@ -422,10 +432,12 @@ function publicFixture(
     plannerSessionId: identity.sessionId,
     userId: identity.userId,
     preparedFromUserInputId: preparationUserInputId,
+    preparedFromUserInputAt: "2026-09-03T10:59:59.000Z",
     status: "pending" as const,
     preparedAt: "2026-09-03T11:00:00.000Z",
     confirmedAt: null,
     confirmedByUserInputId: null,
+    confirmedByUserInputAt: null,
     confirmationSource: null,
   };
   const consent = {
@@ -703,10 +715,10 @@ function publicFixture(
       } as never,
       sessionManager: sessionManager as never,
       currentUserId: () => identity.userId,
-      latestAcceptedPlannerUserInputId: async () => acceptedPlannerUserInputId,
+      latestAcceptedPlannerUserInput: async () => acceptedPlannerUserInput,
       resolveProjectRoot: async () => "/tmp/project",
       defaultHarness: "codex",
-      now: () => "2026-09-03T11:00:00.000Z",
+      now: () => currentTime,
     });
   return {
     service,
@@ -726,10 +738,26 @@ function publicFixture(
     specs,
     workspaceStore,
     manager,
-    acceptPlannerReply: () => {
+    acceptPlannerReply: (acceptedAt?: string) => {
+      const resolvedAcceptedAt =
+        acceptedAt ??
+        new Date(Date.parse(currentTime) + 1_000).toISOString();
       confirmationTurn += 1;
-      acceptedPlannerUserInputId = `planner-input-confirmation-${confirmationTurn}`;
-      return acceptedPlannerUserInputId;
+      acceptedPlannerUserInput = {
+        inputId: `planner-input-confirmation-${confirmationTurn}`,
+        acceptedAt: resolvedAcceptedAt,
+      };
+      if (Date.parse(resolvedAcceptedAt) >= Date.parse(currentTime)) {
+        currentTime = new Date(
+          Date.parse(resolvedAcceptedAt) + 1_000,
+        ).toISOString();
+      }
+      return acceptedPlannerUserInput;
+    },
+    setAcceptedPlannerUserInput: (
+      value: { inputId: string; acceptedAt: string } | null,
+    ) => {
+      acceptedPlannerUserInput = value;
     },
     beforeNextTransaction: (action: () => void | Promise<void>) => {
       beforeNextTransaction = action;
@@ -886,11 +914,38 @@ describe("BuilderPlanningSessionService public authorization", () => {
     ).rejects.toMatchObject({ code: "user_reply_required" });
     expect(fixture.create).not.toHaveBeenCalled();
 
+    // A message created before preparation cannot become consent merely
+    // because its queued PTY delivery completes after preparation.
+    fixture.acceptPlannerReply("2026-09-03T10:59:59.500Z");
+    await expect(
+      fixture.service().openOrReuse(fixture.identity, request),
+    ).rejects.toMatchObject({ code: "user_reply_required" });
+    expect(fixture.create).not.toHaveBeenCalled();
+
     fixture.acceptPlannerReply();
     await expect(
       fixture.service().openOrReuse(fixture.identity, request),
     ).resolves.toMatchObject({ consentId: preparation.consentId });
     expect(fixture.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares safely before a fresh planner has accepted any user input", async () => {
+    const fixture = publicFixture(false);
+    fixture.setAcceptedPlannerUserInput(null);
+
+    await expect(
+      fixture.service().prepareConsent(fixture.identity, {
+        source: fixture.request.source,
+        plan: fixture.request.plan,
+        assignmentIds: fixture.request.assignmentIds,
+      }),
+    ).resolves.toMatchObject({ expectedSessionCount: 1 });
+    expect(fixture.aggregate().buildPlanning.fanoutConsents[0]).toMatchObject({
+      preparedFromUserInputId: null,
+      preparedFromUserInputAt: null,
+      status: "pending",
+    });
+    expect(fixture.create).not.toHaveBeenCalled();
   });
 
   it("rejects consent when an exact brief version changes after preparation", async () => {
@@ -949,8 +1004,10 @@ describe("BuilderPlanningSessionService public authorization", () => {
       status: "confirmed",
       confirmationSource: "planner-attested-conversation",
       preparedFromUserInputId: "planner-input-preparation",
+      preparedFromUserInputAt: "2026-09-03T10:59:59.000Z",
       confirmedByUserInputId: "planner-input-confirmation-1",
-      confirmedAt: "2026-09-03T11:00:00.000Z",
+      confirmedByUserInputAt: "2026-09-03T11:00:01.000Z",
+      confirmedAt: "2026-09-03T11:00:02.000Z",
     });
   });
 

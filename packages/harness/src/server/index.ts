@@ -2784,8 +2784,8 @@ export const startServer = async (
     sourceResolver: architectureSourceResolver,
     sessionManager,
     currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
-    latestAcceptedPlannerUserInputId: (sessionId) =>
-      plannerGreeting.latestAcceptedUserInputId(sessionId),
+    latestAcceptedPlannerUserInput: (sessionId) =>
+      plannerGreeting.latestAcceptedUserInput(sessionId),
     resolveProjectRoot: async (projectId) => {
       const project = await studioProjectCatalog.resolveIdentity(projectId);
       const root = project?.rootBindings.find(

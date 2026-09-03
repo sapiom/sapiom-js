@@ -68,7 +68,13 @@ const plannerSessionSchema = z
   .strict() satisfies z.ZodType<PlannerSessionRequest>;
 
 const plannerMessageSchema = z
-  .object({ text: z.string().min(1).max(100_000) })
+  .object({
+    text: z
+      .string()
+      .min(1)
+      .max(100_000)
+      .refine((value) => value.trim() !== ""),
+  })
   .strict() satisfies z.ZodType<PlannerMessageRequest>;
 
 const additionalBuilderSessionSchema = z

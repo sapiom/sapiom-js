@@ -275,10 +275,11 @@ export interface BuilderPlanningSessionServiceOptions {
   sessionManager: SessionManager;
   currentUserId: () => string;
   /** Content-free, durable proof of the latest user submission accepted by
-   * this planner session. Consent opening requires a later token than preparation. */
-  latestAcceptedPlannerUserInputId: (
+   * this planner session. Its boundary timestamp is the time the user input
+   * entered Studio, not when a queued message eventually reached the PTY. */
+  latestAcceptedPlannerUserInput: (
     sessionId: string,
-  ) => Promise<string | null>;
+  ) => Promise<{ inputId: string; acceptedAt: string } | null>;
   resolveProjectRoot: (projectId: StudioProjectId) => Promise<string>;
   defaultHarness: HarnessKind;
   now?: () => string;
@@ -701,19 +702,18 @@ export class BuilderPlanningSessionService {
       throw new BuilderPlanningSessionError("forbidden");
   }
 
-  private async acceptedPlannerUserInputId(
+  private async latestAcceptedPlannerUserInput(
     identity: PlanningSessionIdentity,
-  ): Promise<string> {
+  ): Promise<{ inputId: string; acceptedAt: string } | null> {
     try {
-      const inputId = await this.options.latestAcceptedPlannerUserInputId(
+      return await this.options.latestAcceptedPlannerUserInput(
         identity.sessionId,
       );
-      if (inputId) return inputId;
     } catch {
-      // A missing/unreadable turn token is safety-significant. Fail closed
-      // without exposing storage details to the model-facing tool boundary.
+      // Preparation has no side effect and may safely establish a zero-input
+      // watermark. Opening still fails closed until a later receipt exists.
+      return null;
     }
-    throw new BuilderPlanningSessionError("user_reply_required");
   }
 
   async preview(projectId: StudioProjectId): Promise<PlanningFanoutPreview> {
@@ -879,16 +879,17 @@ export class BuilderPlanningSessionService {
     request: PreparePlanningFanoutRequest,
   ): Promise<PlanningFanoutConsentPreparation> {
     this.assertPlanner(identity);
-    const preparedFromUserInputId =
-      await this.acceptedPlannerUserInputId(identity);
     const exact = await this.exactPlanning(identity.projectId, request);
+    const preparedFromUserInput =
+      await this.latestAcceptedPlannerUserInput(identity);
     const briefs = this.consentBriefs(exact.briefs);
     const preparedAt = this.now();
     const consentId = stableId("fanout-consent", {
       projectId: identity.projectId,
       plannerSessionId: identity.sessionId,
       userId: identity.userId,
-      preparedFromUserInputId,
+      preparedFromUserInputId: preparedFromUserInput?.inputId ?? null,
+      preparedFromUserInputAt: preparedFromUserInput?.acceptedAt ?? null,
       source: request.source,
       plan: request.plan,
       assignmentIds: [...request.assignmentIds].sort(),
@@ -903,11 +904,13 @@ export class BuilderPlanningSessionService {
       briefs,
       plannerSessionId: identity.sessionId,
       userId: identity.userId,
-      preparedFromUserInputId,
+      preparedFromUserInputId: preparedFromUserInput?.inputId ?? null,
+      preparedFromUserInputAt: preparedFromUserInput?.acceptedAt ?? null,
       status: "pending" as const,
       preparedAt,
       confirmedAt: null,
       confirmedByUserInputId: null,
+      confirmedByUserInputAt: null,
       confirmationSource: null,
     };
     const consent = {
@@ -969,7 +972,7 @@ export class BuilderPlanningSessionService {
     identity: PlanningSessionIdentity,
     request: OpenPlanningFanoutRequest,
     briefs: readonly AgentBriefVersionRecord[],
-    acceptedUserInputId: string,
+    acceptedUserInput: { inputId: string; acceptedAt: string } | null,
   ): PlanningFanoutConsent {
     const consent = aggregate.buildPlanning.fanoutConsents.find(
       (entry) => entry.consentId === request.consentId,
@@ -995,11 +998,17 @@ export class BuilderPlanningSessionService {
       !same(consent.briefs, this.consentBriefs(briefs))
     )
       throw new BuilderPlanningSessionError("stale_consent");
-    if (
-      consent.status === "pending" &&
-      acceptedUserInputId === consent.preparedFromUserInputId
-    )
-      throw new BuilderPlanningSessionError("user_reply_required");
+    if (consent.status === "pending") {
+      const acceptedAt = Date.parse(acceptedUserInput?.acceptedAt ?? "");
+      const preparedAt = Date.parse(consent.preparedAt);
+      if (
+        !acceptedUserInput ||
+        !Number.isFinite(acceptedAt) ||
+        !Number.isFinite(preparedAt) ||
+        acceptedAt <= preparedAt
+      )
+        throw new BuilderPlanningSessionError("user_reply_required");
+    }
     return consent;
   }
 
@@ -1026,7 +1035,7 @@ export class BuilderPlanningSessionService {
     request: OpenPlanningFanoutRequest,
   ): Promise<PlanningFanoutOpenResponse> {
     this.assertPlanner(identity);
-    const acceptedUserInputId = await this.acceptedPlannerUserInputId(identity);
+    const acceptedUserInput = await this.latestAcceptedPlannerUserInput(identity);
     // Expensive completeness validation is a preflight only. The serialized
     // transaction below repeats every mutable source/plan/brief check before it
     // creates or reuses a binding claim. The caller's assertion of readiness is
@@ -1037,7 +1046,7 @@ export class BuilderPlanningSessionService {
       identity,
       request,
       preflight.briefs,
-      acceptedUserInputId,
+      acceptedUserInput,
     );
     const timestamp = this.now();
     const claimed = await this.options.workspaceStore.transact(
@@ -1049,7 +1058,7 @@ export class BuilderPlanningSessionService {
           identity,
           request,
           exact.briefs,
-          acceptedUserInputId,
+          acceptedUserInput,
         );
         const confirmedConsent: PlanningFanoutConsent =
           consent.status === "confirmed"
@@ -1059,7 +1068,8 @@ export class BuilderPlanningSessionService {
                   ...consent,
                   status: "confirmed" as const,
                   confirmedAt: timestamp,
-                  confirmedByUserInputId: acceptedUserInputId,
+                  confirmedByUserInputId: acceptedUserInput!.inputId,
+                  confirmedByUserInputAt: acceptedUserInput!.acceptedAt,
                   confirmationSource: "planner-attested-conversation" as const,
                 };
                 const { consentDigest: priorDigest, ...projection } = confirmed;

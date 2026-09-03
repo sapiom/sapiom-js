@@ -576,6 +576,17 @@ describe("createAgentMapRouter", () => {
       "Build a support triage system",
     );
 
+    const whitespace = await fetch(`${route}/${plannerSession.id}/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ text: "   " }),
+    });
+    expect(whitespace.status).toBe(400);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+
     const retryResponse = await fetch(
       `${route}/${plannerSession.id}/greeting/retry`,
       {

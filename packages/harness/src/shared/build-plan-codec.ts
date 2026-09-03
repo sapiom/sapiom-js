@@ -95,7 +95,9 @@ const hasFanoutConsentTurnEvidence = (value: unknown): boolean =>
   value !== null &&
   !Array.isArray(value) &&
   Object.prototype.hasOwnProperty.call(value, "preparedFromUserInputId") &&
-  Object.prototype.hasOwnProperty.call(value, "confirmedByUserInputId");
+  Object.prototype.hasOwnProperty.call(value, "preparedFromUserInputAt") &&
+  Object.prototype.hasOwnProperty.call(value, "confirmedByUserInputId") &&
+  Object.prototype.hasOwnProperty.call(value, "confirmedByUserInputAt");
 const hasDuplicateOrdinals = (entries: readonly { ordinal: number }[]) =>
   new Set(entries.map((entry) => entry.ordinal)).size !== entries.length;
 
@@ -694,11 +696,13 @@ const fanoutConsentSchema = z
     briefs: unique(briefRefSchema, (entry) => entry.briefId),
     plannerSessionId: opaqueId,
     userId: opaqueId,
-    preparedFromUserInputId: opaqueId,
+    preparedFromUserInputId: opaqueId.nullable(),
+    preparedFromUserInputAt: timestamp.nullable(),
     status: z.enum(["pending", "confirmed"]),
     preparedAt: timestamp,
     confirmedAt: timestamp.nullable(),
     confirmedByUserInputId: opaqueId.nullable(),
+    confirmedByUserInputAt: timestamp.nullable(),
     confirmationSource: z.literal("planner-attested-conversation").nullable(),
     consentDigest: digest,
   })
@@ -708,6 +712,7 @@ const fanoutConsentSchema = z
     if (
       confirmed !== (consent.confirmedAt !== null) ||
       confirmed !== (consent.confirmedByUserInputId !== null) ||
+      confirmed !== (consent.confirmedByUserInputAt !== null) ||
       confirmed !== (consent.confirmationSource !== null)
     )
       context.addIssue({
@@ -715,13 +720,28 @@ const fanoutConsentSchema = z
         message: "confirmation fields must match consent status",
       });
     if (
-      consent.confirmedByUserInputId !== null &&
-      consent.confirmedByUserInputId === consent.preparedFromUserInputId
+      (consent.preparedFromUserInputId === null) !==
+      (consent.preparedFromUserInputAt === null)
     )
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "confirmation must come from a later user input",
+        message: "preparation input fields must be present together",
       });
+    if (consent.confirmedByUserInputAt !== null) {
+      if (
+        Date.parse(consent.confirmedByUserInputAt) <=
+        Date.parse(consent.preparedAt)
+      )
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "confirmation must come from a post-preparation user input",
+        });
+      if (consent.confirmedByUserInputId === consent.preparedFromUserInputId)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "confirmation must come from a later user input",
+        });
+    }
   });
 const kickoffSchema = z
   .object({

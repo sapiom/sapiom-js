@@ -117,6 +117,8 @@ describe("build planning strict codecs", () => {
       fanoutConsents: [
         {
           consentId: "fanout-consent_00000000-0000-7000-8000-000000000001",
+          preparedFromUserInputId: "planner-input-before-preparation",
+          confirmedByUserInputId: "planner-input-after-preparation",
           status: "confirmed",
         },
       ],

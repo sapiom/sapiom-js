@@ -29,6 +29,10 @@ interface PersistedPlannerState {
    * This content-free token lets other trusted services prove that another
    * user turn occurred without interpreting the message text. */
   lastAcceptedUserInputId: string | null;
+  /** Time the latest accepted input entered the trusted user-input boundary.
+   * Queued inputs retain their enqueue time so a pre-preparation backlog
+   * cannot later masquerade as a reply to a consent question. */
+  lastAcceptedUserInputAt: string | null;
   retryCount: number;
   emptyProject: boolean;
 }
@@ -85,6 +89,11 @@ export interface PlannerGreetingCoordinatorOptions {
   /** Live authorization gate checked immediately before every PTY dispatch. */
   canDispatch?: (session: HarnessSession) => boolean | Promise<boolean>;
   onEvent?: (event: PlannerLifecycleEvent) => Promise<void> | void;
+}
+
+export interface AcceptedPlannerUserInput {
+  inputId: string;
+  acceptedAt: string;
 }
 
 export class PlannerGreetingRetryUnavailableError extends Error {
@@ -148,6 +157,10 @@ function isPersistedPlannerState(
       value.lastAcceptedUserInputId !== null &&
       (typeof value.lastAcceptedUserInputId !== "string" ||
         value.lastAcceptedUserInputId === "")) ||
+    (value.lastAcceptedUserInputAt !== undefined &&
+      value.lastAcceptedUserInputAt !== null &&
+      (typeof value.lastAcceptedUserInputAt !== "string" ||
+        !Number.isFinite(Date.parse(value.lastAcceptedUserInputAt)))) ||
     !Number.isSafeInteger(value.retryCount) ||
     (value.retryCount as number) < 0 ||
     (value.retryCount as number) > MAX_RETRIES ||
@@ -227,6 +240,9 @@ function adoptRehydratedState(
     },
   };
   if (!isPersistedPlannerState(value, predecessor)) return null;
+  const hasAcceptedInput =
+    value.lastAcceptedUserInputId != null &&
+    value.lastAcceptedUserInputAt != null;
   return {
     ...structuredClone(value),
     metadata: {
@@ -238,7 +254,12 @@ function adoptRehydratedState(
       sessionId: session.id,
     })),
     dispatchingInputId: value.dispatchingInputId ?? null,
-    lastAcceptedUserInputId: value.lastAcceptedUserInputId ?? null,
+    lastAcceptedUserInputId: hasAcceptedInput
+      ? value.lastAcceptedUserInputId
+      : null,
+    lastAcceptedUserInputAt: hasAcceptedInput
+      ? value.lastAcceptedUserInputAt
+      : null,
   };
 }
 
@@ -421,6 +442,7 @@ export class PlannerGreetingCoordinator {
       inputs: [],
       dispatchingInputId: null,
       lastAcceptedUserInputId: null,
+      lastAcceptedUserInputAt: null,
       retryCount: 0,
       emptyProject,
     };
@@ -449,12 +471,20 @@ export class PlannerGreetingCoordinator {
         await fs.readFile(this.file(session.id), "utf8"),
       );
       if (isPersistedPlannerState(parsed, session)) {
+        const hasAcceptedInput =
+          parsed.lastAcceptedUserInputId != null &&
+          parsed.lastAcceptedUserInputAt != null;
         state = {
           ...parsed,
           // Backward-compatible with queue files written by the first SAP-3055
           // review head before dispatch intent became explicit.
           dispatchingInputId: parsed.dispatchingInputId ?? null,
-          lastAcceptedUserInputId: parsed.lastAcceptedUserInputId ?? null,
+          lastAcceptedUserInputId: hasAcceptedInput
+            ? parsed.lastAcceptedUserInputId
+            : null,
+          lastAcceptedUserInputAt: hasAcceptedInput
+            ? parsed.lastAcceptedUserInputAt
+            : null,
         };
       } else {
         const adopted = adoptRehydratedState(parsed, session);
@@ -569,13 +599,18 @@ export class PlannerGreetingCoordinator {
     const accepted = await this.acceptedInputIds(sessionId);
     if (accepted === null || accepted.size === 0) return state;
     const acceptedInputs = state.inputs.filter((input) => accepted.has(input.id));
+    const acceptedUserInputs = acceptedInputs.filter(
+      (input) => input.text.trim() !== "",
+    );
     const remaining = state.inputs.filter((input) => !accepted.has(input.id));
     if (remaining.length === state.inputs.length) return state;
     const reconciled: PersistedPlannerState = {
       ...structuredClone(state),
       inputs: remaining,
       lastAcceptedUserInputId:
-        acceptedInputs.at(-1)?.id ?? state.lastAcceptedUserInputId,
+        acceptedUserInputs.at(-1)?.id ?? state.lastAcceptedUserInputId,
+      lastAcceptedUserInputAt:
+        acceptedUserInputs.at(-1)?.acceptedAt ?? state.lastAcceptedUserInputAt,
       dispatchingInputId:
         state.dispatchingInputId && accepted.has(state.dispatchingInputId)
           ? null
@@ -1374,7 +1409,12 @@ export class PlannerGreetingCoordinator {
         ...structuredClone(state),
         inputs: state.inputs.slice(1),
         dispatchingInputId: null,
-        lastAcceptedUserInputId: input.id,
+        lastAcceptedUserInputId:
+          input.text.trim() === "" ? state.lastAcceptedUserInputId : input.id,
+        lastAcceptedUserInputAt:
+          input.text.trim() === ""
+            ? state.lastAcceptedUserInputAt
+            : input.acceptedAt,
         metadata: {
           ...structuredClone(state.metadata),
           queuedInputIds: state.metadata.queuedInputIds.slice(1),
@@ -1395,21 +1435,31 @@ export class PlannerGreetingCoordinator {
   /** Return the latest server-accepted user turn after all earlier queue work
    * for this planner session has settled. The shared serialization boundary is
    * what prevents a fast model tool call from racing the message dequeue. */
-  latestAcceptedUserInputId(sessionId: string): Promise<string | null> {
+  latestAcceptedUserInput(
+    sessionId: string,
+  ): Promise<AcceptedPlannerUserInput | null> {
     return this.serialize(sessionId, async () => {
       if (this.retiredSessions.has(sessionId)) return null;
       const session = this.options.sessionManager.get(sessionId);
       if (!session?.planning) return null;
       const state = await this.reconcileAcceptedInputs(await this.load(session));
-      return state.lastAcceptedUserInputId;
+      if (
+        state.lastAcceptedUserInputId === null ||
+        state.lastAcceptedUserInputAt === null
+      )
+        return null;
+      return {
+        inputId: state.lastAcceptedUserInputId,
+        acceptedAt: state.lastAcceptedUserInputAt,
+      };
     });
   }
 
-  /** Persist a content-free token for a human Enter gesture observed on the
-   * authenticated terminal transport. SessionManager invokes this only for
-   * raw terminal input, never for greetings or other programmatic prompts.
-   * Calling serialize synchronously queues this write before the planner can
-   * make a follow-up MCP request on the submitted turn. */
+  /** Persist a content-free token for a non-empty raw line observed on the
+   * authenticated terminal transport. SessionManager filters empty Enter/TUI
+   * navigation and invokes this only for raw input, never greetings or other
+   * programmatic prompts. Calling serialize synchronously queues this write
+   * before the planner can make a follow-up MCP request on the submitted turn. */
   recordRawUserSubmission(sessionId: string): Promise<void> {
     if (
       this.retiredSessions.has(sessionId) ||
@@ -1417,6 +1467,7 @@ export class PlannerGreetingCoordinator {
     )
       return Promise.resolve();
     const inputId = this.generateId();
+    const acceptedAt = this.now();
     return this.serialize(sessionId, async () => {
       if (this.retiredSessions.has(sessionId)) return;
       const session = this.options.sessionManager.get(sessionId);
@@ -1427,6 +1478,7 @@ export class PlannerGreetingCoordinator {
       await this.persist(sessionId, {
         ...structuredClone(state),
         lastAcceptedUserInputId: inputId,
+        lastAcceptedUserInputAt: acceptedAt,
       });
     });
   }

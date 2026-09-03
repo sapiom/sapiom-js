@@ -549,7 +549,7 @@ export function createAgentMapToolServer(
       "build_plan_prepare_planning_sessions",
       {
         description:
-          "Prepare the exact top-level planning-session scope after the build plan and focused briefs become planning-eligible. Returns the agent names, missions, exact brief references, and an opaque consent ID. Summarize that list to the user and ask for explicit consent; do not open sessions in the same turn. Studio mechanically requires a different, subsequently accepted user submission before the consent can open sessions.",
+          "Prepare the exact top-level planning-session scope after the build plan and focused briefs become planning-eligible. Returns the agent names, missions, exact brief references, and an opaque consent ID. Summarize that list to the user and ask for explicit consent; do not open sessions in the same turn. Studio separately requires a non-empty user submission accepted after preparation, but you must attest whether that reply is affirmative.",
         inputSchema: fanoutScopeSchema,
         annotations: {
           readOnlyHint: false,

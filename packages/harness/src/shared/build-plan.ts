@@ -611,13 +611,16 @@ export interface PlanningFanoutConsent {
   briefs: readonly AgentBriefRef[];
   plannerSessionId: string;
   userId: string;
-  /** Server-accepted planner input that preceded preparation. Opening a
-   * pending consent requires a different, subsequently accepted input. */
-  preparedFromUserInputId: string;
+  /** Latest server-accepted planner input when preparation completed. A fresh
+   * planner may have none. Its boundary time is retained to exclude messages
+   * that were queued before the consent scope existed. */
+  preparedFromUserInputId: string | null;
+  preparedFromUserInputAt: string | null;
   status: "pending" | "confirmed";
   preparedAt: string;
   confirmedAt: string | null;
   confirmedByUserInputId: string | null;
+  confirmedByUserInputAt: string | null;
   confirmationSource: "planner-attested-conversation" | null;
   consentDigest: PlanningFanoutConsentDigest;
 }

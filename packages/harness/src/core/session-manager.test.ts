@@ -214,13 +214,19 @@ describe("SessionManager", () => {
     expect(onRawInputSubmitted).toHaveBeenCalledTimes(1);
     expect(onRawInputSubmitted).toHaveBeenCalledWith(session.id);
 
-    manager.write(session.id, "\x1b[200~pasted\rcontent\x1b[201~");
+    manager.write(session.id, "\r");
+    manager.write(session.id, "\x1b[B\r");
+    manager.write(session.id, "/resume\r");
     expect(onRawInputSubmitted).toHaveBeenCalledTimes(1);
+
+    manager.write(session.id, "\x1b[200~pasted\rcontent\x1b[201~\r");
+    expect(onRawInputSubmitted).toHaveBeenCalledTimes(2);
 
     const programmatic = manager.submitInput(session.id, "queued reply", true);
     await vi.advanceTimersByTimeAsync(300);
     await expect(programmatic).resolves.toBe(true);
-    expect(onRawInputSubmitted).toHaveBeenCalledTimes(1);
+    manager.write(session.id, "\r");
+    expect(onRawInputSubmitted).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 

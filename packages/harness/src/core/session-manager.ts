@@ -383,9 +383,10 @@ export interface SessionManagerOptions {
   ) => Promise<PlanningSessionIdentity | undefined>;
   /** Revokes launch capabilities/transports after every exit path. */
   onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
-  /** Observes a human Enter gesture that was accepted by a live terminal PTY.
-   * Programmatic submitInput() calls never reach this callback. The callback
-   * is advisory and must not be able to interrupt terminal input delivery. */
+  /** Observes a non-empty, non-command raw terminal line accepted by a live
+   * PTY. Empty/TUI selection Enter gestures and programmatic submitInput()
+   * calls never reach this callback. The callback is advisory and must not be
+   * able to interrupt terminal input delivery. */
   onRawInputSubmitted?: (sessionId: string) => void;
   now?: () => string;
   generateId?: () => string;
@@ -516,6 +517,9 @@ interface PtyHandle {
    * output-side mode announcement. Both marker and content may span chunks. */
   trustedInputPasting: boolean;
   trustedInputEscape: string;
+  /** Content detector for raw line submissions. Kept separate from the
+   * stricter slash-command parser so ordinary pasted/edited replies count. */
+  trustedSubmissionLine: string;
   /** One-shot authority for the matching SessionStart transition. It lives on
    * the pty handle so exit/relaunch clears it without durable ambient state. */
   agentSessionRotation: {
@@ -1615,10 +1619,23 @@ export class SessionManager {
       if (handle.trustedInputPasting) {
         // In particular, CR inside a multiline paste is content, not trusted
         // Enter, and must never reset invalid state or arm an inner `/clear`.
+        if (char === "\r" || char === "\n") {
+          handle.trustedSubmissionLine += " ";
+        } else if (
+          char >= " " &&
+          char !== "\x7f" &&
+          handle.trustedSubmissionLine.length < TRUSTED_INPUT_LINE_MAX
+        ) {
+          handle.trustedSubmissionLine += char;
+        }
         continue;
       }
       if (char === "\r") {
-        submissionCount += 1;
+        const submittedLine = handle.trustedSubmissionLine.trim();
+        if (submittedLine !== "" && !submittedLine.startsWith("/")) {
+          submissionCount += 1;
+        }
+        handle.trustedSubmissionLine = "";
         if (!handle.trustedInputInvalid) {
           const transition = this.rotationForTrustedLine(
             handle.trustedInputLine,
@@ -1644,11 +1661,18 @@ export class SessionManager {
       // A literal LF is pasted/multiline content, not the terminal's Enter
       // key (which is CR). Reset fail-closed without authorizing an inner line.
       if (char === "\n") {
+        if (handle.trustedSubmissionLine.length < TRUSTED_INPUT_LINE_MAX) {
+          handle.trustedSubmissionLine += " ";
+        }
         handle.trustedInputLine = "";
         handle.trustedInputInvalid = true;
         continue;
       }
       if (char === "\x7f" || char === "\b") {
+        handle.trustedSubmissionLine = handle.trustedSubmissionLine.slice(
+          0,
+          -1,
+        );
         if (!handle.trustedInputInvalid) {
           handle.trustedInputLine = handle.trustedInputLine.slice(0, -1);
         }
@@ -1657,6 +1681,7 @@ export class SessionManager {
       // Ctrl-U clears the current composer; Ctrl-C abandons it. Neither
       // revokes a command already submitted (notably `/resume` picker mode).
       if (char === "\x15" || char === "\x03") {
+        handle.trustedSubmissionLine = "";
         handle.trustedInputLine = "";
         handle.trustedInputInvalid = false;
         continue;
@@ -1666,6 +1691,9 @@ export class SessionManager {
       if (char < " " || char === "\x7f") {
         handle.trustedInputInvalid = true;
         continue;
+      }
+      if (handle.trustedSubmissionLine.length < TRUSTED_INPUT_LINE_MAX) {
+        handle.trustedSubmissionLine += char;
       }
       if (handle.trustedInputInvalid) continue;
       if (handle.trustedInputLine.length >= TRUSTED_INPUT_LINE_MAX) {
@@ -1683,12 +1711,14 @@ export class SessionManager {
    * of trusted Enter gestures: invalidate the whole submitted text so neither
    * raw nor bracketed transport can smuggle an inner `/clear` or `/resume`. */
   private observeTrustedSubmittedText(handle: PtyHandle, text: string): void {
+    handle.trustedSubmissionLine = "";
     if (text.includes("\r") || text.includes("\n")) {
       handle.trustedInputLine = "";
       handle.trustedInputInvalid = true;
       return;
     }
     this.observeTrustedTerminalInput(handle, text);
+    handle.trustedSubmissionLine = "";
   }
 
   private rotationForTrustedLine(
@@ -2044,6 +2074,7 @@ export class SessionManager {
       trustedInputInvalid: false,
       trustedInputPasting: false,
       trustedInputEscape: "",
+      trustedSubmissionLine: "",
       agentSessionRotation: null,
       exited,
       resolveExited,

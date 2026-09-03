@@ -137,9 +137,11 @@ describe("PlannerGreetingCoordinator", () => {
       status: "delivered",
       messageId: "greeting-message",
     };
+    let acceptedAt = "2026-09-03T11:00:00.000Z";
     const coordinator = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
+      now: () => acceptedAt,
     });
     await coordinator.register(session, {
       emptyProject: true,
@@ -147,29 +149,35 @@ describe("PlannerGreetingCoordinator", () => {
     });
 
     await expect(
-      coordinator.latestAcceptedUserInputId(session.id),
+      coordinator.latestAcceptedUserInput(session.id),
     ).resolves.toBeNull();
     await coordinator.enqueue(session.id, "first user message");
-    const first = await coordinator.latestAcceptedUserInputId(session.id);
-    expect(first).toMatch(/^[0-9a-f-]{36}$/u);
+    const first = await coordinator.latestAcceptedUserInput(session.id);
+    expect(first).toMatchObject({ acceptedAt });
+    expect(first?.inputId).toMatch(/^[0-9a-f-]{36}$/u);
 
+    acceptedAt = "2026-09-03T11:00:01.000Z";
     await coordinator.enqueue(session.id, "second user message");
-    const second = await coordinator.latestAcceptedUserInputId(session.id);
-    expect(second).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(second).not.toBe(first);
+    const second = await coordinator.latestAcceptedUserInput(session.id);
+    expect(second).toMatchObject({ acceptedAt });
+    expect(second?.inputId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(second?.inputId).not.toBe(first?.inputId);
 
+    acceptedAt = "2026-09-03T11:00:02.000Z";
     await coordinator.recordRawUserSubmission(session.id);
     const rawTerminalSubmission =
-      await coordinator.latestAcceptedUserInputId(session.id);
-    expect(rawTerminalSubmission).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(rawTerminalSubmission).not.toBe(second);
+      await coordinator.latestAcceptedUserInput(session.id);
+    expect(rawTerminalSubmission).toMatchObject({ acceptedAt });
+    expect(rawTerminalSubmission?.inputId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(rawTerminalSubmission?.inputId).not.toBe(second?.inputId);
 
     const restarted = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
+      now: () => acceptedAt,
     });
     await restarted.register(session, { emptyProject: true, mode: "boot" });
-    await expect(restarted.latestAcceptedUserInputId(session.id)).resolves.toBe(
+    await expect(restarted.latestAcceptedUserInput(session.id)).resolves.toEqual(
       rawTerminalSubmission,
     );
   });
