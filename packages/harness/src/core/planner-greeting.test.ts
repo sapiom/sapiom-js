@@ -111,11 +111,17 @@ describe("PlannerGreetingCoordinator", () => {
     const localPrompt = coordinator.decorateLocalEvent(
       event(session.id, "prompt.submitted", { prompt: greeting }),
     );
-    expect(localPrompt.payload).toMatchObject({ prompt: greeting });
-    expect(localPrompt.payload).not.toHaveProperty("plannerOrigin");
-    expect(coordinator.redactForTelemetry(localPrompt).payload).not.toHaveProperty(
-      "prompt",
-    );
+    expect(localPrompt.payload).toMatchObject({
+      prompt: greeting,
+      plannerOrigin: "infrastructure",
+    });
+    expect(coordinator.redactForTelemetry(localPrompt).payload).toMatchObject({
+      planner: true,
+      origin: "infrastructure",
+    });
+    expect(
+      coordinator.redactForTelemetry(localPrompt).payload,
+    ).not.toHaveProperty("prompt");
 
     await coordinator.onEventPersisted(
       event(session.id, "turn.completed", { assistantText: "What should we build?" }),

@@ -1246,7 +1246,15 @@ export class PlannerGreetingCoordinator {
       await this.persist(sessionId, state);
       if (skipStartup) {
         this.clearTimer(sessionId);
-        this.clearCorrelation(sessionId);
+        if (attemptId) {
+          // The prompt may already have crossed the PTY boundary without its
+          // hook arriving yet. Keep a retired correlation so it is still
+          // projected as infrastructure, while its late completion cannot
+          // deliver the now-skipped startup turn.
+          this.retireAttemptCorrelation(sessionId, attemptId);
+        } else {
+          this.clearCorrelation(sessionId);
+        }
         this.emit({
           name: "planner_greeting.skipped",
           projectId: state.metadata.identity.projectId,
