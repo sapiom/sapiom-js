@@ -1,5 +1,68 @@
 # @sapiom/harness
 
+## 0.13.0
+
+### Minor Changes
+
+- 516f13a: Add durable, path-free Studio project identities and lazy Agent Map workspace state. The authenticated local server now exposes project workspace and root-binding association endpoints, and stores the new catalog at `studio-projects.json` with per-project records beneath `agent-map/` in the configured harness state root. The legacy System Graph and per-agent Canvas remain unchanged.
+- fb2486d: Open Studio Agent Maps as a dedicated planning workspace with a live, project-scoped planning conversation beside the durable map. Planner tabs can resume, start fresh, rename, and end; transcript updates refetch through content-free invalidations, map and planner failures retry independently, and mobile keeps the conversation primary behind an explicit Agent Map sheet.
+
+  This release adds variants to the public `BusMessage`, `UiEventName`, and `AnalyticsEventType` unions. Consumers that switch over these forward-extensible event types should retain a default arm so later additive events remain source-compatible.
+
+- 6864bdb: Render the shared Agent Map proposal live beside its raw coding-agent CLI. Studio now applies only contiguous attributed deltas, refetches durable state after gaps or reconnects, and presents all five planned node kinds and six directed relationship kinds on a read-only accessible canvas with structured inspection and one role-neutral Proposed treatment.
+
+  Planner onboarding now stays in the coding agent's hidden launch context instead of appearing as a synthetic user turn, and signed-out local sessions rooted in a Studio project receive the same scoped Agent Map tools as authenticated sessions. The former automatic assistant-first greeting and retry lifecycle is now compatibility-only for persisted sessions and API clients; new interactive planner sessions begin with the developer's real input, so `planner_greeting.attempted`, `planner_greeting.delivered`, `planner_greeting.failed`, `planner_greeting.skipped`, and `planner_greeting.retried` should no longer be treated as active new-session signals.
+
+  Agent Map planners now launch with a dedicated architecture-planning profile instead of inheriting Studio's scaffold/run/deploy coding profile. The validate and propose MCP tools advertise every typed operation variant while retaining bounded service-authored validation errors for malformed calls.
+
+  This release adds variants to the public `UiEventName` and `AnalyticsEventType` unions. Consumers that switch over these forward-extensible event types should retain a default arm so later additive events remain source-compatible.
+
+- ae0a77e: Resolve the latest saved credential and selected environment whenever Agent Studio creates, resumes, or runs a background Claude session. A confirmed credential removal now clears the launch key, while a malformed or unreadable store preserves the last-known key. Unknown selected environments now fail the affected launch with an explicit configuration error instead of silently routing it to production. Preserve `--no-auth` as a process-wide opt-out and expose a strict credential-store reader for safe live reconciliation.
+- 31bdf89: Expose the shared Agent Map proposal through one capability-authenticated embedded HTTP MCP endpoint. Project planner, assigned-builder, and manual-builder sessions receive identical read, validate, and propose tools through private per-session Claude or Codex launch configuration, with rotation on resume and revocation on exit.
+- 1729542: Prepare crash-atomic, project-wide Agent Map proposal persistence for the SAP-3060 transport, with attributed operation history, bounded session-scoped idempotency receipts, and history-derived stale-write rebasing. Exact results are retained for a bounded retry window, while older same-session request IDs cannot apply twice. Agent Map workspace reads now return a coherent versioned workspace-and-proposal snapshot, and the named browser-safe contracts required by the accepted-delta bus payload are exported from the package entry point.
+- 189eaf1: Open durable Studio projects in a pinned Agent Map workspace and remember the selected Agent Map or agent per user and project. Preferences live in the new `agent-map/studio-workspace-preferences.json` state file and are exposed through the path-free `GET` and `PUT /api/projects/:projectId/current-workspace` routes. Agent identities remain opaque outside the server, survive authenticated moves, and repair safely when a complete project scan proves that an agent was deleted.
+- ac9a35f: Add trusted, project-scoped Agent Map planner sessions with deterministic
+  resume-or-create/fresh resolution, focused path-free context, a durable
+  automatic-greeting state machine, FIFO user input, bounded lifecycle telemetry,
+  public planner session/greeting state, and per-session ingest capabilities that
+  cannot be replayed across PTYs or used for host `/api` mutations. Rehydrated
+  planner replacements atomically inherit the exact predecessor FIFO while their
+  focused brief can reuse an older recorded ancestor.
+
+  **Breaking:** generic `POST /api/sessions` now strictly rejects unknown fields,
+  so clients can no longer attach planner metadata to a generic create request.
+  Generic planner input, resume, and adopt routes also reject planner-owned
+  sessions. Generic adopt additionally rejects every conflicting current owner
+  or durable historical vendor identity, including ordinary pre-`/clear` and
+  pre-`/resume` aliases, with a bounded 409 before adapter probing. Migrate
+  planner clients to the project-scoped open, message, and greeting-retry routes
+  under `/api/projects/:projectId/planner-sessions`.
+
+  All coding-agent sessions now pin
+  vendor identity to a durable session owner: conflicting `SessionStart` claims
+  are rejected. The only rotation exception is a short-lived, one-shot
+  server-observed `/clear` or `/resume` terminal gesture; `/resume` picker input
+  may refresh its soft window only within a bounded hard deadline.
+
+  On upgrade, duplicate legacy vendor resume pointers are migrated with the first
+  persisted `sessions.json` row as owner. Later duplicate rows are rewritten with
+  `agentSessionId: null` and cannot resume or re-adopt that fenced identity under
+  the losing row. Provider transcripts and conversation history are not deleted;
+  start a fresh session in the losing row's directory to continue there.
+
+- 6bc9d58: Agent Studio now fetches its coding-agent system prompt from the Sapiom backend on session start (`GET /v1/harness/system-prompt`), instead of using only the copy baked into this package. Prompt improvements now reach a session after a backend deploy rather than after an npm upgrade. The bundled prompt remains the offline fallback — a non-200, empty body, network error or 5s timeout starts the session on it, exactly as before.
+
+  The request is unconditional: it fetches configuration rather than reporting usage, so it is not gated on the telemetry opt-in, and it carries no session content, identifiers or API key. Set `SAPIOM_HARNESS_PROMPT_FETCH_DISABLED=1` (or `true`) to skip it and always use the bundled prompt — see the README's "Outbound requests" section.
+
+### Patch Changes
+
+- d26f6f5: Separate permanent workspace discovery freshness from legacy System Graph invocation observations while preserving shared watcher ownership. On polling fallback, files covered only by legacy invocation scanning stop triggering session and rail rescans after the legacy graph subscription retires; accepted discovery inputs continue to refresh normally.
+- e9a847b: Refactor workspace file-watch ownership without changing behavior or public APIs.
+- Updated dependencies [ae0a77e]
+  - @sapiom/mcp@0.14.0
+  - @sapiom/agent@0.13.1
+  - @sapiom/agent-core@0.13.4
+
 ## 0.12.0
 
 ### Minor Changes

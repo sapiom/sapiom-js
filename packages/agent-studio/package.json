@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/agent-studio",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "Agent Studio — build, test, deploy, and run Sapiom agents with your coding agent in a local workspace.",
   "keywords": [
     "sapiom",
