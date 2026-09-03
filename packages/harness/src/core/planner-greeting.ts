@@ -1183,7 +1183,6 @@ export class PlannerGreetingCoordinator {
     }
     state.metadata.greeting = { status: "failed", retryable, errorCode };
     await this.persist(sessionId, state);
-    if (!retryable) this.clearCorrelation(sessionId);
     this.emit({
       name: "planner_greeting.failed",
       projectId: state.metadata.identity.projectId,

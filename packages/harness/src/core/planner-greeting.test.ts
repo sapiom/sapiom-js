@@ -5,7 +5,10 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
-import type { SessionManager } from "./session-manager.js";
+import {
+  SessionInputGuardRejectedError,
+  type SessionManager,
+} from "./session-manager.js";
 import {
   PlannerGreetingCoordinator,
   PlannerGreetingRetryUnavailableError,
@@ -176,6 +179,33 @@ describe("PlannerGreetingCoordinator", () => {
     expect(session.planning?.greeting).toEqual({
       status: "skipped",
       reason: "user-proceeded",
+    });
+  });
+
+  it("keeps a staged guard rejection classified for a delayed hook", async () => {
+    manager.submitInput = async (_id, text) => {
+      submitted.push(text);
+      throw new SessionInputGuardRejectedError(true);
+    };
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    const greeting = submitted[0]!;
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: false,
+      errorCode: "session_exited",
+    });
+
+    const localPrompt = coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: greeting }),
+    );
+    expect(localPrompt.payload).toMatchObject({
+      prompt: greeting,
+      plannerOrigin: "infrastructure",
     });
   });
 
