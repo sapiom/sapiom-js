@@ -22,6 +22,7 @@ const STATIC_PROVIDER_NEUTRAL_COPY_TARGETS = [
   "examples/personalized-media-at-scale/index.ts",
   "packages/harness/web/src/components/SecretAddDialog.tsx",
   "packages/harness/web/src/components/SecretImportDialog.tsx",
+  "packages/harness/web/src/components/SecretRowDialogs.tsx",
   "packages/harness/web/src/components/SessionStepsBar.tsx",
   "packages/sandbox/README.md",
   "packages/sandbox/src/multipart.ts",

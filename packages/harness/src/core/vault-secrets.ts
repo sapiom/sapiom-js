@@ -174,12 +174,17 @@ export function createVaultSecretsClient(opts: {
         `${secretsPath(definitionId)}/${encodeURIComponent(key)}`,
         { method: "DELETE" },
       );
-      // DELETE is idempotent here: 404 means the vault does not hold this key,
-      // which is the state the caller asked for. Treating it as a failure made
-      // a locally-held key on a LINKED agent undeletable — the vault 404s a
-      // name it was never given, the route refused, and the local copy stayed.
-      // That is reachable from the ordinary path of adding a secret before
-      // linking, so it is the common case rather than an edge one.
+      // DELETE is idempotent here, so a 404 is success. Note what the status
+      // does NOT tell us: this route answers 404 both for a key the vault does
+      // not hold and for a definition it cannot find (`refuse` reads the same
+      // status as the latter), so a delete against a stale `definitionId`
+      // reports success too. That is the right trade anyway — after either
+      // one, the credential is not stored under the name the caller asked
+      // about — and the alternative is worse: treating 404 as a failure made a
+      // locally-held key on a LINKED agent undeletable, because the vault 404s
+      // a name it was never given, the route refused, and the local copy
+      // stayed. That is reachable by adding a secret before linking, which is
+      // the ordinary path rather than an edge one.
       if (response?.status === 404) return;
       if (!response || !response.ok) throw refuse(response, key);
     },
