@@ -60,7 +60,8 @@ function diagnostic(
       "The assignment requires acceptance evidence",
     "brief-change-protocol-missing":
       "The brief requires an architecture change protocol",
-    "bootstrap-limit-exceeded": "Builder bootstrap content exceeds a safe bound",
+    "bootstrap-limit-exceeded":
+      "Builder bootstrap content exceeds a safe bound",
     "invalid-dependency":
       "A dependency is not supported by the referenced architecture",
     "unresolved-required-decision": "A required decision remains unresolved",
@@ -135,9 +136,7 @@ function validateBrief(
         brief.briefId,
       ]),
     );
-  if (
-    brief.plan.planId !== plan.planId
-  )
+  if (brief.plan.planId !== plan.planId)
     issues.push(
       diagnostic("invalid-dependency", `${prefix}.plan`, [brief.plan.planId]),
     );

@@ -103,7 +103,9 @@ export function localPlanningPrincipal(
 }
 
 function launchRoot(project: StudioProjectIdentity): string {
-  const binding = project.rootBindings.find((entry) => entry.status === "active");
+  const binding = project.rootBindings.find(
+    (entry) => entry.status === "active",
+  );
   if (!binding) throw new PlanningSessionError("project_launch_unavailable");
   return binding.localRootRef;
 }
@@ -133,8 +135,8 @@ export async function isPlannerDispatchAuthorized(input: {
   const project = await input.resolveProject(identity.projectId);
   return Boolean(
     project &&
-      input.currentPrincipal() === expectedPrincipal &&
-      isCurrentProjectRoot(project, input.session.cwd),
+    input.currentPrincipal() === expectedPrincipal &&
+    isCurrentProjectRoot(project, input.session.cwd),
   );
 }
 
@@ -247,11 +249,13 @@ export function buildFocusedPlannerContext(input: {
               })),
           }
         : { status: "not_created" },
-      bindingRefs: project.rootBindings.slice(0, 64).map(({ id, repositoryId, status }) => ({
-        id: bounded(id),
-        repositoryId: repositoryId ? bounded(repositoryId) : null,
-        status,
-      })),
+      bindingRefs: project.rootBindings
+        .slice(0, 64)
+        .map(({ id, repositoryId, status }) => ({
+          id: bounded(id),
+          repositoryId: repositoryId ? bounded(repositoryId) : null,
+          status,
+        })),
       warnings: (details.warnings ?? [])
         .slice(0, 16)
         .map((warning) => bounded(warning)),
@@ -286,12 +290,12 @@ function recordSupportsRehydration(
   if (record.turnCount > 0) return true;
   return Boolean(
     greeting.status === "delivered" &&
-      record.turns?.some(
-        (turn) =>
-          turn.prompt === null &&
-          typeof turn.assistantText === "string" &&
-          turn.assistantText.trim() !== "",
-      ),
+    record.turns?.some(
+      (turn) =>
+        turn.prompt === null &&
+        typeof turn.assistantText === "string" &&
+        turn.assistantText.trim() !== "",
+    ),
   );
 }
 
@@ -345,14 +349,16 @@ export class PlanningSessionService {
     const identity = session.planning?.identity;
     return Boolean(
       identity &&
-        identity.role === "map-planner" &&
-        identity.sessionId === session.id &&
-        identity.projectId === projectId &&
-        identity.userId === principal,
+      identity.role === "map-planner" &&
+      identity.sessionId === session.id &&
+      identity.projectId === projectId &&
+      identity.userId === principal,
     );
   }
 
-  private async project(projectId: StudioProjectId): Promise<StudioProjectIdentity> {
+  private async project(
+    projectId: StudioProjectId,
+  ): Promise<StudioProjectIdentity> {
     const project = await this.options.catalog.resolveIdentity(projectId);
     if (!project) throw new PlanningSessionError("project_not_found");
     return project;
@@ -430,7 +436,10 @@ export class PlanningSessionService {
       throw new PlanningSessionError("forbidden");
     }
     this.emit({
-      name: mode === "created" ? "planner_session.created" : "planner_session.resumed",
+      name:
+        mode === "created"
+          ? "planner_session.created"
+          : "planner_session.resumed",
       projectId: project.projectId,
       sessionId: session.id,
       resolution: mode,
@@ -473,7 +482,9 @@ export class PlanningSessionService {
     let current: HarnessSession | undefined = candidate;
     while (current && !visited.has(current.id) && visited.size < 32) {
       visited.add(current.id);
-      const record = await this.options.readRecord(current.id).catch(() => null);
+      const record = await this.options
+        .readRecord(current.id)
+        .catch(() => null);
       if (recordSupportsRehydration(record, current.planning!.greeting)) {
         return current.id;
       }
@@ -584,7 +595,9 @@ export class PlanningSessionService {
           .catch(() => null);
         if (resumed) {
           if (this.currentPrincipal() !== principal) {
-            await this.options.sessionManager.kill(resumed.id).catch(() => false);
+            await this.options.sessionManager
+              .kill(resumed.id)
+              .catch(() => false);
             throw new PlanningSessionError("forbidden");
           }
           this.emit({
@@ -603,7 +616,9 @@ export class PlanningSessionService {
             });
             await this.assertRunnable(projectId, resumed.cwd, principal);
           } catch (error) {
-            await this.options.sessionManager.kill(resumed.id).catch(() => false);
+            await this.options.sessionManager
+              .kill(resumed.id)
+              .catch(() => false);
             throw error;
           }
           return { session: resumed, resolution: "resumed" };

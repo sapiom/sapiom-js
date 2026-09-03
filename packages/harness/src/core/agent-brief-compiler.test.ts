@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it } from "vitest";
 
 import type { PlanNodeId } from "../shared/agent-map.js";
@@ -34,25 +36,46 @@ const compileStock = () => {
 };
 
 describe("agent brief compiler", () => {
+  it("matches the complete canonical stock-research compilation golden", async () => {
+    const actual = canonicalJson(compileStock());
+    const golden = JSON.parse(
+      await readFile(
+        new URL(
+          "./fixtures/stock-research-compile.golden.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    expect(actual).toBe(canonicalJson(golden));
+  });
+
   it("produces distinct focused Research and Marketing briefs with one typed boundary", () => {
     const result = compileStock();
     expect(result.completeness.status).toBe("complete");
-    expect(result.briefs.map((entry) => entry.plannedAgentId)).toEqual([
-      RESEARCH_ID,
-      MARKETING_ID,
-    ].sort());
+    expect(result.briefs.map((entry) => entry.plannedAgentId)).toEqual(
+      [RESEARCH_ID, MARKETING_ID].sort(),
+    );
     const research = result.briefs.find(
       (entry) => entry.plannedAgentId === RESEARCH_ID,
     )!;
     const marketing = result.briefs.find(
       (entry) => entry.plannedAgentId === MARKETING_ID,
     )!;
-    expect(research.brief.ownedNodeIds).toEqual([RESEARCH_ID, ANALYST_ID].sort());
+    expect(research.brief.ownedNodeIds).toEqual(
+      [RESEARCH_ID, ANALYST_ID].sort(),
+    );
     expect(research.brief.outputs).toEqual([
-      expect.objectContaining({ contractId: REPORT_CONTRACT, nodeId: ANALYST_ID }),
+      expect.objectContaining({
+        contractId: REPORT_CONTRACT,
+        nodeId: ANALYST_ID,
+      }),
     ]);
     expect(marketing.brief.inputs).toEqual([
-      expect.objectContaining({ contractId: REPORT_CONTRACT, nodeId: MARKETING_ID }),
+      expect.objectContaining({
+        contractId: REPORT_CONTRACT,
+        nodeId: MARKETING_ID,
+      }),
     ]);
     expect(research.brief.outputs[0]?.relationshipIds).toEqual([
       "rel_10000000-0000-7000-8000-000000000001",
@@ -84,7 +107,9 @@ describe("agent brief compiler", () => {
       expect.objectContaining({ kind: "shared-resource" }),
     );
     expect(research.brief.compilerVersion).toBe(AGENT_BRIEF_COMPILER_VERSION);
-    expect(research.brief.dependencyFingerprints.map((entry) => entry.kind)).toEqual([
+    expect(
+      research.brief.dependencyFingerprints.map((entry) => entry.kind),
+    ).toEqual([
       "owned-nodes",
       "relevant-nodes",
       "input-contracts",
@@ -99,7 +124,9 @@ describe("agent brief compiler", () => {
       briefSemanticDigests: result.briefs.map(
         (entry) => entry.brief.semanticDigest,
       ),
-      briefRecordDigests: result.briefs.map((entry) => entry.brief.recordDigest),
+      briefRecordDigests: result.briefs.map(
+        (entry) => entry.brief.recordDigest,
+      ),
       bootstrapDigests: result.briefs.map(
         (entry) => entry.bootstrap.contextDigest,
       ),
@@ -137,9 +164,9 @@ describe("agent brief compiler", () => {
       plan,
       assignments: stockAssignments().reverse(),
     });
-    expect(
-      second.briefs.map((entry) => entry.brief.semanticDigest),
-    ).toEqual(first.briefs.map((entry) => entry.brief.semanticDigest));
+    expect(second.briefs.map((entry) => entry.brief.semanticDigest)).toEqual(
+      first.briefs.map((entry) => entry.brief.semanticDigest),
+    );
     expect(canonicalJson(second.briefs)).toBe(canonicalJson(first.briefs));
   });
 
@@ -171,21 +198,29 @@ describe("agent brief compiler", () => {
         "ambiguous-contract-direction",
       ]),
     );
-    expect(result.diagnostics.every((entry) => entry.path.length > 0)).toBe(true);
+    expect(result.diagnostics.every((entry) => entry.path.length > 0)).toBe(
+      true,
+    );
   });
 
   it("does not create independent briefs for subagents, resources, connectors, or artifacts", () => {
     const result = compileStock();
     expect(result.briefs).toHaveLength(2);
-    expect(result.briefs.some((entry) => entry.plannedAgentId === ANALYST_ID)).toBe(false);
-    expect(result.briefs.some((entry) => entry.plannedAgentId === REPORT_ID)).toBe(false);
+    expect(
+      result.briefs.some((entry) => entry.plannedAgentId === ANALYST_ID),
+    ).toBe(false);
+    expect(
+      result.briefs.some((entry) => entry.plannedAgentId === REPORT_ID),
+    ).toBe(false);
   });
 
   it("independently rejects tampered current and previous records", () => {
     const graph = stockResearchGraph();
     const plan = stockResearchPlan(graph);
     const current = compileStock();
-    const tampered = structuredClone(current.briefs.map((entry) => entry.brief));
+    const tampered = structuredClone(
+      current.briefs.map((entry) => entry.brief),
+    );
     tampered[0]!.mission = "tampered without resealing";
     const result = compileAgentBriefs({
       projectId: STOCK_PROJECT_ID,
@@ -197,8 +232,14 @@ describe("agent brief compiler", () => {
     });
     expect(result.diagnostics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "source-digest-mismatch", path: "plan.recordDigest" }),
-        expect.objectContaining({ code: "source-digest-mismatch", path: "previous.briefs[0]" }),
+        expect.objectContaining({
+          code: "source-digest-mismatch",
+          path: "plan.recordDigest",
+        }),
+        expect.objectContaining({
+          code: "source-digest-mismatch",
+          path: "previous.briefs[0]",
+        }),
       ]),
     );
   });
@@ -213,9 +254,15 @@ describe("agent brief compiler", () => {
       graph,
       plan,
       assignments: stockAssignments(),
-      previous: { plan, graph, briefs: first.briefs.map((entry) => entry.brief) },
+      previous: {
+        plan,
+        graph,
+        briefs: first.briefs.map((entry) => entry.brief),
+      },
     });
-    expect(unchanged.briefs.every((entry) => entry.disposition === "unchanged")).toBe(true);
+    expect(
+      unchanged.briefs.every((entry) => entry.disposition === "unchanged"),
+    ).toBe(true);
     expect(unchanged.briefs.map((entry) => entry.brief)).toEqual(
       first.briefs.map((entry) => entry.brief),
     );
@@ -237,11 +284,19 @@ describe("agent brief compiler", () => {
       graph,
       plan: reboundPlan,
       assignments: stockAssignments(),
-      previous: { plan, graph, briefs: first.briefs.map((entry) => entry.brief) },
+      previous: {
+        plan,
+        graph,
+        briefs: first.briefs.map((entry) => entry.brief),
+      },
     });
-    expect(rebound.briefs.every((entry) => entry.disposition === "source-rebound")).toBe(true);
+    expect(
+      rebound.briefs.every((entry) => entry.disposition === "source-rebound"),
+    ).toBe(true);
     rebound.briefs.forEach((entry, index) => {
-      expect(entry.brief.semanticDigest).toBe(first.briefs[index]!.brief.semanticDigest);
+      expect(entry.brief.semanticDigest).toBe(
+        first.briefs[index]!.brief.semanticDigest,
+      );
       expect(entry.brief.version).toBe(2);
       expect(entry.brief.source.kind).toBe("revision");
     });
@@ -347,7 +402,9 @@ describe("agent brief compiler", () => {
       },
     });
     expect(valid.diagnostics).toEqual([]);
-    expect(valid.briefs.every((entry) => entry.disposition === "unchanged")).toBe(true);
+    expect(
+      valid.briefs.every((entry) => entry.disposition === "unchanged"),
+    ).toBe(true);
 
     for (const forgedPlan of [
       {

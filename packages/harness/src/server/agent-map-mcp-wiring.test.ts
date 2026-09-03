@@ -392,7 +392,9 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
                   clientRef: "production-deliverable",
                   description: "A verified implementation plan",
                   artifactNodeIds: [],
-                  acceptanceCriterionRefs: [{ clientRef: "production-criterion" }],
+                  acceptanceCriterionRefs: [
+                    { clientRef: "production-criterion" },
+                  ],
                 },
               ],
               constraints: [],

@@ -161,9 +161,7 @@ import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { ArchitectureSourceResolver } from "../core/architecture-source-resolver.js";
 import { BuildPlanContractValidator } from "../core/build-plan-contract-validator.js";
-import {
-  BuildPlanService,
-} from "../core/build-plan-service.js";
+import { BuildPlanService } from "../core/build-plan-service.js";
 import { DeterministicAgentBriefCompiler } from "../core/agent-brief-compiler.js";
 import { CanonicalBuildPlanImpactEvaluator } from "../core/build-plan-impact-evaluator.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
@@ -674,7 +672,9 @@ export const startServer = async (
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
   );
-  let emitAgentMapCapabilityEvent = (_event: AgentMapCapabilityEvent): void => {};
+  let emitAgentMapCapabilityEvent = (
+    _event: AgentMapCapabilityEvent,
+  ): void => {};
   const agentMapCapabilities = new AgentMapCapabilityRegistry({
     onEvent: (event) => emitAgentMapCapabilityEvent(event),
   });

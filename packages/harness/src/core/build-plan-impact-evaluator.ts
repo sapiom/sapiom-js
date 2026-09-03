@@ -60,7 +60,9 @@ function graphChanges(previous: AgentMapGraph, next: AgentMapGraph) {
     const rightIndex = new Map(right.map((entry) => [entry.id, entry]));
     return unique([...leftIndex.keys(), ...rightIndex.keys()]).filter(
       (id) =>
-        canonicalJson(leftIndex.get(id) ? project(leftIndex.get(id)!) : null) !==
+        canonicalJson(
+          leftIndex.get(id) ? project(leftIndex.get(id)!) : null,
+        ) !==
         canonicalJson(rightIndex.get(id) ? project(rightIndex.get(id)!) : null),
     );
   };
@@ -78,7 +80,11 @@ function graphChanges(previous: AgentMapGraph, next: AgentMapGraph) {
       result.set(id, [...(result.get(id) ?? []), value]);
     graph.nodes.forEach((node) =>
       node.contractRefs.forEach((id) =>
-        add(id, { nodeId: node.id, kind: node.kind, ownerAgentId: node.ownerAgentId }),
+        add(id, {
+          nodeId: node.id,
+          kind: node.kind,
+          ownerAgentId: node.ownerAgentId,
+        }),
       ),
     );
     graph.relationships.forEach((relationship) => {
@@ -125,29 +131,30 @@ function fingerprintReasons(
   const nextIndex = new Map(
     next.dependencyFingerprints.map((entry) => [entry.kind, entry]),
   );
-  return unique([
-    ...previousIndex.keys(),
-    ...nextIndex.keys(),
-  ]).flatMap((kind) => {
-    const before = previousIndex.get(kind);
-    const after = nextIndex.get(kind);
-    if (before?.digest === after?.digest) return [];
-    const entries = [before, after].filter(
-      (entry): entry is DependencyFingerprint => entry !== undefined,
-    );
-    return [
-      {
-        code: reasonCode(kind),
-        affectedNodeIds: unique(entries.flatMap((entry) => entry.nodeIds)),
-        affectedRelationshipIds: unique(
-          entries.flatMap((entry) => entry.relationshipIds),
-        ),
-        affectedContractIds: unique(entries.flatMap((entry) => entry.contractIds)),
-        ...(before ? { previousFingerprint: before.digest } : {}),
-        ...(after ? { currentFingerprint: after.digest } : {}),
-      },
-    ];
-  });
+  return unique([...previousIndex.keys(), ...nextIndex.keys()]).flatMap(
+    (kind) => {
+      const before = previousIndex.get(kind);
+      const after = nextIndex.get(kind);
+      if (before?.digest === after?.digest) return [];
+      const entries = [before, after].filter(
+        (entry): entry is DependencyFingerprint => entry !== undefined,
+      );
+      return [
+        {
+          code: reasonCode(kind),
+          affectedNodeIds: unique(entries.flatMap((entry) => entry.nodeIds)),
+          affectedRelationshipIds: unique(
+            entries.flatMap((entry) => entry.relationshipIds),
+          ),
+          affectedContractIds: unique(
+            entries.flatMap((entry) => entry.contractIds),
+          ),
+          ...(before ? { previousFingerprint: before.digest } : {}),
+          ...(after ? { currentFingerprint: after.digest } : {}),
+        },
+      ];
+    },
+  );
 }
 
 export function evaluateBuildPlanImpact(input: {
@@ -160,8 +167,12 @@ export function evaluateBuildPlanImpact(input: {
   nextGraph: AgentMapGraph;
   nextBriefs: readonly AgentBriefVersionRecord[];
 }): BuildPlanImpactResult {
-  const previous = new Map(input.briefs.map((brief) => [brief.plannedAgentId, brief]));
-  const next = new Map(input.nextBriefs.map((brief) => [brief.plannedAgentId, brief]));
+  const previous = new Map(
+    input.briefs.map((brief) => [brief.plannedAgentId, brief]),
+  );
+  const next = new Map(
+    input.nextBriefs.map((brief) => [brief.plannedAgentId, brief]),
+  );
   const previousAgentIds = unique([...previous.keys()]);
   const nextAgentIds = unique([...next.keys()]);
   const addedAgentIds = nextAgentIds.filter((id) => !previous.has(id));
@@ -214,7 +225,8 @@ export function evaluateBuildPlanImpact(input: {
       reasons.length === 0 &&
       changes.changedNodeIds.some(
         (id) =>
-          before!.ownedNodeIds.includes(id) || before!.relevantNodeIds.includes(id),
+          before!.ownedNodeIds.includes(id) ||
+          before!.relevantNodeIds.includes(id),
       );
     if (reasons.length) staleBriefIds.push(before!.briefId);
     else preservedBriefIds.push(before!.briefId);
@@ -254,9 +266,7 @@ export function evaluateBuildPlanImpact(input: {
   };
 }
 
-export class CanonicalBuildPlanImpactEvaluator
-  implements BuildPlanImpactEvaluator
-{
+export class CanonicalBuildPlanImpactEvaluator implements BuildPlanImpactEvaluator {
   evaluate(
     input: Parameters<BuildPlanImpactEvaluator["evaluate"]>[0],
   ): BuildPlanImpactResult {
@@ -267,7 +277,9 @@ export class CanonicalBuildPlanImpactEvaluator
       !input.nextGraph ||
       !input.nextBriefs
     )
-      throw new Error("canonical impact evaluation requires exact plans and graphs");
+      throw new Error(
+        "canonical impact evaluation requires exact plans and graphs",
+      );
     return evaluateBuildPlanImpact({
       ...input,
       previousPlan: input.previousPlan,

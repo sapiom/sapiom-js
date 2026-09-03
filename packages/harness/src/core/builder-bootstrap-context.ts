@@ -60,7 +60,9 @@ function relevantMilestones(
   plan: ProjectBuildPlanVersion,
   selectedIds: readonly string[],
 ): BuildMilestone[] {
-  const index = new Map(plan.milestones.map((entry) => [entry.milestoneId, entry]));
+  const index = new Map(
+    plan.milestones.map((entry) => [entry.milestoneId, entry]),
+  );
   const selected = new Set(selectedIds);
   const visit = (id: string): void => {
     const milestone = index.get(id as BuildMilestone["milestoneId"]);
@@ -73,9 +75,13 @@ function relevantMilestones(
     .filter((entry) => selected.has(entry.milestoneId))
     .sort(
       (left, right) =>
-        left.ordinal - right.ordinal || compare(left.milestoneId, right.milestoneId),
+        left.ordinal - right.ordinal ||
+        compare(left.milestoneId, right.milestoneId),
     )
-    .map((entry) => ({ ...entry, dependsOn: [...entry.dependsOn].sort(compare) }));
+    .map((entry) => ({
+      ...entry,
+      dependsOn: [...entry.dependsOn].sort(compare),
+    }));
 }
 
 export function createBuilderBootstrapContext(input: {
@@ -112,10 +118,14 @@ export function createBuilderBootstrapContext(input: {
     project: {
       outcome: plan.outcome.summary,
       relevantMilestones: relevantMilestones(plan, assignment.milestoneIds),
-      sharedConstraints: byId(plan.sharedConstraints, (entry) => entry.constraintId),
+      sharedConstraints: byId(
+        plan.sharedConstraints,
+        (entry) => entry.constraintId,
+      ),
       integrationCriteria: [...plan.integrationCriteria].sort(
         (left, right) =>
-          left.ordinal - right.ordinal || compare(left.criterionId, right.criterionId),
+          left.ordinal - right.ordinal ||
+          compare(left.criterionId, right.criterionId),
       ),
     },
     architecture: {
@@ -162,7 +172,10 @@ export function createBuilderBootstrapContext(input: {
       withoutDigest,
     ) as BuilderBootstrapDigest,
   };
-  if (Buffer.byteLength(canonicalJson(result), "utf8") > BUILDER_BOOTSTRAP_MAX_BYTES)
+  if (
+    Buffer.byteLength(canonicalJson(result), "utf8") >
+    BUILDER_BOOTSTRAP_MAX_BYTES
+  )
     throw new BuilderBootstrapLimitError("bootstrap");
   return result;
 }

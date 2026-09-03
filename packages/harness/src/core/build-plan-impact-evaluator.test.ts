@@ -49,11 +49,19 @@ describe("canonical build plan impact evaluator", () => {
     });
     expect(result.impact.assignmentChanges).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ plannedAgentId: RESEARCH_ID, disposition: "stale" }),
-        expect.objectContaining({ plannedAgentId: MARKETING_ID, disposition: "stale" }),
+        expect.objectContaining({
+          plannedAgentId: RESEARCH_ID,
+          disposition: "stale",
+        }),
+        expect.objectContaining({
+          plannedAgentId: MARKETING_ID,
+          disposition: "stale",
+        }),
       ]),
     );
-    expect(result.impact.changedContractIds).toContain("contract-research-report");
+    expect(result.impact.changedContractIds).toContain(
+      "contract-research-report",
+    );
   });
 
   it("stales only the owner for an internal subagent implementation change", () => {
@@ -89,7 +97,8 @@ describe("canonical build plan impact evaluator", () => {
   it("refreshes presentation without semantic staleness for a label-only rename", () => {
     const previous = initial();
     const graph = structuredClone(previous.graph);
-    graph.nodes.find((entry) => entry.id === ANALYST_ID)!.name = "Senior equity analyst";
+    graph.nodes.find((entry) => entry.id === ANALYST_ID)!.name =
+      "Senior equity analyst";
     const plan = reviseStockPlan(previous.plan, graph);
     const result = compileAgentBriefs({
       projectId: STOCK_PROJECT_ID,
@@ -109,7 +118,9 @@ describe("canonical build plan impact evaluator", () => {
         (entry) => entry.plannedAgentId === RESEARCH_ID,
       )?.disposition,
     ).toBe("presentation-refreshed");
-    expect(result.briefs.every((entry) => entry.disposition === "source-rebound")).toBe(true);
+    expect(
+      result.briefs.every((entry) => entry.disposition === "source-rebound"),
+    ).toBe(true);
   });
 
   it("targets assignment-authored changes and preserves unaffected identities", () => {
@@ -195,7 +206,8 @@ describe("canonical build plan impact evaluator", () => {
           scope: { inScope: ["Compliance review"], nonGoals: ["Research"] },
           deliverables: [
             {
-              deliverableId: "deliverable_10000000-0000-7000-8000-000000000004" as never,
+              deliverableId:
+                "deliverable_10000000-0000-7000-8000-000000000004" as never,
               description: "Compliance decision",
               artifactNodeIds: [],
               acceptanceCriterionIds: [
@@ -206,7 +218,8 @@ describe("canonical build plan impact evaluator", () => {
           constraints: [],
           acceptanceCriteria: [
             {
-              criterionId: "criterion_10000000-0000-7000-8000-000000000004" as never,
+              criterionId:
+                "criterion_10000000-0000-7000-8000-000000000004" as never,
               ordinal: 1,
               description: "Campaign is reviewed",
               verification: "Record the decision",
@@ -231,15 +244,20 @@ describe("canonical build plan impact evaluator", () => {
     });
     expect(added.impact.addedAgentIds).toEqual([addedId]);
     expect(
-      added.impact.assignmentChanges.filter((entry) =>
-        [RESEARCH_ID, MARKETING_ID].includes(entry.plannedAgentId),
-      ).every((entry) => entry.disposition === "preserved"),
+      added.impact.assignmentChanges
+        .filter((entry) =>
+          [RESEARCH_ID, MARKETING_ID].includes(entry.plannedAgentId),
+        )
+        .every((entry) => entry.disposition === "preserved"),
     ).toBe(true);
 
     const removedGraph = structuredClone(previous.graph);
-    removedGraph.nodes = removedGraph.nodes.filter((entry) => entry.id !== MARKETING_ID);
+    removedGraph.nodes = removedGraph.nodes.filter(
+      (entry) => entry.id !== MARKETING_ID,
+    );
     removedGraph.relationships = removedGraph.relationships.filter(
-      (entry) => entry.fromNodeId !== MARKETING_ID && entry.toNodeId !== MARKETING_ID,
+      (entry) =>
+        entry.fromNodeId !== MARKETING_ID && entry.toNodeId !== MARKETING_ID,
     );
     const removedPlan = reviseStockPlan(previous.plan, removedGraph, {
       assignments: previous.plan.assignments.filter(
@@ -268,7 +286,8 @@ describe("canonical build plan impact evaluator", () => {
   it("stales old and new owners for an ownership transfer", () => {
     const previous = initial();
     const graph = structuredClone(previous.graph);
-    graph.nodes.find((entry) => entry.id === ANALYST_ID)!.ownerAgentId = MARKETING_ID;
+    graph.nodes.find((entry) => entry.id === ANALYST_ID)!.ownerAgentId =
+      MARKETING_ID;
     const plan = reviseStockPlan(previous.plan, graph);
     const result = compileAgentBriefs({
       projectId: STOCK_PROJECT_ID,

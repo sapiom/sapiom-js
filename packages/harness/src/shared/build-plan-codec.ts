@@ -387,10 +387,7 @@ export const agentBriefVersionRecordSchema = z
       })
       .strict(),
     compilerVersion: opaqueId,
-    dependencyFingerprints: unique(
-      fingerprintSchema,
-      (entry) => entry.kind,
-    ),
+    dependencyFingerprints: unique(fingerprintSchema, (entry) => entry.kind),
     semanticDigest: digest,
     recordDigest: digest,
     authoredBy: actorSchema,

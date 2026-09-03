@@ -1830,12 +1830,13 @@ describe("BuildPlanService", () => {
       operations,
     });
     expect(created.impact).toMatchObject({ semanticChange: true });
-    expect(Object.values((await store.read(PROJECT_ID)).briefVersionsById)[0]).toHaveLength(1);
+    expect(
+      Object.values((await store.read(PROJECT_ID)).briefVersionsById)[0],
+    ).toHaveLength(1);
 
     const revisionSource = {
       kind: "revision" as const,
-      revisionId:
-        "revision_00000000-0000-7000-8000-000000000023" as never,
+      revisionId: "revision_00000000-0000-7000-8000-000000000023" as never,
       revisionNumber: 1,
       graphDigest: proposalSource().graphDigest,
     };
@@ -1879,8 +1880,7 @@ describe("BuildPlanService", () => {
     const graph = stockResearchGraph();
     const source = {
       kind: "revision" as const,
-      revisionId:
-        "revision_10000000-0000-7000-8000-000000000031" as never,
+      revisionId: "revision_10000000-0000-7000-8000-000000000031" as never,
       revisionNumber: 1,
       graphDigest: computeArchitectureGraphDigest(graph),
     };
@@ -1939,10 +1939,11 @@ describe("BuildPlanService", () => {
     });
     const initial = await store.read(PROJECT_ID);
     const researchBriefId = initial.currentBriefByAgentId[RESEARCH_ID]!.briefId;
-    const marketingBriefId = initial.currentBriefByAgentId[MARKETING_ID]!.briefId;
-    const marketing = initial.planVersions.at(-1)!.assignments.find(
-      (entry) => entry.plannedAgentId === MARKETING_ID,
-    )!;
+    const marketingBriefId =
+      initial.currentBriefByAgentId[MARKETING_ID]!.briefId;
+    const marketing = initial.planVersions
+      .at(-1)!
+      .assignments.find((entry) => entry.plannedAgentId === MARKETING_ID)!;
     const changed = await service.apply(identity, {
       schemaVersion: 1,
       planId: created.plan.planId,
@@ -1985,9 +1986,7 @@ describe("BuildPlanService", () => {
       expectedPlanVersion: changed.plan.version,
       expectedSource: source,
       requestId: "two-agent-unchanged",
-      operations: [
-        { op: "set-project-outcome", outcome: fixturePlan.outcome },
-      ],
+      operations: [{ op: "set-project-outcome", outcome: fixturePlan.outcome }],
     });
     expect(unchanged.completeness.status).toBe("complete");
     const afterUnchanged = await store.read(PROJECT_ID);

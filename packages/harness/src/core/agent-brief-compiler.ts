@@ -78,27 +78,41 @@ function diagnostic(
   severity: BuildPlanDiagnostic["severity"] = "error",
 ): BuildPlanDiagnostic {
   const messages: Record<BuildPlanDiagnostic["code"], string> = {
-    "missing-agent-assignment": "A top-level agent requires exactly one assignment",
+    "missing-agent-assignment":
+      "A top-level agent requires exactly one assignment",
     "unknown-node-reference": "A referenced architecture node does not exist",
-    "cross-project-reference": "The plan and compile request projects do not match",
+    "cross-project-reference":
+      "The plan and compile request projects do not match",
     "missing-brief": "A current assignment requires a focused brief",
-    "incompatible-contract-direction": "A contract direction conflicts with typed graph fields",
-    "ambiguous-contract-direction": "Typed graph fields do not establish a contract direction",
+    "incompatible-contract-direction":
+      "A contract direction conflicts with typed graph fields",
+    "ambiguous-contract-direction":
+      "Typed graph fields do not establish a contract direction",
     "ownership-cycle": "Architecture ownership contains a cycle",
-    "multiple-top-level-owners": "A stable node resolves to multiple top-level owners",
-    "dangling-ownership": "Architecture ownership does not resolve to a top-level agent",
-    "authored-architecture-conflict": "Authored intent conflicts with architecture-owned facts",
-    "brief-mission-missing": "The assignment requires a bounded agent-specific mission",
+    "multiple-top-level-owners":
+      "A stable node resolves to multiple top-level owners",
+    "dangling-ownership":
+      "Architecture ownership does not resolve to a top-level agent",
+    "authored-architecture-conflict":
+      "Authored intent conflicts with architecture-owned facts",
+    "brief-mission-missing":
+      "The assignment requires a bounded agent-specific mission",
     "brief-scope-missing": "The assignment requires explicit in-scope work",
     "brief-non-goals-suspicious": "The assignment has no explicit non-goals",
-    "brief-deliverable-missing": "The assignment requires a concrete deliverable",
-    "brief-acceptance-criterion-missing": "The assignment requires acceptance evidence",
-    "brief-change-protocol-missing": "The compiled brief requires the architecture change protocol",
-    "bootstrap-limit-exceeded": "Builder bootstrap content exceeds a safe bound",
-    "invalid-dependency": "A dependency is not supported by the typed architecture",
+    "brief-deliverable-missing":
+      "The assignment requires a concrete deliverable",
+    "brief-acceptance-criterion-missing":
+      "The assignment requires acceptance evidence",
+    "brief-change-protocol-missing":
+      "The compiled brief requires the architecture change protocol",
+    "bootstrap-limit-exceeded":
+      "Builder bootstrap content exceeds a safe bound",
+    "invalid-dependency":
+      "A dependency is not supported by the typed architecture",
     "unresolved-required-decision": "A required decision remains unresolved",
     "source-not-found": "The exact architecture source was not found",
-    "source-digest-mismatch": "The source, plan, or graph digest does not match",
+    "source-digest-mismatch":
+      "The source, plan, or graph digest does not match",
   };
   return {
     code,
@@ -212,7 +226,10 @@ function indexGraph(
         ]),
       );
     relationshipIds.add(relationship.id);
-    if (!nodes.has(relationship.fromNodeId) || !nodes.has(relationship.toNodeId))
+    if (
+      !nodes.has(relationship.fromNodeId) ||
+      !nodes.has(relationship.toNodeId)
+    )
       diagnostics.push(
         diagnostic("unknown-node-reference", `graph.relationships[${index}]`, [
           relationship.id,
@@ -278,7 +295,9 @@ const port = (
       entry.executionMode ? [entry.executionMode] : [],
     ),
   ),
-  description: relationships.map((entry) => entry.description).sort(compare)[0]!,
+  description: relationships
+    .map((entry) => entry.description)
+    .sort(compare)[0]!,
 });
 
 function boundaryForAgent(
@@ -297,9 +316,8 @@ function boundaryForAgent(
     const fromRoot = index.rootByNodeId.get(relationship.fromNodeId) ?? null;
     const toRoot = index.rootByNodeId.get(relationship.toNodeId) ?? null;
     if (fromRoot === agentId || toRoot === agentId) {
-      const otherId = fromRoot === agentId
-        ? relationship.toNodeId
-        : relationship.fromNodeId;
+      const otherId =
+        fromRoot === agentId ? relationship.toNodeId : relationship.fromNodeId;
       const other = index.nodes.get(otherId);
       if (
         other &&
@@ -336,7 +354,12 @@ function boundaryForAgent(
     const producing = flows.filter((flow) => flow.fromRoot === agentId);
     const consuming = flows.filter((flow) => flow.toRoot === agentId);
     producing.forEach((flow) => {
-      if (!outputs.some((entry) => entry.contractId === contractId && entry.nodeId === flow.fromNodeId))
+      if (
+        !outputs.some(
+          (entry) =>
+            entry.contractId === contractId && entry.nodeId === flow.fromNodeId,
+        )
+      )
         outputs.push(
           port(
             contractId,
@@ -349,7 +372,12 @@ function boundaryForAgent(
       if (!flow.toRoot) relevant.add(flow.toNodeId);
     });
     consuming.forEach((flow) => {
-      if (!inputs.some((entry) => entry.contractId === contractId && entry.nodeId === flow.toNodeId))
+      if (
+        !inputs.some(
+          (entry) =>
+            entry.contractId === contractId && entry.nodeId === flow.toNodeId,
+        )
+      )
         inputs.push(
           port(
             contractId,
@@ -369,7 +397,10 @@ function boundaryForAgent(
     );
     for (const provider of providerRoots) {
       for (const consumer of consumerRoots) {
-        if (provider === consumer || (provider !== agentId && consumer !== agentId))
+        if (
+          provider === consumer ||
+          (provider !== agentId && consumer !== agentId)
+        )
           continue;
         const evidence = flows.filter(
           (flow) =>
@@ -389,7 +420,9 @@ function boundaryForAgent(
           kind: providing ? "provides-input" : "consumes-output",
           direction: providing ? "downstream" : "upstream",
           counterpartAgentId,
-          relationshipIds: unique(evidence.map((entry) => entry.relationship.id)),
+          relationshipIds: unique(
+            evidence.map((entry) => entry.relationship.id),
+          ),
           contractIds: [contractId],
           requiredByMilestoneIds: unique(
             plan.assignments.find((entry) => entry.plannedAgentId === agentId)
@@ -403,12 +436,12 @@ function boundaryForAgent(
   }
 
   const carrierNodes = [...index.nodes.values()].filter(
-    (node) =>
-      node.kind === "resource" || node.kind === "connector",
+    (node) => node.kind === "resource" || node.kind === "connector",
   );
   for (const carrier of by(carrierNodes, (entry) => entry.id)) {
     const evidence = index.relationships.filter(
-      (entry) => entry.fromNodeId === carrier.id || entry.toNodeId === carrier.id,
+      (entry) =>
+        entry.fromNodeId === carrier.id || entry.toNodeId === carrier.id,
     );
     const roots = unique(
       evidence.flatMap((entry) => [
@@ -495,7 +528,10 @@ function fingerprint(
 ): DependencyFingerprint {
   return {
     kind,
-    digest: computeCanonicalDigest(`sapiom.agent-brief-dependency.${kind}.v1`, value),
+    digest: computeCanonicalDigest(
+      `sapiom.agent-brief-dependency.${kind}.v1`,
+      value,
+    ),
     nodeIds: unique(refs.nodeIds ?? []),
     relationshipIds: unique(refs.relationshipIds ?? []),
     contractIds: unique(refs.contractIds ?? []),
@@ -576,7 +612,9 @@ function makeFingerprints(input: {
       contractIds: unique(
         input.ownedNodeIds.flatMap(
           (id) =>
-            input.index.nodes.get(id)?.contractRefs as PlanContractId[] | undefined ?? [],
+            (input.index.nodes.get(id)?.contractRefs as
+              | PlanContractId[]
+              | undefined) ?? [],
         ),
       ),
     }),
@@ -632,7 +670,8 @@ function identitiesFor(
       supplied.set(entry.plannedAgentId, entry);
   for (const brief of by(
     request.previous?.briefs ?? [],
-    (entry) => `${entry.plannedAgentId}\0${entry.assignmentId}\0${entry.briefId}`,
+    (entry) =>
+      `${entry.plannedAgentId}\0${entry.assignmentId}\0${entry.briefId}`,
   ))
     if (!supplied.has(brief.plannedAgentId))
       supplied.set(brief.plannedAgentId, {
@@ -656,9 +695,7 @@ function identitiesFor(
   return supplied;
 }
 
-function sealBrief(
-  value: AgentBriefVersionRecord,
-): AgentBriefVersionRecord {
+function sealBrief(value: AgentBriefVersionRecord): AgentBriefVersionRecord {
   const semanticDigest = computeAgentBriefSemanticDigest(value);
   const withSemantic = { ...value, semanticDigest };
   return {
@@ -682,13 +719,17 @@ export function compileAgentBriefs(
     diagnostics.push(
       diagnostic("source-digest-mismatch", "source", [request.plan.planId]),
     );
-  if (computeArchitectureGraphDigest(request.graph) !== request.source.graphDigest)
+  if (
+    computeArchitectureGraphDigest(request.graph) !== request.source.graphDigest
+  )
     diagnostics.push(
       diagnostic("source-digest-mismatch", "source.graphDigest", [
         request.source.graphDigest,
       ]),
     );
-  if (computeBuildPlanSemanticDigest(request.plan) !== request.plan.semanticDigest)
+  if (
+    computeBuildPlanSemanticDigest(request.plan) !== request.plan.semanticDigest
+  )
     diagnostics.push(
       diagnostic("source-digest-mismatch", "plan.semanticDigest", [
         request.plan.planId,
@@ -702,14 +743,19 @@ export function compileAgentBriefs(
     );
   if (request.previous) {
     const previous = request.previous;
-    const allowedPlanRefs = previous.allowedPlanRefs ?? [planRef(previous.plan)];
+    const allowedPlanRefs = previous.allowedPlanRefs ?? [
+      planRef(previous.plan),
+    ];
     if (allowedPlanRefs.length > BUILD_PLAN_VERSION_HISTORY_LIMIT)
       diagnostics.push(
         diagnostic("bootstrap-limit-exceeded", "previous.allowedPlanRefs", [
           previous.plan.planId,
         ]),
       );
-    const allowedByVersion = new Map<number, (typeof allowedPlanRefs)[number]>();
+    const allowedByVersion = new Map<
+      number,
+      (typeof allowedPlanRefs)[number]
+    >();
     for (const [refIndex, ref] of allowedPlanRefs.entries()) {
       const existing = allowedByVersion.get(ref.version);
       if (
@@ -718,15 +764,13 @@ export function compileAgentBriefs(
         existing
       )
         diagnostics.push(
-          diagnostic("source-digest-mismatch", `previous.allowedPlanRefs[${refIndex}]`, [
-            ref.planId,
-            String(ref.version),
-          ]),
+          diagnostic(
+            "source-digest-mismatch",
+            `previous.allowedPlanRefs[${refIndex}]`,
+            [ref.planId, String(ref.version)],
+          ),
         );
-      if (
-        !existing ||
-        compare(ref.semanticDigest, existing.semanticDigest) < 0
-      )
+      if (!existing || compare(ref.semanticDigest, existing.semanticDigest) < 0)
         allowedByVersion.set(ref.version, ref);
     }
     const currentPreviousRef = allowedByVersion.get(previous.plan.version);
@@ -770,7 +814,8 @@ export function compileAgentBriefs(
         ]),
       );
     if (
-      computeBuildPlanSemanticDigest(previous.plan) !== previous.plan.semanticDigest ||
+      computeBuildPlanSemanticDigest(previous.plan) !==
+        previous.plan.semanticDigest ||
       computeBuildPlanRecordDigest(previous.plan) !== previous.plan.recordDigest
     )
       diagnostics.push(
@@ -799,7 +844,8 @@ export function compileAgentBriefs(
         );
       if (
         brief.plan.planId !== previous.plan.planId ||
-        allowedByVersion.get(brief.plan.version)?.planId !== brief.plan.planId ||
+        allowedByVersion.get(brief.plan.version)?.planId !==
+          brief.plan.planId ||
         allowedByVersion.get(brief.plan.version)?.semanticDigest !==
           brief.plan.semanticDigest ||
         !architectureSourceRefsEqual(brief.source, previous.plan.source) ||
@@ -833,15 +879,11 @@ export function compileAgentBriefs(
     );
     if (duplicateAgent || conflictingOwner)
       diagnostics.push(
-        diagnostic(
-          "invalid-dependency",
-          `assignments[${assignmentIndex}]`,
-          [
-            assignment.plannedAgentId,
-            assignment.assignmentId,
-            assignment.briefId,
-          ],
-        ),
+        diagnostic("invalid-dependency", `assignments[${assignmentIndex}]`, [
+          assignment.plannedAgentId,
+          assignment.assignmentId,
+          assignment.briefId,
+        ]),
       );
   }
   const index = indexGraph(request.graph, diagnostics);
@@ -856,7 +898,8 @@ export function compileAgentBriefs(
   const previousByAgent = new Map<PlanNodeId, AgentBriefVersionRecord>();
   for (const brief of by(
     request.previous?.briefs ?? [],
-    (entry) => `${entry.plannedAgentId}\0${entry.assignmentId}\0${entry.briefId}`,
+    (entry) =>
+      `${entry.plannedAgentId}\0${entry.assignmentId}\0${entry.briefId}`,
   ))
     if (!previousByAgent.has(brief.plannedAgentId))
       previousByAgent.set(brief.plannedAgentId, brief);
@@ -875,11 +918,19 @@ export function compileAgentBriefs(
     const identity = identities.get(agent.id)!;
     if (assignment.mission.trim().length === 0)
       diagnostics.push(
-        diagnostic("brief-mission-missing", `plan.assignments[${assignmentIndex}].mission`, [agent.id]),
+        diagnostic(
+          "brief-mission-missing",
+          `plan.assignments[${assignmentIndex}].mission`,
+          [agent.id],
+        ),
       );
     if (assignment.scope.inScope.length === 0)
       diagnostics.push(
-        diagnostic("brief-scope-missing", `plan.assignments[${assignmentIndex}].scope.inScope`, [agent.id]),
+        diagnostic(
+          "brief-scope-missing",
+          `plan.assignments[${assignmentIndex}].scope.inScope`,
+          [agent.id],
+        ),
       );
     if (assignment.scope.nonGoals.length === 0)
       diagnostics.push(
@@ -892,7 +943,11 @@ export function compileAgentBriefs(
       );
     if (assignment.deliverables.length === 0)
       diagnostics.push(
-        diagnostic("brief-deliverable-missing", `plan.assignments[${assignmentIndex}].deliverables`, [agent.id]),
+        diagnostic(
+          "brief-deliverable-missing",
+          `plan.assignments[${assignmentIndex}].deliverables`,
+          [agent.id],
+        ),
       );
     if (
       assignment.acceptanceCriteria.length === 0 &&
@@ -940,11 +995,18 @@ export function compileAgentBriefs(
         }
       }),
     );
-    const boundary = boundaryForAgent(agent.id, request.plan, index, diagnostics);
+    const boundary = boundaryForAgent(
+      agent.id,
+      request.plan,
+      index,
+      diagnostics,
+    );
     const constraints = by(
       [...request.plan.sharedConstraints, ...assignment.constraints].filter(
         (entry, entryIndex, entries) =>
-          entries.findIndex((candidate) => candidate.constraintId === entry.constraintId) === entryIndex,
+          entries.findIndex(
+            (candidate) => candidate.constraintId === entry.constraintId,
+          ) === entryIndex,
       ),
       (entry) => entry.constraintId,
     );
@@ -952,7 +1014,11 @@ export function compileAgentBriefs(
       const shared = request.plan.sharedConstraints.find(
         (entry) => entry.constraintId === own.constraintId,
       );
-      if (shared && computeCanonicalDigest("constraint", shared) !== computeCanonicalDigest("constraint", own))
+      if (
+        shared &&
+        computeCanonicalDigest("constraint", shared) !==
+          computeCanonicalDigest("constraint", own)
+      )
         diagnostics.push(
           diagnostic(
             "authored-architecture-conflict",
@@ -962,7 +1028,9 @@ export function compileAgentBriefs(
         );
     }
     const criteria = [...assignment.acceptanceCriteria].sort(
-      (left, right) => left.ordinal - right.ordinal || compare(left.criterionId, right.criterionId),
+      (left, right) =>
+        left.ordinal - right.ordinal ||
+        compare(left.criterionId, right.criterionId),
     );
     const fingerprints = makeFingerprints({
       agentId: agent.id,
@@ -979,7 +1047,8 @@ export function compileAgentBriefs(
       schemaVersion: 1,
       projectId: request.projectId,
       briefId: identity.briefId,
-      version: ((previous?.version ?? 0) + 1) as AgentBriefVersionRecord["version"],
+      version: ((previous?.version ?? 0) +
+        1) as AgentBriefVersionRecord["version"],
       parentVersion: previous?.version ?? null,
       plannedAgentId: agent.id,
       assignmentId: identity.assignmentId,
@@ -995,18 +1064,22 @@ export function compileAgentBriefs(
       inputs: boundary.inputs,
       outputs: boundary.outputs,
       dependencies: boundary.dependencies,
-      deliverables: by(assignment.deliverables, (entry) => entry.deliverableId).map(
-        (entry) => ({
-          ...entry,
-          artifactNodeIds: unique(entry.artifactNodeIds),
-          acceptanceCriterionIds: unique(entry.acceptanceCriterionIds),
-        }),
-      ),
+      deliverables: by(
+        assignment.deliverables,
+        (entry) => entry.deliverableId,
+      ).map((entry) => ({
+        ...entry,
+        artifactNodeIds: unique(entry.artifactNodeIds),
+        acceptanceCriterionIds: unique(entry.acceptanceCriterionIds),
+      })),
       acceptanceCriteria: criteria,
       constraints,
       milestones: unique(assignment.milestoneIds),
       unresolvedDecisions: by(
-        [...request.plan.unresolvedDecisions, ...assignment.unresolvedDecisions],
+        [
+          ...request.plan.unresolvedDecisions,
+          ...assignment.unresolvedDecisions,
+        ],
         (entry) => entry.decisionId,
       ),
       changeProtocol: {
@@ -1099,10 +1172,16 @@ export function compileAgentBriefs(
     nextBriefs,
   });
   const finalizedDiagnostics = finalizeDiagnostics(diagnostics);
-  const complete = finalizedDiagnostics.every((entry) => entry.severity !== "error");
-  const reasons: CompileAgentBriefsResult["eligibility"]["reasons"][number][] = [];
+  const complete = finalizedDiagnostics.every(
+    (entry) => entry.severity !== "error",
+  );
+  const reasons: CompileAgentBriefsResult["eligibility"]["reasons"][number][] =
+    [];
   if (!complete) reasons.push("plan-incomplete");
-  if (candidates.filter((entry) => entry.disposition !== "retired").length !== index.topLevelAgents.length)
+  if (
+    candidates.filter((entry) => entry.disposition !== "retired").length !==
+    index.topLevelAgents.length
+  )
     reasons.push("brief-missing");
   if (request.source.kind !== "revision") reasons.push("source-not-confirmed");
   return {
@@ -1141,7 +1220,9 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
             plan: input.previousPlan,
             graph: input.previousGraph,
             briefs: input.currentBriefs,
-            allowedPlanRefs: input.previousPlanRefs ?? [planRef(input.previousPlan)],
+            allowedPlanRefs: input.previousPlanRefs ?? [
+              planRef(input.previousPlan),
+            ],
           }
         : undefined;
     const compilation = compileAgentBriefs({
@@ -1157,7 +1238,9 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
     return {
       briefs: compilation.briefs
         .filter((entry) =>
-          ["created", "new-version", "source-rebound"].includes(entry.disposition),
+          ["created", "new-version", "source-rebound"].includes(
+            entry.disposition,
+          ),
         )
         .map((entry) => entry.brief),
       changes: compilation.briefs.map((entry) => ({

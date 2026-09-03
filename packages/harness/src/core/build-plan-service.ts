@@ -1288,7 +1288,9 @@ export class BuildPlanService {
           0,
           BUILD_PLAN_MAX_DIAGNOSTICS,
         ),
-        ...(compiled.compilation ? { impact: compiled.compilation.impact } : {}),
+        ...(compiled.compilation
+          ? { impact: compiled.compilation.impact }
+          : {}),
         replayed: false,
       },
     };
@@ -1672,7 +1674,9 @@ export class BuildPlanService {
     committable: readonly AgentBriefVersionRecord[],
     plan: ProjectBuildPlanVersion,
   ): AgentBriefVersionRecord[] {
-    const active = new Set(plan.assignments.map((entry) => entry.plannedAgentId));
+    const active = new Set(
+      plan.assignments.map((entry) => entry.plannedAgentId),
+    );
     const result = new Map(
       current
         .filter((brief) => active.has(brief.plannedAgentId))

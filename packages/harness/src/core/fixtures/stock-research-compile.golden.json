@@ -1,0 +1,893 @@
+{
+  "briefs": [
+    {
+      "assignmentId": "assignment_10000000-0000-7000-8000-000000000001",
+      "bootstrap": {
+        "architecture": {
+          "agent": {
+            "contractRefs": [],
+            "id": "node_10000000-0000-7000-8000-000000000001",
+            "kind": "agent",
+            "name": "Research",
+            "ownerAgentId": null,
+            "purpose": "Produce defensible stock research"
+          },
+          "contracts": [
+            {
+              "contractId": "contract-research-report",
+              "description": "Write the cited ResearchReport",
+              "executionModes": ["asynchronous"],
+              "nodeId": "node_10000000-0000-7000-8000-000000000003",
+              "relationshipIds": ["rel_10000000-0000-7000-8000-000000000001"]
+            }
+          ],
+          "ownedNodes": [
+            {
+              "contractRefs": [],
+              "id": "node_10000000-0000-7000-8000-000000000001",
+              "kind": "agent",
+              "name": "Research",
+              "ownerAgentId": null,
+              "purpose": "Produce defensible stock research"
+            },
+            {
+              "contractRefs": ["contract-research-report"],
+              "id": "node_10000000-0000-7000-8000-000000000003",
+              "kind": "subagent",
+              "name": "Equity analyst",
+              "ownerAgentId": "node_10000000-0000-7000-8000-000000000001",
+              "purpose": "Analyze company fundamentals"
+            }
+          ],
+          "relevantNodes": [
+            {
+              "contractRefs": ["contract-research-report"],
+              "id": "node_10000000-0000-7000-8000-000000000004",
+              "kind": "artifact",
+              "name": "ResearchReport",
+              "ownerAgentId": null,
+              "purpose": "Carry cited analysis into publication"
+            },
+            {
+              "contractRefs": [],
+              "id": "node_10000000-0000-7000-8000-000000000005",
+              "kind": "resource",
+              "name": "Market data",
+              "ownerAgentId": null,
+              "purpose": "Shared market facts"
+            }
+          ]
+        },
+        "architectureSource": {
+          "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+          "kind": "proposal",
+          "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+          "version": 1
+        },
+        "assignment": {
+          "acceptanceCriteria": [
+            {
+              "criterionId": "criterion_10000000-0000-7000-8000-000000000001",
+              "description": "Report contains cited findings",
+              "ordinal": 1,
+              "verification": "Review citations and source links"
+            }
+          ],
+          "changeProtocol": {
+            "instructions": [
+              "Use agent_map_propose for architecture changes.",
+              "Submit a structured planning result.",
+              "Stop before implementation."
+            ],
+            "proposeArchitectureChanges": true
+          },
+          "constraints": [
+            {
+              "constraintId": "citations-required",
+              "description": "Every claim must be cited",
+              "required": true
+            }
+          ],
+          "deliverables": [
+            {
+              "acceptanceCriterionIds": [
+                "criterion_10000000-0000-7000-8000-000000000001"
+              ],
+              "artifactNodeIds": ["node_10000000-0000-7000-8000-000000000004"],
+              "deliverableId": "deliverable_10000000-0000-7000-8000-000000000001",
+              "description": "A cited ResearchReport"
+            }
+          ],
+          "dependencies": [
+            {
+              "blocking": false,
+              "contractIds": [],
+              "counterpartAgentId": "node_10000000-0000-7000-8000-000000000002",
+              "dependencyId": "dependency_0277ceb5-8869-77f2-8466-b0f1ffd73624",
+              "description": "Shared resource node_10000000-0000-7000-8000-000000000005",
+              "direction": "bidirectional",
+              "kind": "shared-resource",
+              "relationshipIds": [
+                "rel_10000000-0000-7000-8000-000000000003",
+                "rel_10000000-0000-7000-8000-000000000004"
+              ],
+              "requiredByMilestoneIds": []
+            },
+            {
+              "blocking": true,
+              "contractIds": ["contract-research-report"],
+              "counterpartAgentId": "node_10000000-0000-7000-8000-000000000002",
+              "dependencyId": "dependency_cfecdfa5-2d95-74a0-85f8-ff9b288ddf5d",
+              "description": "Typed contract contract-research-report crosses the agent boundary",
+              "direction": "downstream",
+              "kind": "provides-input",
+              "relationshipIds": [
+                "rel_10000000-0000-7000-8000-000000000001",
+                "rel_10000000-0000-7000-8000-000000000002"
+              ],
+              "requiredByMilestoneIds": [
+                "milestone_10000000-0000-7000-8000-000000000001"
+              ]
+            }
+          ],
+          "inputs": [],
+          "mission": "Produce a cited report that supports the campaign outcome",
+          "outputs": [
+            {
+              "contractId": "contract-research-report",
+              "description": "Write the cited ResearchReport",
+              "executionModes": ["asynchronous"],
+              "nodeId": "node_10000000-0000-7000-8000-000000000003",
+              "relationshipIds": ["rel_10000000-0000-7000-8000-000000000001"]
+            }
+          ],
+          "repositoryIntents": [],
+          "scope": {
+            "inScope": ["Source and analyze company evidence"],
+            "nonGoals": ["Publishing campaign copy"]
+          },
+          "unresolvedDecisions": []
+        },
+        "assignmentId": "assignment_10000000-0000-7000-8000-000000000001",
+        "brief": {
+          "briefId": "brief_10000000-0000-7000-8000-000000000001",
+          "semanticDigest": "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
+          "version": 1
+        },
+        "compilerVersion": "1.0.0",
+        "contextDigest": "sha256:bc66bf9db1260f15b4f0f091887178b899888a645b5bb535c602e46fd13c888b",
+        "plan": {
+          "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+          "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+          "version": 1
+        },
+        "plannedAgentId": "node_10000000-0000-7000-8000-000000000001",
+        "project": {
+          "integrationCriteria": [
+            {
+              "criterionId": "criterion_10000000-0000-7000-8000-000000000003",
+              "description": "Research reaches Marketing through the typed report",
+              "ordinal": 1,
+              "verification": "Verify the shared contract identity"
+            }
+          ],
+          "outcome": "Publish a defensible stock research campaign",
+          "relevantMilestones": [
+            {
+              "dependsOn": [],
+              "milestoneId": "milestone_10000000-0000-7000-8000-000000000001",
+              "ordinal": 1,
+              "outcome": "Cited analysis is ready for publication",
+              "title": "Research ready"
+            }
+          ],
+          "sharedConstraints": [
+            {
+              "constraintId": "citations-required",
+              "description": "Every claim must be cited",
+              "required": true
+            }
+          ]
+        },
+        "schemaVersion": 1
+      },
+      "brief": {
+        "acceptanceCriteria": [
+          {
+            "criterionId": "criterion_10000000-0000-7000-8000-000000000001",
+            "description": "Report contains cited findings",
+            "ordinal": 1,
+            "verification": "Review citations and source links"
+          }
+        ],
+        "assignmentId": "assignment_10000000-0000-7000-8000-000000000001",
+        "authoredBy": {
+          "role": "map-planner",
+          "sessionId": "session-1",
+          "userId": "planner-1"
+        },
+        "briefId": "brief_10000000-0000-7000-8000-000000000001",
+        "changeProtocol": {
+          "instructions": [
+            "Use agent_map_propose for architecture changes.",
+            "Submit a structured planning result.",
+            "Stop before implementation."
+          ],
+          "proposeArchitectureChanges": true
+        },
+        "compilerVersion": "1.0.0",
+        "constraints": [
+          {
+            "constraintId": "citations-required",
+            "description": "Every claim must be cited",
+            "required": true
+          }
+        ],
+        "createdAt": "2026-09-03T10:00:00.000Z",
+        "deliverables": [
+          {
+            "acceptanceCriterionIds": [
+              "criterion_10000000-0000-7000-8000-000000000001"
+            ],
+            "artifactNodeIds": ["node_10000000-0000-7000-8000-000000000004"],
+            "deliverableId": "deliverable_10000000-0000-7000-8000-000000000001",
+            "description": "A cited ResearchReport"
+          }
+        ],
+        "dependencies": [
+          {
+            "blocking": false,
+            "contractIds": [],
+            "counterpartAgentId": "node_10000000-0000-7000-8000-000000000002",
+            "dependencyId": "dependency_0277ceb5-8869-77f2-8466-b0f1ffd73624",
+            "description": "Shared resource node_10000000-0000-7000-8000-000000000005",
+            "direction": "bidirectional",
+            "kind": "shared-resource",
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000003",
+              "rel_10000000-0000-7000-8000-000000000004"
+            ],
+            "requiredByMilestoneIds": []
+          },
+          {
+            "blocking": true,
+            "contractIds": ["contract-research-report"],
+            "counterpartAgentId": "node_10000000-0000-7000-8000-000000000002",
+            "dependencyId": "dependency_cfecdfa5-2d95-74a0-85f8-ff9b288ddf5d",
+            "description": "Typed contract contract-research-report crosses the agent boundary",
+            "direction": "downstream",
+            "kind": "provides-input",
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000001",
+              "rel_10000000-0000-7000-8000-000000000002"
+            ],
+            "requiredByMilestoneIds": [
+              "milestone_10000000-0000-7000-8000-000000000001"
+            ]
+          }
+        ],
+        "dependencyFingerprints": [
+          {
+            "contractIds": ["contract-research-report"],
+            "digest": "sha256:63c10b642269f13f0d0dfff2d7c8faddf7159b14bd306280941358e8667e078d",
+            "kind": "owned-nodes",
+            "nodeIds": [
+              "node_10000000-0000-7000-8000-000000000001",
+              "node_10000000-0000-7000-8000-000000000003"
+            ],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:530b1077741d6959cfce5f44bca3fc6ddc54a5737a811b8588977b96bdbaa996",
+            "kind": "relevant-nodes",
+            "nodeIds": [
+              "node_10000000-0000-7000-8000-000000000004",
+              "node_10000000-0000-7000-8000-000000000005"
+            ],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:a625853bb28a2a31900bde4083f7f645c68b94998893362e6152a926126f0ac4",
+            "kind": "input-contracts",
+            "nodeIds": [],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": ["contract-research-report"],
+            "digest": "sha256:85ea6b0b0ddd72810def3cdff166adb682dc7ef44dbd4783740c850dc41bc371",
+            "kind": "output-contracts",
+            "nodeIds": [],
+            "relationshipIds": ["rel_10000000-0000-7000-8000-000000000001"]
+          },
+          {
+            "contractIds": ["contract-research-report"],
+            "digest": "sha256:44bee35512628b86798712ce0dc635f9c4badf98b70ba18a93b13b13c41ad892",
+            "kind": "cross-agent-relationships",
+            "nodeIds": [
+              "node_10000000-0000-7000-8000-000000000001",
+              "node_10000000-0000-7000-8000-000000000002"
+            ],
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000001",
+              "rel_10000000-0000-7000-8000-000000000002",
+              "rel_10000000-0000-7000-8000-000000000003",
+              "rel_10000000-0000-7000-8000-000000000004"
+            ]
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:2008f06f142106ad3ab57505a93a9c5598d4536b2911ca5db60934061eead8d5",
+            "kind": "shared-resources",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000005"],
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000003",
+              "rel_10000000-0000-7000-8000-000000000004"
+            ]
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:cad4f0e6713b6a9d7cbe26a6cc070c1d584c9ff05972782ed5d198979c386a13",
+            "kind": "milestones",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000001"],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:ac3ef08e0bdc6e87c59025c7068456b91ad14650fc868ff2dbbb4b54c792da98",
+            "kind": "shared-plan-content",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000001"],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:fbe97c9715b80201bbd612c43d8da2295da45f7c1227f270444421ef882d1fae",
+            "kind": "assignment-content",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000001"],
+            "relationshipIds": []
+          }
+        ],
+        "inputs": [],
+        "milestones": ["milestone_10000000-0000-7000-8000-000000000001"],
+        "mission": "Produce a cited report that supports the campaign outcome",
+        "outputs": [
+          {
+            "contractId": "contract-research-report",
+            "description": "Write the cited ResearchReport",
+            "executionModes": ["asynchronous"],
+            "nodeId": "node_10000000-0000-7000-8000-000000000003",
+            "relationshipIds": ["rel_10000000-0000-7000-8000-000000000001"]
+          }
+        ],
+        "ownedNodeIds": [
+          "node_10000000-0000-7000-8000-000000000001",
+          "node_10000000-0000-7000-8000-000000000003"
+        ],
+        "parentVersion": null,
+        "plan": {
+          "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+          "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+          "version": 1
+        },
+        "plannedAgentId": "node_10000000-0000-7000-8000-000000000001",
+        "projectId": "project_10000000-0000-4000-8000-000000000001",
+        "recordDigest": "sha256:9afc89433a3bae3590c3a65f916acb636213d255a386ce444e5d2b6d316fae38",
+        "relevantNodeIds": [
+          "node_10000000-0000-7000-8000-000000000004",
+          "node_10000000-0000-7000-8000-000000000005"
+        ],
+        "schemaVersion": 1,
+        "scope": {
+          "inScope": ["Source and analyze company evidence"],
+          "nonGoals": ["Publishing campaign copy"]
+        },
+        "semanticDigest": "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
+        "source": {
+          "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+          "kind": "proposal",
+          "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+          "version": 1
+        },
+        "unresolvedDecisions": [],
+        "version": 1
+      },
+      "disposition": "created",
+      "existingBriefRef": null,
+      "plannedAgentId": "node_10000000-0000-7000-8000-000000000001"
+    },
+    {
+      "assignmentId": "assignment_10000000-0000-7000-8000-000000000002",
+      "bootstrap": {
+        "architecture": {
+          "agent": {
+            "contractRefs": [],
+            "id": "node_10000000-0000-7000-8000-000000000002",
+            "kind": "agent",
+            "name": "Marketing",
+            "ownerAgentId": null,
+            "purpose": "Publish investor-ready findings"
+          },
+          "contracts": [
+            {
+              "contractId": "contract-research-report",
+              "description": "Read the approved ResearchReport",
+              "executionModes": ["asynchronous"],
+              "nodeId": "node_10000000-0000-7000-8000-000000000002",
+              "relationshipIds": ["rel_10000000-0000-7000-8000-000000000002"]
+            }
+          ],
+          "ownedNodes": [
+            {
+              "contractRefs": [],
+              "id": "node_10000000-0000-7000-8000-000000000002",
+              "kind": "agent",
+              "name": "Marketing",
+              "ownerAgentId": null,
+              "purpose": "Publish investor-ready findings"
+            }
+          ],
+          "relevantNodes": [
+            {
+              "contractRefs": ["contract-research-report"],
+              "id": "node_10000000-0000-7000-8000-000000000004",
+              "kind": "artifact",
+              "name": "ResearchReport",
+              "ownerAgentId": null,
+              "purpose": "Carry cited analysis into publication"
+            },
+            {
+              "contractRefs": [],
+              "id": "node_10000000-0000-7000-8000-000000000005",
+              "kind": "resource",
+              "name": "Market data",
+              "ownerAgentId": null,
+              "purpose": "Shared market facts"
+            },
+            {
+              "contractRefs": [],
+              "id": "node_10000000-0000-7000-8000-000000000006",
+              "kind": "connector",
+              "name": "Publishing channel",
+              "ownerAgentId": null,
+              "purpose": "Deliver approved content"
+            }
+          ]
+        },
+        "architectureSource": {
+          "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+          "kind": "proposal",
+          "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+          "version": 1
+        },
+        "assignment": {
+          "acceptanceCriteria": [
+            {
+              "criterionId": "criterion_10000000-0000-7000-8000-000000000002",
+              "description": "Campaign uses only approved report claims",
+              "ordinal": 1,
+              "verification": "Trace every claim to ResearchReport"
+            }
+          ],
+          "changeProtocol": {
+            "instructions": [
+              "Use agent_map_propose for architecture changes.",
+              "Submit a structured planning result.",
+              "Stop before implementation."
+            ],
+            "proposeArchitectureChanges": true
+          },
+          "constraints": [
+            {
+              "constraintId": "citations-required",
+              "description": "Every claim must be cited",
+              "required": true
+            }
+          ],
+          "deliverables": [
+            {
+              "acceptanceCriterionIds": [
+                "criterion_10000000-0000-7000-8000-000000000002"
+              ],
+              "artifactNodeIds": [],
+              "deliverableId": "deliverable_10000000-0000-7000-8000-000000000002",
+              "description": "Publication-ready campaign content"
+            }
+          ],
+          "dependencies": [
+            {
+              "blocking": false,
+              "contractIds": [],
+              "counterpartAgentId": "node_10000000-0000-7000-8000-000000000001",
+              "dependencyId": "dependency_835413c7-73fd-747e-8e0f-23ff75744d40",
+              "description": "Shared resource node_10000000-0000-7000-8000-000000000005",
+              "direction": "bidirectional",
+              "kind": "shared-resource",
+              "relationshipIds": [
+                "rel_10000000-0000-7000-8000-000000000003",
+                "rel_10000000-0000-7000-8000-000000000004"
+              ],
+              "requiredByMilestoneIds": []
+            },
+            {
+              "blocking": true,
+              "contractIds": ["contract-research-report"],
+              "counterpartAgentId": "node_10000000-0000-7000-8000-000000000001",
+              "dependencyId": "dependency_cfea2732-a55c-74d5-83e8-ad395982de60",
+              "description": "Typed contract contract-research-report crosses the agent boundary",
+              "direction": "upstream",
+              "kind": "consumes-output",
+              "relationshipIds": [
+                "rel_10000000-0000-7000-8000-000000000001",
+                "rel_10000000-0000-7000-8000-000000000002"
+              ],
+              "requiredByMilestoneIds": [
+                "milestone_10000000-0000-7000-8000-000000000001"
+              ]
+            }
+          ],
+          "inputs": [
+            {
+              "contractId": "contract-research-report",
+              "description": "Read the approved ResearchReport",
+              "executionModes": ["asynchronous"],
+              "nodeId": "node_10000000-0000-7000-8000-000000000002",
+              "relationshipIds": ["rel_10000000-0000-7000-8000-000000000002"]
+            }
+          ],
+          "mission": "Turn approved research into investor-ready campaign content",
+          "outputs": [],
+          "repositoryIntents": [],
+          "scope": {
+            "inScope": ["Create campaign content from approved research"],
+            "nonGoals": ["Changing research conclusions"]
+          },
+          "unresolvedDecisions": []
+        },
+        "assignmentId": "assignment_10000000-0000-7000-8000-000000000002",
+        "brief": {
+          "briefId": "brief_10000000-0000-7000-8000-000000000002",
+          "semanticDigest": "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+          "version": 1
+        },
+        "compilerVersion": "1.0.0",
+        "contextDigest": "sha256:c3077bb88e615695b71f4d81f4b1d7d12571032d102ef941a345acc44eeaaeb1",
+        "plan": {
+          "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+          "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+          "version": 1
+        },
+        "plannedAgentId": "node_10000000-0000-7000-8000-000000000002",
+        "project": {
+          "integrationCriteria": [
+            {
+              "criterionId": "criterion_10000000-0000-7000-8000-000000000003",
+              "description": "Research reaches Marketing through the typed report",
+              "ordinal": 1,
+              "verification": "Verify the shared contract identity"
+            }
+          ],
+          "outcome": "Publish a defensible stock research campaign",
+          "relevantMilestones": [
+            {
+              "dependsOn": [],
+              "milestoneId": "milestone_10000000-0000-7000-8000-000000000001",
+              "ordinal": 1,
+              "outcome": "Cited analysis is ready for publication",
+              "title": "Research ready"
+            }
+          ],
+          "sharedConstraints": [
+            {
+              "constraintId": "citations-required",
+              "description": "Every claim must be cited",
+              "required": true
+            }
+          ]
+        },
+        "schemaVersion": 1
+      },
+      "brief": {
+        "acceptanceCriteria": [
+          {
+            "criterionId": "criterion_10000000-0000-7000-8000-000000000002",
+            "description": "Campaign uses only approved report claims",
+            "ordinal": 1,
+            "verification": "Trace every claim to ResearchReport"
+          }
+        ],
+        "assignmentId": "assignment_10000000-0000-7000-8000-000000000002",
+        "authoredBy": {
+          "role": "map-planner",
+          "sessionId": "session-1",
+          "userId": "planner-1"
+        },
+        "briefId": "brief_10000000-0000-7000-8000-000000000002",
+        "changeProtocol": {
+          "instructions": [
+            "Use agent_map_propose for architecture changes.",
+            "Submit a structured planning result.",
+            "Stop before implementation."
+          ],
+          "proposeArchitectureChanges": true
+        },
+        "compilerVersion": "1.0.0",
+        "constraints": [
+          {
+            "constraintId": "citations-required",
+            "description": "Every claim must be cited",
+            "required": true
+          }
+        ],
+        "createdAt": "2026-09-03T10:00:00.000Z",
+        "deliverables": [
+          {
+            "acceptanceCriterionIds": [
+              "criterion_10000000-0000-7000-8000-000000000002"
+            ],
+            "artifactNodeIds": [],
+            "deliverableId": "deliverable_10000000-0000-7000-8000-000000000002",
+            "description": "Publication-ready campaign content"
+          }
+        ],
+        "dependencies": [
+          {
+            "blocking": false,
+            "contractIds": [],
+            "counterpartAgentId": "node_10000000-0000-7000-8000-000000000001",
+            "dependencyId": "dependency_835413c7-73fd-747e-8e0f-23ff75744d40",
+            "description": "Shared resource node_10000000-0000-7000-8000-000000000005",
+            "direction": "bidirectional",
+            "kind": "shared-resource",
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000003",
+              "rel_10000000-0000-7000-8000-000000000004"
+            ],
+            "requiredByMilestoneIds": []
+          },
+          {
+            "blocking": true,
+            "contractIds": ["contract-research-report"],
+            "counterpartAgentId": "node_10000000-0000-7000-8000-000000000001",
+            "dependencyId": "dependency_cfea2732-a55c-74d5-83e8-ad395982de60",
+            "description": "Typed contract contract-research-report crosses the agent boundary",
+            "direction": "upstream",
+            "kind": "consumes-output",
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000001",
+              "rel_10000000-0000-7000-8000-000000000002"
+            ],
+            "requiredByMilestoneIds": [
+              "milestone_10000000-0000-7000-8000-000000000001"
+            ]
+          }
+        ],
+        "dependencyFingerprints": [
+          {
+            "contractIds": [],
+            "digest": "sha256:041420f82cb04e9e98f04c9cecce08a4d060083a4587cef0c2a0211f28df4a76",
+            "kind": "owned-nodes",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000002"],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:db49aacc6859362599636dfa1375d12ea19f85c8a8f7f0b2f981921bf57795b4",
+            "kind": "relevant-nodes",
+            "nodeIds": [
+              "node_10000000-0000-7000-8000-000000000004",
+              "node_10000000-0000-7000-8000-000000000005",
+              "node_10000000-0000-7000-8000-000000000006"
+            ],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": ["contract-research-report"],
+            "digest": "sha256:8a09c49c9edbe4fd8f3a724a7be80ff8c3cc54d93e1062682e056085166ca9c9",
+            "kind": "input-contracts",
+            "nodeIds": [],
+            "relationshipIds": ["rel_10000000-0000-7000-8000-000000000002"]
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:03bc8b5c5c7a830a5874f6c2d6059cfe096d32cea6505cf1dc11e3d9f3b64df8",
+            "kind": "output-contracts",
+            "nodeIds": [],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": ["contract-research-report"],
+            "digest": "sha256:44bee35512628b86798712ce0dc635f9c4badf98b70ba18a93b13b13c41ad892",
+            "kind": "cross-agent-relationships",
+            "nodeIds": [
+              "node_10000000-0000-7000-8000-000000000001",
+              "node_10000000-0000-7000-8000-000000000002"
+            ],
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000001",
+              "rel_10000000-0000-7000-8000-000000000002",
+              "rel_10000000-0000-7000-8000-000000000003",
+              "rel_10000000-0000-7000-8000-000000000004"
+            ]
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:2008f06f142106ad3ab57505a93a9c5598d4536b2911ca5db60934061eead8d5",
+            "kind": "shared-resources",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000005"],
+            "relationshipIds": [
+              "rel_10000000-0000-7000-8000-000000000003",
+              "rel_10000000-0000-7000-8000-000000000004"
+            ]
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:cad4f0e6713b6a9d7cbe26a6cc070c1d584c9ff05972782ed5d198979c386a13",
+            "kind": "milestones",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000002"],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:ac3ef08e0bdc6e87c59025c7068456b91ad14650fc868ff2dbbb4b54c792da98",
+            "kind": "shared-plan-content",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000002"],
+            "relationshipIds": []
+          },
+          {
+            "contractIds": [],
+            "digest": "sha256:00c53bbe57ac0c284cdbbc8e54501ff15be39e1b98e0bd4a10506f2502cc2436",
+            "kind": "assignment-content",
+            "nodeIds": ["node_10000000-0000-7000-8000-000000000002"],
+            "relationshipIds": []
+          }
+        ],
+        "inputs": [
+          {
+            "contractId": "contract-research-report",
+            "description": "Read the approved ResearchReport",
+            "executionModes": ["asynchronous"],
+            "nodeId": "node_10000000-0000-7000-8000-000000000002",
+            "relationshipIds": ["rel_10000000-0000-7000-8000-000000000002"]
+          }
+        ],
+        "milestones": ["milestone_10000000-0000-7000-8000-000000000001"],
+        "mission": "Turn approved research into investor-ready campaign content",
+        "outputs": [],
+        "ownedNodeIds": ["node_10000000-0000-7000-8000-000000000002"],
+        "parentVersion": null,
+        "plan": {
+          "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+          "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+          "version": 1
+        },
+        "plannedAgentId": "node_10000000-0000-7000-8000-000000000002",
+        "projectId": "project_10000000-0000-4000-8000-000000000001",
+        "recordDigest": "sha256:ea608d0ea468aa5952cc0db91793abbf3a7621f49f0c29bdcd0996bbe6f86469",
+        "relevantNodeIds": [
+          "node_10000000-0000-7000-8000-000000000004",
+          "node_10000000-0000-7000-8000-000000000005",
+          "node_10000000-0000-7000-8000-000000000006"
+        ],
+        "schemaVersion": 1,
+        "scope": {
+          "inScope": ["Create campaign content from approved research"],
+          "nonGoals": ["Changing research conclusions"]
+        },
+        "semanticDigest": "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+        "source": {
+          "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+          "kind": "proposal",
+          "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+          "version": 1
+        },
+        "unresolvedDecisions": [],
+        "version": 1
+      },
+      "disposition": "created",
+      "existingBriefRef": null,
+      "plannedAgentId": "node_10000000-0000-7000-8000-000000000002"
+    }
+  ],
+  "completeness": { "issues": [], "status": "complete" },
+  "diagnostics": [],
+  "eligibility": {
+    "implementationEligible": false,
+    "planningEligible": true,
+    "reasons": ["source-not-confirmed"]
+  },
+  "impact": {
+    "addedAgentIds": [
+      "node_10000000-0000-7000-8000-000000000001",
+      "node_10000000-0000-7000-8000-000000000002"
+    ],
+    "assignmentChanges": [
+      {
+        "assignmentId": "assignment_10000000-0000-7000-8000-000000000001",
+        "briefId": "brief_10000000-0000-7000-8000-000000000001",
+        "disposition": "added",
+        "plannedAgentId": "node_10000000-0000-7000-8000-000000000001",
+        "reasons": [
+          {
+            "affectedContractIds": [],
+            "affectedNodeIds": ["node_10000000-0000-7000-8000-000000000001"],
+            "affectedRelationshipIds": [],
+            "code": "agent-added"
+          }
+        ]
+      },
+      {
+        "assignmentId": "assignment_10000000-0000-7000-8000-000000000002",
+        "briefId": "brief_10000000-0000-7000-8000-000000000002",
+        "disposition": "added",
+        "plannedAgentId": "node_10000000-0000-7000-8000-000000000002",
+        "reasons": [
+          {
+            "affectedContractIds": [],
+            "affectedNodeIds": ["node_10000000-0000-7000-8000-000000000002"],
+            "affectedRelationshipIds": [],
+            "code": "agent-added"
+          }
+        ]
+      }
+    ],
+    "changedContractIds": ["contract-research-report"],
+    "changedNodeIds": [
+      "node_10000000-0000-7000-8000-000000000001",
+      "node_10000000-0000-7000-8000-000000000002",
+      "node_10000000-0000-7000-8000-000000000003",
+      "node_10000000-0000-7000-8000-000000000004",
+      "node_10000000-0000-7000-8000-000000000005",
+      "node_10000000-0000-7000-8000-000000000006"
+    ],
+    "changedRelationshipIds": [
+      "rel_10000000-0000-7000-8000-000000000001",
+      "rel_10000000-0000-7000-8000-000000000002",
+      "rel_10000000-0000-7000-8000-000000000003",
+      "rel_10000000-0000-7000-8000-000000000004",
+      "rel_10000000-0000-7000-8000-000000000005"
+    ],
+    "digest": "sha256:e9c8e3b27102a5fb8f2b194bd6c4482d2f670949f0b40325eb39a022fc4795ab",
+    "from": {
+      "plan": {
+        "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+        "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+        "version": 1
+      },
+      "source": {
+        "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+        "kind": "proposal",
+        "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+        "version": 1
+      }
+    },
+    "preservedBriefIds": [],
+    "removedAgentIds": [],
+    "semanticChange": true,
+    "staleBriefIds": [],
+    "to": {
+      "plan": {
+        "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+        "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+        "version": 1
+      },
+      "source": {
+        "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+        "kind": "proposal",
+        "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+        "version": 1
+      }
+    }
+  },
+  "plan": {
+    "planId": "build-plan_10000000-0000-7000-8000-000000000001",
+    "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
+    "version": 1
+  },
+  "source": {
+    "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
+    "kind": "proposal",
+    "proposalId": "proposal_10000000-0000-7000-8000-000000000001",
+    "version": 1
+  }
+}

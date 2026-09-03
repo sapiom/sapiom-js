@@ -19,8 +19,7 @@ import {
   computeBuildPlanSemanticDigest,
 } from "./build-plan-canonicalization.js";
 
-export const STOCK_PROJECT_ID =
-  "project_10000000-0000-4000-8000-000000000001";
+export const STOCK_PROJECT_ID = "project_10000000-0000-4000-8000-000000000001";
 export const RESEARCH_ID =
   "node_10000000-0000-7000-8000-000000000001" as PlanNodeId;
 export const MARKETING_ID =
@@ -149,8 +148,7 @@ export function stockResearchPlan(
   const draft = {
     schemaVersion: 1 as const,
     projectId: STOCK_PROJECT_ID,
-    planId:
-      "build-plan_10000000-0000-7000-8000-000000000001" as BuildPlanId,
+    planId: "build-plan_10000000-0000-7000-8000-000000000001" as BuildPlanId,
     version: 1 as ProjectBuildPlanVersion["version"],
     parentVersion: null,
     changeKind: "created" as const,
@@ -271,15 +269,13 @@ export const stockAssignments = () => [
   {
     assignmentId:
       "assignment_10000000-0000-7000-8000-000000000001" as PlanningAssignmentId,
-    briefId:
-      "brief_10000000-0000-7000-8000-000000000001" as AgentBriefId,
+    briefId: "brief_10000000-0000-7000-8000-000000000001" as AgentBriefId,
     plannedAgentId: RESEARCH_ID,
   },
   {
     assignmentId:
       "assignment_10000000-0000-7000-8000-000000000002" as PlanningAssignmentId,
-    briefId:
-      "brief_10000000-0000-7000-8000-000000000002" as AgentBriefId,
+    briefId: "brief_10000000-0000-7000-8000-000000000002" as AgentBriefId,
     plannedAgentId: MARKETING_ID,
   },
 ];
