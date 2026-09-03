@@ -2989,6 +2989,7 @@ export class MockApi implements HarnessApi {
       harness: request.harness ?? primary.harness,
       ...(request.theme ? { theme: request.theme } : {}),
     });
+    session.agentSessionId = `mock-builder-agent-${session.id}`;
     session.title = primary.title;
     session.executionPolicy = "planning-readonly";
     session.agentMapIdentity = {

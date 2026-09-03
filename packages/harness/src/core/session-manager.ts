@@ -319,6 +319,9 @@ export type LaunchOptsBuilder = (
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: PlanningSessionIdentity;
+    /** Trusted capability projection; false keeps identity for durable scope
+     * while withholding the Agent Map MCP transport from this process. */
+    agentMapCapability?: boolean;
     executionPolicy?: import("../shared/types.js").SessionExecutionPolicy;
     /** Server-composed secret launch metadata, never accepted from REST. */
     agentMapMcp?: { url: string; bearerToken: string };
@@ -409,6 +412,8 @@ export interface TrustedSessionCreateOptions {
   planning?: (sessionId: string) => PlannerSessionMetadata;
   /** Future E5 seam for a server-authored planned builder assignment. */
   agentMapIdentity?: (sessionId: string) => PlanningSessionIdentity;
+  /** Defaults to true when an Agent Map identity exists. */
+  agentMapCapability?: boolean;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
   /** Server-authored native CLI orientation for a newly created session. */
@@ -712,7 +717,12 @@ export class SessionManager {
         ? {
             ...(promptAppendix ? { promptAppendix } : {}),
             ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
-            ...(agentMapIdentity ? { agentMapIdentity } : {}),
+            ...(agentMapIdentity
+              ? {
+                  agentMapIdentity,
+                  agentMapCapability: trusted.agentMapCapability !== false,
+                }
+              : {}),
             executionPolicy,
           }
         : undefined;
@@ -905,6 +915,12 @@ export class SessionManager {
               ? { promptAppendix: trusted.promptAppendix }
               : {}),
             ...(agentMapIdentity ? { agentMapIdentity } : {}),
+            ...(agentMapIdentity
+              ? {
+                  agentMapCapability:
+                    trusted.builderPlanning?.primary !== false,
+                }
+              : {}),
             executionPolicy,
             resume: true as const,
           }

@@ -94,6 +94,12 @@ export interface AgentMapProposalServiceOptions {
     revisionId: string,
   ) => Promise<AgentMapGraph | null>;
   onAccepted?: (delta: AcceptedProposalDelta) => void | Promise<void>;
+  /** Basic trusted identity check that also applies to non-mutating receipt
+   * replay. It must not depend on mutable proposal or binding freshness. */
+  authorizeIdentity?: (
+    identity: PlanningSessionIdentity,
+    aggregate: AgentMapProjectAggregate,
+  ) => void;
   /** Trusted policy check executed under the same aggregate lock as mutation. */
   authorizeMutation?: (
     identity: PlanningSessionIdentity,
@@ -474,6 +480,7 @@ export class AgentMapProposalService {
       throw new AgentMapProposalValidationError(parsed.issues, 0);
     }
     const request = parsed.value;
+    const digest = requestDigest(request);
     let acceptedDelta: AcceptedProposalDelta | null = null;
     let replayed = false;
     let result: ProposalBatchResult;
@@ -483,9 +490,8 @@ export class AgentMapProposalService {
         async (aggregate) => {
           if (aggregate.workspace.projectId !== identity.projectId)
             throw new AgentMapProposalProjectError();
-          this.options.authorizeMutation?.(identity, aggregate);
+          this.options.authorizeIdentity?.(identity, aggregate);
           const currentVersion = aggregate.proposal?.version ?? 0;
-          const digest = requestDigest(request);
           const receipt = aggregate.receipts.find(
             (candidate) =>
               candidate.sessionId === identity.sessionId &&
@@ -522,6 +528,7 @@ export class AgentMapProposalService {
               affectedRelationshipIds: [],
               recovery: "new_request",
             });
+          this.options.authorizeMutation?.(identity, aggregate);
           this.assertProposalPointer(aggregate, request, currentVersion);
           if (request.expectedVersion > currentVersion)
             throw this.stale(currentVersion);

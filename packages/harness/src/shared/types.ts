@@ -252,7 +252,8 @@ export interface HarnessSession {
   agentMapIdentity?: import("./agent-map.js").PlanningSessionIdentity;
   /** Missing only on registries written before SAP-3074; treated as default. */
   executionPolicy?: SessionExecutionPolicy;
-  /** Present only on trusted primary planned-builder sessions. */
+  /** Trusted planned-builder context; `primary: false` marks an additional,
+   * non-authoritative tab with the same exact assignment context. */
   builderPlanning?: BuilderPlanningSessionMetadata;
 }
 

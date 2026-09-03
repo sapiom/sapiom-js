@@ -1907,6 +1907,68 @@ describe("SessionManager", () => {
     );
   });
 
+  it("withholds Agent Map capability on create and resume for a trusted secondary builder", async () => {
+    const buildLaunchOpts = vi.fn(async () => ({}));
+    const { manager, spawns } = makeManager({ buildLaunchOpts });
+    const metadata = {
+      bindingId: "builder-binding_00000000-0000-7000-8000-000000000001",
+      purpose: "implementation-planning",
+      assignmentId: "assignment_00000000-0000-7000-8000-000000000001",
+      plannedAgentId: "node_00000000-0000-7000-8000-000000000001",
+      source: {
+        kind: "proposal",
+        proposalId: "proposal_00000000-0000-7000-8000-000000000001",
+        version: 1,
+        graphDigest: `sha256:${"1".repeat(64)}`,
+      },
+      plan: {
+        planId: "build-plan_00000000-0000-7000-8000-000000000001",
+        version: 1,
+        semanticDigest: `sha256:${"2".repeat(64)}`,
+      },
+      brief: {
+        briefId: "brief_00000000-0000-7000-8000-000000000001",
+        version: 1,
+        semanticDigest: `sha256:${"3".repeat(64)}`,
+      },
+      bootstrapDigest: `sha256:${"4".repeat(64)}`,
+      state: "planning",
+      primary: false,
+    } as const;
+    const session = await manager.create(
+      { cwd: "/tmp/proj", harness: "claude-code" },
+      {
+        executionPolicy: "planning-readonly",
+        agentMapCapability: false,
+        agentMapIdentity: (sessionId) => ({
+          projectId: "project_00000000-0000-4000-8000-000000000001" as never,
+          sessionId,
+          userId: "user-1",
+          role: "agent-builder",
+          assignment: {
+            kind: "planned",
+            agentId: metadata.plannedAgentId as never,
+          },
+        }),
+        builderPlanning: () => metadata as never,
+      },
+    );
+    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
+      session.id,
+      expect.anything(),
+      expect.objectContaining({ agentMapCapability: false }),
+    );
+
+    await manager.setAgentSessionId(session.id, "secondary-agent-session");
+    spawns[0]?.emitExit(0);
+    await manager.resume(session.id, { builderPlanning: metadata as never });
+    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
+      session.id,
+      expect.anything(),
+      expect.objectContaining({ resume: true, agentMapCapability: false }),
+    );
+  });
+
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {
     const { manager } = makeManager();
     const session = await manager.registerHistorical({

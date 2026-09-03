@@ -158,6 +158,10 @@ describe("ClaudeCodeAdapter", () => {
         cwd: "/tmp/proj",
         executionPolicy: "planning-readonly",
         mcpConfigFile: "/tmp/plan-mcp.json",
+        agentMapMcp: {
+          url: "http://127.0.0.1:4000/mcp/agent-map",
+          bearerToken: "capability",
+        },
       });
 
       expect(spec.args).toEqual([
@@ -173,6 +177,28 @@ describe("ClaudeCodeAdapter", () => {
         "Bash,PowerShell,Edit,Write,NotebookEdit",
       ]);
       expect(spec.args).not.toContain("--allow-dangerously-skip-permissions");
+    });
+
+    it("withholds Agent Map mutation tools from a secondary planning launch", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launch({
+        harnessSessionId: "h-secondary",
+        cwd: "/tmp/proj",
+        executionPolicy: "planning-readonly",
+        mcpConfigFile: "/tmp/secondary-mcp.json",
+      });
+
+      expect(spec.args).toEqual([
+        "--mcp-config",
+        "/tmp/secondary-mcp.json",
+        "--restricted",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "plan",
+        "--disallowedTools",
+        "Bash,PowerShell,Edit,Write,NotebookEdit",
+      ]);
+      expect(spec.args).not.toContain("--allowedTools");
     });
 
     it("throws a descriptive error when the systemPromptFile can't be read", () => {
@@ -256,7 +282,8 @@ describe("ClaudeCodeAdapter", () => {
     it("rejects a version below the floor and accepts the floor and above", () => {
       expect(isClaudeVersionSupported("1.9.9 (Claude Code)")).toBe(false);
       expect(isClaudeVersionSupported("0.5.0")).toBe(false);
-      expect(isClaudeVersionSupported("2.1.82 (Claude Code)")).toBe(false);
+      expect(isClaudeVersionSupported("2.1.247 (Claude Code)")).toBe(false);
+      expect(isClaudeVersionSupported("2.1.248 (Claude Code)")).toBe(true);
       expect(
         isClaudeVersionSupported(`${MIN_CLAUDE_CODE_VERSION} (Claude Code)`),
       ).toBe(true);

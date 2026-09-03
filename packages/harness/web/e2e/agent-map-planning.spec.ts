@@ -216,6 +216,39 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       )
       .toBe(1);
 
+    await extraResearch.click();
+    const extraResearchSessionId = await activeSessionId(page);
+    expect(extraResearchSessionId).toBeTruthy();
+    expect(extraResearchSessionId).not.toBe(researchSessionId);
+    await page.evaluate((sessionId) => {
+      (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            exitBuilderPlanningSession?: (id: string) => void;
+          };
+        }
+      ).__HARNESS_TEST__?.exitBuilderPlanningSession?.(sessionId!);
+    }, extraResearchSessionId);
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+    await page.getByTestId("dead-session-resume").click();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      extraResearchSessionId ?? "",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: { builderPlanningResumeCalls?: string[] };
+              }
+            ).__HARNESS_TEST__?.builderPlanningResumeCalls ?? [],
+        ),
+      )
+      .toContain(extraResearchSessionId);
+
     await researchTab.click();
     await page.evaluate((sessionId) => {
       (

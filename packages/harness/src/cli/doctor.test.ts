@@ -53,12 +53,12 @@ import { MIN_CLAUDE_CODE_VERSION } from "../core/adapters/claude-code.js";
 describe("runDoctor", () => {
   it("passes when node, claude, and git are present and codex is absent", async () => {
     presentBinaries = new Set(["claude", "git"]);
-    claudeVersion = "2.1.220 (Claude Code)";
+    claudeVersion = `${MIN_CLAUDE_CODE_VERSION} (Claude Code)`;
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
     expect(byName.node.ok).toBe(true);
-    expect(byName.claude).toEqual({ name: "claude", ok: true, detail: "2.1.220 (Claude Code)" });
+    expect(byName.claude).toEqual({ name: "claude", ok: true, detail: `${MIN_CLAUDE_CODE_VERSION} (Claude Code)` });
     expect(byName.git).toEqual({ name: "git", ok: true, detail: "git version 2.43.0" });
     expect(byName.codex.ok).toBe(false);
 
@@ -121,7 +121,7 @@ describe("runDoctor", () => {
 
   it("prefers claude-code when both agents are present", async () => {
     presentBinaries = new Set(["claude", "codex", "git"]);
-    claudeVersion = "2.1.220 (Claude Code)";
+    claudeVersion = `${MIN_CLAUDE_CODE_VERSION} (Claude Code)`;
     const report = await runDoctor();
 
     expect(report.ok).toBe(true);

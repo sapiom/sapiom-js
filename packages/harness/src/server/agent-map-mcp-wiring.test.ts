@@ -13,6 +13,7 @@ import type {
   SpawnSpec,
 } from "../shared/types.js";
 import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
+import { AGENT_MAP_BUILDER_SECONDARY_PLANNING_SYSTEM_PROMPT } from "../profiles/agent-map-builder-planning.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { computeArchitectureGraphDigest } from "../core/build-plan-canonicalization.js";
 import { startServer, type HarnessServer } from "./index.js";
@@ -137,6 +138,101 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     }),
   });
   expect(rejected.status).toBe(401);
+});
+
+it("withholds Agent Map transport and mutation instructions from a secondary builder", async () => {
+  let launchOpts: LaunchOpts | undefined;
+  const adapter: HarnessAdapter = {
+    id: "claude-code",
+    eventSource: "hooks",
+    doctor: async () => [],
+    launch: (opts) => {
+      launchOpts = opts;
+      return { command: "bash", args: [], env: {}, cwd: opts.cwd };
+    },
+    resume: (_id, opts) => {
+      launchOpts = opts;
+      return { command: "bash", args: [], env: {}, cwd: opts.cwd };
+    },
+    listPastSessions: async () => [],
+    canResume: async () => true,
+  };
+  const webDir = path.join(root, "web-secondary");
+  await fs.mkdir(webDir);
+  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
+  server = await startServer({
+    port: 0,
+    bootToken: "boot-token",
+    telemetryOptIn: false,
+    identity: {
+      userId: "user-1",
+      tenantId: "tenant-1",
+      organizationName: "Test",
+      apiKey: "sk_test",
+      source: "cached",
+    },
+    adapters: { "claude-code": adapter },
+    stateRoot: root,
+    launchDir: projectRoot,
+    webDir,
+    autoCreateSession: false,
+    loadSystemPrompt: async () => "ordinary prompt",
+  });
+  const metadata = {
+    bindingId: "builder-binding_00000000-0000-7000-8000-000000000001",
+    purpose: "implementation-planning",
+    assignmentId: "assignment_00000000-0000-7000-8000-000000000001",
+    plannedAgentId: "node_00000000-0000-7000-8000-000000000001",
+    source: {
+      kind: "proposal",
+      proposalId: "proposal_00000000-0000-7000-8000-000000000001",
+      version: 1,
+      graphDigest: `sha256:${"1".repeat(64)}`,
+    },
+    plan: {
+      planId: "build-plan_00000000-0000-7000-8000-000000000001",
+      version: 1,
+      semanticDigest: `sha256:${"2".repeat(64)}`,
+    },
+    brief: {
+      briefId: "brief_00000000-0000-7000-8000-000000000001",
+      version: 1,
+      semanticDigest: `sha256:${"3".repeat(64)}`,
+    },
+    bootstrapDigest: `sha256:${"4".repeat(64)}`,
+    state: "planning",
+    primary: false,
+  } as const;
+  const session = await server.sessionManager.create(
+    { cwd: projectRoot, harness: "claude-code" },
+    {
+      executionPolicy: "planning-readonly",
+      agentMapCapability: false,
+      agentMapIdentity: (sessionId) => ({
+        projectId: projectId as never,
+        sessionId,
+        userId: "user-1",
+        role: "agent-builder",
+        assignment: {
+          kind: "planned",
+          agentId: metadata.plannedAgentId as never,
+        },
+      }),
+      builderPlanning: () => metadata as never,
+      promptAppendix: () => "<builder-assignment-data />",
+    },
+  );
+
+  expect(session.builderPlanning?.primary).toBe(false);
+  expect(launchOpts?.agentMapMcp).toBeUndefined();
+  const config = JSON.parse(
+    await fs.readFile(launchOpts!.mcpConfigFile!, "utf8"),
+  );
+  expect(config.mcpServers).not.toHaveProperty("agent-map");
+  const prompt = await fs.readFile(launchOpts!.systemPromptFile!, "utf8");
+  expect(prompt).toContain(AGENT_MAP_BUILDER_SECONDARY_PLANNING_SYSTEM_PROMPT);
+  expect(prompt).not.toContain("agent_map_propose");
+  expect(prompt).not.toContain("planning_result_submit");
 });
 
 it("gives a signed-out local planner its scoped Agent Map tools", async () => {

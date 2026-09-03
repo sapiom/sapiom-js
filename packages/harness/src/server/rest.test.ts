@@ -978,7 +978,7 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
-    it("delegates planning-readonly resume to the trusted builder scope", async () => {
+    it("delegates secondary planning-readonly resume to the trusted builder scope", async () => {
       const builder = exitedSession({
         id: "builder-1",
         executionPolicy: "planning-readonly",
@@ -1007,7 +1007,7 @@ describe("createRestRouter", () => {
           },
           bootstrapDigest: `sha256:${"4".repeat(64)}` as never,
           state: "planning",
-          primary: true,
+          primary: false,
         },
       });
       const sessionManager = fakeSessionManager([builder]);

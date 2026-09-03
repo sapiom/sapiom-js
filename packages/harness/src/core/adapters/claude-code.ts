@@ -33,10 +33,8 @@ import { stripAnsi } from "../strip-ansi.js";
  * below-floor claude as NOT ok so the desktop host installs a current one and
  * the CLI surfaces an actionable upgrade remedy instead.
  *
- * Why 2.1.83:
- * - Claude's permission-mode documentation identifies 2.1.83 as the first
- *   version that supports Auto mode, which interactive Harness sessions use as
- *   their initial mode.
+ * Why 2.1.248:
+ * - planning-readonly launches require `--restricted`, introduced in 2.1.248.
  * - The plugin system did not exist before the "Plugin System Released" entry
  *   in `2.0.12`, so no `1.x` or `2.0.0`–`2.0.11` build can recognize
  *   `--plugin-dir` — they reject it outright.
@@ -48,7 +46,7 @@ import { stripAnsi } from "../strip-ansi.js";
  * This is the SINGLE source of truth — bump it whenever the adapter starts
  * sending a flag, or relying on behavior, a newer `claude` introduced.
  */
-export const MIN_CLAUDE_CODE_VERSION = "2.1.83";
+export const MIN_CLAUDE_CODE_VERSION = "2.1.248";
 
 /**
  * Extract a leading `major.minor.patch` from a `claude --version` line such as
@@ -398,11 +396,13 @@ function buildInteractiveConfigArgs(opts: LaunchOpts): string[] {
       "--strict-mcp-config",
       "--permission-mode",
       "plan",
-      "--allowedTools",
-      "mcp__agent-map__agent_map_propose,mcp__agent-map__planning_result_submit",
-      "--disallowedTools",
-      "Bash,PowerShell,Edit,Write,NotebookEdit",
     );
+    if (opts.agentMapMcp)
+      args.push(
+        "--allowedTools",
+        "mcp__agent-map__agent_map_propose,mcp__agent-map__planning_result_submit",
+      );
+    args.push("--disallowedTools", "Bash,PowerShell,Edit,Write,NotebookEdit");
     return args;
   }
   // Auto remains the safe, classifier-backed default for eligible accounts.

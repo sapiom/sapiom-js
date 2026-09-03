@@ -59,6 +59,7 @@ import type { ArchitectureSourceResolver } from "./architecture-source-resolver.
 import type { BuildPlanContractValidator } from "./build-plan-contract-validator.js";
 import type { BuildPlanStore } from "./build-plan-store.js";
 import {
+  SessionAlreadyLiveError,
   SessionInputGuardRejectedError,
   SessionNotReadyError,
   type SessionManager,
@@ -82,6 +83,7 @@ const opaque = z
   .max(512)
   .refine(
     (value) =>
+      value === value.trim() &&
       value.trim().length > 0 &&
       !value.includes("/") &&
       !value.includes("\\") &&
@@ -111,7 +113,7 @@ const briefRefSchema = z
 const stepSchema = z
   .object({
     stepId: opaque,
-    ordinal: z.number().int().positive(),
+    ordinal: z.number().int().safe().positive(),
     description: z.string().trim().min(1).max(2_000),
     verification: z.string().trim().min(1).max(2_000),
   })
@@ -274,6 +276,77 @@ export interface OpenPlanningFanoutRequest {
 const same = (left: unknown, right: unknown): boolean =>
   canonicalJson(left) === canonicalJson(right);
 
+/** The binding id is stable across replanning epochs, so lifecycle CAS must
+ * also fence every immutable context field that defines one exact epoch. */
+function sameBindingContext(
+  left: BuilderPlanningSessionBinding,
+  right: BuilderPlanningSessionBinding,
+): boolean {
+  return (
+    left.bindingId === right.bindingId &&
+    left.projectId === right.projectId &&
+    left.assignmentId === right.assignmentId &&
+    left.plannedAgentId === right.plannedAgentId &&
+    left.purpose === right.purpose &&
+    left.executionPolicy === right.executionPolicy &&
+    same(left.source, right.source) &&
+    same(left.plan, right.plan) &&
+    same(left.brief, right.brief) &&
+    left.bootstrapDigest === right.bootstrapDigest
+  );
+}
+
+interface BindingMutationExpectation {
+  sessionId?: string | null;
+  spawnEpoch?: number;
+  spawnClaimId?: string | null;
+  state?:
+    | BuilderPlanningSessionBinding["state"]
+    | readonly BuilderPlanningSessionBinding["state"][];
+  kickoffId?: string | null;
+  kickoffInputId?: string | null;
+  deliveryClaimId?: string | null;
+}
+
+function matchesBindingMutationExpectation(
+  binding: BuilderPlanningSessionBinding,
+  expected: BindingMutationExpectation,
+): boolean {
+  const has = (key: keyof BindingMutationExpectation) =>
+    Object.prototype.hasOwnProperty.call(expected, key);
+  const states = Array.isArray(expected.state)
+    ? expected.state
+    : expected.state
+      ? [expected.state]
+      : null;
+  return (
+    (!has("sessionId") || binding.sessionId === expected.sessionId) &&
+    (!has("spawnEpoch") || binding.spawnEpoch === expected.spawnEpoch) &&
+    (!has("spawnClaimId") || binding.spawnClaimId === expected.spawnClaimId) &&
+    (!states || states.includes(binding.state)) &&
+    (!has("kickoffId") ||
+      (binding.kickoff?.kickoffId ?? null) === expected.kickoffId) &&
+    (!has("kickoffInputId") ||
+      (binding.kickoff?.inputId ?? null) === expected.kickoffInputId) &&
+    (!has("deliveryClaimId") ||
+      (binding.kickoff?.deliveryClaimId ?? null) === expected.deliveryClaimId)
+  );
+}
+
+function exactLifecycleExpectation(
+  binding: BuilderPlanningSessionBinding,
+): BindingMutationExpectation {
+  return {
+    sessionId: binding.sessionId,
+    spawnEpoch: binding.spawnEpoch,
+    spawnClaimId: binding.spawnClaimId,
+    state: binding.state,
+    kickoffId: binding.kickoff?.kickoffId ?? null,
+    kickoffInputId: binding.kickoff?.inputId ?? null,
+    deliveryClaimId: binding.kickoff?.deliveryClaimId ?? null,
+  };
+}
+
 function proposalStaleReasons(
   aggregate: AgentMapProjectAggregate,
   binding: BuilderPlanningSessionBinding,
@@ -413,6 +486,25 @@ function proposalStaleReasons(
       affectedContractIds: [...changedContracts].sort(),
     },
   ];
+}
+
+function proposalOperationConflictKeys(operation: MapOperation): string[] {
+  switch (operation.kind) {
+    case "add-node":
+      return [`node:${operation.node.id}`];
+    case "update-node":
+    case "remove-node":
+      return [`node:${operation.nodeId}`];
+    case "add-relationship":
+      return [
+        `relationship:${operation.relationship.id}`,
+        `node:${operation.relationship.fromNodeId}`,
+        `node:${operation.relationship.toNodeId}`,
+      ];
+    case "update-relationship":
+    case "remove-relationship":
+      return [`relationship:${operation.relationshipId}`];
+  }
 }
 
 function stableId(prefix: string, seed: unknown): string {
@@ -894,6 +986,7 @@ export class BuilderPlanningSessionService {
 
   private async updateBinding(
     binding: BuilderPlanningSessionBinding,
+    expected: BindingMutationExpectation,
     update: (
       current: BuilderPlanningSessionBinding,
     ) => BuilderPlanningSessionBinding,
@@ -905,7 +998,11 @@ export class BuilderPlanningSessionService {
           aggregate.buildPlanning.builderBindingsByAssignmentId[
             binding.assignmentId
           ];
-        if (!current || current.bindingId !== binding.bindingId)
+        if (
+          !current ||
+          !sameBindingContext(current, binding) ||
+          !matchesBindingMutationExpectation(current, expected)
+        )
           throw new BuilderPlanningSessionError("binding_stale");
         const next = update(structuredClone(current));
         return {
@@ -943,6 +1040,31 @@ export class BuilderPlanningSessionService {
       );
   }
 
+  private async readCompatibleBinding(
+    binding: BuilderPlanningSessionBinding,
+    options: Readonly<{
+      requireSessionId?: string | null;
+      allowStale?: boolean;
+    }> = {},
+  ): Promise<BuilderPlanningSessionBinding> {
+    const aggregate = await this.options.workspaceStore.readAggregate(
+      binding.projectId,
+    );
+    const current =
+      aggregate.buildPlanning.builderBindingsByAssignmentId[
+        binding.assignmentId
+      ];
+    if (
+      !current ||
+      !sameBindingContext(current, binding) ||
+      (Object.prototype.hasOwnProperty.call(options, "requireSessionId") &&
+        current.sessionId !== options.requireSessionId) ||
+      (!options.allowStale && current.state === "stale")
+    )
+      throw new BuilderPlanningSessionError("binding_stale");
+    return current;
+  }
+
   private async claimSpawn(
     binding: BuilderPlanningSessionBinding,
   ): Promise<
@@ -960,9 +1082,11 @@ export class BuilderPlanningSessionService {
         aggregate.buildPlanning.builderBindingsByAssignmentId[
           binding.assignmentId
         ];
-      if (!current || current.bindingId !== binding.bindingId)
+      if (!current || !sameBindingContext(current, binding))
         throw new BuilderPlanningSessionError("binding_stale");
       if (current.sessionId) return { value: { won: false, binding: current } };
+      if (!["pending", "failed", "spawning"].includes(current.state))
+        throw new BuilderPlanningSessionError("binding_stale");
       const claimedAtMs = current.spawnClaimedAt
         ? Date.parse(current.spawnClaimedAt)
         : Number.NaN;
@@ -971,6 +1095,8 @@ export class BuilderPlanningSessionService {
         Number.isFinite(claimedAtMs) &&
         nowMs - claimedAtMs < this.spawnClaimTtlMs;
       if (liveClaim) return { value: { won: false, binding: current } };
+      if (current.spawnEpoch !== binding.spawnEpoch)
+        throw new BuilderPlanningSessionError("binding_stale");
       const next: BuilderPlanningSessionBinding = {
         ...current,
         state: "spawning",
@@ -1003,20 +1129,16 @@ export class BuilderPlanningSessionService {
     request: OpenPlanningFanoutRequest,
   ): Promise<BuilderPlanningSessionBinding> {
     let current = binding;
+    let resumedByThisInvocation = false;
     let session = current.sessionId
       ? this.options.sessionManager.get(current.sessionId)
       : undefined;
     session ??= this.matchingSession(current);
     if (current.sessionId && !session) {
-      // The durable logical session id is part of the primary binding. Losing
-      // its registry record is unrecoverable here; silently minting a second id
-      // would sever the visible conversation lineage.
-      return this.updateBinding(current, (value) => ({
-        ...value,
-        state: "failed",
-        failureCode: "resume_failed",
-        updatedAt: this.now(),
-      }));
+      // A process-local registry miss is not evidence that a session owned by
+      // another Studio/coordinator is dead. Preserve the durable authority and
+      // let the owning registry or an explicit scoped resume reconcile it.
+      return current;
     }
     if (session?.status === "exited") {
       try {
@@ -1024,33 +1146,64 @@ export class BuilderPlanningSessionService {
           builderPlanning: sessionMetadata(current),
           promptAppendix: serializeBuilderBootstrapContext(bootstrap),
         });
-      } catch {
-        current = await this.updateBinding(current, (value) => ({
-          ...value,
-          state: "failed",
-          failureCode: "resume_failed",
-          updatedAt: this.now(),
-        }));
-        if (session.builderPlanning)
-          await this.options.sessionManager
-            .setBuilderPlanningMetadata(session.id, sessionMetadata(current))
-            .catch(() => {});
-        return current;
+        resumedByThisInvocation = true;
+      } catch (error) {
+        const observed = this.options.sessionManager.get(session.id);
+        if (
+          error instanceof SessionAlreadyLiveError &&
+          observed?.status === "running"
+        ) {
+          session = observed;
+        } else {
+          current = await this.updateBinding(
+            current,
+            exactLifecycleExpectation(current),
+            (value) => ({
+              ...value,
+              state: "failed",
+              failureCode: "resume_failed",
+              updatedAt: this.now(),
+            }),
+          );
+          if (session.builderPlanning)
+            await this.options.sessionManager
+              .setBuilderPlanningMetadata(session.id, sessionMetadata(current))
+              .catch(() => {});
+          return current;
+        }
       }
     }
     if (session) {
-      current = await this.updateBinding(current, (value) => ({
-        ...value,
-        sessionId: session!.id,
-        state:
-          value.state === "submitted"
-            ? "submitted"
-            : value.kickoff?.state === "delivered"
-              ? "planning"
-              : "kickoff-pending",
-        failureCode: null,
-        updatedAt: this.now(),
-      }));
+      try {
+        current = await this.updateBinding(
+          current,
+          exactLifecycleExpectation(current),
+          (value) => ({
+            ...value,
+            sessionId: session!.id,
+            state:
+              value.state === "submitted"
+                ? "submitted"
+                : value.kickoff?.state === "delivered"
+                  ? "planning"
+                  : "kickoff-pending",
+            failureCode: null,
+            updatedAt: this.now(),
+          }),
+        );
+      } catch (error) {
+        try {
+          return await this.readCompatibleBinding(current, {
+            requireSessionId: session.id,
+          });
+        } catch {
+          if (resumedByThisInvocation)
+            await this.options.sessionManager
+              .kill(session.id)
+              .catch(() => false);
+          throw error;
+        }
+      }
       if (session.ready) void this.deliverKickoff(current).catch(() => {});
       return current;
     }
@@ -1062,26 +1215,38 @@ export class BuilderPlanningSessionService {
       // is safe; this loser must never call create itself while the lease lives.
       session = this.matchingSession(current);
       if (!session) return current;
-      current = await this.updateBinding(current, (value) => ({
-        ...value,
-        sessionId: session!.id,
-        state:
-          value.kickoff?.state === "delivered"
-            ? "planning"
-            : session!.status === "exited"
-              ? "failed"
-              : "kickoff-pending",
-        spawnClaimId: null,
-        spawnClaimedAt: null,
-        failureCode: session!.status === "exited" ? "spawn_failed" : null,
-        updatedAt: this.now(),
-      }));
+      try {
+        current = await this.updateBinding(
+          current,
+          exactLifecycleExpectation(current),
+          (value) => ({
+            ...value,
+            sessionId: session!.id,
+            state:
+              value.kickoff?.state === "delivered"
+                ? "planning"
+                : session!.status === "exited"
+                  ? "failed"
+                  : "kickoff-pending",
+            spawnClaimId: null,
+            spawnClaimedAt: null,
+            failureCode: session!.status === "exited" ? "spawn_failed" : null,
+            updatedAt: this.now(),
+          }),
+        );
+      } catch (error) {
+        const reconciled = await this.readCompatibleBinding(current);
+        if (reconciled.sessionId) return reconciled;
+        throw error;
+      }
       return current;
     }
     const claimId = claim.claimId;
+    const claimed = current;
+    let created: HarnessSession;
     try {
       const root = await this.options.resolveProjectRoot(planner.projectId);
-      const created = await this.options.sessionManager.create(
+      created = await this.options.sessionManager.create(
         {
           cwd: root,
           harness: request.harness ?? this.options.defaultHarness,
@@ -1100,15 +1265,42 @@ export class BuilderPlanningSessionService {
           promptAppendix: () => serializeBuilderBootstrapContext(bootstrap),
         },
       );
-      const inputId = stableId("kickoff", {
-        assignmentId: current.assignmentId,
-        bootstrapDigest: current.bootstrapDigest,
-        kind: "input",
-      });
-      current = await this.updateBinding(current, (value) => {
-        if (value.spawnClaimId !== claimId)
-          throw new BuilderPlanningSessionError("binding_stale");
-        return {
+    } catch {
+      return this.updateBinding(
+        claimed,
+        {
+          sessionId: null,
+          spawnEpoch: claimed.spawnEpoch,
+          spawnClaimId: claimId,
+          state: "spawning",
+          kickoffId: null,
+        },
+        (value) => ({
+          ...value,
+          state: "failed",
+          spawnClaimId: null,
+          spawnClaimedAt: null,
+          failureCode: "spawn_failed",
+          updatedAt: this.now(),
+        }),
+      );
+    }
+    const inputId = stableId("kickoff", {
+      assignmentId: claimed.assignmentId,
+      bootstrapDigest: claimed.bootstrapDigest,
+      kind: "input",
+    });
+    try {
+      current = await this.updateBinding(
+        claimed,
+        {
+          sessionId: null,
+          spawnEpoch: claimed.spawnEpoch,
+          spawnClaimId: claimId,
+          state: "spawning",
+          kickoffId: null,
+        },
+        (value) => ({
           ...value,
           sessionId: created.id,
           state: "kickoff-pending",
@@ -1128,8 +1320,16 @@ export class BuilderPlanningSessionService {
             acknowledgedBy: null,
           },
           updatedAt: this.now(),
-        };
-      });
+        }),
+      );
+    } catch (error) {
+      await this.options.sessionManager.kill(created.id).catch(() => false);
+      const reconciled = await this.readCompatibleBinding(claimed);
+      if (reconciled.sessionId && reconciled.sessionId !== created.id)
+        return reconciled;
+      throw error;
+    }
+    try {
       await this.options.sessionManager.setBuilderPlanningMetadata(
         created.id,
         sessionMetadata(current),
@@ -1137,17 +1337,16 @@ export class BuilderPlanningSessionService {
       if (created.ready) void this.deliverKickoff(current).catch(() => {});
       return current;
     } catch {
-      return this.updateBinding(current, (value) =>
-        value.spawnClaimId !== claimId
-          ? value
-          : {
-              ...value,
-              state: "failed",
-              spawnClaimId: null,
-              spawnClaimedAt: null,
-              failureCode: "spawn_failed",
-              updatedAt: this.now(),
-            },
+      await this.options.sessionManager.kill(created.id).catch(() => false);
+      return this.updateBinding(
+        current,
+        exactLifecycleExpectation(current),
+        (value) => ({
+          ...value,
+          state: "failed",
+          failureCode: "spawn_failed",
+          updatedAt: this.now(),
+        }),
       );
     }
   }
@@ -1188,8 +1387,12 @@ export class BuilderPlanningSessionService {
         ];
       if (
         !current ||
-        current.bindingId !== binding.bindingId ||
+        !sameBindingContext(current, binding) ||
         current.sessionId !== binding.sessionId ||
+        current.spawnEpoch !== binding.spawnEpoch ||
+        current.spawnClaimId !== binding.spawnClaimId ||
+        current.kickoff?.kickoffId !== binding.kickoff?.kickoffId ||
+        current.kickoff?.inputId !== binding.kickoff?.inputId ||
         !current.kickoff ||
         current.state === "stale"
       )
@@ -1318,17 +1521,27 @@ export class BuilderPlanningSessionService {
     }
     if (!accepted && !ambiguous)
       this.expectedKickoffs.delete(binding.sessionId);
-    const uncertain = await this.updateBinding(delivering, (value) => {
-      // A prompt hook can be persisted before submitInput returns. Delivered is
-      // terminal for this kickoff epoch and must never be downgraded.
-      if (value.kickoff?.state === "delivered") return value;
-      if (value.kickoff?.deliveryClaimId !== claim.claimId) return value;
-      return reconcileKickoffAttempt(value, {
-        accepted,
-        ambiguous,
-        updatedAt: this.now(),
-      });
-    });
+    const uncertain = await this.updateBinding(
+      delivering,
+      {
+        sessionId: delivering.sessionId,
+        spawnEpoch: delivering.spawnEpoch,
+        spawnClaimId: delivering.spawnClaimId,
+        kickoffId: delivering.kickoff?.kickoffId ?? null,
+        kickoffInputId: delivering.kickoff?.inputId ?? null,
+      },
+      (value) => {
+        // A prompt hook can be persisted before submitInput returns. Delivered
+        // is terminal for this kickoff epoch and must never be downgraded.
+        if (value.kickoff?.state === "delivered") return value;
+        if (value.kickoff?.deliveryClaimId !== claim.claimId) return value;
+        return reconcileKickoffAttempt(value, {
+          accepted,
+          ambiguous,
+          updatedAt: this.now(),
+        });
+      },
+    );
     await this.options.sessionManager
       .setBuilderPlanningMetadata(binding.sessionId, sessionMetadata(uncertain))
       .catch(() => {});
@@ -1369,24 +1582,45 @@ export class BuilderPlanningSessionService {
       binding.kickoff?.inputId !== event.payload.builderKickoffInputId
     )
       return;
-    const delivered = await this.updateBinding(binding, (value) => ({
-      ...value,
-      // A late durable acknowledgement resolves delivery, but it must not
-      // revive a context that reconciliation already staled or overwrite a
-      // terminal submission/failure lifecycle.
-      state: ["stale", "submitted", "failed"].includes(value.state)
-        ? value.state
-        : "planning",
-      kickoff: {
-        ...value.kickoff!,
-        state: "delivered",
-        deliveryClaimId: null,
-        deliveryClaimedAt: null,
-        deliveredAt: event.ts,
-        acknowledgedBy: { source: "hook", observedAt: event.ts },
+    const delivered = await this.updateBinding(
+      binding,
+      {
+        sessionId: session.id,
+        spawnEpoch: binding.spawnEpoch,
+        spawnClaimId: binding.spawnClaimId,
+        kickoffId: binding.kickoff.kickoffId,
+        kickoffInputId: binding.kickoff.inputId,
+        deliveryClaimId: binding.kickoff.deliveryClaimId,
       },
-      updatedAt: this.now(),
-    }));
+      (value) => {
+        if (
+          !value.kickoff ||
+          value.kickoff.inputId !== event.payload.builderKickoffInputId ||
+          !["delivering", "delivery-uncertain", "delivered"].includes(
+            value.kickoff.state,
+          )
+        )
+          throw new BuilderPlanningSessionError("binding_stale");
+        return {
+          ...value,
+          // A late durable acknowledgement resolves delivery, but it must not
+          // revive a context that reconciliation already staled or overwrite a
+          // terminal submission/failure lifecycle.
+          state: ["stale", "submitted", "failed"].includes(value.state)
+            ? value.state
+            : "planning",
+          kickoff: {
+            ...value.kickoff,
+            state: "delivered",
+            deliveryClaimId: null,
+            deliveryClaimedAt: null,
+            deliveredAt: event.ts,
+            acknowledgedBy: { source: "hook", observedAt: event.ts },
+          },
+          updatedAt: this.now(),
+        };
+      },
+    );
     this.expectedKickoffs.delete(session.id);
     await this.options.sessionManager
       .setBuilderPlanningMetadata(session.id, sessionMetadata(delivered))
@@ -1506,6 +1740,17 @@ export class BuilderPlanningSessionService {
     const aggregate = await this.options.workspaceStore.readAggregate(
       binding.projectId,
     );
+    const current =
+      aggregate.buildPlanning.builderBindingsByAssignmentId[
+        binding.assignmentId
+      ];
+    if (
+      !current ||
+      !sameBindingContext(current, binding) ||
+      current.sessionId !== binding.sessionId ||
+      current.state === "stale"
+    )
+      throw new BuilderPlanningSessionError("binding_stale");
     const plan = aggregate.buildPlanning.planVersions.find((entry) =>
       same(
         {
@@ -1576,10 +1821,17 @@ export class BuilderPlanningSessionService {
       aggregate.buildPlanning.builderBindingsByAssignmentId[
         metadata.assignmentId
       ];
+    const primary = metadata.primary !== false;
     if (
       !binding ||
-      binding.sessionId !== sessionId ||
+      binding.projectId !== projectId ||
+      !binding.sessionId ||
+      (primary
+        ? binding.sessionId !== sessionId
+        : binding.sessionId === sessionId) ||
       binding.state === "stale" ||
+      metadata.plannedAgentId !== binding.plannedAgentId ||
+      identity.assignment.agentId !== binding.plannedAgentId ||
       !exactContext(
         binding,
         metadata,
@@ -1590,34 +1842,83 @@ export class BuilderPlanningSessionService {
     )
       throw new BuilderPlanningSessionError("binding_stale");
     const bootstrap = await this.bootstrapForBinding(binding);
+    let resumed: HarnessSession | undefined;
     try {
-      const resumed = await this.options.sessionManager.resume(sessionId, {
+      resumed = await this.options.sessionManager.resume(sessionId, {
         builderPlanning: session.builderPlanning!,
         promptAppendix: serializeBuilderBootstrapContext(bootstrap),
       });
-      const next = await this.updateBinding(binding, (current) => ({
-        ...current,
-        state:
-          current.state === "submitted"
-            ? "submitted"
-            : current.kickoff?.state === "delivered"
-              ? "planning"
-              : "kickoff-pending",
-        failureCode: null,
-        updatedAt: this.now(),
-      }));
+      if (!primary) {
+        // Secondary tabs share the primary's exact trusted context but never
+        // own or transition its durable binding. Resume only this secondary
+        // logical session and refresh its read-only lifecycle projection.
+        const confirmed = await this.readCompatibleBinding(binding, {
+          requireSessionId: binding.sessionId,
+        });
+        if (
+          confirmed.sessionId !== binding.sessionId ||
+          confirmed.state === "stale"
+        )
+          throw new BuilderPlanningSessionError("binding_stale");
+        await this.options.sessionManager.setBuilderPlanningMetadata(
+          sessionId,
+          sessionMetadata(confirmed, false),
+        );
+        return resumed;
+      }
+      const next = await this.updateBinding(
+        binding,
+        exactLifecycleExpectation(binding),
+        (current) => ({
+          ...current,
+          state:
+            current.state === "submitted"
+              ? "submitted"
+              : current.kickoff?.state === "delivered"
+                ? "planning"
+                : "kickoff-pending",
+          failureCode: null,
+          updatedAt: this.now(),
+        }),
+      );
       await this.options.sessionManager.setBuilderPlanningMetadata(
         sessionId,
         sessionMetadata(next),
       );
       return resumed;
     } catch (error) {
-      const failed = await this.updateBinding(binding, (current) => ({
-        ...current,
-        state: "failed",
-        failureCode: "resume_failed",
-        updatedAt: this.now(),
-      }));
+      if (error instanceof SessionAlreadyLiveError) throw error;
+      if (error instanceof BuilderPlanningSessionError) {
+        if (!resumed) throw error;
+        try {
+          const confirmed = await this.readCompatibleBinding(binding, {
+            requireSessionId: binding.sessionId,
+          });
+          await this.options.sessionManager.setBuilderPlanningMetadata(
+            sessionId,
+            sessionMetadata(confirmed, primary),
+          );
+          return resumed;
+        } catch {
+          await this.options.sessionManager.kill(sessionId).catch(() => false);
+          throw error;
+        }
+      }
+      if (!primary) {
+        if (resumed)
+          await this.options.sessionManager.kill(sessionId).catch(() => false);
+        throw error;
+      }
+      const failed = await this.updateBinding(
+        binding,
+        exactLifecycleExpectation(binding),
+        (current) => ({
+          ...current,
+          state: "failed",
+          failureCode: "resume_failed",
+          updatedAt: this.now(),
+        }),
+      );
       await this.options.sessionManager
         .setBuilderPlanningMetadata(sessionId, sessionMetadata(failed))
         .catch(() => {});
@@ -1670,6 +1971,7 @@ export class BuilderPlanningSessionService {
       },
       {
         executionPolicy: "planning-readonly",
+        agentMapCapability: false,
         agentMapIdentity: (sessionId) => ({
           projectId,
           sessionId,
@@ -1734,10 +2036,8 @@ export class BuilderPlanningSessionService {
     }
   }
 
-  /** Called from AgentMapProposalService inside the same project transaction
-   * that would mutate the proposal. A planned builder may author one direct
-   * successor only while its primary binding is current and actively planning. */
-  assertProposalMutationAuthorized(
+  /** Stable identity/scope check used before durable proposal receipt replay. */
+  assertProposalIdentityAuthorized(
     identity: PlanningSessionIdentity,
     aggregate: AgentMapProjectAggregate,
   ): void {
@@ -1747,6 +2047,39 @@ export class BuilderPlanningSessionService {
     )
       return;
     const session = this.options.sessionManager.get(identity.sessionId);
+    const metadata = session?.builderPlanning;
+    if (
+      identity.userId !== this.options.currentUserId() ||
+      identity.projectId !== aggregate.workspace.projectId ||
+      !session ||
+      session.agentMapIdentity?.projectId !== identity.projectId ||
+      session.agentMapIdentity.userId !== identity.userId ||
+      session.agentMapIdentity.role !== "agent-builder" ||
+      session.agentMapIdentity.assignment.kind !== "planned" ||
+      session.agentMapIdentity.assignment.agentId !==
+        identity.assignment.agentId ||
+      session.executionPolicy !== "planning-readonly" ||
+      !metadata ||
+      metadata.primary === false ||
+      metadata.plannedAgentId !== identity.assignment.agentId
+    )
+      throw new BuilderPlanningSessionError("forbidden");
+  }
+
+  /** First-commit freshness check under the proposal transaction. A planned
+   * builder may author one direct successor only while its primary binding is
+   * current and actively planning. */
+  assertProposalMutationAuthorized(
+    identity: PlanningSessionIdentity,
+    aggregate: AgentMapProjectAggregate,
+  ): void {
+    if (
+      identity.role !== "agent-builder" ||
+      identity.assignment.kind !== "planned"
+    )
+      return;
+    this.assertProposalIdentityAuthorized(identity, aggregate);
+    const session = this.options.sessionManager.get(identity.sessionId)!;
     const metadata = session?.builderPlanning;
     const binding = metadata
       ? aggregate.buildPlanning.builderBindingsByAssignmentId[
@@ -1800,11 +2133,12 @@ export class BuilderPlanningSessionService {
       binding.source.kind !== "proposal" ||
       aggregate.workspace.activeProposalId !== binding.source.proposalId ||
       aggregate.proposal?.id !== binding.source.proposalId ||
-      aggregate.proposal.version !== binding.source.version + 1
+      aggregate.proposal.version < binding.source.version + 1
     )
       return null;
+    const source = binding.source;
     const records = aggregate.proposal.history.filter(
-      (entry) => entry.acceptedVersion === aggregate.proposal!.version,
+      (entry) => entry.acceptedVersion === source.version + 1,
     );
     if (
       records.length === 0 ||
@@ -1818,6 +2152,19 @@ export class BuilderPlanningSessionService {
       )
     )
       return null;
+    const directKeys = new Set(
+      records.flatMap((entry) =>
+        proposalOperationConflictKeys(entry.operation),
+      ),
+    );
+    const superseded = aggregate.proposal.history
+      .filter((entry) => entry.acceptedVersion > source.version + 1)
+      .some((entry) =>
+        proposalOperationConflictKeys(entry.operation).some((key) =>
+          directKeys.has(key),
+        ),
+      );
+    if (superseded) return null;
     return records;
   }
 
@@ -1989,10 +2336,7 @@ export class BuilderPlanningSessionService {
         const allowed = directSuccessor?.map((entry) => entry.id).sort();
         if (!allowed || !same(requested, allowed))
           throw new BuilderPlanningSessionError("invalid_proposal_operations");
-      } else if (
-        request.proposedMapOperationIds.length > 0 ||
-        !proposalIsCompatible
-      )
+      } else if (request.proposedMapOperationIds.length > 0 || directSuccessor)
         throw new BuilderPlanningSessionError("invalid_proposal_operations");
       const history =
         aggregate.buildPlanning.submissionsByAssignmentId[

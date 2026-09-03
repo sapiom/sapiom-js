@@ -99,7 +99,10 @@ import {
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import { AGENT_MAP_PLANNER_SYSTEM_PROMPT } from "../profiles/agent-map-planner.js";
-import { AGENT_MAP_BUILDER_PLANNING_SYSTEM_PROMPT } from "../profiles/agent-map-builder-planning.js";
+import {
+  AGENT_MAP_BUILDER_PLANNING_SYSTEM_PROMPT,
+  AGENT_MAP_BUILDER_SECONDARY_PLANNING_SYSTEM_PROMPT,
+} from "../profiles/agent-map-builder-planning.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -586,7 +589,11 @@ function createDefaultBuildLaunchOpts(
     const planningReadonly = context?.executionPolicy === "planning-readonly";
     const promptPromise =
       planningReadonly && context?.agentMapIdentity?.role === "agent-builder"
-        ? Promise.resolve(AGENT_MAP_BUILDER_PLANNING_SYSTEM_PROMPT)
+        ? Promise.resolve(
+            context.agentMapCapability === false
+              ? AGENT_MAP_BUILDER_SECONDARY_PLANNING_SYSTEM_PROMPT
+              : AGENT_MAP_BUILDER_PLANNING_SYSTEM_PROMPT,
+          )
         : context?.agentMapIdentity?.role === "map-planner"
           ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
           : loadSystemPrompt().catch((err: unknown) => {
@@ -1153,7 +1160,9 @@ export const startServer = async (
     context,
   ) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
-    if (!context?.agentMapIdentity) {
+    if (!context?.agentMapIdentity || context.agentMapCapability === false) {
+      if (context?.resume && context.agentMapIdentity)
+        await agentMapMcp?.revokeSession(harnessSessionId);
       return innerBuildLaunchOpts(harnessSessionId, req, context);
     }
     if (!agentMapMcpUrl) {
@@ -2734,6 +2743,11 @@ export const startServer = async (
           .catch(() => {});
         bus.publish({ type: "agent-map.proposal.changed", delta });
       },
+      authorizeIdentity: (planningIdentity, aggregate) =>
+        builderPlanningSessions?.assertProposalIdentityAuthorized(
+          planningIdentity,
+          aggregate,
+        ),
       authorizeMutation: (planningIdentity, aggregate) =>
         builderPlanningSessions?.assertProposalMutationAuthorized(
           planningIdentity,
