@@ -1,10 +1,20 @@
 import {
   AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+  AGENT_MAP_RELATIONSHIP_ENDPOINT_MATRIX,
+  AGENT_MAP_REVISION_SCHEMA_VERSION,
   EXECUTION_MODES,
   PLAN_NODE_KINDS,
   RELATIONSHIP_KINDS,
   type DraftRef,
   type AcceptedProposalDelta,
+  type AgentMapGraph,
+  type AgentMapGraphDigest,
+  type AgentMapRevision,
+  type AgentMapRevisionId,
+  type AgentMapRevisionRef,
+  type ArchitectureApproval,
+  type ConfirmArchitectureRequest,
+  type ConfirmArchitectureResult,
   type MapChangeProposal,
   type MapOperation,
   type PlanNode,
@@ -13,7 +23,9 @@ import {
   type PlanRelationshipId,
   type ProposalActor,
   type ProposalBatchResult,
+  type PlannerUserMessageReceipt,
 } from "./agent-map.js";
+import { canonicalizeAgentMapGraph } from "./agent-map-canonical.js";
 
 export const AGENT_MAP_UUID_V7_PATTERN =
   "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -58,6 +70,9 @@ const isPlanId = (value: unknown, prefix: string): value is string =>
   typeof value === "string" &&
   new RegExp(`^${prefix}_${AGENT_MAP_UUID_V7_PATTERN}$`, "u").test(value);
 
+const isAgentMapDigest = (value: unknown): value is AgentMapGraphDigest =>
+  typeof value === "string" && /^sha256:[0-9a-f]{64}$/u.test(value);
+
 const isTimestamp = (value: unknown): value is string => {
   if (typeof value !== "string") return false;
   try {
@@ -73,7 +88,7 @@ const isContractRefs = (value: unknown): value is string[] =>
   value.every((entry) => isAgentMapBoundedText(entry, 512)) &&
   new Set(value).size === value.length;
 
-function parseNode(value: unknown): PlanNode {
+export function parseAgentMapNode(value: unknown): PlanNode {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
@@ -95,7 +110,7 @@ function parseNode(value: unknown): PlanNode {
   return structuredClone(value) as unknown as PlanNode;
 }
 
-function parseRelationship(value: unknown): PlanRelationship {
+export function parseAgentMapRelationship(value: unknown): PlanRelationship {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
@@ -123,6 +138,66 @@ function parseRelationship(value: unknown): PlanRelationship {
   )
     throw new Error("invalid Agent Map relationship");
   return structuredClone(value) as unknown as PlanRelationship;
+}
+
+const relationshipSemanticKey = (relationship: PlanRelationship): string =>
+  JSON.stringify([
+    relationship.fromNodeId,
+    relationship.toNodeId,
+    relationship.kind,
+    relationship.executionMode,
+    relationship.contractRef,
+  ]);
+
+/** Strict graph parser shared by immutable revision boundaries. */
+export function parseAgentMapGraph(value: unknown): AgentMapGraph {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["nodes", "relationships"]) ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.relationships)
+  )
+    throw new Error("invalid Agent Map graph");
+
+  const nodes = value.nodes.map(parseAgentMapNode);
+  const relationships = value.relationships.map(parseAgentMapRelationship);
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const semanticRelationships = new Set<string>();
+  if (
+    nodesById.size !== nodes.length ||
+    new Set(relationships.map(({ id }) => id)).size !== relationships.length
+  )
+    throw new Error("inconsistent Agent Map graph");
+
+  for (const node of nodes) {
+    const owner =
+      node.ownerAgentId === null ? undefined : nodesById.get(node.ownerAgentId);
+    if (
+      (node.kind === "subagent" &&
+        (node.ownerAgentId === node.id || owner?.kind !== "agent")) ||
+      (node.kind !== "subagent" && node.ownerAgentId !== null)
+    )
+      throw new Error("inconsistent Agent Map graph");
+  }
+
+  for (const relationship of relationships) {
+    const from = nodesById.get(relationship.fromNodeId);
+    const to = nodesById.get(relationship.toNodeId);
+    const rule = AGENT_MAP_RELATIONSHIP_ENDPOINT_MATRIX[relationship.kind];
+    const semanticKey = relationshipSemanticKey(relationship);
+    if (
+      !from ||
+      !to ||
+      from.id === to.id ||
+      !rule.from.has(from.kind) ||
+      !rule.to.has(to.kind) ||
+      semanticRelationships.has(semanticKey)
+    )
+      throw new Error("inconsistent Agent Map graph");
+    semanticRelationships.add(semanticKey);
+  }
+
+  return { nodes, relationships };
 }
 
 function parseNodeChanges(value: unknown) {
@@ -169,7 +244,7 @@ export function parseMapOperation(value: unknown): MapOperation {
     case "add-node":
       if (!hasExactKeys(value, ["kind", "node"]))
         throw new Error("invalid Agent Map operation");
-      return { kind: value.kind, node: parseNode(value.node) };
+      return { kind: value.kind, node: parseAgentMapNode(value.node) };
     case "update-node":
       if (
         !hasExactKeys(value, ["kind", "nodeId", "changes"]) ||
@@ -193,7 +268,7 @@ export function parseMapOperation(value: unknown): MapOperation {
         throw new Error("invalid Agent Map operation");
       return {
         kind: value.kind,
-        relationship: parseRelationship(value.relationship),
+        relationship: parseAgentMapRelationship(value.relationship),
       };
     case "update-relationship":
       if (
@@ -333,8 +408,8 @@ export function parseMapChangeProposal(
   )
     throw new Error("invalid Agent Map proposal");
 
-  const nodes = value.nodes.map(parseNode);
-  const relationships = value.relationships.map(parseRelationship);
+  const nodes = value.nodes.map(parseAgentMapNode);
+  const relationships = value.relationships.map(parseAgentMapRelationship);
   const history = value.history.map((record) => {
     if (
       !isRecord(record) ||
@@ -459,5 +534,198 @@ export function parseAgentMapProposalReceipt(
       value.allocatedRelationshipIds,
       "rel",
     ) as ProposalBatchResult["allocatedRelationshipIds"],
+  };
+}
+
+export function parseArchitectureApproval(
+  value: unknown,
+): ArchitectureApproval {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "approvedProposalId",
+      "approvedProposalVersion",
+      "approvingUserId",
+      "approvingSessionId",
+      "approvingMessageId",
+      "approvedAt",
+    ]) ||
+    !isPlanId(value.approvedProposalId, "proposal") ||
+    !Number.isSafeInteger(value.approvedProposalVersion) ||
+    (value.approvedProposalVersion as number) < 1 ||
+    !isAgentMapBoundedText(value.approvingUserId, 256) ||
+    !isAgentMapBoundedText(value.approvingSessionId, 256) ||
+    !isAgentMapBoundedText(value.approvingMessageId, 256) ||
+    !isTimestamp(value.approvedAt)
+  )
+    throw new Error("invalid Agent Map architecture approval");
+  return structuredClone(value) as unknown as ArchitectureApproval;
+}
+
+export function parsePlannerUserMessageReceipt(
+  value: unknown,
+  expectedProjectId: string,
+): PlannerUserMessageReceipt {
+  if (
+    !isAgentMapBoundedText(expectedProjectId, 128) ||
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "messageId",
+      "projectId",
+      "userId",
+      "sessionId",
+      "origin",
+      "acceptedAt",
+    ]) ||
+    !isAgentMapBoundedText(value.messageId, 256) ||
+    !isAgentMapBoundedText(value.projectId, 128) ||
+    value.projectId !== expectedProjectId ||
+    !isAgentMapBoundedText(value.userId, 256) ||
+    !isAgentMapBoundedText(value.sessionId, 256) ||
+    value.origin !== "human" ||
+    !isTimestamp(value.acceptedAt)
+  )
+    throw new Error("invalid Agent Map planner message receipt");
+  return structuredClone(value) as unknown as PlannerUserMessageReceipt;
+}
+
+export function parseConfirmArchitectureRequest(
+  value: unknown,
+): ConfirmArchitectureRequest {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "schemaVersion",
+      "requestId",
+      "proposalId",
+      "expectedVersion",
+      "expectedDigest",
+      "approvingMessageId",
+    ]) ||
+    value.schemaVersion !== AGENT_MAP_REVISION_SCHEMA_VERSION ||
+    !isAgentMapBoundedText(value.requestId, 128) ||
+    !isPlanId(value.proposalId, "proposal") ||
+    !Number.isSafeInteger(value.expectedVersion) ||
+    (value.expectedVersion as number) < 1 ||
+    !isAgentMapDigest(value.expectedDigest) ||
+    !isAgentMapBoundedText(value.approvingMessageId, 256)
+  )
+    throw new Error("invalid Agent Map confirmation request");
+  return structuredClone(value) as unknown as ConfirmArchitectureRequest;
+}
+
+export function parseAgentMapRevisionRef(value: unknown): AgentMapRevisionRef {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "id",
+      "revisionNumber",
+      "parentRevisionId",
+      "digest",
+      "createdAt",
+    ]) ||
+    !isPlanId(value.id, "revision") ||
+    !Number.isSafeInteger(value.revisionNumber) ||
+    (value.revisionNumber as number) < 1 ||
+    (value.parentRevisionId !== null &&
+      !isPlanId(value.parentRevisionId, "revision")) ||
+    (value.revisionNumber === 1) !== (value.parentRevisionId === null) ||
+    !isAgentMapDigest(value.digest) ||
+    !isTimestamp(value.createdAt)
+  )
+    throw new Error("invalid Agent Map revision reference");
+  return structuredClone(value) as unknown as AgentMapRevisionRef;
+}
+
+export function parseAgentMapRevision(
+  value: unknown,
+  expectedProjectId: string,
+): AgentMapRevision {
+  if (
+    !isAgentMapBoundedText(expectedProjectId, 128) ||
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "schemaVersion",
+      "id",
+      "projectId",
+      "revisionNumber",
+      "parentRevisionId",
+      "nodes",
+      "relationships",
+      "digest",
+      "approval",
+      "createdAt",
+    ]) ||
+    value.schemaVersion !== AGENT_MAP_REVISION_SCHEMA_VERSION ||
+    value.projectId !== expectedProjectId ||
+    !isAgentMapBoundedText(value.projectId, 128) ||
+    !isPlanId(value.id, "revision") ||
+    !Number.isSafeInteger(value.revisionNumber) ||
+    (value.revisionNumber as number) < 1 ||
+    (value.parentRevisionId !== null &&
+      !isPlanId(value.parentRevisionId, "revision")) ||
+    (value.revisionNumber === 1) !== (value.parentRevisionId === null) ||
+    !isAgentMapDigest(value.digest) ||
+    !isTimestamp(value.createdAt)
+  )
+    throw new Error("invalid Agent Map revision");
+
+  const graph = canonicalizeAgentMapGraph(
+    parseAgentMapGraph({
+      nodes: value.nodes,
+      relationships: value.relationships,
+    }),
+  );
+  const approval = parseArchitectureApproval(value.approval);
+  if (approval.approvedAt > value.createdAt)
+    throw new Error("invalid Agent Map revision");
+  return {
+    schemaVersion: AGENT_MAP_REVISION_SCHEMA_VERSION,
+    id: value.id as AgentMapRevisionId,
+    projectId: value.projectId,
+    revisionNumber: value.revisionNumber as number,
+    parentRevisionId: value.parentRevisionId as AgentMapRevisionId | null,
+    ...graph,
+    digest: value.digest,
+    approval,
+    createdAt: value.createdAt,
+  };
+}
+
+export function parseConfirmArchitectureResult(
+  value: unknown,
+): ConfirmArchitectureResult {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "schemaVersion",
+      "outcome",
+      "approvedProposal",
+      "revision",
+      "workspaceRecordVersion",
+    ]) ||
+    value.schemaVersion !== AGENT_MAP_REVISION_SCHEMA_VERSION ||
+    (value.outcome !== "confirmed" && value.outcome !== "replayed") ||
+    !isRecord(value.approvedProposal) ||
+    !hasExactKeys(value.approvedProposal, ["id", "version", "digest"]) ||
+    !isPlanId(value.approvedProposal.id, "proposal") ||
+    !Number.isSafeInteger(value.approvedProposal.version) ||
+    (value.approvedProposal.version as number) < 1 ||
+    !isAgentMapDigest(value.approvedProposal.digest) ||
+    !Number.isSafeInteger(value.workspaceRecordVersion) ||
+    (value.workspaceRecordVersion as number) < 1
+  )
+    throw new Error("invalid Agent Map confirmation result");
+  const revision = parseAgentMapRevisionRef(value.revision);
+  if (value.approvedProposal.digest !== revision.digest)
+    throw new Error("invalid Agent Map confirmation result");
+  return {
+    schemaVersion: AGENT_MAP_REVISION_SCHEMA_VERSION,
+    outcome: value.outcome,
+    approvedProposal: structuredClone(
+      value.approvedProposal,
+    ) as ConfirmArchitectureResult["approvedProposal"],
+    revision,
+    workspaceRecordVersion: value.workspaceRecordVersion as number,
   };
 }

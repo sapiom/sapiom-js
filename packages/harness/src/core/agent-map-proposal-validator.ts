@@ -1,50 +1,26 @@
-import type {
-  AgentMapGraph,
-  DraftRef,
-  MapOperation,
-  MapOperationInput,
-  PlanNode,
-  PlanNodeId,
-  PlanNodeKind,
-  PlanRelationship,
-  PlanRelationshipId,
-  ProposalBatchRequest,
-  ProposalValidationIssue,
-  ProposalValidationResult,
-  RelationshipKind,
+import {
+  AGENT_MAP_RELATIONSHIP_ENDPOINT_MATRIX,
+  type AgentMapGraph,
+  type DraftRef,
+  type MapOperation,
+  type MapOperationInput,
+  type PlanNode,
+  type PlanNodeId,
+  type PlanRelationship,
+  type PlanRelationshipId,
+  type ProposalBatchRequest,
+  type ProposalValidationIssue,
+  type ProposalValidationResult,
 } from "../shared/agent-map.js";
+import {
+  canonicalizeAgentMapGraph,
+  canonicalizeAgentMapStrings,
+  compareAgentMapStrings,
+} from "../shared/agent-map-canonical.js";
 
-const ACTOR_KINDS = new Set<PlanNodeKind>(["agent", "subagent"]);
-const ALL_NODE_KINDS = new Set<PlanNodeKind>([
-  "agent",
-  "subagent",
-  "resource",
-  "connector",
-  "artifact",
-]);
-
-export const RELATIONSHIP_ENDPOINT_MATRIX: Readonly<
-  Record<
-    RelationshipKind,
-    { from: ReadonlySet<PlanNodeKind>; to: ReadonlySet<PlanNodeKind> }
-  >
-> = {
-  invokes: { from: ACTOR_KINDS, to: ACTOR_KINDS },
-  feeds: { from: ALL_NODE_KINDS, to: ACTOR_KINDS },
-  reads: {
-    from: ACTOR_KINDS,
-    to: new Set<PlanNodeKind>(["resource", "artifact"]),
-  },
-  writes: {
-    from: ACTOR_KINDS,
-    to: new Set<PlanNodeKind>(["resource", "artifact"]),
-  },
-  uses: {
-    from: ACTOR_KINDS,
-    to: new Set<PlanNodeKind>(["resource", "connector"]),
-  },
-  triggers: { from: ALL_NODE_KINDS, to: ACTOR_KINDS },
-};
+/** @deprecated Import the shared policy for new code. */
+export const RELATIONSHIP_ENDPOINT_MATRIX =
+  AGENT_MAP_RELATIONSHIP_ENDPOINT_MATRIX;
 
 export interface ProposalTouchSet {
   entityKeys: string[];
@@ -97,11 +73,8 @@ const nodeDraftKey = (draftRef: DraftRef): string => `draft-node:${draftRef}`;
 const relationshipDraftKey = (draftRef: DraftRef): string =>
   `draft-relationship:${draftRef}`;
 
-const compareStrings = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
-
-const canonicalStrings = (values: readonly string[]): string[] =>
-  [...values].sort(compareStrings);
+const compareStrings = compareAgentMapStrings;
+const canonicalStrings = canonicalizeAgentMapStrings;
 
 const stripUndefinedProperties = <T extends Record<string, unknown>>(
   value: T,
@@ -110,25 +83,7 @@ const stripUndefinedProperties = <T extends Record<string, unknown>>(
     Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
   ) as T;
 
-const canonicalNode = (node: PlanNode): PlanNode => ({
-  ...node,
-  contractRefs: canonicalStrings(node.contractRefs),
-});
-
-const canonicalRelationship = (
-  relationship: PlanRelationship,
-): PlanRelationship => ({ ...relationship });
-
-export function canonicalizeAgentMapGraph(graph: AgentMapGraph): AgentMapGraph {
-  return {
-    nodes: graph.nodes
-      .map(canonicalNode)
-      .sort((left, right) => compareStrings(left.id, right.id)),
-    relationships: graph.relationships
-      .map(canonicalRelationship)
-      .sort((left, right) => compareStrings(left.id, right.id)),
-  };
-}
+export { canonicalizeAgentMapGraph };
 
 export function semanticRelationshipKey(
   relationship: Pick<

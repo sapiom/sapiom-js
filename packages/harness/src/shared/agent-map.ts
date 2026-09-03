@@ -13,6 +13,7 @@ export const AGENT_MAP_WORKSPACE_SCHEMA_VERSION = 1;
 export const AGENT_MAP_INITIAL_RECORD_VERSION = 1;
 export const STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION = 1;
 export const AGENT_MAP_PROPOSAL_SCHEMA_VERSION = 1 as const;
+export const AGENT_MAP_REVISION_SCHEMA_VERSION = 1 as const;
 
 type AgentMapBrand<TBrand extends string> = string & {
   readonly __brand: TBrand;
@@ -23,6 +24,8 @@ export type PlanNodeId = AgentMapBrand<"PlanNodeId">;
 export type PlanRelationshipId = AgentMapBrand<"PlanRelationshipId">;
 export type MapProposalId = AgentMapBrand<"MapProposalId">;
 export type ProposalOperationId = AgentMapBrand<"ProposalOperationId">;
+export type AgentMapRevisionId = AgentMapBrand<"AgentMapRevisionId">;
+export type AgentMapGraphDigest = AgentMapBrand<"AgentMapGraphDigest">;
 /** A caller-authored alias whose lifetime is exactly one operation batch. */
 export type DraftRef = AgentMapBrand<"DraftRef">;
 
@@ -52,6 +55,33 @@ export const EXECUTION_MODES = [
   "human-triggered",
 ] as const;
 export type ExecutionMode = (typeof EXECUTION_MODES)[number];
+
+const AGENT_MAP_ACTOR_KINDS = new Set<PlanNodeKind>(["agent", "subagent"]);
+const AGENT_MAP_ALL_NODE_KINDS = new Set<PlanNodeKind>(PLAN_NODE_KINDS);
+
+/** The single endpoint policy shared by proposal and revision validation. */
+export const AGENT_MAP_RELATIONSHIP_ENDPOINT_MATRIX: Readonly<
+  Record<
+    RelationshipKind,
+    { from: ReadonlySet<PlanNodeKind>; to: ReadonlySet<PlanNodeKind> }
+  >
+> = {
+  invokes: { from: AGENT_MAP_ACTOR_KINDS, to: AGENT_MAP_ACTOR_KINDS },
+  feeds: { from: AGENT_MAP_ALL_NODE_KINDS, to: AGENT_MAP_ACTOR_KINDS },
+  reads: {
+    from: AGENT_MAP_ACTOR_KINDS,
+    to: new Set<PlanNodeKind>(["resource", "artifact"]),
+  },
+  writes: {
+    from: AGENT_MAP_ACTOR_KINDS,
+    to: new Set<PlanNodeKind>(["resource", "artifact"]),
+  },
+  uses: {
+    from: AGENT_MAP_ACTOR_KINDS,
+    to: new Set<PlanNodeKind>(["resource", "connector"]),
+  },
+  triggers: { from: AGENT_MAP_ALL_NODE_KINDS, to: AGENT_MAP_ACTOR_KINDS },
+};
 
 export interface PlanNode {
   id: PlanNodeId;
@@ -325,6 +355,87 @@ export interface MapChangeProposal {
   createdAt: string;
   updatedAt: string;
 }
+
+/** Minimal, content-free evidence binding one human approval to one source. */
+export interface ArchitectureApproval {
+  approvedProposalId: MapProposalId;
+  approvedProposalVersion: number;
+  approvingUserId: string;
+  approvingSessionId: string;
+  approvingMessageId: string;
+  approvedAt: string;
+}
+
+/** Trusted host receipt; message text is deliberately never retained here. */
+export interface PlannerUserMessageReceipt {
+  messageId: string;
+  projectId: StudioProjectId;
+  userId: string;
+  sessionId: string;
+  origin: "human";
+  acceptedAt: string;
+}
+
+/** Model-controlled confirmation input. All authority is service-derived. */
+export interface ConfirmArchitectureRequest {
+  schemaVersion: typeof AGENT_MAP_REVISION_SCHEMA_VERSION;
+  requestId: string;
+  proposalId: MapProposalId;
+  expectedVersion: number;
+  expectedDigest: AgentMapGraphDigest;
+  approvingMessageId: string;
+}
+
+/** A bounded revision projection suitable for later architecture sources. */
+export interface AgentMapRevisionRef {
+  id: AgentMapRevisionId;
+  revisionNumber: number;
+  parentRevisionId: AgentMapRevisionId | null;
+  digest: AgentMapGraphDigest;
+  createdAt: string;
+}
+
+/** Immutable complete architecture snapshot. It is never an operation delta. */
+export interface AgentMapRevision {
+  schemaVersion: typeof AGENT_MAP_REVISION_SCHEMA_VERSION;
+  id: AgentMapRevisionId;
+  projectId: StudioProjectId;
+  revisionNumber: number;
+  parentRevisionId: AgentMapRevisionId | null;
+  nodes: PlanNode[];
+  relationships: PlanRelationship[];
+  digest: AgentMapGraphDigest;
+  approval: ArchitectureApproval;
+  createdAt: string;
+}
+
+/** Confirmation returns identity and source evidence, never the full graph. */
+export interface ConfirmArchitectureResult {
+  schemaVersion: typeof AGENT_MAP_REVISION_SCHEMA_VERSION;
+  outcome: "confirmed" | "replayed";
+  approvedProposal: {
+    id: MapProposalId;
+    version: number;
+    digest: AgentMapGraphDigest;
+  };
+  revision: AgentMapRevisionRef;
+  workspaceRecordVersion: number;
+}
+
+export type ConfirmArchitectureFailure =
+  | { code: "malformed_input"; recovery: "reread" }
+  | { code: "stale_proposal"; recovery: "reread" }
+  | { code: "proposal_digest_mismatch"; recovery: "reread" }
+  | { code: "approval_message_invalid"; recovery: "ask_again" }
+  | { code: "approval_message_reused"; recovery: "ask_again" }
+  | { code: "request_id_reused"; recovery: "new_request" }
+  | { code: "cross_project"; recovery: "reread" }
+  | { code: "invalid_revision_chain"; recovery: "retry" }
+  | { code: "storage_unavailable"; recovery: "retry" };
+
+export type ConfirmArchitectureErrorCode = ConfirmArchitectureFailure["code"];
+export type ConfirmArchitectureRecovery =
+  ConfirmArchitectureFailure["recovery"];
 
 export interface AgentMapReadSnapshot {
   schemaVersion: typeof AGENT_MAP_PROPOSAL_SCHEMA_VERSION;

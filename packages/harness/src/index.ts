@@ -6,12 +6,23 @@
 export * from "./shared/types.js";
 export {
   AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+  AGENT_MAP_REVISION_SCHEMA_VERSION,
   EXECUTION_MODES,
   PLAN_NODE_KINDS,
   RELATIONSHIP_KINDS,
 } from "./shared/agent-map.js";
 export type {
   AcceptedProposalDelta,
+  AgentMapGraphDigest,
+  AgentMapRevision,
+  AgentMapRevisionId,
+  AgentMapRevisionRef,
+  ArchitectureApproval,
+  ConfirmArchitectureFailure,
+  ConfirmArchitectureErrorCode,
+  ConfirmArchitectureRecovery,
+  ConfirmArchitectureRequest,
+  ConfirmArchitectureResult,
   ExecutionMode,
   MapOperation,
   MapProposalId,
@@ -23,6 +34,7 @@ export type {
   PlanRelationshipId,
   ProposalActor,
   ProposalOperationId,
+  PlannerUserMessageReceipt,
   RelationshipChanges,
   RelationshipKind,
   StudioProjectId,

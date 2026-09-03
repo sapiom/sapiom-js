@@ -20,9 +20,9 @@ import {
   type StudioProjectId,
 } from "../shared/agent-map.js";
 import { parseProposalActor } from "../shared/agent-map-codec.js";
+import { canonicalizeAgentMapGraph } from "../shared/agent-map-canonical.js";
 import { parseProposalBatchRequest } from "./agent-map-proposal-schema.js";
 import {
-  canonicalizeAgentMapGraph,
   derivePersistedMapOperationTouchSet,
   materializeValidatedMapBatch,
   proposalTouchSetsOverlap,
