@@ -133,6 +133,19 @@ function planningFor(
   };
 }
 
+const EMPTY_PROJECT_STARTUP_POLICY = [
+  "A newly created planner for an empty project may receive a server-authored Agent Studio startup turn before any human message; treat that visible request as an explicit instruction to inspect the project and draft a reviewable initial map.",
+  "When it arrives, first call agent_map_read so persisted state remains authoritative.",
+  "If a proposal, confirmed revision, or project build plan now exists, do not modify it; summarize what is present and ask what the user wants to review or change.",
+  "If the map is still empty, inspect the project read-only for existing agent definitions, subagents, registries, calls, contracts, inputs, outputs, resources, connectors, and artifacts; do not edit source code or run implementation work.",
+  "Create nodes only for actual agents and supporting elements where explicit code or configuration evidence supports them.",
+  "Add relationships only when explicit evidence supports their direction and semantics; never guess from names, proximity, or likely architecture.",
+  "Call agent_map_validate before agent_map_propose and create one unconfirmed proposal. On a version conflict, call agent_map_read again and do not overwrite newer work.",
+  "Never confirm, launch, deploy, or implement the proposal automatically.",
+  "Summarize what was mapped, identify uncertainties or omitted relationships, and ask the user to review or correct it.",
+  "If no existing agents are found, create no placeholder nodes; explain that result and ask one open-ended question about the outcome the user wants to build.",
+].join(" ");
+
 export function buildFocusedPlannerContext(input: {
   project: StudioProjectIdentity;
   workspace: AgentMapWorkspaceState;
@@ -203,7 +216,7 @@ export function buildFocusedPlannerContext(input: {
   };
   return [
     "<agent-map-planner-context>",
-    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive planner transcript is user-visible.${emptyProject ? " A newly created planner for an empty project may receive a server-authored Agent Studio startup turn before any human message; follow it as an explicit request to inspect the project and draft a reviewable initial map." : ""}${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to the startup task." : ""} Outside that startup turn, do not propose architecture or invoke mutation tools before the user asks you to.`,
+    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive planner transcript is user-visible.${emptyProject ? ` ${EMPTY_PROJECT_STARTUP_POLICY}` : ""}${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to the startup task." : ""} Outside that startup turn, do not propose architecture or invoke mutation tools before the user asks you to.`,
     JSON.stringify(context),
     "</agent-map-planner-context>",
   ].join("\n");

@@ -188,6 +188,10 @@ describe("planner session context and identity", () => {
     expect(context).toContain(
       "may receive a server-authored Agent Studio startup turn",
     );
+    expect(context).toContain(
+      "explicit code or configuration evidence supports them",
+    );
+    expect(context).toContain("Never confirm, launch, deploy, or implement");
     expect(context).toContain("In your first response, briefly explain");
     expect(context).not.toContain("/Users/private");
     expect(context).not.toContain("private-workspace-key");
@@ -305,6 +309,9 @@ describe("PlanningSessionService", () => {
     expect(sessionStartMessages).toEqual([
       AGENT_MAP_PLANNER_SESSION_START_MESSAGE,
     ]);
+    expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toContain(
+      "Use this session to review, refine, or extend the Agent Map",
+    );
     expect(contexts[0]).not.toContain(
       "In your first response, briefly explain",
     );

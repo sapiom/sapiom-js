@@ -237,34 +237,17 @@ function adoptRehydratedState(
 
 export function plannerGreetingPrompt(
   emptyProject: boolean,
-  attemptId?: string,
+  attemptNumber = 1,
 ): string {
-  const instructions = emptyProject
-    ? [
-        "This is an Agent Studio startup task for the project planning agent.",
-        "First call agent_map_read so the persisted Agent Map, not prior assistant prose, is authoritative.",
-        "If a proposal, confirmed revision, or project build plan now exists, do not modify it; briefly summarize what is present and ask the user what they want to review or change.",
-        "If the Agent Map is still empty, inspect the current project read-only for existing agent definitions, subagents, registries, calls, contracts, inputs, outputs, resources, connectors, and artifacts. You may browse files and run read-only searches, but do not edit source code or run implementation work.",
-        "Draft one node for each actual top-level agent you find, plus subagents, resources, connectors, and artifacts only where the project provides concrete evidence for them.",
-        "Add relationships only when explicit code or configuration evidence supports the direction and semantics; never guess from names, proximity, or likely architecture.",
-        "Call agent_map_validate before agent_map_propose, then create one reviewable proposal containing the evidence-backed topology. If proposing reports a version conflict, call agent_map_read again and do not overwrite newer work.",
-        "Never confirm, launch, deploy, or implement the proposal automatically.",
-        "After proposing, briefly summarize what you mapped, identify uncertainties or omitted relationships, and ask the user to review or correct it.",
-        "If the project contains no existing agents, do not create placeholder nodes; explain that nothing was found and ask one open-ended question about the outcome the user wants to build.",
-      ]
-    : [
-        "This is an Agent Studio startup turn for the project planning agent.",
-        "Respond with one brief greeting.",
-        "Explain that you and the user will plan the agents, responsibilities, data flow, resources, and connectors together.",
-        "Briefly acknowledge that a current plan exists, then ask exactly one open-ended question about what the user wants to review, extend, or change.",
-        "Do not propose an architecture, create nodes or relationships, invoke tools, or ask a second question before the user replies.",
-      ];
-  return [
-    ...instructions,
-    ...(attemptId
-      ? [`Internal attempt ID: ${attemptId}. Never mention this ID in your response.`]
-      : []),
-  ].join("\n");
+  const ordinal = Number.isSafeInteger(attemptNumber)
+    ? Math.min(Math.max(attemptNumber, 1), MAX_RETRIES + 1)
+    : 1;
+  const request = emptyProject
+    ? "Agent Studio automatic request: Inspect this project for existing agents and evidence-backed dependencies, then draft an unconfirmed Agent Map proposal for review."
+    : "Agent Studio automatic request: Briefly introduce the current Agent Map, then ask what the user wants to review, extend, or change.";
+  return ordinal === 1
+    ? request
+    : `${request} (Automatic retry ${ordinal - 1} of ${MAX_RETRIES}.)`;
 }
 
 const PLANNER_SESSION_SOURCES = new Set([
@@ -1108,7 +1091,10 @@ export class PlannerGreetingCoordinator {
         attemptId,
         queueDepth: state.inputs.length,
       });
-      const prompt = plannerGreetingPrompt(state.emptyProject, attemptId);
+      const prompt = plannerGreetingPrompt(
+        state.emptyProject,
+        state.retryCount + 1,
+      );
       if (!(await this.canDispatch(session))) {
         await this.setFailure(state, attemptId, "session_exited", false);
         if (retry) throw new PlannerDispatchForbiddenError();
@@ -1247,17 +1233,29 @@ export class PlannerGreetingCoordinator {
       };
       state.inputs.push(input);
       state.metadata.queuedInputIds.push(input.id);
-      if (state.metadata.greeting.status === "failed") {
+      const greeting = state.metadata.greeting;
+      const skipStartup =
+        greeting.status === "pending" ||
+        greeting.status === "generating" ||
+        greeting.status === "failed";
+      const attemptId =
+        greeting.status === "generating" ? greeting.attemptId : undefined;
+      if (skipStartup) {
         state.metadata.greeting = { status: "skipped", reason: "user-proceeded" };
+      }
+      await this.persist(sessionId, state);
+      if (skipStartup) {
+        this.clearTimer(sessionId);
+        this.clearCorrelation(sessionId);
         this.emit({
           name: "planner_greeting.skipped",
           projectId: state.metadata.identity.projectId,
           sessionId,
+          ...(attemptId ? { attemptId } : {}),
           reason: "user-proceeded",
           queueDepth: state.inputs.length,
         });
       }
-      await this.persist(sessionId, state);
       if (isTerminal(state.metadata)) await this.drain(state, true);
       // drain() advances through immutable queue-state clones. Return the
       // latest authoritative projection rather than the pre-drain object so a

@@ -103,7 +103,9 @@ readiness. The planner reads the authoritative map, inspects the project
 read-only for existing agents and evidence-backed relationships, validates the
 result, and creates a proposal for the user to review. It never confirms or
 implements that proposal automatically. Live, resumed, and rehydrated sessions
-preserve their prior startup state instead of replaying the turn.
+preserve their prior startup state instead of replaying the turn. The automatic
+turn uses the configured planning provider and may consume provider credits; a
+real user message takes priority and skips or preempts unfinished startup work.
 
 Planner metadata is part of the session registry. Its input FIFO and greeting
 attempt state live at

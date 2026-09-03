@@ -85,7 +85,7 @@ describe("PlannerGreetingCoordinator", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("persists one ready-gated greeting, then releases accepted input FIFO", async () => {
+  it("lets accepted user input preempt an in-flight startup turn", async () => {
     const coordinator = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
@@ -98,15 +98,21 @@ describe("PlannerGreetingCoordinator", () => {
 
     await coordinator.enqueue(session.id, "first user message");
     await coordinator.enqueue(session.id, "second user message");
-    expect(submitted).toEqual([greeting]);
+    expect(submitted).toEqual([
+      greeting,
+      "first user message",
+      "second user message",
+    ]);
+    expect(session.planning?.greeting).toEqual({
+      status: "skipped",
+      reason: "user-proceeded",
+    });
 
     const localPrompt = coordinator.decorateLocalEvent(
       event(session.id, "prompt.submitted", { prompt: greeting }),
     );
-    expect(localPrompt.payload).toMatchObject({
-      prompt: greeting,
-      plannerOrigin: "infrastructure",
-    });
+    expect(localPrompt.payload).toMatchObject({ prompt: greeting });
+    expect(localPrompt.payload).not.toHaveProperty("plannerOrigin");
     expect(coordinator.redactForTelemetry(localPrompt).payload).not.toHaveProperty(
       "prompt",
     );
@@ -114,13 +120,8 @@ describe("PlannerGreetingCoordinator", () => {
     await coordinator.onEventPersisted(
       event(session.id, "turn.completed", { assistantText: "What should we build?" }),
     );
-    expect(submitted).toEqual([
-      greeting,
-      "first user message",
-      "second user message",
-    ]);
     expect(session.planning).toMatchObject({
-      greeting: { status: "delivered", messageId: "event-turn.completed" },
+      greeting: { status: "skipped", reason: "user-proceeded" },
       queuedInputIds: [],
     });
     const durable = JSON.parse(
@@ -556,7 +557,7 @@ describe("PlannerGreetingCoordinator", () => {
     ).toEqual({ schemaVersion: 1, inputIds: [] });
   });
 
-  it("bounds pending readiness, then drains its durable FIFO when readiness arrives", async () => {
+  it("lets user input preempt a pending startup turn, then drains at readiness", async () => {
     vi.useFakeTimers();
     session.ready = false;
     const coordinator = new PlannerGreetingCoordinator({
@@ -566,6 +567,10 @@ describe("PlannerGreetingCoordinator", () => {
     });
     await coordinator.register(session, { emptyProject: true, mode: "created" });
     await coordinator.enqueue(session.id, "queued while booting");
+    expect(session.planning?.greeting).toEqual({
+      status: "skipped",
+      reason: "user-proceeded",
+    });
     await vi.advanceTimersByTimeAsync(101);
     await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
       .writes.get(session.id);
@@ -977,36 +982,31 @@ describe("PlannerGreetingCoordinator", () => {
 });
 
 describe("plannerGreetingPrompt", () => {
-  it("asks an empty project to inspect existing agents and draft a safe proposal", () => {
-    const empty = plannerGreetingPrompt(true);
-    expect(empty).toContain("Agent Studio startup task");
-    expect(empty).toContain("agent_map_read");
-    expect(empty).toContain("inspect the current project read-only");
-    expect(empty).toContain("explicit code or configuration evidence");
-    expect(empty).toContain("agent_map_validate");
-    expect(empty).toContain("agent_map_propose");
-    expect(empty).toContain("Never confirm");
-    expect(empty).toContain("do not create placeholder nodes");
+  it("keeps the automatic request single-line, human-readable, and review-only", () => {
+    const empty = plannerGreetingPrompt(true, 1);
+    expect(empty).toContain("Agent Studio automatic request");
+    expect(empty).toContain("Inspect this project for existing agents");
+    expect(empty).toContain("unconfirmed Agent Map proposal");
+    expect(empty).not.toContain("\n");
+    expect(empty).not.toContain("agent_map_read");
+    expect(empty).not.toContain("Internal attempt ID");
+    expect(empty).not.toContain("retry");
   });
 
   it("keeps the legacy existing-plan greeting conversational", () => {
-    const existing = plannerGreetingPrompt(false);
-    expect(existing).toContain("project planning agent");
-    expect(existing).toContain(
-      "agents, responsibilities, data flow, resources, and connectors",
-    );
-    expect(existing).toContain("exactly one open-ended question");
-    expect(existing).toContain("Do not propose an architecture");
-    expect(existing).toContain("invoke tools");
-    expect(existing).toContain("current plan exists");
+    const existing = plannerGreetingPrompt(false, 1);
+    expect(existing).toContain("current Agent Map");
+    expect(existing).toContain("review, extend, or change");
+    expect(existing).not.toContain("\n");
     expect(existing).not.toContain("agent_map_propose");
   });
 
-  it("keeps attempt correlation out of the planner response", () => {
-    const empty = plannerGreetingPrompt(true);
-    const attempted = plannerGreetingPrompt(true, "attempt-private-1");
-    expect(attempted).toContain("Internal attempt ID: attempt-private-1");
-    expect(attempted).toContain("Never mention this ID");
-    expect(empty).not.toContain("attempt-private-1");
+  it("uses a human-readable ordinal to keep retry prompts distinct", () => {
+    const initial = plannerGreetingPrompt(true, 1);
+    const retry = plannerGreetingPrompt(true, 2);
+    expect(retry).not.toBe(initial);
+    expect(retry).toContain("Automatic retry 1 of 2");
+    expect(plannerGreetingPrompt(true, 3)).toContain("Automatic retry 2 of 2");
+    expect(retry).not.toContain("attempt-private");
   });
 });

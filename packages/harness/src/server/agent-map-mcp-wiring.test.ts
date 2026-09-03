@@ -232,7 +232,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
     [
       "Agent Map planning session",
-      "If this project does not have an Agent Map yet, Agent Studio will automatically inspect it for existing agents and draft an evidence-backed proposal for you to review. It will not confirm or implement the proposal automatically. If a map already exists, use this session to review, refine, or extend it.",
+      "Use this session to review, refine, or extend the Agent Map. If no map has been started, Agent Studio will automatically inspect the project for existing agents and draft an evidence-backed, unconfirmed proposal. The automatic inspection uses your configured planning agent; it does not edit code or begin implementation.",
     ].join("\n"),
   );
   const plannerEmitter = await fs.readFile(
