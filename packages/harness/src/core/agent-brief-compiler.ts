@@ -1378,22 +1378,34 @@ function compilePersistedAgentBriefs(
   };
 }
 
+export class AgentBriefCompilationError extends Error {
+  constructor(
+    readonly diagnostics: readonly BuildPlanDiagnostic[],
+    readonly code:
+      | "invalid-compilation"
+      | "legacy-brief-result" = "invalid-compilation",
+  ) {
+    super(
+      code === "legacy-brief-result"
+        ? "Agent brief compiler produced a legacy brief"
+        : "Agent brief compilation failed",
+    );
+    this.name = "AgentBriefCompilationError";
+  }
+}
+
 export function compileAgentBriefs(
   request: CompileAgentBriefsRequest,
 ): CompileAgentBriefsResult {
   const compilation = compilePersistedAgentBriefs(request);
   if (
-    compilation.briefs.some((candidate) => candidate.brief.schemaVersion !== 2)
+    compilation.briefs.some(
+      (candidate) =>
+        candidate.brief.schemaVersion !== AGENT_BRIEF_SCHEMA_VERSION,
+    )
   )
-    throw new Error("current compiler input produced a legacy brief");
+    throw new AgentBriefCompilationError([], "legacy-brief-result");
   return compilation as CompileAgentBriefsResult;
-}
-
-export class AgentBriefCompilationError extends Error {
-  constructor(readonly diagnostics: readonly BuildPlanDiagnostic[]) {
-    super("Agent brief compilation failed");
-    this.name = "AgentBriefCompilationError";
-  }
 }
 
 /** Production adapter for the build-plan authoring orchestration seam. */

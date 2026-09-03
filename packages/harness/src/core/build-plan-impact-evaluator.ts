@@ -132,7 +132,11 @@ function graphChanges(previous: AgentMapGraph, next: AgentMapGraph) {
 function fingerprintReasons(
   previous: PersistedAgentBriefVersionRecord,
   next: PersistedAgentBriefVersionRecord,
-  changes: ReturnType<typeof graphChanges>,
+  changedIds: Readonly<{
+    nodes: ReadonlySet<string>;
+    relationships: ReadonlySet<string>;
+    contracts: ReadonlySet<string>;
+  }>,
 ): BriefStaleReason[] {
   if (previous.schemaVersion === 1 || next.schemaVersion === 1)
     return previous.semanticDigest === next.semanticDigest
@@ -168,13 +172,11 @@ function fingerprintReasons(
       ].includes(kind);
       const affected = <T extends string>(
         values: readonly T[],
-        changed: readonly string[],
+        changed: ReadonlySet<string>,
       ) => {
         const canonical = unique(values);
         return (
-          graphDerived
-            ? canonical.filter((id) => changed.includes(id))
-            : canonical
+          graphDerived ? canonical.filter((id) => changed.has(id)) : canonical
         ).slice(0, BUILD_PLAN_IMPACT_REASON_ID_LIMIT);
       };
       return [
@@ -182,15 +184,15 @@ function fingerprintReasons(
           code: reasonCode(kind),
           affectedNodeIds: affected(
             entries.flatMap((entry) => entry.nodeIds),
-            changes.changedNodeIds,
+            changedIds.nodes,
           ),
           affectedRelationshipIds: affected(
             entries.flatMap((entry) => entry.relationshipIds),
-            changes.changedRelationshipIds,
+            changedIds.relationships,
           ),
           affectedContractIds: affected(
             entries.flatMap((entry) => entry.contractIds),
-            changes.changedContractIds,
+            changedIds.contracts,
           ),
           ...(before ? { previousFingerprint: before.digest } : {}),
           ...(after ? { currentFingerprint: after.digest } : {}),
@@ -322,6 +324,11 @@ export function evaluatePersistedBuildPlanImpact(
   const addedAgentIds = nextAgentIds.filter((id) => !previous.has(id));
   const removedAgentIds = previousAgentIds.filter((id) => !next.has(id));
   const changes = graphChanges(input.previousGraph, input.nextGraph);
+  const changedIds = {
+    nodes: new Set(changes.changedNodeIds),
+    relationships: new Set(changes.changedRelationshipIds),
+    contracts: new Set(changes.changedContractIds),
+  };
   const staleBriefIds: AgentBriefId[] = [];
   const preservedBriefIds: AgentBriefId[] = [];
   const assignmentChanges: AssignmentImpact[] = [];
@@ -364,14 +371,14 @@ export function evaluatePersistedBuildPlanImpact(
       });
       continue;
     }
-    const reasons = fingerprintReasons(before!, after!, changes);
+    const reasons = fingerprintReasons(before!, after!, changedIds);
+    const briefNodeIds = new Set([
+      ...before!.ownedNodeIds,
+      ...before!.relevantNodeIds,
+    ]);
     const presentationChanged =
       reasons.length === 0 &&
-      changes.changedNodeIds.some(
-        (id) =>
-          before!.ownedNodeIds.includes(id) ||
-          before!.relevantNodeIds.includes(id),
-      );
+      changes.changedNodeIds.some((id) => briefNodeIds.has(id));
     if (reasons.length) staleBriefIds.push(before!.briefId);
     else preservedBriefIds.push(before!.briefId);
     assignmentChanges.push({

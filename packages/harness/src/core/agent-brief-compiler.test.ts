@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanNodeId } from "../shared/agent-map.js";
 import {
+  AgentBriefCompilationError,
   compileAgentBriefs,
   AGENT_BRIEF_COMPILER_VERSION,
 } from "./agent-brief-compiler.js";
@@ -22,7 +23,16 @@ import {
   stockResearchRelayFixture,
   reviseStockPlan,
 } from "./agent-brief-compiler.test-support.js";
-import { canonicalJson } from "./build-plan-canonicalization.js";
+import {
+  canonicalJson,
+  computeArchitectureGraphDigest,
+} from "./build-plan-canonicalization.js";
+import {
+  graph as simpleGraph,
+  makeLegacyBrief,
+  makePlan,
+  PROJECT_ID,
+} from "./build-plan.test-support.js";
 
 const compileStock = () => {
   const graph = stockResearchGraph();
@@ -322,6 +332,56 @@ describe("agent brief compiler", () => {
         expect.objectContaining({ contractIds: [REPORT_CONTRACT] }),
       ]),
     );
+  });
+
+  it("returns a discriminable compiler error for legacy records on the public boundary", () => {
+    const previousPlan = makePlan();
+    const graph = { nodes: [], relationships: [] };
+    const plan = makePlan({
+      version: 2 as never,
+      parentVersion: previousPlan.version,
+      changeKind: "edited",
+      source: {
+        ...previousPlan.source,
+        version:
+          previousPlan.source.kind === "proposal"
+            ? previousPlan.source.version + 1
+            : undefined,
+        graphDigest: computeArchitectureGraphDigest(graph),
+      } as never,
+      assignments: [],
+    });
+    let failure: unknown;
+
+    try {
+      compileAgentBriefs({
+        projectId: PROJECT_ID,
+        source: plan.source,
+        graph,
+        plan,
+        assignments: [],
+        previous: {
+          plan: previousPlan,
+          graph: simpleGraph,
+          briefs: [makeLegacyBrief(previousPlan)] as never,
+          allowedPlanRefs: [
+            {
+              planId: previousPlan.planId,
+              version: previousPlan.version,
+              semanticDigest: previousPlan.semanticDigest,
+            },
+          ],
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AgentBriefCompilationError);
+    expect(failure).toMatchObject({
+      code: "legacy-brief-result",
+      diagnostics: [],
+    });
   });
 
   it("does not create independent briefs for subagents, resources, connectors, or artifacts", () => {
