@@ -618,6 +618,13 @@ export class SessionManager {
         session.executionPolicy = "interactive-default";
         dirty = true;
       }
+      if (
+        session.builderPlanning &&
+        session.builderPlanning.primary === undefined
+      ) {
+        session.builderPlanning.primary = true;
+        dirty = true;
+      }
       if (session.status !== "exited") {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;

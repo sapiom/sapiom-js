@@ -48,11 +48,13 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     getAgentSessionOwner: vi.fn((agentSessionId: string) =>
       Array.from(sessions.values()).find(
         (session) => session.agentSessionId === agentSessionId,
-      )),
+      ),
+    ),
     isAgentSessionIdentityReserved: vi.fn((agentSessionId: string) =>
       Array.from(sessions.values()).some(
         (session) => session.agentSessionId === agentSessionId,
-      )),
+      ),
+    ),
     create: vi.fn(),
     resume: vi.fn(),
     kill: vi.fn(() => true),
@@ -178,6 +180,14 @@ describe("createRestRouter", () => {
   });
 
   describe("GET /state", () => {
+    it("reconciles durable builder freshness before projecting tabs", async () => {
+      const beforeReadState = vi.fn(async () => undefined);
+      start({ beforeReadState });
+      const res = await fetch(`${baseUrl}/state`);
+      expect(res.status).toBe(200);
+      expect(beforeReadState).toHaveBeenCalledTimes(1);
+    });
+
     it("reports unauthenticated with empty workflows/macros/sessions by default", async () => {
       start();
       const res = await fetch(`${baseUrl}/state`);
@@ -407,7 +417,10 @@ describe("createRestRouter", () => {
       const res = await fetch(`${baseUrl}/settings`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ helpSeen: true, telemetryNoticeDismissed: true }),
+        body: JSON.stringify({
+          helpSeen: true,
+          telemetryNoticeDismissed: true,
+        }),
       });
       expect(await res.json()).toMatchObject({
         helpSeen: true,
@@ -965,6 +978,57 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
+    it("delegates planning-readonly resume to the trusted builder scope", async () => {
+      const builder = exitedSession({
+        id: "builder-1",
+        executionPolicy: "planning-readonly",
+        builderPlanning: {
+          bindingId: "builder-binding-1",
+          purpose: "implementation-planning",
+          assignmentId:
+            "assignment_00000000-0000-7000-8000-000000000001" as never,
+          plannedAgentId: "node_00000000-0000-7000-8000-000000000001" as never,
+          source: {
+            kind: "proposal",
+            proposalId:
+              "proposal_00000000-0000-7000-8000-000000000001" as never,
+            version: 1,
+            graphDigest: `sha256:${"1".repeat(64)}` as never,
+          },
+          plan: {
+            planId: "build-plan_00000000-0000-7000-8000-000000000001" as never,
+            version: 1 as never,
+            semanticDigest: `sha256:${"2".repeat(64)}` as never,
+          },
+          brief: {
+            briefId: "brief_00000000-0000-7000-8000-000000000001" as never,
+            version: 1 as never,
+            semanticDigest: `sha256:${"3".repeat(64)}` as never,
+          },
+          bootstrapDigest: `sha256:${"4".repeat(64)}` as never,
+          state: "planning",
+          primary: true,
+        },
+      });
+      const sessionManager = fakeSessionManager([builder]);
+      const resumeBuilderPlanningSession = vi.fn(async () => ({
+        ...builder,
+        status: "running" as const,
+      }));
+      start({ sessionManager, resumeBuilderPlanningSession });
+      const response = await fetch(`${baseUrl}/sessions/builder-1/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(response.status).toBe(200);
+      expect(resumeBuilderPlanningSession).toHaveBeenCalledWith(builder);
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+      expect(await response.json()).toMatchObject({
+        id: "builder-1",
+        status: "running",
+      });
+    });
+
     it("requires planner resume to use the trusted project resolver", async () => {
       const planner = exitedSession({
         id: "planner-1",
@@ -1434,7 +1498,9 @@ describe("createRestRouter", () => {
       expect(canResume).not.toHaveBeenCalled();
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
       expect(sessionManager.resume).not.toHaveBeenCalled();
-      expect(sessionManager.get("planner-existing")?.planning).toEqual(original);
+      expect(sessionManager.get("planner-existing")?.planning).toEqual(
+        original,
+      );
     });
 
     it("rejects a rotated planner's durable old alias even though its current pointer changed", async () => {
@@ -1454,7 +1520,9 @@ describe("createRestRouter", () => {
       });
       const sessionManager = fakeSessionManager([planner]);
       (
-        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<
+          typeof vi.fn
+        >
       ).mockImplementation((agentSessionId: string) =>
         agentSessionId === body.agentSessionId ? planner : undefined,
       );
@@ -1483,7 +1551,9 @@ describe("createRestRouter", () => {
       const original = structuredClone(owner);
       const sessionManager = fakeSessionManager([owner]);
       (
-        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<
+          typeof vi.fn
+        >
       ).mockImplementation((agentSessionId: string) =>
         agentSessionId === body.agentSessionId ? owner : undefined,
       );

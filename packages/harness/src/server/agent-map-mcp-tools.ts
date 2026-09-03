@@ -23,12 +23,18 @@ import {
 import {
   BuilderPlanningSessionError,
   planningResultSubmitRequestSchema,
+  type OpenPlanningFanoutRequest,
   type BuilderPlanningSessionService,
 } from "../core/builder-planning-session.js";
 import {
   architectureSourceRefSchema,
   buildPlanRefSchema,
 } from "../shared/build-plan-codec.js";
+import type {
+  ArchitectureSourceRef,
+  BuildPlanRef,
+  PlanningAssignmentId,
+} from "../shared/build-plan.js";
 
 /**
  * MCP discovery sees the complete SAP-3061 input contract. Field-level `catch`
@@ -133,6 +139,34 @@ const planRebaseSchema = z
     ),
   })
   .strict();
+const planningResultMcpSchema = z
+  .object({
+    schemaVersion: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.schemaVersion,
+    ),
+    expected: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.expected,
+    ),
+    requestId: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.requestId,
+    ),
+    status: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.status,
+    ),
+    implementationPlan: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.implementationPlan,
+    ),
+    risks: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.risks,
+    ),
+    questions: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.questions,
+    ),
+    proposedMapOperationIds: preserveInvalidForService(
+      planningResultSubmitRequestSchema.shape.proposedMapOperationIds,
+    ),
+  })
+  .strict();
 
 export interface AgentMapToolEvent {
   tool:
@@ -203,6 +237,7 @@ function errorResult(error: unknown) {
       : error instanceof BuilderPlanningSessionError
         ? {
             code: error.code,
+            issues: error.issues.slice(0, 64),
             recovery:
               error.code === "idempotency_key_reused"
                 ? "new_request_id"
@@ -518,9 +553,15 @@ export function createAgentMapToolServer(
       },
       async (request) =>
         instrument("build_plan_open_planning_sessions", async () => {
+          const openRequest: OpenPlanningFanoutRequest = {
+            approvalId: request.approvalId,
+            source: request.source as ArchitectureSourceRef,
+            plan: request.plan as BuildPlanRef,
+            assignmentIds: request.assignmentIds as PlanningAssignmentId[],
+          };
           const bindings = await options.builderPlanningService!.openOrReuse(
             identity,
-            request as never,
+            openRequest,
           );
           return toolResult(
             { bindings },
@@ -540,7 +581,7 @@ export function createAgentMapToolServer(
       {
         description:
           "Submit this assignment's immutable structured implementation plan.",
-        inputSchema: planningResultSubmitRequestSchema,
+        inputSchema: planningResultMcpSchema,
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,

@@ -559,6 +559,9 @@ export interface BuilderPlanningSubmission {
   projectId: StudioProjectId;
   assignmentId: PlanningAssignmentId;
   sessionId: string;
+  /** Durable idempotency provenance. Older SAP-3067 records may omit it. */
+  requestId?: string;
+  requestDigest?: PlanningSubmissionDigest;
   source: ArchitectureSourceRef;
   plan: BuildPlanRef;
   brief: AgentBriefRef;
@@ -618,6 +621,10 @@ export interface BuilderKickoffDelivery {
   inputId: string;
   state: "pending" | "delivering" | "delivered" | "delivery-uncertain";
   attemptCount: number;
+  /** Durable single-writer claim. A stale delivering claim becomes uncertain;
+   * it is never reclaimed into another blind write. */
+  deliveryClaimId: string | null;
+  deliveryClaimedAt: string | null;
   deliveredAt: string | null;
   acknowledgedBy: Readonly<{
     source: "hook" | "transcript-marker";
@@ -644,7 +651,7 @@ export interface BuilderPlanningSessionBinding {
   state: import("./types.js").BuilderPlanningLifecycleState;
   staleReasons: readonly BriefStaleReason[];
   kickoff: BuilderKickoffDelivery | null;
-  failureCode: "spawn_failed" | "policy_unavailable" | null;
+  failureCode: "spawn_failed" | "resume_failed" | "policy_unavailable" | null;
   createdAt: string;
   updatedAt: string;
 }

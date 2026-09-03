@@ -20,6 +20,7 @@ import type {
   FsDirEntry,
   FsListResponse,
   HarnessEntry,
+  HarnessKind,
   HarnessSession,
   HarnessSettings,
   InjectInputRequest,
@@ -401,6 +402,14 @@ export interface HarnessApi {
     plannerSessionId: string,
     request: PlanningFanoutOpenRequest,
   ): Promise<PlanningFanoutOpenResponse>;
+  openAdditionalBuilderPlanningSession(
+    projectId: StudioProjectId,
+    primarySessionId: string,
+    request: Readonly<{
+      harness?: HarnessKind;
+      theme?: "light" | "dark";
+    }>,
+  ): Promise<HarnessSession>;
   /** Compatibility surface for coordinator-driven clients. The Studio renders
    * the planner's raw CLI and does not project this protocol into a second
    * transcript/composer UI. */
@@ -733,6 +742,20 @@ class RealApi implements HarnessApi {
   ): Promise<PlanningFanoutOpenResponse> {
     return this.request<PlanningFanoutOpenResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(plannerSessionId)}/planning-fanout`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  openAdditionalBuilderPlanningSession(
+    projectId: StudioProjectId,
+    primarySessionId: string,
+    request: Readonly<{
+      harness?: HarnessKind;
+      theme?: "light" | "dark";
+    }>,
+  ): Promise<HarnessSession> {
+    return this.request<HarnessSession>(
+      `/api/projects/${encodeURIComponent(projectId)}/builder-planning-sessions/${encodeURIComponent(primarySessionId)}/additional`,
       { method: "POST", body: JSON.stringify(request) },
     );
   }
@@ -2041,6 +2064,10 @@ export class MockApi implements HarnessApi {
   >();
   private systemGraphRevision = new Map<WorkspaceKey, number>();
   private pendingSystemGraphRevision = new Map<WorkspaceKey, number>();
+  private builderPlanningBindings = new Map<
+    StudioProjectId,
+    BuilderPlanningSessionBinding[]
+  >();
 
   async startAuth(): Promise<AuthStartResponse> {
     // Record the call for Playwright assertions (same pattern as runMacro/deploy).
@@ -2679,24 +2706,35 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
   ): Promise<PlanningFanoutPreview> {
     const snapshot = await this.getAgentMapWorkspace(projectId);
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get(
+        "mockPlanningFanoutUnavailable",
+      ) === "1"
+    )
+      return {
+        available: false,
+        warnings: ["Resolve the incomplete build-plan decisions first."],
+      };
     if (!snapshot.proposal)
       return { available: false, warnings: ["Complete a build plan first."] };
     const agentIds = snapshot.proposal.nodes
       .filter((node) => node.kind === "agent")
       .map((node) => node.id);
-    const zeroDigest = `sha256:${"0".repeat(64)}` as GraphDigest;
+    const graphDigest =
+      "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f" as GraphDigest;
     const source: ArchitectureSourceRef = {
       kind: "proposal",
       proposalId: snapshot.proposal.id,
       version: snapshot.proposal.version,
-      graphDigest: zeroDigest,
+      graphDigest,
     };
     const plan: BuildPlanRef = {
       planId:
         "build-plan_00000000-0000-7000-8000-000000000001" as BuildPlanRef["planId"],
       version: 1 as BuildPlanRef["version"],
       semanticDigest:
-        `sha256:${"0".repeat(64)}` as BuildPlanRef["semanticDigest"],
+        "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31" as BuildPlanRef["semanticDigest"],
     };
     return {
       available: true,
@@ -2718,6 +2756,8 @@ export class MockApi implements HarnessApi {
     plannerSessionId: string,
     request: PlanningFanoutOpenRequest,
   ): Promise<PlanningFanoutOpenResponse> {
+    const approvalId =
+      "fanout-approval_00000000-0000-7000-8000-000000000001" as PlanningFanoutOpenResponse["approvalId"];
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __HARNESS_TEST__?: Record<string, unknown>;
@@ -2725,6 +2765,15 @@ export class MockApi implements HarnessApi {
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         planningFanoutCall: { projectId, plannerSessionId, request },
+        planningApprovalEvidence: {
+          approvalId,
+          projectId,
+          plannerSessionId,
+          source: request.source,
+          plan: request.plan,
+          assignmentIds: request.assignmentIds,
+          provenance: "authenticated-ui-action",
+        },
       };
     }
     const snapshot = await this.getAgentMapWorkspace(projectId);
@@ -2738,16 +2787,35 @@ export class MockApi implements HarnessApi {
       for (const [index, assignmentId] of request.assignmentIds.entries()) {
         const node = agentNodes[index];
         if (!node) continue;
+        const existing = this.builderPlanningBindings
+          .get(projectId)
+          ?.find(
+            (binding) =>
+              binding.assignmentId === assignmentId &&
+              binding.purpose === "implementation-planning",
+          );
+        if (existing) {
+          bindings.push(existing);
+          continue;
+        }
         const session = await this.createSession({
           cwd: root,
           harness: request.harness ?? "claude-code",
           ...(request.theme ? { theme: request.theme } : {}),
         });
-        const zeroDigest = `sha256:${"0".repeat(64)}`;
+        session.agentSessionId = `mock-builder-agent-${index + 1}`;
+        const briefDigests = [
+          "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
+          "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+        ] as const;
+        const bootstrapDigests = [
+          "sha256:bc66bf9db1260f15b4f0f091887178b899888a645b5bb535c602e46fd13c888b",
+          "sha256:c3077bb88e615695b71f4d81f4b1d7d12571032d102ef941a345acc44eeaaeb1",
+        ] as const;
         const brief = {
           briefId: `brief_${node.id.slice("node_".length)}`,
           version: 1,
-          semanticDigest: zeroDigest,
+          semanticDigest: briefDigests[index] ?? briefDigests[0],
         } as BuilderPlanningSessionBinding["brief"];
         const bindingId =
           `builder-binding_${node.id.slice("node_".length)}` as BuilderPlanningSessionBinding["bindingId"];
@@ -2768,12 +2836,26 @@ export class MockApi implements HarnessApi {
           source: request.source,
           plan: request.plan,
           brief,
-          bootstrapDigest:
-            zeroDigest as BuilderPlanningSessionBinding["bootstrapDigest"],
+          bootstrapDigest: (bootstrapDigests[index] ??
+            bootstrapDigests[0]) as BuilderPlanningSessionBinding["bootstrapDigest"],
           state: "planning",
+          primary: true,
         };
         const now = new Date().toISOString();
-        bindings.push({
+        const kickoff: BuilderPlanningSessionBinding["kickoff"] = {
+          kickoffId:
+            `builder-kickoff_${node.id.slice("node_".length)}` as NonNullable<
+              BuilderPlanningSessionBinding["kickoff"]
+            >["kickoffId"],
+          inputId: `user-input_${node.id.slice("node_".length)}`,
+          state: "delivered" as const,
+          attemptCount: 1,
+          deliveryClaimId: null,
+          deliveryClaimedAt: null,
+          deliveredAt: now,
+          acknowledgedBy: { source: "hook" as const, observedAt: now },
+        };
+        const binding: BuilderPlanningSessionBinding = {
           bindingId,
           projectId,
           assignmentId,
@@ -2790,21 +2872,154 @@ export class MockApi implements HarnessApi {
           sessionId: session.id,
           state: "planning",
           staleReasons: [],
-          kickoff: null,
+          kickoff,
           failureCode: null,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        bindings.push(binding);
+        this.builderPlanningBindings.set(projectId, [
+          ...(this.builderPlanningBindings.get(projectId) ?? []),
+          binding,
+        ]);
         void import("./events").then(({ publishMockBusMessage }) => {
           publishMockBusMessage({ type: "session.status", session });
         });
       }
     }
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const updateBuilder = (
+        plannedAgentId: string,
+        update: (session: HarnessSession) => HarnessSession,
+      ): void => {
+        const changed: HarnessSession[] = [];
+        this.sessions = this.sessions.map((session) => {
+          if (
+            session.agentMapIdentity?.role !== "agent-builder" ||
+            session.agentMapIdentity.assignment.kind !== "planned" ||
+            session.agentMapIdentity.assignment.agentId !== plannedAgentId ||
+            !session.builderPlanning
+          )
+            return session;
+          const next = update(session);
+          changed.push(next);
+          return next;
+        });
+        void import("./events").then(({ publishMockBusMessage }) => {
+          for (const session of changed)
+            publishMockBusMessage({ type: "session.status", session });
+        });
+      };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        planningFanoutResponse: { approvalId, bindings },
+        exitBuilderPlanningSession: (sessionId: string) => {
+          const current = this.sessions.find(
+            (session) =>
+              session.id === sessionId && session.builderPlanning != null,
+          );
+          if (!current) return;
+          const exited: HarnessSession = {
+            ...current,
+            status: "exited",
+            ready: false,
+            exitCode: 1,
+            lastActiveAt: new Date().toISOString(),
+          };
+          this.sessions = this.sessions.map((session) =>
+            session.id === sessionId ? exited : session,
+          );
+          void import("./events").then(({ publishMockBusMessage }) => {
+            publishMockBusMessage({ type: "session.status", session: exited });
+          });
+        },
+        staleBuilderPlanningAssignment: (plannedAgentId: string) =>
+          updateBuilder(plannedAgentId, (session) => ({
+            ...session,
+            builderPlanning: { ...session.builderPlanning!, state: "stale" },
+          })),
+        setBuilderPlanningState: (
+          plannedAgentId: string,
+          state: NonNullable<HarnessSession["builderPlanning"]>["state"],
+        ) =>
+          updateBuilder(plannedAgentId, (session) => ({
+            ...session,
+            builderPlanning: { ...session.builderPlanning!, state },
+          })),
+      };
+    }
     return {
-      approvalId:
-        "fanout-approval_00000000-0000-7000-8000-000000000001" as PlanningFanoutOpenResponse["approvalId"],
+      approvalId,
       bindings,
     };
+  }
+
+  async openAdditionalBuilderPlanningSession(
+    projectId: StudioProjectId,
+    primarySessionId: string,
+    request: Readonly<{
+      harness?: HarnessKind;
+      theme?: "light" | "dark";
+    }>,
+  ): Promise<HarnessSession> {
+    const primary = this.sessions.find(
+      (session) =>
+        session.id === primarySessionId &&
+        session.agentMapIdentity?.projectId === projectId &&
+        session.agentMapIdentity.role === "agent-builder" &&
+        session.builderPlanning?.primary !== false,
+    );
+    const primaryIdentity = primary?.agentMapIdentity;
+    if (
+      !primary?.builderPlanning ||
+      !primaryIdentity ||
+      primaryIdentity.role !== "agent-builder"
+    ) {
+      throw new ApiError(
+        403,
+        "Primary builder planning session required",
+        "Primary builder planning session required",
+      );
+    }
+    const session = await this.createSession({
+      cwd: primary.cwd,
+      harness: request.harness ?? primary.harness,
+      ...(request.theme ? { theme: request.theme } : {}),
+    });
+    session.title = primary.title;
+    session.executionPolicy = "planning-readonly";
+    session.agentMapIdentity = {
+      ...primaryIdentity,
+      sessionId: session.id,
+    };
+    session.builderPlanning = {
+      ...primary.builderPlanning,
+      state: "planning",
+      primary: false,
+    };
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.additionalBuilderSessionCalls as
+          | unknown[]
+          | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        additionalBuilderSessionCalls: [
+          ...previous,
+          { projectId, primarySessionId, request, sessionId: session.id },
+        ],
+      };
+    }
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "session.status", session });
+    });
+    return session;
   }
 
   async sendPlannerMessage(
@@ -3353,6 +3568,19 @@ export class MockApi implements HarnessApi {
     this.sessions = this.sessions.map((session) =>
       session.id === resumed.id ? resumed : session,
     );
+    if (typeof window !== "undefined" && resumed.builderPlanning) {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.builderPlanningResumeCalls as
+          | string[]
+          | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        builderPlanningResumeCalls: [...previous, id],
+      };
+    }
     return resumed;
   }
 

@@ -175,7 +175,7 @@ function PopulatedAgentMap({
         planningFanout.source.kind === "proposal"
           ? `${planningFanout.source.proposalId} version ${planningFanout.source.version}`
           : `${planningFanout.source.revisionId} revision ${planningFanout.source.revisionNumber}`
-      } digest ${planningFanout.source.graphDigest}; ${planningFanout.assignmentCount} assignments; ${planningFanout.expectedSessionCount} sessions; ${planningFanout.expectedModelTurnCount} model turns`
+      } digest ${planningFanout.source.graphDigest}; ${planningFanout.assignmentCount} assignments; ${planningFanout.expectedSessionCount} sessions; ${planningFanout.expectedModelTurnCount} kickoff prompts`
     : null;
   return (
     <div
@@ -196,7 +196,7 @@ function PopulatedAgentMap({
           Version {proposal.version}
         </span>
       </div>
-      {planningFanout?.available && onOpenPlanningFanout && (
+      {planningFanout?.available && (
         <div
           className="agent-map-live-header"
           data-testid="planning-fanout-consent"
@@ -214,22 +214,40 @@ function PopulatedAgentMap({
             ({planningFanout.source.graphDigest.slice(0, 15)}…) ·{" "}
             {planningFanout.assignmentCount} assignments ·{" "}
             {planningFanout.expectedSessionCount} sessions ·{" "}
-            {planningFanout.expectedModelTurnCount} model turns
+            {planningFanout.expectedModelTurnCount} kickoff prompts
           </span>
           {planningFanout.warnings.length > 0 && (
             <span className="system-graph-node-meta">
               Warnings: {planningFanout.warnings.join(", ")}
             </span>
           )}
+          {!onOpenPlanningFanout && (
+            <span className="system-graph-node-meta">
+              Select the Planner tab to approve and open these sessions.
+            </span>
+          )}
           <button
             type="button"
             className="btn-primary"
             data-testid="open-planning-sessions"
-            disabled={planningFanoutPending}
+            disabled={planningFanoutPending || !onOpenPlanningFanout}
             onClick={onOpenPlanningFanout}
           >
             {planningFanoutPending ? "Opening…" : "Open planning sessions"}
           </button>
+        </div>
+      )}
+      {planningFanout && !planningFanout.available && (
+        <div
+          className="agent-map-live-header"
+          data-testid="planning-fanout-unavailable"
+        >
+          <span className="status-tag">Planning sessions unavailable</span>
+          <span className="system-graph-node-meta">
+            {planningFanout.warnings.length > 0
+              ? planningFanout.warnings.join(" ")
+              : "The current plan is not ready for planning sessions."}
+          </span>
         </div>
       )}
       <div className="agent-map-live-body">

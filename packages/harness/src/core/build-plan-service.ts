@@ -4,6 +4,7 @@ import type {
   AgentMapGraph,
   PlanNodeId,
   PlanningSessionIdentity,
+  StudioProjectId,
 } from "../shared/agent-map.js";
 import {
   architectureSourceRefsEqual,
@@ -150,6 +151,8 @@ export interface BuildPlanServiceDependencies {
   briefCompiler: AgentBriefCompiler;
   impactEvaluator: BuildPlanImpactEvaluator;
   clock: Clock;
+  /** Post-commit projection hook; durable plan state remains authoritative. */
+  onCommitted?: (projectId: StudioProjectId) => void | Promise<void>;
 }
 
 const requestDigest = (value: unknown): string =>
@@ -795,6 +798,9 @@ export class BuildPlanService {
       );
       if (committed.replayed)
         return (await this.findReplay(identity, input.requestId, digest))!;
+      await Promise.resolve(
+        this.dependencies.onCommitted?.(identity.projectId),
+      ).catch(() => {});
       return {
         ...prepared.result,
         plan: committed.plan,
@@ -1117,6 +1123,9 @@ export class BuildPlanService {
       );
       if (committed.replayed)
         return (await this.findReplay(identity, input.requestId, digest))!;
+      await Promise.resolve(
+        this.dependencies.onCommitted?.(identity.projectId),
+      ).catch(() => {});
       return { ...result, plan: committed.plan };
     } catch (error) {
       if (error instanceof BuildPlanStoreLimitError)

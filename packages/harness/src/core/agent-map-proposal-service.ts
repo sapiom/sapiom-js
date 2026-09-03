@@ -94,6 +94,11 @@ export interface AgentMapProposalServiceOptions {
     revisionId: string,
   ) => Promise<AgentMapGraph | null>;
   onAccepted?: (delta: AcceptedProposalDelta) => void | Promise<void>;
+  /** Trusted policy check executed under the same aggregate lock as mutation. */
+  authorizeMutation?: (
+    identity: PlanningSessionIdentity,
+    aggregate: AgentMapProjectAggregate,
+  ) => void;
   onOutcome?: (event: {
     name:
       | "agent_map.proposal.accepted"
@@ -478,6 +483,7 @@ export class AgentMapProposalService {
         async (aggregate) => {
           if (aggregate.workspace.projectId !== identity.projectId)
             throw new AgentMapProposalProjectError();
+          this.options.authorizeMutation?.(identity, aggregate);
           const currentVersion = aggregate.proposal?.version ?? 0;
           const digest = requestDigest(request);
           const receipt = aggregate.receipts.find(

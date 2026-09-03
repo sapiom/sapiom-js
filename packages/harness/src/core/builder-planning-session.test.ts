@@ -5,7 +5,12 @@ import type {
   BuilderPlanningSessionBinding,
 } from "../shared/build-plan.js";
 import { emptyBuildPlanningAggregate } from "../shared/build-plan.js";
-import { BuilderPlanningSessionService } from "./builder-planning-session.js";
+import {
+  BuilderPlanningSessionService,
+  planningResultSubmitRequestSchema,
+  reconcileKickoffAttempt,
+} from "./builder-planning-session.js";
+import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import { computeCanonicalDigest } from "./build-plan-canonicalization.js";
 import {
   AGENT_ID,
@@ -20,6 +25,7 @@ import {
 } from "./build-plan.test-support.js";
 import type { AgentMapProjectAggregate } from "./agent-map-workspace-store.js";
 import type { HarnessSession } from "../shared/types.js";
+import { SessionNotReadyError } from "./session-manager.js";
 
 describe("BuilderPlanningSessionService durable spawn claim", () => {
   it("has one CAS winner across service instances and recovers only an expired claim", async () => {
@@ -118,6 +124,89 @@ describe("BuilderPlanningSessionService durable spawn claim", () => {
   });
 });
 
+describe("planning result request boundary", () => {
+  const base = {
+    schemaVersion: 1,
+    expected: {
+      assignmentId: ASSIGNMENT_ID,
+      source: proposalSource(),
+      plan: {
+        planId: PLAN_ID,
+        version: 1,
+        semanticDigest: `sha256:${"1".repeat(64)}`,
+      },
+      brief: {
+        briefId: BRIEF_ID,
+        version: 1,
+        semanticDigest: `sha256:${"2".repeat(64)}`,
+      },
+      bootstrapDigest: `sha256:${"3".repeat(64)}`,
+    },
+    requestId: "submit-request",
+    status: "changes-proposed",
+    implementationPlan: [
+      {
+        stepId: "step-one",
+        ordinal: 1,
+        description: "Implement",
+        verification: "Verify",
+      },
+    ],
+    risks: [
+      { riskId: "risk-one", description: "Risk", mitigation: "Mitigate" },
+    ],
+    questions: [{ questionId: "question-one", question: "Question?" }],
+    proposedMapOperationIds: ["operation_00000000-0000-7000-8000-000000000001"],
+  };
+
+  it.each([
+    [
+      "duplicate step ids",
+      {
+        implementationPlan: [
+          base.implementationPlan[0],
+          { ...base.implementationPlan[0], ordinal: 2 },
+        ],
+      },
+    ],
+    [
+      "duplicate ordinals",
+      {
+        implementationPlan: [
+          base.implementationPlan[0],
+          { ...base.implementationPlan[0], stepId: "step-two" },
+        ],
+      },
+    ],
+    ["duplicate risk ids", { risks: [base.risks[0], base.risks[0]] }],
+    [
+      "duplicate question ids",
+      { questions: [base.questions[0], base.questions[0]] },
+    ],
+    [
+      "duplicate proposal operation ids",
+      {
+        proposedMapOperationIds: [
+          base.proposedMapOperationIds[0],
+          base.proposedMapOperationIds[0],
+        ],
+      },
+    ],
+    ["whitespace request id", { requestId: "   " }],
+    [
+      "whitespace step id",
+      {
+        implementationPlan: [{ ...base.implementationPlan[0], stepId: "   " }],
+      },
+    ],
+  ])("rejects %s", (_name, changes) => {
+    expect(
+      planningResultSubmitRequestSchema.safeParse({ ...base, ...changes })
+        .success,
+    ).toBe(false);
+  });
+});
+
 function publicFixture(includeApproval: boolean) {
   const plan = makePlan();
   const brief = makeBrief(plan);
@@ -176,7 +265,34 @@ function publicFixture(includeApproval: boolean) {
       version: 1,
       nodes: graph.nodes,
       relationships: graph.relationships,
-      history: [],
+      history: [
+        ...graph.nodes.map((node, index) => ({
+          id: `operation_00000000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+          requestId: "initial-map",
+          acceptedVersion: 1,
+          operation: { kind: "add-node" as const, node },
+          actor: {
+            userId: identity.userId,
+            sessionId: identity.sessionId,
+            role: "map-planner" as const,
+            assignment: null,
+          },
+          acceptedAt: "2026-09-03T10:00:00.000Z",
+        })),
+        ...graph.relationships.map((relationship, index) => ({
+          id: `operation_00000000-0000-7000-8001-${String(index + 1).padStart(12, "0")}`,
+          requestId: "initial-map",
+          acceptedVersion: 1,
+          operation: { kind: "add-relationship" as const, relationship },
+          actor: {
+            userId: identity.userId,
+            sessionId: identity.sessionId,
+            role: "map-planner" as const,
+            assignment: null,
+          },
+          acceptedAt: "2026-09-03T10:00:00.000Z",
+        })),
+      ],
       createdAt: "2026-09-03T10:00:00.000Z",
       updatedAt: "2026-09-03T10:00:00.000Z",
     },
@@ -212,6 +328,7 @@ function publicFixture(includeApproval: boolean) {
     },
   } as unknown as AgentMapProjectAggregate;
   let transaction = Promise.resolve();
+  let beforeNextTransaction: (() => void | Promise<void>) | null = null;
   const workspaceStore = {
     readAggregate: vi.fn(async () => structuredClone(aggregate)),
     transact: <T>(
@@ -221,12 +338,19 @@ function publicFixture(includeApproval: boolean) {
       ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>,
     ): Promise<T> => {
       let value!: T;
-      transaction = transaction.then(async () => {
+      const run = transaction.then(async () => {
+        const before = beforeNextTransaction;
+        beforeNextTransaction = null;
+        await before?.();
         const outcome = await operation(structuredClone(aggregate));
         if (outcome.next) aggregate = outcome.next;
         value = outcome.value;
       });
-      return transaction.then(() => value);
+      transaction = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run.then(() => value);
     },
   };
   const sessions: HarnessSession[] = [
@@ -266,10 +390,18 @@ function publicFixture(includeApproval: boolean) {
     sessions.push(session);
     return session;
   });
+  const resume = vi.fn(async (id: string) => {
+    const session = sessions.find((candidate) => candidate.id === id);
+    if (!session) throw new Error("missing session");
+    session.status = "running";
+    session.ready = false;
+    return session;
+  });
   const manager = {
     get: (id: string) => sessions.find((session) => session.id === id),
     list: () => sessions,
     create,
+    resume,
     setBuilderPlanningMetadata: vi.fn(
       async (id: string, metadata: HarnessSession["builderPlanning"]) => {
         const session = sessions.find((candidate) => candidate.id === id);
@@ -278,7 +410,15 @@ function publicFixture(includeApproval: boolean) {
     ),
     submitInput: vi.fn(async () => false),
   };
-  const service = () =>
+  const service = (
+    validate?: () => Promise<{
+      completeness: { status: "complete"; issues: never[] };
+      eligibility: {
+        planningEligible: true;
+        implementationEligible: false;
+      };
+    }>,
+  ) =>
     new BuilderPlanningSessionService({
       workspaceStore: workspaceStore as never,
       buildPlanStore: {
@@ -286,13 +426,15 @@ function publicFixture(includeApproval: boolean) {
         isCurrentProposalSource: async () => true,
       } as never,
       contractValidator: {
-        validate: async () => ({
-          completeness: { status: "complete", issues: [] },
-          eligibility: {
-            planningEligible: true,
-            implementationEligible: false,
-          },
-        }),
+        validate:
+          validate ??
+          (async () => ({
+            completeness: { status: "complete" as const, issues: [] },
+            eligibility: {
+              planningEligible: true as const,
+              implementationEligible: false as const,
+            },
+          })),
       } as never,
       sessionManager: manager as never,
       currentUserId: () => identity.userId,
@@ -310,10 +452,46 @@ function publicFixture(includeApproval: boolean) {
       assignmentIds: [ASSIGNMENT_ID],
     },
     create,
+    resume,
     aggregate: () => aggregate,
     sessions,
     briefRef,
+    workspaceStore,
+    manager,
+    beforeNextTransaction: (action: () => void | Promise<void>) => {
+      beforeNextTransaction = action;
+    },
   };
+}
+
+function markBuilderPlanning(fixture: ReturnType<typeof publicFixture>) {
+  const session = fixture.sessions.find(
+    (candidate) => candidate.id === "builder-session",
+  )!;
+  const binding =
+    fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+      ASSIGNMENT_ID
+    ]!;
+  binding.state = "planning";
+  binding.kickoff = {
+    kickoffId: "kickoff_00000000-0000-7000-8000-000000000030" as never,
+    inputId: "input_00000000-0000-7000-8000-000000000031",
+    state: "delivered",
+    attemptCount: 1,
+    deliveryClaimId: null,
+    deliveryClaimedAt: null,
+    deliveredAt: "2026-09-03T11:00:01.000Z",
+    acknowledgedBy: {
+      source: "hook",
+      observedAt: "2026-09-03T11:00:01.000Z",
+    },
+  };
+  session.builderPlanning = {
+    ...session.builderPlanning!,
+    state: "planning",
+    primary: true,
+  };
+  return { session, binding, builder: session.agentMapIdentity! };
 }
 
 describe("BuilderPlanningSessionService public authorization", () => {
@@ -323,6 +501,35 @@ describe("BuilderPlanningSessionService public authorization", () => {
       fixture.service().openOrReuse(fixture.identity, fixture.request),
     ).rejects.toMatchObject({ code: "missing_consent" });
     expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the effective brief is a legacy persisted record", async () => {
+    const fixture = publicFixture(true);
+    const brief =
+      fixture.aggregate().buildPlanning.briefVersionsById[BRIEF_ID]![0]!;
+    Object.assign(brief, { schemaVersion: 1 });
+    delete (brief as { digestVersion?: number }).digestVersion;
+
+    await expect(
+      fixture.service().openOrReuse(fixture.identity, fixture.request),
+    ).rejects.toMatchObject({ code: "plan_not_ready" });
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the exact proposal source under the binding transaction lock", async () => {
+    const fixture = publicFixture(true);
+    fixture.beforeNextTransaction(() => {
+      fixture.aggregate().proposal!.version = 2;
+    });
+    await expect(
+      fixture.service().openOrReuse(fixture.identity, fixture.request),
+    ).rejects.toMatchObject({ code: "stale_consent" });
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ],
+    ).toBeUndefined();
   });
 
   it("concurrent services create one primary and a retry reuses it", async () => {
@@ -340,21 +547,100 @@ describe("BuilderPlanningSessionService public authorization", () => {
     expect(fixture.create).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an exited primary as history and creates one replacement", async () => {
+  it("decides reuse from transactional state after a delayed opener pre-read", async () => {
+    const fixture = publicFixture(true);
+    let announcePreflight!: () => void;
+    const preflightRead = new Promise<void>((resolve) => {
+      announcePreflight = resolve;
+    });
+    let releasePreflight!: () => void;
+    const preflightGate = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    const delayed = fixture.service(async () => {
+      announcePreflight();
+      await preflightGate;
+      return {
+        completeness: { status: "complete", issues: [] },
+        eligibility: {
+          planningEligible: true,
+          implementationEligible: false,
+        },
+      };
+    });
+    const delayedOpen = delayed.openOrReuse(fixture.identity, fixture.request);
+    await preflightRead;
+    const first = await fixture
+      .service()
+      .openOrReuse(fixture.identity, fixture.request);
+    releasePreflight();
+    const second = await delayedOpen;
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+    expect(first[0]?.bindingId).toBe(second[0]?.bindingId);
+    expect(first[0]?.sessionId).toBe("builder-session");
+    expect(second[0]?.sessionId).toBe("builder-session");
+  });
+
+  it("resumes an exited primary with the same durable session id", async () => {
     const fixture = publicFixture(true);
     await fixture.service().openOrReuse(fixture.identity, fixture.request);
     fixture.sessions.find(
       (session) => session.id === "builder-session",
     )!.status = "exited";
-    const replacement = await fixture
+    const resumed = await fixture
       .service()
       .openOrReuse(fixture.identity, fixture.request);
-    expect(fixture.create).toHaveBeenCalledTimes(2);
-    expect(replacement[0]?.sessionId).toBe("builder-session-2");
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+    expect(fixture.resume).toHaveBeenCalledWith(
+      "builder-session",
+      expect.objectContaining({
+        builderPlanning: expect.objectContaining({
+          bindingId: resumed[0]?.bindingId,
+        }),
+        promptAppendix: expect.stringContaining("builder-assignment-data"),
+      }),
+    );
+    expect(resumed[0]?.sessionId).toBe("builder-session");
+  });
+
+  it("reconstructs trusted context for scoped same-id resume", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    fixture.sessions.find(
+      (session) => session.id === "builder-session",
+    )!.status = "exited";
+    const resumed = await service.resume(PROJECT_ID, "builder-session");
+    expect(resumed.id).toBe("builder-session");
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+    expect(fixture.resume).toHaveBeenCalledTimes(1);
+    expect(fixture.resume).toHaveBeenCalledWith(
+      "builder-session",
+      expect.objectContaining({
+        promptAppendix: expect.stringContaining("builder-assignment-data"),
+      }),
+    );
+  });
+
+  it("opens an additional read-only session without replacing the primary binding", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+
+    const additional = await service.openAdditionalSession(
+      PROJECT_ID,
+      "builder-session",
+      { harness: "claude-code" },
+    );
+
+    expect(additional.id).toBe("builder-session-2");
+    expect(additional.executionPolicy).toBe("planning-readonly");
+    expect(additional.builderPlanning?.primary).toBe(false);
     expect(
-      fixture.sessions.find((session) => session.id === "builder-session")
-        ?.builderPlanning?.state,
-    ).toBe("failed");
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]?.sessionId,
+    ).toBe("builder-session");
   });
 
   it("submits only for the exact effective brief and enforces request replay", async () => {
@@ -392,6 +678,31 @@ describe("BuilderPlanningSessionService public authorization", () => {
     const first = await service.submitResult(builder, request);
     const replay = await service.submitResult(builder, request);
     expect(replay).toEqual(first);
+    const aggregate = fixture.aggregate();
+    aggregate.buildPlanning = {
+      ...aggregate.buildPlanning,
+      planningSubmissionReceipts: Array.from({ length: 1_024 }, (_, index) => ({
+        sessionId: `old-session-${index}`,
+        requestId: `old-request-${index}`,
+        requestDigest: `sha256:${"a".repeat(64)}` as never,
+        submissionId:
+          `submission_00000000-0000-7000-8000-${String(index).padStart(12, "0")}` as never,
+      })),
+    };
+    await service.submitResult(builder, {
+      ...request,
+      requestId: "submit-after-receipt-window",
+    });
+    expect(
+      fixture.aggregate().buildPlanning.planningSubmissionReceipts,
+    ).toHaveLength(256);
+    expect(await service.submitResult(builder, request)).toEqual(first);
+    const afterWindow = fixture.aggregate();
+    afterWindow.buildPlanning = {
+      ...afterWindow.buildPlanning,
+      currentBriefByAgentId: {},
+    };
+    expect(await service.submitResult(builder, request)).toEqual(first);
     await expect(
       service.submitResult(builder, {
         ...request,
@@ -400,14 +711,383 @@ describe("BuilderPlanningSessionService public authorization", () => {
         ],
       }),
     ).rejects.toMatchObject({ code: "idempotency_key_reused" });
-
-    const aggregate = fixture.aggregate();
-    aggregate.buildPlanning = {
-      ...aggregate.buildPlanning,
-      currentBriefByAgentId: {},
-    };
     await expect(
       service.submitResult(builder, { ...request, requestId: "submit-stale" }),
     ).rejects.toMatchObject({ code: "binding_stale" });
+  });
+
+  it("accepts only the exact operation ids authored by this builder in the current direct successor", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const { session, builder } = markBuilderPlanning(fixture);
+    const proposal = new AgentMapProposalService(
+      fixture.workspaceStore as never,
+      {
+        authorizeMutation: (identity, aggregate) =>
+          service.assertProposalMutationAuthorized(identity, aggregate),
+      },
+    );
+    const accepted = await proposal.propose(builder, {
+      schemaVersion: 1,
+      proposalId:
+        fixture.request.source.kind === "proposal"
+          ? fixture.request.source.proposalId
+          : null,
+      expectedVersion: 1,
+      requestId: "builder-proposal",
+      operations: [
+        {
+          kind: "update-node",
+          nodeId: AGENT_ID,
+          changes: { purpose: "Clarify the implementation boundary" },
+        },
+      ],
+    });
+    const metadata = session.builderPlanning!;
+    const submission = await service.submitResult(builder, {
+      schemaVersion: 1,
+      expected: {
+        assignmentId: metadata.assignmentId,
+        source: metadata.source,
+        plan: metadata.plan,
+        brief: metadata.brief,
+        bootstrapDigest: metadata.bootstrapDigest,
+      },
+      requestId: "submit-builder-proposal",
+      status: "changes-proposed",
+      implementationPlan: [
+        {
+          stepId: "step-one",
+          ordinal: 1,
+          description: "Implement after the map revision is accepted",
+          verification: "Run the focused suite",
+        },
+      ],
+      risks: [],
+      questions: [],
+      proposedMapOperationIds: accepted.operationIds,
+    });
+    expect(submission.proposedMapOperationIds).toEqual(accepted.operationIds);
+
+    const foreign = publicFixture(true);
+    const foreignService = foreign.service();
+    await foreignService.openOrReuse(foreign.identity, foreign.request);
+    const foreignPlanning = markBuilderPlanning(foreign);
+    const aggregate = foreign.aggregate();
+    aggregate.proposal!.version = 2;
+    aggregate.proposal!.history.push({
+      id: "operation_00000000-0000-7000-9000-000000000099" as never,
+      requestId: "foreign-proposal",
+      acceptedVersion: 2,
+      operation: {
+        kind: "update-node",
+        nodeId: AGENT_ID,
+        changes: { purpose: "Foreign change" },
+      },
+      actor: {
+        userId: "user-test",
+        sessionId: "foreign-session",
+        role: "agent-builder",
+        assignment: { kind: "planned", agentId: AGENT_ID },
+      },
+      acceptedAt: "2026-09-03T11:00:02.000Z",
+    });
+    const foreignMetadata = foreignPlanning.session.builderPlanning!;
+    await expect(
+      foreignService.submitResult(foreignPlanning.builder, {
+        schemaVersion: 1,
+        expected: {
+          assignmentId: foreignMetadata.assignmentId,
+          source: foreignMetadata.source,
+          plan: foreignMetadata.plan,
+          brief: foreignMetadata.brief,
+          bootstrapDigest: foreignMetadata.bootstrapDigest,
+        },
+        requestId: "submit-foreign-proposal",
+        status: "changes-proposed",
+        implementationPlan: [
+          {
+            stepId: "step-one",
+            ordinal: 1,
+            description: "Do not accept foreign provenance",
+            verification: "Reject",
+          },
+        ],
+        risks: [],
+        questions: [],
+        proposedMapOperationIds: [aggregate.proposal!.history.at(-1)!.id],
+      }),
+    ).rejects.toMatchObject({ code: "binding_stale" });
+
+    aggregate.workspace.activeProposalId =
+      "proposal_00000000-0000-7000-9000-000000000100" as never;
+    aggregate.proposal!.id = aggregate.workspace.activeProposalId;
+    await expect(
+      foreignService.submitResult(foreignPlanning.builder, {
+        schemaVersion: 1,
+        expected: {
+          assignmentId: foreignMetadata.assignmentId,
+          source: foreignMetadata.source,
+          plan: foreignMetadata.plan,
+          brief: foreignMetadata.brief,
+          bootstrapDigest: foreignMetadata.bootstrapDigest,
+        },
+        requestId: "submit-replaced-proposal",
+        status: "ready",
+        implementationPlan: [
+          {
+            stepId: "step-one",
+            ordinal: 1,
+            description: "Do not accept replacement source",
+            verification: "Reject",
+          },
+        ],
+        risks: [],
+        questions: [],
+        proposedMapOperationIds: [],
+      }),
+    ).rejects.toMatchObject({ code: "binding_stale" });
+  });
+
+  it("denies proposal mutation from a stale planned-builder session", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const { binding, builder } = markBuilderPlanning(fixture);
+    binding.state = "stale";
+    fixture.sessions.find(
+      (candidate) => candidate.id === "builder-session",
+    )!.builderPlanning!.state = "stale";
+    const proposal = new AgentMapProposalService(
+      fixture.workspaceStore as never,
+      {
+        authorizeMutation: (identity, aggregate) =>
+          service.assertProposalMutationAuthorized(identity, aggregate),
+      },
+    );
+    await expect(
+      proposal.propose(builder, {
+        schemaVersion: 1,
+        proposalId:
+          fixture.request.source.kind === "proposal"
+            ? fixture.request.source.proposalId
+            : null,
+        expectedVersion: 1,
+        requestId: "stale-builder-proposal",
+        operations: [
+          {
+            kind: "update-node",
+            nodeId: AGENT_ID,
+            changes: { purpose: "Must be denied" },
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "binding_stale" });
+    expect(fixture.aggregate().proposal?.version).toBe(1);
+  });
+
+  it("proactively stales only the assignment touched by a proposal change", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const { binding } = markBuilderPlanning(fixture);
+    const aggregate = fixture.aggregate();
+    const otherAgentId =
+      "node_00000000-0000-7000-8000-000000000002" as typeof AGENT_ID;
+    const otherAssignmentId =
+      "assignment_00000000-0000-7000-8000-000000000002" as typeof ASSIGNMENT_ID;
+    const otherBriefId =
+      "brief_00000000-0000-7000-8000-000000000002" as typeof BRIEF_ID;
+    const sourceBrief =
+      aggregate.buildPlanning.briefVersionsById[BRIEF_ID]![0]!;
+    const otherBrief = {
+      ...structuredClone(sourceBrief),
+      briefId: otherBriefId,
+      assignmentId: otherAssignmentId,
+      plannedAgentId: otherAgentId,
+      ownedNodeIds: [otherAgentId],
+      relevantNodeIds: [],
+      semanticDigest: `sha256:${"8".repeat(64)}` as never,
+      recordDigest: `sha256:${"9".repeat(64)}` as never,
+    };
+    const otherBriefRef = {
+      briefId: otherBriefId,
+      version: otherBrief.version,
+      semanticDigest: otherBrief.semanticDigest,
+    };
+    const otherBinding: BuilderPlanningSessionBinding = {
+      ...structuredClone(binding),
+      bindingId:
+        "builder-binding_00000000-0000-7000-8000-000000000002" as never,
+      assignmentId: otherAssignmentId,
+      plannedAgentId: otherAgentId,
+      brief: otherBriefRef,
+      sessionId: "builder-session-marketing",
+    };
+    aggregate.buildPlanning = {
+      ...aggregate.buildPlanning,
+      currentBriefByAgentId: {
+        ...aggregate.buildPlanning.currentBriefByAgentId,
+        [otherAgentId]: otherBriefRef,
+      },
+      briefVersionsById: {
+        ...aggregate.buildPlanning.briefVersionsById,
+        [otherBriefId]: [otherBrief],
+      },
+      assignmentByAgentId: {
+        ...aggregate.buildPlanning.assignmentByAgentId,
+        [otherAgentId]: {
+          ...aggregate.buildPlanning.assignmentByAgentId[AGENT_ID]!,
+          assignmentId: otherAssignmentId,
+          briefId: otherBriefId,
+          plannedAgentId: otherAgentId,
+        },
+      },
+      builderBindingsByAssignmentId: {
+        ...aggregate.buildPlanning.builderBindingsByAssignmentId,
+        [otherAssignmentId]: otherBinding,
+      },
+    };
+    fixture.sessions.push({
+      ...fixture.sessions.find((session) => session.id === "builder-session")!,
+      id: "builder-session-marketing",
+      agentMapIdentity: {
+        projectId: PROJECT_ID,
+        sessionId: "builder-session-marketing",
+        userId: "user-test",
+        role: "agent-builder",
+        assignment: { kind: "planned", agentId: otherAgentId },
+      },
+      builderPlanning: {
+        ...fixture.sessions.find((session) => session.id === "builder-session")!
+          .builderPlanning!,
+        bindingId: otherBinding.bindingId,
+        assignmentId: otherAssignmentId,
+        plannedAgentId: otherAgentId,
+        brief: otherBriefRef,
+      },
+    });
+    aggregate.proposal!.version = 2;
+    aggregate.proposal!.history.push({
+      id: "operation_00000000-0000-7000-8000-000000000500" as never,
+      requestId: "targeted-planner-edit",
+      acceptedVersion: 2,
+      operation: {
+        kind: "update-node",
+        nodeId: AGENT_ID,
+        changes: { purpose: "Only research changed" },
+      },
+      actor: {
+        userId: "user-test",
+        sessionId: "planner-session",
+        role: "map-planner",
+        assignment: null,
+      },
+      acceptedAt: "2026-09-03T11:00:02.000Z",
+    });
+
+    await service.reconcileProject(PROJECT_ID);
+
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]?.state,
+    ).toBe("stale");
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        otherAssignmentId
+      ]?.state,
+    ).toBe("planning");
+    expect(
+      fixture.sessions.find((session) => session.id === "builder-session")
+        ?.builderPlanning?.state,
+    ).toBe("stale");
+    expect(
+      fixture.sessions.find(
+        (session) => session.id === "builder-session-marketing",
+      )?.builderPlanning?.state,
+    ).toBe("planning");
+  });
+});
+
+describe("BuilderPlanningSessionService kickoff delivery claim", () => {
+  type Delivery = (binding: BuilderPlanningSessionBinding) => Promise<void>;
+
+  it("does not fabricate kickoff state when create/attach has not persisted one", () => {
+    const binding = {
+      ...publicFixture(true).aggregate().buildPlanning
+        .builderBindingsByAssignmentId[ASSIGNMENT_ID],
+      kickoff: null,
+    } as BuilderPlanningSessionBinding;
+    expect(
+      reconcileKickoffAttempt(binding, {
+        accepted: true,
+        ambiguous: false,
+        updatedAt: "2026-09-03T11:00:02.000Z",
+      }),
+    ).toBe(binding);
+  });
+
+  it("has one durable sender across concurrent service instances", async () => {
+    const fixture = publicFixture(true);
+    await fixture.service().openOrReuse(fixture.identity, fixture.request);
+    const binding =
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]!;
+    fixture.sessions.find(
+      (session) => session.id === "builder-session",
+    )!.ready = true;
+    let release!: (accepted: boolean) => void;
+    const submitted = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    fixture.manager.submitInput.mockImplementation(async () => submitted);
+    const first = fixture.service() as unknown as { deliverKickoff: Delivery };
+    const second = fixture.service() as unknown as { deliverKickoff: Delivery };
+    const firstDelivery = first.deliverKickoff(binding);
+    await vi.waitFor(() =>
+      expect(fixture.manager.submitInput).toHaveBeenCalledTimes(1),
+    );
+    const secondDelivery = second.deliverKickoff(binding);
+    await secondDelivery;
+    expect(fixture.manager.submitInput).toHaveBeenCalledTimes(1);
+    release(false);
+    await firstDelivery;
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]?.kickoff,
+    ).toMatchObject({ state: "pending", deliveryClaimId: null });
+  });
+
+  it("retries definitive pre-write failures but surfaces ambiguous exceptions", async () => {
+    const fixture = publicFixture(true);
+    await fixture.service().openOrReuse(fixture.identity, fixture.request);
+    const service = fixture.service() as unknown as {
+      deliverKickoff: Delivery;
+    };
+    const current = () =>
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]!;
+    fixture.manager.submitInput.mockRejectedValueOnce(
+      new SessionNotReadyError("builder-session"),
+    );
+    await service.deliverKickoff(current());
+    expect(current().kickoff).toMatchObject({
+      state: "pending",
+      deliveryClaimId: null,
+    });
+
+    fixture.manager.submitInput.mockRejectedValueOnce(
+      new Error("adapter failed after an unknown write outcome"),
+    );
+    await service.deliverKickoff(current());
+    expect(current()).toMatchObject({
+      state: "delivery-uncertain",
+      kickoff: { state: "delivery-uncertain", deliveryClaimId: null },
+    });
   });
 });

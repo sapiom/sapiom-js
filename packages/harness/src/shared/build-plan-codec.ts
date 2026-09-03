@@ -585,6 +585,8 @@ export const builderPlanningSubmissionSchema = z
     projectId,
     assignmentId: generatedId("assignment"),
     sessionId: opaqueId,
+    requestId: opaqueId.optional(),
+    requestDigest: digest.optional(),
     source: architectureSourceRefSchema,
     plan: buildPlanRefSchema,
     brief: briefRefSchema,
@@ -682,6 +684,8 @@ const kickoffSchema = z
     inputId: opaqueId,
     state: z.enum(["pending", "delivering", "delivered", "delivery-uncertain"]),
     attemptCount: z.number().int().min(0).max(32),
+    deliveryClaimId: opaqueId.nullable().default(null),
+    deliveryClaimedAt: timestamp.nullable().default(null),
     deliveredAt: timestamp.nullable(),
     acknowledgedBy: z
       .object({
@@ -721,7 +725,9 @@ const builderBindingSchema = z
     ]),
     staleReasons: z.array(staleReasonSchema).max(9),
     kickoff: kickoffSchema.nullable(),
-    failureCode: z.enum(["spawn_failed", "policy_unavailable"]).nullable(),
+    failureCode: z
+      .enum(["spawn_failed", "resume_failed", "policy_unavailable"])
+      .nullable(),
     createdAt: timestamp,
     updatedAt: timestamp,
   })
@@ -1122,6 +1128,7 @@ export function parseBuildPlanningAggregate(
       fail();
   }
   const submissionIds = new Set<string>();
+  const submissionRequestKeys = new Map<string, BuilderPlanningSubmission>();
   for (const [assignmentId, history] of Object.entries(
     aggregate.submissionsByAssignmentId,
   )) {
@@ -1136,6 +1143,8 @@ export function parseBuildPlanningAggregate(
       );
       if (
         submissionIds.has(submission.submissionId) ||
+        (submission.requestId === undefined) !==
+          (submission.requestDigest === undefined) ||
         submission.projectId !== expectedProjectId ||
         submission.assignmentId !== assignmentId ||
         !plan ||
@@ -1151,6 +1160,11 @@ export function parseBuildPlanningAggregate(
       )
         fail();
       submissionIds.add(submission.submissionId);
+      if (submission.requestId) {
+        const key = `${submission.sessionId}\0${submission.requestId}`;
+        if (submissionRequestKeys.has(key)) fail();
+        submissionRequestKeys.set(key, submission);
+      }
     });
   }
   for (const approval of aggregate.fanoutApprovals) {
@@ -1187,7 +1201,12 @@ export function parseBuildPlanningAggregate(
     const key = `${receipt.sessionId}\0${receipt.requestId}`;
     if (
       submissionReceiptKeys.has(key) ||
-      !submissionIds.has(receipt.submissionId)
+      !submissionIds.has(receipt.submissionId) ||
+      (submissionRequestKeys.has(key) &&
+        (submissionRequestKeys.get(key)?.submissionId !==
+          receipt.submissionId ||
+          submissionRequestKeys.get(key)?.requestDigest !==
+            receipt.requestDigest))
     )
       fail();
     submissionReceiptKeys.add(key);

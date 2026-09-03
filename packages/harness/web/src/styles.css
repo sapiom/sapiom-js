@@ -2811,6 +2811,14 @@ button.rail-footer-card:hover {
     color var(--transition-fast);
 }
 
+.session-tab.has-planning-status {
+  max-width: 48ch;
+}
+
+.session-planning-status {
+  flex: 0 0 auto;
+}
+
 .session-tab:hover {
   background: var(--surface-hover);
   color: var(--text-dim);

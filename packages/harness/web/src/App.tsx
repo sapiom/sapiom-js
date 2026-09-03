@@ -349,6 +349,7 @@ export const App = (): JSX.Element => {
   const [planningFanoutPreview, setPlanningFanoutPreview] =
     useState<PlanningFanoutPreview | null>(null);
   const [planningFanoutPending, setPlanningFanoutPending] = useState(false);
+  const [planningSiblingPending, setPlanningSiblingPending] = useState(false);
   useEffect(() => {
     if (!plannerProjectId || agentMapEntry.state.workspace.status !== "ready") {
       setPlanningFanoutPreview(null);
@@ -1417,19 +1418,20 @@ export const App = (): JSX.Element => {
   const planningSessions = planningWorkspace
     ? state.sessions.filter(
         (session) =>
-          session.status !== "exited" &&
+          (session.status !== "exited" || session.builderPlanning != null) &&
           (session.agentMapIdentity?.projectId ??
             session.planning?.identity.projectId) === studioView.projectId,
       )
     : [];
   const activePlanningSession =
     planningWorkspace &&
-    activeSession?.status !== "exited" &&
+    (activeSession?.status !== "exited" ||
+      activeSession.builderPlanning != null) &&
     (activeSession?.agentMapIdentity?.projectId ??
       activeSession?.planning?.identity.projectId) === studioView.projectId
       ? activeSession
       : null;
-  const planningSessionLabel = (session: HarnessSession): string => {
+  const planningSessionBaseLabel = (session: HarnessSession): string => {
     const mapIdentity = session.agentMapIdentity;
     if (
       mapIdentity?.role === "map-planner" ||
@@ -1451,6 +1453,40 @@ export const App = (): JSX.Element => {
     }
     return sessionDisplayName(session, state.sessions, sessionNames);
   };
+  const planningSessionLabel = (session: HarnessSession): string => {
+    const base = planningSessionBaseLabel(session);
+    const identity = session.agentMapIdentity ?? session.planning?.identity;
+    const peers = planningSessions
+      .filter((candidate) => {
+        const candidateIdentity =
+          candidate.agentMapIdentity ?? candidate.planning?.identity;
+        if (!identity || !candidateIdentity) return false;
+        if (identity.role !== candidateIdentity.role) return false;
+        if (
+          identity.role === "agent-builder" &&
+          candidateIdentity.role === "agent-builder"
+        ) {
+          return (
+            identity.assignment.kind === "planned" &&
+            candidateIdentity.assignment.kind === "planned" &&
+            identity.assignment.agentId === candidateIdentity.assignment.agentId
+          );
+        }
+        return true;
+      })
+      .sort((left, right) => {
+        const primaryOrder =
+          Number(right.builderPlanning?.primary !== false) -
+          Number(left.builderPlanning?.primary !== false);
+        return (
+          primaryOrder ||
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id)
+        );
+      });
+    const index = peers.findIndex((candidate) => candidate.id === session.id);
+    return index > 0 ? `${base} ${index + 1}` : base;
+  };
   const activePlannedAgentId = (() => {
     const mapIdentity = activePlanningSession?.agentMapIdentity;
     return mapIdentity?.role === "agent-builder" &&
@@ -1458,6 +1494,52 @@ export const App = (): JSX.Element => {
       ? (mapIdentity.assignment.agentId as PlanNodeId)
       : null;
   })();
+  const openPlanningSibling = async (): Promise<void> => {
+    if (!planningWorkspace || planningSiblingPending) return;
+    if (!activePlanningSession) {
+      await agentMapEntry.openFreshPlanner();
+      return;
+    }
+    const identity = activePlanningSession.agentMapIdentity;
+    if (
+      identity?.role !== "agent-builder" ||
+      identity.assignment.kind !== "planned"
+    ) {
+      await agentMapEntry.openFreshPlanner();
+      return;
+    }
+    const plannedAgentId = identity.assignment.agentId;
+    const primary = planningSessions.find(
+      (session) =>
+        session.builderPlanning?.primary !== false &&
+        session.agentMapIdentity?.role === "agent-builder" &&
+        session.agentMapIdentity.assignment.kind === "planned" &&
+        session.agentMapIdentity.assignment.agentId === plannedAgentId,
+    );
+    if (!primary) {
+      harness.showToast(
+        "The primary planning session is unavailable.",
+        "error",
+      );
+      return;
+    }
+    setPlanningSiblingPending(true);
+    try {
+      const session = await harness.api.openAdditionalBuilderPlanningSession(
+        identity.projectId,
+        primary.id,
+        { harness: activePlanningSession.harness, theme: getTheme() },
+      );
+      harness.setActiveSessionId(session.id);
+    } catch (error) {
+      harness.showToast(
+        errorMessage(error, "Couldn't start the planning session."),
+        "error",
+      );
+    } finally {
+      setPlanningSiblingPending(false);
+    }
+  };
 
   /**
    * Whose tabs the strip shows: the ACTIVE session's PROJECT (SAP-2980), never
@@ -3073,12 +3155,13 @@ export const App = (): JSX.Element => {
               }
               newSessionPending={
                 planningWorkspace
-                  ? agentMapEntry.state.planner.status === "loading"
+                  ? agentMapEntry.state.planner.status === "loading" ||
+                    planningSiblingPending
                   : siblingSessionPending
               }
               onNewSession={
                 planningWorkspace
-                  ? agentMapEntry.openFreshPlanner
+                  ? openPlanningSibling
                   : activeSession
                     ? () => handleStartSiblingSession(activeSession)
                     : null
@@ -3199,6 +3282,20 @@ export const App = (): JSX.Element => {
                     testId="planner-loading"
                     icon="Radio"
                     title="Opening planning session…"
+                  />
+                ) : activePlanningSession?.status === "exited" &&
+                  activePlanningSession.builderPlanning ? (
+                  <DeadSessionPane
+                    session={activePlanningSession}
+                    resumeMode={deadResumeMode}
+                    loadRecord={harness.sessionRecord}
+                    onResume={() =>
+                      void harness.resumeSession(activePlanningSession.id)
+                    }
+                    onContinue={() => undefined}
+                    onClose={() =>
+                      void harness.closeSession(activePlanningSession.id)
+                    }
                   />
                 ) : activePlanningSession?.agentMapIdentity ||
                   activePlanningSession?.planning ? (
@@ -3595,7 +3692,11 @@ export const App = (): JSX.Element => {
                   focusedNodeId={activePlannedAgentId}
                   planningFanout={planningFanoutPreview}
                   planningFanoutPending={planningFanoutPending}
-                  onOpenPlanningFanout={() => void openPlanningFanout()}
+                  {...(activePlannerForProject
+                    ? {
+                        onOpenPlanningFanout: () => void openPlanningFanout(),
+                      }
+                    : {})}
                   onRetry={agentMapEntry.retryWorkspace}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}

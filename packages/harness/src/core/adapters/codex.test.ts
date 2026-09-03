@@ -56,17 +56,32 @@ describe("CodexAdapter", () => {
       ]);
     });
 
-    it("enforces the planning-readonly sandbox and clears inherited MCP servers", () => {
+    it("combines planning-readonly sandboxing with only the scoped Agent Map MCP", () => {
       const adapter = new CodexAdapter({ binary: "fake-codex" });
+      const agentMapMcp = {
+        url: "http://127.0.0.1:4312/mcp/agent-map",
+        bearerToken: "planning-capability",
+      };
       const spec = adapter.launch({
         harnessSessionId: "h-plan",
         cwd: "/tmp/proj",
         executionPolicy: "planning-readonly",
+        agentMapMcp,
       });
 
       expect(spec.args).toContain('sandbox_mode="read-only"');
       expect(spec.args).toContain("mcp_servers={}");
+      expect(spec.args).toContain(
+        `mcp_servers.agent-map.url=${JSON.stringify(agentMapMcp.url)}`,
+      );
+      expect(spec.args).toContain(
+        'mcp_servers.agent-map.bearer_token_env_var="SAPIOM_AGENT_MAP_CAPABILITY"',
+      );
       expect(spec.args).not.toContain('sandbox_mode="workspace-write"');
+      expect(spec.args.join(" ")).not.toContain(agentMapMcp.bearerToken);
+      expect(spec.env).toEqual({
+        SAPIOM_AGENT_MAP_CAPABILITY: agentMapMcp.bearerToken,
+      });
     });
 
     it("embeds the systemPromptFile's content inline via -c developer_instructions=<value>", async () => {

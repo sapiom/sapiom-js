@@ -11,6 +11,10 @@ const binding = (kickoffState: "delivering" | "delivered") =>
       inputId: "input_test",
       state: kickoffState,
       attemptCount: 1,
+      deliveryClaimId:
+        kickoffState === "delivering" ? "delivery-claim_test" : null,
+      deliveryClaimedAt:
+        kickoffState === "delivering" ? "2026-09-03T11:00:00.000Z" : null,
       deliveredAt:
         kickoffState === "delivered" ? "2026-09-03T11:00:01.000Z" : null,
       acknowledgedBy:

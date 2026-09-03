@@ -38,8 +38,8 @@ describe("createAgentMapRouter", () => {
   });
 
   async function start(planner?: {
-    planningSessions: PlanningSessionService;
-    plannerGreeting: PlannerGreetingCoordinator;
+    planningSessions?: PlanningSessionService;
+    plannerGreeting?: PlannerGreetingCoordinator;
     builderPlanningSessions?: BuilderPlanningSessionService;
   }) {
     const stateRoot = await fs.mkdtemp(
@@ -731,5 +731,71 @@ describe("createAgentMapRouter", () => {
       plannerSession.planning!.identity,
       expect.objectContaining({ ...body, approvalId: expect.any(String) }),
     );
+  });
+
+  it("keeps planning preview side-effect free for unknown project ids", async () => {
+    const preview = vi.fn(async () => ({ available: false, warnings: [] }));
+    const fixture = await start({
+      builderPlanningSessions: {
+        preview,
+      } as unknown as BuilderPlanningSessionService,
+    });
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/project_00000000-0000-4000-8000-000000009999/planning-fanout`,
+      { headers: { "X-Harness-Token": "test-token" } },
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ code: "project_not_found" });
+    expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("opens an additional builder tab only through the scoped project route", async () => {
+    const additional = {
+      id: "builder-additional",
+      agentSessionId: null,
+      harness: "codex",
+      cwd: "/tmp/project",
+      title: "Research",
+      status: "starting",
+      createdAt: "2026-09-03T12:00:00.000Z",
+      lastActiveAt: "2026-09-03T12:00:00.000Z",
+      boundWorkflowPath: null,
+      ready: false,
+      executionPolicy: "planning-readonly",
+    } as const;
+    const openAdditionalSession = vi.fn(async () => additional);
+    const fixture = await start({
+      builderPlanningSessions: {
+        openAdditionalSession,
+      } as unknown as BuilderPlanningSessionService,
+    });
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/builder-planning-sessions/builder-primary/additional`;
+    expect(
+      (
+        await fetch(route, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ harness: "codex" }),
+        })
+      ).status,
+    ).toBe(401);
+    const response = await fetch(route, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ harness: "codex", theme: "dark" }),
+    });
+    expect(response.status).toBe(201);
+    expect(openAdditionalSession).toHaveBeenCalledWith(
+      fixture.project.projectId,
+      "builder-primary",
+      { harness: "codex", theme: "dark" },
+    );
+    expect(await response.json()).toMatchObject({
+      id: "builder-additional",
+      executionPolicy: "planning-readonly",
+    });
   });
 });

@@ -2721,14 +2721,24 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
+  let builderPlanningSessions: BuilderPlanningSessionService | null = null;
   const agentMapProposalService = new AgentMapProposalService(
     agentMapWorkspaceStore,
     {
       // Persistence is authoritative and completes before this callback. The
       // shared event socket gives an already-open map the accepted delta; a
       // disconnected browser recovers from the durable snapshot on reconnect.
-      onAccepted: (delta) =>
-        bus.publish({ type: "agent-map.proposal.changed", delta }),
+      onAccepted: async (delta) => {
+        await builderPlanningSessions
+          ?.reconcileProject(delta.projectId)
+          .catch(() => {});
+        bus.publish({ type: "agent-map.proposal.changed", delta });
+      },
+      authorizeMutation: (planningIdentity, aggregate) =>
+        builderPlanningSessions?.assertProposalMutationAuthorized(
+          planningIdentity,
+          aggregate,
+        ),
     },
   );
   const architectureSourceResolver = new ArchitectureSourceResolver(
@@ -2745,11 +2755,14 @@ export const startServer = async (
     briefCompiler: new DeterministicAgentBriefCompiler(),
     impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
     clock: { now: () => new Date() },
+    onCommitted: (projectId) =>
+      builderPlanningSessions?.reconcileProject(projectId),
   });
-  const builderPlanningSessions = new BuilderPlanningSessionService({
+  builderPlanningSessions = new BuilderPlanningSessionService({
     workspaceStore: agentMapWorkspaceStore,
     buildPlanStore,
     contractValidator: buildPlanContractValidator,
+    sourceResolver: architectureSourceResolver,
     sessionManager,
     currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
     resolveProjectRoot: async (projectId) => {
@@ -3067,6 +3080,13 @@ export const startServer = async (
           console.error("[harness] Studio project catalog is unavailable");
           return [];
         }
+      },
+      beforeReadState: () => builderPlanningSessions!.reconcile(),
+      resumeBuilderPlanningSession: (session) => {
+        const projectId = session.agentMapIdentity?.projectId;
+        if (!projectId)
+          throw new Error("builder planning session has no project identity");
+        return builderPlanningSessions!.resume(projectId, session.id);
       },
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>

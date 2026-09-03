@@ -174,6 +174,8 @@ export interface BuilderPlanningSessionMetadata {
   brief: import("./build-plan.js").AgentBriefRef;
   bootstrapDigest: import("./build-plan.js").BuilderBootstrapDigest;
   state: BuilderPlanningLifecycleState;
+  /** Only the stable primary binding may propose or submit its result. */
+  primary?: boolean;
 }
 
 /** A harness session = one pty running one agent process in one directory. */

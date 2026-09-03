@@ -283,6 +283,8 @@ export const computePlanningSubmissionSemanticDigest = (
   const meaning = omit(submission, [
     "submissionId",
     "sessionId",
+    "requestId",
+    "requestDigest",
     "submittedAt",
     "supersedesSubmissionId",
     "semanticDigest",

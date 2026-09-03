@@ -398,6 +398,8 @@ function buildInteractiveConfigArgs(opts: LaunchOpts): string[] {
       "--strict-mcp-config",
       "--permission-mode",
       "plan",
+      "--allowedTools",
+      "mcp__agent-map__agent_map_propose,mcp__agent-map__planning_result_submit",
       "--disallowedTools",
       "Bash,PowerShell,Edit,Write,NotebookEdit",
     );

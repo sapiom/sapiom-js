@@ -6,6 +6,10 @@ import type { PlanningSessionIdentity } from "../shared/agent-map.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { BuildPlanServiceError } from "../core/build-plan-service.js";
+import {
+  BuilderPlanningSessionError,
+  planningResultSubmitRequestSchema,
+} from "../core/builder-planning-session.js";
 import { createAgentMapToolServer } from "./agent-map-mcp-tools.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
@@ -291,6 +295,99 @@ describe("Agent Map MCP plan-authoring discovery", () => {
         ],
       },
     });
+    await client.close();
+    await server.close();
+  });
+
+  it("returns bounded invalid_request for duplicate planning result identities", async () => {
+    const identity: PlanningSessionIdentity = {
+      projectId,
+      sessionId: "planned-builder-invalid",
+      userId: "user",
+      role: "agent-builder",
+      assignment: { kind: "planned", agentId: "agent-1" },
+    };
+    const submitResult = vi.fn(async (_identity, request) => {
+      const parsed = planningResultSubmitRequestSchema.safeParse(request);
+      if (!parsed.success)
+        throw new BuilderPlanningSessionError(
+          "invalid_request",
+          parsed.error.issues.slice(0, 64).map((issue) => ({
+            path: issue.path.join("."),
+            message: issue.code,
+          })),
+        );
+      throw new Error("unexpected valid request");
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const server = createAgentMapToolServer(
+      identity,
+      new AgentMapProposalService(
+        new AgentMapWorkspaceStore("/tmp/agent-map-tools-invalid-planning"),
+      ),
+      { builderPlanningService: { submitResult } as never },
+    );
+    const client = new Client({ name: "invalid-planning", version: "1" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({
+      name: "planning_result_submit",
+      arguments: {
+        schemaVersion: 1,
+        expected: {
+          assignmentId: "assignment_00000000-0000-7000-8000-000000000001",
+          source: {
+            kind: "proposal",
+            proposalId: "proposal_00000000-0000-7000-8000-000000000001",
+            version: 1,
+            graphDigest: `sha256:${"1".repeat(64)}`,
+          },
+          plan: {
+            planId: "build-plan_00000000-0000-7000-8000-000000000001",
+            version: 1,
+            semanticDigest: `sha256:${"2".repeat(64)}`,
+          },
+          brief: {
+            briefId: "brief_00000000-0000-7000-8000-000000000001",
+            version: 1,
+            semanticDigest: `sha256:${"3".repeat(64)}`,
+          },
+          bootstrapDigest: `sha256:${"4".repeat(64)}`,
+        },
+        requestId: "submit-duplicates",
+        status: "ready",
+        implementationPlan: [
+          {
+            stepId: "step-one",
+            ordinal: 1,
+            description: "One",
+            verification: "One",
+          },
+          {
+            stepId: "step-one",
+            ordinal: 1,
+            description: "Two",
+            verification: "Two",
+          },
+        ],
+        risks: [],
+        questions: [],
+        proposedMapOperationIds: [],
+      },
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "invalid_request",
+        recovery: "reread",
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: expect.stringContaining("stepId") }),
+          expect.objectContaining({ path: expect.stringContaining("ordinal") }),
+        ]),
+      },
+    });
+    expect(submitResult).toHaveBeenCalledOnce();
     await client.close();
     await server.close();
   });

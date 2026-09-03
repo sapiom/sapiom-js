@@ -130,7 +130,7 @@ export function SessionTabs({
             <div
               ref={active ? activeTabRef : undefined}
               key={session.id}
-              className={`session-tab${active ? " is-active" : ""}`}
+              className={`session-tab${active ? " is-active" : ""}${planningState ? " has-planning-status" : ""}`}
               data-testid={`session-tab-${session.id}`}
             >
               {showRename ? (
@@ -191,6 +191,14 @@ export function SessionTabs({
                   >
                     {label}
                   </span>
+                  {planningState && (
+                    <span
+                      className="status-tag session-planning-status"
+                      data-testid={`session-planning-status-${session.id}`}
+                    >
+                      Planning read-only · {planningState}
+                    </span>
+                  )}
                 </button>
               )}
 

@@ -93,6 +93,12 @@ const planningFanoutSchema = z
     theme: z.enum(["light", "dark"]).optional(),
   })
   .strict();
+const additionalBuilderSessionSchema = z
+  .object({
+    harness: z.enum(SPAWNABLE_HARNESS_KINDS).optional(),
+    theme: z.enum(["light", "dark"]).optional(),
+  })
+  .strict();
 
 function sendPlanningError(
   res: import("express").Response,
@@ -419,9 +425,19 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       return;
     }
     try {
-      const preview = await options.builderPlanningSessions.preview(
+      const project = await options.catalog.resolveIdentity(
         req.params
           .projectId as import("../shared/agent-map.js").StudioProjectId,
+      );
+      if (!project) {
+        res.status(404).json({
+          code: "project_not_found",
+          error: "Studio project was not found",
+        });
+        return;
+      }
+      const preview = await options.builderPlanningSessions.preview(
+        project.projectId,
       );
       res.status(200).setHeader("Cache-Control", "no-store").json(preview);
     } catch (error) {
@@ -524,6 +540,40 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
                 : 409;
           res.status(status).json({ code: error.code, error: error.message });
         } else if (!sendPlanningError(res, error)) next(error);
+      }
+    },
+  );
+
+  router.post(
+    "/projects/:projectId/builder-planning-sessions/:sessionId/additional",
+    async (req, res, next) => {
+      if (!options.builderPlanningSessions) {
+        res
+          .status(501)
+          .json({ error: "Builder planning sessions are unavailable" });
+        return;
+      }
+      const parsed = additionalBuilderSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid additional session request" });
+        return;
+      }
+      try {
+        const session =
+          await options.builderPlanningSessions.openAdditionalSession(
+            req.params.projectId,
+            req.params.sessionId,
+            parsed.data,
+          );
+        res.status(201).setHeader("Cache-Control", "no-store").json(session);
+      } catch (error) {
+        if (error instanceof BuilderPlanningSessionError) {
+          res
+            .status(error.code === "forbidden" ? 403 : 409)
+            .json({ code: error.code, error: error.message });
+        } else {
+          next(error);
+        }
       }
     },
   );
