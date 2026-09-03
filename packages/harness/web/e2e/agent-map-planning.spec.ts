@@ -93,6 +93,9 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       /source proposal_.*digest sha256:/,
     );
     await page.getByTestId("open-planning-sessions").click();
+    await expect(page.getByTestId("toast")).toContainText(
+      "Opened or reused 2 planning sessions",
+    );
     await expect
       .poll(() =>
         page.evaluate(() => {

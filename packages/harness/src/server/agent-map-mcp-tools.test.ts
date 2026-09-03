@@ -101,23 +101,24 @@ describe("Agent Map MCP plan-authoring discovery", () => {
     const client = new Client({ name: "partial-fanout", version: "1" });
     await server.connect(serverTransport);
     await client.connect(clientTransport);
+    const toolArguments = {
+      approvalId: "approval-opaque",
+      source: {
+        kind: "proposal",
+        proposalId: "proposal_00000000-0000-7000-8000-000000000001",
+        version: 1,
+        graphDigest: `sha256:${"1".repeat(64)}`,
+      },
+      plan: {
+        planId: "build-plan_00000000-0000-7000-8000-000000000001",
+        version: 1,
+        semanticDigest: `sha256:${"2".repeat(64)}`,
+      },
+      assignmentIds,
+    };
     const result = await client.callTool({
       name: "build_plan_open_planning_sessions",
-      arguments: {
-        approvalId: "approval-opaque",
-        source: {
-          kind: "proposal",
-          proposalId: "proposal_00000000-0000-7000-8000-000000000001",
-          version: 1,
-          graphDigest: `sha256:${"1".repeat(64)}`,
-        },
-        plan: {
-          planId: "build-plan_00000000-0000-7000-8000-000000000001",
-          version: 1,
-          semanticDigest: `sha256:${"2".repeat(64)}`,
-        },
-        assignmentIds,
-      },
+      arguments: toolArguments,
     });
 
     expect(result).toMatchObject({
@@ -132,6 +133,24 @@ describe("Agent Map MCP plan-authoring discovery", () => {
         }),
       ],
     });
+
+    const pluralAssignmentIds = [...assignmentIds, "assignment-c"];
+    openOrReuse.mockResolvedValueOnce({
+      bindings: pluralAssignmentIds.map((assignmentId) => ({ assignmentId })),
+      unreachableAssignmentIds: ["assignment-b"],
+    });
+    const plural = await client.callTool({
+      name: "build_plan_open_planning_sessions",
+      arguments: { ...toolArguments, assignmentIds: pluralAssignmentIds },
+    });
+    expect(plural.content).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining(
+          "Reconciled 2 planning sessions; 1 is locally unreachable.",
+        ),
+      }),
+    ]);
+
     await client.close();
     await server.close();
   });
