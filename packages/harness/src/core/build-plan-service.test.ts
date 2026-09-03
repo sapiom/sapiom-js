@@ -1797,8 +1797,8 @@ describe("BuildPlanService", () => {
         op: "create-agent-assignment" as const,
         assignment: {
           plannedAgentId: AGENT_ID,
-          mission: baseOperations[1]!.assignment.mission,
-          scope: baseOperations[1]!.assignment.scope,
+          mission: "Implement the feature",
+          scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
           deliverables: [
             {
               clientRef: "production-deliverable",
