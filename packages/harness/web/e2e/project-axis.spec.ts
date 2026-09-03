@@ -174,6 +174,11 @@ test.describe("the plan-first project children", () => {
     const agent = group.getByTestId("workflow-dashboard-keeper");
     await expect(project).toBeVisible();
     await expect(map).toBeVisible();
+    await expect(map.getByTestId("agent-map-select")).toHaveText("Plan Agents");
+    await expect(map.getByTestId("agent-map-select")).toHaveAttribute(
+      "data-tooltip",
+      "Open Plan Agents",
+    );
     await expect(agent).toBeVisible();
     await expect(group.locator(":scope > *")).toHaveCount(3);
 
@@ -186,6 +191,10 @@ test.describe("the plan-first project children", () => {
 
     await group.getByTestId("agent-map-select").click();
     await expect(map).toHaveClass(/is-selected/);
+    await expect(map.getByTestId("agent-map-select")).toHaveAttribute(
+      "data-tooltip",
+      "Plan Agents selected",
+    );
     await expect(page.getByTestId("agent-map-empty")).toBeVisible();
 
     // A selected child expands on selection, but an intentional disclosure

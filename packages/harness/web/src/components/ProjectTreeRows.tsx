@@ -142,11 +142,11 @@ export function AgentMapRow({
         className="tree-row"
         data-testid="agent-map-select"
         aria-pressed={selected}
-        data-tooltip={selected ? "Agent Map selected" : "Open Agent Map"}
+        data-tooltip={selected ? "Plan Agents selected" : "Open Plan Agents"}
         onClick={onSelect}
       >
         <Icon name="Waypoints" size={13} />
-        <span className="tree-row-label">Agent Map</span>
+        <span className="tree-row-label">Plan Agents</span>
       </button>
     </div>
   );
