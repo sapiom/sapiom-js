@@ -177,7 +177,7 @@ interface WorkflowsRailProps {
   onOpenProject: (root: string) => Promise<unknown>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  /** Starts a coding-agent session at the selected project root. */
+  /** Starts a coding-agent session and owns its failure feedback. */
   onStartProjectSession: (root: string, label: string) => Promise<void>;
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
@@ -1395,18 +1395,12 @@ export function WorkflowsRail({
                           data-testid={`project-start-session-${project.label}`}
                           aria-label={`Start a session in ${project.label}`}
                           data-tooltip="Start a session here"
-                          onClick={() => {
+                          onClick={() =>
                             void onStartProjectSession(
                               project.root,
                               project.label,
-                            ).catch((err: unknown) => {
-                              onToast(
-                                err instanceof Error
-                                  ? err.message
-                                  : `Couldn't start a session in ${project.label}.`,
-                              );
-                            });
-                          }}
+                            )
+                          }
                         >
                           <Icon name="Plus" size={13} />
                         </button>

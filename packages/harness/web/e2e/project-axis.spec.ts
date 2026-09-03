@@ -168,6 +168,17 @@ test.describe("the plan-first project children", () => {
   test("the project plus starts a coding session at its root without creating an agent", async ({
     page,
   }) => {
+    await page.evaluate(() => {
+      const key = "sapiom-harness-ui-prefs";
+      const current = JSON.parse(localStorage.getItem(key) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...current, preferredHarness: "codex" }),
+      );
+    });
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const row = group.getByTestId("project-row-dashboard-keeper");
     const start = group.getByTestId("project-start-session-dashboard-keeper");
@@ -217,7 +228,7 @@ test.describe("the plan-first project children", () => {
         lastCreateSession: {
           req: {
             cwd: "/Users/demo/dashboard-keeper",
-            harness: "claude-code",
+            harness: "codex",
           },
         },
       });
@@ -239,6 +250,28 @@ test.describe("the plan-first project children", () => {
           ).__HARNESS_TEST__?.createOrder ?? [],
       ),
     ).not.toContain("scaffold:/Users/demo/dashboard-keeper");
+  });
+
+  test("a failed project session keeps Plan Agents selected", async ({
+    page,
+  }) => {
+    const group = page.getByTestId("workspace-group-dashboard-keeper");
+    const map = group.getByTestId("agent-map-select");
+    await map.click();
+    await expect(map).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await page.evaluate(() => {
+      (
+        window as unknown as { __MOCK_CREATE_SESSION_FAIL_ONCE__?: boolean }
+      ).__MOCK_CREATE_SESSION_FAIL_ONCE__ = true;
+    });
+
+    await group.getByTestId("project-start-session-dashboard-keeper").click();
+    await expect(page.getByTestId("toast")).toContainText(
+      "mock: couldn't create session",
+    );
+    await expect(map).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
   });
 
   test("a root agent is a separate target below the pinned Agent Map", async ({

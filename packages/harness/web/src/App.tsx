@@ -1644,7 +1644,7 @@ export const App = (): JSX.Element => {
         harness.setActiveSessionId(decision.to.id);
       return;
     }
-    void startProjectSession(root, label);
+    void startProjectSession(root, label, preferredHarness());
   };
   selectProjectRef.current = handleSelectWorkspace;
 
@@ -1659,17 +1659,19 @@ export const App = (): JSX.Element => {
   const startProjectSession = async (
     root: string,
     label: string,
-    agentHarness: HarnessKind = "claude-code",
-  ): Promise<void> => {
-    if (startingProjectRootsRef.current.has(root)) return;
+    agentHarness: HarnessKind,
+  ): Promise<boolean> => {
+    if (startingProjectRootsRef.current.has(root)) return false;
     startingProjectRootsRef.current.add(root);
     setStartingProject({ root, label });
     try {
       await createSessionAt(root, agentHarness);
+      return true;
     } catch (err) {
       harness.showToast(
         (err as Error).message || `Couldn't start a session in ${label}.`,
       );
+      return false;
     } finally {
       startingProjectRootsRef.current.delete(root);
       setStartingProject((current) =>
@@ -1683,8 +1685,11 @@ export const App = (): JSX.Element => {
    * preference the rail used to read before it dispatched. It moved here with
    * the create itself; the rail no longer starts sessions.
    */
-  const preferredHarness = (): HarnessKind =>
-    loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
+  function preferredHarness(): HarnessKind {
+    return loadUiPrefs().preferredHarness === "codex"
+      ? "codex"
+      : "claude-code";
+  }
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -2776,14 +2781,20 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onStartProjectSession={(root, label) => {
+            onStartProjectSession={async (root, label) => {
               // A project-row `+` explicitly asks to see a fresh coding
               // session, even when Plan Agents or a legacy project map is the
-              // current altitude. The planner process stays resumable.
+              // current altitude. Change views only after creation succeeds so
+              // a failed launch leaves the planner in place and resumable.
+              const started = await startProjectSession(
+                root,
+                label,
+                preferredHarness(),
+              );
+              if (!started) return;
               studioRestoreGenerationRef.current += 1;
               setStudioSelection(null);
               setSelectedProject(null);
-              return startProjectSession(root, label, preferredHarness());
             }}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}

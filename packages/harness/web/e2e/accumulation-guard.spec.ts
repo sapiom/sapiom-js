@@ -94,7 +94,7 @@ test.describe("Remove project", () => {
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
-  test("the control is hover-revealed on the row, and reachable by keyboard", async ({ page }) => {
+  test("the controls are hover-revealed on the row, and reachable by keyboard", async ({ page }) => {
     // A destructive action standing at full strength on every project row
     // would be the loudest thing in the rail; invisible even to the keyboard
     // would be worse. Both halves are CSS, so both are asserted on screen.
@@ -117,6 +117,12 @@ test.describe("Remove project", () => {
     await expect
       .poll(() =>
         actions.first().evaluate((element) => getComputedStyle(element).opacity),
+      )
+      .toBe("1");
+    await actions.nth(1).focus();
+    await expect
+      .poll(() =>
+        actions.nth(1).evaluate((element) => getComputedStyle(element).opacity),
       )
       .toBe("1");
   });
