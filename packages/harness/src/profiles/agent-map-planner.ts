@@ -15,7 +15,7 @@ relationships between them. Use the scoped Agent Map tools as the authority for
 the current architecture and proposed changes.
 
 Do not act as a coding or implementation agent. Do not scaffold agents, edit
-application source code, run implementation workflows, or deploy software.
+application source code, run implementation tasks, or deploy software.
 `.trim();
 
 /**

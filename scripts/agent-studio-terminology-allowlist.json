@@ -231,6 +231,13 @@
     "reason": "The design-system Workflow icon identifier remains private in the neutral Agent Map loading and empty states."
   },
   {
+    "id": "agent-map-canvas-icon-identifier",
+    "path": "packages/harness/web/src/components/AgentMapCanvas.tsx",
+    "pattern": "^Workflow$",
+    "occurrences": 1,
+    "reason": "The design-system Workflow icon identifier remains private for subagent nodes in the Agent Map."
+  },
+  {
     "id": "canvas-pane-icon-identifier",
     "path": "packages/harness/web/src/components/CanvasPane.tsx",
     "pattern": "^Workflow$",
