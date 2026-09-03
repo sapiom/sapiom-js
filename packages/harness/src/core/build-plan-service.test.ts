@@ -457,6 +457,105 @@ describe("BuildPlanService", () => {
     });
   });
 
+  it("replays apply when the same request commits between replay and prepare reads", async () => {
+    const { service, store } = await fixture();
+    const request = {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-apply-preflight-race",
+      operations: baseOperations,
+    };
+    const read = store.read.bind(store);
+    let readCount = 0;
+    let committed: Awaited<ReturnType<typeof service.apply>> | undefined;
+    vi.spyOn(store, "read").mockImplementation(async (projectId) => {
+      readCount += 1;
+      if (readCount === 2) committed = await service.apply(identity, request);
+      return read(projectId);
+    });
+
+    const replayed = await service.apply(identity, request);
+
+    expect(committed).toMatchObject({ plan: { version: 1 }, replayed: false });
+    expect(replayed).toEqual({ ...committed!, replayed: true });
+    expect((await read(PROJECT_ID)).planVersions).toHaveLength(1);
+  });
+
+  it("rejects a changed apply payload committed during the preflight race", async () => {
+    const { service, store } = await fixture();
+    const request = {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-apply-preflight-reused",
+      operations: baseOperations,
+    };
+    const competingRequest = {
+      ...request,
+      operations: [
+        {
+          op: "set-project-outcome" as const,
+          outcome: { summary: "Competing payload" },
+        },
+      ],
+    };
+    const read = store.read.bind(store);
+    let readCount = 0;
+    vi.spyOn(store, "read").mockImplementation(async (projectId) => {
+      readCount += 1;
+      if (readCount === 2) await service.apply(identity, competingRequest);
+      return read(projectId);
+    });
+
+    await expect(service.apply(identity, request)).rejects.toMatchObject({
+      code: "idempotency_key_reused",
+    });
+    expect((await read(PROJECT_ID)).planVersions).toHaveLength(1);
+  });
+
+  it("replays rebase when the same request commits between replay and preflight reads", async () => {
+    const { service, store } = await fixture();
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-create-before-rebase-preflight-race",
+      operations: baseOperations,
+    });
+    const request = {
+      schemaVersion: 1,
+      planId: created.plan.planId,
+      expectedPlanVersion: created.plan.version,
+      fromSource: proposalSource(),
+      toSource: {
+        kind: "revision" as const,
+        revisionId: "revision_00000000-0000-7000-8000-000000000021",
+        revisionNumber: 1,
+        graphDigest: proposalSource().graphDigest,
+      },
+      requestId: "request-rebase-preflight-race",
+      resolutions: [],
+    };
+    const read = store.read.bind(store);
+    let readCount = 0;
+    let committed: Awaited<ReturnType<typeof service.rebase>> | undefined;
+    vi.spyOn(store, "read").mockImplementation(async (projectId) => {
+      readCount += 1;
+      if (readCount === 2) committed = await service.rebase(identity, request);
+      return read(projectId);
+    });
+
+    const replayed = await service.rebase(identity, request);
+
+    expect(committed).toMatchObject({ plan: { version: 2 }, replayed: false });
+    expect(replayed).toEqual({ ...committed!, replayed: true });
+    expect((await read(PROJECT_ID)).planVersions).toHaveLength(2);
+  });
+
   it("allocates canonical subrecord IDs from bounded client correlations", async () => {
     const { service, allocator, store } = await fixture();
     const request = {
