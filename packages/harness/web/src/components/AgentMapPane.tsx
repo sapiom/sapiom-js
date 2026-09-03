@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
+import type { PlanningFanoutPreview } from "@shared/build-plan";
 
 import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
@@ -10,6 +11,10 @@ import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
   state: AgentMapWorkspacePaneState;
+  focusedNodeId?: PlanNodeId | null;
+  planningFanout?: PlanningFanoutPreview | null;
+  planningFanoutPending?: boolean;
+  onOpenPlanningFanout?: () => void;
   onRetry: () => void;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -18,6 +23,10 @@ interface AgentMapPaneProps {
 /** The honest E1 map: durable state around the existing neutral canvas empty. */
 export function AgentMapPane({
   state,
+  focusedNodeId = null,
+  planningFanout = null,
+  planningFanoutPending = false,
+  onOpenPlanningFanout,
   onRetry,
   expanded,
   onToggleExpanded,
@@ -26,6 +35,14 @@ export function AgentMapPane({
   const proposal = value?.proposal ?? null;
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
   const mapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (
+      focusedNodeId &&
+      proposal?.nodes.some((node) => node.id === focusedNodeId)
+    )
+      setSelected(focusedNodeId);
+  }, [focusedNodeId, proposal]);
 
   useEffect(() => {
     if (
@@ -96,6 +113,9 @@ export function AgentMapPane({
         selected={selected}
         onSelectNode={setSelected}
         onCloseInspector={closeInspector}
+        planningFanout={planningFanout}
+        planningFanoutPending={planningFanoutPending}
+        onOpenPlanningFanout={onOpenPlanningFanout}
       />
     );
   } else {
@@ -137,13 +157,26 @@ function PopulatedAgentMap({
   selected,
   onSelectNode,
   onCloseInspector,
+  planningFanout,
+  planningFanoutPending,
+  onOpenPlanningFanout,
 }: {
   value: AgentMapWorkspaceResponse;
   selected: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId) => void;
   onCloseInspector: () => void;
+  planningFanout: PlanningFanoutPreview | null;
+  planningFanoutPending: boolean;
+  onOpenPlanningFanout?: () => void;
 }): JSX.Element {
   const proposal = value.proposal!;
+  const exactFanoutLabel = planningFanout?.available
+    ? `Plan ${planningFanout.plan.planId} version ${planningFanout.plan.version} digest ${planningFanout.plan.semanticDigest}; source ${
+        planningFanout.source.kind === "proposal"
+          ? `${planningFanout.source.proposalId} version ${planningFanout.source.version}`
+          : `${planningFanout.source.revisionId} revision ${planningFanout.source.revisionNumber}`
+      } digest ${planningFanout.source.graphDigest}; ${planningFanout.assignmentCount} assignments; ${planningFanout.expectedSessionCount} sessions; ${planningFanout.expectedModelTurnCount} model turns`
+    : null;
   return (
     <div
       className="agent-map-live"
@@ -163,6 +196,42 @@ function PopulatedAgentMap({
           Version {proposal.version}
         </span>
       </div>
+      {planningFanout?.available && onOpenPlanningFanout && (
+        <div
+          className="agent-map-live-header"
+          data-testid="planning-fanout-consent"
+        >
+          <span
+            className="system-graph-node-meta"
+            aria-label={exactFanoutLabel ?? undefined}
+            title={exactFanoutLabel ?? undefined}
+          >
+            Plan {planningFanout.plan.planId} v{planningFanout.plan.version} (
+            {planningFanout.plan.semanticDigest.slice(0, 15)}…) · Source{" "}
+            {planningFanout.source.kind === "proposal"
+              ? `${planningFanout.source.proposalId} v${planningFanout.source.version}`
+              : `${planningFanout.source.revisionId} r${planningFanout.source.revisionNumber}`}{" "}
+            ({planningFanout.source.graphDigest.slice(0, 15)}…) ·{" "}
+            {planningFanout.assignmentCount} assignments ·{" "}
+            {planningFanout.expectedSessionCount} sessions ·{" "}
+            {planningFanout.expectedModelTurnCount} model turns
+          </span>
+          {planningFanout.warnings.length > 0 && (
+            <span className="system-graph-node-meta">
+              Warnings: {planningFanout.warnings.join(", ")}
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn-primary"
+            data-testid="open-planning-sessions"
+            disabled={planningFanoutPending}
+            onClick={onOpenPlanningFanout}
+          >
+            {planningFanoutPending ? "Opening…" : "Open planning sessions"}
+          </button>
+        </div>
+      )}
       <div className="agent-map-live-body">
         <AgentMapCanvas
           proposal={proposal}

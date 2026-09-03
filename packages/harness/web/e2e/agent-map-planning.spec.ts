@@ -79,6 +79,44 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
+    const consent = page.getByTestId("planning-fanout-consent");
+    await expect(consent).toBeVisible();
+    await expect(consent).toContainText("2 assignments");
+    const exactRefs = consent.locator("[aria-label^='Plan ']");
+    await expect(exactRefs).toHaveAttribute(
+      "aria-label",
+      /build-plan_.*digest sha256:/,
+    );
+    await expect(exactRefs).toHaveAttribute(
+      "aria-label",
+      /source proposal_.*digest sha256:/,
+    );
+    await page.getByTestId("open-planning-sessions").click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Boolean(
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: { planningFanoutCall?: unknown };
+              }
+            ).__HARNESS_TEST__?.planningFanoutCall,
+          ),
+        ),
+      )
+      .toBe(true);
+    const tabs = page
+      .getByRole("tablist", { name: "Sessions" })
+      .getByRole("tab");
+    await expect(tabs).toHaveCount(3);
+    await expect(tabs.filter({ hasText: "Planner" })).toHaveCount(1);
+    await expect(tabs.filter({ hasText: "Stock Research" })).toHaveCount(1);
+    const marketingTab = tabs.filter({ hasText: "Marketing" });
+    await expect(marketingTab).toHaveCount(1);
+    await expect(marketingTab).toHaveAttribute(
+      "aria-label",
+      /Planning read-only · Planning$/,
+    );
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -106,10 +144,11 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
         page.locator(`[data-node-kind='${kind}']`).first(),
       ).toBeVisible();
     }
+    const liveMap = page.getByTestId("agent-map-live");
     await expect(
-      page.getByText("Stock Research", { exact: true }),
+      liveMap.getByText("Stock Research", { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText("Marketing", { exact: true })).toBeVisible();
+    await expect(liveMap.getByText("Marketing", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Research Database", { exact: true }),
     ).toBeVisible();
@@ -182,7 +221,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       });
     }, projectId);
     await expect(
-      page.getByText("Campaign Marketing", { exact: true }),
+      liveMap.getByText("Campaign Marketing", { exact: true }),
     ).toBeVisible();
     await expect
       .poll(() =>
@@ -191,7 +230,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
         ),
       )
       .toBe(transformedView);
-    await page.getByText("Campaign Marketing", { exact: true }).click();
+    await liveMap.getByText("Campaign Marketing", { exact: true }).click();
     await expect(
       page.getByTestId("agent-map-latest-attribution"),
     ).toContainText("Agent builder · unplanned");
@@ -232,7 +271,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       });
     }, projectId);
     await expect(
-      page.getByText("Equity Research", { exact: true }),
+      liveMap.getByText("Equity Research", { exact: true }),
     ).toBeVisible();
     await expect(
       page.getByTestId("agent-map-latest-attribution"),

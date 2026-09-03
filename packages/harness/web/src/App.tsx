@@ -58,10 +58,12 @@ import type {
 } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
 import type {
+  PlanNodeId,
   PlannerSessionRequest,
   StudioProjectId,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
+import type { PlanningFanoutPreview } from "@shared/build-plan";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";
@@ -344,6 +346,75 @@ export const App = (): JSX.Element => {
     subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
+  const [planningFanoutPreview, setPlanningFanoutPreview] =
+    useState<PlanningFanoutPreview | null>(null);
+  const [planningFanoutPending, setPlanningFanoutPending] = useState(false);
+  useEffect(() => {
+    if (!plannerProjectId || agentMapEntry.state.workspace.status !== "ready") {
+      setPlanningFanoutPreview(null);
+      return;
+    }
+    let current = true;
+    void harness.api.getPlanningFanoutPreview(plannerProjectId).then(
+      (preview) => {
+        if (current) setPlanningFanoutPreview(preview);
+      },
+      () => {
+        if (current)
+          setPlanningFanoutPreview({
+            available: false,
+            warnings: ["Planning fan-out status is unavailable."],
+          });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [agentMapEntry.state.workspace, harness.api, plannerProjectId]);
+
+  const openPlanningFanout = useCallback(async (): Promise<void> => {
+    if (
+      !plannerProjectId ||
+      !activePlannerForProject ||
+      !planningFanoutPreview?.available ||
+      planningFanoutPending
+    )
+      return;
+    setPlanningFanoutPending(true);
+    try {
+      await harness.api.openPlanningFanout(
+        plannerProjectId,
+        activePlannerForProject.id,
+        {
+          source: planningFanoutPreview.source,
+          plan: planningFanoutPreview.plan,
+          assignmentIds: planningFanoutPreview.assignmentIds,
+          harness:
+            loadUiPrefs().preferredHarness === "codex"
+              ? "codex"
+              : "claude-code",
+          theme: getTheme(),
+        },
+      );
+      harness.showToast(
+        `Opening ${planningFanoutPreview.assignmentCount} planning sessions`,
+      );
+    } catch (error) {
+      harness.showToast(
+        errorMessage(error, "Planning sessions could not be opened."),
+        "error",
+      );
+    } finally {
+      setPlanningFanoutPending(false);
+    }
+  }, [
+    activePlannerForProject,
+    harness.api,
+    harness.showToast,
+    plannerProjectId,
+    planningFanoutPending,
+    planningFanoutPreview,
+  ]);
 
   // A project visit restores its server-owned preference before choosing an
   // altitude. Once map is chosen, `useAgentMapEntry` owns the independent map
@@ -480,20 +551,23 @@ export const App = (): JSX.Element => {
    * this epic removes, one click later. A functional updater so the rule can
    * be applied from handlers that do not close over the current selection.
    */
-  const leaveProjectUnlessInside = useCallback((cwd: string | null): void => {
-    setSelectedProject((current) =>
-      current && cwd && rootContains(current.root, cwd) ? current : null,
-    );
-    setStudioSelection((current) => {
-      if (!current || !cwd) return null;
-      const ownsTarget = (harness.state?.workspaceScopes ?? []).some(
-        (scope) =>
-          scope.projectId === current.projectId &&
-          rootContains(scope.cwd, cwd),
+  const leaveProjectUnlessInside = useCallback(
+    (cwd: string | null): void => {
+      setSelectedProject((current) =>
+        current && cwd && rootContains(current.root, cwd) ? current : null,
       );
-      return ownsTarget ? current : null;
-    });
-  }, [harness.state]);
+      setStudioSelection((current) => {
+        if (!current || !cwd) return null;
+        const ownsTarget = (harness.state?.workspaceScopes ?? []).some(
+          (scope) =>
+            scope.projectId === current.projectId &&
+            rootContains(scope.cwd, cwd),
+        );
+        return ownsTarget ? current : null;
+      });
+    },
+    [harness.state],
+  );
   // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
   // because it needs `state`/`handleFocusAgent`, which exist only past the loading
   // guard; the effects below reach it through the ref. The cold-start target rides
@@ -1340,21 +1414,50 @@ export const App = (): JSX.Element => {
   const planningWorkspace = studioView?.altitude === "map";
   const agentMapUnavailable =
     planningWorkspace && agentMapEntry.state.unavailable !== null;
-  const plannerSessions = planningWorkspace
+  const planningSessions = planningWorkspace
     ? state.sessions.filter(
         (session) =>
           session.status !== "exited" &&
-          session.planning?.identity.role === "map-planner" &&
-          session.planning.identity.projectId === studioView.projectId,
+          (session.agentMapIdentity?.projectId ??
+            session.planning?.identity.projectId) === studioView.projectId,
       )
     : [];
-  const activePlannerSession =
+  const activePlanningSession =
     planningWorkspace &&
     activeSession?.status !== "exited" &&
-    activeSession?.planning?.identity.role === "map-planner" &&
-    activeSession.planning.identity.projectId === studioView.projectId
+    (activeSession?.agentMapIdentity?.projectId ??
+      activeSession?.planning?.identity.projectId) === studioView.projectId
       ? activeSession
       : null;
+  const planningSessionLabel = (session: HarnessSession): string => {
+    const mapIdentity = session.agentMapIdentity;
+    if (
+      mapIdentity?.role === "map-planner" ||
+      session.planning?.identity.role === "map-planner"
+    )
+      return "Planner";
+    if (
+      mapIdentity?.role === "agent-builder" &&
+      mapIdentity.assignment.kind === "planned"
+    ) {
+      const agentId = mapIdentity.assignment.agentId;
+      const proposal =
+        agentMapEntry.state.workspace.status === "ready"
+          ? agentMapEntry.state.workspace.value.proposal
+          : null;
+      return (
+        proposal?.nodes.find((node) => node.id === agentId)?.name ?? "Builder"
+      );
+    }
+    return sessionDisplayName(session, state.sessions, sessionNames);
+  };
+  const activePlannedAgentId = (() => {
+    const mapIdentity = activePlanningSession?.agentMapIdentity;
+    return mapIdentity?.role === "agent-builder" &&
+      mapIdentity.assignment.kind === "planned"
+      ? (mapIdentity.assignment.agentId as PlanNodeId)
+      : null;
+  })();
 
   /**
    * Whose tabs the strip shows: the ACTIVE session's PROJECT (SAP-2980), never
@@ -1376,7 +1479,7 @@ export const App = (): JSX.Element => {
     knownProjectRoots(),
   );
   const focusTabs = planningWorkspace
-    ? plannerSessions
+    ? planningSessions
     : conversation.kind === "project"
       ? liveSessionsForProject(state.sessions, conversation.root)
       : liveSessionsForFocus(state.sessions, conversation.path);
@@ -1460,7 +1563,7 @@ export const App = (): JSX.Element => {
   const rightPaneSuppressedByComposer =
     (showComposer && !atMapAltitude) || agentMapUnavailable;
   const sessionBarSession = planningWorkspace
-    ? activePlannerSession
+    ? activePlanningSession
     : showWorkbench || showDead
       ? activeSession
       : null;
@@ -1873,8 +1976,7 @@ export const App = (): JSX.Element => {
           ) ?? null)
         : null;
       const session =
-        existing ??
-        (await createSessionAt(request.root, preferredHarness()));
+        existing ?? (await createSessionAt(request.root, preferredHarness()));
       await harness.bindWorkflow(session.id, created.path);
       harness.setActiveSessionId(session.id);
       setFocusedAgentPath(created.path);
@@ -2038,7 +2140,9 @@ export const App = (): JSX.Element => {
       // the dialog shows it verbatim.
       const parent = parentOf(cwd);
       if (!parent)
-        throw new Error(`Can't create an agent at ${cwd} — pick a folder inside a project.`);
+        throw new Error(
+          `Can't create an agent at ${cwd} — pick a folder inside a project.`,
+        );
       const created = await harness.scaffoldAgent(
         parent,
         basenameOf(cwd),
@@ -2638,9 +2742,7 @@ export const App = (): JSX.Element => {
             sessions={state.sessions}
             pendingWorkspaces={harness.pendingWorkspaces}
             activeSessionId={harness.activeSessionId}
-            focusedAgentPath={
-              atMapAltitude ? null : effectiveFocusedAgentPath
-            }
+            focusedAgentPath={atMapAltitude ? null : effectiveFocusedAgentPath}
             workspaceScopes={state.workspaceScopes}
             studioProjects={state.studioProjects}
             studioSelection={planFirstSelection}
@@ -2693,10 +2795,7 @@ export const App = (): JSX.Element => {
             closedProjects={harness.closedProjects}
             unsearchedCheckouts={harness.unsearchedCheckouts}
             onRemoveProject={async (root) => {
-              if (
-                selectedProject &&
-                samePath(selectedProject.root, root)
-              ) {
+              if (selectedProject && samePath(selectedProject.root, root)) {
                 setSelectedProject(null);
               }
               const removedProjectId = workspaceScopes.find((scope) =>
@@ -2935,7 +3034,7 @@ export const App = (): JSX.Element => {
               }
               sessions={
                 planningWorkspace
-                  ? plannerSessions
+                  ? planningSessions
                   : showWorkbench
                     ? focusTabs
                     : []
@@ -2943,7 +3042,9 @@ export const App = (): JSX.Element => {
               busySessionIds={harness.busySessionIds}
               onSelectSession={selectTab}
               labelOf={(session) =>
-                sessionDisplayName(session, state.sessions, sessionNames)
+                planningWorkspace
+                  ? planningSessionLabel(session)
+                  : sessionDisplayName(session, state.sessions, sessionNames)
               }
               busy={
                 sessionBarSession != null &&
@@ -3099,21 +3200,19 @@ export const App = (): JSX.Element => {
                     icon="Radio"
                     title="Opening planning session…"
                   />
-                ) : activePlannerSession?.planning ? (
+                ) : activePlanningSession?.agentMapIdentity ||
+                  activePlanningSession?.planning ? (
                   /* Agent Map planning is still an ordinary coding-agent
                      session. Keep the exact same raw CLI surface used for
                      every agent: trust/auth prompts, slash commands, tool
                      output, and provider chrome must remain visible rather
                      than being replaced by a transcript/composer facsimile. */
                   <div className="agent-view" data-testid="agent-view">
-                    <div
-                      className="agent-view-panel"
-                      id="agent-panel-terminal"
-                    >
+                    <div className="agent-view-panel" id="agent-panel-terminal">
                       <Terminal
-                        sessionId={activePlannerSession.id}
+                        sessionId={activePlanningSession.id}
                         token={harness.bootToken}
-                        cwd={activePlannerSession.cwd}
+                        cwd={activePlanningSession.cwd}
                       />
                     </div>
                   </div>
@@ -3249,29 +3348,29 @@ export const App = (): JSX.Element => {
             !isMobile &&
             !rightPaneSuppressedByComposer &&
             !canvasExpanded && (
-            <div
-              className="pane-resize-handle pane-resize-handle-canvas"
-              // Track the canvas column's ACTUAL edge, not the requested width.
-              // The column is `minmax(CANVAS_MIN, widths.canvas)`, so it clamps
-              // below widths.canvas once the terminal is at its own floor
-              // (100% − CANVAS_MIN). Positioning the handle at the raw
-              // widths.canvas then stranded it in the terminal, a growing gap
-              // to the left of the board it splits. The same clamp keeps them
-              // welded at every width. (null = the 1fr/1fr split, always at 50%.)
-              style={{
-                right:
-                  widths.canvas == null
-                    ? "50%"
-                    : `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`,
-              }}
-              onPointerDown={startCanvasDrag}
-              onDoubleClick={resetCanvas}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize canvas pane"
-              data-testid="resize-handle-canvas"
-            />
-          )}
+              <div
+                className="pane-resize-handle pane-resize-handle-canvas"
+                // Track the canvas column's ACTUAL edge, not the requested width.
+                // The column is `minmax(CANVAS_MIN, widths.canvas)`, so it clamps
+                // below widths.canvas once the terminal is at its own floor
+                // (100% − CANVAS_MIN). Positioning the handle at the raw
+                // widths.canvas then stranded it in the terminal, a growing gap
+                // to the left of the board it splits. The same clamp keeps them
+                // welded at every width. (null = the 1fr/1fr split, always at 50%.)
+                style={{
+                  right:
+                    widths.canvas == null
+                      ? "50%"
+                      : `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`,
+                }}
+                onPointerDown={startCanvasDrag}
+                onDoubleClick={resetCanvas}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize canvas pane"
+                data-testid="resize-handle-canvas"
+              />
+            )}
 
           {isMobile && !rightCollapsed && (
             <div
@@ -3374,7 +3473,8 @@ export const App = (): JSX.Element => {
                 aria-label={secretsDisabled ?? undefined}
                 data-tooltip={secretsDisabled ?? undefined}
                 className={
-                  "right-pane-tab" + (shownTab === "secrets" ? " is-active" : "")
+                  "right-pane-tab" +
+                  (shownTab === "secrets" ? " is-active" : "")
                 }
                 onClick={() => setRightTab("secrets")}
                 data-testid="right-tab-secrets"
@@ -3463,7 +3563,10 @@ export const App = (): JSX.Element => {
                 key worth preserving, and keeping a credential list mounted
                 behind another tab buys nothing. */}
             {shownTab === "secrets" && (
-              <div className="right-pane-panel" data-testid="right-panel-secrets">
+              <div
+                className="right-pane-panel"
+                data-testid="right-panel-secrets"
+              >
                 <SecretsPanel
                   api={harness.api}
                   workflow={rightPaneWorkflow}
@@ -3489,6 +3592,10 @@ export const App = (): JSX.Element => {
               {studioView?.altitude === "map" ? (
                 <AgentMapPane
                   state={agentMapEntry.state.workspace}
+                  focusedNodeId={activePlannedAgentId}
+                  planningFanout={planningFanoutPreview}
+                  planningFanoutPending={planningFanoutPending}
+                  onOpenPlanningFanout={() => void openPlanningFanout()}
                   onRetry={agentMapEntry.retryWorkspace}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}
@@ -3515,109 +3622,112 @@ export const App = (): JSX.Element => {
                 }
                 data-testid="right-panel-board"
               >
-              <CanvasPane
-                sessionId={harness.activeSessionId}
-                lastMessage={harness.lastMessage}
-                subjectWorkflow={rightPaneWorkflow}
-                source={canvasSource}
-                loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
-                overviewActive={showComposer}
-                sessionExited={showDead}
-                onCanvasState={(hasContent) => {
-                  // The board keeps its mount behind the map; its probe must
-                  // not reveal or collapse the pane while the PROJECT is what
-                  // the pane is showing — the map is the answer to selecting a
-                  // project and cannot be closed under it.
-                  if (atMapAltitude) return;
-                  // The pane follows the active session's board: open it whenever
-                  // the session has one, close it when it doesn't. This fires on
-                  // the mount probe, on every canvas.reload, and on each session
-                  // switch — so a board an agent just rendered (a finished build,
-                  // a switch to a populated agent) opens the pane on its own, even
-                  // one you'd collapsed, and an empty session keeps it closed.
-                  // Mobile drives its sheet with its own control, not this.
-                  if (isMobile) return;
-                  // An exited session keeps the pane open even with no board, so
-                  // its "resume to see it" invite stays visible.
-                  const activeExited =
-                    state.sessions.find((s) => s.id === harness.activeSessionId)
-                      ?.status === "exited";
-                  if (hasContent || activeExited) {
-                    // Content present (or an exited session's invite) → always
-                    // reveal, re-opening even a pane the user had collapsed.
-                    emptyCollapsedKeyRef.current = null;
-                    setRightCollapsed(false);
-                    return;
+                <CanvasPane
+                  sessionId={harness.activeSessionId}
+                  lastMessage={harness.lastMessage}
+                  subjectWorkflow={rightPaneWorkflow}
+                  source={canvasSource}
+                  loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
+                  overviewActive={showComposer}
+                  sessionExited={showDead}
+                  onCanvasState={(hasContent) => {
+                    // The board keeps its mount behind the map; its probe must
+                    // not reveal or collapse the pane while the PROJECT is what
+                    // the pane is showing — the map is the answer to selecting a
+                    // project and cannot be closed under it.
+                    if (atMapAltitude) return;
+                    // The pane follows the active session's board: open it whenever
+                    // the session has one, close it when it doesn't. This fires on
+                    // the mount probe, on every canvas.reload, and on each session
+                    // switch — so a board an agent just rendered (a finished build,
+                    // a switch to a populated agent) opens the pane on its own, even
+                    // one you'd collapsed, and an empty session keeps it closed.
+                    // Mobile drives its sheet with its own control, not this.
+                    if (isMobile) return;
+                    // An exited session keeps the pane open even with no board, so
+                    // its "resume to see it" invite stays visible.
+                    const activeExited =
+                      state.sessions.find(
+                        (s) => s.id === harness.activeSessionId,
+                      )?.status === "exited";
+                    if (hasContent || activeExited) {
+                      // Content present (or an exited session's invite) → always
+                      // reveal, re-opening even a pane the user had collapsed.
+                      emptyCollapsedKeyRef.current = null;
+                      setRightCollapsed(false);
+                      return;
+                    }
+                    // Empty board → collapse once per (session, bound workflow). A
+                    // redundant probe for the same one must not re-close a pane the
+                    // user just expanded; a new session or binding still collapses.
+                    if (manualExpandPendingRef.current) {
+                      manualExpandPendingRef.current = false;
+                      manualExpandSessionRef.current =
+                        harness.activeSessionId ?? null;
+                      return;
+                    }
+                    const claimed = manualExpandSessionRef.current;
+                    if (claimed != null && claimed === harness.activeSessionId)
+                      return;
+                    if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
+                    emptyCollapsedKeyRef.current = emptyBoardKey;
+                    setRightCollapsed(true);
+                  }}
+                  onGraphChange={(workflowPath, graph) => {
+                    const contract = inputContractFromCanvasGraph(graph);
+                    if (contract)
+                      visibleInputContractsRef.current.set(
+                        workflowPath,
+                        contract,
+                      );
+                  }}
+                  expanded={canvasExpanded && !atMapAltitude}
+                  onToggleExpanded={toggleCanvasExpanded}
+                  macros={state.macros}
+                  tasks={harness.tasks}
+                  surface={shownTab === "steps" ? "steps" : "board"}
+                  onOpenSteps={() => setRightTab("steps")}
+                  run={activeObservedRun?.run ?? null}
+                  runTarget={activeObservedRun?.target ?? null}
+                  runs={activeSessionRuns}
+                  onSelectRun={(executionId) => {
+                    if (harness.activeSessionId)
+                      harness.selectRun(harness.activeSessionId, executionId);
+                  }}
+                  preview={
+                    harness.activeSessionId
+                      ? (harness.previewBySession.get(
+                          harness.activeSessionId,
+                        ) ?? null)
+                      : null
                   }
-                  // Empty board → collapse once per (session, bound workflow). A
-                  // redundant probe for the same one must not re-close a pane the
-                  // user just expanded; a new session or binding still collapses.
-                  if (manualExpandPendingRef.current) {
-                    manualExpandPendingRef.current = false;
-                    manualExpandSessionRef.current =
-                      harness.activeSessionId ?? null;
-                    return;
+                  deployState={
+                    rightPaneWorkflow
+                      ? (harness.deployStateByPath.get(
+                          rightPaneWorkflow.path,
+                        ) ?? null)
+                      : null
                   }
-                  const claimed = manualExpandSessionRef.current;
-                  if (claimed != null && claimed === harness.activeSessionId)
-                    return;
-                  if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
-                  emptyCollapsedKeyRef.current = emptyBoardKey;
-                  setRightCollapsed(true);
-                }}
-                onGraphChange={(workflowPath, graph) => {
-                  const contract = inputContractFromCanvasGraph(graph);
-                  if (contract)
-                    visibleInputContractsRef.current.set(
-                      workflowPath,
-                      contract,
-                    );
-                }}
-                expanded={canvasExpanded && !atMapAltitude}
-                onToggleExpanded={toggleCanvasExpanded}
-                macros={state.macros}
-                tasks={harness.tasks}
-                surface={shownTab === "steps" ? "steps" : "board"}
-                onOpenSteps={() => setRightTab("steps")}
-                run={activeObservedRun?.run ?? null}
-                runTarget={activeObservedRun?.target ?? null}
-                runs={activeSessionRuns}
-                onSelectRun={(executionId) => {
-                  if (harness.activeSessionId)
-                    harness.selectRun(harness.activeSessionId, executionId);
-                }}
-                preview={
-                  harness.activeSessionId
-                    ? (harness.previewBySession.get(harness.activeSessionId) ??
-                      null)
-                    : null
-                }
-                deployState={
-                  rightPaneWorkflow
-                    ? (harness.deployStateByPath.get(rightPaneWorkflow.path) ??
-                      null)
-                    : null
-                }
-                onDismissDeploy={() => {
-                  if (rightPaneWorkflow)
-                    harness.dismissDeployState(rightPaneWorkflow.path);
-                }}
-                agentsBaseUrl={state.agentsBaseUrl}
-                onOpenCode={() => setRightTab("steps")}
-                workflows={state.workflows}
-                onOpenWorkflow={(path) => void handleBindWorkflow(path)}
-                /* The pane's own CTAs (Visualize, a failed task's Retry) act on
+                  onDismissDeploy={() => {
+                    if (rightPaneWorkflow)
+                      harness.dismissDeployState(rightPaneWorkflow.path);
+                  }}
+                  agentsBaseUrl={state.agentsBaseUrl}
+                  onOpenCode={() => setRightTab("steps")}
+                  workflows={state.workflows}
+                  onOpenWorkflow={(path) => void handleBindWorkflow(path)}
+                  /* The pane's own CTAs (Visualize, a failed task's Retry) act on
                    what the pane is DRAWING, not on what the session is bound
                    to — otherwise the empty state for F renders F's board. */
-                onRunMacro={(macro) =>
-                  handleRunMacroForWorkflow(rightPaneWorkflow, macro)
-                }
-                onInjectPrompt={(text) => {
-                  if (harness.activeSessionId)
-                    void harness.injectInput(harness.activeSessionId, text);
-                }}
-                onDescribeWorkflow={handleDescribeWithAI}
-              />
+                  onRunMacro={(macro) =>
+                    handleRunMacroForWorkflow(rightPaneWorkflow, macro)
+                  }
+                  onInjectPrompt={(text) => {
+                    if (harness.activeSessionId)
+                      void harness.injectInput(harness.activeSessionId, text);
+                  }}
+                  onDescribeWorkflow={handleDescribeWithAI}
+                />
               </div>
             </div>
           </div>

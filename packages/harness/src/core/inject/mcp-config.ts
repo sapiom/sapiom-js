@@ -53,6 +53,8 @@ export interface McpConfigOptions {
    * field out rather than inventing an "unknown".
    */
   harnessVersion?: string;
+  /** Omit every general Sapiom capability for a planning-only builder. */
+  planningReadonly?: boolean;
 }
 
 /**
@@ -85,36 +87,33 @@ export async function generateMcpConfig(
   const { apiURL } = await resolveEnvironment(sapiomEnvironment);
   const remoteMcpUrl = `${apiURL.replace(/\/+$/, "")}/v1/mcp`;
 
+  const generalServers = options.planningReadonly
+    ? {}
+    : {
+        sapiom: {
+          type: "http",
+          url: remoteMcpUrl,
+          ...(options.apiKey
+            ? { headers: { "x-api-key": options.apiKey } }
+            : {}),
+        },
+        "sapiom-dev": options.devServer
+          ? {
+              command: options.devServer.command,
+              args: options.devServer.args,
+              ...(devEnv || options.devServer.env
+                ? { env: { ...devEnvEntries, ...options.devServer.env } }
+                : {}),
+            }
+          : {
+              command: "npx",
+              args: ["-y", "@sapiom/mcp@latest"],
+              ...(devEnv ? { env: devEnv } : {}),
+            },
+      };
   const config = {
     mcpServers: {
-      sapiom: {
-        type: "http",
-        url: remoteMcpUrl,
-        ...(options.apiKey ? { headers: { "x-api-key": options.apiKey } } : {}),
-      },
-      "sapiom-dev": options.devServer
-        ? {
-            command: options.devServer.command,
-            args: options.devServer.args,
-            // The launcher's own env (e.g. ELECTRON_RUN_AS_NODE) must win over
-            // the shared entries — it is what makes the command a node at all.
-            ...(devEnv || options.devServer.env
-              ? { env: { ...devEnvEntries, ...options.devServer.env } }
-              : {}),
-          }
-        : {
-            command: "npx",
-            // Pin the dist-tag (`@latest`) rather than the bare name so npx always
-            // resolves the PUBLISHED package from the registry. A bare
-            // `@sapiom/mcp` resolves a LOCAL workspace copy whenever the harness
-            // runs from inside the sapiom-js monorepo (dogfooding/dev) — whose bin
-            // isn't linked, so the server fails to launch ("sapiom-mcp: command
-            // not found" → JSON-RPC -32000). A dist-tag spec forces registry
-            // resolution and is behaviourally identical to what a real user
-            // (outside the monorepo) already gets, so it's a pure robustness fix.
-            args: ["-y", "@sapiom/mcp@latest"],
-            ...(devEnv ? { env: devEnv } : {}),
-          },
+      ...generalServers,
       ...(options.agentMap
         ? {
             "agent-map": {

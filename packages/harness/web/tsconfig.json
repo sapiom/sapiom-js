@@ -17,6 +17,7 @@
       "@shared/system-graph": ["../src/shared/system-graph.ts"],
       "@shared/agent-map": ["../src/shared/agent-map.ts"],
       "@shared/agent-map-codec": ["../src/shared/agent-map-codec.ts"],
+      "@shared/build-plan": ["../src/shared/build-plan.ts"],
       "@shared/agent-name": ["../src/shared/agent-name.ts"],
       "@shared/render-local-run": ["../src/core/render-local-run.ts"],
       "@shared/stub-feedback": ["../src/core/stub-feedback.ts"],

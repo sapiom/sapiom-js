@@ -70,7 +70,9 @@ export function parseClaudeVersion(
  * can never mass-reject working installs — the floor exists to catch provably
  * ancient binaries, not to gate on our own parser's limits.
  */
-export function isClaudeVersionSupported(versionLine: string | null | undefined): boolean {
+export function isClaudeVersionSupported(
+  versionLine: string | null | undefined,
+): boolean {
   const parsed = parseClaudeVersion(versionLine);
   if (!parsed) return true;
   const floor = parseClaudeVersion(MIN_CLAUDE_CODE_VERSION)!;
@@ -120,7 +122,10 @@ export function encodeProjectPath(cwd: string): string {
  * (core/session-record.ts), which reads the same transcript files. Claude's
  * directory layout — symlink handling included — is defined here once.
  */
-export async function projectDirsFor(homeDir: string, cwd: string): Promise<string[]> {
+export async function projectDirsFor(
+  homeDir: string,
+  cwd: string,
+): Promise<string[]> {
   const names = new Set<string>();
   const resolved = await realpath(cwd).catch(() => undefined);
   if (resolved) names.add(encodeProjectPath(resolved));
@@ -135,7 +140,11 @@ export async function projectDirsFor(homeDir: string, cwd: string): Promise<stri
  * via `POST /api/sessions/adopt`, and is never a real transcript either way.
  */
 function isSafeSessionId(agentSessionId: string): boolean {
-  return agentSessionId.length > 0 && /^[A-Za-z0-9._-]+$/.test(agentSessionId) && !agentSessionId.includes("..");
+  return (
+    agentSessionId.length > 0 &&
+    /^[A-Za-z0-9._-]+$/.test(agentSessionId) &&
+    !agentSessionId.includes("..")
+  );
 }
 
 const execFileAsync = promisify(execFile);
@@ -180,7 +189,6 @@ interface TranscriptEntry {
   message?: { role?: string; content?: unknown };
 }
 
-
 function extractTextFromContent(content: unknown): string | undefined {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -202,7 +210,10 @@ function extractTextFromContent(content: unknown): string | undefined {
  * mid-line). */
 function parseTranscriptLines(
   text: string,
-  { dropFirst = false, dropLast = false }: { dropFirst?: boolean; dropLast?: boolean } = {},
+  {
+    dropFirst = false,
+    dropLast = false,
+  }: { dropFirst?: boolean; dropLast?: boolean } = {},
 ): TranscriptEntry[] {
   const lines = text.split("\n");
   const start = dropFirst ? 1 : 0;
@@ -213,7 +224,11 @@ function parseTranscriptLines(
     if (!trimmed) continue;
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
         entries.push(parsed as TranscriptEntry);
       }
     } catch {
@@ -268,7 +283,9 @@ async function scanTranscript(
       const tailBuf = Buffer.allocUnsafe(window);
       await handle.read(tailBuf, 0, window, size - window);
       // The tail window likely starts mid-line — drop that partial first line.
-      tail = parseTranscriptLines(tailBuf.toString("utf8"), { dropFirst: true });
+      tail = parseTranscriptLines(tailBuf.toString("utf8"), {
+        dropFirst: true,
+      });
     } finally {
       await handle.close();
     }
@@ -303,7 +320,11 @@ function latestValue(
 ): string | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry?.type === type && typeof entry[field] === "string" && entry[field]!.trim()) {
+    if (
+      entry?.type === type &&
+      typeof entry[field] === "string" &&
+      entry[field]!.trim()
+    ) {
       return entry[field]!.trim();
     }
   }
@@ -328,10 +349,14 @@ function extractTitle(
   tail: TranscriptEntry[],
   fallback: string,
 ): string {
-  const aiTitle = latestValue(tail, "ai-title", "aiTitle") ?? latestValue(head, "ai-title", "aiTitle");
+  const aiTitle =
+    latestValue(tail, "ai-title", "aiTitle") ??
+    latestValue(head, "ai-title", "aiTitle");
   if (aiTitle) return truncateTitle(aiTitle);
 
-  const summary = latestValue(tail, "summary", "summary") ?? latestValue(head, "summary", "summary");
+  const summary =
+    latestValue(tail, "summary", "summary") ??
+    latestValue(head, "summary", "summary");
   if (summary) return truncateTitle(summary);
 
   for (const entry of head) {
@@ -344,7 +369,10 @@ function extractTitle(
 
 /** Most recent git branch recorded on a message entry, newest-first (tail then
  * head), or undefined when the transcript records none. */
-function extractGitBranch(head: TranscriptEntry[], tail: TranscriptEntry[]): string | undefined {
+function extractGitBranch(
+  head: TranscriptEntry[],
+  tail: TranscriptEntry[],
+): string | undefined {
   for (const entries of [tail, head]) {
     for (let i = entries.length - 1; i >= 0; i--) {
       const branch = entries[i]?.gitBranch;
@@ -364,6 +392,17 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
 
 function buildInteractiveConfigArgs(opts: LaunchOpts): string[] {
   const args = buildConfigArgs(opts);
+  if (opts.executionPolicy === "planning-readonly") {
+    args.push(
+      "--restricted",
+      "--strict-mcp-config",
+      "--permission-mode",
+      "plan",
+      "--disallowedTools",
+      "Bash,PowerShell,Edit,Write,NotebookEdit",
+    );
+    return args;
+  }
   // Auto remains the safe, classifier-backed default for eligible accounts.
   // Claude Code silently downgrades when the account/model cannot enter Auto;
   // the allow flag only adds Bypass to the Shift+Tab cycle so the user can
@@ -426,7 +465,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   constructor(options: ClaudeCodeAdapterOptions = {}) {
     this.binary = options.binary ?? "claude";
     this.homeDir = options.homeDir ?? homedir();
-    this.fullScanMaxBytes = options.fullScanMaxBytes ?? DEFAULT_FULL_SCAN_MAX_BYTES;
+    this.fullScanMaxBytes =
+      options.fullScanMaxBytes ?? DEFAULT_FULL_SCAN_MAX_BYTES;
   }
 
   /**
@@ -438,13 +478,18 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
    */
   detectBlockingPrompt(scrollback: string): boolean {
     const cleaned = stripAnsi(scrollback);
-    return CLAUDE_BLOCKING_PROMPT_PATTERNS.some((pattern) => pattern.test(cleaned));
+    return CLAUDE_BLOCKING_PROMPT_PATTERNS.some((pattern) =>
+      pattern.test(cleaned),
+    );
   }
 
   async doctor(): Promise<DoctorCheck[]> {
     let versionLine: string;
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
+      const { stdout } = await execFileAsync(this.binary, ["--version"], {
+        timeout: 5_000,
+        windowsHide: true,
+      });
       versionLine = stdout.trim();
     } catch {
       return [
@@ -473,7 +518,10 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   launch(opts: LaunchOpts): SpawnSpec {
     const args = buildInteractiveConfigArgs(opts);
     if (opts.systemPromptFile) {
-      args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
+      args.push(
+        "--append-system-prompt",
+        readPromptFile(opts.systemPromptFile),
+      );
     }
     return {
       command: this.binary,
@@ -487,9 +535,16 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   }
 
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec {
-    const args = ["--resume", agentSessionId, ...buildInteractiveConfigArgs(opts)];
+    const args = [
+      "--resume",
+      agentSessionId,
+      ...buildInteractiveConfigArgs(opts),
+    ];
     if (opts.systemPromptFile) {
-      args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
+      args.push(
+        "--append-system-prompt",
+        readPromptFile(opts.systemPromptFile),
+      );
     }
     return {
       command: this.binary,
@@ -519,11 +574,20 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     }
     const args = ["-p", opts.prompt, ...buildConfigArgs(opts)];
     if (opts.systemPromptFile) {
-      args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
+      args.push(
+        "--append-system-prompt",
+        readPromptFile(opts.systemPromptFile),
+      );
     }
     if (opts.model) args.push("--model", opts.model);
     if (opts.maxTurns != null) args.push("--max-turns", String(opts.maxTurns));
-    args.push("--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose");
+    args.push(
+      "--permission-mode",
+      "acceptEdits",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+    );
     return {
       command: this.binary,
       args,
@@ -552,8 +616,11 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   async canResume(agentSessionId: string, cwd: string): Promise<boolean> {
     if (!isSafeSessionId(agentSessionId)) return false;
     for (const projectDir of await projectDirsFor(this.homeDir, cwd)) {
-      const fileStat = await stat(join(projectDir, `${agentSessionId}.jsonl`)).catch(() => undefined);
-      if (fileStat != null && fileStat.isFile() && fileStat.size > 0) return true;
+      const fileStat = await stat(
+        join(projectDir, `${agentSessionId}.jsonl`),
+      ).catch(() => undefined);
+      if (fileStat != null && fileStat.isFile() && fileStat.size > 0)
+        return true;
     }
     return false;
   }
@@ -619,6 +686,8 @@ function readPromptFile(path: string): string {
   }
 }
 
-export function createClaudeCodeAdapter(options?: ClaudeCodeAdapterOptions): HarnessAdapter {
+export function createClaudeCodeAdapter(
+  options?: ClaudeCodeAdapterOptions,
+): HarnessAdapter {
   return new ClaudeCodeAdapter(options);
 }

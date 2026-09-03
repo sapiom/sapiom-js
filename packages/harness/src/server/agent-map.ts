@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 
@@ -33,6 +34,19 @@ import {
   PlannerGreetingRetryUnavailableError,
   type PlannerGreetingCoordinator,
 } from "../core/planner-greeting.js";
+import {
+  BuilderPlanningSessionError,
+  type BuilderPlanningSessionService,
+} from "../core/builder-planning-session.js";
+import {
+  architectureSourceRefSchema,
+  buildPlanRefSchema,
+} from "../shared/build-plan-codec.js";
+import type {
+  ArchitectureSourceRef,
+  BuildPlanRef,
+  PlanningAssignmentId,
+} from "../shared/build-plan.js";
 
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
@@ -52,6 +66,7 @@ export interface AgentMapRouterOptions {
     | Promise<readonly WorkspaceScopeSummary[]>;
   planningSessions?: PlanningSessionService;
   plannerGreeting?: PlannerGreetingCoordinator;
+  builderPlanningSessions?: BuilderPlanningSessionService;
 }
 
 const plannerSessionSchema = z
@@ -65,6 +80,19 @@ const plannerSessionSchema = z
 const plannerMessageSchema = z
   .object({ text: z.string().min(1).max(100_000) })
   .strict() satisfies z.ZodType<PlannerMessageRequest>;
+
+const planningFanoutSchema = z
+  .object({
+    source: architectureSourceRefSchema,
+    plan: buildPlanRefSchema,
+    assignmentIds: z
+      .array(z.string().regex(/^assignment_[0-9a-f-]+$/u))
+      .min(1)
+      .max(256),
+    harness: z.enum(SPAWNABLE_HARNESS_KINDS).optional(),
+    theme: z.enum(["light", "dark"]).optional(),
+  })
+  .strict();
 
 function sendPlanningError(
   res: import("express").Response,
@@ -383,6 +411,24 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     },
   );
 
+  router.get("/projects/:projectId/planning-fanout", async (req, res, next) => {
+    if (!options.builderPlanningSessions) {
+      res
+        .status(501)
+        .json({ error: "Builder planning sessions are unavailable" });
+      return;
+    }
+    try {
+      const preview = await options.builderPlanningSessions.preview(
+        req.params
+          .projectId as import("../shared/agent-map.js").StudioProjectId,
+      );
+      res.status(200).setHeader("Cache-Control", "no-store").json(preview);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post(
     "/projects/:projectId/planner-sessions/:sessionId/messages",
     async (req, res, next) => {
@@ -407,6 +453,77 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         res.status(202).json({ metadata });
       } catch (error) {
         if (!sendPlanningError(res, error)) next(error);
+      }
+    },
+  );
+
+  // This is the sole production approval-minting bridge. It is reachable only
+  // after the server-wide boot-token middleware has authenticated the Studio
+  // UI request, and planner ownership is rechecked before the action id is
+  // observed. MCP/model calls can consume an approval id but cannot reach this
+  // route through their capability endpoint or supply provenance fields.
+  router.post(
+    "/projects/:projectId/planner-sessions/:sessionId/planning-fanout",
+    async (req, res, next) => {
+      if (!options.planningSessions || !options.builderPlanningSessions) {
+        res
+          .status(501)
+          .json({ error: "Builder planning sessions are unavailable" });
+        return;
+      }
+      const parsed = planningFanoutSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid planning fan-out request" });
+        return;
+      }
+      try {
+        const session = await options.planningSessions.requireOwned(
+          req.params.projectId,
+          req.params.sessionId,
+        );
+        const planner = session.planning?.identity;
+        if (!planner || planner.role !== "map-planner") {
+          res
+            .status(403)
+            .json({ code: "forbidden", error: "Planner ownership required" });
+          return;
+        }
+        const fanoutRequest = {
+          source: parsed.data.source as ArchitectureSourceRef,
+          plan: parsed.data.plan as BuildPlanRef,
+          assignmentIds: parsed.data.assignmentIds.map(
+            (assignmentId) => assignmentId as PlanningAssignmentId,
+          ),
+        };
+        const approval =
+          await options.builderPlanningSessions.approveFromAuthenticatedUiAction(
+            planner,
+            fanoutRequest,
+            `user-action_${randomUUID()}`,
+          );
+        const bindings = await options.builderPlanningSessions.openOrReuse(
+          planner,
+          {
+            ...fanoutRequest,
+            ...(parsed.data.harness ? { harness: parsed.data.harness } : {}),
+            ...(parsed.data.theme ? { theme: parsed.data.theme } : {}),
+            approvalId: approval.approvalId,
+          },
+        );
+        res.status(202).setHeader("Cache-Control", "no-store").json({
+          approvalId: approval.approvalId,
+          bindings,
+        });
+      } catch (error) {
+        if (error instanceof BuilderPlanningSessionError) {
+          const status =
+            error.code === "forbidden"
+              ? 403
+              : error.code === "missing_consent"
+                ? 401
+                : 409;
+          res.status(status).json({ code: error.code, error: error.message });
+        } else if (!sendPlanningError(res, error)) next(error);
       }
     },
   );

@@ -20,6 +20,15 @@ import {
   buildPlanRebaseRequestSchema,
   buildPlanValidateRequestSchema,
 } from "../core/build-plan-schema.js";
+import {
+  BuilderPlanningSessionError,
+  planningResultSubmitRequestSchema,
+  type BuilderPlanningSessionService,
+} from "../core/builder-planning-session.js";
+import {
+  architectureSourceRefSchema,
+  buildPlanRefSchema,
+} from "../shared/build-plan-codec.js";
 
 /**
  * MCP discovery sees the complete SAP-3061 input contract. Field-level `catch`
@@ -29,11 +38,11 @@ import {
  * zod-to-json-schema renders each ZodCatch from its inner schema; the final
  * refinement keeps every envelope field required in the advertised contract.
  */
-const preserveInvalidForService = <Schema extends z.ZodTypeAny>(schema: Schema) =>
+const preserveInvalidForService = <Schema extends z.ZodTypeAny>(
+  schema: Schema,
+) =>
   schema
-    .catch(
-      (context: { input: unknown }) => context.input as z.output<Schema>,
-    )
+    .catch((context: { input: unknown }) => context.input as z.output<Schema>)
     .refine((value) => value !== undefined);
 const preserveOptionalInvalidForService = <Schema extends z.ZodTypeAny>(
   schema: Schema,
@@ -133,7 +142,9 @@ export interface AgentMapToolEvent {
     | "build_plan_read"
     | "build_plan_validate"
     | "build_plan_apply"
-    | "build_plan_rebase";
+    | "build_plan_rebase"
+    | "build_plan_open_planning_sessions"
+    | "planning_result_submit";
   outcome: "ok" | "error";
   errorCode?: string;
   role: PlanningSessionIdentity["role"];
@@ -159,6 +170,7 @@ export interface AgentMapMcpToolsOptions {
   onEvent?: (event: AgentMapToolEvent) => void;
   readSnapshot?: () => Promise<object>;
   buildPlanService?: BuildPlanService;
+  builderPlanningService?: BuilderPlanningSessionService;
 }
 
 export class AgentMapMcpProjectUnavailableError extends Error {
@@ -188,22 +200,32 @@ function errorResult(error: unknown) {
                     ? "split_batch"
                     : "correct",
         }
-      : error instanceof AgentMapProposalValidationError
+      : error instanceof BuilderPlanningSessionError
         ? {
             code: error.code,
-            currentVersion: error.currentVersion,
-            issues: error.issues,
-            recovery: "correct",
+            recovery:
+              error.code === "idempotency_key_reused"
+                ? "new_request_id"
+                : error.code === "missing_consent"
+                  ? "obtain_user_consent"
+                  : "reread",
           }
-        : error instanceof AgentMapProposalConflictError
-          ? { ...error.conflict }
-          : error instanceof AgentMapProposalProjectError
-            ? { code: "forbidden", recovery: "reread" }
-            : error instanceof AgentMapMcpProjectUnavailableError
-              ? { code: "project_unavailable", recovery: "reread" }
-              : error instanceof AgentMapWorkspaceStoreError
-                ? { code: "storage_unavailable", recovery: "retry" }
-                : { code: "internal_error", recovery: "retry" };
+        : error instanceof AgentMapProposalValidationError
+          ? {
+              code: error.code,
+              currentVersion: error.currentVersion,
+              issues: error.issues,
+              recovery: "correct",
+            }
+          : error instanceof AgentMapProposalConflictError
+            ? { ...error.conflict }
+            : error instanceof AgentMapProposalProjectError
+              ? { code: "forbidden", recovery: "reread" }
+              : error instanceof AgentMapMcpProjectUnavailableError
+                ? { code: "project_unavailable", recovery: "reread" }
+                : error instanceof AgentMapWorkspaceStoreError
+                  ? { code: "storage_unavailable", recovery: "retry" }
+                  : { code: "internal_error", recovery: "retry" };
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify(details) }],
@@ -224,7 +246,10 @@ export function createAgentMapToolServer(
   service: AgentMapProposalService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
-  const server = new McpServer({ name: "sapiom-studio-agent-map", version: "1" });
+  const server = new McpServer({
+    name: "sapiom-studio-agent-map",
+    version: "1",
+  });
   const emit = (event: AgentMapToolEvent): void => {
     try {
       options.onEvent?.(event);
@@ -310,7 +335,8 @@ export function createAgentMapToolServer(
   server.registerTool(
     "agent_map_read",
     {
-      description: "Read the current confirmed workspace and shared Agent Map proposal.",
+      description:
+        "Read the current confirmed workspace and shared Agent Map proposal.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -319,36 +345,53 @@ export function createAgentMapToolServer(
         const snapshot = options.readSnapshot
           ? await options.readSnapshot()
           : await service.read(identity.projectId);
-        const proposal = (snapshot as { proposal?: { version?: number } | null }).proposal;
-        return toolResult(snapshot, `Agent Map proposal version ${proposal?.version ?? 0}.`);
+        const proposal = (
+          snapshot as { proposal?: { version?: number } | null }
+        ).proposal;
+        return toolResult(
+          snapshot,
+          `Agent Map proposal version ${proposal?.version ?? 0}.`,
+        );
       }),
   );
 
   server.registerTool(
     "agent_map_validate",
     {
-      description: "Validate a complete proposal batch without mutating shared state or allocating IDs.",
+      description:
+        "Validate a complete proposal batch without mutating shared state or allocating IDs.",
       inputSchema: batchSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (request) =>
       instrument("agent_map_validate", async () => {
         const result = await service.validate(identity, request);
-        return toolResult(result, `Proposal batch is valid at version ${result.currentVersion}.`);
+        return toolResult(
+          result,
+          `Proposal batch is valid at version ${result.currentVersion}.`,
+        );
       }),
   );
 
   server.registerTool(
     "agent_map_propose",
     {
-      description: "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
+      description:
+        "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
       inputSchema: batchSchema,
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (request) =>
       instrument("agent_map_propose", async () => {
         const result = await service.propose(identity, request);
-        return toolResult(result, `Accepted Agent Map proposal version ${result.version}.`);
+        return toolResult(
+          result,
+          `Accepted Agent Map proposal version ${result.version}.`,
+        );
       }),
   );
 
@@ -450,6 +493,71 @@ export function createAgentMapToolServer(
               ? request.resolutions.length
               : undefined,
         ),
+    );
+  }
+
+  if (identity.role === "map-planner" && options.builderPlanningService) {
+    server.registerTool(
+      "build_plan_open_planning_sessions",
+      {
+        description:
+          "Open exact planning-only builder sessions using an opaque approval issued by a direct user action.",
+        inputSchema: z
+          .object({
+            approvalId: z.string().min(1).max(512),
+            source: architectureSourceRefSchema,
+            plan: buildPlanRefSchema,
+            assignmentIds: z.array(z.string().min(1).max(512)).max(256),
+          })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+      },
+      async (request) =>
+        instrument("build_plan_open_planning_sessions", async () => {
+          const bindings = await options.builderPlanningService!.openOrReuse(
+            identity,
+            request as never,
+          );
+          return toolResult(
+            { bindings },
+            `Reconciled ${bindings.length} planning sessions.`,
+          );
+        }),
+    );
+  }
+
+  if (
+    identity.role === "agent-builder" &&
+    identity.assignment.kind === "planned" &&
+    options.builderPlanningService
+  ) {
+    server.registerTool(
+      "planning_result_submit",
+      {
+        description:
+          "Submit this assignment's immutable structured implementation plan.",
+        inputSchema: planningResultSubmitRequestSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+      },
+      async (request) =>
+        instrument("planning_result_submit", async () => {
+          const submission = await options.builderPlanningService!.submitResult(
+            identity,
+            request,
+          );
+          return toolResult(
+            submission,
+            `Submitted planning result ${submission.submissionId}.`,
+          );
+        }),
     );
   }
 

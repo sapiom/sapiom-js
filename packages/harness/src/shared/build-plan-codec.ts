@@ -105,14 +105,14 @@ export const architectureSourceRefSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-const buildPlanRefSchema = z
+export const buildPlanRefSchema = z
   .object({
     planId: generatedId("build-plan"),
     version,
     semanticDigest: digest,
   })
   .strict();
-const briefRefSchema = z
+export const briefRefSchema = z
   .object({
     briefId: generatedId("brief"),
     version,
@@ -554,6 +554,78 @@ const staleReasonSchema = z
     currentFingerprint: digest.optional(),
   })
   .strict();
+const fanoutApprovalSchema = z
+  .object({
+    approvalId: generatedId("fanout-approval"),
+    projectId,
+    source: architectureSourceRefSchema,
+    plan: buildPlanRefSchema,
+    assignmentIds: unique(generatedId("assignment"), (entry) => entry),
+    approvedByUserId: opaqueId,
+    approvingSessionId: opaqueId,
+    userInputId: opaqueId,
+    approvedAt: timestamp,
+    approvalDigest: digest,
+  })
+  .strict();
+const kickoffSchema = z
+  .object({
+    kickoffId: generatedId("kickoff"),
+    inputId: opaqueId,
+    state: z.enum(["pending", "delivering", "delivered", "delivery-uncertain"]),
+    attemptCount: z.number().int().min(0).max(32),
+    deliveredAt: timestamp.nullable(),
+    acknowledgedBy: z
+      .object({
+        source: z.enum(["hook", "transcript-marker"]),
+        observedAt: timestamp,
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+const builderBindingSchema = z
+  .object({
+    bindingId: generatedId("builder-binding"),
+    projectId,
+    assignmentId: generatedId("assignment"),
+    plannedAgentId: nodeId,
+    purpose: z.literal("implementation-planning"),
+    source: architectureSourceRefSchema,
+    plan: buildPlanRefSchema,
+    brief: briefRefSchema,
+    bootstrapDigest: digest,
+    executionPolicy: z.literal("planning-readonly"),
+    spawnEpoch: z.number().int().min(0).max(1_000_000),
+    spawnClaimId: opaqueId.nullable(),
+    spawnClaimedAt: timestamp.nullable(),
+    sessionId: opaqueId.nullable(),
+    state: z.enum([
+      "pending",
+      "spawning",
+      "ready",
+      "kickoff-pending",
+      "planning",
+      "submitted",
+      "delivery-uncertain",
+      "failed",
+      "stale",
+    ]),
+    staleReasons: z.array(staleReasonSchema).max(9),
+    kickoff: kickoffSchema.nullable(),
+    failureCode: z.enum(["spawn_failed", "policy_unavailable"]).nullable(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  .strict();
+const planningSubmissionReceiptSchema = z
+  .object({
+    sessionId: opaqueId,
+    requestId: opaqueId,
+    requestDigest: digest,
+    submissionId: generatedId("submission"),
+  })
+  .strict();
 const impactSchema = z
   .object({
     from: z
@@ -752,6 +824,15 @@ const buildPlanningAggregateSchema = z
         .array(builderPlanningSubmissionSchema)
         .max(PLANNING_SUBMISSION_HISTORY_LIMIT),
     ),
+    // Additive defaults migrate SAP-3070 aggregates on their next atomic write.
+    fanoutApprovals: z.array(fanoutApprovalSchema).max(256).default([]),
+    builderBindingsByAssignmentId: z
+      .record(generatedId("assignment"), builderBindingSchema)
+      .default({}),
+    planningSubmissionReceipts: z
+      .array(planningSubmissionReceiptSchema)
+      .max(1_024)
+      .default([]),
     idempotencyReceipts: z.array(receiptSchema).max(256),
     idempotencyTombstones: z
       .array(tombstoneSchema)
@@ -943,6 +1024,45 @@ export function parseBuildPlanningAggregate(
         fail();
       submissionIds.add(submission.submissionId);
     });
+  }
+  for (const approval of aggregate.fanoutApprovals) {
+    if (
+      approval.projectId !== expectedProjectId ||
+      approval.assignmentIds.some((id) => !assignments.has(id))
+    )
+      fail();
+  }
+  for (const [assignmentId, binding] of Object.entries(
+    aggregate.builderBindingsByAssignmentId,
+  )) {
+    const assignment = assignments.get(assignmentId);
+    const brief = briefs.get(
+      `${binding.brief.briefId}\0${binding.brief.version}`,
+    );
+    const plan = plans.get(`${binding.plan.planId}\0${binding.plan.version}`);
+    if (
+      !assignment ||
+      binding.projectId !== expectedProjectId ||
+      binding.assignmentId !== assignmentId ||
+      binding.plannedAgentId !== assignment.plannedAgentId ||
+      !brief ||
+      brief.semanticDigest !== binding.brief.semanticDigest ||
+      brief.assignmentId !== assignmentId ||
+      !plan ||
+      plan.semanticDigest !== binding.plan.semanticDigest ||
+      !architectureSourceRefsEqual(plan.source, binding.source)
+    )
+      fail();
+  }
+  const submissionReceiptKeys = new Set<string>();
+  for (const receipt of aggregate.planningSubmissionReceipts) {
+    const key = `${receipt.sessionId}\0${receipt.requestId}`;
+    if (
+      submissionReceiptKeys.has(key) ||
+      !submissionIds.has(receipt.submissionId)
+    )
+      fail();
+    submissionReceiptKeys.add(key);
   }
   if (
     new Set(

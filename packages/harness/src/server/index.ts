@@ -100,6 +100,7 @@ import {
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import { AGENT_MAP_PLANNER_SYSTEM_PROMPT } from "../profiles/agent-map-planner.js";
+import { AGENT_MAP_BUILDER_PLANNING_SYSTEM_PROMPT } from "../profiles/agent-map-builder-planning.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -165,6 +166,7 @@ import { BuildPlanService } from "../core/build-plan-service.js";
 import { DeterministicAgentBriefCompiler } from "../core/agent-brief-compiler.js";
 import { CanonicalBuildPlanImpactEvaluator } from "../core/build-plan-impact-evaluator.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
+import { BuilderPlanningSessionService } from "../core/builder-planning-session.js";
 import { computeArchitectureGraphDigest } from "../core/build-plan-canonicalization.js";
 import {
   AgentMapCapabilityRegistry,
@@ -579,13 +581,16 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
+    const planningReadonly = context?.executionPolicy === "planning-readonly";
     const promptPromise =
-      context?.agentMapIdentity?.role === "map-planner"
-        ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
-        : loadSystemPrompt().catch((err: unknown) => {
-            console.error("[harness] system-prompt load failed:", err);
-            return DEFAULT_SYSTEM_PROMPT;
-          });
+      planningReadonly && context?.agentMapIdentity?.role === "agent-builder"
+        ? Promise.resolve(AGENT_MAP_BUILDER_PLANNING_SYSTEM_PROMPT)
+        : context?.agentMapIdentity?.role === "map-planner"
+          ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
+          : loadSystemPrompt().catch((err: unknown) => {
+              console.error("[harness] system-prompt load failed:", err);
+              return DEFAULT_SYSTEM_PROMPT;
+            });
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -604,6 +609,7 @@ function createDefaultBuildLaunchOpts(
         harnessVersion: readVersion(),
         ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
         ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
+        ...(planningReadonly ? { planningReadonly: true } : {}),
       }),
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
@@ -2738,6 +2744,23 @@ export const startServer = async (
     impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
     clock: { now: () => new Date() },
   });
+  const builderPlanningSessions = new BuilderPlanningSessionService({
+    workspaceStore: agentMapWorkspaceStore,
+    buildPlanStore,
+    contractValidator: buildPlanContractValidator,
+    sessionManager,
+    currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
+    resolveProjectRoot: async (projectId) => {
+      const project = await studioProjectCatalog.resolveIdentity(projectId);
+      const root = project?.rootBindings.find(
+        (binding) => binding.status === "active",
+      )?.localRootRef;
+      if (!root) throw new Error("Studio project has no active root");
+      return root;
+    },
+    defaultHarness: options.defaultHarnessKind ?? "claude-code",
+  });
+  await builderPlanningSessions.reconcile();
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -2763,6 +2786,7 @@ export const startServer = async (
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
     buildPlanService,
+    builderPlanningService: builderPlanningSessions,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
@@ -3003,6 +3027,14 @@ export const startServer = async (
         error,
       );
     });
+    void builderPlanningSessions
+      .onSessionStatus(session)
+      .catch((error: unknown) => {
+        console.error(
+          "[harness] builder kickoff status transition failed:",
+          error,
+        );
+      });
   });
 
   const app: Express = express();
@@ -3102,6 +3134,7 @@ export const startServer = async (
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
       planningSessions,
       plannerGreeting,
+      builderPlanningSessions,
     }),
   );
   app.use(
@@ -3520,7 +3553,10 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
-    decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
+    decorateEvent: (event) =>
+      builderPlanningSessions.decorateLocalEvent(
+        plannerGreeting.decorateLocalEvent(event),
+      ),
     projectTelemetryEvent: (event) => plannerGreeting.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
@@ -3552,6 +3588,11 @@ export const startServer = async (
       void plannerGreeting.onEventPersisted(event).catch((error: unknown) => {
         console.error("[harness] planner greeting completion failed:", error);
       });
+      void builderPlanningSessions
+        .onEventPersisted(event)
+        .catch((error: unknown) => {
+          console.error("[harness] builder kickoff completion failed:", error);
+        });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);
       // The normal end of a session: the SessionEnd hook's event is in the

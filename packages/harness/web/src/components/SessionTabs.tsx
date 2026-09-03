@@ -103,6 +103,27 @@ export function SessionTabs({
           const active = session.id === activeSessionId;
           const label = labelOf(session);
           const provider = HARNESS_LABELS[session.harness];
+          const planningState = session.builderPlanning
+            ? {
+                pending: "Starting",
+                spawning: "Starting",
+                ready: "Starting",
+                "kickoff-pending": "Starting",
+                planning: "Planning",
+                submitted: "Submitted",
+                stale: "Stale",
+                "delivery-uncertain": "Delivery uncertain",
+                failed: "Failed",
+              }[session.builderPlanning.state]
+            : null;
+          const accessibleLabel = [
+            label,
+            provider,
+            session.builderPlanning ? "Planning read-only" : null,
+            planningState,
+          ]
+            .filter(Boolean)
+            .join(" · ");
           const showRename = active && renaming;
 
           return (
@@ -144,10 +165,11 @@ export function SessionTabs({
                   type="button"
                   role="tab"
                   aria-selected={active}
+                  aria-label={accessibleLabel}
                   className="session-tab-main"
                   data-testid={`session-tab-main-${session.id}`}
-                  title={`${label} · ${provider}`}
-                  data-tooltip={`${label} · ${provider}`}
+                  title={accessibleLabel}
+                  data-tooltip={accessibleLabel}
                   onClick={() => onSelect(session.id)}
                 >
                   {busySessionIds.has(session.id) ? (

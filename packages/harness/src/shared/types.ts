@@ -146,6 +146,36 @@ export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
+/** Trusted runtime authority. Generic session-create requests cannot set it. */
+export type SessionExecutionPolicy =
+  | "interactive-default"
+  | "planning-readonly"
+  | "implementation";
+
+export type BuilderPlanningLifecycleState =
+  | "pending"
+  | "spawning"
+  | "ready"
+  | "kickoff-pending"
+  | "planning"
+  | "submitted"
+  | "delivery-uncertain"
+  | "failed"
+  | "stale";
+
+/** Exact, server-authored builder compatibility metadata projected to Studio. */
+export interface BuilderPlanningSessionMetadata {
+  bindingId: string;
+  purpose: "implementation-planning";
+  assignmentId: import("./build-plan.js").PlanningAssignmentId;
+  plannedAgentId: import("./agent-map.js").PlanNodeId;
+  source: import("./build-plan.js").ArchitectureSourceRef;
+  plan: import("./build-plan.js").BuildPlanRef;
+  brief: import("./build-plan.js").AgentBriefRef;
+  bootstrapDigest: import("./build-plan.js").BuilderBootstrapDigest;
+  state: BuilderPlanningLifecycleState;
+}
+
 /** A harness session = one pty running one agent process in one directory. */
 export interface HarnessSession {
   /** Our id (uuid). */
@@ -218,6 +248,10 @@ export interface HarnessSession {
   planning?: import("./agent-map.js").PlannerSessionMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
   agentMapIdentity?: import("./agent-map.js").PlanningSessionIdentity;
+  /** Missing only on registries written before SAP-3074; treated as default. */
+  executionPolicy?: SessionExecutionPolicy;
+  /** Present only on trusted primary planned-builder sessions. */
+  builderPlanning?: BuilderPlanningSessionMetadata;
 }
 
 /**
@@ -311,6 +345,8 @@ export interface SpawnSpec {
 export interface LaunchOpts {
   harnessSessionId: string;
   cwd: string;
+  /** Trusted execution boundary selected by SessionManager. */
+  executionPolicy?: SessionExecutionPolicy;
   /** Absolute path to the generated system-prompt file (profile). */
   systemPromptFile?: string;
   /** Absolute path to the generated MCP config file. */

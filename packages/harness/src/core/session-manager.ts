@@ -71,7 +71,11 @@ export class SessionInputGuardRejectedError extends Error {
 // the whole server at import time.
 type IPty = import("node-pty").IPty;
 type PtyForkOptions = import("node-pty").IPtyForkOptions;
-export type PtySpawnFn = (file: string, args: string[], options: PtyForkOptions) => IPty;
+export type PtySpawnFn = (
+  file: string,
+  args: string[],
+  options: PtyForkOptions,
+) => IPty;
 
 let defaultSpawn: PtySpawnFn | undefined;
 let defaultSpawnError: Error | undefined;
@@ -90,7 +94,9 @@ let defaultSpawnError: Error | undefined;
 export async function ensureSpawnHelperExecutable(): Promise<void> {
   if (process.platform === "win32") return;
   try {
-    const nodePtyPkgJson = createRequire(import.meta.url).resolve("node-pty/package.json");
+    const nodePtyPkgJson = createRequire(import.meta.url).resolve(
+      "node-pty/package.json",
+    );
     const helperPath = join(
       dirname(nodePtyPkgJson),
       "prebuilds",
@@ -304,17 +310,23 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
  */
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
-  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
+  req: Pick<
+    CreateSessionRequest,
+    "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme"
+  >,
   context?: {
     promptAppendix?: string;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: PlanningSessionIdentity;
+    executionPolicy?: import("../shared/types.js").SessionExecutionPolicy;
     /** Server-composed secret launch metadata, never accepted from REST. */
     agentMapMcp?: { url: string; bearerToken: string };
     resume?: boolean;
   },
-) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
+) =>
+  | Omit<LaunchOpts, "harnessSessionId" | "cwd">
+  | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
 
@@ -404,6 +416,12 @@ export interface TrustedSessionCreateOptions {
   /** Server-owned coordinator predecessor. This may differ from the older
    * history record used to build the rehydration brief. */
   handoffFromSessionId?: string;
+  /** Server-selected runtime authority; never read from CreateSessionRequest. */
+  executionPolicy?: import("../shared/types.js").SessionExecutionPolicy;
+  /** Exact primary-binding metadata for a trusted planned builder. */
+  builderPlanning?: (
+    sessionId: string,
+  ) => import("../shared/types.js").BuilderPlanningSessionMetadata;
 }
 
 export interface TrustedSessionResumeOptions {
@@ -411,6 +429,8 @@ export interface TrustedSessionResumeOptions {
   planning?: PlannerSessionMetadata;
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
+  /** Exact persisted builder context required for a planned-builder resume. */
+  builderPlanning?: import("../shared/types.js").BuilderPlanningSessionMetadata;
 }
 
 interface PtyHandle {
@@ -504,10 +524,8 @@ export class SessionManager {
   private readonly agentSessionOwnersPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
-  private readonly resolveAgentMapIdentity:
-    | SessionManagerOptions["resolveAgentMapIdentity"];
-  private readonly onAgentMapSessionExit:
-    | SessionManagerOptions["onAgentMapSessionExit"];
+  private readonly resolveAgentMapIdentity: SessionManagerOptions["resolveAgentMapIdentity"];
+  private readonly onAgentMapSessionExit: SessionManagerOptions["onAgentMapSessionExit"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -516,8 +534,12 @@ export class SessionManager {
   private readonly writeAgentSessionOwnerRegistry:
     | ((file: string, serialized: string) => Promise<void>)
     | undefined;
-  private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
-  private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
+  private readonly writeWorkspaceContext: (
+    session: HarnessSession,
+  ) => Promise<void>;
+  private readonly prepareWorkspaceContext: (
+    session: HarnessSession,
+  ) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly platform: NodeJS.Platform;
@@ -550,7 +572,9 @@ export class SessionManager {
     this.revokeIngestToken = (sessionId) =>
       options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
-    this.sessionsPath = expandHome(options.sessionsPath ?? HARNESS_PATHS.sessions);
+    this.sessionsPath = expandHome(
+      options.sessionsPath ?? HARNESS_PATHS.sessions,
+    );
     this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
     this.spawnPty = options.spawnPty;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
@@ -561,9 +585,12 @@ export class SessionManager {
     this.writeSessionRegistry = options.writeSessionRegistry;
     this.writeAgentSessionOwnerRegistry =
       options.writeAgentSessionOwnerRegistry;
-    this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
-    this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
-    this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
+    this.writeWorkspaceContext =
+      options.writeWorkspaceContext ?? (async () => {});
+    this.prepareWorkspaceContext =
+      options.prepareWorkspaceContext ?? (async () => {});
+    this.ensureCanvasTemplate =
+      options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     this.platform = options.platform ?? process.platform;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
@@ -587,6 +614,10 @@ export class SessionManager {
     }
     let dirty = false;
     for (const session of persisted) {
+      if (!session.executionPolicy) {
+        session.executionPolicy = "interactive-default";
+        dirty = true;
+      }
       if (session.status !== "exited") {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;
@@ -635,7 +666,8 @@ export class SessionManager {
       // with harness="conductor" (written by an earlier build, hand-edited, or
       // a future registration) hits this path on resume/submitInput.
       const info = listHarnessAdapters().find((a) => a.id === harness);
-      if (info?.mode === "external") throw new ExternalHarnessError(harness, info.label);
+      if (info?.mode === "external")
+        throw new ExternalHarnessError(harness, info.label);
       throw new AdapterNotFoundError(harness);
     }
     return adapter;
@@ -648,18 +680,33 @@ export class SessionManager {
     const id = this.generateId();
     const adapter = this.getAdapter(req.harness);
     const planning = trusted.planning?.(id);
-    const trustedIdentity = trusted.agentMapIdentity?.(id) ?? planning?.identity;
+    const trustedIdentity =
+      trusted.agentMapIdentity?.(id) ?? planning?.identity;
     const agentMapIdentity = this.resolveAgentMapIdentity
       ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
       : trustedIdentity;
     const promptAppendix = trusted.promptAppendix?.(id);
     const sessionStartSystemMessage = trusted.sessionStartSystemMessage?.(id);
+    const executionPolicy = trusted.executionPolicy ?? "interactive-default";
+    const builderPlanning = trusted.builderPlanning?.(id);
+    if (
+      executionPolicy === "planning-readonly" &&
+      (!builderPlanning ||
+        agentMapIdentity?.role !== "agent-builder" ||
+        agentMapIdentity.assignment.kind !== "planned" ||
+        agentMapIdentity.assignment.agentId !== builderPlanning.plannedAgentId)
+    ) {
+      throw new Error(
+        "planning-readonly requires an exact trusted builder binding",
+      );
+    }
     const launchContext =
       promptAppendix || sessionStartSystemMessage || agentMapIdentity
         ? {
             ...(promptAppendix ? { promptAppendix } : {}),
             ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
             ...(agentMapIdentity ? { agentMapIdentity } : {}),
+            executionPolicy,
           }
         : undefined;
     const opts: LaunchOpts = {
@@ -668,6 +715,7 @@ export class SessionManager {
       ...(await (launchContext
         ? this.buildLaunchOpts(id, req, launchContext)
         : this.buildLaunchOpts(id, req))),
+      executionPolicy,
     };
     let spec: SpawnSpec;
     try {
@@ -700,6 +748,10 @@ export class SessionManager {
       ...(planning ? { planning } : {}),
       ...(agentMapIdentity
         ? { agentMapIdentity: structuredClone(agentMapIdentity) }
+        : {}),
+      executionPolicy,
+      ...(builderPlanning
+        ? { builderPlanning: structuredClone(builderPlanning) }
         : {}),
     };
     this.sessions.set(id, session);
@@ -797,6 +849,17 @@ export class SessionManager {
       throw new SessionAlreadyLiveError(id);
     }
     const adapter = this.getAdapter(session.harness);
+    const executionPolicy = session.executionPolicy ?? "interactive-default";
+    if (executionPolicy === "planning-readonly") {
+      if (
+        !session.builderPlanning ||
+        !trusted.builderPlanning ||
+        JSON.stringify(session.builderPlanning) !==
+          JSON.stringify(trusted.builderPlanning)
+      ) {
+        throw new Error("planned-builder resume context is not compatible");
+      }
+    }
     // Pre-flight against the agent's OWN store before touching the record.
     // Holding an agentSessionId only means our SessionStart hook fired once;
     // an agent that never received a prompt writes no transcript, so
@@ -805,7 +868,9 @@ export class SessionManager {
     // Failing here instead keeps the record exactly as it was — unspawned,
     // and (see below) with its real lastActiveAt intact.
     if (!(await adapter.canResume(session.agentSessionId, session.cwd))) {
-      const label = listHarnessAdapters().find((a) => a.id === session.harness)?.label ?? session.harness;
+      const label =
+        listHarnessAdapters().find((a) => a.id === session.harness)?.label ??
+        session.harness;
       throw new SessionNotResumeableError(
         id,
         `${label} no longer has the conversation for this session (${session.agentSessionId}) in ${session.cwd}. ` +
@@ -822,7 +887,7 @@ export class SessionManager {
           session.cwd,
           trustedIdentity ?? session.agentMapIdentity,
         )
-      : trustedIdentity ?? session.agentMapIdentity;
+      : (trustedIdentity ?? session.agentMapIdentity);
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else delete session.agentMapIdentity;
@@ -833,6 +898,7 @@ export class SessionManager {
               ? { promptAppendix: trusted.promptAppendix }
               : {}),
             ...(agentMapIdentity ? { agentMapIdentity } : {}),
+            executionPolicy,
             resume: true as const,
           }
         : undefined;
@@ -842,6 +908,7 @@ export class SessionManager {
       ...(await (launchContext
         ? this.buildLaunchOpts(id, session, launchContext)
         : this.buildLaunchOpts(id, session))),
+      executionPolicy,
     };
     let spec: SpawnSpec;
     try {
@@ -998,7 +1065,10 @@ export class SessionManager {
       if (handle) {
         // Guard against non-numeric pids (test fakes) — never probe the OS
         // with a garbage value, and never declare a session dead on one.
-        if (typeof handle.pty.pid === "number" && !this.isPidAlive(handle.pty.pid)) {
+        if (
+          typeof handle.pty.pid === "number" &&
+          !this.isPidAlive(handle.pty.pid)
+        ) {
           this.markExited(session.id, handle, null);
         }
         continue;
@@ -1008,7 +1078,8 @@ export class SessionManager {
       // so only sweep records older than the grace period (an unparseable
       // lastActiveAt is garbage and sweeps immediately).
       const ageMs = Date.now() - Date.parse(session.lastActiveAt);
-      if (!(ageMs < NO_PTY_SWEEP_GRACE_MS)) void this.transitionExited(session, null);
+      if (!(ageMs < NO_PTY_SWEEP_GRACE_MS))
+        void this.transitionExited(session, null);
     }
   }
 
@@ -1063,7 +1134,8 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) {
       const info = listHarnessAdapters().find((a) => a.id === session.harness);
-      if (info?.mode === "external") throw new ExternalHarnessError(session.harness, info.label);
+      if (info?.mode === "external")
+        throw new ExternalHarnessError(session.harness, info.label);
       return false;
     }
     if (!this.isReadyEnough(session, handle)) {
@@ -1241,7 +1313,10 @@ export class SessionManager {
         // chunk arrives. Everything before it is ordinary unsynchronized
         // output and can be committed now.
         let prefixLength = Math.min(SYNC_OUTPUT_START.length - 1, rest.length);
-        while (prefixLength > 0 && !SYNC_OUTPUT_START.startsWith(rest.slice(-prefixLength))) {
+        while (
+          prefixLength > 0 &&
+          !SYNC_OUTPUT_START.startsWith(rest.slice(-prefixLength))
+        ) {
           prefixLength -= 1;
         }
         const outputEnd = rest.length - prefixLength;
@@ -1340,15 +1415,15 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) return false;
     const handle = this.ptys.get(id);
-    const transitionSource = source === "clear" || source === "resume" ? source : null;
+    const transitionSource =
+      source === "clear" || source === "resume" ? source : null;
     let authorization = handle?.agentSessionRotation ?? null;
     if (handle && authorization && authorization.expiresAt <= Date.now()) {
       handle.agentSessionRotation = null;
       authorization = null;
     }
     const matchesAuthorization =
-      transitionSource !== null &&
-      authorization?.source === transitionSource;
+      transitionSource !== null && authorization?.source === transitionSource;
 
     // A matching clear/resume SessionStart consumes the user gesture even
     // when this is the first vendor id, Claude keeps the same id, or the
@@ -1373,7 +1448,8 @@ export class SessionManager {
     // pointers. A fresh session can therefore never reclaim A's old id and
     // merge its events/transcript with A after a restart.
     if (ownerId !== undefined && ownerId !== id) return false;
-    if (ownerId === undefined) await this.reserveAgentSessionIdentity(digest, id);
+    if (ownerId === undefined)
+      await this.reserveAgentSessionIdentity(digest, id);
 
     const candidate = { ...session, agentSessionId };
     let releaseFence: () => void = () => {};
@@ -1433,7 +1509,9 @@ export class SessionManager {
         const possibleControls = handle.trustedInputPasting
           ? [BRACKETED_PASTE_END]
           : [BRACKETED_PASTE_START, BRACKETED_PASTE_END];
-        if (possibleControls.some((candidate) => candidate.startsWith(control))) {
+        if (
+          possibleControls.some((candidate) => candidate.startsWith(control))
+        ) {
           if (control === BRACKETED_PASTE_START) {
             handle.trustedInputPasting = true;
             handle.trustedInputLine = "";
@@ -1467,7 +1545,9 @@ export class SessionManager {
       }
       if (char === "\r") {
         if (!handle.trustedInputInvalid) {
-          const transition = this.rotationForTrustedLine(handle.trustedInputLine);
+          const transition = this.rotationForTrustedLine(
+            handle.trustedInputLine,
+          );
           if (transition) {
             const now = Date.now();
             handle.agentSessionRotation = {
@@ -1572,6 +1652,24 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     session.planning = structuredClone(metadata);
+    await this.persist();
+    this.emitStatus(session);
+  }
+
+  /** Persist the server-owned builder lifecycle projection for Studio tabs. */
+  async setBuilderPlanningMetadata(
+    id: string,
+    metadata: import("../shared/types.js").BuilderPlanningSessionMetadata,
+  ): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    if (
+      session.executionPolicy !== "planning-readonly" ||
+      session.builderPlanning?.bindingId !== metadata.bindingId
+    ) {
+      throw new Error("builder planning metadata is not compatible");
+    }
+    session.builderPlanning = structuredClone(metadata);
     await this.persist();
     this.emitStatus(session);
   }
@@ -1744,7 +1842,10 @@ export class SessionManager {
    * keystrokes) must never wait on this, since a human answering the very
    * prompt this is waiting out is exactly how a session becomes ready.
    */
-  private async waitUntilReady(id: string, timeoutMs: number): Promise<boolean> {
+  private async waitUntilReady(
+    id: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const handle = this.ptys.get(id);
@@ -1926,7 +2027,11 @@ export class SessionManager {
 
     const poll = setInterval(() => {
       const current = this.sessions.get(id);
-      if (!current || this.ptys.get(id) !== handle || current.status !== "running") {
+      if (
+        !current ||
+        this.ptys.get(id) !== handle ||
+        current.status !== "running"
+      ) {
         clearInterval(poll);
         return;
       }
@@ -1974,7 +2079,11 @@ export class SessionManager {
    * silent no-op rather than double-transitioning or clobbering a newer
    * session/handle that's since taken its place (e.g. a resume).
    */
-  private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
+  private markExited(
+    id: string,
+    handle: PtyHandle,
+    exitCode: number | null,
+  ): void {
     if (this.ptys.get(id) !== handle) return;
     // Preserve the tail of output BEFORE the handle (and its buffer) is dropped
     // — this is the only chance to keep the agent's own error line. Worth it
@@ -2011,11 +2120,16 @@ export class SessionManager {
   private transitionExited(
     session: HarnessSession,
     exitCode: number | null,
-    { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
+    {
+      stampLastActive = true,
+      exitTail = null,
+    }: { stampLastActive?: boolean; exitTail?: string | null } = {},
   ): Promise<void> {
     this.revokeIngestToken(session.id);
     try {
-      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(() => {});
+      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(
+        () => {},
+      );
     } catch {
       // Capability cleanup never delays durable session reconciliation.
     }
@@ -2046,9 +2160,7 @@ export class SessionManager {
   private serializeAgentSessionIdentity<T>(
     operation: () => Promise<T>,
   ): Promise<T> {
-    const next = this.agentSessionIdentityQueue
-      .catch(() => {})
-      .then(operation);
+    const next = this.agentSessionIdentityQueue.catch(() => {}).then(operation);
     this.agentSessionIdentityQueue = next.then(
       () => {},
       () => {},
@@ -2087,7 +2199,9 @@ export class SessionManager {
         record.owners === null ||
         Array.isArray(record.owners)
       ) {
-        throw new Error("agent-session owner ledger has an unsupported version");
+        throw new Error(
+          "agent-session owner ledger has an unsupported version",
+        );
       }
       const entries = Object.entries(record.owners as Record<string, unknown>);
       if (entries.length > AGENT_SESSION_OWNER_MAX_ENTRIES) {
@@ -2100,7 +2214,9 @@ export class SessionManager {
           ownerId.length === 0 ||
           ownerId.length > 256
         ) {
-          throw new Error("agent-session owner ledger contains an invalid entry");
+          throw new Error(
+            "agent-session owner ledger contains an invalid entry",
+          );
         }
         this.agentSessionOwners.set(digest, ownerId);
       }
@@ -2169,9 +2285,8 @@ export class SessionManager {
       return;
     }
     await mkdir(dirname(this.agentSessionOwnersPath), { recursive: true });
-    const tmpPath = `${this.agentSessionOwnersPath}.tmp-${process.pid}-${
-      this.agentSessionOwnerWriteSeq++
-    }`;
+    const tmpPath = `${this.agentSessionOwnersPath}.tmp-${process.pid}-${this
+      .agentSessionOwnerWriteSeq++}`;
     await writeFile(tmpPath, serialized, { encoding: "utf8", mode: 0o600 });
     await rename(tmpPath, this.agentSessionOwnersPath);
   }

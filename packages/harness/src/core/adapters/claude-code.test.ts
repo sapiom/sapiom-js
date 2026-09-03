@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -24,12 +31,22 @@ describe("ClaudeCodeAdapter", () => {
       const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
       // ANSI-decorated, as a real pty frame renders them.
       expect(
-        adapter.detectBlockingPrompt("\x1b[1mDo you trust the files in this folder?\x1b[0m"),
+        adapter.detectBlockingPrompt(
+          "\x1b[1mDo you trust the files in this folder?\x1b[0m",
+        ),
       ).toBe(true);
-      expect(adapter.detectBlockingPrompt("Do you trust the files in this directory?")).toBe(true);
-      expect(adapter.detectBlockingPrompt("Choose the text style that looks best")).toBe(true);
+      expect(
+        adapter.detectBlockingPrompt(
+          "Do you trust the files in this directory?",
+        ),
+      ).toBe(true);
+      expect(
+        adapter.detectBlockingPrompt("Choose the text style that looks best"),
+      ).toBe(true);
       expect(adapter.detectBlockingPrompt("Select login method:")).toBe(true);
-      expect(adapter.detectBlockingPrompt("> welcome, composer is ready")).toBe(false);
+      expect(adapter.detectBlockingPrompt("> welcome, composer is ready")).toBe(
+        false,
+      );
     });
   });
 
@@ -60,7 +77,10 @@ describe("ClaudeCodeAdapter", () => {
 
     it("omits --plugin-dir from args when pluginDir is not set", () => {
       const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
-      const spec = adapter.launch({ harnessSessionId: "h-no-plugin", cwd: "/tmp/proj" });
+      const spec = adapter.launch({
+        harnessSessionId: "h-no-plugin",
+        cwd: "/tmp/proj",
+      });
       expect(spec.args).not.toContain("--plugin-dir");
     });
   });
@@ -115,7 +135,10 @@ describe("ClaudeCodeAdapter", () => {
 
     it("builds a resume SpawnSpec with --resume <agentSessionId>", () => {
       const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
-      const spec = adapter.resume("agent-uuid-123", { harnessSessionId: "h1", cwd: "/tmp/proj" });
+      const spec = adapter.resume("agent-uuid-123", {
+        harnessSessionId: "h1",
+        cwd: "/tmp/proj",
+      });
 
       expect(spec.command).toBe("fake-claude");
       expect(spec.args).toEqual([
@@ -126,6 +149,28 @@ describe("ClaudeCodeAdapter", () => {
         "--allow-dangerously-skip-permissions",
       ]);
       expect(spec.env).toEqual({ CLAUDECODE: null });
+    });
+
+    it("enforces plan mode and denies every source-mutating tool for planning-readonly", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launch({
+        harnessSessionId: "h-plan",
+        cwd: "/tmp/proj",
+        executionPolicy: "planning-readonly",
+        mcpConfigFile: "/tmp/plan-mcp.json",
+      });
+
+      expect(spec.args).toEqual([
+        "--mcp-config",
+        "/tmp/plan-mcp.json",
+        "--restricted",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "plan",
+        "--disallowedTools",
+        "Bash,PowerShell,Edit,Write,NotebookEdit",
+      ]);
+      expect(spec.args).not.toContain("--allow-dangerously-skip-permissions");
     });
 
     it("throws a descriptive error when the systemPromptFile can't be read", () => {
@@ -180,15 +225,17 @@ describe("ClaudeCodeAdapter", () => {
 
     it("throws when no prompt is provided — a task with nothing to run is a caller bug", () => {
       const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
-      expect(() => adapter.launchTask({ harnessSessionId: "task-1", cwd: "/tmp/proj" })).toThrow(
-        /requires opts\.prompt/,
-      );
+      expect(() =>
+        adapter.launchTask({ harnessSessionId: "task-1", cwd: "/tmp/proj" }),
+      ).toThrow(/requires opts\.prompt/);
     });
   });
 
   describe("doctor", () => {
     it("reports ok:false when the binary isn't on PATH", async () => {
-      const adapter = new ClaudeCodeAdapter({ binary: "definitely-not-a-real-binary-xyz" });
+      const adapter = new ClaudeCodeAdapter({
+        binary: "definitely-not-a-real-binary-xyz",
+      });
       const checks = await adapter.doctor();
       expect(checks).toHaveLength(1);
       expect(checks[0]).toMatchObject({ name: "claude", ok: false });
@@ -208,7 +255,9 @@ describe("ClaudeCodeAdapter", () => {
       expect(isClaudeVersionSupported("1.9.9 (Claude Code)")).toBe(false);
       expect(isClaudeVersionSupported("0.5.0")).toBe(false);
       expect(isClaudeVersionSupported("2.1.82 (Claude Code)")).toBe(false);
-      expect(isClaudeVersionSupported(`${MIN_CLAUDE_CODE_VERSION} (Claude Code)`)).toBe(true);
+      expect(
+        isClaudeVersionSupported(`${MIN_CLAUDE_CODE_VERSION} (Claude Code)`),
+      ).toBe(true);
       expect(isClaudeVersionSupported("2.4.1 (Claude Code)")).toBe(true);
       expect(isClaudeVersionSupported("10.0.0")).toBe(true);
     });
@@ -218,7 +267,9 @@ describe("ClaudeCodeAdapter", () => {
       // own parser's limits — an unreadable version is left alone on purpose.
       expect(isClaudeVersionSupported(null)).toBe(true);
       expect(isClaudeVersionSupported("")).toBe(true);
-      expect(isClaudeVersionSupported("some future format with no dotted number")).toBe(true);
+      expect(
+        isClaudeVersionSupported("some future format with no dotted number"),
+      ).toBe(true);
     });
   });
 
@@ -252,15 +303,32 @@ describe("ClaudeCodeAdapter", () => {
       await mkdir(projectDir, { recursive: true });
 
       const withSummary = [
-        JSON.stringify({ type: "user", message: { role: "user", content: "help me build a workflow" } }),
-        JSON.stringify({ type: "summary", summary: "Build a leasing workflow" }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "help me build a workflow" },
+        }),
+        JSON.stringify({
+          type: "summary",
+          summary: "Build a leasing workflow",
+        }),
       ].join("\n");
-      await writeFile(join(projectDir, "session-aaa.jsonl"), withSummary + "\n", "utf8");
+      await writeFile(
+        join(projectDir, "session-aaa.jsonl"),
+        withSummary + "\n",
+        "utf8",
+      );
 
       const fallbackToUserMessage = [
-        JSON.stringify({ type: "user", message: { role: "user", content: "just chatting, no summary yet" } }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "just chatting, no summary yet" },
+        }),
       ].join("\n");
-      await writeFile(join(projectDir, "session-bbb.jsonl"), fallbackToUserMessage + "\n", "utf8");
+      await writeFile(
+        join(projectDir, "session-bbb.jsonl"),
+        fallbackToUserMessage + "\n",
+        "utf8",
+      );
 
       // Not a transcript file — must be ignored.
       await writeFile(join(projectDir, "notes.txt"), "irrelevant", "utf8");
@@ -289,12 +357,19 @@ describe("ClaudeCodeAdapter", () => {
         "not json at all",
         JSON.stringify({ type: "summary", summary: "Recovered summary" }),
       ].join("\n");
-      await writeFile(join(projectDir, "session-ccc.jsonl"), content + "\n", "utf8");
+      await writeFile(
+        join(projectDir, "session-ccc.jsonl"),
+        content + "\n",
+        "utf8",
+      );
 
       const adapter = new ClaudeCodeAdapter({ homeDir });
       const summaries = await adapter.listPastSessions(cwd);
       expect(summaries).toHaveLength(1);
-      expect(summaries[0]).toMatchObject({ agentSessionId: "session-ccc", title: "Recovered summary" });
+      expect(summaries[0]).toMatchObject({
+        agentSessionId: "session-ccc",
+        title: "Recovered summary",
+      });
     });
 
     it("reads only the tail of large transcripts, still finding a title near the end", async () => {
@@ -310,7 +385,10 @@ describe("ClaudeCodeAdapter", () => {
       await writeFile(join(projectDir, "session-large.jsonl"), content, "utf8");
 
       // Force the head/tail-window path (not a full scan) with a tiny cap.
-      const adapter = new ClaudeCodeAdapter({ homeDir, fullScanMaxBytes: 1_024 });
+      const adapter = new ClaudeCodeAdapter({
+        homeDir,
+        fullScanMaxBytes: 1_024,
+      });
       const summaries = await adapter.listPastSessions(cwd);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]).toMatchObject({ title: "Found in the tail" });
@@ -327,12 +405,27 @@ describe("ClaudeCodeAdapter", () => {
           type: "user",
           origin: { kind: "human" },
           gitBranch: "feat/SAP-1632",
-          message: { role: "user", content: "You are an AI coding agent managed by the Orchestrator. Do X." },
+          message: {
+            role: "user",
+            content:
+              "You are an AI coding agent managed by the Orchestrator. Do X.",
+          },
         }),
-        JSON.stringify({ type: "ai-title", aiTitle: "Fix resume history row labels" }),
-        JSON.stringify({ type: "assistant", gitBranch: "feat/SAP-1632", message: { role: "assistant", content: "ok" } }),
+        JSON.stringify({
+          type: "ai-title",
+          aiTitle: "Fix resume history row labels",
+        }),
+        JSON.stringify({
+          type: "assistant",
+          gitBranch: "feat/SAP-1632",
+          message: { role: "assistant", content: "ok" },
+        }),
       ].join("\n");
-      await writeFile(join(projectDir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"), content + "\n", "utf8");
+      await writeFile(
+        join(projectDir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"),
+        content + "\n",
+        "utf8",
+      );
 
       const adapter = new ClaudeCodeAdapter({ homeDir });
       const summaries = await adapter.listPastSessions(cwd);
@@ -349,19 +442,51 @@ describe("ClaudeCodeAdapter", () => {
       await mkdir(projectDir, { recursive: true });
 
       const content = [
-        JSON.stringify({ type: "user", origin: { kind: "human" }, gitBranch: "main", message: { role: "user", content: "first" } }),
-        JSON.stringify({ type: "assistant", gitBranch: "main", message: { role: "assistant", content: "working" } }),
+        JSON.stringify({
+          type: "user",
+          origin: { kind: "human" },
+          gitBranch: "main",
+          message: { role: "user", content: "first" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          gitBranch: "main",
+          message: { role: "assistant", content: "working" },
+        }),
         // Tool result echoed back with role "user" — not a human turn.
-        JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", content: "done" }] } }),
+        JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", content: "done" }],
+          },
+        }),
         // Sub-agent (sidechain) prompt — not a top-level human turn.
-        JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: "sub-agent ask" } }),
-        JSON.stringify({ type: "user", origin: { kind: "human" }, gitBranch: "feat/x", message: { role: "user", content: "second" } }),
+        JSON.stringify({
+          type: "user",
+          isSidechain: true,
+          message: { role: "user", content: "sub-agent ask" },
+        }),
+        JSON.stringify({
+          type: "user",
+          origin: { kind: "human" },
+          gitBranch: "feat/x",
+          message: { role: "user", content: "second" },
+        }),
       ].join("\n");
-      await writeFile(join(projectDir, "session-turns.jsonl"), content + "\n", "utf8");
+      await writeFile(
+        join(projectDir, "session-turns.jsonl"),
+        content + "\n",
+        "utf8",
+      );
 
       const adapter = new ClaudeCodeAdapter({ homeDir });
       const [summary] = await adapter.listPastSessions(cwd);
-      expect(summary).toMatchObject({ messageCount: 2, gitBranch: "feat/x", title: "first" });
+      expect(summary).toMatchObject({
+        messageCount: 2,
+        gitBranch: "feat/x",
+        title: "first",
+      });
     });
 
     it("falls back to the directory basename (never a bare UUID) when a session has no title, summary, or prompt", async () => {
@@ -369,9 +494,16 @@ describe("ClaudeCodeAdapter", () => {
       await mkdir(projectDir, { recursive: true });
 
       const content = [
-        JSON.stringify({ type: "assistant", message: { role: "assistant", content: "no user prompt here" } }),
+        JSON.stringify({
+          type: "assistant",
+          message: { role: "assistant", content: "no user prompt here" },
+        }),
       ].join("\n");
-      await writeFile(join(projectDir, "11111111-2222-3333-4444-555555555555.jsonl"), content + "\n", "utf8");
+      await writeFile(
+        join(projectDir, "11111111-2222-3333-4444-555555555555.jsonl"),
+        content + "\n",
+        "utf8",
+      );
 
       const adapter = new ClaudeCodeAdapter({ homeDir });
       const [summary] = await adapter.listPastSessions(cwd);
@@ -401,14 +533,25 @@ describe("ClaudeCodeAdapter", () => {
       return join(home, ".claude", "projects", encodeProjectPath(projectCwd));
     }
 
-    async function writeTranscript(projectCwd: string, id: string, body: string): Promise<void> {
+    async function writeTranscript(
+      projectCwd: string,
+      id: string,
+      body: string,
+    ): Promise<void> {
       const dir = encodedProjectDir(homeDir, projectCwd);
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, `${id}.jsonl`), body, "utf8");
     }
 
     it("is true when the transcript for that id exists under the encoded project dir", async () => {
-      await writeTranscript(cwd, sessionId, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      await writeTranscript(
+        cwd,
+        sessionId,
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "hi" },
+        }) + "\n",
+      );
       const adapter = new ClaudeCodeAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(true);
     });
@@ -417,14 +560,23 @@ describe("ClaudeCodeAdapter", () => {
       // The real-world shape — the SessionStart hook gave us an id, but the
       // user never submitted a prompt, so Claude Code wrote nothing at all.
       // The project dir itself exists because OTHER sessions in it did run.
-      await writeTranscript(cwd, "some-other-session", JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      await writeTranscript(
+        cwd,
+        "some-other-session",
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "hi" },
+        }) + "\n",
+      );
       const adapter = new ClaudeCodeAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(false);
     });
 
     it("is false when no project directory exists for the cwd at all", async () => {
       const adapter = new ClaudeCodeAdapter({ homeDir });
-      expect(await adapter.canResume(sessionId, "/nonexistent/project")).toBe(false);
+      expect(await adapter.canResume(sessionId, "/nonexistent/project")).toBe(
+        false,
+      );
     });
 
     it("is false for a zero-byte transcript — the file exists but holds no conversation", async () => {
@@ -434,14 +586,25 @@ describe("ClaudeCodeAdapter", () => {
     });
 
     it("is scoped to the cwd: the same id under another project does not count", async () => {
-      await writeTranscript("/Users/test/other-project", sessionId, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      await writeTranscript(
+        "/Users/test/other-project",
+        sessionId,
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "hi" },
+        }) + "\n",
+      );
       const adapter = new ClaudeCodeAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(false);
-      expect(await adapter.canResume(sessionId, "/Users/test/other-project")).toBe(true);
+      expect(
+        await adapter.canResume(sessionId, "/Users/test/other-project"),
+      ).toBe(true);
     });
 
     it("is false for a directory that happens to be named <id>.jsonl", async () => {
-      await mkdir(join(encodedProjectDir(homeDir, cwd), `${sessionId}.jsonl`), { recursive: true });
+      await mkdir(join(encodedProjectDir(homeDir, cwd), `${sessionId}.jsonl`), {
+        recursive: true,
+      });
       const adapter = new ClaudeCodeAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(false);
     });
@@ -464,7 +627,10 @@ describe("ClaudeCodeAdapter", () => {
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, `${sessionId}.jsonl`),
-        JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n",
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "hi" },
+        }) + "\n",
         "utf8",
       );
 
@@ -477,13 +643,23 @@ describe("ClaudeCodeAdapter", () => {
       expect(summaries).toHaveLength(1);
       // The row reports the cwd the caller asked about, so resuming it stays
       // in the directory the user is actually working in.
-      expect(summaries[0]).toMatchObject({ agentSessionId: sessionId, cwd: linkedProject });
+      expect(summaries[0]).toMatchObject({
+        agentSessionId: sessionId,
+        cwd: linkedProject,
+      });
 
       await rm(root, { recursive: true, force: true });
     });
 
     it("still answers for a cwd that no longer exists on disk (realpath fails, raw encoding stands)", async () => {
-      await writeTranscript(cwd, sessionId, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      await writeTranscript(
+        cwd,
+        sessionId,
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "hi" },
+        }) + "\n",
+      );
       const adapter = new ClaudeCodeAdapter({ homeDir });
       // `cwd` here is a path that was never created — realpath rejects, and the
       // raw encoding is the only candidate left. It must still resolve.
@@ -494,7 +670,9 @@ describe("ClaudeCodeAdapter", () => {
       const adapter = new ClaudeCodeAdapter({ homeDir });
       // Ids reach this from HTTP via POST /api/sessions/adopt, so a traversal
       // attempt must be rejected outright rather than statted.
-      expect(await adapter.canResume("../../../../etc/passwd", cwd)).toBe(false);
+      expect(await adapter.canResume("../../../../etc/passwd", cwd)).toBe(
+        false,
+      );
       expect(await adapter.canResume("..", cwd)).toBe(false);
       expect(await adapter.canResume("a/b", cwd)).toBe(false);
       expect(await adapter.canResume("", cwd)).toBe(false);

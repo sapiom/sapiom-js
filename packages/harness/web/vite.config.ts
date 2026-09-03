@@ -102,6 +102,9 @@ export default defineConfig({
       "@shared/agent-map-codec": fileURLToPath(
         new URL("../src/shared/agent-map-codec.ts", import.meta.url),
       ),
+      "@shared/build-plan": fileURLToPath(
+        new URL("../src/shared/build-plan.ts", import.meta.url),
+      ),
       // One agent-name rule for the dialog and the create route: a name the
       // field accepts and the server refuses reads as a broken app.
       "@shared/agent-name": fileURLToPath(

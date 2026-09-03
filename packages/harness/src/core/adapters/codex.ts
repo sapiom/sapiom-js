@@ -165,7 +165,10 @@ interface RolloutLine {
 /** Read only the head of a (possibly huge) rollout file and extract its
  * `session_meta` entry. Codex always writes `session_meta` as the first
  * line, but this tolerates a few leading blank/malformed lines defensively. */
-async function readSessionMeta(filePath: string, maxBytes = ROLLOUT_HEAD_BYTES): Promise<RolloutSessionMeta | null> {
+async function readSessionMeta(
+  filePath: string,
+  maxBytes = ROLLOUT_HEAD_BYTES,
+): Promise<RolloutSessionMeta | null> {
   let content: string;
   try {
     const handle = await open(filePath, "r");
@@ -196,7 +199,10 @@ async function readSessionMeta(filePath: string, maxBytes = ROLLOUT_HEAD_BYTES):
     const id = typeof payload?.id === "string" ? payload.id : undefined;
     const cwd = typeof payload?.cwd === "string" ? payload.cwd : undefined;
     if (!id || !cwd) return null;
-    const timestamp = typeof payload?.timestamp === "string" ? Date.parse(payload.timestamp) : NaN;
+    const timestamp =
+      typeof payload?.timestamp === "string"
+        ? Date.parse(payload.timestamp)
+        : NaN;
     return { id, cwd, timestampMs: Number.isNaN(timestamp) ? null : timestamp };
   }
   return null;
@@ -215,7 +221,8 @@ function extractTitleFromHead(content: string, fallback: string): string {
     } catch {
       continue;
     }
-    if (parsed.type !== "event_msg" || parsed.payload?.type !== "user_message") continue;
+    if (parsed.type !== "event_msg" || parsed.payload?.type !== "user_message")
+      continue;
     const message = parsed.payload.message;
     if (typeof message === "string" && message.trim()) {
       const text = message.trim();
@@ -286,8 +293,13 @@ export class CodexAdapter implements HarnessAdapter {
 
   async doctor(): Promise<DoctorCheck[]> {
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
-      return [{ name: "codex", ok: true, detail: stdout.trim() || "installed" }];
+      const { stdout } = await execFileAsync(this.binary, ["--version"], {
+        timeout: 5_000,
+        windowsHide: true,
+      });
+      return [
+        { name: "codex", ok: true, detail: stdout.trim() || "installed" },
+      ];
     } catch {
       return [
         {
@@ -387,7 +399,9 @@ export class CodexAdapter implements HarnessAdapter {
       if (!meta || !cwds.has(meta.cwd)) continue;
 
       const fileStat = await stat(filePath).catch(() => undefined);
-      const lastActiveAt = fileStat ? fileStat.mtime.toISOString() : new Date(0).toISOString();
+      const lastActiveAt = fileStat
+        ? fileStat.mtime.toISOString()
+        : new Date(0).toISOString();
 
       let title = basename(filePath, ".jsonl");
       try {
@@ -447,6 +461,7 @@ export class CodexAdapter implements HarnessAdapter {
  * process on startup.
  */
 function buildConfigArgs(opts: LaunchOpts): string[] {
+  const planningReadonly = opts.executionPolicy === "planning-readonly";
   const args = [
     "-c",
     "check_for_update_on_startup=false",
@@ -464,8 +479,9 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
     "-c",
     'approval_policy="never"',
     "-c",
-    'sandbox_mode="workspace-write"',
+    `sandbox_mode=${JSON.stringify(planningReadonly ? "read-only" : "workspace-write")}`,
   ];
+  if (planningReadonly) args.push("-c", "mcp_servers={}");
   if (opts.agentMapMcp) {
     args.push(
       "-c",
@@ -487,6 +503,8 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
   return args;
 }
 
-export function createCodexAdapter(options?: CodexAdapterOptions): HarnessAdapter {
+export function createCodexAdapter(
+  options?: CodexAdapterOptions,
+): HarnessAdapter {
   return new CodexAdapter(options);
 }

@@ -262,6 +262,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "agent_map_read",
     "agent_map_validate",
     "build_plan_apply",
+    "build_plan_open_planning_sessions",
     "build_plan_read",
     "build_plan_rebase",
     "build_plan_validate",

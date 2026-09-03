@@ -58,6 +58,16 @@ import type {
   StudioProjectSummary,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
+import type {
+  ArchitectureSourceRef,
+  BuilderPlanningSessionBinding,
+  BuildPlanRef,
+  GraphDigest,
+  PlanningAssignmentId,
+  PlanningFanoutOpenRequest,
+  PlanningFanoutOpenResponse,
+  PlanningFanoutPreview,
+} from "@shared/build-plan";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
@@ -383,6 +393,14 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse>;
+  getPlanningFanoutPreview(
+    projectId: StudioProjectId,
+  ): Promise<PlanningFanoutPreview>;
+  openPlanningFanout(
+    projectId: StudioProjectId,
+    plannerSessionId: string,
+    request: PlanningFanoutOpenRequest,
+  ): Promise<PlanningFanoutOpenResponse>;
   /** Compatibility surface for coordinator-driven clients. The Studio renders
    * the planner's raw CLI and does not project this protocol into a second
    * transcript/composer UI. */
@@ -696,6 +714,25 @@ class RealApi implements HarnessApi {
   ): Promise<PlannerSessionResponse> {
     return this.request<PlannerSessionResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/planner-sessions`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  getPlanningFanoutPreview(
+    projectId: StudioProjectId,
+  ): Promise<PlanningFanoutPreview> {
+    return this.request<PlanningFanoutPreview>(
+      `/api/projects/${encodeURIComponent(projectId)}/planning-fanout`,
+    );
+  }
+
+  openPlanningFanout(
+    projectId: StudioProjectId,
+    plannerSessionId: string,
+    request: PlanningFanoutOpenRequest,
+  ): Promise<PlanningFanoutOpenResponse> {
+    return this.request<PlanningFanoutOpenResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(plannerSessionId)}/planning-fanout`,
       { method: "POST", body: JSON.stringify(request) },
     );
   }
@@ -2638,6 +2675,138 @@ export class MockApi implements HarnessApi {
     return { session, resolution: "created" };
   }
 
+  async getPlanningFanoutPreview(
+    projectId: StudioProjectId,
+  ): Promise<PlanningFanoutPreview> {
+    const snapshot = await this.getAgentMapWorkspace(projectId);
+    if (!snapshot.proposal)
+      return { available: false, warnings: ["Complete a build plan first."] };
+    const agentIds = snapshot.proposal.nodes
+      .filter((node) => node.kind === "agent")
+      .map((node) => node.id);
+    const zeroDigest = `sha256:${"0".repeat(64)}` as GraphDigest;
+    const source: ArchitectureSourceRef = {
+      kind: "proposal",
+      proposalId: snapshot.proposal.id,
+      version: snapshot.proposal.version,
+      graphDigest: zeroDigest,
+    };
+    const plan: BuildPlanRef = {
+      planId:
+        "build-plan_00000000-0000-7000-8000-000000000001" as BuildPlanRef["planId"],
+      version: 1 as BuildPlanRef["version"],
+      semanticDigest:
+        `sha256:${"0".repeat(64)}` as BuildPlanRef["semanticDigest"],
+    };
+    return {
+      available: true,
+      source,
+      plan,
+      assignmentIds: agentIds.map(
+        (id) =>
+          `assignment_${id.slice("node_".length)}` as PlanningAssignmentId,
+      ),
+      assignmentCount: agentIds.length,
+      expectedSessionCount: agentIds.length,
+      expectedModelTurnCount: agentIds.length,
+      warnings: [],
+    };
+  }
+
+  async openPlanningFanout(
+    projectId: StudioProjectId,
+    plannerSessionId: string,
+    request: PlanningFanoutOpenRequest,
+  ): Promise<PlanningFanoutOpenResponse> {
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        planningFanoutCall: { projectId, plannerSessionId, request },
+      };
+    }
+    const snapshot = await this.getAgentMapWorkspace(projectId);
+    const root = [...this.studioProjectIds.entries()].find(
+      ([, id]) => id === projectId,
+    )?.[0];
+    const agentNodes =
+      snapshot.proposal?.nodes.filter((node) => node.kind === "agent") ?? [];
+    const bindings: BuilderPlanningSessionBinding[] = [];
+    if (root) {
+      for (const [index, assignmentId] of request.assignmentIds.entries()) {
+        const node = agentNodes[index];
+        if (!node) continue;
+        const session = await this.createSession({
+          cwd: root,
+          harness: request.harness ?? "claude-code",
+          ...(request.theme ? { theme: request.theme } : {}),
+        });
+        const zeroDigest = `sha256:${"0".repeat(64)}`;
+        const brief = {
+          briefId: `brief_${node.id.slice("node_".length)}`,
+          version: 1,
+          semanticDigest: zeroDigest,
+        } as BuilderPlanningSessionBinding["brief"];
+        const bindingId =
+          `builder-binding_${node.id.slice("node_".length)}` as BuilderPlanningSessionBinding["bindingId"];
+        session.title = node.name;
+        session.executionPolicy = "planning-readonly";
+        session.agentMapIdentity = {
+          projectId,
+          sessionId: session.id,
+          userId: "user_mock",
+          role: "agent-builder",
+          assignment: { kind: "planned", agentId: node.id },
+        };
+        session.builderPlanning = {
+          bindingId,
+          purpose: "implementation-planning",
+          assignmentId,
+          plannedAgentId: node.id,
+          source: request.source,
+          plan: request.plan,
+          brief,
+          bootstrapDigest:
+            zeroDigest as BuilderPlanningSessionBinding["bootstrapDigest"],
+          state: "planning",
+        };
+        const now = new Date().toISOString();
+        bindings.push({
+          bindingId,
+          projectId,
+          assignmentId,
+          plannedAgentId: node.id,
+          purpose: "implementation-planning",
+          source: request.source,
+          plan: request.plan,
+          brief,
+          bootstrapDigest: session.builderPlanning.bootstrapDigest,
+          executionPolicy: "planning-readonly",
+          spawnEpoch: 1,
+          spawnClaimId: null,
+          spawnClaimedAt: null,
+          sessionId: session.id,
+          state: "planning",
+          staleReasons: [],
+          kickoff: null,
+          failureCode: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        void import("./events").then(({ publishMockBusMessage }) => {
+          publishMockBusMessage({ type: "session.status", session });
+        });
+      }
+    }
+    return {
+      approvalId:
+        "fanout-approval_00000000-0000-7000-8000-000000000001" as PlanningFanoutOpenResponse["approvalId"],
+      bindings,
+    };
+  }
+
   async sendPlannerMessage(
     projectId: StudioProjectId,
     sessionId: string,
@@ -3814,7 +3983,11 @@ export class MockApi implements HarnessApi {
   ): Promise<{ state: AgentSecret["state"] }> {
     await delay(150);
     if (mockErrorTargets().has("secretWrite")) {
-      throw new ApiError(502, `mock: ${key} refused`, `${key} could not be stored.`);
+      throw new ApiError(
+        502,
+        `mock: ${key} refused`,
+        `${key} could not be stored.`,
+      );
     }
     const state: AgentSecret["state"] = this.mockLinked(workflowPath)
       ? "synced"

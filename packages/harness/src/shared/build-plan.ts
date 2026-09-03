@@ -58,6 +58,19 @@ export type BuilderBootstrapDigest = BuildPlanBrand<
   "BuilderBootstrapDigest"
 >;
 export type ImpactDigest = BuildPlanBrand<string, "ImpactDigest">;
+export type PlanningFanoutApprovalId = BuildPlanBrand<
+  string,
+  "PlanningFanoutApprovalId"
+>;
+export type PlanningFanoutApprovalDigest = BuildPlanBrand<
+  string,
+  "PlanningFanoutApprovalDigest"
+>;
+export type BuilderPlanningSessionBindingId = BuildPlanBrand<
+  string,
+  "BuilderPlanningSessionBindingId"
+>;
+export type BuilderKickoffId = BuildPlanBrand<string, "BuilderKickoffId">;
 
 export type ArchitectureSourceRef =
   | Readonly<{
@@ -521,6 +534,89 @@ export interface BuilderPlanningSubmission {
   submittedAt: string;
 }
 
+export interface PlanningFanoutApproval {
+  approvalId: PlanningFanoutApprovalId;
+  projectId: StudioProjectId;
+  source: ArchitectureSourceRef;
+  plan: BuildPlanRef;
+  assignmentIds: readonly PlanningAssignmentId[];
+  approvedByUserId: string;
+  approvingSessionId: string;
+  userInputId: string;
+  approvedAt: string;
+  approvalDigest: PlanningFanoutApprovalDigest;
+}
+
+/** Exact, path-free facts shown before the authenticated user consents. */
+export type PlanningFanoutPreview =
+  | Readonly<{
+      available: true;
+      source: ArchitectureSourceRef;
+      plan: BuildPlanRef;
+      assignmentIds: readonly PlanningAssignmentId[];
+      assignmentCount: number;
+      expectedSessionCount: number;
+      expectedModelTurnCount: number;
+      warnings: readonly string[];
+    }>
+  | Readonly<{ available: false; warnings: readonly string[] }>;
+
+export interface PlanningFanoutOpenResponse {
+  approvalId: PlanningFanoutApprovalId;
+  bindings: readonly BuilderPlanningSessionBinding[];
+}
+
+export interface PlanningFanoutOpenRequest {
+  source: ArchitectureSourceRef;
+  plan: BuildPlanRef;
+  assignmentIds: readonly PlanningAssignmentId[];
+  harness?: import("./types.js").HarnessKind;
+  theme?: import("./types.js").UiTheme;
+}
+
+export interface BuilderKickoffDelivery {
+  kickoffId: BuilderKickoffId;
+  inputId: string;
+  state: "pending" | "delivering" | "delivered" | "delivery-uncertain";
+  attemptCount: number;
+  deliveredAt: string | null;
+  acknowledgedBy: Readonly<{
+    source: "hook" | "transcript-marker";
+    observedAt: string;
+  }> | null;
+}
+
+export interface BuilderPlanningSessionBinding {
+  bindingId: BuilderPlanningSessionBindingId;
+  projectId: StudioProjectId;
+  assignmentId: PlanningAssignmentId;
+  plannedAgentId: PlanNodeId;
+  purpose: "implementation-planning";
+  source: ArchitectureSourceRef;
+  plan: BuildPlanRef;
+  brief: AgentBriefRef;
+  bootstrapDigest: BuilderBootstrapDigest;
+  executionPolicy: "planning-readonly";
+  /** Monotonic durable create/reconcile claim for this stable binding. */
+  spawnEpoch: number;
+  spawnClaimId: string | null;
+  spawnClaimedAt: string | null;
+  sessionId: string | null;
+  state: import("./types.js").BuilderPlanningLifecycleState;
+  staleReasons: readonly BriefStaleReason[];
+  kickoff: BuilderKickoffDelivery | null;
+  failureCode: "spawn_failed" | "policy_unavailable" | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanningSubmissionIdempotencyReceipt {
+  sessionId: string;
+  requestId: string;
+  requestDigest: string;
+  submissionId: BuilderPlanningSubmissionId;
+}
+
 export interface PlanningAssignmentRecord {
   schemaVersion: typeof BUILD_PLAN_SCHEMA_VERSION;
   projectId: StudioProjectId;
@@ -586,6 +682,11 @@ export interface BuildPlanningAggregateV1 {
   submissionsByAssignmentId: Readonly<
     Record<string, readonly BuilderPlanningSubmission[]>
   >;
+  fanoutApprovals: readonly PlanningFanoutApproval[];
+  builderBindingsByAssignmentId: Readonly<
+    Record<string, BuilderPlanningSessionBinding>
+  >;
+  planningSubmissionReceipts: readonly PlanningSubmissionIdempotencyReceipt[];
   idempotencyReceipts: readonly BuildPlanIdempotencyReceipt[];
   idempotencyTombstones: readonly BuildPlanIdempotencyTombstone[];
 }
@@ -618,6 +719,9 @@ export const emptyBuildPlanningAggregate = (): BuildPlanningAggregateV1 => ({
   briefVersionsById: {},
   assignmentByAgentId: {},
   submissionsByAssignmentId: {},
+  fanoutApprovals: [],
+  builderBindingsByAssignmentId: {},
+  planningSubmissionReceipts: [],
   idempotencyReceipts: [],
   idempotencyTombstones: [],
 });
