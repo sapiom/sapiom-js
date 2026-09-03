@@ -181,9 +181,9 @@ interface WorkflowsRailProps {
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /**
-   * Create an agent IN a project (SAP-2981). Opens the create dialog App owns;
-   * the harness then does the scaffold and the agent joins the rail before any
-   * session starts.
+   * Compatibility path for a state payload without a durable Studio project.
+   * Opens the create dialog App owns; the harness then does the scaffold and
+   * the agent joins the rail before any session starts.
    *
    * It used to be `onScaffoldSession(root, harness)` — start a pty and inject
    * an English sentence asking the coding agent to call the scaffold MCP tool.
@@ -196,8 +196,9 @@ interface WorkflowsRailProps {
   projectRoot: string | null;
   /** Persist a changed project root as the user's default. */
   onSaveProjectRoot: (root: string) => Promise<void>;
-  /** Bare-project affordance: create the folder's first agent, binding the
-   *  live session it already has rather than opening a second one. */
+  /** Compatibility-only bare-project affordance: create the folder's first
+   *  agent, binding the live session it already has rather than opening a
+   *  second one. */
   onScaffoldInSession: (sessionId: string) => void;
   /** Navigate to the templates destination (App owns the center view). */
   onBrowseTemplates: () => void;
@@ -283,10 +284,10 @@ function ProjectRowMenu({
   onRemove,
 }: {
   label: string;
-  /** The create action this project currently offers, or null while one is
-   *  mid-creation and there is nothing to add to yet. A bare project (sessions,
-   *  no agent) scaffolds into its existing session; every other project starts
-   *  a new one rooted at the project. */
+  /** The compatibility create action this project currently offers, or null
+   *  when its Agent Map owns creation / while one is mid-creation. A bare
+   *  project (sessions, no agent) scaffolds into its existing session; every
+   *  other project starts a new one rooted at the project. */
   create: {
     kind: "create" | "scaffold";
     testid: string;
@@ -1231,12 +1232,12 @@ export function WorkflowsRail({
             const studioProject = studioProjects?.find(
               (candidate) => candidate.projectId === workspaceScope?.projectId,
             );
-            // A durable Studio project is owned by its Agent Map: agents enter
-            // through planning and approval, never through the legacy direct-
-            // create affordances. Keep this independent of the selected axis so
-            // switching to Group cannot bring the bypass back.
-            const plannerManaged = studioProject != null;
-            const planFirst = axis === "project" && plannerManaged;
+            // Current servers issue a durable Studio project for every scope,
+            // and that project's Agent Map owns creation. The absent case is a
+            // compatibility payload, not a second creation mode. Keep ownership
+            // independent of the selected axis so Group cannot restore a bypass.
+            const mapOwnsCreation = studioProject != null;
+            const planFirst = axis === "project" && mapOwnsCreation;
             const mapSelected =
               planFirst &&
               studioSelection?.kind === "agent-map" &&
@@ -1406,7 +1407,7 @@ export function WorkflowsRail({
                       <ProjectRowMenu
                         label={project.label}
                         create={
-                          plannerManaged || creating
+                          mapOwnsCreation || creating
                             ? null
                             : bare
                               ? {
@@ -1480,7 +1481,7 @@ export function WorkflowsRail({
                     this. */}
                 {!collapsed && empty && !creating && bare == null && (
                   <>
-                    {!plannerManaged && (
+                    {!mapOwnsCreation && (
                       <div className="workspace-row is-nested workspace-row-empty">
                         <span
                           className="row-disclosure row-disclosure-static"

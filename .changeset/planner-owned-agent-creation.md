@@ -1,6 +1,6 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 "@sapiom/harness-desktop": patch
 ---
 
-Keep planner-managed Studio projects on the Agent Map flow by removing direct agent-creation actions from empty sidebar rows and project menus. Legacy non-planning harness projects retain their existing creation controls.
+Make Agent Map planning the only agent-creation route in Studio projects. Empty sidebar rows no longer offer to create the first agent directly, and project menus no longer offer direct create or in-session scaffold actions.
