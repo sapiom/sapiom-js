@@ -62,6 +62,13 @@ export interface RetryDirective {
  * (status='paused', signal name + correlationId stored on the execution row)
  * and the inline runner exits via AgentPausedError.
  *
+ * `timeoutMs` is a **hard failure**, not an in-workflow branch. When it
+ * elapses with no signal, the sweep calls `expirePausedExecution` and the
+ * run becomes `failed` with `PauseTimeoutError`. It does **not** resume
+ * `resumeStep` with a timeout payload. "Wait for an event, otherwise
+ * proceed" belongs on an external timer that fires the same signal (see
+ * `examples/approval-chain`).
+ *
  * Signal-routed resume is implemented in `signals.service.ts`:
  * `AgentSignals.fireSignal(name, correlationId, payload)` looks up paused
  * executions by (signal.name, correlationId) and wakes each one with the
@@ -74,7 +81,7 @@ export interface PauseUntilSignalDirective {
     readonly correlationId?: string;
   };
   readonly timeoutMs?: number;
-  /** Step to run when the signal arrives. Defaults to the paused step. */
+  /** Step to run when the signal arrives. Defaults to the paused step. Not used on pause timeout. */
   readonly resumeStep?: string;
 }
 
@@ -189,6 +196,10 @@ export interface Pause<Resume extends string> {
   readonly kind: typeof DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL;
   readonly signal: { readonly name: string; readonly correlationId?: string };
   readonly resumeStep?: Resume;
+  /**
+   * Hard deadline for the pause. On expiry the execution **fails** with
+   * `PauseTimeoutError`; it does not resume `resumeStep`.
+   */
   readonly timeoutMs?: number;
   /** Optional audit output recorded for the pausing step. */
   readonly output?: unknown;
@@ -237,6 +248,13 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * Both are consumed as `return pauseUntilSignal(...)` from an async `run()`, so
  * async-return flattening makes the sync/async distinction invisible at the call
  * site.
+ *
+ * **`timeoutMs` fails the run.** If the signal has not arrived when
+ * `pausedUntil` elapses, the engine raises `PauseTimeoutError` and marks the
+ * execution `failed`. There is no timeout→resume payload and no `timeoutStep`.
+ * Omit `timeoutMs` for an indefinite wait. For "close bidding after 48h or
+ * 3 bids, whichever first", fire the same signal from an external timer
+ * (cron / webhook) instead of relying on `timeoutMs`.
  */
 export function pauseUntilSignal<const Resume extends string>(args: {
   signal: string;

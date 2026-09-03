@@ -176,6 +176,10 @@ Things to know:
     return pauseUntilSignal(run, { resumeStep: "review" });
   }
   ```
+- **`timeoutMs` fails the run.** If the signal never arrives, the engine marks
+  the execution `failed` with `PauseTimeoutError`. It does not resume
+  `resumeStep`. Omit `timeoutMs` for an indefinite wait; drive "wait-or-proceed"
+  by firing the same signal from an external timer.
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
 
