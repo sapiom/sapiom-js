@@ -46,7 +46,11 @@ export interface MaterializeAgentMapRevisionInput {
 }
 
 export type AgentMapConfirmationBoundaryInput =
-  | { committedFirst: "proposal-operation" }
+  | {
+      committedFirst: "proposal-operation";
+      confirmedSource: { proposalId: MapProposalId; version: number };
+      operationSource: { proposalId: MapProposalId; version: number };
+    }
   | {
       committedFirst: "confirmation";
       confirmedSource: { proposalId: MapProposalId; version: number };
@@ -66,7 +70,7 @@ export type AgentMapConfirmationBoundaryDecision =
     }
   | {
       confirmation: { outcome: "confirmed" };
-      proposalOperation: "rebase-eligible" | "stale";
+      proposalOperation: "committed" | "rebase-eligible" | "stale";
     };
 
 /** A bounded failure whose message never includes caller-controlled values. */
@@ -145,7 +149,15 @@ export function digestConfirmArchitectureRequest(
 export function classifyAgentMapConfirmationBoundary(
   input: AgentMapConfirmationBoundaryInput,
 ): AgentMapConfirmationBoundaryDecision {
-  if (input.committedFirst === "proposal-operation")
+  const operationTargetsConfirmedSource =
+    input.operationSource.proposalId === input.confirmedSource.proposalId &&
+    input.operationSource.version === input.confirmedSource.version;
+  if (input.committedFirst === "proposal-operation") {
+    if (!operationTargetsConfirmedSource)
+      return {
+        confirmation: { outcome: "confirmed" },
+        proposalOperation: "committed",
+      };
     return {
       confirmation: {
         outcome: "failed",
@@ -153,13 +165,12 @@ export function classifyAgentMapConfirmationBoundary(
       },
       proposalOperation: "committed",
     };
+  }
   return {
     confirmation: { outcome: "confirmed" },
-    proposalOperation:
-      input.operationSource.proposalId === input.confirmedSource.proposalId &&
-      input.operationSource.version === input.confirmedSource.version
-        ? "rebase-eligible"
-        : "stale",
+    proposalOperation: operationTargetsConfirmedSource
+      ? "rebase-eligible"
+      : "stale",
   };
 }
 
