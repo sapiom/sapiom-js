@@ -141,6 +141,60 @@ describe("BuildPlanContractValidator", () => {
       "incompatible-contract-direction",
     ]);
   });
+
+  it("accepts producer and consumer evidence through a written and read artifact", async () => {
+    const fixture = reportFlowFixture();
+    const result = await fixture.validator.validate(fixture.plan, [
+      fixture.researchBrief,
+      fixture.marketingBrief,
+    ]);
+
+    expect(result.completeness.issues).toEqual([]);
+    expect(result.completeness.status).toBe("complete");
+  });
+
+  it("rejects report-flow evidence with the wrong dependency direction", async () => {
+    const fixture = reportFlowFixture();
+    const marketingBrief = makeBrief(fixture.plan, {
+      ...fixture.marketingBrief,
+      dependencies: fixture.marketingBrief.dependencies.map((dependency) => ({
+        ...dependency,
+        direction: "downstream" as const,
+      })),
+    });
+    const result = await fixture.validator.validate(fixture.plan, [
+      fixture.researchBrief,
+      marketingBrief,
+    ]);
+
+    expect(result.completeness.issues.map(({ code }) => code)).toEqual([
+      "invalid-dependency",
+    ]);
+  });
+
+  it("rejects report-flow ports and dependencies with the wrong contract", async () => {
+    const fixture = reportFlowFixture();
+    const marketingBrief = makeBrief(fixture.plan, {
+      ...fixture.marketingBrief,
+      inputs: fixture.marketingBrief.inputs.map((port) => ({
+        ...port,
+        contractId: fixture.otherContractId,
+      })),
+      dependencies: fixture.marketingBrief.dependencies.map((dependency) => ({
+        ...dependency,
+        contractIds: [fixture.otherContractId],
+      })),
+    });
+    const result = await fixture.validator.validate(fixture.plan, [
+      fixture.researchBrief,
+      marketingBrief,
+    ]);
+
+    expect(result.completeness.issues.map(({ code }) => code)).toEqual([
+      "invalid-dependency",
+      "incompatible-contract-direction",
+    ]);
+  });
 });
 
 function dependencyFixture() {
@@ -297,6 +351,138 @@ function dependencyFixture() {
     plan,
     primaryBrief,
     counterpartBrief,
+    otherContractId,
+  };
+}
+
+function reportFlowFixture() {
+  const marketingAgentId =
+    "node_00000000-0000-7000-8000-000000000021" as PlanNodeId;
+  const reportArtifactId =
+    "node_00000000-0000-7000-8000-000000000022" as PlanNodeId;
+  const writeRelationshipId =
+    "rel_00000000-0000-7000-8000-000000000021" as PlanRelationshipId;
+  const readRelationshipId =
+    "rel_00000000-0000-7000-8000-000000000022" as PlanRelationshipId;
+  const contractId =
+    "contract_00000000-0000-7000-8000-000000000021" as PlanContractId;
+  const otherContractId =
+    "contract_00000000-0000-7000-8000-000000000022" as PlanContractId;
+  const reportGraph: AgentMapGraph = {
+    nodes: [
+      { ...graph.nodes[0]!, name: "Research", purpose: "Research the market" },
+      {
+        id: marketingAgentId,
+        kind: "agent",
+        name: "Marketing",
+        purpose: "Use research in campaigns",
+        ownerAgentId: null,
+        contractRefs: [contractId],
+      },
+      {
+        id: reportArtifactId,
+        kind: "artifact",
+        name: "ResearchReport",
+        purpose: "Carry research findings",
+        ownerAgentId: AGENT_ID,
+        contractRefs: [contractId],
+      },
+    ],
+    relationships: [
+      {
+        id: writeRelationshipId,
+        fromNodeId: AGENT_ID,
+        toNodeId: reportArtifactId,
+        kind: "writes",
+        executionMode: "asynchronous",
+        contractRef: contractId,
+        description: "Research produces the report",
+      },
+      {
+        id: readRelationshipId,
+        fromNodeId: marketingAgentId,
+        toNodeId: reportArtifactId,
+        kind: "reads",
+        executionMode: "asynchronous",
+        contractRef: contractId,
+        description: "Marketing consumes the report",
+      },
+    ],
+  };
+  const baseAssignment = makePlan().assignments[0]!;
+  const plan = makePlan({
+    assignments: [
+      baseAssignment,
+      { ...baseAssignment, plannedAgentId: marketingAgentId },
+    ],
+  });
+  const researchBrief = makeBrief(plan, {
+    ownedNodeIds: [AGENT_ID, reportArtifactId],
+    relevantNodeIds: [AGENT_ID, marketingAgentId, reportArtifactId],
+    outputs: [
+      {
+        contractId,
+        nodeId: AGENT_ID,
+        relationshipIds: [writeRelationshipId],
+        description: "Published research report",
+      },
+    ],
+    dependencies: [
+      {
+        dependencyId:
+          "dependency_00000000-0000-7000-8000-000000000021" as BriefDependencyId,
+        kind: "provides-input",
+        direction: "downstream",
+        counterpartAgentId: marketingAgentId,
+        relationshipIds: [writeRelationshipId, readRelationshipId],
+        contractIds: [contractId],
+        requiredByMilestoneIds: [],
+        blocking: false,
+        description: "Provides the report to Marketing",
+      },
+    ],
+  });
+  const marketingBrief = makeBrief(plan, {
+    briefId: "brief_00000000-0000-7000-8000-000000000021" as AgentBriefId,
+    assignmentId:
+      "assignment_00000000-0000-7000-8000-000000000021" as PlanningAssignmentId,
+    plannedAgentId: marketingAgentId,
+    ownedNodeIds: [marketingAgentId],
+    relevantNodeIds: [AGENT_ID, marketingAgentId, reportArtifactId],
+    inputs: [
+      {
+        contractId,
+        nodeId: marketingAgentId,
+        relationshipIds: [readRelationshipId],
+        description: "Research report input",
+      },
+    ],
+    dependencies: [
+      {
+        dependencyId:
+          "dependency_00000000-0000-7000-8000-000000000022" as BriefDependencyId,
+        kind: "consumes-output",
+        direction: "upstream",
+        counterpartAgentId: AGENT_ID,
+        relationshipIds: [writeRelationshipId, readRelationshipId],
+        contractIds: [contractId],
+        requiredByMilestoneIds: [],
+        blocking: true,
+        description: "Consumes Research's report",
+      },
+    ],
+  });
+  return {
+    validator: new BuildPlanContractValidator({
+      resolve: async (_projectId, source) => ({
+        projectId: PROJECT_ID,
+        source,
+        graph: reportGraph,
+      }),
+    }),
+    plan,
+    researchBrief,
+    marketingBrief,
     otherContractId,
   };
 }

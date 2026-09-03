@@ -1,4 +1,8 @@
-import type { AgentMapGraph, PlanNodeId } from "../shared/agent-map.js";
+import type {
+  AgentMapGraph,
+  PlanNodeId,
+  PlanRelationship,
+} from "../shared/agent-map.js";
 import {
   architectureSourceRefsEqual,
   type AgentBriefVersionRecord,
@@ -72,6 +76,33 @@ function finalize(issues: BuildPlanDiagnostic[]): BuildPlanDiagnostic[] {
     .slice(0, BUILD_PLAN_DIAGNOSTIC_LIMIT);
 }
 
+type EffectiveDataFlow = Readonly<{
+  fromNodeId: PlanNodeId;
+  toNodeId: PlanNodeId;
+}>;
+
+/**
+ * E2 records actor-oriented resource access: both reads and writes point from
+ * the actor to the resource/artifact. Delivery dependencies need the semantic
+ * direction of the transferred data, so reads flow in the opposite direction.
+ * `uses` is deliberately excluded because resource access alone does not prove
+ * that one agent produces an input consumed by another.
+ */
+function effectiveDataFlow(
+  relationship: PlanRelationship,
+): EffectiveDataFlow | null {
+  if (relationship.kind === "uses") return null;
+  if (relationship.kind === "reads")
+    return {
+      fromNodeId: relationship.toNodeId,
+      toNodeId: relationship.fromNodeId,
+    };
+  return {
+    fromNodeId: relationship.fromNodeId,
+    toNodeId: relationship.toNodeId,
+  };
+}
+
 function validateBrief(
   brief: AgentBriefVersionRecord,
   plan: ProjectBuildPlanVersion,
@@ -116,6 +147,79 @@ function validateBrief(
   };
   const belongsToPlannedAgent = (nodeId: PlanNodeId): boolean =>
     ownershipRoot(nodeId) === brief.plannedAgentId;
+  const isCarrierNode = (nodeId: PlanNodeId): boolean => {
+    const kind = nodes.get(nodeId)?.kind;
+    return kind === "artifact" || kind === "resource" || kind === "connector";
+  };
+  const evidenceFormsDataPath = (
+    evidence: readonly EffectiveDataFlow[],
+    producerAgentId: PlanNodeId,
+    consumerAgentId: PlanNodeId,
+  ): boolean => {
+    if (evidence.length === 0) return false;
+    const isAllowedNode = (nodeId: PlanNodeId): boolean => {
+      const root = ownershipRoot(nodeId);
+      return (
+        root === producerAgentId ||
+        root === consumerAgentId ||
+        (root === null && isCarrierNode(nodeId))
+      );
+    };
+    if (
+      evidence.some(
+        ({ fromNodeId, toNodeId }) =>
+          !isAllowedNode(fromNodeId) || !isAllowedNode(toNodeId),
+      )
+    )
+      return false;
+
+    const isActorFor = (nodeId: PlanNodeId, agentId: PlanNodeId): boolean => {
+      const kind = nodes.get(nodeId)?.kind;
+      return (
+        ownershipRoot(nodeId) === agentId &&
+        (kind === "agent" || kind === "subagent")
+      );
+    };
+    const startIds = new Set(
+      evidence
+        .flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId])
+        .filter((nodeId) => isActorFor(nodeId, producerAgentId)),
+    );
+    const targetIds = new Set(
+      evidence
+        .flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId])
+        .filter((nodeId) => isActorFor(nodeId, consumerAgentId)),
+    );
+    if (startIds.size === 0 || targetIds.size === 0) return false;
+
+    const reachableFrom = (
+      initial: ReadonlySet<PlanNodeId>,
+      reverse: boolean,
+    ): Set<PlanNodeId> => {
+      const reached = new Set(initial);
+      const queue = [...initial];
+      for (let index = 0; index < queue.length; index += 1) {
+        const current = queue[index]!;
+        for (const edge of evidence) {
+          const fromNodeId = reverse ? edge.toNodeId : edge.fromNodeId;
+          const toNodeId = reverse ? edge.fromNodeId : edge.toNodeId;
+          if (fromNodeId !== current || reached.has(toNodeId)) continue;
+          reached.add(toNodeId);
+          queue.push(toNodeId);
+        }
+      }
+      return reached;
+    };
+    const forward = reachableFrom(startIds, false);
+    const backward = reachableFrom(targetIds, true);
+    return (
+      [...targetIds].some((targetId) => forward.has(targetId)) &&
+      evidence.every(
+        ({ fromNodeId, toNodeId }) =>
+          forward.has(fromNodeId) && backward.has(toNodeId),
+      )
+    );
+  };
   const plannedNode = nodes.get(brief.plannedAgentId);
   if (
     !plannedNode ||
@@ -160,18 +264,20 @@ function validateBrief(
       );
     const validEvidence =
       port.relationshipIds.length > 0 &&
-      evidence.every(
-        (relation) =>
-          relation !== undefined &&
-          relation.contractRef === port.contractId &&
-          (isInput
-            ? relation.toNodeId === port.nodeId &&
-              belongsToPlannedAgent(relation.toNodeId) &&
-              ownershipRoot(relation.fromNodeId) !== brief.plannedAgentId
-            : relation.fromNodeId === port.nodeId &&
-              belongsToPlannedAgent(relation.fromNodeId) &&
-              ownershipRoot(relation.toNodeId) !== brief.plannedAgentId),
-      );
+      evidence.every((relation) => {
+        if (!relation || relation.contractRef !== port.contractId) return false;
+        const flow = effectiveDataFlow(relation);
+        if (!flow) return false;
+        return isInput
+          ? flow.toNodeId === port.nodeId &&
+              belongsToPlannedAgent(flow.toNodeId) &&
+              (ownershipRoot(flow.fromNodeId) !== brief.plannedAgentId ||
+                isCarrierNode(flow.fromNodeId))
+          : flow.fromNodeId === port.nodeId &&
+              belongsToPlannedAgent(flow.fromNodeId) &&
+              (ownershipRoot(flow.toNodeId) !== brief.plannedAgentId ||
+                isCarrierNode(flow.toNodeId));
+      });
     if (!validEvidence)
       issues.push(
         diagnostic(
@@ -186,6 +292,10 @@ function validateBrief(
     const evidence = dependency.relationshipIds
       .map((id) => relationships.get(id))
       .filter((entry) => entry !== undefined);
+    const dataFlowEvidence = evidence.flatMap((relation) => {
+      const flow = effectiveDataFlow(relation);
+      return flow === null ? [] : [flow];
+    });
     const ownToCounterpart = evidence.filter(
       (relation) =>
         ownershipRoot(relation.fromNodeId) === brief.plannedAgentId &&
@@ -210,6 +320,15 @@ function validateBrief(
     const contractsLinked = dependency.contractIds.every((id) =>
       evidencedContracts.has(id),
     );
+    const dataFlowContractsLinked =
+      dependency.contractIds.length > 0 &&
+      dataFlowEvidence.length === evidence.length &&
+      contractsLinked &&
+      evidence.every(
+        (relation) =>
+          relation.contractRef !== null &&
+          dependency.contractIds.some((id) => id === relation.contractRef),
+      );
     const milestoneIds = new Set(
       plan.milestones.map(({ milestoneId }) => milestoneId),
     );
@@ -259,12 +378,20 @@ function validateBrief(
       milestonesLinked &&
       (dependency.kind === "consumes-output"
         ? dependency.direction === "upstream" &&
-          dependency.contractIds.length > 0 &&
-          counterpartToOwn.length === evidence.length
+          dataFlowContractsLinked &&
+          evidenceFormsDataPath(
+            dataFlowEvidence,
+            dependency.counterpartAgentId,
+            brief.plannedAgentId,
+          )
         : dependency.kind === "provides-input"
           ? dependency.direction === "downstream" &&
-            dependency.contractIds.length > 0 &&
-            ownToCounterpart.length === evidence.length
+            dataFlowContractsLinked &&
+            evidenceFormsDataPath(
+              dataFlowEvidence,
+              brief.plannedAgentId,
+              dependency.counterpartAgentId,
+            )
           : dependency.kind === "shared-resource"
             ? dependency.direction === "bidirectional" &&
               sharedResourceIds.length > 0 &&
