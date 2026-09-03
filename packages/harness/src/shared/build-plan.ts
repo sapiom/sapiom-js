@@ -606,6 +606,9 @@ export type PlanningFanoutPreview =
 export interface PlanningFanoutOpenResponse {
   approvalId: PlanningFanoutApprovalId;
   bindings: readonly BuilderPlanningSessionBinding[];
+  /** Bindings durably owned by another coordinator but unavailable through
+   * this process-local session registry. Their authority is left untouched. */
+  unreachableAssignmentIds: readonly PlanningAssignmentId[];
 }
 
 export interface PlanningFanoutOpenRequest {

@@ -2758,6 +2758,13 @@ export class MockApi implements HarnessApi {
   ): Promise<PlanningFanoutOpenResponse> {
     const approvalId =
       "fanout-approval_00000000-0000-7000-8000-000000000001" as PlanningFanoutOpenResponse["approvalId"];
+    const unreachableAssignmentIds =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get(
+        "mockPlanningUnreachable",
+      ) === "1"
+        ? request.assignmentIds.slice(1, 2)
+        : [];
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __HARNESS_TEST__?: Record<string, unknown>;
@@ -2918,7 +2925,11 @@ export class MockApi implements HarnessApi {
       };
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
-        planningFanoutResponse: { approvalId, bindings },
+        planningFanoutResponse: {
+          approvalId,
+          bindings,
+          unreachableAssignmentIds,
+        },
         exitBuilderPlanningSession: (sessionId: string) => {
           const current = this.sessions.find(
             (session) =>
@@ -2965,6 +2976,7 @@ export class MockApi implements HarnessApi {
     return {
       approvalId,
       bindings,
+      unreachableAssignmentIds,
     };
   }
 

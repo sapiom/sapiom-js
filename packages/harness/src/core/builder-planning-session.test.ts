@@ -11,7 +11,10 @@ import {
   reconcileKickoffAttempt,
 } from "./builder-planning-session.js";
 import { AgentMapProposalService } from "./agent-map-proposal-service.js";
-import { computeCanonicalDigest } from "./build-plan-canonicalization.js";
+import {
+  computeArchitectureGraphDigest,
+  computeCanonicalDigest,
+} from "./build-plan-canonicalization.js";
 import {
   AGENT_ID,
   ASSIGNMENT_ID,
@@ -251,7 +254,37 @@ describe("planning result request boundary", () => {
     ).toBe(false);
   });
 
-  it.each(["\u0001", "\ud800"])(
+  it("normalizes planning text before length and safety validation", () => {
+    const parsed = planningResultSubmitRequestSchema.safeParse({
+      ...base,
+      implementationPlan: [
+        {
+          ...base.implementationPlan[0],
+          description: `  ${"x".repeat(2_000)}  `,
+          verification: "  verify  ",
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success)
+      expect(parsed.data.implementationPlan[0]).toMatchObject({
+        description: "x".repeat(2_000),
+        verification: "verify",
+      });
+    expect(
+      planningResultSubmitRequestSchema.safeParse({
+        ...base,
+        implementationPlan: [
+          {
+            ...base.implementationPlan[0],
+            description: ` ${"x".repeat(2_001)} `,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(["\u0001", "\u007f", "\ud800"])(
     "rejects unsafe planning text %j in every persisted text field",
     (unsafe) => {
       const requests = [
@@ -290,9 +323,53 @@ describe("planning result request boundary", () => {
   );
 });
 
-function publicFixture(includeApproval: boolean) {
-  const plan = makePlan();
-  const brief = makeBrief(plan);
+function publicFixture(includeApproval: boolean, agentCount = 1) {
+  const basePlan = makePlan();
+  const specs = Array.from({ length: agentCount }, (_, index) => ({
+    agentId:
+      index === 0
+        ? AGENT_ID
+        : (`node_00000000-0000-7000-8000-${String(index + 1).padStart(12, "0")}` as typeof AGENT_ID),
+    assignmentId:
+      index === 0
+        ? ASSIGNMENT_ID
+        : (`assignment_00000000-0000-7000-8000-${String(index + 101).padStart(12, "0")}` as typeof ASSIGNMENT_ID),
+    briefId:
+      index === 0
+        ? BRIEF_ID
+        : (`brief_00000000-0000-7000-8000-${String(index + 201).padStart(12, "0")}` as typeof BRIEF_ID),
+  }));
+  const projectGraph = {
+    nodes: specs.map((spec, index) => ({
+      ...graph.nodes[0]!,
+      id: spec.agentId,
+      name: index === 0 ? "Builder" : `Builder ${index + 1}`,
+    })),
+    relationships: [],
+  };
+  const source = {
+    ...proposalSource(),
+    graphDigest: computeArchitectureGraphDigest(projectGraph),
+  };
+  const plan = makePlan({
+    source,
+    assignments: specs.map((spec, index) => ({
+      ...basePlan.assignments[0]!,
+      plannedAgentId: spec.agentId,
+      mission: `Implement assignment ${index + 1}`,
+    })),
+  });
+  const briefs = specs.map((spec, index) =>
+    makeBrief(plan, {
+      briefId: spec.briefId,
+      plannedAgentId: spec.agentId,
+      assignmentId: spec.assignmentId,
+      mission: `Implement assignment ${index + 1}`,
+      ownedNodeIds: [spec.agentId],
+      relevantNodeIds: [spec.agentId],
+    }),
+  );
+  const brief = briefs[0]!;
   const planRef = {
     planId: plan.planId,
     version: plan.version,
@@ -314,7 +391,7 @@ function publicFixture(includeApproval: boolean) {
     projectId: PROJECT_ID,
     source: plan.source,
     plan: planRef,
-    assignmentIds: [ASSIGNMENT_ID],
+    assignmentIds: specs.map((spec) => spec.assignmentId),
     approvedByUserId: identity.userId,
     approvingSessionId: identity.sessionId,
     userInputId: "user-action_00000000-0000-4000-8000-000000000021",
@@ -346,10 +423,10 @@ function publicFixture(includeApproval: boolean) {
       projectId: PROJECT_ID,
       baseRevisionId: null,
       version: 1,
-      nodes: graph.nodes,
-      relationships: graph.relationships,
+      nodes: projectGraph.nodes,
+      relationships: projectGraph.relationships,
       history: [
-        ...graph.nodes.map((node, index) => ({
+        ...projectGraph.nodes.map((node, index) => ({
           id: `operation_00000000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
           requestId: "initial-map",
           acceptedVersion: 1,
@@ -362,7 +439,7 @@ function publicFixture(includeApproval: boolean) {
           },
           acceptedAt: "2026-09-03T10:00:00.000Z",
         })),
-        ...graph.relationships.map((relationship, index) => ({
+        ...projectGraph.relationships.map((relationship, index) => ({
           id: `operation_00000000-0000-7000-8001-${String(index + 1).padStart(12, "0")}`,
           requestId: "initial-map",
           acceptedVersion: 1,
@@ -385,36 +462,58 @@ function publicFixture(includeApproval: boolean) {
       planId: plan.planId,
       currentPlanVersion: plan.version,
       planVersions: [plan],
-      currentBriefByAgentId: { [AGENT_ID]: briefRef },
-      briefVersionsById: { [BRIEF_ID]: [brief] },
-      assignmentByAgentId: {
-        [AGENT_ID]: {
-          schemaVersion: 1,
-          projectId: PROJECT_ID,
-          assignmentId: ASSIGNMENT_ID,
-          briefId: BRIEF_ID,
-          plannedAgentId: AGENT_ID,
-          status: "active",
-          createdAt: "2026-09-03T10:00:00.000Z",
-          retiredAt: null,
-          transitions: [
-            {
-              status: "active",
-              at: "2026-09-03T10:00:00.000Z",
-              planVersion: plan.version,
-            },
-          ],
-          recordDigest: `sha256:${"3".repeat(64)}`,
-        },
-      },
+      currentBriefByAgentId: Object.fromEntries(
+        briefs.map((candidate) => [
+          candidate.plannedAgentId,
+          {
+            briefId: candidate.briefId,
+            version: candidate.version,
+            semanticDigest: candidate.semanticDigest,
+          },
+        ]),
+      ),
+      briefVersionsById: Object.fromEntries(
+        briefs.map((candidate) => [candidate.briefId, [candidate]]),
+      ),
+      assignmentByAgentId: Object.fromEntries(
+        specs.map((spec) => [
+          spec.agentId,
+          {
+            schemaVersion: 1,
+            projectId: PROJECT_ID,
+            assignmentId: spec.assignmentId,
+            briefId: spec.briefId,
+            plannedAgentId: spec.agentId,
+            status: "active",
+            createdAt: "2026-09-03T10:00:00.000Z",
+            retiredAt: null,
+            transitions: [
+              {
+                status: "active",
+                at: "2026-09-03T10:00:00.000Z",
+                planVersion: plan.version,
+              },
+            ],
+            recordDigest: `sha256:${"3".repeat(64)}`,
+          },
+        ]),
+      ),
       fanoutApprovals: includeApproval ? [approval] : [],
     },
   } as unknown as AgentMapProjectAggregate;
   let transaction = Promise.resolve();
   let beforeNextTransaction: (() => void | Promise<void>) | null = null;
+  let afterNextTransactionCommit: (() => void | Promise<void>) | null = null;
+  let afterNextReadAggregate: (() => void | Promise<void>) | null = null;
   let beforeNextList: (() => void) | null = null;
   const workspaceStore = {
-    readAggregate: vi.fn(async () => structuredClone(aggregate)),
+    readAggregate: vi.fn(async () => {
+      const snapshot = structuredClone(aggregate);
+      const after = afterNextReadAggregate;
+      afterNextReadAggregate = null;
+      await after?.();
+      return snapshot;
+    }),
     transact: <T>(
       _projectId: string,
       operation: (
@@ -434,7 +533,12 @@ function publicFixture(includeApproval: boolean) {
         () => undefined,
         () => undefined,
       );
-      return run.then(() => value);
+      return run.then(async () => {
+        const after = afterNextTransactionCommit;
+        afterNextTransactionCommit = null;
+        await after?.();
+        return value;
+      });
     },
   };
   const sessions: HarnessSession[] = [
@@ -452,10 +556,13 @@ function publicFixture(includeApproval: boolean) {
       agentMapIdentity: identity,
     },
   ];
+  let createdSessionSequence = 0;
   const create = vi.fn(async (_request, trusted) => {
-    const id = sessions.some((session) => session.id === "builder-session")
-      ? "builder-session-2"
-      : "builder-session";
+    const builderNumber = ++createdSessionSequence;
+    const id =
+      builderNumber === 1
+        ? "builder-session"
+        : `builder-session-${builderNumber}`;
     const session = {
       id,
       agentSessionId: "builder-agent",
@@ -575,17 +682,24 @@ function publicFixture(includeApproval: boolean) {
       approvalId: approval.approvalId,
       source: plan.source,
       plan: planRef,
-      assignmentIds: [ASSIGNMENT_ID],
+      assignmentIds: specs.map((spec) => spec.assignmentId),
     },
     create,
     resume,
     aggregate: () => aggregate,
     sessions,
     briefRef,
+    specs,
     workspaceStore,
     manager,
     beforeNextTransaction: (action: () => void | Promise<void>) => {
       beforeNextTransaction = action;
+    },
+    afterNextTransactionCommit: (action: () => void | Promise<void>) => {
+      afterNextTransactionCommit = action;
+    },
+    afterNextReadAggregate: (action: () => void | Promise<void>) => {
+      afterNextReadAggregate = action;
     },
     beforeNextList: (action: () => void) => {
       beforeNextList = action;
@@ -623,6 +737,37 @@ function markBuilderPlanning(fixture: ReturnType<typeof publicFixture>) {
     primary: true,
   };
   return { session, binding, builder: session.agentMapIdentity! };
+}
+
+function planningResultRequest(
+  session: HarnessSession,
+  requestId: string,
+  description = "Implement the assignment",
+) {
+  const metadata = session.builderPlanning!;
+  return {
+    schemaVersion: 1 as const,
+    expected: {
+      assignmentId: metadata.assignmentId,
+      source: metadata.source,
+      plan: metadata.plan,
+      brief: metadata.brief,
+      bootstrapDigest: metadata.bootstrapDigest,
+    },
+    requestId,
+    status: "ready" as const,
+    implementationPlan: [
+      {
+        stepId: "step-one",
+        ordinal: 1,
+        description,
+        verification: "Run the focused suite",
+      },
+    ],
+    risks: [],
+    questions: [],
+    proposedMapOperationIds: [],
+  };
 }
 
 describe("BuilderPlanningSessionService public authorization", () => {
@@ -673,8 +818,8 @@ describe("BuilderPlanningSessionService public authorization", () => {
     const replay = await fixture
       .service()
       .openOrReuse(fixture.identity, fixture.request);
-    expect(replay).toHaveLength(1);
-    expect(replay[0]?.sessionId).toBe("builder-session");
+    expect(replay.bindings).toHaveLength(1);
+    expect(replay.bindings[0]?.sessionId).toBe("builder-session");
     expect(fixture.create).toHaveBeenCalledTimes(1);
   });
 
@@ -703,11 +848,14 @@ describe("BuilderPlanningSessionService public authorization", () => {
     const loser = await fixture
       .service()
       .openOrReuse(fixture.identity, fixture.request);
-    expect(loser[0]).toMatchObject({ state: "spawning", sessionId: null });
+    expect(loser.bindings[0]).toMatchObject({
+      state: "spawning",
+      sessionId: null,
+    });
 
     releaseCreate();
     const winner = await winnerOpen;
-    expect(winner[0]?.sessionId).toBe("builder-session");
+    expect(winner.bindings[0]?.sessionId).toBe("builder-session");
     expect(fixture.create).toHaveBeenCalledTimes(1);
     expect(fixture.manager.kill).not.toHaveBeenCalled();
     expect(
@@ -743,11 +891,10 @@ describe("BuilderPlanningSessionService public authorization", () => {
       submitInput: vi.fn(),
     };
 
-    await expect(
-      fixture
-        .service(undefined, foreignManager as never)
-        .openOrReuse(fixture.identity, fixture.request),
-    ).rejects.toMatchObject({ code: "session_unreachable" });
+    const foreignOutcome = await fixture
+      .service(undefined, foreignManager as never)
+      .openOrReuse(fixture.identity, fixture.request);
+    expect(foreignOutcome.unreachableAssignmentIds).toEqual([ASSIGNMENT_ID]);
 
     expect(foreignCreate).not.toHaveBeenCalled();
     expect(
@@ -755,10 +902,108 @@ describe("BuilderPlanningSessionService public authorization", () => {
         ASSIGNMENT_ID
       ],
     ).toMatchObject({
-      bindingId: first[0]?.bindingId,
+      bindingId: first.bindings[0]?.bindingId,
       sessionId: "builder-session",
-      state: first[0]?.state,
+      state: first.bindings[0]?.state,
     });
+  });
+
+  it.each([0, 1])(
+    "isolates a locally unreachable assignment at ordered position %i and opens later assignments",
+    async (foreignIndex) => {
+      const fixture = publicFixture(true, 3);
+      const initial = await fixture
+        .service()
+        .openOrReuse(fixture.identity, fixture.request);
+      const foreignSpec = fixture.specs[foreignIndex]!;
+      const aggregate = fixture.aggregate();
+      const foreignBinding = structuredClone(
+        aggregate.buildPlanning.builderBindingsByAssignmentId[
+          foreignSpec.assignmentId
+        ]!,
+      );
+      aggregate.buildPlanning.builderBindingsByAssignmentId = {
+        [foreignSpec.assignmentId]: foreignBinding,
+      };
+      const foreignSessionId = foreignBinding.sessionId!;
+      fixture.sessions.splice(
+        0,
+        fixture.sessions.length,
+        ...fixture.sessions.filter(
+          (session) =>
+            session.id === fixture.identity.sessionId ||
+            session.id === foreignSessionId,
+        ),
+      );
+      fixture.create.mockClear();
+      const localManager = {
+        ...fixture.manager,
+        get: (id: string) =>
+          id === foreignSessionId ? undefined : fixture.manager.get(id),
+        list: () =>
+          fixture.manager
+            .list()
+            .filter((session) => session.id !== foreignSessionId),
+      };
+
+      const outcome = await fixture
+        .service(undefined, localManager)
+        .openOrReuse(fixture.identity, fixture.request);
+
+      expect(outcome.bindings.map((binding) => binding.assignmentId)).toEqual(
+        fixture.request.assignmentIds,
+      );
+      expect(outcome.unreachableAssignmentIds).toEqual([
+        foreignSpec.assignmentId,
+      ]);
+      expect(fixture.create).toHaveBeenCalledTimes(2);
+      expect(fixture.manager.kill).not.toHaveBeenCalled();
+      expect(
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          foreignSpec.assignmentId
+        ],
+      ).toEqual(foreignBinding);
+
+      const ownerRetry = await fixture
+        .service()
+        .openOrReuse(fixture.identity, fixture.request);
+      expect(ownerRetry.unreachableAssignmentIds).toEqual([]);
+      expect(ownerRetry.bindings).toHaveLength(initial.bindings.length);
+      expect(fixture.create).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("reports every foreign binding unreachable without mutation or side effects", async () => {
+    const fixture = publicFixture(true, 3);
+    const initial = await fixture
+      .service()
+      .openOrReuse(fixture.identity, fixture.request);
+    const before = structuredClone(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId,
+    );
+    fixture.create.mockClear();
+    const planner = fixture.sessions.find(
+      (session) => session.id === fixture.identity.sessionId,
+    )!;
+    const foreignManager = {
+      ...fixture.manager,
+      get: (id: string) => (id === planner.id ? planner : undefined),
+      list: () => [planner],
+    };
+
+    const outcome = await fixture
+      .service(undefined, foreignManager)
+      .openOrReuse(fixture.identity, fixture.request);
+
+    expect(outcome.bindings).toHaveLength(3);
+    expect(outcome.unreachableAssignmentIds).toEqual(
+      initial.bindings.map((binding) => binding.assignmentId),
+    );
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.manager.kill).not.toHaveBeenCalled();
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId,
+    ).toEqual(before);
   });
 
   it("decides reuse from transactional state after a delayed opener pre-read", async () => {
@@ -790,9 +1035,9 @@ describe("BuilderPlanningSessionService public authorization", () => {
     releasePreflight();
     const second = await delayedOpen;
     expect(fixture.create).toHaveBeenCalledTimes(1);
-    expect(first[0]?.bindingId).toBe(second[0]?.bindingId);
-    expect(first[0]?.sessionId).toBe("builder-session");
-    expect(second[0]?.sessionId).toBe("builder-session");
+    expect(first.bindings[0]?.bindingId).toBe(second.bindings[0]?.bindingId);
+    expect(first.bindings[0]?.sessionId).toBe("builder-session");
+    expect(second.bindings[0]?.sessionId).toBe("builder-session");
   });
 
   it("stops a just-created orphan when another owner wins before attach", async () => {
@@ -837,9 +1082,9 @@ describe("BuilderPlanningSessionService public authorization", () => {
       return orphan;
     });
 
-    const [binding] = await fixture
-      .service()
-      .openOrReuse(fixture.identity, fixture.request);
+    const {
+      bindings: [binding],
+    } = await fixture.service().openOrReuse(fixture.identity, fixture.request);
 
     expect(binding?.sessionId).toBe("winner-session");
     expect(fixture.manager.kill).toHaveBeenCalledWith("builder-session");
@@ -867,12 +1112,12 @@ describe("BuilderPlanningSessionService public authorization", () => {
       "builder-session",
       expect.objectContaining({
         builderPlanning: expect.objectContaining({
-          bindingId: resumed[0]?.bindingId,
+          bindingId: resumed.bindings[0]?.bindingId,
         }),
         promptAppendix: expect.stringContaining("builder-assignment-data"),
       }),
     );
-    expect(resumed[0]?.sessionId).toBe("builder-session");
+    expect(resumed.bindings[0]?.sessionId).toBe("builder-session");
   });
 
   it("reconstructs trusted context for scoped same-id resume", async () => {
@@ -897,10 +1142,9 @@ describe("BuilderPlanningSessionService public authorization", () => {
   it("does not poison a primary binding on a benign double-resume", async () => {
     const fixture = publicFixture(true);
     const service = fixture.service();
-    const [opened] = await service.openOrReuse(
-      fixture.identity,
-      fixture.request,
-    );
+    const {
+      bindings: [opened],
+    } = await service.openOrReuse(fixture.identity, fixture.request);
     fixture.sessions.find(
       (session) => session.id === "builder-session",
     )!.status = "exited";
@@ -1046,10 +1290,9 @@ describe("BuilderPlanningSessionService public authorization", () => {
   it("does not mutate primary authority when a secondary resume fails", async () => {
     const fixture = publicFixture(true);
     const service = fixture.service();
-    const [opened] = await service.openOrReuse(
-      fixture.identity,
-      fixture.request,
-    );
+    const {
+      bindings: [opened],
+    } = await service.openOrReuse(fixture.identity, fixture.request);
     const additional = await service.openAdditionalSession(
       PROJECT_ID,
       "builder-session",
@@ -1122,7 +1365,285 @@ describe("BuilderPlanningSessionService public authorization", () => {
     });
   });
 
-  it.each(["\u0001", "\ud800"])(
+  it.each(["accepted", "ambiguous"] as const)(
+    "uses an exact primary result as terminal proof after %s uncertain delivery",
+    async (outcome) => {
+      const fixture = publicFixture(true);
+      const service = fixture.service();
+      await service.openOrReuse(fixture.identity, fixture.request);
+      const session = fixture.sessions.find(
+        (candidate) => candidate.id === "builder-session",
+      )!;
+      session.ready = true;
+      if (outcome === "accepted")
+        fixture.manager.submitInput.mockResolvedValueOnce(true);
+      else
+        fixture.manager.submitInput.mockRejectedValueOnce(
+          new Error("write outcome unknown"),
+        );
+      await service.onSessionStatus(session);
+      await vi.waitFor(() =>
+        expect(
+          fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+            ASSIGNMENT_ID
+          ],
+        ).toMatchObject({
+          state: "delivery-uncertain",
+          kickoff: { state: "delivery-uncertain", attemptCount: 1 },
+        }),
+      );
+
+      const restarted = fixture.service();
+      await restarted.reconcile();
+      const request = planningResultRequest(session, `uncertain-${outcome}`);
+      const submission = await restarted.submitResult(
+        session.agentMapIdentity!,
+        request,
+      );
+      expect(
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          ASSIGNMENT_ID
+        ],
+      ).toMatchObject({
+        state: "submitted",
+        kickoff: {
+          state: "delivery-uncertain",
+          deliveryClaimId: null,
+          deliveryClaimedAt: null,
+        },
+      });
+      expect(
+        await restarted.submitResult(session.agentMapIdentity!, request),
+      ).toEqual(submission);
+      await expect(
+        restarted.submitResult(session.agentMapIdentity!, {
+          ...request,
+          requestId: `${request.requestId}-new`,
+        }),
+      ).rejects.toMatchObject({ code: "binding_stale" });
+
+      const prompt = "lost acknowledgement prompt";
+      expect(
+        restarted.decorateLocalEvent({
+          eventId: "after-uncertain-submit-decorate",
+          seq: 1,
+          ts: "2026-09-03T11:00:02.000Z",
+          userId: "user-test",
+          tenantId: null,
+          machineId: "machine-test",
+          harnessSessionId: session.id,
+          agentSessionId: session.agentSessionId,
+          harness: "codex",
+          type: "prompt.submitted",
+          payload: { prompt },
+        }).payload,
+      ).toEqual({ prompt });
+      const kickoff =
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          ASSIGNMENT_ID
+        ]!.kickoff!;
+      await restarted.onEventPersisted({
+        eventId: "after-uncertain-submit",
+        seq: 2,
+        ts: "2026-09-03T11:00:03.000Z",
+        userId: "user-test",
+        tenantId: null,
+        machineId: "machine-test",
+        harnessSessionId: session.id,
+        agentSessionId: session.agentSessionId,
+        harness: "codex",
+        type: "prompt.submitted",
+        payload: { builderKickoffInputId: kickoff.inputId },
+      });
+      expect(
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          ASSIGNMENT_ID
+        ],
+      ).toMatchObject({
+        state: "submitted",
+        kickoff: { state: "delivery-uncertain" },
+      });
+    },
+  );
+
+  it("denies an uncertain result from a secondary session", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const primary = fixture.sessions.find(
+      (candidate) => candidate.id === "builder-session",
+    )!;
+    const binding =
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]!;
+    binding.lifecycleEpoch += 1;
+    binding.state = "delivery-uncertain";
+    binding.kickoff = {
+      ...binding.kickoff!,
+      state: "delivery-uncertain",
+      attemptCount: 1,
+    };
+    const secondary = await service.openAdditionalSession(
+      PROJECT_ID,
+      primary.id,
+    );
+
+    await expect(
+      service.submitResult(
+        secondary.agentMapIdentity!,
+        planningResultRequest(secondary, "secondary-uncertain"),
+      ),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    expect(fixture.aggregate().buildPlanning.submissionsByAssignmentId).toEqual(
+      {},
+    );
+  });
+
+  it.each(["ack-first", "submit-first"] as const)(
+    "keeps uncertain kickoff/result ordering monotonic when %s wins",
+    async (winner) => {
+      const fixture = publicFixture(true);
+      const service = fixture.service();
+      await service.openOrReuse(fixture.identity, fixture.request);
+      const session = fixture.sessions.find(
+        (candidate) => candidate.id === "builder-session",
+      )!;
+      session.ready = true;
+      fixture.manager.submitInput.mockResolvedValueOnce(true);
+      await service.onSessionStatus(session);
+      await vi.waitFor(() =>
+        expect(
+          fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+            ASSIGNMENT_ID
+          ]?.state,
+        ).toBe("delivery-uncertain"),
+      );
+      const kickoff =
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          ASSIGNMENT_ID
+        ]!.kickoff!;
+      const event: AnalyticsEvent = {
+        eventId: `uncertain-race-${winner}`,
+        seq: 1,
+        ts: "2026-09-03T11:00:02.000Z",
+        userId: "user-test",
+        tenantId: null,
+        machineId: "machine-test",
+        harnessSessionId: session.id,
+        agentSessionId: session.agentSessionId,
+        harness: "codex",
+        type: "prompt.submitted",
+        payload: { builderKickoffInputId: kickoff.inputId },
+      };
+      const request = planningResultRequest(session, `race-${winner}`);
+
+      if (winner === "ack-first") {
+        await service.onEventPersisted(event);
+        await service.submitResult(session.agentMapIdentity!, request);
+        expect(
+          fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+            ASSIGNMENT_ID
+          ],
+        ).toMatchObject({
+          state: "submitted",
+          kickoff: { state: "delivered" },
+        });
+        return;
+      }
+
+      let observedRead!: () => void;
+      const readStarted = new Promise<void>((resolve) => {
+        observedRead = resolve;
+      });
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      fixture.afterNextReadAggregate(async () => {
+        observedRead();
+        await readGate;
+      });
+      const delayedAcknowledgement = service.onEventPersisted(event);
+      await readStarted;
+      await service.submitResult(session.agentMapIdentity!, request);
+      releaseRead();
+      await expect(delayedAcknowledgement).resolves.toBeUndefined();
+
+      expect(
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          ASSIGNMENT_ID
+        ],
+      ).toMatchObject({
+        state: "submitted",
+        kickoff: { state: "delivery-uncertain" },
+      });
+      const prompt = (
+        fixture.manager.submitInput.mock.calls as unknown as Array<
+          [string, string]
+        >
+      )[0]![1];
+      expect(
+        service.decorateLocalEvent({
+          ...event,
+          eventId: "after-submit-attribution",
+          payload: { prompt },
+        }).payload,
+      ).toEqual({ prompt });
+    },
+  );
+
+  it("preserves delivery uncertainty across refanout, trusted resume, and restart", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const session = fixture.sessions.find(
+      (candidate) => candidate.id === "builder-session",
+    )!;
+    session.ready = true;
+    fixture.manager.submitInput.mockResolvedValueOnce(true);
+    await service.onSessionStatus(session);
+    await vi.waitFor(() =>
+      expect(
+        fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+          ASSIGNMENT_ID
+        ]?.state,
+      ).toBe("delivery-uncertain"),
+    );
+
+    const refanout = await service.openOrReuse(
+      fixture.identity,
+      fixture.request,
+    );
+    expect(refanout.bindings[0]).toMatchObject({
+      state: "delivery-uncertain",
+      kickoff: { state: "delivery-uncertain" },
+    });
+    session.status = "exited";
+    await service.resume(PROJECT_ID, session.id);
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ],
+    ).toMatchObject({
+      state: "delivery-uncertain",
+      kickoff: { state: "delivery-uncertain" },
+    });
+
+    const restarted = fixture.service();
+    await restarted.reconcile();
+    expect(
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ],
+    ).toMatchObject({
+      state: "delivery-uncertain",
+      kickoff: { state: "delivery-uncertain" },
+    });
+    expect(fixture.manager.submitInput).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["\u0001", "\u007f", "\ud800"])(
     "maps unsafe persisted text %j to bounded invalid_request without mutation",
     async (unsafe) => {
       const fixture = publicFixture(true);
@@ -1160,6 +1681,64 @@ describe("BuilderPlanningSessionService public authorization", () => {
       expect(fixture.aggregate().buildPlanning).toEqual(before);
     },
   );
+
+  it("persists trimmed planning text and replays padding variants with one digest", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const { session, builder } = markBuilderPlanning(fixture);
+    const base = planningResultRequest(
+      session,
+      "trimmed-result",
+      "  Implement the assignment  ",
+    );
+    const padded = {
+      ...base,
+      implementationPlan: [
+        { ...base.implementationPlan[0]!, verification: "  Run tests  " },
+      ],
+      risks: [
+        {
+          riskId: "risk-one",
+          description: "  A risk  ",
+          mitigation: "  Mitigate it  ",
+        },
+      ],
+      questions: [{ questionId: "question-one", question: "  A question?  " }],
+    };
+
+    const first = await service.submitResult(builder, padded);
+    expect(first).toMatchObject({
+      implementationPlan: [
+        {
+          description: "Implement the assignment",
+          verification: "Run tests",
+        },
+      ],
+      risks: [{ description: "A risk", mitigation: "Mitigate it" }],
+      questions: [{ question: "A question?" }],
+    });
+    const replay = await service.submitResult(builder, {
+      ...padded,
+      implementationPlan: [
+        {
+          ...padded.implementationPlan[0]!,
+          description: "Implement the assignment",
+          verification: "Run tests",
+        },
+      ],
+      risks: [
+        {
+          ...padded.risks[0]!,
+          description: "A risk",
+          mitigation: "Mitigate it",
+        },
+      ],
+      questions: [{ ...padded.questions[0]!, question: "A question?" }],
+    });
+    expect(replay).toEqual(first);
+    expect(replay.requestDigest).toBe(first.requestDigest);
+  });
 
   it("submits only for the exact effective brief and enforces request replay", async () => {
     const fixture = publicFixture(true);
@@ -1730,6 +2309,12 @@ describe("BuilderPlanningSessionService public authorization", () => {
       state: "planning",
     });
     expect(
+      fixture.sessions.find((session) => session.id === "builder-session")
+        ?.builderPlanning,
+    ).toMatchObject({
+      state: "stale",
+    });
+    expect(
       fixture.sessions.find((session) => session.id === "builder-session-2")
         ?.builderPlanning,
     ).toMatchObject({
@@ -1921,9 +2506,7 @@ describe("BuilderPlanningSessionService kickoff delivery claim", () => {
       payload: { builderKickoffInputId: oldInputId },
     };
 
-    await expect(service.onEventPersisted(event)).rejects.toMatchObject({
-      code: "binding_stale",
-    });
+    await expect(service.onEventPersisted(event)).resolves.toBeUndefined();
     expect(
       fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
         ASSIGNMENT_ID
@@ -1933,6 +2516,133 @@ describe("BuilderPlanningSessionService kickoff delivery claim", () => {
       sessionId: null,
       state: "pending",
       kickoff: null,
+    });
+  });
+
+  it("keeps an old tab stale when its durable acknowledgement projection loses to replacement", async () => {
+    const fixture = publicFixture(true);
+    const service = fixture.service();
+    await service.openOrReuse(fixture.identity, fixture.request);
+    const initialSession = fixture.sessions.find(
+      (session) => session.id === "builder-session",
+    )!;
+    fixture.sessions.push({
+      ...structuredClone(initialSession),
+      id: "builder-secondary",
+      agentMapIdentity: {
+        ...initialSession.agentMapIdentity!,
+        sessionId: "builder-secondary",
+      },
+      builderPlanning: {
+        ...initialSession.builderPlanning!,
+        primary: false,
+      },
+    });
+    const oldBinding =
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]!;
+    oldBinding.state = "kickoff-pending";
+    oldBinding.kickoff = {
+      ...oldBinding.kickoff!,
+      state: "delivering",
+      attemptCount: 1,
+      deliveryClaimId: "delivery-claim_old-aba",
+      deliveryClaimedAt: "2026-09-03T11:00:00.000Z",
+    };
+    let announceCommit!: () => void;
+    const committed = new Promise<void>((resolve) => {
+      announceCommit = resolve;
+    });
+    let releaseProjection!: () => void;
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    fixture.afterNextTransactionCommit(async () => {
+      announceCommit();
+      await projectionGate;
+    });
+    const acknowledgement = service.onEventPersisted({
+      eventId: "old-ack-before-replacement",
+      seq: 1,
+      ts: "2026-09-03T11:00:02.000Z",
+      userId: "user-test",
+      tenantId: null,
+      machineId: "machine-test",
+      harnessSessionId: "builder-session",
+      agentSessionId: "builder-agent",
+      harness: "codex",
+      type: "prompt.submitted",
+      payload: { builderKickoffInputId: oldBinding.kickoff.inputId },
+    });
+    await committed;
+    const acknowledgedEpoch =
+      fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
+        ASSIGNMENT_ID
+      ]!.lifecycleEpoch;
+
+    const aggregate = fixture.aggregate();
+    const priorBrief = aggregate.buildPlanning.briefVersionsById[BRIEF_ID]![0]!;
+    const replacementBrief = {
+      ...structuredClone(priorBrief),
+      version: 2 as never,
+      semanticDigest: `sha256:${"d".repeat(64)}` as never,
+      recordDigest: `sha256:${"e".repeat(64)}` as never,
+    };
+    const replacementBriefRef = {
+      briefId: replacementBrief.briefId,
+      version: replacementBrief.version,
+      semanticDigest: replacementBrief.semanticDigest,
+    };
+    aggregate.buildPlanning = {
+      ...aggregate.buildPlanning,
+      currentBriefByAgentId: {
+        ...aggregate.buildPlanning.currentBriefByAgentId,
+        [AGENT_ID]: replacementBriefRef,
+      },
+      briefVersionsById: {
+        ...aggregate.buildPlanning.briefVersionsById,
+        [BRIEF_ID]: [priorBrief, replacementBrief],
+      },
+    };
+    const replacement = await service.openOrReuse(
+      fixture.identity,
+      fixture.request,
+    );
+    const oldSession = fixture.sessions.find(
+      (session) => session.id === "builder-session",
+    )!;
+    expect(oldSession.builderPlanning).toMatchObject({
+      state: "stale",
+      lifecycleEpoch: acknowledgedEpoch + 1,
+    });
+    expect(
+      fixture.sessions.find((session) => session.id === "builder-secondary")
+        ?.builderPlanning,
+    ).toMatchObject({
+      state: "stale",
+      lifecycleEpoch: acknowledgedEpoch + 1,
+      primary: false,
+    });
+
+    releaseProjection();
+    await acknowledgement;
+
+    expect(oldSession.builderPlanning).toMatchObject({
+      state: "stale",
+      lifecycleEpoch: acknowledgedEpoch + 1,
+    });
+    expect(replacement.bindings[0]).toMatchObject({
+      brief: replacementBriefRef,
+      sessionId: "builder-session-2",
+    });
+    expect(
+      fixture.sessions.find((session) => session.id === "builder-session-2")
+        ?.builderPlanning,
+    ).toMatchObject({
+      brief: replacementBriefRef,
+      state: "kickoff-pending",
+      primary: true,
     });
   });
 });

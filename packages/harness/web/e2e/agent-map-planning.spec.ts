@@ -491,6 +491,21 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     ).toContainText("Agent builder · unplanned");
   });
 
+  test("reports a partial planning fan-out without claiming every assignment opened", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1&mockPlanningUnreachable=1",
+    );
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openDashboardMap(page);
+    await expect(page.getByTestId("planning-fanout-consent")).toBeVisible();
+    await page.getByTestId("open-planning-sessions").click();
+    await expect(page.getByTestId("toast")).toContainText(
+      "Opened or reused 1 planning sessions; 1 is unavailable from this coordinator.",
+    );
+  });
+
   test("expands the Agent Map in place and unwinds its inspector before full view", async ({
     page,
   }) => {

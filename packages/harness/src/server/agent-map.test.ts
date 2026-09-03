@@ -16,10 +16,7 @@ import {
   PlanningSessionError,
   type PlanningSessionService,
 } from "../core/planning-session.js";
-import {
-  BuilderPlanningSessionError,
-  type BuilderPlanningSessionService,
-} from "../core/builder-planning-session.js";
+import type { BuilderPlanningSessionService } from "../core/builder-planning-session.js";
 import type { AgentMapWorkspaceResponse } from "../shared/agent-map.js";
 import type { HarnessSession } from "../shared/types.js";
 import { createBootTokenMiddleware } from "./auth.js";
@@ -665,7 +662,10 @@ describe("createAgentMapRouter", () => {
     const approve = vi.fn(async () => ({
       approvalId: "fanout-approval_00000000-0000-7000-8000-000000000001",
     }));
-    const open = vi.fn(async () => []);
+    const open = vi.fn(async () => ({
+      bindings: [] as unknown[],
+      unreachableAssignmentIds: [] as string[],
+    }));
     const preview = vi.fn(async () => ({ available: false, warnings: [] }));
     const builder = {
       approveFromAuthenticatedUiAction: approve,
@@ -735,9 +735,10 @@ describe("createAgentMapRouter", () => {
       expect.objectContaining({ ...body, approvalId: expect.any(String) }),
     );
 
-    open.mockRejectedValueOnce(
-      new BuilderPlanningSessionError("session_unreachable"),
-    );
+    open.mockResolvedValueOnce({
+      bindings: [],
+      unreachableAssignmentIds: body.assignmentIds,
+    });
     const unreachable = await fetch(route, {
       method: "POST",
       headers: {
@@ -746,9 +747,10 @@ describe("createAgentMapRouter", () => {
       },
       body: JSON.stringify(body),
     });
-    expect(unreachable.status).toBe(409);
+    expect(unreachable.status).toBe(202);
     expect(await unreachable.json()).toMatchObject({
-      code: "session_unreachable",
+      bindings: [],
+      unreachableAssignmentIds: body.assignmentIds,
     });
   });
 

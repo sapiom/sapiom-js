@@ -77,6 +77,65 @@ describe("Agent Map MCP plan-authoring discovery", () => {
     ).toBe(true);
   });
 
+  it("reports reachable and locally unreachable fan-out counts honestly", async () => {
+    const identity: PlanningSessionIdentity = {
+      projectId,
+      sessionId: "planner-partial-fanout",
+      userId: "user",
+      role: "map-planner",
+    };
+    const assignmentIds = ["assignment-a", "assignment-b", "assignment-c"];
+    const openOrReuse = vi.fn(async () => ({
+      bindings: assignmentIds.map((assignmentId) => ({ assignmentId })),
+      unreachableAssignmentIds: [assignmentIds[1]],
+    }));
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const server = createAgentMapToolServer(
+      identity,
+      new AgentMapProposalService(
+        new AgentMapWorkspaceStore("/tmp/agent-map-tools-partial-fanout"),
+      ),
+      { builderPlanningService: { openOrReuse } as never },
+    );
+    const client = new Client({ name: "partial-fanout", version: "1" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({
+      name: "build_plan_open_planning_sessions",
+      arguments: {
+        approvalId: "approval-opaque",
+        source: {
+          kind: "proposal",
+          proposalId: "proposal_00000000-0000-7000-8000-000000000001",
+          version: 1,
+          graphDigest: `sha256:${"1".repeat(64)}`,
+        },
+        plan: {
+          planId: "build-plan_00000000-0000-7000-8000-000000000001",
+          version: 1,
+          semanticDigest: `sha256:${"2".repeat(64)}`,
+        },
+        assignmentIds,
+      },
+    });
+
+    expect(result).toMatchObject({
+      structuredContent: {
+        unreachableAssignmentIds: ["assignment-b"],
+      },
+      content: [
+        expect.objectContaining({
+          text: expect.stringContaining(
+            "Reconciled 2 planning sessions; 1 is locally unreachable.",
+          ),
+        }),
+      ],
+    });
+    await client.close();
+    await server.close();
+  });
+
   it("returns method-not-found to builders and emits content-free planner telemetry", async () => {
     const events: unknown[] = [];
     const connect = async (identity: PlanningSessionIdentity) => {

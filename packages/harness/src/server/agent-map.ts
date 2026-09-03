@@ -517,7 +517,7 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
             fanoutRequest,
             `user-action_${randomUUID()}`,
           );
-        const bindings = await options.builderPlanningSessions.openOrReuse(
+        const outcome = await options.builderPlanningSessions.openOrReuse(
           planner,
           {
             ...fanoutRequest,
@@ -526,10 +526,13 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
             approvalId: approval.approvalId,
           },
         );
-        res.status(202).setHeader("Cache-Control", "no-store").json({
-          approvalId: approval.approvalId,
-          bindings,
-        });
+        res
+          .status(202)
+          .setHeader("Cache-Control", "no-store")
+          .json({
+            approvalId: approval.approvalId,
+            ...outcome,
+          });
       } catch (error) {
         if (error instanceof BuilderPlanningSessionError) {
           const status =

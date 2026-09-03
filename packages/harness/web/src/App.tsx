@@ -383,7 +383,7 @@ export const App = (): JSX.Element => {
       return;
     setPlanningFanoutPending(true);
     try {
-      await harness.api.openPlanningFanout(
+      const outcome = await harness.api.openPlanningFanout(
         plannerProjectId,
         activePlannerForProject.id,
         {
@@ -397,9 +397,19 @@ export const App = (): JSX.Element => {
           theme: getTheme(),
         },
       );
-      harness.showToast(
-        `Opening ${planningFanoutPreview.assignmentCount} planning sessions`,
-      );
+      if (outcome.unreachableAssignmentIds.length > 0) {
+        const reachableCount =
+          outcome.bindings.length - outcome.unreachableAssignmentIds.length;
+        harness.showToast(
+          `Opened or reused ${reachableCount} planning sessions; ${outcome.unreachableAssignmentIds.length} ${outcome.unreachableAssignmentIds.length === 1 ? "is" : "are"} unavailable from this coordinator.`,
+          "error",
+        );
+      } else {
+        harness.showToast(
+          `Opened or reused ${outcome.bindings.length} planning sessions`,
+          "info",
+        );
+      }
     } catch (error) {
       harness.showToast(
         errorMessage(error, "Planning sessions could not be opened."),
