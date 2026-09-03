@@ -33,6 +33,12 @@ export const HARNESS_PATHS = {
   settings: `${HARNESS_HOME}/settings.json`,
   /** Durable Studio project identities and private repository/root bindings. */
   studioProjects: `${HARNESS_HOME}/studio-projects.json`,
+  /**
+   * Secret values authored in Studio before their agent exists in the cloud
+   * (core/pending-secrets.ts). PLAINTEXT, and the only harness file that is —
+   * mode 0600, outside every project directory so it can never be committed.
+   */
+  pendingSecrets: `${HARNESS_HOME}/pending-secrets.json`,
   /** Durable plan-first Agent Map records, partitioned beneath projects/. */
   agentMap: `${HARNESS_HOME}/agent-map`,
   /** Generated per-session agent config (claude settings/mcp-config files). */
@@ -1663,6 +1669,66 @@ export type WorkflowInputContractResponse =
       /** Safe, user-facing explanation; never raw extraction diagnostics. */
       reason: string;
     };
+
+// ---------------------------------------------------------------------------
+// Secrets (right pane, Secrets tab)
+// ---------------------------------------------------------------------------
+
+/**
+ * One credential on an agent, as the Secrets tab sees it.
+ *
+ * There is NO value and no field a value could be smuggled through: the
+ * platform's read is names-only by design (`GET .../secrets` → `{ keys }`), and
+ * the local store's values never leave the harness process.
+ *
+ * There is also no hint, version, or timestamp. The design this tab is ported
+ * from draws all four, and the platform can supply none of them — a column
+ * populated for locally-held rows and blank for deployed ones is
+ * identification you cannot trust, which is worse than none at all.
+ */
+export interface AgentSecret {
+  /** UPPER_SNAKE_CASE env name. Also the identity of the row. */
+  name: string;
+  /**
+   * `synced` — configured on the cloud definition, so deployed runs get it.
+   * `pending` — held on this machine only, waiting for a deploy to carry it up.
+   */
+  state: "pending" | "synced";
+  /** Whether this machine holds a plaintext copy, which is what lets a LOCAL
+   *  run receive the value — and what "remove local copy" acts on. */
+  hasLocalCopy: boolean;
+}
+
+export interface AgentSecretsView {
+  secrets: AgentSecret[];
+  /** Whether a cloud definition exists yet. Unlinked agents can still hold
+   *  pending secrets; that is the whole point of the local store. */
+  linked: boolean;
+  /**
+   * The vault list could not be read (signed out, unreachable, drifted shape).
+   * Deliberately distinct from an empty list: telling a user an agent has no
+   * secrets when we simply could not look invites them to re-add one that is
+   * already there.
+   */
+  unreadable: boolean;
+}
+
+/**
+ * The outcome of a multi-key write (an .env import, or a flush).
+ *
+ * Per-key rather than a boolean because the upstream route takes ONE key per
+ * request: N writes can partly succeed, and an import that lands four of six
+ * while reporting "imported" is the exact failure the import preview exists to
+ * prevent. It must not come back on the write side.
+ */
+export interface SecretWriteReport {
+  /** Names that landed, in the order attempted. */
+  uploaded: string[];
+  /** Names that did not, each with a sentence naming what to do about it. */
+  failed: { key: string; error: string }[];
+  /** Where the successful writes went. */
+  state?: AgentSecret["state"];
+}
 
 // ---------------------------------------------------------------------------
 // Action macros (right icon rail)

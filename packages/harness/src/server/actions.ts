@@ -50,6 +50,12 @@ import { resolveCoreBaseUrl } from "../core/definition-slug-resolver.js";
 import { HOST_ESBUILD_PIN, unpackedPath } from "../core/asar-path.js";
 import { readWorkflowInputContract } from "../core/input-contract.js";
 import type { RunLocalRequest } from "../core/run-local-bootstrap.js";
+import type { PendingSecretsStore } from "../core/pending-secrets.js";
+import { flushPendingSecrets } from "../core/secrets-flush.js";
+import {
+  createVaultSecretsClient,
+  type VaultSecretsClient,
+} from "../core/vault-secrets.js";
 import type { WorkflowInputContractResponse } from "../shared/types.js";
 import {
   type ApiKeyProvider,
@@ -131,8 +137,15 @@ export interface RunLocalChildProcess {
 }
 
 /** Spawn the run-local bootstrap child. Test seam — defaults to `node`ing the
- *  compiled bootstrap. */
-export type RunLocalSpawnFn = () => RunLocalChildProcess;
+ *  compiled bootstrap.
+ *
+ *  `secrets` are the project's pending Studio credentials, merged into the
+ *  child's environment (core/pending-secrets.ts). Passed per call rather than
+ *  captured at construction because they are per-PROJECT and one server serves
+ *  many. */
+export type RunLocalSpawnFn = (
+  secrets?: Record<string, string>,
+) => RunLocalChildProcess;
 
 /**
  * Resolve the compiled run-local bootstrap entry. This module lives at
@@ -187,7 +200,20 @@ export interface RunLocalChildSpec {
  */
 export function resolveRunLocalChildSpec(
   moduleUrl: string,
-  runtime: { execPath: string; env: NodeJS.ProcessEnv; isElectron: boolean },
+  runtime: {
+    execPath: string;
+    env: NodeJS.ProcessEnv;
+    isElectron: boolean;
+    /**
+     * The project's pending Studio secrets. These OVERRIDE the inherited
+     * environment on purpose: a value the user typed into this agent's Secrets
+     * tab is a per-agent statement, and it is what the deployed run will get
+     * from the vault. Letting an unrelated shell export win here would make a
+     * local run disagree with production precisely when the user was trying to
+     * check that it agrees.
+     */
+    secrets?: Record<string, string>;
+  },
 ): RunLocalChildSpec {
   const bootstrap = unpackedPath(resolveRunLocalBootstrapPath(moduleUrl));
   const args = bootstrap.endsWith(".ts")
@@ -208,16 +234,21 @@ export function resolveRunLocalChildSpec(
     env: {
       ...inherited,
       ...(runtime.isElectron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+      // Last, so the tab's values win over an inherited export. See `secrets`.
+      ...(runtime.secrets ?? {}),
     },
   };
 }
 
 /** The default spawn. stdin is piped so the route can write the request. */
-function defaultRunLocalSpawn(): RunLocalChildProcess {
+function defaultRunLocalSpawn(
+  secrets?: Record<string, string>,
+): RunLocalChildProcess {
   const spec = resolveRunLocalChildSpec(import.meta.url, {
     execPath: process.execPath,
     env: process.env,
     isElectron: Boolean(process.versions.electron),
+    secrets,
   });
   return spawnChildProcess(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -310,6 +341,17 @@ export interface ActionsRouterOpts {
    * runs.ts and the `spawnProcess` seam in task-manager.ts.
    */
   runLocalSpawn?: RunLocalSpawnFn;
+  /**
+   * Secret values authored in Studio before the agent was linked
+   * (core/pending-secrets.ts). The run-local route merges the requested
+   * project's values into its child's environment, and the deploy route pushes
+   * them to the vault once a definition id exists. Optional: a host that does
+   * not supply one simply has no pending secrets to apply.
+   */
+  pendingSecrets?: PendingSecretsStore;
+  /** Injectable vault client for the deploy flush. Test seam; defaults to the
+   *  real one built from the held key. */
+  vault?: VaultSecretsClient;
 }
 
 /**
@@ -443,6 +485,44 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   /** Mint a core client for a specific key against the resolved core host. */
   const clientFor = (apiKey: string): ReturnType<typeof createClient> =>
     deps.createClient({ host: baseUrl, apiKey });
+
+  /**
+   * Push this project's locally-held credentials to the definition the deploy
+   * just resolved (core/secrets-flush.ts). Reports per-key failures as
+   * non-terminal `warning` lines: a credential that did not land is something
+   * the user must know about, and it is NOT a reason to fail a deploy that
+   * otherwise worked.
+   */
+  const flushPendingOnDeploy = async (
+    projectPath: string,
+    definitionId: string,
+    write: (event: DeployStreamEvent) => void,
+  ): Promise<void> => {
+    const pending = opts.pendingSecrets;
+    if (!pending || pending.entries(projectPath).length === 0) return;
+    try {
+      const result = await flushPendingSecrets({
+        pending,
+        vault:
+          opts.vault ??
+          createVaultSecretsClient({ apiKey: provider, baseUrl }),
+        projectPath,
+        definitionId,
+      });
+      for (const failure of result.failed) {
+        write({ phase: "warning", message: failure.error });
+      }
+    } catch (err) {
+      // The flush itself blew up (not a per-key refusal). Same posture: say so,
+      // continue the build.
+      write({
+        phase: "warning",
+        message: `This agent's saved credentials were not uploaded: ${
+          err instanceof Error ? err.message : String(err)
+        }. They are still stored locally — retry from the Secrets tab.`,
+      });
+    }
+  };
 
   /**
    * GET /api/workflows/:id/input-contract
@@ -594,6 +674,13 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       // toDeployErrorEvent below — reported as itself, never as a build
       // failure, and `deploy` is never reached.
       const definitionId = await ensureDefinitionId();
+      // Credentials the user set before this agent existed in the cloud, now
+      // that it does. BEFORE the build, not after: `link --create` has already
+      // provisioned the definition and its scoped credential, so the secret
+      // routes work pre-build — and a build that fails must not also lose the
+      // keys. Never fatal: a deploy that succeeded is not a failure because a
+      // credential did not, and the tab still shows what is pending.
+      await flushPendingOnDeploy(workflow.path, definitionId, write);
       write({ phase: "building", definitionId });
       // Auth against the live key, refreshing + retrying once on a rejected key
       // (same recovery the runs router gets). The building/terminal streaming
@@ -699,7 +786,11 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
 
     let child: RunLocalChildProcess;
     try {
-      child = runLocalSpawn();
+      // The values the user set on THIS agent, so a local run sees the same
+      // environment its deployed counterpart will. Read from the in-memory
+      // snapshot: this handler spawns synchronously and must not become async
+      // to ask the disk for four strings.
+      child = runLocalSpawn(opts.pendingSecrets?.values(request.sourceDir));
     } catch (err) {
       // Never launched (e.g. the node binary or bootstrap is missing) — the
       // request itself is fine, so answer in-band with a terminal error line.

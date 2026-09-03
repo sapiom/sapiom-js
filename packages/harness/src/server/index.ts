@@ -202,6 +202,8 @@ import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
 import { createTemplatesRouter } from "./templates.js";
 import { createAccountRouter } from "./account.js";
+import { createSecretsRouter } from "./secrets.js";
+import { createPendingSecretsStore } from "../core/pending-secrets.js";
 import { createActionsRouter } from "./actions.js";
 import { createAuthRouter, createMutableAuthState } from "./auth-routes.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
@@ -3124,6 +3126,24 @@ export const startServer = async (
       apiKey: apiKeyProvider,
     }),
   );
+  // The Secrets tab. Two stores behind one list: values authored before the
+  // agent existed in the cloud (held here, under the state root so `--state-root`
+  // isolates them and no project directory ever holds a credential), and the
+  // names the vault reports for a linked agent. Values only ever travel
+  // browser → server → vault; nothing reads one back.
+  const pendingSecrets = await createPendingSecretsStore(
+    statePaths.pendingSecrets,
+  );
+  app.use(
+    createSecretsRouter({
+      apiKey: apiKeyProvider,
+      pendingSecrets,
+      resolveWorkflow: (id) => {
+        const workflow = workflowsCache.find((w) => w.path === id);
+        return workflow ? { path: workflow.path } : null;
+      },
+    }),
+  );
   // Direct action macros (Deploy / Prod-run) — server-side, key never reaches
   // the browser, no Claude Code. Resolves a workflow :id (its path) against the
   // same live cache the rest router's findWorkflow uses.
@@ -3152,6 +3172,11 @@ export const startServer = async (
           dirty: true,
         });
       },
+      // Shared with the secrets router above: a deploy is where locally-held
+      // credentials finally have a definition to be written against, and
+      // run-local reads the same store to give a local run the same
+      // environment its deployed counterpart will get.
+      pendingSecrets,
     }),
   );
   // IA-01: the session-free, workflow-keyed canvas route. Same derivation the

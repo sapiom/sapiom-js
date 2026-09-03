@@ -1516,6 +1516,42 @@ describe("createActionsRouter", () => {
       expect(spec.env["PATH"]).toBe("/usr/bin"); // inherits the rest
     });
 
+    it("merges the project's pending Studio secrets into the child's env", () => {
+      const spec = resolveRunLocalChildSpec(CLI, {
+        execPath: "/usr/bin/node",
+        env: { PATH: "/usr/bin" },
+        isElectron: false,
+        secrets: { ANTHROPIC_API_KEY: "sk-ant-local" },
+      });
+      // This is what makes a local run see the same environment its deployed
+      // counterpart will get from the vault.
+      expect(spec.env["ANTHROPIC_API_KEY"]).toBe("sk-ant-local");
+      expect(spec.env["PATH"]).toBe("/usr/bin");
+    });
+
+    it("lets a pending secret OVERRIDE an inherited shell export", () => {
+      const spec = resolveRunLocalChildSpec(CLI, {
+        execPath: "/usr/bin/node",
+        env: { ANTHROPIC_API_KEY: "sk-from-the-shell" },
+        isElectron: false,
+        secrets: { ANTHROPIC_API_KEY: "sk-from-the-tab" },
+      });
+      // A value typed into THIS agent's Secrets tab is a per-agent statement,
+      // and it is what the deployed run receives. An unrelated shell export
+      // winning here would make a local run disagree with production exactly
+      // when the user was checking that it agrees.
+      expect(spec.env["ANTHROPIC_API_KEY"]).toBe("sk-from-the-tab");
+    });
+
+    it("changes nothing when the project has no pending secrets", () => {
+      const spec = resolveRunLocalChildSpec(CLI, {
+        execPath: "/usr/bin/node",
+        env: { PATH: "/usr/bin" },
+        isElectron: false,
+      });
+      expect(spec.env).toEqual({ PATH: "/usr/bin" });
+    });
+
     it("leaves the CLI path untouched — no flag, no rewriting, real node", () => {
       const spec = resolveRunLocalChildSpec(CLI, { execPath: "/usr/bin/node", env: { PATH: "/usr/bin" }, isElectron: false });
       expect(spec.env["ELECTRON_RUN_AS_NODE"]).toBeUndefined();
