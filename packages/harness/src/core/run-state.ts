@@ -19,6 +19,7 @@
 import { decodeExecutionProjection } from "@sapiom/agent-core";
 
 import type { RunView } from "../shared/types.js";
+import { resolveCoreBaseUrl } from "./definition-slug-resolver.js";
 import { renderRunState } from "./render-run-state.js";
 import {
   type ApiKeyProvider,
@@ -60,12 +61,51 @@ export interface RunStateFetcherOpts {
    */
   apiKey: string | null | ApiKeyProvider;
   baseUrl?: string;
+  /** Override Core's base URL (resolved from env by default). Test seam. */
+  coreBaseUrl?: string;
   /** Injectable fetch implementation — defaults to global fetch. Test seam. */
   fetchImpl?: typeof fetch;
 }
 
 export interface RunStateFetcher {
   fetch(executionId: string): Promise<RunStateResult>;
+}
+
+/**
+ * Core's own view of the same execution, used when the agents surface 404s.
+ *
+ * A 404 from the gateway is ambiguous in a way that matters: it means either
+ * "no such execution" or "no such ROUTE". On a local stack it is the latter —
+ * `GET /agents/v1/executions/:id` is not mounted there, so a cloud run that
+ * completed fine reported "execution not found" and Studio could never show its
+ * status. Asking Core resolves the ambiguity: if Core has the execution it is
+ * rendered, and if Core has not heard of it either then it genuinely does not
+ * exist.
+ *
+ * Core returns the same projection shape, so the SAME decoder renders it —
+ * verified against a real completed execution rather than assumed.
+ *
+ * Note the header: Core authenticates `x-api-key`; the gateway's
+ * `x-sapiom-api-key` is rejected there with a 401.
+ *
+ * The gateway stays primary. It owns deployed agent runs in production, and
+ * this is a fallback rather than a replacement so prod behaviour is unchanged.
+ */
+async function fetchFromCore(
+  executionId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch,
+  coreBaseUrl: string,
+): Promise<Response | null> {
+  try {
+    return await fetchImpl(
+      `${coreBaseUrl}/v1/workflows/executions/${encodeURIComponent(executionId)}`,
+      { headers: { "x-api-key": apiKey } },
+    );
+  } catch {
+    // Core unreachable too — the caller keeps the gateway's verdict.
+    return null;
+  }
 }
 
 /** Upstream statuses that mean "the API key was rejected" — worth one refresh
@@ -90,6 +130,9 @@ export function createRunStateFetcher(
   opts: RunStateFetcherOpts,
 ): RunStateFetcher {
   const { baseUrl = resolveAgentsBaseUrl(), fetchImpl = fetch } = opts;
+  // Resolved lazily: `resolveCoreBaseUrl()` reads the environment, and reading
+  // it at construction would freeze whatever was set at boot.
+  const coreBase = (): string => opts.coreBaseUrl ?? resolveCoreBaseUrl();
   const provider = toApiKeyProvider(opts.apiKey);
 
   const requestOnce = async (
@@ -112,8 +155,13 @@ export function createRunStateFetcher(
     }
   };
 
-  const decode = async (res: Response): Promise<RunStateResult> => {
+  const decode = async (
+    res: Response,
+    onNotFound?: () => Promise<RunStateResult>,
+  ): Promise<RunStateResult> => {
     if (res.status === 404) {
+      // Ask Core before declaring it missing — see fetchFromCore.
+      if (onNotFound) return onNotFound();
       return { ok: false, status: 404, error: "execution not found" };
     }
     if (!res.ok) {
@@ -127,6 +175,23 @@ export function createRunStateFetcher(
       const raw = (await res.json()) as Record<string, unknown>;
       const runView = renderRunState(decodeExecutionProjection(raw));
       return { ok: true, runView };
+    } catch {
+      return { ok: false, status: 502, error: "could not decode execution" };
+    }
+  };
+
+  /** Second opinion from Core, keeping the gateway's 404 if Core has none. */
+  const viaCore = async (
+    executionId: string,
+    apiKey: string,
+  ): Promise<RunStateResult> => {
+    const res = await fetchFromCore(executionId, apiKey, fetchImpl, coreBase());
+    if (!res || !res.ok) {
+      return { ok: false, status: 404, error: "execution not found" };
+    }
+    try {
+      const raw = (await res.json()) as Record<string, unknown>;
+      return { ok: true, runView: renderRunState(decodeExecutionProjection(raw)) };
     } catch {
       return { ok: false, status: 502, error: "could not decode execution" };
     }
@@ -157,11 +222,11 @@ export function createRunStateFetcher(
           apiKey = refreshed;
           const second = await requestOnce(executionId, apiKey);
           if (second.kind === "err") return second.result;
-          return decode(second.res);
+          return decode(second.res, () => viaCore(executionId, apiKey!));
         }
       }
 
-      return decode(first.res);
+      return decode(first.res, () => viaCore(executionId, apiKey));
     },
   };
 }

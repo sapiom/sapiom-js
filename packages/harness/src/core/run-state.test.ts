@@ -465,3 +465,161 @@ describe("createRunStateFetcher — refresh-on-401", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Core fallback: a gateway 404 is ambiguous — route missing, or execution missing
+// ---------------------------------------------------------------------------
+
+describe("createRunStateFetcher — Core fallback on a gateway 404", () => {
+  /**
+   * The case this exists for. On a local stack `GET /agents/v1/executions/:id`
+   * is not mounted, so the gateway answers 404 for a cloud run that completed
+   * perfectly well — and Studio reported "execution not found" for a run whose
+   * output was sitting in Core the whole time.
+   */
+  it("renders the execution from Core when the gateway has no such route", async () => {
+    const mockFetch = makeSequencedFetch([
+      response(404, { message: "Cannot GET /agents/v1/executions/58" }),
+      response(200, RAW_SUCCESS_DOC),
+    ]);
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+
+    const result = await fetcher.fetch("58");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.runView.status).toBe("completed");
+  });
+
+  it("asks Core with Core's header, not the gateway's", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      return Promise.resolve(
+        calls.length === 1 ? response(404, {}) : response(200, RAW_SUCCESS_DOC),
+      );
+    }) as unknown as typeof fetch;
+
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+    await fetcher.fetch("58");
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toBe("https://agents.test/agents/v1/executions/58");
+    expect(calls[0].headers["x-sapiom-api-key"]).toBe("sk-test-key");
+    // Core rejects the gateway's header with a 401, so it must not be reused.
+    expect(calls[1].url).toBe("https://core.test/v1/workflows/executions/58");
+    expect(calls[1].headers["x-api-key"]).toBe("sk-test-key");
+    expect(calls[1].headers["x-sapiom-api-key"]).toBeUndefined();
+  });
+
+  /** Both surfaces disclaim it: now "not found" is the honest answer. */
+  it("keeps the 404 when Core has not heard of it either", async () => {
+    const mockFetch = makeFetch(404, { error: "not found" });
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+
+    const result = await fetcher.fetch("nope");
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      error: "execution not found",
+    });
+  });
+
+  it("keeps the 404 when Core itself is unreachable", async () => {
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve(response(404, {}));
+      return Promise.reject(new Error("ECONNREFUSED"));
+    }) as unknown as typeof fetch;
+
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+
+    const result = await fetcher.fetch("58");
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      error: "execution not found",
+    });
+  });
+
+  /**
+   * `decodeExecutionProjection` is lenient — it accepts an unfamiliar object
+   * rather than throwing — so the only way this path is reached is a body that
+   * will not parse at all. A truncated response, say.
+   */
+  it("reports a decode failure rather than claiming the run is missing", async () => {
+    const unparseable = {
+      status: 200,
+      ok: true,
+      json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")),
+    } as Response;
+    const mockFetch = makeSequencedFetch([response(404, {}), unparseable]);
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+
+    const result = await fetcher.fetch("58");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(502);
+  });
+
+  /**
+   * The gateway remains the owner of deployed runs in production: a 200 there
+   * must never trigger a second call.
+   */
+  it("does not touch Core when the gateway answers", async () => {
+    const mockFetch = makeFetch(200, RAW_SUCCESS_DOC);
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+
+    await fetcher.fetch("58");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not touch Core for a non-404 gateway failure", async () => {
+    const mockFetch = makeFetch(500, { error: "boom" });
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test-key",
+      baseUrl: "https://agents.test",
+      coreBaseUrl: "https://core.test",
+      fetchImpl: mockFetch,
+    });
+
+    const result = await fetcher.fetch("58");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(false);
+  });
+});
