@@ -7,6 +7,9 @@
  */
 import type {
   AccountPlanView,
+  AgentSecret,
+  AgentSecretsView,
+  SecretWriteReport,
   AdoptSessionRequest,
   AgentScaffoldResponse,
   AppState,
@@ -524,6 +527,37 @@ export interface HarnessApi {
   /** The rail's plan card view, relayed by the server from core (key stays
    *  server-side). Never rejects on a degraded read — inspect `source`. */
   getAccountPlan(): Promise<AccountPlanView>;
+  /**
+   * This agent's credentials, by NAME and state. Never carries a value: the
+   * platform's read is names-only by design and the local store's plaintext
+   * stays server-side. `id` is the agent's project path, as every other
+   * workflow-scoped route takes it.
+   */
+  listSecrets(workflowPath: string): Promise<AgentSecretsView>;
+  /** Writes one value — to the vault when the agent is linked, to this
+   *  machine when it is not. Rejects with the reason if it does not land. */
+  setSecret(
+    workflowPath: string,
+    key: string,
+    secret: string,
+  ): Promise<{ state: AgentSecret["state"] }>;
+  /** Bulk write for the .env dialog. The upstream route takes one key per
+   *  request, so this reports EVERY key: a partial import must never read as
+   *  a whole one. */
+  importSecrets(
+    workflowPath: string,
+    entries: { key: string; secret: string }[],
+  ): Promise<SecretWriteReport>;
+  /** Pushes everything held locally to the vault — the answer for an agent
+   *  deployed from the terminal, which the server never observed. */
+  flushSecrets(workflowPath: string): Promise<SecretWriteReport>;
+  /** Removes a secret. `localOnly` drops this machine's copy and leaves the
+   *  deployed credential alone. */
+  deleteSecret(
+    workflowPath: string,
+    key: string,
+    options?: { localOnly?: boolean },
+  ): Promise<void>;
   /** Live run render state (upstream feat/harness-runtime-analytics):
    *  GET /api/runs/:id/state = inspect -> decode -> renderRunState. Poll
    *  after an execution.started bus message until the run is terminal. */
@@ -930,6 +964,58 @@ class RealApi implements HarnessApi {
 
   getAccountPlan(): Promise<AccountPlanView> {
     return this.request<AccountPlanView>("/api/account/plan");
+  }
+
+  /** `/api/workflows/<path>/secrets` — the path is the agent id, encoded the
+   *  same way deploy and input-contract encode it. */
+  private secretsPath(workflowPath: string, suffix = ""): string {
+    return `/api/workflows/${encodeURIComponent(workflowPath)}/secrets${suffix}`;
+  }
+
+  listSecrets(workflowPath: string): Promise<AgentSecretsView> {
+    return this.request<AgentSecretsView>(this.secretsPath(workflowPath));
+  }
+
+  setSecret(
+    workflowPath: string,
+    key: string,
+    secret: string,
+  ): Promise<{ state: AgentSecret["state"] }> {
+    return this.request<{ state: AgentSecret["state"] }>(
+      this.secretsPath(workflowPath),
+      { method: "POST", body: JSON.stringify({ key, secret }) },
+    );
+  }
+
+  importSecrets(
+    workflowPath: string,
+    entries: { key: string; secret: string }[],
+  ): Promise<SecretWriteReport> {
+    return this.request<SecretWriteReport>(
+      this.secretsPath(workflowPath, "/import"),
+      { method: "POST", body: JSON.stringify({ entries }) },
+    );
+  }
+
+  flushSecrets(workflowPath: string): Promise<SecretWriteReport> {
+    return this.request<SecretWriteReport>(
+      this.secretsPath(workflowPath, "/flush"),
+      { method: "POST" },
+    );
+  }
+
+  async deleteSecret(
+    workflowPath: string,
+    key: string,
+    options?: { localOnly?: boolean },
+  ): Promise<void> {
+    await this.request<void>(
+      this.secretsPath(
+        workflowPath,
+        `/${encodeURIComponent(key)}${options?.localOnly ? "?local" : ""}`,
+      ),
+      { method: "DELETE" },
+    );
   }
 
   getRunState(executionId: string): Promise<RunView> {
@@ -3680,6 +3766,102 @@ export class MockApi implements HarnessApi {
   async getAccountPlan(): Promise<AccountPlanView> {
     await delay(150);
     return MOCK_ACCOUNT_PLAN;
+  }
+
+  /**
+   * Mock secrets, per agent path. Module-level on the instance rather than in
+   * a fixture constant: the Secrets panel unmounts whenever another right-pane
+   * tab is in front, so anything panel-local would silently discard a secret
+   * the moment you looked at the canvas.
+   *
+   * Values are held only to make `?mockError=` paths realistic; nothing reads
+   * one back, exactly as in real mode.
+   */
+  private mockSecrets = new Map<string, Map<string, AgentSecret["state"]>>();
+
+  private mockSecretsFor(
+    workflowPath: string,
+  ): Map<string, AgentSecret["state"]> {
+    const existing = this.mockSecrets.get(workflowPath);
+    if (existing) return existing;
+    const seeded = new Map<string, AgentSecret["state"]>();
+    this.mockSecrets.set(workflowPath, seeded);
+    return seeded;
+  }
+
+  /** A mock agent is "linked" when its path is one the fixtures deployed. */
+  private mockLinked(workflowPath: string): boolean {
+    return (
+      MOCK_WORKFLOWS.find((w) => w.path === workflowPath)?.definitionId != null
+    );
+  }
+
+  async listSecrets(workflowPath: string): Promise<AgentSecretsView> {
+    await delay(120);
+    const bucket = this.mockSecretsFor(workflowPath);
+    return {
+      linked: this.mockLinked(workflowPath),
+      unreadable: mockErrorTargets().has("secrets"),
+      secrets: [...bucket.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, state]) => ({ name, state, hasLocalCopy: true })),
+    };
+  }
+
+  async setSecret(
+    workflowPath: string,
+    key: string,
+  ): Promise<{ state: AgentSecret["state"] }> {
+    await delay(150);
+    if (mockErrorTargets().has("secretWrite")) {
+      throw new ApiError(502, `mock: ${key} refused`, `${key} could not be stored.`);
+    }
+    const state: AgentSecret["state"] = this.mockLinked(workflowPath)
+      ? "synced"
+      : "pending";
+    this.mockSecretsFor(workflowPath).set(key, state);
+    return { state };
+  }
+
+  async importSecrets(
+    workflowPath: string,
+    entries: { key: string; secret: string }[],
+  ): Promise<SecretWriteReport> {
+    await delay(200);
+    const state: AgentSecret["state"] = this.mockLinked(workflowPath)
+      ? "synced"
+      : "pending";
+    const report: SecretWriteReport = { uploaded: [], failed: [], state };
+    for (const entry of entries) {
+      // Lets Playwright exercise the partial-import path, which is the one the
+      // real route can produce and the fixture otherwise never would.
+      if (mockErrorTargets().has(`secret:${entry.key}`)) {
+        report.failed.push({
+          key: entry.key,
+          error: `${entry.key} could not be stored (HTTP 500).`,
+        });
+        continue;
+      }
+      this.mockSecretsFor(workflowPath).set(entry.key, state);
+      report.uploaded.push(entry.key);
+    }
+    return report;
+  }
+
+  async flushSecrets(workflowPath: string): Promise<SecretWriteReport> {
+    await delay(200);
+    const bucket = this.mockSecretsFor(workflowPath);
+    const uploaded: string[] = [];
+    for (const name of [...bucket.keys()].sort()) {
+      bucket.set(name, "synced");
+      uploaded.push(name);
+    }
+    return { uploaded, failed: [], state: "synced" };
+  }
+
+  async deleteSecret(workflowPath: string, key: string): Promise<void> {
+    await delay(150);
+    this.mockSecretsFor(workflowPath).delete(key);
   }
 
   async getTemplate(id: string): Promise<TemplateDetailView> {

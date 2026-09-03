@@ -133,3 +133,17 @@ export function stepsDisabledReason(altitude: CanvasAltitude): string | null {
     ? "Steps belong to one agent — select an agent to see them"
     : null;
 }
+
+/**
+ * The same rule for Secrets, and for the same reason: a credential belongs to
+ * ONE agent (the engine stores it per definition), so at map altitude there is
+ * no subject whose secrets to show. A tab that silently kept listing the last
+ * agent's credentials under a project's name would be worse than one that says
+ * why it cannot answer — and worse here than for Steps, because the reader
+ * would draw a conclusion about which secrets a different agent holds.
+ */
+export function secretsDisabledReason(altitude: CanvasAltitude): string | null {
+  return altitude === "map"
+    ? "Secrets belong to one agent — select an agent to see them"
+    : null;
+}

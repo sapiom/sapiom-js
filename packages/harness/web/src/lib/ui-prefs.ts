@@ -13,7 +13,11 @@ import type { RailAxis, RailSort } from "./project-tree";
 export interface UiPrefs {
   railCollapsed?: boolean;
   rightCollapsed?: boolean;
-  rightTab?: "canvas" | "steps" | "code";
+  /**
+   * `"code"` is a retired tab kept in the union only so an OLD stored value
+   * still parses; App.tsx maps anything unrecognised back to "canvas".
+   */
+  rightTab?: "canvas" | "steps" | "secrets" | "code";
   /**
    * Rows the user collapsed in the rail tree, as NAMESPACED keys
    * (`project:<abs path>`, `dir:<abs path>`) — see ProjectTreeRows' `dirKey` /

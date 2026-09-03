@@ -118,6 +118,7 @@ import {
   projectAbove,
   studioCanvasView,
   stepsDisabledReason,
+  secretsDisabledReason,
   type ProjectRef,
 } from "./lib/canvas-altitude";
 import { mostSpecificStudioScope } from "./lib/agent-map";
@@ -179,8 +180,9 @@ import {
   isWorkflowRunnable,
   workflowDeploymentState,
 } from "./lib/workflow-deployment";
+import { SecretsPanel } from "./components/SecretsPanel";
 
-type RightTab = "canvas" | "steps";
+type RightTab = "canvas" | "steps" | "secrets";
 
 /**
  * The roots this install knows it has opened.
@@ -532,7 +534,9 @@ export const App = (): JSX.Element => {
   // canvas rather than rendering nothing.
   const [rightTab, setRightTab] = useState<RightTab>(() => {
     const stored = loadUiPrefs().rightTab;
-    return stored === "canvas" || stored === "steps" ? stored : "canvas";
+    return stored === "canvas" || stored === "steps" || stored === "secrets"
+      ? stored
+      : "canvas";
   });
   // A PAST session under review: picked from the history menu, shown
   // in the terminal slot as a review pane — resuming/starting is the pane's
@@ -1445,9 +1449,14 @@ export const App = (): JSX.Element => {
         workspaceScopes,
       );
   const stepsDisabled = stepsDisabledReason(view.altitude);
+  const secretsDisabled = secretsDisabledReason(view.altitude);
   // At map altitude the map IS the canvas panel, so a stored `steps` intent is
   // held (it restores on the way back down) but never rendered.
-  const shownTab: RightTab = stepsDisabled ? "canvas" : rightTab;
+  const shownTab: RightTab =
+    (stepsDisabled && rightTab === "steps") ||
+    (secretsDisabled && rightTab === "secrets")
+      ? "canvas"
+      : rightTab;
   const rightPaneSuppressedByComposer =
     (showComposer && !atMapAltitude) || agentMapUnavailable;
   const sessionBarSession = planningWorkspace
@@ -3351,6 +3360,28 @@ export const App = (): JSX.Element => {
                 <Icon name="List" size={14} />
                 Steps
               </button>
+              {/* The environment an agent resolves is a projection of that
+                  agent, exactly like its structure (Canvas) and its steps — so
+                  it earns a tab rather than a nested screen. Gated at map
+                  altitude for the same reason Steps is, and more sharply: a tab
+                  still listing the last agent's credentials under a project's
+                  name would invite a wrong conclusion about a different agent. */}
+              <button
+                role="tab"
+                aria-selected={shownTab === "secrets"}
+                disabled={secretsDisabled != null}
+                aria-disabled={secretsDisabled != null || undefined}
+                aria-label={secretsDisabled ?? undefined}
+                data-tooltip={secretsDisabled ?? undefined}
+                className={
+                  "right-pane-tab" + (shownTab === "secrets" ? " is-active" : "")
+                }
+                onClick={() => setRightTab("secrets")}
+                data-testid="right-tab-secrets"
+              >
+                <Icon name="Shield" size={14} />
+                Secrets
+              </button>
               <div className="right-pane-corner">
                 {/* Cloud-status pill → dashboard. The board has no subheader,
                     so the link/build state lives here in the tab bar. */}
@@ -3425,7 +3456,28 @@ export const App = (): JSX.Element => {
               </div>
             </div>
 
-            <div className="right-pane-panel" data-testid="right-panel-canvas">
+            {/* Secrets is a SIBLING panel, not a mode on the board: it reads a
+                different source entirely (the vault + this machine's pending
+                store) and shares no state with the canvas. Mounted only while
+                selected — unlike the board, it holds no probe state or reload
+                key worth preserving, and keeping a credential list mounted
+                behind another tab buys nothing. */}
+            {shownTab === "secrets" && (
+              <div className="right-pane-panel" data-testid="right-panel-secrets">
+                <SecretsPanel
+                  api={harness.api}
+                  workflow={rightPaneWorkflow}
+                  onToast={harness.showToast}
+                />
+              </div>
+            )}
+            <div
+              className={
+                "right-pane-panel" +
+                (shownTab === "secrets" ? " is-hidden" : "")
+              }
+              data-testid="right-panel-canvas"
+            >
               {/* MAP altitude. Mounted BESIDE the board, not instead of it —
                   `CanvasPane` keeps its mount (and with it its probe state,
                   reload key and background-task tracking) while the project is
