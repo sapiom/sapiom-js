@@ -407,8 +407,7 @@ function validateBrief(
       counterpart.kind !== "agent" ||
       counterpart.ownerAgentId !== null ||
       dependency.counterpartAgentId === brief.plannedAgentId ||
-      !supported ||
-      !contractsLinked
+      !supported
     )
       issues.push(
         diagnostic(

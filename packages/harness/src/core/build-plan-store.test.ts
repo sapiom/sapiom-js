@@ -191,6 +191,35 @@ describe("BuildPlanStore", () => {
     });
   });
 
+  it("detects same-size tampering when file identity metadata is restored", async () => {
+    const { root, workspaceStore, buildPlanStore } = await fixture();
+    await buildPlanStore.commitPlanVersion(makePlan(), graph, request);
+    const file = path.join(root, "projects", PROJECT_ID, "workspace.json");
+    const fixedTime = new Date("2026-09-03T10:00:00.000Z");
+    await fs.utimes(file, fixedTime, fixedTime);
+    await workspaceStore.readAggregate(PROJECT_ID);
+
+    const before = await fs.stat(file, { bigint: true });
+    const raw = await fs.readFile(file, "utf8");
+    const tampered = raw.replace(
+      "Ship a durable product",
+      "Hack a durable product",
+    );
+    expect(tampered).not.toBe(raw);
+    expect(Buffer.byteLength(tampered)).toBe(Buffer.byteLength(raw));
+    await fs.writeFile(file, tampered);
+    await fs.utimes(file, fixedTime, fixedTime);
+    const after = await fs.stat(file, { bigint: true });
+    expect(after.dev).toBe(before.dev);
+    expect(after.ino).toBe(before.ino);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+
+    await expect(
+      workspaceStore.readAggregate(PROJECT_ID),
+    ).rejects.toMatchObject({ code: "malformed_state" });
+  });
+
   it("retires and restores the same assignment identity without erasing history", async () => {
     const { buildPlanStore } = await fixture();
     const first = makePlan();

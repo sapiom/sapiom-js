@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -156,6 +156,9 @@ export function parseAgentMapWorkspaceState(
 
 const storageError = () =>
   new AgentMapWorkspaceStoreError("storage_unavailable");
+
+const contentDigest = (raw: string): string =>
+  createHash("sha256").update(raw).digest("hex");
 
 function parseArchitectureFields(
   value: unknown,
@@ -331,7 +334,7 @@ function migrateAggregateV1(
 /** Crash-atomic owner of workspace, active proposal, history, and private receipts. */
 export class AgentMapWorkspaceStore {
   private readonly queues = new Map<StudioProjectId, Promise<void>>();
-  private readonly verifiedFileIdentity = new Map<StudioProjectId, string>();
+  private readonly verifiedContentDigest = new Map<StudioProjectId, string>();
 
   constructor(
     private readonly agentMapRoot: string,
@@ -389,11 +392,10 @@ export class AgentMapWorkspaceStore {
   }> {
     const file = this.workspacePath(projectId);
     let decoded: unknown;
-    let fileIdentity: string;
+    let rawDigest: string;
     try {
       const raw = await fs.readFile(file, "utf8");
-      const stat = await fs.stat(file, { bigint: true });
-      fileIdentity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+      rawDigest = contentDigest(raw);
       decoded = JSON.parse(raw) as unknown;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT")
@@ -429,9 +431,9 @@ export class AgentMapWorkspaceStore {
             created: false,
           };
         const aggregate = parseAggregate(decoded, projectId);
-        if (this.verifiedFileIdentity.get(projectId) !== fileIdentity) {
+        if (this.verifiedContentDigest.get(projectId) !== rawDigest) {
           assertBuildPlanningIntegrity(aggregate.buildPlanning);
-          this.verifiedFileIdentity.set(projectId, fileIdentity);
+          this.verifiedContentDigest.set(projectId, rawDigest);
         }
         return {
           aggregate,
@@ -450,12 +452,13 @@ export class AgentMapWorkspaceStore {
     const file = this.workspacePath(projectId);
     const directory = path.dirname(file);
     const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+    const serialized = `${JSON.stringify(aggregate, null, 2)}\n`;
     let handle: fs.FileHandle | undefined;
     try {
       await fs.mkdir(directory, { recursive: true });
       handle = await fs.open(temporary, "wx", 0o600);
       await this.options.beforePersistStep?.("write");
-      await handle.writeFile(`${JSON.stringify(aggregate, null, 2)}\n`, "utf8");
+      await handle.writeFile(serialized, "utf8");
       await this.options.beforePersistStep?.("file-sync");
       await handle.sync();
       await handle.close();
@@ -469,11 +472,7 @@ export class AgentMapWorkspaceStore {
       } finally {
         await directoryHandle.close();
       }
-      const stat = await fs.stat(file, { bigint: true });
-      this.verifiedFileIdentity.set(
-        projectId,
-        `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`,
-      );
+      this.verifiedContentDigest.set(projectId, contentDigest(serialized));
     } catch {
       throw storageError();
     } finally {
