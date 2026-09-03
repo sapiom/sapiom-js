@@ -2810,7 +2810,7 @@ export const App = (): JSX.Element => {
         </div>
       )}
 
-      {!railCollapsed && !isMobile && (
+      {!railCollapsed && !isMobile && !canvasExpanded && (
         <div
           className="pane-resize-handle pane-resize-handle-rail"
           style={{ left: widths.rail }}
@@ -3236,7 +3236,10 @@ export const App = (): JSX.Element => {
             </div>
           </div>
 
-          {!rightCollapsed && !isMobile && !rightPaneSuppressedByComposer && (
+          {!rightCollapsed &&
+            !isMobile &&
+            !rightPaneSuppressedByComposer &&
+            !canvasExpanded && (
             <div
               className="pane-resize-handle pane-resize-handle-canvas"
               // Track the canvas column's ACTUAL edge, not the requested width.

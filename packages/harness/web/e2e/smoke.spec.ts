@@ -2916,10 +2916,14 @@ test("canvas controls: the board widget zooms; the subheader's expand lifts the 
     "position",
     "fixed",
   );
+  await expect(page.getByTestId("resize-handle-rail")).toHaveCount(0);
+  await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
   await page.getByTestId("canvas-expand-exit").click();
   await expect(page.locator(".canvas-frame-wrap")).not.toHaveClass(
     /is-expanded/,
   );
+  await expect(page.getByTestId("resize-handle-rail")).toBeVisible();
+  await expect(page.getByTestId("resize-handle-canvas")).toBeVisible();
 
   // Escape works too.
   await expand.click();

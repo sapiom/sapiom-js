@@ -263,6 +263,8 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     const frame = page.getByTestId("agent-map-frame");
     await expect(frame).toHaveClass(/is-expanded/);
     await expect(frame).toHaveCSS("position", "fixed");
+    await expect(page.getByTestId("resize-handle-rail")).toHaveCount(0);
+    await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
     await expect
       .poll(() =>
         subject.evaluate((element) => (element as HTMLElement).style.transform),
@@ -279,6 +281,8 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
 
     await page.keyboard.press("Escape");
     await expect(frame).not.toHaveClass(/is-expanded/);
+    await expect(page.getByTestId("resize-handle-rail")).toBeVisible();
+    await expect(page.getByTestId("resize-handle-canvas")).toBeVisible();
 
     await expand.click();
     await page.getByTestId("canvas-expand-exit").click();
