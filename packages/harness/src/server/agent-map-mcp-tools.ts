@@ -23,8 +23,9 @@ import {
 import {
   BuilderPlanningSessionError,
   planningResultSubmitRequestSchema,
-  type OpenPlanningFanoutRequest,
   type BuilderPlanningSessionService,
+  type OpenPlanningFanoutRequest,
+  type PreparePlanningFanoutRequest,
 } from "../core/builder-planning-session.js";
 import {
   architectureSourceRefSchema,
@@ -177,6 +178,7 @@ export interface AgentMapToolEvent {
     | "build_plan_validate"
     | "build_plan_apply"
     | "build_plan_rebase"
+    | "build_plan_prepare_planning_sessions"
     | "build_plan_open_planning_sessions"
     | "planning_result_submit";
   outcome: "ok" | "error";
@@ -242,8 +244,10 @@ function errorResult(error: unknown) {
               error.code === "idempotency_key_reused"
                 ? "new_request_id"
                 : error.code === "missing_consent"
-                  ? "obtain_user_consent"
-                  : "reread",
+                  ? "prepare_consent"
+                  : error.code === "stale_consent"
+                    ? "reprepare_consent"
+                    : "reread",
           }
         : error instanceof AgentMapProposalValidationError
           ? {
@@ -532,14 +536,52 @@ export function createAgentMapToolServer(
   }
 
   if (identity.role === "map-planner" && options.builderPlanningService) {
+    const fanoutScopeSchema = z
+      .object({
+        source: architectureSourceRefSchema,
+        plan: buildPlanRefSchema,
+        assignmentIds: z.array(z.string().min(1).max(512)).max(256),
+      })
+      .strict();
+    server.registerTool(
+      "build_plan_prepare_planning_sessions",
+      {
+        description:
+          "Prepare the exact top-level planning-session scope after the build plan and focused briefs become planning-eligible. Returns the agent names, missions, exact brief references, and an opaque consent ID. Summarize that list to the user and ask for explicit consent; do not open sessions in the same turn.",
+        inputSchema: fanoutScopeSchema,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+      },
+      async (request) =>
+        instrument("build_plan_prepare_planning_sessions", async () => {
+          const prepareRequest: PreparePlanningFanoutRequest = {
+            source: request.source as ArchitectureSourceRef,
+            plan: request.plan as BuildPlanRef,
+            assignmentIds: request.assignmentIds as PlanningAssignmentId[],
+          };
+          const preparation =
+            await options.builderPlanningService!.prepareConsent(
+              identity,
+              prepareRequest,
+            );
+          return toolResult(
+            preparation,
+            `Prepared ${preparation.expectedSessionCount} planning ${preparation.expectedSessionCount === 1 ? "session" : "sessions"}. Summarize the exact session list and ask the user for explicit consent before opening them.`,
+          );
+        }),
+    );
     server.registerTool(
       "build_plan_open_planning_sessions",
       {
         description:
-          "Open exact planning-only builder sessions using an opaque approval issued by a direct user action.",
+          "After the user explicitly consents in the planning conversation, open or reuse one read-only planning session per top-level assignment from a prepared exact consent scope. The server revalidates the current proposal, plan, assignments, brief versions, consent scope, and eligibility before any process side effect. Never call this before an affirmative user reply.",
         inputSchema: z
           .object({
-            approvalId: z.string().min(1).max(512),
+            consentId: z.string().regex(/^fanout-consent_[0-9a-f-]+$/u),
+            confirmation: z.literal("user-confirmed"),
             source: architectureSourceRefSchema,
             plan: buildPlanRefSchema,
             assignmentIds: z.array(z.string().min(1).max(512)).max(256),
@@ -554,7 +596,8 @@ export function createAgentMapToolServer(
       async (request) =>
         instrument("build_plan_open_planning_sessions", async () => {
           const openRequest: OpenPlanningFanoutRequest = {
-            approvalId: request.approvalId,
+            consentId: request.consentId,
+            confirmation: request.confirmation,
             source: request.source as ArchitectureSourceRef,
             plan: request.plan as BuildPlanRef,
             assignmentIds: request.assignmentIds as PlanningAssignmentId[],

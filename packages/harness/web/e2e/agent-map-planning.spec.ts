@@ -79,35 +79,103 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
-    const consent = page.getByTestId("planning-fanout-consent");
-    await expect(consent).toBeVisible();
-    await expect(consent).toContainText("2 assignments");
-    await expect(consent).toContainText("2 kickoff prompts");
-    const exactRefs = consent.locator("[aria-label^='Plan ']");
-    await expect(exactRefs).toHaveAttribute(
-      "aria-label",
-      /build-plan_.*digest sha256:/,
-    );
-    await expect(exactRefs).toHaveAttribute(
-      "aria-label",
-      /source proposal_.*digest sha256:/,
-    );
-    await page.getByTestId("open-planning-sessions").click();
-    await expect(page.getByTestId("toast")).toContainText(
-      "Opened or reused 2 planning sessions",
-    );
+    await expect(page.getByTestId("planning-fanout-consent")).toHaveCount(0);
+    await expect(page.getByTestId("open-planning-sessions")).toHaveCount(0);
+    const tabs = page
+      .getByRole("tablist", { name: "Sessions" })
+      .getByRole("tab");
+    await expect(tabs).toHaveCount(1);
+
+    const preparation = await page.evaluate(async () => {
+      const testState = (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            plannerPreparePlanningFanout?: () => Promise<unknown>;
+          };
+        }
+      ).__HARNESS_TEST__;
+      return testState?.plannerPreparePlanningFanout?.();
+    });
+    expect(preparation).toMatchObject({
+      consentId: expect.stringMatching(/^fanout-consent_/u),
+      assignmentIds: [
+        "assignment_00000000-0000-7000-8000-000000000101",
+        "assignment_00000000-0000-7000-8000-000000000102",
+      ],
+      plan: expect.objectContaining({
+        planId: expect.stringMatching(/^build-plan_/u),
+        semanticDigest: expect.stringMatching(/^sha256:/u),
+      }),
+      source: expect.objectContaining({
+        proposalId: expect.stringMatching(/^proposal_/u),
+        graphDigest: expect.stringMatching(/^sha256:/u),
+      }),
+      sessions: [
+        expect.objectContaining({
+          agentName: "Stock Research",
+          mission:
+            "Research public-market signals and produce sourced findings.",
+          executionPolicy: "planning-readonly",
+          brief: expect.objectContaining({
+            briefId: expect.stringMatching(/^brief_/u),
+            version: 1,
+            semanticDigest: expect.stringMatching(/^sha256:/u),
+          }),
+        }),
+        expect.objectContaining({
+          agentName: "Marketing",
+          mission: "Turn approved findings into audience-ready campaigns.",
+          executionPolicy: "planning-readonly",
+          brief: expect.objectContaining({
+            briefId: expect.stringMatching(/^brief_/u),
+            version: 1,
+            semanticDigest: expect.stringMatching(/^sha256:/u),
+          }),
+        }),
+      ],
+      expectedSessionCount: 2,
+      expectedKickoffPromptCount: 2,
+    });
+    // Preparation is the planner's summary/consent boundary and has no spawn
+    // side effect. Opening happens only after the next conversational turn.
+    await expect(tabs).toHaveCount(1);
+    await page.evaluate(async () => {
+      const testState = (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            plannerOpenPlanningFanoutAfterConsent?: () => Promise<unknown>;
+          };
+        }
+      ).__HARNESS_TEST__;
+      await testState?.plannerOpenPlanningFanoutAfterConsent?.();
+    });
+    await expect(tabs).toHaveCount(3);
+    await page.evaluate(async () => {
+      const testState = (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            plannerOpenPlanningFanoutAfterConsent?: () => Promise<unknown>;
+          };
+        }
+      ).__HARNESS_TEST__;
+      await testState?.plannerOpenPlanningFanoutAfterConsent?.();
+    });
+    await expect(tabs).toHaveCount(3);
+
     await expect
       .poll(() =>
         page.evaluate(() => {
           const state = (
             window as unknown as {
               __HARNESS_TEST__?: {
-                planningApprovalEvidence?: {
+                planningPlannerEvidence?: {
+                  consentId?: string;
+                  confirmation?: string;
                   provenance?: string;
                   assignmentIds?: string[];
                 };
                 planningFanoutResponse?: {
-                  approvalId?: string;
+                  consentId?: string;
                   bindings?: Array<{
                     sessionId?: string;
                     bootstrapDigest?: string;
@@ -119,13 +187,13 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
           ).__HARNESS_TEST__;
           const bindings = state?.planningFanoutResponse?.bindings ?? [];
           return {
-            provenance: state?.planningApprovalEvidence?.provenance,
+            provenance: state?.planningPlannerEvidence?.provenance,
+            confirmation: state?.planningPlannerEvidence?.confirmation,
+            exactConsent:
+              state?.planningPlannerEvidence?.consentId ===
+              state?.planningFanoutResponse?.consentId,
             assignmentIds:
-              state?.planningApprovalEvidence?.assignmentIds?.join(","),
-            approvalIssued:
-              state?.planningFanoutResponse?.approvalId?.startsWith(
-                "fanout-approval_",
-              ) ?? false,
+              state?.planningPlannerEvidence?.assignmentIds?.join(","),
             bindingCount: bindings.length,
             uniqueSessions: new Set(
               bindings.map((binding) => binding.sessionId),
@@ -144,19 +212,16 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
         }),
       )
       .toEqual({
-        provenance: "authenticated-ui-action",
+        provenance: "planner-mcp-after-conversation-consent",
+        confirmation: "user-confirmed",
+        exactConsent: true,
         assignmentIds:
           "assignment_00000000-0000-7000-8000-000000000101,assignment_00000000-0000-7000-8000-000000000102",
-        approvalIssued: true,
         bindingCount: 2,
         uniqueSessions: 2,
         acknowledgedKickoffs: 2,
         nonzeroBootstraps: 2,
       });
-    const tabs = page
-      .getByRole("tablist", { name: "Sessions" })
-      .getByRole("tab");
-    await expect(tabs).toHaveCount(3);
     await expect(tabs.filter({ hasText: "Planner" })).toHaveCount(1);
     await expect(tabs.filter({ hasText: "Stock Research" })).toHaveCount(1);
     const marketingTab = tabs.filter({ hasText: "Marketing" });
@@ -180,10 +245,6 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
         name: "Stock Research, agent, Proposed",
       }),
     ).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("open-planning-sessions")).toBeDisabled();
-    await expect(consent).toContainText(
-      "Select the Planner tab to approve and open these sessions.",
-    );
 
     await marketingTab.click();
     const marketingSessionId = await activeSessionId(page);
@@ -502,11 +563,40 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
-    await expect(page.getByTestId("planning-fanout-consent")).toBeVisible();
-    await page.getByTestId("open-planning-sessions").click();
-    await expect(page.getByTestId("toast")).toContainText(
-      "Opened or reused 1 planning session; 1 is unavailable from this coordinator.",
-    );
+    await page.evaluate(async () => {
+      const testState = (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            plannerPreparePlanningFanout?: () => Promise<unknown>;
+            plannerOpenPlanningFanoutAfterConsent?: () => Promise<unknown>;
+          };
+        }
+      ).__HARNESS_TEST__;
+      await testState?.plannerPreparePlanningFanout?.();
+      await testState?.plannerOpenPlanningFanoutAfterConsent?.();
+    });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  planningFanoutResponse?: {
+                    bindings?: unknown[];
+                    unreachableAssignmentIds?: string[];
+                  };
+                };
+              }
+            ).__HARNESS_TEST__?.planningFanoutResponse,
+        ),
+      )
+      .toMatchObject({
+        bindings: [{}, {}],
+        unreachableAssignmentIds: [
+          "assignment_00000000-0000-7000-8000-000000000102",
+        ],
+      });
   });
 
   test("expands the Agent Map in place and unwinds its inspector before full view", async ({
@@ -559,20 +649,49 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(frame).not.toHaveClass(/is-expanded/);
   });
 
-  test("renders the exact unavailable fan-out reason", async ({ page }) => {
+  test("keeps unavailable fan-out diagnostics inside the planner flow", async ({
+    page,
+  }) => {
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1&mockPlanningFanoutUnavailable=1",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
-
-    const unavailable = page.getByTestId("planning-fanout-unavailable");
-    await expect(unavailable).toBeVisible();
-    await expect(unavailable).toContainText("Planning sessions unavailable");
-    await expect(unavailable).toContainText(
-      "Resolve the incomplete build-plan decisions first.",
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            typeof (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  plannerPreparePlanningFanout?: () => Promise<unknown>;
+                };
+              }
+            ).__HARNESS_TEST__?.plannerPreparePlanningFanout,
+        ),
+      )
+      .toBe("function");
+    const preparation = await page.evaluate(async () => {
+      const testState = (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            plannerPreparePlanningFanout?: () => Promise<unknown>;
+          };
+        }
+      ).__HARNESS_TEST__;
+      return testState?.plannerPreparePlanningFanout?.();
+    });
+    expect(preparation).toEqual({
+      available: false,
+      warnings: ["Resolve the incomplete build-plan decisions first."],
+    });
+    await expect(page.getByTestId("planning-fanout-unavailable")).toHaveCount(
+      0,
     );
     await expect(page.getByTestId("open-planning-sessions")).toHaveCount(0);
+    await expect(
+      page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
+    ).toHaveCount(1);
   });
 
   test("a generating greeting still renders the raw planner CLI", async ({

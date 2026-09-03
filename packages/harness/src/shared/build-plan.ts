@@ -73,6 +73,14 @@ export type PlanningFanoutApprovalDigest = BuildPlanBrand<
   string,
   "PlanningFanoutApprovalDigest"
 >;
+export type PlanningFanoutConsentId = BuildPlanBrand<
+  string,
+  "PlanningFanoutConsentId"
+>;
+export type PlanningFanoutConsentDigest = BuildPlanBrand<
+  string,
+  "PlanningFanoutConsentDigest"
+>;
 export type BuilderPlanningSessionBindingId = BuildPlanBrand<
   string,
   "BuilderPlanningSessionBindingId"
@@ -577,6 +585,8 @@ export interface BuilderPlanningSubmission {
 }
 
 export interface PlanningFanoutApproval {
+  /** @deprecated Legacy browser-approval state retained only so existing local
+   * aggregates remain readable. It cannot authorize a new fan-out. */
   approvalId: PlanningFanoutApprovalId;
   projectId: StudioProjectId;
   source: ArchitectureSourceRef;
@@ -589,7 +599,43 @@ export interface PlanningFanoutApproval {
   approvalDigest: PlanningFanoutApprovalDigest;
 }
 
-/** Exact, path-free facts shown before the authenticated user consents. */
+/** Exact session scope prepared before the planner asks for conversational
+ * consent. A model cannot alter this scope when it later attests that the user
+ * confirmed it; any source, plan, assignment, or brief change makes it stale. */
+export interface PlanningFanoutConsent {
+  consentId: PlanningFanoutConsentId;
+  projectId: StudioProjectId;
+  source: ArchitectureSourceRef;
+  plan: BuildPlanRef;
+  assignmentIds: readonly PlanningAssignmentId[];
+  briefs: readonly AgentBriefRef[];
+  plannerSessionId: string;
+  userId: string;
+  status: "pending" | "confirmed";
+  preparedAt: string;
+  confirmedAt: string | null;
+  confirmationSource: "planner-attested-conversation" | null;
+  consentDigest: PlanningFanoutConsentDigest;
+}
+
+export interface PlanningFanoutConsentPreparation {
+  consentId: PlanningFanoutConsentId;
+  source: ArchitectureSourceRef;
+  plan: BuildPlanRef;
+  sessions: readonly Readonly<{
+    assignmentId: PlanningAssignmentId;
+    plannedAgentId: PlanNodeId;
+    agentName: string;
+    mission: string;
+    brief: AgentBriefRef;
+    executionPolicy: "planning-readonly";
+  }>[];
+  expectedSessionCount: number;
+  expectedKickoffPromptCount: number;
+  warnings: readonly string[];
+}
+
+/** Exact, path-free readiness facts for diagnostics and host integrations. */
 export type PlanningFanoutPreview =
   | Readonly<{
       available: true;
@@ -598,25 +644,17 @@ export type PlanningFanoutPreview =
       assignmentIds: readonly PlanningAssignmentId[];
       assignmentCount: number;
       expectedSessionCount: number;
-      expectedModelTurnCount: number;
+      expectedKickoffPromptCount: number;
       warnings: readonly string[];
     }>
   | Readonly<{ available: false; warnings: readonly string[] }>;
 
 export interface PlanningFanoutOpenResponse {
-  approvalId: PlanningFanoutApprovalId;
+  consentId: PlanningFanoutConsentId;
   bindings: readonly BuilderPlanningSessionBinding[];
   /** Durable bindings that this coordinator cannot reach through its
    * process-local session registry, including after local pruning or reset. */
   unreachableAssignmentIds: readonly PlanningAssignmentId[];
-}
-
-export interface PlanningFanoutOpenRequest {
-  source: ArchitectureSourceRef;
-  plan: BuildPlanRef;
-  assignmentIds: readonly PlanningAssignmentId[];
-  harness?: import("./types.js").HarnessKind;
-  theme?: import("./types.js").UiTheme;
 }
 
 export interface BuilderKickoffDelivery {
@@ -733,7 +771,10 @@ export interface BuildPlanningAggregateV1 {
   submissionsByAssignmentId: Readonly<
     Record<string, readonly BuilderPlanningSubmission[]>
   >;
+  /** @deprecated Retained only so Studio can read state written by the
+   * pre-autonomous SAP-3074 preview. New fan-outs do not consult or append it. */
   fanoutApprovals: readonly PlanningFanoutApproval[];
+  fanoutConsents: readonly PlanningFanoutConsent[];
   builderBindingsByAssignmentId: Readonly<
     Record<string, BuilderPlanningSessionBinding>
   >;
@@ -771,6 +812,7 @@ export const emptyBuildPlanningAggregate = (): BuildPlanningAggregateV1 => ({
   assignmentByAgentId: {},
   submissionsByAssignmentId: {},
   fanoutApprovals: [],
+  fanoutConsents: [],
   builderBindingsByAssignmentId: {},
   planningSubmissionReceipts: [],
   idempotencyReceipts: [],

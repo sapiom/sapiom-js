@@ -647,111 +647,42 @@ describe("createAgentMapRouter", () => {
     });
   });
 
-  it("mints exact fan-out approval only after boot auth and owned planner provenance", async () => {
-    const plannerSession = {
-      id: "planner-owned",
-      planning: {
-        identity: {
-          projectId: "project-placeholder",
-          sessionId: "planner-owned",
-          userId: "user-test",
-          role: "map-planner",
-        },
-      },
-    } as unknown as HarnessSession;
-    const approve = vi.fn(async () => ({
-      approvalId: "fanout-approval_00000000-0000-7000-8000-000000000001",
-    }));
+  it("does not expose a browser route that can authorize planning fan-out", async () => {
+    const prepareConsent = vi.fn();
     const open = vi.fn(async () => ({
       bindings: [] as unknown[],
       unreachableAssignmentIds: [] as string[],
     }));
     const preview = vi.fn(async () => ({ available: false, warnings: [] }));
     const builder = {
-      approveFromAuthenticatedUiAction: approve,
+      prepareConsent,
       openOrReuse: open,
       preview,
     } as unknown as BuilderPlanningSessionService;
     const fixture = await start({
-      planningSessions: {
-        open: vi.fn(),
-        requireOwned: vi.fn(async () => plannerSession),
-      } as unknown as PlanningSessionService,
-      plannerGreeting: {} as PlannerGreetingCoordinator,
       builderPlanningSessions: builder,
     });
-    plannerSession.planning!.identity.projectId = fixture.project.projectId;
-    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/${plannerSession.id}/planning-fanout`;
-    const body = {
-      source: {
-        kind: "proposal",
-        proposalId: "proposal_00000000-0000-7000-8000-000000000001",
-        version: 1,
-        graphDigest: `sha256:${"1".repeat(64)}`,
-      },
-      plan: {
-        planId: "build-plan_00000000-0000-7000-8000-000000000002",
-        version: 1,
-        semanticDigest: `sha256:${"2".repeat(64)}`,
-      },
-      assignmentIds: ["assignment_00000000-0000-7000-8000-000000000003"],
-    };
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/planner-owned/planning-fanout`;
     expect(
       (
         await fetch(route, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
+          body: "{}",
         })
       ).status,
     ).toBe(401);
-    const forged = await fetch(route, {
+    const authenticatedBrowserAttempt = await fetch(route, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "X-Harness-Token": "test-token",
       },
-      body: JSON.stringify({ ...body, approved: true, userInputId: "forged" }),
+      body: "{}",
     });
-    expect(forged.status).toBe(400);
-    expect(approve).not.toHaveBeenCalled();
-
-    const accepted = await fetch(route, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Harness-Token": "test-token",
-      },
-      body: JSON.stringify(body),
-    });
-    expect(accepted.status).toBe(202);
-    expect(approve).toHaveBeenCalledWith(
-      plannerSession.planning!.identity,
-      body,
-      expect.stringMatching(/^user-action_[0-9a-f-]{36}$/u),
-    );
-    expect(open).toHaveBeenCalledWith(
-      plannerSession.planning!.identity,
-      expect.objectContaining({ ...body, approvalId: expect.any(String) }),
-    );
-
-    open.mockResolvedValueOnce({
-      bindings: [],
-      unreachableAssignmentIds: body.assignmentIds,
-    });
-    const unreachable = await fetch(route, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Harness-Token": "test-token",
-      },
-      body: JSON.stringify(body),
-    });
-    expect(unreachable.status).toBe(202);
-    expect(await unreachable.json()).toMatchObject({
-      bindings: [],
-      unreachableAssignmentIds: body.assignmentIds,
-    });
+    expect(authenticatedBrowserAttempt.status).toBe(404);
+    expect(prepareConsent).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("keeps planning preview side-effect free for unknown project ids", async () => {

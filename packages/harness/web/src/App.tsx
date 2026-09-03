@@ -63,7 +63,6 @@ import type {
   StudioProjectId,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
-import type { PlanningFanoutPreview } from "@shared/build-plan";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";
@@ -346,87 +345,7 @@ export const App = (): JSX.Element => {
     subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
-  const [planningFanoutPreview, setPlanningFanoutPreview] =
-    useState<PlanningFanoutPreview | null>(null);
-  const [planningFanoutPending, setPlanningFanoutPending] = useState(false);
   const [planningSiblingPending, setPlanningSiblingPending] = useState(false);
-  useEffect(() => {
-    if (!plannerProjectId || agentMapEntry.state.workspace.status !== "ready") {
-      setPlanningFanoutPreview(null);
-      return;
-    }
-    let current = true;
-    void harness.api.getPlanningFanoutPreview(plannerProjectId).then(
-      (preview) => {
-        if (current) setPlanningFanoutPreview(preview);
-      },
-      () => {
-        if (current)
-          setPlanningFanoutPreview({
-            available: false,
-            warnings: ["Planning fan-out status is unavailable."],
-          });
-      },
-    );
-    return () => {
-      current = false;
-    };
-  }, [agentMapEntry.state.workspace, harness.api, plannerProjectId]);
-
-  const openPlanningFanout = useCallback(async (): Promise<void> => {
-    if (
-      !plannerProjectId ||
-      !activePlannerForProject ||
-      !planningFanoutPreview?.available ||
-      planningFanoutPending
-    )
-      return;
-    setPlanningFanoutPending(true);
-    try {
-      const outcome = await harness.api.openPlanningFanout(
-        plannerProjectId,
-        activePlannerForProject.id,
-        {
-          source: planningFanoutPreview.source,
-          plan: planningFanoutPreview.plan,
-          assignmentIds: planningFanoutPreview.assignmentIds,
-          harness:
-            loadUiPrefs().preferredHarness === "codex"
-              ? "codex"
-              : "claude-code",
-          theme: getTheme(),
-        },
-      );
-      if (outcome.unreachableAssignmentIds.length > 0) {
-        const reachableCount =
-          outcome.bindings.length - outcome.unreachableAssignmentIds.length;
-        harness.showToast(
-          `Opened or reused ${reachableCount} planning ${reachableCount === 1 ? "session" : "sessions"}; ${outcome.unreachableAssignmentIds.length} ${outcome.unreachableAssignmentIds.length === 1 ? "is" : "are"} unavailable from this coordinator.`,
-          "error",
-        );
-      } else {
-        harness.showToast(
-          `Opened or reused ${outcome.bindings.length} planning ${outcome.bindings.length === 1 ? "session" : "sessions"}`,
-          "info",
-        );
-      }
-    } catch (error) {
-      harness.showToast(
-        errorMessage(error, "Planning sessions could not be opened."),
-        "error",
-      );
-    } finally {
-      setPlanningFanoutPending(false);
-    }
-  }, [
-    activePlannerForProject,
-    harness.api,
-    harness.showToast,
-    plannerProjectId,
-    planningFanoutPending,
-    planningFanoutPreview,
-  ]);
-
   // A project visit restores its server-owned preference before choosing an
   // altitude. Once map is chosen, `useAgentMapEntry` owns the independent map
   // and planner requests; preference restoration must not couple their fate.
@@ -3700,13 +3619,6 @@ export const App = (): JSX.Element => {
                 <AgentMapPane
                   state={agentMapEntry.state.workspace}
                   focusedNodeId={activePlannedAgentId}
-                  planningFanout={planningFanoutPreview}
-                  planningFanoutPending={planningFanoutPending}
-                  {...(activePlannerForProject
-                    ? {
-                        onOpenPlanningFanout: () => void openPlanningFanout(),
-                      }
-                    : {})}
                   onRetry={agentMapEntry.retryWorkspace}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}

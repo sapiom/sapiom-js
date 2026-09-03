@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 
@@ -38,15 +37,6 @@ import {
   BuilderPlanningSessionError,
   type BuilderPlanningSessionService,
 } from "../core/builder-planning-session.js";
-import {
-  architectureSourceRefSchema,
-  buildPlanRefSchema,
-} from "../shared/build-plan-codec.js";
-import type {
-  ArchitectureSourceRef,
-  BuildPlanRef,
-  PlanningAssignmentId,
-} from "../shared/build-plan.js";
 
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
@@ -81,18 +71,6 @@ const plannerMessageSchema = z
   .object({ text: z.string().min(1).max(100_000) })
   .strict() satisfies z.ZodType<PlannerMessageRequest>;
 
-const planningFanoutSchema = z
-  .object({
-    source: architectureSourceRefSchema,
-    plan: buildPlanRefSchema,
-    assignmentIds: z
-      .array(z.string().regex(/^assignment_[0-9a-f-]+$/u))
-      .min(1)
-      .max(256),
-    harness: z.enum(SPAWNABLE_HARNESS_KINDS).optional(),
-    theme: z.enum(["light", "dark"]).optional(),
-  })
-  .strict();
 const additionalBuilderSessionSchema = z
   .object({
     harness: z.enum(SPAWNABLE_HARNESS_KINDS).optional(),
@@ -469,80 +447,6 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         res.status(202).json({ metadata });
       } catch (error) {
         if (!sendPlanningError(res, error)) next(error);
-      }
-    },
-  );
-
-  // This is the sole production approval-minting bridge. It is reachable only
-  // after the server-wide boot-token middleware has authenticated the Studio
-  // UI request, and planner ownership is rechecked before the action id is
-  // observed. MCP/model calls can consume an approval id but cannot reach this
-  // route through their capability endpoint or supply provenance fields.
-  router.post(
-    "/projects/:projectId/planner-sessions/:sessionId/planning-fanout",
-    async (req, res, next) => {
-      if (!options.planningSessions || !options.builderPlanningSessions) {
-        res
-          .status(501)
-          .json({ error: "Builder planning sessions are unavailable" });
-        return;
-      }
-      const parsed = planningFanoutSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ error: "Invalid planning fan-out request" });
-        return;
-      }
-      try {
-        const session = await options.planningSessions.requireOwned(
-          req.params.projectId,
-          req.params.sessionId,
-        );
-        const planner = session.planning?.identity;
-        if (!planner || planner.role !== "map-planner") {
-          res
-            .status(403)
-            .json({ code: "forbidden", error: "Planner ownership required" });
-          return;
-        }
-        const fanoutRequest = {
-          source: parsed.data.source as ArchitectureSourceRef,
-          plan: parsed.data.plan as BuildPlanRef,
-          assignmentIds: parsed.data.assignmentIds.map(
-            (assignmentId) => assignmentId as PlanningAssignmentId,
-          ),
-        };
-        const approval =
-          await options.builderPlanningSessions.approveFromAuthenticatedUiAction(
-            planner,
-            fanoutRequest,
-            `user-action_${randomUUID()}`,
-          );
-        const outcome = await options.builderPlanningSessions.openOrReuse(
-          planner,
-          {
-            ...fanoutRequest,
-            ...(parsed.data.harness ? { harness: parsed.data.harness } : {}),
-            ...(parsed.data.theme ? { theme: parsed.data.theme } : {}),
-            approvalId: approval.approvalId,
-          },
-        );
-        res
-          .status(202)
-          .setHeader("Cache-Control", "no-store")
-          .json({
-            approvalId: approval.approvalId,
-            ...outcome,
-          });
-      } catch (error) {
-        if (error instanceof BuilderPlanningSessionError) {
-          const status =
-            error.code === "forbidden"
-              ? 403
-              : error.code === "missing_consent"
-                ? 401
-                : 409;
-          res.status(status).json({ code: error.code, error: error.message });
-        } else if (!sendPlanningError(res, error)) next(error);
       }
     },
   );

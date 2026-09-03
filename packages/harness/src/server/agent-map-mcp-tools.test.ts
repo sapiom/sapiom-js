@@ -85,7 +85,34 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       role: "map-planner",
     };
     const assignmentIds = ["assignment-a", "assignment-b"];
+    const consentId = "fanout-consent_00000000-0000-7000-8000-000000000001";
+    const prepareConsent = vi.fn(
+      async (
+        _identity: unknown,
+        request: { source: unknown; plan: unknown },
+      ) => ({
+        consentId,
+        source: request.source,
+        plan: request.plan,
+        sessions: assignmentIds.map((assignmentId, index) => ({
+          assignmentId,
+          plannedAgentId: `agent-${index + 1}`,
+          agentName: `Agent ${index + 1}`,
+          mission: `Plan assignment ${index + 1}`,
+          brief: {
+            briefId: `brief_00000000-0000-7000-8000-00000000000${index + 1}`,
+            version: 1,
+            semanticDigest: `sha256:${String(index + 3).repeat(64)}`,
+          },
+          executionPolicy: "planning-readonly",
+        })),
+        expectedSessionCount: assignmentIds.length,
+        expectedKickoffPromptCount: assignmentIds.length,
+        warnings: [],
+      }),
+    );
     const openOrReuse = vi.fn(async () => ({
+      consentId,
       bindings: assignmentIds.map((assignmentId) => ({ assignmentId })),
       unreachableAssignmentIds: [assignmentIds[1]],
     }));
@@ -96,13 +123,16 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       new AgentMapProposalService(
         new AgentMapWorkspaceStore("/tmp/agent-map-tools-partial-fanout"),
       ),
-      { builderPlanningService: { openOrReuse } as never },
+      {
+        builderPlanningService: { prepareConsent, openOrReuse } as never,
+      },
     );
     const client = new Client({ name: "partial-fanout", version: "1" });
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     const toolArguments = {
-      approvalId: "approval-opaque",
+      consentId,
+      confirmation: "user-confirmed",
       source: {
         kind: "proposal",
         proposalId: "proposal_00000000-0000-7000-8000-000000000001",
@@ -116,6 +146,37 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       },
       assignmentIds,
     };
+    const prepared = await client.callTool({
+      name: "build_plan_prepare_planning_sessions",
+      arguments: {
+        source: toolArguments.source,
+        plan: toolArguments.plan,
+        assignmentIds,
+      },
+    });
+    expect(prepared).toMatchObject({
+      structuredContent: {
+        consentId,
+        expectedSessionCount: 2,
+        sessions: [
+          expect.objectContaining({
+            agentName: "Agent 1",
+            mission: "Plan assignment 1",
+          }),
+          expect.objectContaining({
+            agentName: "Agent 2",
+            mission: "Plan assignment 2",
+          }),
+        ],
+      },
+      content: [
+        expect.objectContaining({
+          text: expect.stringContaining("ask the user for explicit consent"),
+        }),
+      ],
+    });
+    expect(openOrReuse).not.toHaveBeenCalled();
+
     const result = await client.callTool({
       name: "build_plan_open_planning_sessions",
       arguments: toolArguments,
@@ -136,6 +197,7 @@ describe("Agent Map MCP plan-authoring discovery", () => {
 
     const pluralAssignmentIds = [...assignmentIds, "assignment-c"];
     openOrReuse.mockResolvedValueOnce({
+      consentId,
       bindings: pluralAssignmentIds.map((assignmentId) => ({ assignmentId })),
       unreachableAssignmentIds: ["assignment-b"],
     });
@@ -176,6 +238,10 @@ describe("Agent Map MCP plan-authoring discovery", () => {
         ),
         {
           buildPlanService: { read } as never,
+          builderPlanningService: {
+            prepareConsent: vi.fn(),
+            openOrReuse: vi.fn(),
+          } as never,
           onEvent: (event) => events.push(event),
         },
       );
@@ -203,6 +269,20 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       ],
     });
     expect(builder.read).not.toHaveBeenCalled();
+    for (const name of [
+      "build_plan_prepare_planning_sessions",
+      "build_plan_open_planning_sessions",
+    ])
+      await expect(
+        builder.client.callTool({ name, arguments: {} }),
+      ).resolves.toMatchObject({
+        isError: true,
+        content: [
+          expect.objectContaining({
+            text: expect.stringMatching(/not found/iu),
+          }),
+        ],
+      });
     await builder.client.close();
     await builder.server.close();
 

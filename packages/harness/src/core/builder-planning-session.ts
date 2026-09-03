@@ -19,7 +19,8 @@ import type {
   BriefStaleReason,
   BuildPlanRef,
   PlanningAssignmentId,
-  PlanningFanoutApproval,
+  PlanningFanoutConsent,
+  PlanningFanoutConsentPreparation,
   PlanningFanoutOpenResponse,
   PlanningFanoutPreview,
   PlanningSubmissionIdempotencyReceipt,
@@ -246,6 +247,7 @@ export class BuilderPlanningSessionError extends Error {
       | "forbidden"
       | "missing_consent"
       | "stale_consent"
+      | "stale_plan"
       | "plan_not_ready"
       | "binding_stale"
       | "session_unreachable"
@@ -281,20 +283,20 @@ export interface BuilderPlanningSessionServiceOptions {
   deliveryClaimTtlMs?: number;
 }
 
-export interface ApprovePlanningFanoutRequest {
-  source: ArchitectureSourceRef;
-  plan: BuildPlanRef;
-  assignmentIds: readonly PlanningAssignmentId[];
-}
-
 export interface OpenPlanningFanoutRequest {
-  approvalId: string;
+  consentId: string;
+  confirmation: "user-confirmed";
   source: ArchitectureSourceRef;
   plan: BuildPlanRef;
   assignmentIds: readonly PlanningAssignmentId[];
   harness?: HarnessKind;
   theme?: UiTheme;
 }
+
+export type PreparePlanningFanoutRequest = Pick<
+  OpenPlanningFanoutRequest,
+  "source" | "plan" | "assignmentIds"
+>;
 
 const same = (left: unknown, right: unknown): boolean =>
   canonicalJson(left) === canonicalJson(right);
@@ -714,10 +716,6 @@ export class BuilderPlanningSessionService {
         },
         assignmentIds,
       });
-      const status = await this.options.contractValidator.validate(
-        exact.plan,
-        exact.briefs,
-      );
       return {
         available: true,
         source: plan.source,
@@ -729,8 +727,8 @@ export class BuilderPlanningSessionService {
         assignmentIds,
         assignmentCount: assignmentIds.length,
         expectedSessionCount: assignmentIds.length,
-        expectedModelTurnCount: assignmentIds.length,
-        warnings: status.completeness.issues
+        expectedKickoffPromptCount: assignmentIds.length,
+        warnings: exact.status.completeness.issues
           .filter((issue) => issue.severity === "warning")
           .slice(0, 16)
           .map((issue) => issue.code),
@@ -744,7 +742,7 @@ export class BuilderPlanningSessionService {
 
   private exactPlanningFromAggregate(
     aggregate: AgentMapProjectAggregate,
-    request: ApprovePlanningFanoutRequest,
+    request: PreparePlanningFanoutRequest,
   ): {
     plan: ProjectBuildPlanVersion;
     briefs: AgentBriefVersionRecord[];
@@ -773,14 +771,25 @@ export class BuilderPlanningSessionService {
         relationships: aggregate.proposal.relationships,
       }) !== request.source.graphDigest
     )
-      throw new BuilderPlanningSessionError("stale_consent");
+      throw new BuilderPlanningSessionError("stale_plan");
     const assignmentIds = [...request.assignmentIds].sort();
-    const active = Object.values(aggregate.buildPlanning.assignmentByAgentId)
-      .filter((entry) => entry.status === "active")
-      .map((entry) => entry.assignmentId)
-      .sort();
+    const topLevelAgentIds = new Set(
+      aggregate.proposal.nodes
+        .filter((node) => node.kind === "agent" && node.ownerAgentId === null)
+        .map((node) => node.id),
+    );
+    const activeAssignments = Object.values(
+      aggregate.buildPlanning.assignmentByAgentId,
+    ).filter((entry) => entry.status === "active");
+    if (
+      activeAssignments.some(
+        (entry) => !topLevelAgentIds.has(entry.plannedAgentId),
+      )
+    )
+      throw new BuilderPlanningSessionError("plan_not_ready");
+    const active = activeAssignments.map((entry) => entry.assignmentId).sort();
     if (!same(assignmentIds, active))
-      throw new BuilderPlanningSessionError("stale_consent");
+      throw new BuilderPlanningSessionError("stale_plan");
     const briefs = active.map((assignmentId) => {
       const assignment = Object.values(
         aggregate.buildPlanning.assignmentByAgentId,
@@ -799,8 +808,10 @@ export class BuilderPlanningSessionService {
         !assignment ||
         !ref ||
         !isCurrentAgentBrief(brief) ||
+        brief.plannedAgentId !== assignment.plannedAgentId ||
         brief.assignmentId !== assignmentId ||
-        brief.plan.planId !== request.plan.planId ||
+        brief.semanticDigest !== ref.semanticDigest ||
+        !same(brief.plan, request.plan) ||
         !same(brief.source, request.source)
       )
         throw new BuilderPlanningSessionError("plan_not_ready");
@@ -818,7 +829,7 @@ export class BuilderPlanningSessionService {
 
   private async exactPlanning(
     projectId: StudioProjectId,
-    request: ApprovePlanningFanoutRequest,
+    request: PreparePlanningFanoutRequest,
   ) {
     const aggregate =
       await this.options.workspaceStore.readAggregate(projectId);
@@ -829,75 +840,141 @@ export class BuilderPlanningSessionService {
     );
     if (!status.eligibility.planningEligible)
       throw new BuilderPlanningSessionError("plan_not_ready");
-    return { aggregate, ...exact };
+    return { aggregate, ...exact, status };
   }
 
-  /**
-   * Server-internal half of the approval bridge. The boot-token-authenticated
-   * UI route is the only production caller and supplies the input id that it
-   * observed while handling that exact human action. This method is not wired
-   * to MCP or the generic session REST API.
-   */
-  async approveFromAuthenticatedUiAction(
+  private consentBriefs(
+    briefs: readonly AgentBriefVersionRecord[],
+  ): AgentBriefRef[] {
+    return briefs.map((brief) => ({
+      briefId: brief.briefId,
+      version: brief.version,
+      semanticDigest: brief.semanticDigest,
+    }));
+  }
+
+  async prepareConsent(
     identity: PlanningSessionIdentity,
-    request: ApprovePlanningFanoutRequest,
-    observedUserInputId: string,
-  ): Promise<PlanningFanoutApproval> {
+    request: PreparePlanningFanoutRequest,
+  ): Promise<PlanningFanoutConsentPreparation> {
     this.assertPlanner(identity);
-    if (!/^user-action_[0-9a-f-]{36}$/u.test(observedUserInputId))
-      throw new BuilderPlanningSessionError("missing_consent");
-    await this.exactPlanning(identity.projectId, request);
-    const userInputId = observedUserInputId;
-    const approvedAt = this.now();
-    const withoutDigest = {
-      approvalId: stableId("fanout-approval", { ...request, userInputId }),
+    const exact = await this.exactPlanning(identity.projectId, request);
+    const briefs = this.consentBriefs(exact.briefs);
+    const preparedAt = this.now();
+    const consentId = stableId("fanout-consent", {
+      projectId: identity.projectId,
+      plannerSessionId: identity.sessionId,
+      userId: identity.userId,
+      source: request.source,
+      plan: request.plan,
+      assignmentIds: [...request.assignmentIds].sort(),
+      briefs,
+    }) as PlanningFanoutConsent["consentId"];
+    const pending = {
+      consentId,
       projectId: identity.projectId,
       source: request.source,
       plan: request.plan,
       assignmentIds: [...request.assignmentIds].sort(),
-      approvedByUserId: identity.userId,
-      approvingSessionId: identity.sessionId,
-      userInputId,
-      approvedAt,
+      briefs,
+      plannerSessionId: identity.sessionId,
+      userId: identity.userId,
+      status: "pending" as const,
+      preparedAt,
+      confirmedAt: null,
+      confirmationSource: null,
     };
-    const approval = {
-      ...withoutDigest,
-      approvalDigest: computeCanonicalDigest(
-        "sapiom.planning-fanout-approval.v1",
-        withoutDigest,
-      ),
-    } as unknown as PlanningFanoutApproval;
-    return this.options.workspaceStore.transact(
+    const consent = {
+      ...pending,
+      consentDigest: computeCanonicalDigest(
+        "sapiom.planning-fanout-consent.v1",
+        pending,
+      ) as PlanningFanoutConsent["consentDigest"],
+    } satisfies PlanningFanoutConsent;
+    const persisted = await this.options.workspaceStore.transact(
       identity.projectId,
       async (aggregate) => {
-        // Approval is evidence for the exact state observed at this serialized
-        // boundary, not for a preflight snapshot that may already be stale.
-        this.exactPlanningFromAggregate(aggregate, request);
-        const existing = aggregate.buildPlanning.fanoutApprovals.find(
-          (entry) => entry.approvalId === approval.approvalId,
+        const locked = this.exactPlanningFromAggregate(aggregate, request);
+        if (!same(this.consentBriefs(locked.briefs), briefs))
+          throw new BuilderPlanningSessionError("stale_plan");
+        const existing = aggregate.buildPlanning.fanoutConsents.find(
+          (entry) => entry.consentId === consentId,
         );
         if (existing) return { value: existing };
         return {
-          value: approval,
+          value: consent,
           next: {
             ...aggregate,
             buildPlanning: {
               ...aggregate.buildPlanning,
-              fanoutApprovals: [
-                ...aggregate.buildPlanning.fanoutApprovals,
-                approval,
+              fanoutConsents: [
+                ...aggregate.buildPlanning.fanoutConsents,
+                consent,
               ].slice(-256),
             },
           },
         };
       },
     );
+    const nodes = new Map(exact.graph.nodes.map((node) => [node.id, node]));
+    return {
+      consentId: persisted.consentId,
+      source: persisted.source,
+      plan: persisted.plan,
+      sessions: exact.briefs.map((brief, index) => ({
+        assignmentId: brief.assignmentId,
+        plannedAgentId: brief.plannedAgentId,
+        agentName: nodes.get(brief.plannedAgentId)?.name ?? "Planned agent",
+        mission: brief.mission,
+        brief: persisted.briefs[index]!,
+        executionPolicy: "planning-readonly" as const,
+      })),
+      expectedSessionCount: exact.briefs.length,
+      expectedKickoffPromptCount: exact.briefs.length,
+      warnings: exact.status.completeness.issues
+        .filter((issue) => issue.severity === "warning")
+        .slice(0, 16)
+        .map((issue) => issue.code),
+    };
+  }
+
+  private requireConsent(
+    aggregate: AgentMapProjectAggregate,
+    identity: PlanningSessionIdentity,
+    request: OpenPlanningFanoutRequest,
+    briefs: readonly AgentBriefVersionRecord[],
+  ): PlanningFanoutConsent {
+    const consent = aggregate.buildPlanning.fanoutConsents.find(
+      (entry) => entry.consentId === request.consentId,
+    );
+    if (!consent) throw new BuilderPlanningSessionError("missing_consent");
+    const { consentDigest, ...projection } = consent;
+    if (
+      request.confirmation !== "user-confirmed" ||
+      consent.projectId !== identity.projectId ||
+      consent.userId !== identity.userId ||
+      consent.plannerSessionId !== identity.sessionId ||
+      consentDigest !==
+        computeCanonicalDigest(
+          "sapiom.planning-fanout-consent.v1",
+          projection,
+        ) ||
+      !same(consent.source, request.source) ||
+      !same(consent.plan, request.plan) ||
+      !same(
+        [...consent.assignmentIds].sort(),
+        [...request.assignmentIds].sort(),
+      ) ||
+      !same(consent.briefs, this.consentBriefs(briefs))
+    )
+      throw new BuilderPlanningSessionError("stale_consent");
+    return consent;
   }
 
   openOrReuse(
     identity: PlanningSessionIdentity,
     request: OpenPlanningFanoutRequest,
-  ): Promise<Omit<PlanningFanoutOpenResponse, "approvalId">> {
+  ): Promise<PlanningFanoutOpenResponse> {
     const prior =
       this.projectOpens.get(identity.projectId) ?? Promise.resolve();
     const next = prior
@@ -915,39 +992,50 @@ export class BuilderPlanningSessionService {
   private async openOrReuseOnce(
     identity: PlanningSessionIdentity,
     request: OpenPlanningFanoutRequest,
-  ): Promise<Omit<PlanningFanoutOpenResponse, "approvalId">> {
+  ): Promise<PlanningFanoutOpenResponse> {
     this.assertPlanner(identity);
     // Expensive completeness validation is a preflight only. The serialized
-    // transaction below repeats every mutable source/plan/brief/approval check
-    // before it creates or reuses a binding claim.
-    await this.exactPlanning(identity.projectId, request);
+    // transaction below repeats every mutable source/plan/brief check before it
+    // creates or reuses a binding claim. The caller's assertion of readiness is
+    // never trusted on its own.
+    const preflight = await this.exactPlanning(identity.projectId, request);
+    this.requireConsent(
+      preflight.aggregate,
+      identity,
+      request,
+      preflight.briefs,
+    );
     const timestamp = this.now();
     const claimed = await this.options.workspaceStore.transact(
       identity.projectId,
       async (aggregate) => {
         const exact = this.exactPlanningFromAggregate(aggregate, request);
-        const approval = aggregate.buildPlanning.fanoutApprovals.find(
-          (entry) => entry.approvalId === request.approvalId,
+        const consent = this.requireConsent(
+          aggregate,
+          identity,
+          request,
+          exact.briefs,
         );
-        if (!approval) throw new BuilderPlanningSessionError("missing_consent");
-        const { approvalDigest: claimedDigest, ...approvalProjection } =
-          approval;
-        if (
-          approval.approvedByUserId !== identity.userId ||
-          approval.approvingSessionId !== identity.sessionId ||
-          claimedDigest !==
-            computeCanonicalDigest(
-              "sapiom.planning-fanout-approval.v1",
-              approvalProjection,
-            ) ||
-          !same(approval.source, request.source) ||
-          !same(approval.plan, request.plan) ||
-          !same(
-            [...approval.assignmentIds].sort(),
-            [...request.assignmentIds].sort(),
-          )
-        )
-          throw new BuilderPlanningSessionError("stale_consent");
+        const confirmedConsent: PlanningFanoutConsent =
+          consent.status === "confirmed"
+            ? consent
+            : (() => {
+                const confirmed = {
+                  ...consent,
+                  status: "confirmed" as const,
+                  confirmedAt: timestamp,
+                  confirmationSource: "planner-attested-conversation" as const,
+                };
+                const { consentDigest: priorDigest, ...projection } = confirmed;
+                void priorDigest;
+                return {
+                  ...projection,
+                  consentDigest: computeCanonicalDigest(
+                    "sapiom.planning-fanout-consent.v1",
+                    projection,
+                  ),
+                } as PlanningFanoutConsent;
+              })();
         const bindings = {
           ...aggregate.buildPlanning.builderBindingsByAssignmentId,
         };
@@ -1051,6 +1139,12 @@ export class BuilderPlanningSessionService {
             ...aggregate,
             buildPlanning: {
               ...aggregate.buildPlanning,
+              fanoutConsents: aggregate.buildPlanning.fanoutConsents.map(
+                (entry) =>
+                  entry.consentId === confirmedConsent.consentId
+                    ? confirmedConsent
+                    : entry,
+              ),
               builderBindingsByAssignmentId: bindings,
             },
           },
@@ -1114,6 +1208,7 @@ export class BuilderPlanningSessionService {
       }
     }
     return {
+      consentId: request.consentId as PlanningFanoutConsent["consentId"],
       bindings: output,
       unreachableAssignmentIds,
     };

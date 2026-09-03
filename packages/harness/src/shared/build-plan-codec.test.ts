@@ -99,4 +99,15 @@ describe("build planning strict codecs", () => {
       ),
     ).toThrow("invalid build planning aggregate");
   });
+
+  it("migrates pre-consent local aggregates with an empty consent history", () => {
+    const legacy = {
+      ...emptyBuildPlanningAggregate(),
+    } as Record<string, unknown>;
+    delete legacy.fanoutConsents;
+
+    expect(parseBuildPlanningAggregate(legacy, PROJECT_ID)).toMatchObject({
+      fanoutConsents: [],
+    });
+  });
 });

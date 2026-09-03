@@ -323,7 +323,11 @@ describe("planning result request boundary", () => {
   );
 });
 
-function publicFixture(includeApproval: boolean, agentCount = 1) {
+function publicFixture(
+  includeConsent: boolean,
+  agentCount = 1,
+  nestedAgentIndex: number | null = null,
+) {
   const basePlan = makePlan();
   const specs = Array.from({ length: agentCount }, (_, index) => ({
     agentId:
@@ -344,6 +348,8 @@ function publicFixture(includeApproval: boolean, agentCount = 1) {
       ...graph.nodes[0]!,
       id: spec.agentId,
       name: index === 0 ? "Builder" : `Builder ${index + 1}`,
+      ownerAgentId:
+        index === nestedAgentIndex ? (specs[0]?.agentId ?? null) : null,
     })),
     relationships: [],
   };
@@ -386,22 +392,39 @@ function publicFixture(includeApproval: boolean, agentCount = 1) {
     userId: "user-test",
     role: "map-planner" as const,
   };
-  const approvalCore = {
-    approvalId: "fanout-approval_00000000-0000-7000-8000-000000000020",
+  const consentBriefs = [...specs]
+    .sort((left, right) => left.assignmentId.localeCompare(right.assignmentId))
+    .map((spec) => {
+      const candidate = briefs.find(
+        (briefVersion) => briefVersion.assignmentId === spec.assignmentId,
+      )!;
+      return {
+        briefId: candidate.briefId,
+        version: candidate.version,
+        semanticDigest: candidate.semanticDigest,
+      };
+    });
+  const consentCore = {
+    consentId: "fanout-consent_00000000-0000-7000-8000-000000000020",
     projectId: PROJECT_ID,
     source: plan.source,
     plan: planRef,
-    assignmentIds: specs.map((spec) => spec.assignmentId),
-    approvedByUserId: identity.userId,
-    approvingSessionId: identity.sessionId,
-    userInputId: "user-action_00000000-0000-4000-8000-000000000021",
-    approvedAt: "2026-09-03T11:00:00.000Z",
+    assignmentIds: specs
+      .map((spec) => spec.assignmentId)
+      .sort((left, right) => left.localeCompare(right)),
+    briefs: consentBriefs,
+    plannerSessionId: identity.sessionId,
+    userId: identity.userId,
+    status: "pending" as const,
+    preparedAt: "2026-09-03T11:00:00.000Z",
+    confirmedAt: null,
+    confirmationSource: null,
   };
-  const approval = {
-    ...approvalCore,
-    approvalDigest: computeCanonicalDigest(
-      "sapiom.planning-fanout-approval.v1",
-      approvalCore,
+  const consent = {
+    ...consentCore,
+    consentDigest: computeCanonicalDigest(
+      "sapiom.planning-fanout-consent.v1",
+      consentCore,
     ),
   };
   let aggregate = {
@@ -498,7 +521,8 @@ function publicFixture(includeApproval: boolean, agentCount = 1) {
           },
         ]),
       ),
-      fanoutApprovals: includeApproval ? [approval] : [],
+      fanoutApprovals: [],
+      fanoutConsents: includeConsent ? [consent] : [],
     },
   } as unknown as AgentMapProjectAggregate;
   let transaction = Promise.resolve();
@@ -679,10 +703,11 @@ function publicFixture(includeApproval: boolean, agentCount = 1) {
     service,
     identity,
     request: {
-      approvalId: approval.approvalId,
+      consentId: consent.consentId,
+      confirmation: "user-confirmed" as const,
       source: plan.source,
       plan: planRef,
-      assignmentIds: specs.map((spec) => spec.assignmentId),
+      assignmentIds: consentCore.assignmentIds,
     },
     create,
     resume,
@@ -771,12 +796,119 @@ function planningResultRequest(
 }
 
 describe("BuilderPlanningSessionService public authorization", () => {
-  it("rejects missing approval before any process side effect", async () => {
+  it("rejects a missing prepared consent before any process side effect", async () => {
     const fixture = publicFixture(false);
     await expect(
       fixture.service().openOrReuse(fixture.identity, fixture.request),
     ).rejects.toMatchObject({ code: "missing_consent" });
     expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("prepares one exact, idempotent consent scope for every top-level planned agent", async () => {
+    const fixture = publicFixture(false, 3);
+    const request = {
+      source: fixture.request.source,
+      plan: fixture.request.plan,
+      assignmentIds: fixture.request.assignmentIds,
+    };
+
+    const first = await fixture
+      .service()
+      .prepareConsent(fixture.identity, request);
+    const replay = await fixture
+      .service()
+      .prepareConsent(fixture.identity, request);
+
+    expect(replay).toEqual(first);
+    expect(first.consentId).toMatch(/^fanout-consent_/u);
+    expect(first.sessions).toEqual(
+      fixture.specs.map((spec, index) =>
+        expect.objectContaining({
+          assignmentId: spec.assignmentId,
+          plannedAgentId: spec.agentId,
+          agentName: index === 0 ? "Builder" : `Builder ${index + 1}`,
+          mission: `Implement assignment ${index + 1}`,
+          brief: expect.objectContaining({ briefId: spec.briefId, version: 1 }),
+          executionPolicy: "planning-readonly",
+        }),
+      ),
+    );
+    expect(first.expectedSessionCount).toBe(3);
+    expect(first.expectedKickoffPromptCount).toBe(3);
+    expect(fixture.aggregate().buildPlanning.fanoutConsents).toHaveLength(1);
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of opening a session for a nested planned agent", async () => {
+    const fixture = publicFixture(false, 2, 1);
+
+    await expect(
+      fixture.service().prepareConsent(fixture.identity, {
+        source: fixture.request.source,
+        plan: fixture.request.plan,
+        assignmentIds: fixture.request.assignmentIds,
+      }),
+    ).rejects.toMatchObject({ code: "plan_not_ready" });
+    expect(fixture.aggregate().buildPlanning.fanoutConsents).toEqual([]);
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects consent when an exact brief version changes after preparation", async () => {
+    const fixture = publicFixture(false);
+    const preparation = await fixture
+      .service()
+      .prepareConsent(fixture.identity, {
+        source: fixture.request.source,
+        plan: fixture.request.plan,
+        assignmentIds: fixture.request.assignmentIds,
+      });
+    const current =
+      fixture.aggregate().buildPlanning.briefVersionsById[BRIEF_ID]![0]!;
+    const changed = {
+      ...structuredClone(current),
+      version: 2 as typeof current.version,
+      semanticDigest:
+        `sha256:${"4".repeat(64)}` as typeof current.semanticDigest,
+      recordDigest: `sha256:${"5".repeat(64)}` as typeof current.recordDigest,
+    };
+    (
+      fixture.aggregate().buildPlanning.briefVersionsById[
+        BRIEF_ID
+      ] as (typeof current)[]
+    ).push(changed);
+    (
+      fixture.aggregate().buildPlanning.currentBriefByAgentId as Record<
+        string,
+        typeof fixture.briefRef
+      >
+    )[AGENT_ID] = {
+      briefId: changed.briefId,
+      version: changed.version,
+      semanticDigest: changed.semanticDigest,
+    };
+
+    await expect(
+      fixture.service().openOrReuse(fixture.identity, {
+        ...fixture.request,
+        consentId: preparation.consentId,
+      }),
+    ).rejects.toMatchObject({ code: "stale_consent" });
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("atomically records planner-attested consent when opening", async () => {
+    const fixture = publicFixture(true);
+    const outcome = await fixture
+      .service()
+      .openOrReuse(fixture.identity, fixture.request);
+
+    expect(outcome.consentId).toBe(fixture.request.consentId);
+    expect(fixture.aggregate().buildPlanning.fanoutConsents[0]).toMatchObject({
+      consentId: fixture.request.consentId,
+      status: "confirmed",
+      confirmationSource: "planner-attested-conversation",
+      confirmedAt: "2026-09-03T11:00:00.000Z",
+    });
   });
 
   it("fails closed when the effective brief is a legacy persisted record", async () => {
@@ -799,7 +931,7 @@ describe("BuilderPlanningSessionService public authorization", () => {
     });
     await expect(
       fixture.service().openOrReuse(fixture.identity, fixture.request),
-    ).rejects.toMatchObject({ code: "stale_consent" });
+    ).rejects.toMatchObject({ code: "stale_plan" });
     expect(fixture.create).not.toHaveBeenCalled();
     expect(
       fixture.aggregate().buildPlanning.builderBindingsByAssignmentId[
@@ -820,6 +952,39 @@ describe("BuilderPlanningSessionService public authorization", () => {
       .openOrReuse(fixture.identity, fixture.request);
     expect(replay.bindings).toHaveLength(1);
     expect(replay.bindings[0]?.sessionId).toBe("builder-session");
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves an unplanned manual session untouched across fan-out retries", async () => {
+    const fixture = publicFixture(true);
+    const manualSession: HarnessSession = {
+      id: "manual-session",
+      agentSessionId: "manual-agent",
+      harness: "codex",
+      cwd: "/tmp/project",
+      title: "Manual work",
+      status: "running",
+      ready: true,
+      createdAt: "2026-09-03T10:30:00.000Z",
+      lastActiveAt: "2026-09-03T10:30:00.000Z",
+      boundWorkflowPath: null,
+      agentMapIdentity: {
+        projectId: PROJECT_ID,
+        sessionId: "manual-session",
+        userId: fixture.identity.userId,
+        role: "agent-builder",
+        assignment: { kind: "unplanned" },
+      },
+    };
+    fixture.sessions.push(manualSession);
+    const before = structuredClone(manualSession);
+
+    await fixture.service().openOrReuse(fixture.identity, fixture.request);
+    await fixture.service().openOrReuse(fixture.identity, fixture.request);
+
+    expect(
+      fixture.sessions.find((session) => session.id === manualSession.id),
+    ).toEqual(before);
     expect(fixture.create).toHaveBeenCalledTimes(1);
   });
 
@@ -2605,10 +2770,15 @@ describe("BuilderPlanningSessionService kickoff delivery claim", () => {
         [BRIEF_ID]: [priorBrief, replacementBrief],
       },
     };
-    const replacement = await service.openOrReuse(
-      fixture.identity,
-      fixture.request,
-    );
+    const replacementConsent = await service.prepareConsent(fixture.identity, {
+      source: fixture.request.source,
+      plan: fixture.request.plan,
+      assignmentIds: fixture.request.assignmentIds,
+    });
+    const replacement = await service.openOrReuse(fixture.identity, {
+      ...fixture.request,
+      consentId: replacementConsent.consentId,
+    });
     const oldSession = fixture.sessions.find(
       (session) => session.id === "builder-session",
     )!;

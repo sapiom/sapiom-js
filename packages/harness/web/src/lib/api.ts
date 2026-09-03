@@ -65,7 +65,6 @@ import type {
   BuildPlanRef,
   GraphDigest,
   PlanningAssignmentId,
-  PlanningFanoutOpenRequest,
   PlanningFanoutOpenResponse,
   PlanningFanoutPreview,
 } from "@shared/build-plan";
@@ -394,14 +393,6 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse>;
-  getPlanningFanoutPreview(
-    projectId: StudioProjectId,
-  ): Promise<PlanningFanoutPreview>;
-  openPlanningFanout(
-    projectId: StudioProjectId,
-    plannerSessionId: string,
-    request: PlanningFanoutOpenRequest,
-  ): Promise<PlanningFanoutOpenResponse>;
   openAdditionalBuilderPlanningSession(
     projectId: StudioProjectId,
     primarySessionId: string,
@@ -723,25 +714,6 @@ class RealApi implements HarnessApi {
   ): Promise<PlannerSessionResponse> {
     return this.request<PlannerSessionResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/planner-sessions`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  getPlanningFanoutPreview(
-    projectId: StudioProjectId,
-  ): Promise<PlanningFanoutPreview> {
-    return this.request<PlanningFanoutPreview>(
-      `/api/projects/${encodeURIComponent(projectId)}/planning-fanout`,
-    );
-  }
-
-  openPlanningFanout(
-    projectId: StudioProjectId,
-    plannerSessionId: string,
-    request: PlanningFanoutOpenRequest,
-  ): Promise<PlanningFanoutOpenResponse> {
-    return this.request<PlanningFanoutOpenResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(plannerSessionId)}/planning-fanout`,
       { method: "POST", body: JSON.stringify(request) },
     );
   }
@@ -2068,6 +2040,18 @@ export class MockApi implements HarnessApi {
     StudioProjectId,
     BuilderPlanningSessionBinding[]
   >();
+  /** Playwright-only stand-in for the exact scope returned to a planner before
+   * it summarizes the sessions and asks the user for conversational consent. */
+  private preparedPlanningFanouts = new Map<
+    StudioProjectId,
+    Readonly<{
+      consentId: PlanningFanoutOpenResponse["consentId"];
+      plannerSessionId: string;
+      source: ArchitectureSourceRef;
+      plan: BuildPlanRef;
+      assignmentIds: readonly PlanningAssignmentId[];
+    }>
+  >();
 
   async startAuth(): Promise<AuthStartResponse> {
     // Record the call for Playwright assertions (same pattern as runMacro/deploy).
@@ -2624,6 +2608,7 @@ export class MockApi implements HarnessApi {
         right.lastActiveAt.localeCompare(left.lastActiveAt),
       )[0];
     if (request.mode === "resume-or-create" && existing) {
+      this.installPlannerFanoutTestControls(projectId, existing);
       return { session: existing, resolution: "live" };
     }
     const root = [...this.studioProjectIds.entries()].find(
@@ -2699,7 +2684,101 @@ export class MockApi implements HarnessApi {
       archivedAt: null,
       limitations: [],
     });
+    this.installPlannerFanoutTestControls(projectId, session);
     return { session, resolution: "created" };
+  }
+
+  private installPlannerFanoutTestControls(
+    projectId: StudioProjectId,
+    planner: HarnessSession,
+  ): void {
+    if (typeof window === "undefined") return;
+    const win = window as unknown as {
+      __HARNESS_TEST__?: Record<string, unknown>;
+    };
+    win.__HARNESS_TEST__ = {
+      ...(win.__HARNESS_TEST__ ?? {}),
+      plannerPreparePlanningFanout: async () => {
+        const preview = await this.getPlanningFanoutPreview(projectId);
+        if (!preview.available) {
+          win.__HARNESS_TEST__ = {
+            ...(win.__HARNESS_TEST__ ?? {}),
+            planningConsentPreparation: preview,
+          };
+          return preview;
+        }
+        const prepared = {
+          consentId:
+            "fanout-consent_00000000-0000-7000-8000-000000000001" as PlanningFanoutOpenResponse["consentId"],
+          plannerSessionId: planner.id,
+          source: preview.source,
+          plan: preview.plan,
+          assignmentIds: preview.assignmentIds,
+        };
+        this.preparedPlanningFanouts.set(projectId, prepared);
+        const snapshot = await this.getAgentMapWorkspace(projectId);
+        const topLevelAgents =
+          snapshot.proposal?.nodes.filter(
+            (node) => node.kind === "agent" && node.ownerAgentId === null,
+          ) ?? [];
+        const preparation = {
+          ...prepared,
+          sessions: preview.assignmentIds.flatMap((assignmentId, index) => {
+            const node = topLevelAgents[index];
+            if (!node) return [];
+            return [
+              {
+                assignmentId,
+                plannedAgentId: node.id,
+                agentName: node.name,
+                mission: node.purpose,
+                brief: this.mockPlanningBrief(node.id, index),
+                executionPolicy: "planning-readonly" as const,
+              },
+            ];
+          }),
+          expectedSessionCount: preview.expectedSessionCount,
+          expectedKickoffPromptCount: preview.expectedKickoffPromptCount,
+          warnings: preview.warnings,
+        };
+        win.__HARNESS_TEST__ = {
+          ...(win.__HARNESS_TEST__ ?? {}),
+          planningConsentPreparation: preparation,
+        };
+        return preparation;
+      },
+      plannerOpenPlanningFanoutAfterConsent: async () => {
+        const prepared = this.preparedPlanningFanouts.get(projectId);
+        if (!prepared || prepared.plannerSessionId !== planner.id)
+          throw new Error(
+            "The planner must prepare and summarize the exact fan-out before opening it.",
+          );
+        return this.simulatePlannerFanoutAfterConsent(projectId, planner.id, {
+          consentId: prepared.consentId,
+          confirmation: "user-confirmed",
+          source: prepared.source,
+          plan: prepared.plan,
+          assignmentIds: prepared.assignmentIds,
+          harness: planner.harness,
+          theme: getTheme(),
+        });
+      },
+    };
+  }
+
+  private mockPlanningBrief(
+    plannedAgentId: string,
+    index: number,
+  ): BuilderPlanningSessionBinding["brief"] {
+    const briefDigests = [
+      "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
+      "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+    ] as const;
+    return {
+      briefId: `brief_${plannedAgentId.slice("node_".length)}`,
+      version: 1,
+      semanticDigest: briefDigests[index] ?? briefDigests[0],
+    } as BuilderPlanningSessionBinding["brief"];
   }
 
   async getPlanningFanoutPreview(
@@ -2719,7 +2798,7 @@ export class MockApi implements HarnessApi {
     if (!snapshot.proposal)
       return { available: false, warnings: ["Complete a build plan first."] };
     const agentIds = snapshot.proposal.nodes
-      .filter((node) => node.kind === "agent")
+      .filter((node) => node.kind === "agent" && node.ownerAgentId === null)
       .map((node) => node.id);
     const graphDigest =
       "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f" as GraphDigest;
@@ -2746,18 +2825,24 @@ export class MockApi implements HarnessApi {
       ),
       assignmentCount: agentIds.length,
       expectedSessionCount: agentIds.length,
-      expectedModelTurnCount: agentIds.length,
+      expectedKickoffPromptCount: agentIds.length,
       warnings: [],
     };
   }
 
-  async openPlanningFanout(
+  private async simulatePlannerFanoutAfterConsent(
     projectId: StudioProjectId,
     plannerSessionId: string,
-    request: PlanningFanoutOpenRequest,
+    request: Readonly<{
+      consentId: PlanningFanoutOpenResponse["consentId"];
+      confirmation: "user-confirmed";
+      source: ArchitectureSourceRef;
+      plan: BuildPlanRef;
+      assignmentIds: readonly PlanningAssignmentId[];
+      harness?: HarnessKind;
+      theme?: "light" | "dark";
+    }>,
   ): Promise<PlanningFanoutOpenResponse> {
-    const approvalId =
-      "fanout-approval_00000000-0000-7000-8000-000000000001" as PlanningFanoutOpenResponse["approvalId"];
     const unreachableAssignmentIds =
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get(
@@ -2772,14 +2857,15 @@ export class MockApi implements HarnessApi {
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         planningFanoutCall: { projectId, plannerSessionId, request },
-        planningApprovalEvidence: {
-          approvalId,
+        planningPlannerEvidence: {
           projectId,
           plannerSessionId,
+          consentId: request.consentId,
+          confirmation: request.confirmation,
           source: request.source,
           plan: request.plan,
           assignmentIds: request.assignmentIds,
-          provenance: "authenticated-ui-action",
+          provenance: "planner-mcp-after-conversation-consent",
         },
       };
     }
@@ -2788,7 +2874,9 @@ export class MockApi implements HarnessApi {
       ([, id]) => id === projectId,
     )?.[0];
     const agentNodes =
-      snapshot.proposal?.nodes.filter((node) => node.kind === "agent") ?? [];
+      snapshot.proposal?.nodes.filter(
+        (node) => node.kind === "agent" && node.ownerAgentId === null,
+      ) ?? [];
     const bindings: BuilderPlanningSessionBinding[] = [];
     if (root) {
       for (const [index, assignmentId] of request.assignmentIds.entries()) {
@@ -2811,19 +2899,11 @@ export class MockApi implements HarnessApi {
           ...(request.theme ? { theme: request.theme } : {}),
         });
         session.agentSessionId = `mock-builder-agent-${index + 1}`;
-        const briefDigests = [
-          "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
-          "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
-        ] as const;
         const bootstrapDigests = [
           "sha256:bc66bf9db1260f15b4f0f091887178b899888a645b5bb535c602e46fd13c888b",
           "sha256:c3077bb88e615695b71f4d81f4b1d7d12571032d102ef941a345acc44eeaaeb1",
         ] as const;
-        const brief = {
-          briefId: `brief_${node.id.slice("node_".length)}`,
-          version: 1,
-          semanticDigest: briefDigests[index] ?? briefDigests[0],
-        } as BuilderPlanningSessionBinding["brief"];
+        const brief = this.mockPlanningBrief(node.id, index);
         const bindingId =
           `builder-binding_${node.id.slice("node_".length)}` as BuilderPlanningSessionBinding["bindingId"];
         const bootstrapDigest = (bootstrapDigests[index] ??
@@ -2926,7 +3006,7 @@ export class MockApi implements HarnessApi {
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         planningFanoutResponse: {
-          approvalId,
+          consentId: request.consentId,
           bindings,
           unreachableAssignmentIds,
         },
@@ -2974,7 +3054,7 @@ export class MockApi implements HarnessApi {
       };
     }
     return {
-      approvalId,
+      consentId: request.consentId,
       bindings,
       unreachableAssignmentIds,
     };

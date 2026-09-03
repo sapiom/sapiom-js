@@ -325,6 +325,18 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   );
   expect(systemPrompt).toContain("revision_source_unavailable");
   expect(systemPrompt).toContain("do not retry it");
+  const normalizedSystemPrompt = systemPrompt.replace(/\s+/gu, " ");
+  expect(normalizedSystemPrompt).toContain(
+    "build_plan_prepare_planning_sessions",
+  );
+  expect(normalizedSystemPrompt).toContain(
+    "Summarize every top-level agent session",
+  );
+  expect(normalizedSystemPrompt).toContain("Stop and wait for their reply");
+  expect(normalizedSystemPrompt).toContain(
+    "Do not imply that a Studio button is required",
+  );
+  expect(normalizedSystemPrompt).toContain("E5 remains the separate gate");
   expect(systemPrompt).not.toContain("In your first response, briefly explain");
   expect(systemPrompt).not.toContain(codingPrompt);
   expect(systemPrompt).not.toContain("You are the coding agent");
@@ -360,6 +372,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "agent_map_validate",
     "build_plan_apply",
     "build_plan_open_planning_sessions",
+    "build_plan_prepare_planning_sessions",
     "build_plan_read",
     "build_plan_rebase",
     "build_plan_validate",

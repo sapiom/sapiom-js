@@ -678,6 +678,34 @@ const fanoutApprovalSchema = z
     approvalDigest: digest,
   })
   .strict();
+const fanoutConsentSchema = z
+  .object({
+    consentId: generatedId("fanout-consent"),
+    projectId,
+    source: architectureSourceRefSchema,
+    plan: buildPlanRefSchema,
+    assignmentIds: unique(generatedId("assignment"), (entry) => entry),
+    briefs: unique(briefRefSchema, (entry) => entry.briefId),
+    plannerSessionId: opaqueId,
+    userId: opaqueId,
+    status: z.enum(["pending", "confirmed"]),
+    preparedAt: timestamp,
+    confirmedAt: timestamp.nullable(),
+    confirmationSource: z.literal("planner-attested-conversation").nullable(),
+    consentDigest: digest,
+  })
+  .strict()
+  .superRefine((consent, context) => {
+    const confirmed = consent.status === "confirmed";
+    if (
+      confirmed !== (consent.confirmedAt !== null) ||
+      confirmed !== (consent.confirmationSource !== null)
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "confirmation fields must match consent status",
+      });
+  });
 const kickoffSchema = z
   .object({
     kickoffId: generatedId("kickoff"),
@@ -953,6 +981,10 @@ const buildPlanningAggregateSchema = z
     ),
     // Additive defaults migrate SAP-3070 aggregates on their next atomic write.
     fanoutApprovals: z.array(fanoutApprovalSchema).max(256).default([]),
+    fanoutConsents: unique(
+      fanoutConsentSchema,
+      (entry) => entry.consentId,
+    ).default([]),
     builderBindingsByAssignmentId: z
       .record(generatedId("assignment"), builderBindingSchema)
       .default({}),
@@ -1172,6 +1204,21 @@ export function parseBuildPlanningAggregate(
     if (
       approval.projectId !== expectedProjectId ||
       approval.assignmentIds.some((id) => !assignments.has(id))
+    )
+      fail();
+  }
+  for (const consent of aggregate.fanoutConsents) {
+    const plan = plans.get(`${consent.plan.planId}\0${consent.plan.version}`);
+    if (
+      consent.projectId !== expectedProjectId ||
+      !plan ||
+      plan.semanticDigest !== consent.plan.semanticDigest ||
+      !architectureSourceRefsEqual(plan.source, consent.source) ||
+      consent.assignmentIds.some((id) => !assignments.has(id)) ||
+      consent.briefs.some((ref) => {
+        const brief = briefs.get(`${ref.briefId}\0${ref.version}`);
+        return !brief || brief.semanticDigest !== ref.semanticDigest;
+      })
     )
       fail();
   }
