@@ -46,11 +46,7 @@ export interface MaterializeAgentMapRevisionInput {
 }
 
 export type AgentMapConfirmationBoundaryInput =
-  | {
-      committedFirst: "proposal-operation";
-      confirmedSource: { proposalId: MapProposalId; version: number };
-      operationSource: { proposalId: MapProposalId; version: number };
-    }
+  | { committedFirst: "proposal-operation" }
   | {
       committedFirst: "confirmation";
       confirmedSource: { proposalId: MapProposalId; version: number };
@@ -70,7 +66,7 @@ export type AgentMapConfirmationBoundaryDecision =
     }
   | {
       confirmation: { outcome: "confirmed" };
-      proposalOperation: "committed" | "rebase-eligible" | "stale";
+      proposalOperation: "rebase-eligible" | "stale";
     };
 
 /** A bounded failure whose message never includes caller-controlled values. */
@@ -143,21 +139,17 @@ export function digestConfirmArchitectureRequest(
 
 /**
  * Pure description of the confirmation transaction's linearization boundary.
- * SAP-3063 owns the transaction and must still validate a rebase-eligible
- * operation; this helper keeps only the source-ordering outcomes fixed.
+ * `proposal-operation` means the transaction has already validated and
+ * committed an operation against the one current proposal source being
+ * confirmed. An operation against an older or different proposal cannot
+ * inhabit that branch. After confirmation commits, SAP-3063 must still
+ * validate an exact-source operation before conservatively rebasing it; this
+ * helper keeps only those source-ordering outcomes fixed.
  */
 export function classifyAgentMapConfirmationBoundary(
   input: AgentMapConfirmationBoundaryInput,
 ): AgentMapConfirmationBoundaryDecision {
-  const operationTargetsConfirmedSource =
-    input.operationSource.proposalId === input.confirmedSource.proposalId &&
-    input.operationSource.version === input.confirmedSource.version;
-  if (input.committedFirst === "proposal-operation") {
-    if (!operationTargetsConfirmedSource)
-      return {
-        confirmation: { outcome: "confirmed" },
-        proposalOperation: "committed",
-      };
+  if (input.committedFirst === "proposal-operation")
     return {
       confirmation: {
         outcome: "failed",
@@ -165,12 +157,13 @@ export function classifyAgentMapConfirmationBoundary(
       },
       proposalOperation: "committed",
     };
-  }
   return {
     confirmation: { outcome: "confirmed" },
-    proposalOperation: operationTargetsConfirmedSource
-      ? "rebase-eligible"
-      : "stale",
+    proposalOperation:
+      input.operationSource.proposalId === input.confirmedSource.proposalId &&
+      input.operationSource.version === input.confirmedSource.version
+        ? "rebase-eligible"
+        : "stale",
   };
 }
 

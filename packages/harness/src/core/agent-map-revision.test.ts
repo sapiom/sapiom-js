@@ -598,33 +598,13 @@ describe("Agent Map confirmation retry boundary", () => {
 
   it.each([
     [
-      "an exact-source proposal operation commits first",
-      {
-        committedFirst: "proposal-operation",
-        confirmedSource: { proposalId, version: 1 },
-        operationSource: { proposalId, version: 1 },
-      } as const,
+      "the current proposal operation commits first",
+      { committedFirst: "proposal-operation" } as const,
       {
         confirmation: {
           outcome: "failed",
           failure: { code: "stale_proposal", recovery: "reread" },
         },
-        proposalOperation: "committed",
-      },
-    ],
-    [
-      "an unrelated proposal operation commits first",
-      {
-        committedFirst: "proposal-operation",
-        confirmedSource: { proposalId, version: 1 },
-        operationSource: {
-          proposalId:
-            "proposal_018f0000-0000-7000-8000-000000000099" as MapProposalId,
-          version: 1,
-        },
-      } as const,
-      {
-        confirmation: { outcome: "confirmed" },
         proposalOperation: "committed",
       },
     ],
