@@ -105,6 +105,7 @@ describe("SessionManager", () => {
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
       resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
       onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
+      onRawInputSubmitted?: SessionManagerOptions["onRawInputSubmitted"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -140,6 +141,7 @@ describe("SessionManager", () => {
       buildLaunchOpts: opts.buildLaunchOpts,
       resolveAgentMapIdentity: opts.resolveAgentMapIdentity,
       onAgentMapSessionExit: opts.onAgentMapSessionExit,
+      onRawInputSubmitted: opts.onRawInputSubmitted,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -195,6 +197,31 @@ describe("SessionManager", () => {
 
     expect(manager.write("unknown-id", "x")).toBe(false);
     expect(manager.resize("unknown-id", 1, 1)).toBe(false);
+  });
+
+  it("reports only raw terminal Enter gestures as user submissions", async () => {
+    vi.useFakeTimers();
+    const onRawInputSubmitted = vi.fn();
+    const { manager } = makeManager({ onRawInputSubmitted });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    manager.setReady(session.id);
+
+    manager.write(session.id, "typed reply");
+    manager.write(session.id, "\r");
+    expect(onRawInputSubmitted).toHaveBeenCalledTimes(1);
+    expect(onRawInputSubmitted).toHaveBeenCalledWith(session.id);
+
+    manager.write(session.id, "\x1b[200~pasted\rcontent\x1b[201~");
+    expect(onRawInputSubmitted).toHaveBeenCalledTimes(1);
+
+    const programmatic = manager.submitInput(session.id, "queued reply", true);
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(programmatic).resolves.toBe(true);
+    expect(onRawInputSubmitted).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   describe("submitInput", () => {

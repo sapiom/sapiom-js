@@ -102,6 +102,7 @@ describe("BuilderPlanningSessionService durable spawn claim", () => {
         contractValidator: {} as never,
         sessionManager: {} as never,
         currentUserId: () => "user-test",
+        latestAcceptedPlannerUserInputId: async () => null,
         resolveProjectRoot: async () => "/tmp/project",
         defaultHarness: "codex",
         now: () => now,
@@ -392,6 +393,11 @@ function publicFixture(
     userId: "user-test",
     role: "map-planner" as const,
   };
+  const preparationUserInputId = "planner-input-preparation";
+  let acceptedPlannerUserInputId = includeConsent
+    ? "planner-input-confirmation-1"
+    : preparationUserInputId;
+  let confirmationTurn = 1;
   const consentBriefs = [...specs]
     .sort((left, right) => left.assignmentId.localeCompare(right.assignmentId))
     .map((spec) => {
@@ -415,9 +421,11 @@ function publicFixture(
     briefs: consentBriefs,
     plannerSessionId: identity.sessionId,
     userId: identity.userId,
+    preparedFromUserInputId: preparationUserInputId,
     status: "pending" as const,
     preparedAt: "2026-09-03T11:00:00.000Z",
     confirmedAt: null,
+    confirmedByUserInputId: null,
     confirmationSource: null,
   };
   const consent = {
@@ -695,6 +703,7 @@ function publicFixture(
       } as never,
       sessionManager: sessionManager as never,
       currentUserId: () => identity.userId,
+      latestAcceptedPlannerUserInputId: async () => acceptedPlannerUserInputId,
       resolveProjectRoot: async () => "/tmp/project",
       defaultHarness: "codex",
       now: () => "2026-09-03T11:00:00.000Z",
@@ -717,6 +726,11 @@ function publicFixture(
     specs,
     workspaceStore,
     manager,
+    acceptPlannerReply: () => {
+      confirmationTurn += 1;
+      acceptedPlannerUserInputId = `planner-input-confirmation-${confirmationTurn}`;
+      return acceptedPlannerUserInputId;
+    },
     beforeNextTransaction: (action: () => void | Promise<void>) => {
       beforeNextTransaction = action;
     },
@@ -853,6 +867,32 @@ describe("BuilderPlanningSessionService public authorization", () => {
     expect(fixture.create).not.toHaveBeenCalled();
   });
 
+  it("requires a subsequent server-accepted planner user turn before opening", async () => {
+    const fixture = publicFixture(false);
+    const preparation = await fixture
+      .service()
+      .prepareConsent(fixture.identity, {
+        source: fixture.request.source,
+        plan: fixture.request.plan,
+        assignmentIds: fixture.request.assignmentIds,
+      });
+    const request = {
+      ...fixture.request,
+      consentId: preparation.consentId,
+    };
+
+    await expect(
+      fixture.service().openOrReuse(fixture.identity, request),
+    ).rejects.toMatchObject({ code: "user_reply_required" });
+    expect(fixture.create).not.toHaveBeenCalled();
+
+    fixture.acceptPlannerReply();
+    await expect(
+      fixture.service().openOrReuse(fixture.identity, request),
+    ).resolves.toMatchObject({ consentId: preparation.consentId });
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects consent when an exact brief version changes after preparation", async () => {
     const fixture = publicFixture(false);
     const preparation = await fixture
@@ -886,6 +926,7 @@ describe("BuilderPlanningSessionService public authorization", () => {
       version: changed.version,
       semanticDigest: changed.semanticDigest,
     };
+    fixture.acceptPlannerReply();
 
     await expect(
       fixture.service().openOrReuse(fixture.identity, {
@@ -907,6 +948,8 @@ describe("BuilderPlanningSessionService public authorization", () => {
       consentId: fixture.request.consentId,
       status: "confirmed",
       confirmationSource: "planner-attested-conversation",
+      preparedFromUserInputId: "planner-input-preparation",
+      confirmedByUserInputId: "planner-input-confirmation-1",
       confirmedAt: "2026-09-03T11:00:00.000Z",
     });
   });
@@ -2775,6 +2818,7 @@ describe("BuilderPlanningSessionService kickoff delivery claim", () => {
       plan: fixture.request.plan,
       assignmentIds: fixture.request.assignmentIds,
     });
+    fixture.acceptPlannerReply();
     const replacement = await service.openOrReuse(fixture.identity, {
       ...fixture.request,
       consentId: replacementConsent.consentId,

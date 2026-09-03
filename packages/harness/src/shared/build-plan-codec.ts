@@ -90,6 +90,12 @@ const unique = <T extends z.ZodTypeAny>(
         seen.add(id);
       });
     });
+const hasFanoutConsentTurnEvidence = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Object.prototype.hasOwnProperty.call(value, "preparedFromUserInputId") &&
+  Object.prototype.hasOwnProperty.call(value, "confirmedByUserInputId");
 const hasDuplicateOrdinals = (entries: readonly { ordinal: number }[]) =>
   new Set(entries.map((entry) => entry.ordinal)).size !== entries.length;
 
@@ -688,9 +694,11 @@ const fanoutConsentSchema = z
     briefs: unique(briefRefSchema, (entry) => entry.briefId),
     plannerSessionId: opaqueId,
     userId: opaqueId,
+    preparedFromUserInputId: opaqueId,
     status: z.enum(["pending", "confirmed"]),
     preparedAt: timestamp,
     confirmedAt: timestamp.nullable(),
+    confirmedByUserInputId: opaqueId.nullable(),
     confirmationSource: z.literal("planner-attested-conversation").nullable(),
     consentDigest: digest,
   })
@@ -699,11 +707,20 @@ const fanoutConsentSchema = z
     const confirmed = consent.status === "confirmed";
     if (
       confirmed !== (consent.confirmedAt !== null) ||
+      confirmed !== (consent.confirmedByUserInputId !== null) ||
       confirmed !== (consent.confirmationSource !== null)
     )
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: "confirmation fields must match consent status",
+      });
+    if (
+      consent.confirmedByUserInputId !== null &&
+      consent.confirmedByUserInputId === consent.preparedFromUserInputId
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "confirmation must come from a later user input",
       });
   });
 const kickoffSchema = z
@@ -981,10 +998,20 @@ const buildPlanningAggregateSchema = z
     ),
     // Additive defaults migrate SAP-3070 aggregates on their next atomic write.
     fanoutApprovals: z.array(fanoutApprovalSchema).max(256).default([]),
-    fanoutConsents: unique(
-      fanoutConsentSchema,
-      (entry) => entry.consentId,
-    ).default([]),
+    // Consent records written by the prerelease review build did not bind a
+    // prepare turn to a later user turn. Silently retaining one would preserve
+    // unsafe launch authority; dropping only that old shape fails closed and
+    // forces the planner to summarize and ask again. Records that claim the
+    // new shape still pass through the strict schema unchanged.
+    fanoutConsents: z
+      .preprocess(
+        (value) =>
+          Array.isArray(value)
+            ? value.filter(hasFanoutConsentTurnEvidence)
+            : value,
+        unique(fanoutConsentSchema, (entry) => entry.consentId),
+      )
+      .default([]),
     builderBindingsByAssignmentId: z
       .record(generatedId("assignment"), builderBindingSchema)
       .default({}),

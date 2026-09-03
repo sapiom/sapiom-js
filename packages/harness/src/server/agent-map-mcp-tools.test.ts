@@ -213,6 +213,21 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       }),
     ]);
 
+    openOrReuse.mockRejectedValueOnce(
+      new BuilderPlanningSessionError("user_reply_required"),
+    );
+    const sameTurn = await client.callTool({
+      name: "build_plan_open_planning_sessions",
+      arguments: toolArguments,
+    });
+    expect(sameTurn).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "user_reply_required",
+        recovery: "wait_for_user_reply",
+      },
+    });
+
     await client.close();
     await server.close();
   });

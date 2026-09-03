@@ -25,6 +25,10 @@ interface PersistedPlannerState {
    * restart because the process cannot prove whether the PTY accepted it.
    */
   dispatchingInputId: string | null;
+  /** Latest user submission with a durable PTY-acceptance acknowledgement.
+   * This content-free token lets other trusted services prove that another
+   * user turn occurred without interpreting the message text. */
+  lastAcceptedUserInputId: string | null;
   retryCount: number;
   emptyProject: boolean;
 }
@@ -140,6 +144,10 @@ function isPersistedPlannerState(
     (value.dispatchingInputId !== undefined &&
       value.dispatchingInputId !== null &&
       typeof value.dispatchingInputId !== "string") ||
+    (value.lastAcceptedUserInputId !== undefined &&
+      value.lastAcceptedUserInputId !== null &&
+      (typeof value.lastAcceptedUserInputId !== "string" ||
+        value.lastAcceptedUserInputId === "")) ||
     !Number.isSafeInteger(value.retryCount) ||
     (value.retryCount as number) < 0 ||
     (value.retryCount as number) > MAX_RETRIES ||
@@ -230,6 +238,7 @@ function adoptRehydratedState(
       sessionId: session.id,
     })),
     dispatchingInputId: value.dispatchingInputId ?? null,
+    lastAcceptedUserInputId: value.lastAcceptedUserInputId ?? null,
   };
 }
 
@@ -411,6 +420,7 @@ export class PlannerGreetingCoordinator {
       },
       inputs: [],
       dispatchingInputId: null,
+      lastAcceptedUserInputId: null,
       retryCount: 0,
       emptyProject,
     };
@@ -444,6 +454,7 @@ export class PlannerGreetingCoordinator {
           // Backward-compatible with queue files written by the first SAP-3055
           // review head before dispatch intent became explicit.
           dispatchingInputId: parsed.dispatchingInputId ?? null,
+          lastAcceptedUserInputId: parsed.lastAcceptedUserInputId ?? null,
         };
       } else {
         const adopted = adoptRehydratedState(parsed, session);
@@ -557,11 +568,14 @@ export class PlannerGreetingCoordinator {
     const sessionId = state.metadata.identity.sessionId;
     const accepted = await this.acceptedInputIds(sessionId);
     if (accepted === null || accepted.size === 0) return state;
+    const acceptedInputs = state.inputs.filter((input) => accepted.has(input.id));
     const remaining = state.inputs.filter((input) => !accepted.has(input.id));
     if (remaining.length === state.inputs.length) return state;
     const reconciled: PersistedPlannerState = {
       ...structuredClone(state),
       inputs: remaining,
+      lastAcceptedUserInputId:
+        acceptedInputs.at(-1)?.id ?? state.lastAcceptedUserInputId,
       dispatchingInputId:
         state.dispatchingInputId && accepted.has(state.dispatchingInputId)
           ? null
@@ -1360,6 +1374,7 @@ export class PlannerGreetingCoordinator {
         ...structuredClone(state),
         inputs: state.inputs.slice(1),
         dispatchingInputId: null,
+        lastAcceptedUserInputId: input.id,
         metadata: {
           ...structuredClone(state.metadata),
           queuedInputIds: state.metadata.queuedInputIds.slice(1),
@@ -1375,6 +1390,45 @@ export class PlannerGreetingCoordinator {
       state = committed;
       await this.writeAcceptedInputIds(input.sessionId, []).catch(() => {});
     }
+  }
+
+  /** Return the latest server-accepted user turn after all earlier queue work
+   * for this planner session has settled. The shared serialization boundary is
+   * what prevents a fast model tool call from racing the message dequeue. */
+  latestAcceptedUserInputId(sessionId: string): Promise<string | null> {
+    return this.serialize(sessionId, async () => {
+      if (this.retiredSessions.has(sessionId)) return null;
+      const session = this.options.sessionManager.get(sessionId);
+      if (!session?.planning) return null;
+      const state = await this.reconcileAcceptedInputs(await this.load(session));
+      return state.lastAcceptedUserInputId;
+    });
+  }
+
+  /** Persist a content-free token for a human Enter gesture observed on the
+   * authenticated terminal transport. SessionManager invokes this only for
+   * raw terminal input, never for greetings or other programmatic prompts.
+   * Calling serialize synchronously queues this write before the planner can
+   * make a follow-up MCP request on the submitted turn. */
+  recordRawUserSubmission(sessionId: string): Promise<void> {
+    if (
+      this.retiredSessions.has(sessionId) ||
+      !this.options.sessionManager.get(sessionId)?.planning
+    )
+      return Promise.resolve();
+    const inputId = this.generateId();
+    return this.serialize(sessionId, async () => {
+      if (this.retiredSessions.has(sessionId)) return;
+      const session = this.options.sessionManager.get(sessionId);
+      if (!session?.planning) return;
+      const state = await this.reconcileAcceptedInputs(
+        await this.load(session),
+      );
+      await this.persist(sessionId, {
+        ...structuredClone(state),
+        lastAcceptedUserInputId: inputId,
+      });
+    });
   }
 
   /** Add local-only correlation without removing transcript content. */

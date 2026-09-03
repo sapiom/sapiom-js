@@ -245,9 +245,11 @@ function errorResult(error: unknown) {
                 ? "new_request_id"
                 : error.code === "missing_consent"
                   ? "prepare_consent"
-                  : error.code === "stale_consent"
-                    ? "reprepare_consent"
-                    : "reread",
+                  : error.code === "user_reply_required"
+                    ? "wait_for_user_reply"
+                    : error.code === "stale_consent"
+                      ? "reprepare_consent"
+                      : "reread",
           }
         : error instanceof AgentMapProposalValidationError
           ? {
@@ -547,7 +549,7 @@ export function createAgentMapToolServer(
       "build_plan_prepare_planning_sessions",
       {
         description:
-          "Prepare the exact top-level planning-session scope after the build plan and focused briefs become planning-eligible. Returns the agent names, missions, exact brief references, and an opaque consent ID. Summarize that list to the user and ask for explicit consent; do not open sessions in the same turn.",
+          "Prepare the exact top-level planning-session scope after the build plan and focused briefs become planning-eligible. Returns the agent names, missions, exact brief references, and an opaque consent ID. Summarize that list to the user and ask for explicit consent; do not open sessions in the same turn. Studio mechanically requires a different, subsequently accepted user submission before the consent can open sessions.",
         inputSchema: fanoutScopeSchema,
         annotations: {
           readOnlyHint: false,

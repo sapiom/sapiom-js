@@ -110,4 +110,20 @@ describe("build planning strict codecs", () => {
       fanoutConsents: [],
     });
   });
+
+  it("drops prerelease consents that have no user-turn evidence", () => {
+    const legacy = {
+      ...emptyBuildPlanningAggregate(),
+      fanoutConsents: [
+        {
+          consentId: "fanout-consent_00000000-0000-7000-8000-000000000001",
+          status: "confirmed",
+        },
+      ],
+    };
+
+    expect(parseBuildPlanningAggregate(legacy, PROJECT_ID)).toMatchObject({
+      fanoutConsents: [],
+    });
+  });
 });

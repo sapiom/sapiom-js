@@ -336,6 +336,9 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(normalizedSystemPrompt).toContain(
     "Do not imply that a Studio button is required",
   );
+  expect(normalizedSystemPrompt).toContain(
+    "subsequently accepted user submission",
+  );
   expect(normalizedSystemPrompt).toContain("E5 remains the separate gate");
   expect(systemPrompt).not.toContain("In your first response, briefly explain");
   expect(systemPrompt).not.toContain(codingPrompt);

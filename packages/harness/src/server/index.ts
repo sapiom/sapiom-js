@@ -1188,6 +1188,9 @@ export const startServer = async (
     }
   };
 
+  const plannerRawInputSubmission: {
+    record?: (sessionId: string) => void;
+  } = {};
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
@@ -1225,6 +1228,8 @@ export const startServer = async (
       agentMapCapabilities.revokeSession(sessionId);
       await agentMapMcp?.revokeSession(sessionId);
     },
+    onRawInputSubmitted: (sessionId) =>
+      plannerRawInputSubmission.record?.(sessionId),
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: initializeSessionContext,
@@ -2779,6 +2784,8 @@ export const startServer = async (
     sourceResolver: architectureSourceResolver,
     sessionManager,
     currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
+    latestAcceptedPlannerUserInputId: (sessionId) =>
+      plannerGreeting.latestAcceptedUserInputId(sessionId),
     resolveProjectRoot: async (projectId) => {
       const project = await studioProjectCatalog.resolveIdentity(projectId);
       const root = project?.rootBindings.find(
@@ -2927,6 +2934,12 @@ export const startServer = async (
       }),
     onEvent: emitPlannerLifecycle,
   });
+  plannerRawInputSubmission.record = (sessionId) => {
+    void plannerGreeting.recordRawUserSubmission(sessionId).catch(() => {
+      // The consent gate reads only the durable token and therefore fails
+      // closed if this best-effort write cannot be committed.
+    });
+  };
   for (const session of sessionManager.list()) {
     if (!session.planning) continue;
     let emptyProject = true;

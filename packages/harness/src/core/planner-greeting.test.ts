@@ -132,6 +132,64 @@ describe("PlannerGreetingCoordinator", () => {
     expect(durable.inputs).toEqual([]);
   });
 
+  it("persists a content-free token for the latest accepted user turn", async () => {
+    session.planning!.greeting = {
+      status: "delivered",
+      messageId: "greeting-message",
+    };
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+    });
+    await coordinator.register(session, {
+      emptyProject: true,
+      mode: "created",
+    });
+
+    await expect(
+      coordinator.latestAcceptedUserInputId(session.id),
+    ).resolves.toBeNull();
+    await coordinator.enqueue(session.id, "first user message");
+    const first = await coordinator.latestAcceptedUserInputId(session.id);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/u);
+
+    await coordinator.enqueue(session.id, "second user message");
+    const second = await coordinator.latestAcceptedUserInputId(session.id);
+    expect(second).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(second).not.toBe(first);
+
+    await coordinator.recordRawUserSubmission(session.id);
+    const rawTerminalSubmission =
+      await coordinator.latestAcceptedUserInputId(session.id);
+    expect(rawTerminalSubmission).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(rawTerminalSubmission).not.toBe(second);
+
+    const restarted = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+    });
+    await restarted.register(session, { emptyProject: true, mode: "boot" });
+    await expect(restarted.latestAcceptedUserInputId(session.id)).resolves.toBe(
+      rawTerminalSubmission,
+    );
+  });
+
+  it("ignores raw submissions from ordinary sessions", async () => {
+    session = { ...session, planning: undefined };
+    const generateId = vi.fn(() => "must-not-be-generated");
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      generateId,
+    });
+
+    await expect(
+      coordinator.recordRawUserSubmission(session.id),
+    ).resolves.toBeUndefined();
+    expect(generateId).not.toHaveBeenCalled();
+    await expect(fs.readdir(root)).resolves.toEqual([]);
+  });
+
   it("rejects a planner session identity that could escape the queue root", async () => {
     session = plannerSession("../outside-planner-root");
     const coordinator = new PlannerGreetingCoordinator({

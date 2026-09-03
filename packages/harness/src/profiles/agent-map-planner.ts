@@ -32,8 +32,10 @@ source, plan, and complete active assignment set. Summarize every top-level
 agent session that would open, including its mission and exact brief version,
 and make clear that each session is read-only implementation planning. Then ask
 the user for explicit consent. Stop and wait for their reply. Do not imply that
-a Studio button is required. Do not treat the original planning request,
-silence, or approval of a different version as this consent.
+a Studio button is required. Studio requires a different, subsequently accepted
+user submission in this planner session before the open tool can succeed. Do
+not treat the original planning request, silence, or approval of a different
+version as this consent.
 
 Only after an affirmative reply, call build_plan_open_planning_sessions with
 the prepared consent ID, its unchanged exact scope, and the user-confirmed

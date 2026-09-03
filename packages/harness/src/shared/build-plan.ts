@@ -611,9 +611,13 @@ export interface PlanningFanoutConsent {
   briefs: readonly AgentBriefRef[];
   plannerSessionId: string;
   userId: string;
+  /** Server-accepted planner input that preceded preparation. Opening a
+   * pending consent requires a different, subsequently accepted input. */
+  preparedFromUserInputId: string;
   status: "pending" | "confirmed";
   preparedAt: string;
   confirmedAt: string | null;
+  confirmedByUserInputId: string | null;
   confirmationSource: "planner-attested-conversation" | null;
   consentDigest: PlanningFanoutConsentDigest;
 }
@@ -771,8 +775,8 @@ export interface BuildPlanningAggregateV1 {
   submissionsByAssignmentId: Readonly<
     Record<string, readonly BuilderPlanningSubmission[]>
   >;
-  /** @deprecated Retained only so Studio can read state written by the
-   * pre-autonomous SAP-3074 preview. New fan-outs do not consult or append it. */
+  /** @deprecated Retained only so Studio can read local state written by
+   * earlier prerelease development builds. New fan-outs never consult it. */
   fanoutApprovals: readonly PlanningFanoutApproval[];
   fanoutConsents: readonly PlanningFanoutConsent[];
   builderBindingsByAssignmentId: Readonly<

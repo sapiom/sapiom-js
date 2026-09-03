@@ -383,6 +383,10 @@ export interface SessionManagerOptions {
   ) => Promise<PlanningSessionIdentity | undefined>;
   /** Revokes launch capabilities/transports after every exit path. */
   onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
+  /** Observes a human Enter gesture that was accepted by a live terminal PTY.
+   * Programmatic submitInput() calls never reach this callback. The callback
+   * is advisory and must not be able to interrupt terminal input delivery. */
+  onRawInputSubmitted?: (sessionId: string) => void;
   now?: () => string;
   generateId?: () => string;
   /** Test seam for deterministic registry persistence failures. Production
@@ -560,6 +564,7 @@ export class SessionManager {
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly resolveAgentMapIdentity: SessionManagerOptions["resolveAgentMapIdentity"];
   private readonly onAgentMapSessionExit: SessionManagerOptions["onAgentMapSessionExit"];
+  private readonly onRawInputSubmitted: SessionManagerOptions["onRawInputSubmitted"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -614,6 +619,7 @@ export class SessionManager {
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
+    this.onRawInputSubmitted = options.onRawInputSubmitted;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
@@ -1146,7 +1152,15 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) return false;
     handle.pty.write(data);
-    this.observeTrustedTerminalInput(handle, data);
+    const submissionCount = this.observeTrustedTerminalInput(handle, data);
+    for (let index = 0; index < submissionCount; index += 1) {
+      try {
+        this.onRawInputSubmitted?.(id);
+      } catch {
+        // Input already crossed into the PTY. Consent bookkeeping is
+        // fail-closed elsewhere and must never break the terminal itself.
+      }
+    }
     const session = this.sessions.get(id);
     if (session) {
       session.lastActiveAt = this.now();
@@ -1541,7 +1555,8 @@ export class SessionManager {
    * current line. Picker navigation after an exact `/resume` does not revoke
    * the already-armed one-shot authorization.
    */
-  private observeTrustedTerminalInput(handle: PtyHandle, data: string): void {
+  private observeTrustedTerminalInput(handle: PtyHandle, data: string): number {
+    let submissionCount = 0;
     const pickerAuthorization = handle.agentSessionRotation;
     if (
       data.length > 0 &&
@@ -1603,6 +1618,7 @@ export class SessionManager {
         continue;
       }
       if (char === "\r") {
+        submissionCount += 1;
         if (!handle.trustedInputInvalid) {
           const transition = this.rotationForTrustedLine(
             handle.trustedInputLine,
@@ -1659,6 +1675,7 @@ export class SessionManager {
       }
       handle.trustedInputLine += char;
     }
+    return submissionCount;
   }
 
   /** A protected discrete submit owns its final synthetic CR separately from

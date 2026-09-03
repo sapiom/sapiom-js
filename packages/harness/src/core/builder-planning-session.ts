@@ -246,6 +246,7 @@ export class BuilderPlanningSessionError extends Error {
     readonly code:
       | "forbidden"
       | "missing_consent"
+      | "user_reply_required"
       | "stale_consent"
       | "stale_plan"
       | "plan_not_ready"
@@ -273,6 +274,11 @@ export interface BuilderPlanningSessionServiceOptions {
   sourceResolver?: Pick<ArchitectureSourceResolver, "resolve">;
   sessionManager: SessionManager;
   currentUserId: () => string;
+  /** Content-free, durable proof of the latest user submission accepted by
+   * this planner session. Consent opening requires a later token than preparation. */
+  latestAcceptedPlannerUserInputId: (
+    sessionId: string,
+  ) => Promise<string | null>;
   resolveProjectRoot: (projectId: StudioProjectId) => Promise<string>;
   defaultHarness: HarnessKind;
   now?: () => string;
@@ -695,6 +701,21 @@ export class BuilderPlanningSessionService {
       throw new BuilderPlanningSessionError("forbidden");
   }
 
+  private async acceptedPlannerUserInputId(
+    identity: PlanningSessionIdentity,
+  ): Promise<string> {
+    try {
+      const inputId = await this.options.latestAcceptedPlannerUserInputId(
+        identity.sessionId,
+      );
+      if (inputId) return inputId;
+    } catch {
+      // A missing/unreadable turn token is safety-significant. Fail closed
+      // without exposing storage details to the model-facing tool boundary.
+    }
+    throw new BuilderPlanningSessionError("user_reply_required");
+  }
+
   async preview(projectId: StudioProjectId): Promise<PlanningFanoutPreview> {
     const planning = await this.options.buildPlanStore.read(projectId);
     const plan = planning.planVersions.find(
@@ -858,6 +879,8 @@ export class BuilderPlanningSessionService {
     request: PreparePlanningFanoutRequest,
   ): Promise<PlanningFanoutConsentPreparation> {
     this.assertPlanner(identity);
+    const preparedFromUserInputId =
+      await this.acceptedPlannerUserInputId(identity);
     const exact = await this.exactPlanning(identity.projectId, request);
     const briefs = this.consentBriefs(exact.briefs);
     const preparedAt = this.now();
@@ -865,6 +888,7 @@ export class BuilderPlanningSessionService {
       projectId: identity.projectId,
       plannerSessionId: identity.sessionId,
       userId: identity.userId,
+      preparedFromUserInputId,
       source: request.source,
       plan: request.plan,
       assignmentIds: [...request.assignmentIds].sort(),
@@ -879,9 +903,11 @@ export class BuilderPlanningSessionService {
       briefs,
       plannerSessionId: identity.sessionId,
       userId: identity.userId,
+      preparedFromUserInputId,
       status: "pending" as const,
       preparedAt,
       confirmedAt: null,
+      confirmedByUserInputId: null,
       confirmationSource: null,
     };
     const consent = {
@@ -943,6 +969,7 @@ export class BuilderPlanningSessionService {
     identity: PlanningSessionIdentity,
     request: OpenPlanningFanoutRequest,
     briefs: readonly AgentBriefVersionRecord[],
+    acceptedUserInputId: string,
   ): PlanningFanoutConsent {
     const consent = aggregate.buildPlanning.fanoutConsents.find(
       (entry) => entry.consentId === request.consentId,
@@ -968,6 +995,11 @@ export class BuilderPlanningSessionService {
       !same(consent.briefs, this.consentBriefs(briefs))
     )
       throw new BuilderPlanningSessionError("stale_consent");
+    if (
+      consent.status === "pending" &&
+      acceptedUserInputId === consent.preparedFromUserInputId
+    )
+      throw new BuilderPlanningSessionError("user_reply_required");
     return consent;
   }
 
@@ -994,6 +1026,7 @@ export class BuilderPlanningSessionService {
     request: OpenPlanningFanoutRequest,
   ): Promise<PlanningFanoutOpenResponse> {
     this.assertPlanner(identity);
+    const acceptedUserInputId = await this.acceptedPlannerUserInputId(identity);
     // Expensive completeness validation is a preflight only. The serialized
     // transaction below repeats every mutable source/plan/brief check before it
     // creates or reuses a binding claim. The caller's assertion of readiness is
@@ -1004,6 +1037,7 @@ export class BuilderPlanningSessionService {
       identity,
       request,
       preflight.briefs,
+      acceptedUserInputId,
     );
     const timestamp = this.now();
     const claimed = await this.options.workspaceStore.transact(
@@ -1015,6 +1049,7 @@ export class BuilderPlanningSessionService {
           identity,
           request,
           exact.briefs,
+          acceptedUserInputId,
         );
         const confirmedConsent: PlanningFanoutConsent =
           consent.status === "confirmed"
@@ -1024,6 +1059,7 @@ export class BuilderPlanningSessionService {
                   ...consent,
                   status: "confirmed" as const,
                   confirmedAt: timestamp,
+                  confirmedByUserInputId: acceptedUserInputId,
                   confirmationSource: "planner-attested-conversation" as const,
                 };
                 const { consentDigest: priorDigest, ...projection } = confirmed;
