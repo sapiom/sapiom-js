@@ -1,10 +1,10 @@
 import type { AgentMapGraph, PlanNode } from "../shared/agent-map.js";
 import type {
   AgentBriefRef,
-  AgentBriefVersionRecord,
   BuilderBootstrapContext,
   BuilderBootstrapDigest,
   BuildMilestone,
+  PersistedAgentBriefVersionRecord,
   ProjectBuildPlanVersion,
 } from "../shared/build-plan.js";
 import {
@@ -56,7 +56,7 @@ const summary = (node: PlanNode) => ({
   contractRefs: [...node.contractRefs].sort(compare),
 });
 
-function relevantMilestones(
+export function selectRelevantMilestones(
   plan: ProjectBuildPlanVersion,
   selectedIds: readonly string[],
 ): BuildMilestone[] {
@@ -64,7 +64,10 @@ function relevantMilestones(
     plan.milestones.map((entry) => [entry.milestoneId, entry]),
   );
   const selected = new Set(selectedIds);
+  const visited = new Set<string>();
   const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    visited.add(id);
     const milestone = index.get(id as BuildMilestone["milestoneId"]);
     if (!milestone) return;
     selected.add(id);
@@ -87,7 +90,7 @@ function relevantMilestones(
 export function createBuilderBootstrapContext(input: {
   plan: ProjectBuildPlanVersion;
   graph: AgentMapGraph;
-  brief: AgentBriefVersionRecord;
+  brief: PersistedAgentBriefVersionRecord;
   briefRef?: AgentBriefRef;
 }): BuilderBootstrapContext {
   const { plan, graph, brief } = input;
@@ -117,7 +120,10 @@ export function createBuilderBootstrapContext(input: {
     brief: briefRef,
     project: {
       outcome: plan.outcome.summary,
-      relevantMilestones: relevantMilestones(plan, assignment.milestoneIds),
+      relevantMilestones: selectRelevantMilestones(
+        plan,
+        assignment.milestoneIds,
+      ),
       sharedConstraints: byId(
         plan.sharedConstraints,
         (entry) => entry.constraintId,
@@ -180,7 +186,7 @@ export function createBuilderBootstrapContext(input: {
   return result;
 }
 
-/** SAP-3074 may place this canonical, escaped payload inside trusted delimiters. */
+/** Serialize the canonical assignment data inside explicit untrusted delimiters. */
 export function serializeBuilderBootstrapContext(
   context: BuilderBootstrapContext,
 ): string {

@@ -1,7 +1,6 @@
 import type { AgentMapGraph, PlanNodeId } from "../shared/agent-map.js";
 import type {
   AgentBriefId,
-  AgentBriefVersionRecord,
   AssignmentImpact,
   BriefStaleReason,
   BuildPlanImpactEvaluator,
@@ -9,8 +8,14 @@ import type {
   DependencyFingerprint,
   DependencyFingerprintKind,
   ImpactDigest,
+  PersistedAgentBriefVersionRecord,
   PlanContractId,
   ProjectBuildPlanVersion,
+} from "../shared/build-plan.js";
+import {
+  BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+  BUILD_PLAN_IMPACT_REASON_ID_LIMIT,
+  BUILD_PLAN_MAX_IMPACT_BYTES,
 } from "../shared/build-plan.js";
 import type { PlanRelationshipId } from "../shared/agent-map.js";
 import {
@@ -118,13 +123,37 @@ function graphChanges(previous: AgentMapGraph, next: AgentMapGraph) {
       canonicalJson(previousContracts.get(id) ?? []) !==
       canonicalJson(nextContracts.get(id) ?? []),
   ) as unknown as PlanContractId[];
-  return { changedNodeIds, changedRelationshipIds, changedContractIds };
+  return {
+    changedNodeIds: changedNodeIds.slice(0, BUILD_PLAN_IMPACT_ID_LIST_LIMIT),
+    changedRelationshipIds: changedRelationshipIds.slice(
+      0,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
+    changedContractIds: changedContractIds.slice(
+      0,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
+  };
 }
 
 function fingerprintReasons(
-  previous: AgentBriefVersionRecord,
-  next: AgentBriefVersionRecord,
+  previous: PersistedAgentBriefVersionRecord,
+  next: PersistedAgentBriefVersionRecord,
+  changes: ReturnType<typeof graphChanges>,
 ): BriefStaleReason[] {
+  if (previous.schemaVersion === 1 || next.schemaVersion === 1)
+    return previous.semanticDigest === next.semanticDigest
+      ? []
+      : [
+          {
+            code: "assignment-content-changed",
+            affectedNodeIds: [next.plannedAgentId],
+            affectedRelationshipIds: [],
+            affectedContractIds: [],
+            previousFingerprint: previous.semanticDigest,
+            currentFingerprint: next.semanticDigest,
+          },
+        ];
   const previousIndex = new Map(
     previous.dependencyFingerprints.map((entry) => [entry.kind, entry]),
   );
@@ -139,15 +168,36 @@ function fingerprintReasons(
       const entries = [before, after].filter(
         (entry): entry is DependencyFingerprint => entry !== undefined,
       );
+      const graphDerived = ![
+        "milestones",
+        "shared-plan-content",
+        "assignment-content",
+      ].includes(kind);
+      const affected = <T extends string>(
+        values: readonly T[],
+        changed: readonly string[],
+      ) => {
+        const canonical = unique(values);
+        return (
+          graphDerived
+            ? canonical.filter((id) => changed.includes(id))
+            : canonical
+        ).slice(0, BUILD_PLAN_IMPACT_REASON_ID_LIMIT);
+      };
       return [
         {
           code: reasonCode(kind),
-          affectedNodeIds: unique(entries.flatMap((entry) => entry.nodeIds)),
-          affectedRelationshipIds: unique(
-            entries.flatMap((entry) => entry.relationshipIds),
+          affectedNodeIds: affected(
+            entries.flatMap((entry) => entry.nodeIds),
+            changes.changedNodeIds,
           ),
-          affectedContractIds: unique(
+          affectedRelationshipIds: affected(
+            entries.flatMap((entry) => entry.relationshipIds),
+            changes.changedRelationshipIds,
+          ),
+          affectedContractIds: affected(
             entries.flatMap((entry) => entry.contractIds),
+            changes.changedContractIds,
           ),
           ...(before ? { previousFingerprint: before.digest } : {}),
           ...(after ? { currentFingerprint: after.digest } : {}),
@@ -157,15 +207,115 @@ function fingerprintReasons(
   );
 }
 
+type ImpactWithoutDigest = Omit<BuildPlanImpactResult, "digest">;
+
+function sealImpact(value: ImpactWithoutDigest): BuildPlanImpactResult {
+  return {
+    ...value,
+    digest: computeCanonicalDigest(
+      "sapiom.build-plan-impact.v1",
+      value,
+    ) as ImpactDigest,
+  };
+}
+
+function projectImpact(
+  value: ImpactWithoutDigest,
+  options: Readonly<{
+    includeFingerprints: boolean;
+    reasonIdLimit: number;
+    changedIdLimit: number;
+  }>,
+): ImpactWithoutDigest {
+  return {
+    ...value,
+    assignmentChanges: value.assignmentChanges.map((assignment) => ({
+      ...assignment,
+      reasons: assignment.reasons.map((reason) => ({
+        code: reason.code,
+        affectedNodeIds: reason.affectedNodeIds.slice(0, options.reasonIdLimit),
+        affectedRelationshipIds: reason.affectedRelationshipIds.slice(
+          0,
+          options.reasonIdLimit,
+        ),
+        affectedContractIds: reason.affectedContractIds.slice(
+          0,
+          options.reasonIdLimit,
+        ),
+        ...(options.includeFingerprints && reason.previousFingerprint
+          ? { previousFingerprint: reason.previousFingerprint }
+          : {}),
+        ...(options.includeFingerprints && reason.currentFingerprint
+          ? { currentFingerprint: reason.currentFingerprint }
+          : {}),
+      })),
+    })),
+    changedNodeIds: value.changedNodeIds.slice(0, options.changedIdLimit),
+    changedRelationshipIds: value.changedRelationshipIds.slice(
+      0,
+      options.changedIdLimit,
+    ),
+    changedContractIds: value.changedContractIds.slice(
+      0,
+      options.changedIdLimit,
+    ),
+  };
+}
+
+/**
+ * Keep every affected assignment, disposition, and reason code while reducing
+ * repeated evidence deterministically enough to fit an idempotency receipt.
+ */
+function boundBuildPlanImpact(
+  value: ImpactWithoutDigest,
+): BuildPlanImpactResult {
+  const fits = (candidate: BuildPlanImpactResult) =>
+    Buffer.byteLength(canonicalJson(candidate), "utf8") <=
+    BUILD_PLAN_MAX_IMPACT_BYTES;
+  const exact = sealImpact(value);
+  if (fits(exact)) return exact;
+
+  for (const reasonIdLimit of [16, 8, 4, 2, 1, 0]) {
+    const candidate = sealImpact(
+      projectImpact(value, {
+        includeFingerprints: false,
+        reasonIdLimit,
+        changedIdLimit: BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+      }),
+    );
+    if (fits(candidate)) return candidate;
+  }
+  for (const changedIdLimit of [64, 32, 16, 8, 4, 2, 1, 0]) {
+    const candidate = sealImpact(
+      projectImpact(value, {
+        includeFingerprints: false,
+        reasonIdLimit: 0,
+        changedIdLimit,
+      }),
+    );
+    if (fits(candidate)) return candidate;
+  }
+  const evidenceFree = sealImpact(
+    projectImpact(value, {
+      includeFingerprints: false,
+      reasonIdLimit: 0,
+      changedIdLimit: 0,
+    }),
+  );
+  if (!fits(evidenceFree))
+    throw new Error("canonical build-plan impact exceeds its byte budget");
+  return evidenceFree;
+}
+
 export function evaluateBuildPlanImpact(input: {
   previousSource: ProjectBuildPlanVersion["source"];
   nextSource: ProjectBuildPlanVersion["source"];
-  briefs: readonly AgentBriefVersionRecord[];
+  briefs: readonly PersistedAgentBriefVersionRecord[];
   previousPlan: ProjectBuildPlanVersion;
   nextPlan: ProjectBuildPlanVersion;
   previousGraph: AgentMapGraph;
   nextGraph: AgentMapGraph;
-  nextBriefs: readonly AgentBriefVersionRecord[];
+  nextBriefs: readonly PersistedAgentBriefVersionRecord[];
 }): BuildPlanImpactResult {
   const previous = new Map(
     input.briefs.map((brief) => [brief.plannedAgentId, brief]),
@@ -220,7 +370,7 @@ export function evaluateBuildPlanImpact(input: {
       });
       continue;
     }
-    const reasons = fingerprintReasons(before!, after!);
+    const reasons = fingerprintReasons(before!, after!, changes);
     const presentationChanged =
       reasons.length === 0 &&
       changes.changedNodeIds.some(
@@ -257,13 +407,7 @@ export function evaluateBuildPlanImpact(input: {
       removedAgentIds.length > 0 ||
       assignmentChanges.some((entry) => entry.reasons.length > 0),
   };
-  return {
-    ...withoutDigest,
-    digest: computeCanonicalDigest(
-      "sapiom.build-plan-impact.v1",
-      withoutDigest,
-    ) as ImpactDigest,
-  };
+  return boundBuildPlanImpact(withoutDigest);
 }
 
 export class CanonicalBuildPlanImpactEvaluator implements BuildPlanImpactEvaluator {

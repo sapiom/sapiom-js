@@ -9,7 +9,10 @@ import type {
   PlanNodeId,
   PlanningSessionIdentity,
 } from "../shared/agent-map.js";
-import type { ArchitectureSourceRef } from "../shared/build-plan.js";
+import type {
+  AgentBriefVersionRecord,
+  ArchitectureSourceRef,
+} from "../shared/build-plan.js";
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import { BuildPlanContractValidator } from "./build-plan-contract-validator.js";
@@ -300,7 +303,9 @@ describe("BuildPlanService", () => {
       operations: baseOperations,
     });
     compiler.mockImplementation(async ({ currentBriefs }) => ({
-      briefs: currentBriefs,
+      briefs: currentBriefs.filter(
+        (brief): brief is AgentBriefVersionRecord => brief.schemaVersion === 2,
+      ),
       changes: currentBriefs.map((brief) => ({
         plannedAgentId: brief.plannedAgentId,
         change: "preserved",

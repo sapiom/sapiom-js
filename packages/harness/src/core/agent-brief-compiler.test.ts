@@ -62,6 +62,8 @@ describe("agent brief compiler", () => {
     const marketing = result.briefs.find(
       (entry) => entry.plannedAgentId === MARKETING_ID,
     )!;
+    if (research.brief.schemaVersion !== 2)
+      throw new Error("expected v2 brief");
     expect(research.brief.ownedNodeIds).toEqual(
       [RESEARCH_ID, ANALYST_ID].sort(),
     );
@@ -133,16 +135,16 @@ describe("agent brief compiler", () => {
       impactDigest: result.impact.digest,
     }).toEqual({
       briefSemanticDigests: [
-        "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
-        "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+        "sha256:7a542ea3bc010f2613c387b8cd673550d9cb6ca7293f82ecf2b4d7ffd8a29541",
+        "sha256:72251a62f1ce57781c6127566c7d54faa56f25337b2ba236f80b70ae2ec97376",
       ],
       briefRecordDigests: [
-        "sha256:9afc89433a3bae3590c3a65f916acb636213d255a386ce444e5d2b6d316fae38",
-        "sha256:ea608d0ea468aa5952cc0db91793abbf3a7621f49f0c29bdcd0996bbe6f86469",
+        "sha256:34d1b8b6c72ed32fc7a86e2a755fde1b7b1a9b71b4ca59ce643e97cc0c8bbb0c",
+        "sha256:ea64d0d26ee91295f36ec9bad2cc22724c808ba0f9db5edc8c164038d9f44736",
       ],
       bootstrapDigests: [
-        "sha256:bc66bf9db1260f15b4f0f091887178b899888a645b5bb535c602e46fd13c888b",
-        "sha256:c3077bb88e615695b71f4d81f4b1d7d12571032d102ef941a345acc44eeaaeb1",
+        "sha256:d054723372496ce99a594bafe250dd2daef1484ccbf289045068554e99b16afc",
+        "sha256:8d11e411bda6ad1e0b38c753af9dc352a8988d7714fbb6b9457a234df7956bc8",
       ],
       impactDigest:
         "sha256:e9c8e3b27102a5fb8f2b194bd6c4482d2f670949f0b40325eb39a022fc4795ab",
@@ -200,6 +202,52 @@ describe("agent brief compiler", () => {
     );
     expect(result.diagnostics.every((entry) => entry.path.length > 0)).toBe(
       true,
+    );
+  });
+
+  it("rejects disconnected carriers that merely share a contract reference", () => {
+    const graph = stockResearchGraph();
+    const disconnectedReportId =
+      "node_10000000-0000-7000-8000-000000000008" as PlanNodeId;
+    graph.nodes.push({
+      id: disconnectedReportId,
+      kind: "artifact",
+      name: "DisconnectedResearchReport",
+      purpose: "A different artifact with the same contract label",
+      ownerAgentId: null,
+      contractRefs: [REPORT_CONTRACT],
+    });
+    graph.relationships[1] = {
+      ...graph.relationships[1]!,
+      toNodeId: disconnectedReportId,
+    };
+    const plan = stockResearchPlan(graph);
+    const result = compileAgentBriefs({
+      projectId: STOCK_PROJECT_ID,
+      source: plan.source,
+      graph,
+      plan,
+      assignments: stockAssignments(),
+    });
+
+    expect(result.completeness.status).toBe("incomplete");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "incompatible-contract-direction",
+        path: "graph.relationships.contractRef",
+        relatedIds: expect.arrayContaining([
+          REPORT_CONTRACT,
+          RESEARCH_ID,
+          MARKETING_ID,
+        ]),
+      }),
+    );
+    expect(
+      result.briefs.flatMap((candidate) => candidate.brief.dependencies),
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ contractIds: [REPORT_CONTRACT] }),
+      ]),
     );
   });
 
@@ -341,14 +389,12 @@ describe("agent brief compiler", () => {
     });
     expect(forward.diagnostics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: "previous.briefs[2].plannedAgentId" }),
-        expect.objectContaining({ path: "assignments[2]" }),
+        expect.objectContaining({ path: "previous.briefs[1].plannedAgentId" }),
+        expect.objectContaining({ path: "assignments[1]" }),
       ]),
     );
     expect(canonicalJson(forward.briefs)).toBe(canonicalJson(reversed.briefs));
-    expect(forward.diagnostics.map((entry) => entry.code)).toEqual(
-      reversed.diagnostics.map((entry) => entry.code),
-    );
+    expect(forward.diagnostics).toEqual(reversed.diagnostics);
   });
 
   it("accepts exact historical plan lineage and rejects forged or unknown brief refs", () => {

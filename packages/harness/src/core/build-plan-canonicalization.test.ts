@@ -21,10 +21,10 @@ describe("build planning canonical digests", () => {
       "sha256:c1cebc5b437ab52c744b2fe058264510a26e11fe02c24d048c9e6ad52844325d",
     );
     expect(brief.semanticDigest).toBe(
-      "sha256:b4e925bd84f82307fcaecf17c451f40ee87e85aa98fdfed78a7948fb42c6649b",
+      "sha256:46e02c0cb4a8d2a0a15091e06306f79f4a7adc68214f85cbf753df1c30373b00",
     );
     expect(brief.recordDigest).toBe(
-      "sha256:850ca89585121d0281d78fc597c4c99c665cfa85b36e1d5cadb94b5d7a3f13d6",
+      "sha256:26a3296e951a33e154cc5f6e9f5836ce1540e5b154a36482587ac679599a0304",
     );
   });
 

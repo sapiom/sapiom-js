@@ -9,6 +9,7 @@ import type {
   GraphDigest,
   PlanningSubmissionDigest,
   PlanningAssignmentRecord,
+  PersistedAgentBriefVersionRecord,
   ProjectBuildPlanVersion,
   RecordDigest,
 } from "../shared/build-plan.js";
@@ -125,9 +126,63 @@ export const computeBuildPlanRecordDigest = (
     omit(plan, ["recordDigest"]),
   ) as RecordDigest;
 
+/** Exact digest projection used by immutable v1 records. */
+export function legacyAgentBriefSemanticProjection(
+  brief: Extract<PersistedAgentBriefVersionRecord, { schemaVersion: 1 }>,
+) {
+  return {
+    schemaVersion: brief.schemaVersion,
+    projectId: brief.projectId,
+    plannedAgentId: brief.plannedAgentId,
+    plan: {
+      planId: brief.plan.planId,
+      semanticDigest: brief.plan.semanticDigest,
+    },
+    mission: brief.mission,
+    scope: {
+      inScope: [...brief.scope.inScope].sort(compare),
+      nonGoals: [...brief.scope.nonGoals].sort(compare),
+    },
+    ownedNodeIds: [...brief.ownedNodeIds].sort(compare),
+    relevantNodeIds: [...brief.relevantNodeIds].sort(compare),
+    inputs: by(
+      brief.inputs,
+      (entry) => `${entry.contractId}\0${entry.nodeId}`,
+    ).map((entry) => ({
+      ...entry,
+      relationshipIds: [...entry.relationshipIds].sort(compare),
+    })),
+    outputs: by(
+      brief.outputs,
+      (entry) => `${entry.contractId}\0${entry.nodeId}`,
+    ).map((entry) => ({
+      ...entry,
+      relationshipIds: [...entry.relationshipIds].sort(compare),
+    })),
+    dependencies: by(brief.dependencies, (entry) => entry.dependencyId).map(
+      (entry) => ({
+        ...entry,
+        relationshipIds: [...entry.relationshipIds].sort(compare),
+        contractIds: [...entry.contractIds].sort(compare),
+        requiredByMilestoneIds: [...entry.requiredByMilestoneIds].sort(compare),
+      }),
+    ),
+    deliverables: deliverables(brief.deliverables),
+    acceptanceCriteria: ordered(brief.acceptanceCriteria),
+    constraints: constraints(brief.constraints),
+    milestones: [...brief.milestones].sort(compare),
+    unresolvedDecisions: decision(brief.unresolvedDecisions),
+    changeProtocol: {
+      ...brief.changeProtocol,
+      instructions: [...brief.changeProtocol.instructions],
+    },
+  };
+}
+
 export function agentBriefSemanticProjection(brief: AgentBriefVersionRecord) {
   return {
     schemaVersion: brief.schemaVersion,
+    digestVersion: brief.digestVersion,
     projectId: brief.projectId,
     plannedAgentId: brief.plannedAgentId,
     plan: { planId: brief.plan.planId },
@@ -189,18 +244,26 @@ export function agentBriefSemanticProjection(brief: AgentBriefVersionRecord) {
 }
 
 export const computeAgentBriefSemanticDigest = (
-  brief: AgentBriefVersionRecord,
-): AgentBriefSemanticDigest =>
-  computeCanonicalDigest(
-    "sapiom.agent-brief.semantic.v1",
+  brief: PersistedAgentBriefVersionRecord,
+): AgentBriefSemanticDigest => {
+  if (brief.schemaVersion === 1)
+    return computeCanonicalDigest(
+      "sapiom.agent-brief.semantic.v1",
+      legacyAgentBriefSemanticProjection(brief),
+    ) as AgentBriefSemanticDigest;
+  return computeCanonicalDigest(
+    "sapiom.agent-brief.semantic.v2",
     agentBriefSemanticProjection(brief),
   ) as AgentBriefSemanticDigest;
+};
 
 export const computeAgentBriefRecordDigest = (
-  brief: AgentBriefVersionRecord,
+  brief: PersistedAgentBriefVersionRecord,
 ): RecordDigest =>
   computeCanonicalDigest(
-    "sapiom.agent-brief.record.v1",
+    brief.schemaVersion === 1
+      ? "sapiom.agent-brief.record.v1"
+      : "sapiom.agent-brief.record.v2",
     omit(brief, ["recordDigest"]),
   ) as RecordDigest;
 

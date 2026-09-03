@@ -8,6 +8,7 @@ import type {
 import {
   architectureSourceRefsEqual,
   BUILD_PLAN_ID_MAPPING_LIMIT,
+  BUILD_PLAN_MAX_RESULT_BYTES,
   type AcceptanceCriterion,
   type AgentAssignmentIntent,
   type AgentBriefId,
@@ -22,6 +23,7 @@ import {
   type BuildPlanImpactResult,
   type BuildPlanRef,
   type PlanDecision,
+  type PersistedAgentBriefVersionRecord,
   type PlanningAssignmentId,
   type PlanningAssignmentRef,
   type ProjectBuildPlanVersion,
@@ -38,7 +40,10 @@ import {
   computeBuildPlanSemanticDigest,
 } from "./build-plan-canonicalization.js";
 import type { ExactArchitectureSourceResolver } from "./build-plan-contract-validator.js";
-import { BuildPlanContractValidator } from "./build-plan-contract-validator.js";
+import {
+  BuildPlanContractValidator,
+  computeBriefFreshness,
+} from "./build-plan-contract-validator.js";
 import {
   BuildPlanStore,
   BuildPlanStoreConflictError,
@@ -100,12 +105,12 @@ export interface AgentBriefCompileResult {
   compilation?: import("../shared/build-plan.js").CompileAgentBriefsResult;
 }
 
-/** SAP-3070 implements this boundary; this ticket only orchestrates it. */
+/** Focused-brief compilation boundary used by build-plan authoring. */
 export interface AgentBriefCompiler {
   compile(input: {
     plan: ProjectBuildPlanVersion;
     graph: AgentMapGraph;
-    currentBriefs: readonly AgentBriefVersionRecord[];
+    currentBriefs: readonly PersistedAgentBriefVersionRecord[];
     assignments: readonly PlanningAssignmentRef[];
     previousPlan?: ProjectBuildPlanVersion;
     previousGraph?: AgentMapGraph;
@@ -120,14 +125,14 @@ export class BuildPlanDependencyUnavailableError extends Error {
   }
 }
 
-/** Fail-closed production seam until SAP-3070 supplies the real compiler. */
+/** Fail-closed compiler for compositions that do not install authoring support. */
 export const unavailableAgentBriefCompiler: AgentBriefCompiler = {
   compile: async () => {
     throw new BuildPlanDependencyUnavailableError("brief-compiler");
   },
 };
 
-/** Fail-closed production seam until SAP-3070 supplies the real evaluator. */
+/** Fail-closed evaluator for compositions that do not install authoring support. */
 export const unavailableBuildPlanImpactEvaluator: BuildPlanImpactEvaluator = {
   evaluate: async () => {
     throw new BuildPlanDependencyUnavailableError("impact-evaluator");
@@ -147,7 +152,6 @@ export interface BuildPlanServiceDependencies {
   clock: Clock;
 }
 
-const BUILD_PLAN_MAX_RESULT_BYTES = 512_000;
 const requestDigest = (value: unknown): string =>
   `sha256:${createHash("sha256")
     .update("sapiom.build-plan.request.v1\0")
@@ -174,22 +178,27 @@ function assertPlanner(identity: PlanningSessionIdentity): void {
     throw new BuildPlanServiceError("forbidden_role");
 }
 
-function currentBriefs(
+export function currentEffectiveBriefs(
   planning: Awaited<ReturnType<BuildPlanStore["read"]>>,
-): AgentBriefVersionRecord[] {
+): PersistedAgentBriefVersionRecord[] {
   return Object.values(planning.currentBriefByAgentId)
     .map((ref) =>
       planning.briefVersionsById[ref.briefId]?.find(
         (brief) => brief.version === ref.version,
       ),
     )
-    .filter((brief): brief is AgentBriefVersionRecord => Boolean(brief));
+    .filter((brief): brief is PersistedAgentBriefVersionRecord =>
+      Boolean(brief),
+    )
+    .sort((left, right) =>
+      left.plannedAgentId.localeCompare(right.plannedAgentId),
+    );
 }
 
 function briefsForPlan(
   planning: Awaited<ReturnType<BuildPlanStore["read"]>>,
   plan: ProjectBuildPlanVersion,
-): AgentBriefVersionRecord[] {
+): PersistedAgentBriefVersionRecord[] {
   return Object.values(planning.briefVersionsById)
     .flat()
     .filter(
@@ -659,16 +668,20 @@ export class BuildPlanService {
       plan.version === planning.currentPlanVersion
         ? [
             ...new Map(
-              [...briefs, ...currentBriefs(planning)].map((brief) => [
+              [...briefs, ...currentEffectiveBriefs(planning)].map((brief) => [
                 `${brief.briefId}\0${brief.version}`,
                 brief,
               ]),
             ).values(),
           ]
         : briefs;
+    const effectiveBriefs =
+      plan.version === planning.currentPlanVersion
+        ? currentEffectiveBriefs(planning)
+        : briefs;
     const status = await this.dependencies.contractValidator.validate(
       plan,
-      briefs,
+      effectiveBriefs,
     );
     const include = new Set(
       input.include ?? [
@@ -712,7 +725,7 @@ export class BuildPlanService {
                   ?.briefId === brief.briefId &&
                 planning.currentBriefByAgentId[brief.plannedAgentId]
                   ?.version === brief.version &&
-                architectureSourceRefsEqual(brief.source, plan.source)
+                computeBriefFreshness(brief, plan.source).status === "current"
                   ? "current"
                   : "stale",
             })),
@@ -1039,7 +1052,7 @@ export class BuildPlanService {
     const compiled = await this.compileBriefs({
       plan: draft,
       graph: to.graph,
-      currentBriefs: currentBriefs(planning),
+      currentBriefs: currentEffectiveBriefs(planning),
       assignments: assignmentsForCompile,
       previousPlan: current!,
       previousGraph: from.graph,
@@ -1047,14 +1060,14 @@ export class BuildPlanService {
     });
     const committableBriefs = this.committableBriefs(draft, compiled.briefs);
     const effectiveBriefs = this.effectiveBriefs(
-      currentBriefs(planning),
+      currentEffectiveBriefs(planning),
       committableBriefs,
       draft,
     );
     const impacts = await this.evaluateImpact({
       previousSource: from.source,
       nextSource: to.source,
-      briefs: currentBriefs(planning),
+      briefs: currentEffectiveBriefs(planning),
       previousPlan: current!,
       nextPlan: draft,
       previousGraph: from.graph,
@@ -1271,7 +1284,7 @@ export class BuildPlanService {
     const compiled = await this.compileBriefs({
       plan: draft,
       graph: source.graph,
-      currentBriefs: currentBriefs(planning),
+      currentBriefs: currentEffectiveBriefs(planning),
       assignments: assignmentsForCompile,
       ...(current
         ? {
@@ -1283,7 +1296,7 @@ export class BuildPlanService {
     });
     const committableBriefs = this.committableBriefs(draft, compiled.briefs);
     const effectiveBriefs = this.effectiveBriefs(
-      currentBriefs(planning),
+      currentEffectiveBriefs(planning),
       committableBriefs,
       draft,
     );
@@ -1714,10 +1727,10 @@ export class BuildPlanService {
   }
 
   private effectiveBriefs(
-    current: readonly AgentBriefVersionRecord[],
+    current: readonly PersistedAgentBriefVersionRecord[],
     committable: readonly AgentBriefVersionRecord[],
     plan: ProjectBuildPlanVersion,
-  ): AgentBriefVersionRecord[] {
+  ): PersistedAgentBriefVersionRecord[] {
     const active = new Set(
       plan.assignments.map((entry) => entry.plannedAgentId),
     );

@@ -19,6 +19,7 @@ import {
   BRIEF_ID,
   graph,
   makeBrief,
+  makeLegacyBrief,
   makePlan,
   PROJECT_ID,
   proposalSource,
@@ -172,6 +173,62 @@ describe("BuildPlanStore", () => {
         planning.currentBriefByAgentId[AGENT_ID]!,
       ),
     ).toEqual(brief);
+  });
+
+  it("reads legacy v1 brief history and appends v2 without rewriting it", async () => {
+    const { root, buildPlanStore } = await fixture();
+    const plan = makePlan();
+    const created = await buildPlanStore.commitPlanVersion(
+      plan,
+      graph,
+      request,
+    );
+    const legacy = makeLegacyBrief(plan, {
+      briefId: created.assignments[0]!.briefId,
+      assignmentId: created.assignments[0]!.assignmentId,
+    });
+    const file = path.join(root, "projects", PROJECT_ID, "workspace.json");
+    const persisted = JSON.parse(await fs.readFile(file, "utf8")) as {
+      buildPlanning: {
+        currentBriefByAgentId: Record<string, unknown>;
+        briefVersionsById: Record<string, unknown[]>;
+      };
+    };
+    persisted.buildPlanning.briefVersionsById[legacy.briefId] = [legacy];
+    persisted.buildPlanning.currentBriefByAgentId[AGENT_ID] = {
+      briefId: legacy.briefId,
+      version: legacy.version,
+      semanticDigest: legacy.semanticDigest,
+    };
+    await fs.writeFile(file, `${JSON.stringify(persisted, null, 2)}\n`);
+
+    const restarted = new BuildPlanStore(new AgentMapWorkspaceStore(root));
+    const loaded = await restarted.read(PROJECT_ID);
+    expect(loaded.briefVersionsById[legacy.briefId]).toEqual([legacy]);
+
+    const upgraded = makeBrief(plan, {
+      briefId: legacy.briefId,
+      assignmentId: legacy.assignmentId,
+      version: 2 as AgentBriefVersion,
+      parentVersion: 1 as AgentBriefVersion,
+    });
+    await restarted.commitBriefVersions(PROJECT_ID, created.plan, [upgraded]);
+    const migrated = await restarted.read(PROJECT_ID);
+    expect(migrated.briefVersionsById[legacy.briefId]).toEqual([
+      legacy,
+      upgraded,
+    ]);
+    expect(migrated.currentBriefByAgentId[AGENT_ID]).toMatchObject({
+      briefId: legacy.briefId,
+      version: 2,
+      semanticDigest: upgraded.semanticDigest,
+    });
+    const written = JSON.parse(await fs.readFile(file, "utf8")) as {
+      buildPlanning: { briefVersionsById: Record<string, unknown[]> };
+    };
+    expect(
+      written.buildPlanning.briefVersionsById[legacy.briefId]?.[0],
+    ).toEqual(legacy);
   });
 
   it("revalidates record integrity when the on-disk file changes", async () => {

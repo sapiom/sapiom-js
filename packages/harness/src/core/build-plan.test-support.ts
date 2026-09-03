@@ -9,8 +9,13 @@ import type {
   AgentBriefVersionRecord,
   ArchitectureSourceRef,
   BuildPlanId,
+  LegacyAgentBriefVersionRecord,
   PlanningAssignmentId,
   ProjectBuildPlanVersion,
+} from "../shared/build-plan.js";
+import {
+  AGENT_BRIEF_DIGEST_VERSION,
+  AGENT_BRIEF_SCHEMA_VERSION,
 } from "../shared/build-plan.js";
 import {
   computeAgentBriefRecordDigest,
@@ -106,7 +111,8 @@ export function makeBrief(
   overrides: Partial<AgentBriefVersionRecord> = {},
 ): AgentBriefVersionRecord {
   const draft = {
-    schemaVersion: 1,
+    schemaVersion: AGENT_BRIEF_SCHEMA_VERSION,
+    digestVersion: AGENT_BRIEF_DIGEST_VERSION,
     projectId: PROJECT_ID,
     briefId: BRIEF_ID,
     version: 1,
@@ -149,6 +155,35 @@ export function makeBrief(
     createdAt: "2026-09-03T09:00:00.000Z",
     ...overrides,
   } as AgentBriefVersionRecord;
+  draft.semanticDigest = computeAgentBriefSemanticDigest(draft);
+  draft.recordDigest = computeAgentBriefRecordDigest(draft);
+  return draft;
+}
+
+export function makeLegacyBrief(
+  plan: ProjectBuildPlanVersion,
+  overrides: Partial<LegacyAgentBriefVersionRecord> = {},
+): LegacyAgentBriefVersionRecord {
+  const current = makeBrief(plan);
+  const common: Partial<AgentBriefVersionRecord> = { ...current };
+  delete common.digestVersion;
+  const withoutExecutionModes = (ports: typeof current.inputs) =>
+    ports.map(({ executionModes: _executionModes, ...port }) => port);
+  const draft = {
+    ...common,
+    schemaVersion: 1 as const,
+    inputs: withoutExecutionModes(current.inputs),
+    outputs: withoutExecutionModes(current.outputs),
+    compilerVersion: "legacy-compiler-v1",
+    dependencyFingerprints: [
+      {
+        kind: "node" as const,
+        id: AGENT_ID,
+        digest: `sha256:${"1".repeat(64)}`,
+      },
+    ],
+    ...overrides,
+  } as LegacyAgentBriefVersionRecord;
   draft.semanticDigest = computeAgentBriefSemanticDigest(draft);
   draft.recordDigest = computeAgentBriefRecordDigest(draft);
   return draft;

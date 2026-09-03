@@ -12,6 +12,7 @@ export {
 } from "./shared/agent-map.js";
 export type {
   AcceptedProposalDelta,
+  AgentMapGraph,
   ExecutionMode,
   MapOperation,
   MapProposalId,
@@ -28,43 +29,21 @@ export type {
   StudioProjectId,
 } from "./shared/agent-map.js";
 export {
+  AGENT_BRIEF_DIGEST_VERSION,
+  AGENT_BRIEF_SCHEMA_VERSION,
   BUILD_PLAN_SCHEMA_VERSION,
   architectureSourceRefsEqual,
 } from "./shared/build-plan.js";
-// Deliberate v1 planning handoff surface. Keep this list explicit, but include
-// every branded/member type needed to construct and consume the six records.
+// Export the compiler's full type graph so package-root consumers never need
+// private source imports.
+export type * from "./shared/build-plan.js";
 export type {
-  AgentBriefId,
-  AgentBriefRef,
-  AgentBriefSemanticDigest,
-  AgentBriefVersion,
-  AgentMapRevisionId,
-  ArchitectureSourceRef,
-  BuilderPlanningContextRef,
-  BuilderBootstrapContext,
-  BuilderBootstrapDigest,
-  BuildPlanImpactResult,
-  CompileAgentBriefsRequest,
-  CompileAgentBriefsResult,
-  CompiledBriefCandidate,
-  DependencyFingerprintKind,
-  BuilderPlanningSubmission,
-  BuilderPlanningSubmissionId,
-  BuildPlanId,
-  BuildPlanRef,
-  BuildPlanSemanticDigest,
-  BuildPlanVersion,
-  GraphDigest,
-  ImplementationPlanStep,
-  PlanningAssignmentId,
-  PlanningAssignmentRef,
-  PlanningQuestion,
-  PlanningRisk,
-  PlanningSubmissionDigest,
-  RecordDigest,
-} from "./shared/build-plan.js";
+  AgentBriefCompiler,
+  AgentBriefCompileResult,
+} from "./core/build-plan-service.js";
 export {
   AGENT_BRIEF_COMPILER_VERSION,
+  AgentBriefCompilationError,
   compileAgentBriefs,
   DeterministicAgentBriefCompiler,
 } from "./core/agent-brief-compiler.js";
@@ -74,6 +53,9 @@ export {
 } from "./core/build-plan-impact-evaluator.js";
 export {
   BUILDER_BOOTSTRAP_MAX_BYTES,
+  BUILDER_BOOTSTRAP_MAX_LIST_LENGTH,
+  BUILDER_BOOTSTRAP_MAX_STRING_LENGTH,
+  BuilderBootstrapLimitError,
   createBuilderBootstrapContext,
   serializeBuilderBootstrapContext,
 } from "./core/builder-bootstrap-context.js";
@@ -103,8 +85,8 @@ export type {
   ExternalHarnessAdapterInfo,
 } from "./core/adapters/adapter.js";
 
-// Embedding surface (SAP: harness-desktop) — lets a second host (the Electron
-// app) reuse the exact server + setup flow the CLI (`bin.ts`) runs, instead of
+// Embedding surface — lets a second host reuse the exact server + setup flow
+// the CLI (`bin.ts`) runs, instead of
 // forking it. `ensureConsent`/`printDoctorReport` are intentionally NOT exported:
 // they are TTY-shaped, and a native host supplies `telemetryOptIn`/`consentSource`
 // to `startServer` directly — which is why `saveSettings` is exported too: a

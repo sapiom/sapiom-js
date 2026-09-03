@@ -12,7 +12,10 @@ import {
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
 } from "./build-plan-canonicalization.js";
-import { serializeBuilderBootstrapContext } from "./builder-bootstrap-context.js";
+import {
+  selectRelevantMilestones,
+  serializeBuilderBootstrapContext,
+} from "./builder-bootstrap-context.js";
 
 describe("builder bootstrap context", () => {
   it("is allowlisted, canonical, exact-ref bound, and keeps adversarial plan text as data", () => {
@@ -95,5 +98,31 @@ describe("builder bootstrap context", () => {
       }),
     );
     expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("bounds milestone traversal even when an unparsed caller supplies a cycle", () => {
+    const graph = stockResearchGraph();
+    const first = "milestone_00000000-0000-7000-8000-000000000021" as never;
+    const second = "milestone_00000000-0000-7000-8000-000000000022" as never;
+    const plan = stockResearchPlan(graph, {
+      milestones: [
+        {
+          milestoneId: first,
+          ordinal: 1,
+          title: "First",
+          outcome: "First is ready",
+          dependsOn: [second],
+        },
+        {
+          milestoneId: second,
+          ordinal: 2,
+          title: "Second",
+          outcome: "Second is ready",
+          dependsOn: [first],
+        },
+      ],
+    });
+
+    expect(selectRelevantMilestones(plan, [first])).toEqual(plan.milestones);
   });
 });

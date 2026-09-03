@@ -8,7 +8,14 @@ import type {
 
 export const BUILD_PLAN_SCHEMA_VERSION = 1 as const;
 export const BUILD_PLANNING_AGGREGATE_SCHEMA_VERSION = 1 as const;
+export const AGENT_BRIEF_SCHEMA_VERSION = 2 as const;
+export const AGENT_BRIEF_DIGEST_VERSION = 2 as const;
 export const BUILD_PLAN_ID_MAPPING_LIMIT = 128;
+export const BUILD_PLAN_IMPACT_ASSIGNMENT_LIMIT = 256;
+export const BUILD_PLAN_IMPACT_ID_LIST_LIMIT = 128;
+export const BUILD_PLAN_IMPACT_REASON_ID_LIMIT = 16;
+export const BUILD_PLAN_MAX_IMPACT_BYTES = 320_000;
+export const BUILD_PLAN_MAX_RESULT_BYTES = 512_000;
 export const BUILD_PLAN_VERSION_HISTORY_LIMIT = 1_024;
 export const AGENT_BRIEF_VERSION_HISTORY_LIMIT = 1_024;
 export const PLANNING_SUBMISSION_HISTORY_LIMIT = 1_024;
@@ -218,6 +225,14 @@ export interface BriefContractPort {
   description: string;
 }
 
+/** Exact contract-port shape used by immutable v1 brief records. */
+export interface LegacyBriefContractPort {
+  contractId: PlanContractId;
+  nodeId: PlanNodeId;
+  relationshipIds: readonly PlanRelationshipId[];
+  description: string;
+}
+
 export interface BriefDependency {
   dependencyId: BriefDependencyId;
   kind:
@@ -254,13 +269,19 @@ export interface DependencyFingerprint {
   contractIds: readonly PlanContractId[];
 }
 
+/** Persisted only for exact v1 aggregate compatibility. */
+export interface LegacyDependencyFingerprint {
+  kind: "node" | "relationship" | "contract" | "plan";
+  id: string;
+  digest: string;
+}
+
 export interface BriefChangeProtocol {
   proposeArchitectureChanges: boolean;
   instructions: readonly string[];
 }
 
-export interface AgentBriefVersionRecord {
-  schemaVersion: typeof BUILD_PLAN_SCHEMA_VERSION;
+interface AgentBriefVersionRecordFields {
   projectId: StudioProjectId;
   briefId: AgentBriefId;
   version: AgentBriefVersion;
@@ -273,8 +294,6 @@ export interface AgentBriefVersionRecord {
   scope: Readonly<{ inScope: readonly string[]; nonGoals: readonly string[] }>;
   ownedNodeIds: readonly PlanNodeId[];
   relevantNodeIds: readonly PlanNodeId[];
-  inputs: readonly BriefContractPort[];
-  outputs: readonly BriefContractPort[];
   dependencies: readonly BriefDependency[];
   deliverables: readonly BriefDeliverable[];
   acceptanceCriteria: readonly AcceptanceCriterion[];
@@ -283,12 +302,32 @@ export interface AgentBriefVersionRecord {
   unresolvedDecisions: readonly PlanDecision[];
   changeProtocol: BriefChangeProtocol;
   compilerVersion: string;
-  dependencyFingerprints: readonly DependencyFingerprint[];
   semanticDigest: AgentBriefSemanticDigest;
   recordDigest: RecordDigest;
   authoredBy: PlanningActorRef;
   createdAt: string;
 }
+
+/** Current compiler output. Its schema and digest projection are explicitly v2. */
+export interface AgentBriefVersionRecord extends AgentBriefVersionRecordFields {
+  schemaVersion: typeof AGENT_BRIEF_SCHEMA_VERSION;
+  digestVersion: typeof AGENT_BRIEF_DIGEST_VERSION;
+  inputs: readonly BriefContractPort[];
+  outputs: readonly BriefContractPort[];
+  dependencyFingerprints: readonly DependencyFingerprint[];
+}
+
+/** Exact immutable shape emitted before categorized fingerprints shipped. */
+export interface LegacyAgentBriefVersionRecord extends AgentBriefVersionRecordFields {
+  schemaVersion: typeof BUILD_PLAN_SCHEMA_VERSION;
+  inputs: readonly LegacyBriefContractPort[];
+  outputs: readonly LegacyBriefContractPort[];
+  dependencyFingerprints: readonly LegacyDependencyFingerprint[];
+}
+
+export type PersistedAgentBriefVersionRecord =
+  | AgentBriefVersionRecord
+  | LegacyAgentBriefVersionRecord;
 
 export interface BuildPlanDiagnostic {
   code:
@@ -441,7 +480,7 @@ export interface CompiledBriefCandidate {
     | "source-rebound"
     | "unchanged"
     | "retired";
-  brief: AgentBriefVersionRecord;
+  brief: PersistedAgentBriefVersionRecord;
   bootstrap: BuilderBootstrapContext;
 }
 
@@ -455,7 +494,7 @@ export interface CompileAgentBriefsRequest {
   previous?: Readonly<{
     plan: ProjectBuildPlanVersion;
     graph: import("./agent-map.js").AgentMapGraph;
-    briefs: readonly AgentBriefVersionRecord[];
+    briefs: readonly PersistedAgentBriefVersionRecord[];
     /** Exact bounded aggregate lineage against which historical briefs bind. */
     allowedPlanRefs?: readonly BuildPlanRef[];
   }>;
@@ -580,7 +619,7 @@ export interface BuildPlanningAggregateV1 {
   planVersions: readonly ProjectBuildPlanVersion[];
   currentBriefByAgentId: Readonly<Record<string, AgentBriefRef>>;
   briefVersionsById: Readonly<
-    Record<string, readonly AgentBriefVersionRecord[]>
+    Record<string, readonly PersistedAgentBriefVersionRecord[]>
   >;
   assignmentByAgentId: Readonly<Record<string, PlanningAssignmentRecord>>;
   submissionsByAssignmentId: Readonly<
@@ -594,12 +633,12 @@ export interface BuildPlanImpactEvaluator {
   evaluate(input: {
     previousSource: ArchitectureSourceRef;
     nextSource: ArchitectureSourceRef;
-    briefs: readonly AgentBriefVersionRecord[];
+    briefs: readonly PersistedAgentBriefVersionRecord[];
     previousPlan?: ProjectBuildPlanVersion;
     nextPlan?: ProjectBuildPlanVersion;
     previousGraph?: import("./agent-map.js").AgentMapGraph;
     nextGraph?: import("./agent-map.js").AgentMapGraph;
-    nextBriefs?: readonly AgentBriefVersionRecord[];
+    nextBriefs?: readonly PersistedAgentBriefVersionRecord[];
   }):
     | BuildPlanImpactResult
     | Readonly<Record<string, readonly BriefStaleReason[]>>

@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AGENT_BRIEF_DIGEST_VERSION,
+  AGENT_BRIEF_SCHEMA_VERSION,
   BUILD_PLAN_SCHEMA_VERSION,
+  AgentBriefCompilationError,
+  BuilderBootstrapLimitError,
+  CanonicalBuildPlanImpactEvaluator,
+  DeterministicAgentBriefCompiler,
   architectureSourceRefsEqual,
+  compileAgentBriefs,
+  type AgentMapGraph,
   type AgentBriefId,
   type AgentBriefRef,
   type AgentBriefSemanticDigest,
@@ -13,9 +21,12 @@ import {
   type BuilderPlanningSubmission,
   type BuilderPlanningSubmissionId,
   type BuildPlanId,
+  type BuildPlanDiagnostic,
   type BuildPlanRef,
   type BuildPlanSemanticDigest,
   type BuildPlanVersion,
+  type CompileAgentBriefsRequest,
+  type CompileAgentBriefsResult,
   type GraphDigest,
   type ImplementationPlanStep,
   type MapProposalId,
@@ -26,12 +37,13 @@ import {
   type PlanningSubmissionDigest,
   type PlanNodeId,
   type ProposalOperationId,
+  type ProjectBuildPlanVersion,
   type RecordDigest,
   type StudioProjectId,
 } from "@sapiom/harness";
 
 describe("@sapiom/harness build-planning entrypoint", () => {
-  it("constructs and consumes the complete v1 handoff surface", () => {
+  it("constructs and consumes the complete planning and compiler surface", () => {
     const graphDigest = `sha256:${"a".repeat(64)}` as GraphDigest;
     const source: ArchitectureSourceRef = {
       kind: "proposal",
@@ -124,5 +136,52 @@ describe("@sapiom/harness build-planning entrypoint", () => {
       plan,
       brief,
     });
+
+    const graph: AgentMapGraph = { nodes: [], relationships: [] };
+    const projectPlan: ProjectBuildPlanVersion = {
+      schemaVersion: BUILD_PLAN_SCHEMA_VERSION,
+      projectId: context.projectId,
+      planId: plan.planId,
+      version: plan.version,
+      parentVersion: null,
+      changeKind: "created",
+      source,
+      outcome: { summary: "Compile through the package root" },
+      milestones: [],
+      sharedConstraints: [],
+      repositoryIntents: [],
+      integrationCriteria: [],
+      assignments: [],
+      unresolvedDecisions: [],
+      semanticDigest: plan.semanticDigest,
+      recordDigest: `sha256:${"f".repeat(64)}` as RecordDigest,
+      authoredBy: {
+        userId: "planner-1",
+        sessionId: "session-1",
+        role: "map-planner",
+      },
+      createdAt: "2026-09-03T10:00:00.000Z",
+    };
+    const compileRequest: CompileAgentBriefsRequest = {
+      projectId: context.projectId,
+      source,
+      graph,
+      plan: projectPlan,
+    };
+    const compileFromPackageRoot = (
+      request: CompileAgentBriefsRequest,
+    ): CompileAgentBriefsResult => compileAgentBriefs(request);
+    const compilation = compileFromPackageRoot(compileRequest);
+    const diagnostic: BuildPlanDiagnostic | undefined =
+      compilation.diagnostics[0];
+    expect(AGENT_BRIEF_SCHEMA_VERSION).toBe(2);
+    expect(AGENT_BRIEF_DIGEST_VERSION).toBe(2);
+    expect(diagnostic?.path).toBeDefined();
+    expect(new AgentBriefCompilationError([]).diagnostics).toEqual([]);
+    expect(new BuilderBootstrapLimitError("assignment.mission").path).toBe(
+      "assignment.mission",
+    );
+    expect(new DeterministicAgentBriefCompiler()).toBeDefined();
+    expect(new CanonicalBuildPlanImpactEvaluator()).toBeDefined();
   });
 });
