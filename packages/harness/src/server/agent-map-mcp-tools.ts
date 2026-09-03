@@ -182,9 +182,11 @@ function errorResult(error: unknown) {
               : error.code === "authoring_unavailable" ||
                   error.code === "revision_source_unavailable"
                 ? "dependency_required"
-              : error.code === "idempotency_key_reused"
-                ? "new_request_id"
-                : "correct",
+                : error.code === "idempotency_key_reused"
+                  ? "new_request_id"
+                  : error.code === "result_too_large"
+                    ? "split_batch"
+                    : "correct",
         }
       : error instanceof AgentMapProposalValidationError
         ? {

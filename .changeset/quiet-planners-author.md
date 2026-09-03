@@ -2,4 +2,4 @@
 "@sapiom/harness": minor
 ---
 
-Add capability-scoped build-plan read, validation, atomic authoring, and explicit rebase tools for trusted Agent Map planners.
+Add capability-scoped build-plan reads and strict authoring contracts for trusted Agent Map planners. Validation, application, and rebasing fail closed until production compilation and impact evaluation are installed by the follow-on integration.

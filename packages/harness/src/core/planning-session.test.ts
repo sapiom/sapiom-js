@@ -195,6 +195,8 @@ describe("planner session context and identity", () => {
     expect(context).toContain('"empty":true');
     expect(context).toContain('"status":"not_created"');
     expect(context).toContain("build_plan_rebase");
+    expect(context).toContain("authoring_unavailable");
+    expect(context).toContain("do not retry or loop");
     expect(context).toContain("fresh request ID");
     expect(context).toContain("In your first response, briefly explain");
     expect(context).not.toContain("/Users/private");
@@ -300,8 +302,7 @@ describe("planner session context and identity", () => {
       project,
       workspace: {
         ...workspace,
-        confirmedRevisionId:
-          "revision_00000000-0000-7000-8000-000000000006",
+        confirmedRevisionId: "revision_00000000-0000-7000-8000-000000000006",
       },
       sessionId: "session-1",
       userId: "user-1",
@@ -602,6 +603,8 @@ describe("PlanningSessionService", () => {
     });
     expect(contexts[0]).toContain(projectId);
     expect(contexts[0]).toContain("build_plan_rebase");
+    expect(contexts[0]).toContain("authoring_unavailable");
+    expect(contexts[0]).toContain("do not retry or loop");
     expect(contexts[0]).toContain('"status":"not_created"');
     expect(contexts[0]).not.toContain(
       "In your first response, briefly explain",

@@ -42,6 +42,10 @@ const identity: PlanningSessionIdentity = {
 };
 const SECOND_AGENT_ID =
   "node_00000000-0000-7000-8000-000000000006" as PlanNodeId;
+const MILESTONE_ID = "milestone_00000000-0000-7000-8000-000000000010";
+const DELIVERABLE_ID = "deliverable_00000000-0000-7000-8000-000000000011";
+const CRITERION_ID = "criterion_00000000-0000-7000-8000-000000000012";
+const DECISION_ID = "decision_00000000-0000-7000-8000-000000000013";
 const baseOperations = [
   { op: "set-project-outcome" as const, outcome: { summary: "Ship safely" } },
   {
@@ -120,7 +124,6 @@ describe("BuildPlanService", () => {
       contractValidator: new BuildPlanContractValidator(resolver),
       briefCompiler: { compile: compiler },
       impactEvaluator: { evaluate: impact },
-      idFactory: store,
       clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
     });
     let operationNumber = 8;
@@ -527,6 +530,774 @@ describe("BuildPlanService", () => {
     ).toBe(true);
   });
 
+  it.each([
+    [
+      "milestone",
+      {
+        op: "upsert-milestone",
+        milestone: {
+          milestoneId: MILESTONE_ID,
+          ordinal: 1,
+          title: "Fabricated",
+          outcome: "Must be rejected",
+          dependsOn: [],
+        },
+      },
+    ],
+    [
+      "integration criterion",
+      {
+        op: "set-integration-criteria",
+        criteria: [
+          {
+            criterionId: CRITERION_ID,
+            ordinal: 1,
+            description: "Fabricated",
+            verification: "Must be rejected",
+          },
+        ],
+      },
+    ],
+    [
+      "assignment deliverable",
+      {
+        op: "upsert-agent-assignment",
+        assignment: {
+          ...baseOperations[1]!.assignment,
+          deliverables: [
+            {
+              deliverableId: DELIVERABLE_ID,
+              description: "Fabricated",
+              artifactNodeIds: [AGENT_ID],
+              acceptanceCriterionIds: [],
+            },
+          ],
+        },
+      },
+    ],
+    [
+      "assignment criterion",
+      {
+        op: "upsert-agent-assignment",
+        assignment: {
+          ...baseOperations[1]!.assignment,
+          acceptanceCriteria: [
+            {
+              criterionId: CRITERION_ID,
+              ordinal: 1,
+              description: "Fabricated",
+              verification: "Must be rejected",
+            },
+          ],
+        },
+      },
+    ],
+    [
+      "assignment decision",
+      {
+        op: "upsert-agent-assignment",
+        assignment: {
+          ...baseOperations[1]!.assignment,
+          unresolvedDecisions: [
+            {
+              decisionId: DECISION_ID,
+              question: "Fabricated?",
+              required: false,
+              status: "resolved",
+              resolution: "Reject it",
+            },
+          ],
+        },
+      },
+    ],
+    [
+      "plan decision",
+      {
+        op: "upsert-decision",
+        decision: {
+          decisionId: DECISION_ID,
+          question: "Fabricated?",
+          required: false,
+          status: "resolved",
+          resolution: "Reject it",
+        },
+      },
+    ],
+  ])(
+    "rejects a caller-chosen canonical ID for an absent %s",
+    async (_label, operation) => {
+      const { service, store, compiler, allocator } = await fixture();
+      await expect(
+        service.apply(identity, {
+          schemaVersion: 1,
+          planId: null,
+          expectedPlanVersion: null,
+          expectedSource: proposalSource(),
+          requestId: `request-fabricated-${_label}`,
+          operations: [baseOperations[0]!, operation],
+        }),
+      ).rejects.toMatchObject({ code: "invalid_operation" });
+      expect(compiler).not.toHaveBeenCalled();
+      expect(
+        Object.values(allocator).every(
+          (allocate) => allocate.mock.calls.length === 0,
+        ),
+      ).toBe(true);
+      expect(await store.read(PROJECT_ID)).toMatchObject({
+        planVersions: [],
+        idempotencyReceipts: [],
+        currentPlanVersion: null,
+      });
+    },
+  );
+
+  it("updates existing canonical identities without replacing their scope", async () => {
+    const { service } = await fixture();
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-create-update-targets",
+      operations: [
+        baseOperations[0]!,
+        {
+          op: "create-milestone",
+          clientRef: "milestone-update",
+          milestone: {
+            ordinal: 1,
+            title: "Before",
+            outcome: "Before",
+            dependsOn: [],
+          },
+        },
+        {
+          op: "create-integration-criterion",
+          criterion: {
+            clientRef: "integration-update",
+            ordinal: 1,
+            description: "Before",
+            verification: "Before",
+          },
+        },
+        {
+          op: "create-decision",
+          decision: {
+            clientRef: "plan-decision-update",
+            question: "Before?",
+            required: false,
+            status: "resolved",
+            resolution: "Before",
+          },
+        },
+        {
+          op: "create-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "Before",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                clientRef: "deliverable-update",
+                description: "Before",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionRefs: [
+                  { clientRef: "assignment-criterion-update" },
+                ],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria: [
+              {
+                clientRef: "assignment-criterion-update",
+                ordinal: 1,
+                description: "Before",
+                verification: "Before",
+              },
+            ],
+            milestoneRefs: [{ clientRef: "milestone-update" }],
+            unresolvedDecisions: [
+              {
+                clientRef: "assignment-decision-update",
+                question: "Before?",
+                required: false,
+                status: "resolved",
+                resolution: "Before",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const mapped = new Map(
+      created.idMappings.map(({ clientRef, id }) => [clientRef, id]),
+    );
+
+    const updated = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: created.plan.planId,
+      expectedPlanVersion: created.plan.version,
+      expectedSource: proposalSource(),
+      requestId: "request-update-canonical-targets",
+      operations: [
+        {
+          op: "upsert-milestone",
+          milestone: {
+            milestoneId: mapped.get("milestone-update"),
+            ordinal: 1,
+            title: "After",
+            outcome: "After",
+            dependsOn: [],
+          },
+        },
+        {
+          op: "set-integration-criteria",
+          criteria: [
+            {
+              criterionId: mapped.get("integration-update"),
+              ordinal: 1,
+              description: "After",
+              verification: "After",
+            },
+          ],
+        },
+        {
+          op: "upsert-decision",
+          decision: {
+            decisionId: mapped.get("plan-decision-update"),
+            question: "After?",
+            required: false,
+            status: "resolved",
+            resolution: "After",
+          },
+        },
+        {
+          op: "upsert-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "After",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                deliverableId: mapped.get("deliverable-update"),
+                description: "After",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionIds: [
+                  mapped.get("assignment-criterion-update"),
+                ],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria: [
+              {
+                criterionId: mapped.get("assignment-criterion-update"),
+                ordinal: 1,
+                description: "After",
+                verification: "After",
+              },
+            ],
+            milestoneIds: [mapped.get("milestone-update")],
+            unresolvedDecisions: [
+              {
+                decisionId: mapped.get("assignment-decision-update"),
+                question: "After?",
+                required: false,
+                status: "resolved",
+                resolution: "After",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const updatedState = await service.read(identity, {
+      schemaVersion: 1,
+      include: ["plan"],
+    });
+    expect(updatedState.state).toMatchObject({
+      milestones: [{ title: "After" }],
+      integrationCriteria: [{ description: "After" }],
+      unresolvedDecisions: [{ question: "After?" }],
+      assignments: [
+        {
+          mission: "After",
+          deliverables: [{ description: "After" }],
+          acceptanceCriteria: [{ description: "After" }],
+          unresolvedDecisions: [{ question: "After?" }],
+        },
+      ],
+    });
+    expect(updated.idMappings).toEqual([]);
+  });
+
+  it("resolves update identities only from creates earlier in the same batch", async () => {
+    const { service } = await fixture();
+    const result = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-create-then-update",
+      operations: [
+        baseOperations[0]!,
+        {
+          op: "create-milestone",
+          clientRef: "milestone-in-batch",
+          milestone: {
+            ordinal: 1,
+            title: "Before",
+            outcome: "Before",
+            dependsOn: [],
+          },
+        },
+        {
+          op: "upsert-milestone",
+          milestone: {
+            milestoneId: { clientRef: "milestone-in-batch" },
+            ordinal: 1,
+            title: "After",
+            outcome: "After",
+            dependsOn: [],
+          },
+        },
+        {
+          op: "create-integration-criterion",
+          criterion: {
+            clientRef: "integration-in-batch",
+            ordinal: 1,
+            description: "Before",
+            verification: "Before",
+          },
+        },
+        {
+          op: "set-integration-criteria",
+          criteria: [
+            {
+              criterionId: { clientRef: "integration-in-batch" },
+              ordinal: 1,
+              description: "After",
+              verification: "After",
+            },
+          ],
+        },
+        {
+          op: "create-decision",
+          decision: {
+            clientRef: "decision-in-batch",
+            question: "Before?",
+            required: false,
+            status: "resolved",
+            resolution: "Before",
+          },
+        },
+        {
+          op: "upsert-decision",
+          decision: {
+            decisionId: { clientRef: "decision-in-batch" },
+            question: "After?",
+            required: false,
+            status: "resolved",
+            resolution: "After",
+          },
+        },
+        {
+          op: "create-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "Before",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                clientRef: "deliverable-in-batch",
+                description: "Before",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionRefs: [{ clientRef: "criterion-in-batch" }],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria: [
+              {
+                clientRef: "criterion-in-batch",
+                ordinal: 1,
+                description: "Before",
+                verification: "Before",
+              },
+            ],
+            milestoneRefs: [{ clientRef: "milestone-in-batch" }],
+            unresolvedDecisions: [
+              {
+                clientRef: "assignment-decision-in-batch",
+                question: "Before?",
+                required: false,
+                status: "resolved",
+                resolution: "Before",
+              },
+            ],
+          },
+        },
+        {
+          op: "upsert-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "After",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                deliverableId: { clientRef: "deliverable-in-batch" },
+                description: "After",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionIds: [{ clientRef: "criterion-in-batch" }],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria: [
+              {
+                criterionId: { clientRef: "criterion-in-batch" },
+                ordinal: 1,
+                description: "After",
+                verification: "After",
+              },
+            ],
+            milestoneIds: [{ clientRef: "milestone-in-batch" }],
+            unresolvedDecisions: [
+              {
+                decisionId: { clientRef: "assignment-decision-in-batch" },
+                question: "After?",
+                required: false,
+                status: "resolved",
+                resolution: "After",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const state = await service.read(identity, {
+      schemaVersion: 1,
+      include: ["plan"],
+    });
+    expect(state.state).toMatchObject({
+      milestones: [{ title: "After" }],
+      integrationCriteria: [{ description: "After" }],
+      unresolvedDecisions: [{ question: "After?" }],
+      assignments: [
+        { mission: "After", deliverables: [{ description: "After" }] },
+      ],
+    });
+    expect(result.idMappings).toHaveLength(6);
+  });
+
+  it.each([
+    ["duplicate", "same-client", "same-client"],
+    ["cross-kind collision", "shared-client", "shared-client"],
+  ])(
+    "rejects a %s clientRef declaration without side effects",
+    async (label, firstClientRef, secondClientRef) => {
+      const { service, store, compiler } = await fixture();
+      const secondOperation =
+        label === "duplicate"
+          ? {
+              op: "create-milestone",
+              clientRef: secondClientRef,
+              milestone: {
+                ordinal: 2,
+                title: "Second",
+                outcome: "Second",
+                dependsOn: [],
+              },
+            }
+          : {
+              op: "create-decision",
+              decision: {
+                clientRef: secondClientRef,
+                question: "Collide?",
+                required: false,
+                status: "resolved",
+                resolution: "Reject",
+              },
+            };
+      await expect(
+        service.apply(identity, {
+          schemaVersion: 1,
+          planId: null,
+          expectedPlanVersion: null,
+          expectedSource: proposalSource(),
+          requestId: `request-${label}`,
+          operations: [
+            baseOperations[0]!,
+            {
+              op: "create-milestone",
+              clientRef: firstClientRef,
+              milestone: {
+                ordinal: 1,
+                title: "First",
+                outcome: "First",
+                dependsOn: [],
+              },
+            },
+            secondOperation,
+          ],
+        }),
+      ).rejects.toMatchObject({ code: "invalid_operation" });
+      expect(compiler).not.toHaveBeenCalled();
+      expect((await store.read(PROJECT_ID)).planVersions).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      label: "milestone",
+      create: {
+        op: "create-milestone",
+        clientRef: "create-once-milestone",
+        milestone: {
+          ordinal: 1,
+          title: "Create once",
+          outcome: "Never overwrite",
+          dependsOn: [],
+        },
+      },
+    },
+    {
+      label: "integration criterion",
+      create: {
+        op: "create-integration-criterion",
+        criterion: {
+          clientRef: "create-once-integration",
+          ordinal: 1,
+          description: "Create once",
+          verification: "Never overwrite",
+        },
+      },
+    },
+    {
+      label: "plan decision",
+      create: {
+        op: "create-decision",
+        decision: {
+          clientRef: "create-once-decision",
+          question: "Create once?",
+          required: false,
+          status: "resolved",
+          resolution: "Never overwrite",
+        },
+      },
+    },
+  ])(
+    "does not let a later create overwrite an existing $label",
+    async ({ label, create }) => {
+      const { service, store, compiler, allocator } = await fixture();
+      const request = {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        requestId: `request-create-once-${label}`,
+        operations: [...baseOperations, create],
+      };
+      const created = await service.apply(identity, request);
+      await expect(service.apply(identity, request)).resolves.toMatchObject({
+        replayed: true,
+        idMappings: created.idMappings,
+      });
+      compiler.mockClear();
+
+      await expect(
+        service.apply(identity, {
+          ...request,
+          planId: created.plan.planId,
+          expectedPlanVersion: created.plan.version,
+          requestId: `request-recreate-${label}`,
+          operations: [create],
+        }),
+      ).rejects.toMatchObject({ code: "invalid_operation" });
+      expect(compiler).not.toHaveBeenCalled();
+      expect(
+        Object.values(allocator).every(
+          (allocate) => allocate.mock.calls.length === 0,
+        ),
+      ).toBe(true);
+      expect(await store.read(PROJECT_ID)).toMatchObject({
+        currentPlanVersion: 1,
+        planVersions: [{ version: 1 }],
+        idempotencyReceipts: [{ requestId: request.requestId }],
+      });
+    },
+  );
+
+  it("does not let create-agent-assignment replace an existing assignment", async () => {
+    const { service, store, compiler, allocator } = await fixture();
+    const createAssignment = {
+      op: "create-agent-assignment",
+      assignment: {
+        plannedAgentId: AGENT_ID,
+        mission: "Create once",
+        scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+        deliverables: [],
+        constraints: [],
+        acceptanceCriteria: [],
+        milestoneRefs: [],
+        unresolvedDecisions: [],
+      },
+    };
+    await expect(
+      service.apply(identity, {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        requestId: "request-duplicate-assignment-create",
+        operations: [baseOperations[0]!, createAssignment, createAssignment],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_operation" });
+    expect(compiler).not.toHaveBeenCalled();
+    expect((await store.read(PROJECT_ID)).planVersions).toEqual([]);
+
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-create-assignment-once",
+      operations: baseOperations,
+    });
+    compiler.mockClear();
+
+    await expect(
+      service.apply(identity, {
+        schemaVersion: 1,
+        planId: created.plan.planId,
+        expectedPlanVersion: created.plan.version,
+        expectedSource: proposalSource(),
+        requestId: "request-recreate-assignment",
+        operations: [createAssignment],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_operation" });
+    expect(compiler).not.toHaveBeenCalled();
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
+    expect(await store.read(PROJECT_ID)).toMatchObject({
+      currentPlanVersion: 1,
+      planVersions: [{ version: 1 }],
+      idempotencyReceipts: [{ requestId: "request-create-assignment-once" }],
+    });
+  });
+
+  it("persists the exact boundary of 128 client-correlated ID mappings", async () => {
+    const { service, store } = await fixture();
+    const acceptanceCriteria = Array.from({ length: 127 }, (_, index) => ({
+      clientRef: `criterion-${index + 1}`,
+      ordinal: index + 1,
+      description: `Criterion ${index + 1}`,
+      verification: `Verify criterion ${index + 1}`,
+    }));
+
+    const result = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-mapping-boundary",
+      operations: [
+        baseOperations[0]!,
+        {
+          op: "create-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "Exercise the mapping boundary",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                clientRef: "deliverable-boundary",
+                description: "Boundary deliverable",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionRefs: [],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria,
+            milestoneRefs: [],
+            unresolvedDecisions: [],
+          },
+        },
+      ],
+    });
+
+    expect(result.idMappings).toHaveLength(128);
+    const planning = await store.read(PROJECT_ID);
+    expect(planning.planVersions).toHaveLength(1);
+    expect(planning.idempotencyReceipts[0]?.result?.idMappings).toHaveLength(
+      128,
+    );
+  });
+
+  it("rejects 129 ID mappings before compilation or persistence", async () => {
+    const { service, store, compiler, allocator } = await fixture();
+    const acceptanceCriteria = Array.from({ length: 128 }, (_, index) => ({
+      clientRef: `criterion-${index + 1}`,
+      ordinal: index + 1,
+      description: `Criterion ${index + 1}`,
+      verification: `Verify criterion ${index + 1}`,
+    }));
+
+    await expect(
+      service.apply(identity, {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        requestId: "request-mapping-overflow",
+        operations: [
+          baseOperations[0]!,
+          {
+            op: "create-agent-assignment",
+            assignment: {
+              plannedAgentId: AGENT_ID,
+              mission: "Exercise mapping overflow",
+              scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+              deliverables: [
+                {
+                  clientRef: "deliverable-overflow",
+                  description: "Overflow deliverable",
+                  artifactNodeIds: [AGENT_ID],
+                  acceptanceCriterionRefs: [],
+                },
+              ],
+              constraints: [],
+              acceptanceCriteria,
+              milestoneRefs: [],
+              unresolvedDecisions: [],
+            },
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "result_too_large",
+      issues: [
+        expect.objectContaining({
+          path: "operations",
+          message: expect.stringContaining("split"),
+        }),
+      ],
+    });
+    expect(compiler).not.toHaveBeenCalled();
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
+    expect(await store.read(PROJECT_ID)).toMatchObject({
+      planVersions: [],
+      idempotencyReceipts: [],
+      currentPlanVersion: null,
+    });
+  });
+
   it("reads briefs for the exact historical plan and marks current status separately", async () => {
     const { service, compiler } = await fixture();
     compiler.mockImplementation(
@@ -663,20 +1434,6 @@ describe("BuildPlanService", () => {
   it("applies dependent milestone rewrites in one batch and requires explicit rebase resolutions", async () => {
     const { service, impact, registerGraph } = await fixture();
     const source = proposalSource();
-    const milestoneId = "milestone_00000000-0000-7000-8000-000000000010";
-    const deliverableId = "deliverable_00000000-0000-7000-8000-000000000011";
-    const assignment = {
-      ...baseOperations[1]!.assignment,
-      deliverables: [
-        {
-          deliverableId,
-          description: "Produce the owned architecture artifact",
-          artifactNodeIds: [AGENT_ID],
-          acceptanceCriterionIds: [],
-        },
-      ],
-      milestoneIds: [milestoneId],
-    };
     const created = await service.apply(identity, {
       schemaVersion: 1,
       planId: null,
@@ -698,18 +1455,55 @@ describe("BuildPlanService", () => {
           ],
         },
         {
-          op: "upsert-milestone",
+          op: "create-milestone",
+          clientRef: "rebase-milestone",
           milestone: {
-            milestoneId,
             ordinal: 1,
             title: "Implementation",
             outcome: "Feature complete",
             dependsOn: [],
           },
         },
-        { op: "upsert-agent-assignment", assignment },
+        {
+          op: "create-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "Implement the feature",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                clientRef: "rebase-deliverable",
+                description: "Produce the owned architecture artifact",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionRefs: [],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria: [],
+            milestoneRefs: [{ clientRef: "rebase-milestone" }],
+            unresolvedDecisions: [],
+          },
+        },
       ],
     });
+    const milestoneId = created.idMappings.find(
+      ({ clientRef }) => clientRef === "rebase-milestone",
+    )!.id;
+    const deliverableId = created.idMappings.find(
+      ({ clientRef }) => clientRef === "rebase-deliverable",
+    )!.id;
+    const assignment = {
+      ...baseOperations[1]!.assignment,
+      deliverables: [
+        {
+          deliverableId,
+          description: "Produce the owned architecture artifact",
+          artifactNodeIds: [AGENT_ID],
+          acceptanceCriterionIds: [],
+        },
+      ],
+      milestoneIds: [milestoneId],
+    };
     await expect(
       service.apply(identity, {
         schemaVersion: 1,

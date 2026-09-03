@@ -2739,7 +2739,6 @@ export const startServer = async (
     // compilation or impact behavior.
     briefCompiler: unavailableAgentBriefCompiler,
     impactEvaluator: unavailableBuildPlanImpactEvaluator,
-    idFactory: buildPlanStore,
     clock: { now: () => new Date() },
   });
   emitAgentMapCapabilityEvent = (event) => {
