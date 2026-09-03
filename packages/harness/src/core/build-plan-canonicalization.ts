@@ -4,9 +4,11 @@ import type { AgentMapGraph } from "../shared/agent-map.js";
 import type {
   AgentBriefSemanticDigest,
   AgentBriefVersionRecord,
+  BuildPlanImpactResult,
   BuildPlanSemanticDigest,
   BuilderPlanningSubmission,
   GraphDigest,
+  ImpactDigest,
   PlanningSubmissionDigest,
   PlanningAssignmentRecord,
   PersistedAgentBriefVersionRecord,
@@ -125,6 +127,14 @@ export const computeBuildPlanRecordDigest = (
     "sapiom.build-plan.record.v1",
     omit(plan, ["recordDigest"]),
   ) as RecordDigest;
+
+export const computeBuildPlanImpactDigest = (
+  impact: BuildPlanImpactResult | Omit<BuildPlanImpactResult, "digest">,
+): ImpactDigest =>
+  computeCanonicalDigest(
+    "sapiom.build-plan-impact.v1",
+    "digest" in impact ? omit(impact, ["digest"]) : impact,
+  ) as ImpactDigest;
 
 /** Exact digest projection used by immutable v1 records. */
 export function legacyAgentBriefSemanticProjection(

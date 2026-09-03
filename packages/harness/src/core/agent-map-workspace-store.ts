@@ -23,6 +23,7 @@ import { parseBuildPlanningAggregate } from "../shared/build-plan-codec.js";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
+  computeBuildPlanImpactDigest,
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
   computePlanningAssignmentRecordDigest,
@@ -301,7 +302,13 @@ function assertBuildPlanningIntegrity(
             submission.semanticDigest ||
           computePlanningSubmissionRecordDigest(submission) !==
             submission.recordDigest,
-      )
+      ) ||
+    buildPlanning.idempotencyReceipts.some(
+      (receipt) =>
+        receipt.result?.impact !== undefined &&
+        computeBuildPlanImpactDigest(receipt.result.impact) !==
+          receipt.result.impact.digest,
+    )
   )
     throw new AgentMapWorkspaceStoreError("malformed_state");
 }

@@ -480,7 +480,7 @@ export interface CompiledBriefCandidate {
     | "source-rebound"
     | "unchanged"
     | "retired";
-  brief: PersistedAgentBriefVersionRecord;
+  brief: AgentBriefVersionRecord;
   bootstrap: BuilderBootstrapContext;
 }
 
@@ -494,7 +494,7 @@ export interface CompileAgentBriefsRequest {
   previous?: Readonly<{
     plan: ProjectBuildPlanVersion;
     graph: import("./agent-map.js").AgentMapGraph;
-    briefs: readonly PersistedAgentBriefVersionRecord[];
+    briefs: readonly AgentBriefVersionRecord[];
     /** Exact bounded aggregate lineage against which historical briefs bind. */
     allowedPlanRefs?: readonly BuildPlanRef[];
   }>;

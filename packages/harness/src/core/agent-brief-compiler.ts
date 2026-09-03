@@ -43,10 +43,11 @@ import {
 import {
   BuilderBootstrapLimitError,
   createBuilderBootstrapContext,
+  createPersistedBuilderBootstrapContext,
   BUILDER_BOOTSTRAP_COMPILER_VERSION,
   selectRelevantMilestones,
 } from "./builder-bootstrap-context.js";
-import { evaluateBuildPlanImpact } from "./build-plan-impact-evaluator.js";
+import { evaluatePersistedBuildPlanImpact } from "./build-plan-impact-evaluator.js";
 import type {
   AgentBriefCompiler,
   AgentBriefCompileResult,
@@ -288,41 +289,29 @@ function effectiveFlow(
   };
 }
 
+function actorRoot(nodeId: PlanNodeId, index: GraphIndex): PlanNodeId | null {
+  const node = index.nodes.get(nodeId);
+  return node?.kind === "agent" || node?.kind === "subagent"
+    ? (index.rootByNodeId.get(nodeId) ?? null)
+    : null;
+}
+
 function connectedFlowEvidence(
   flows: readonly Flow[],
   providerAgentId: PlanNodeId,
   consumerAgentId: PlanNodeId,
   index: GraphIndex,
 ): Flow[] | null {
-  const isAllowedNode = (nodeId: PlanNodeId): boolean => {
-    const root = index.rootByNodeId.get(nodeId) ?? null;
-    const kind = index.nodes.get(nodeId)?.kind;
-    return (
-      root === providerAgentId ||
-      root === consumerAgentId ||
-      (root === null &&
-        (kind === "artifact" || kind === "resource" || kind === "connector"))
-    );
-  };
-  const eligible = flows.filter(
-    (flow) => isAllowedNode(flow.fromNodeId) && isAllowedNode(flow.toNodeId),
-  );
-  const isActorFor = (nodeId: PlanNodeId, agentId: PlanNodeId): boolean => {
-    const kind = index.nodes.get(nodeId)?.kind;
-    return (
-      index.rootByNodeId.get(nodeId) === agentId &&
-      (kind === "agent" || kind === "subagent")
-    );
-  };
+  const eligible = flows;
   const starts = new Set(
     eligible
       .flatMap((flow) => [flow.fromNodeId, flow.toNodeId])
-      .filter((nodeId) => isActorFor(nodeId, providerAgentId)),
+      .filter((nodeId) => actorRoot(nodeId, index) === providerAgentId),
   );
   const targets = new Set(
     eligible
       .flatMap((flow) => [flow.fromNodeId, flow.toNodeId])
-      .filter((nodeId) => isActorFor(nodeId, consumerAgentId)),
+      .filter((nodeId) => actorRoot(nodeId, index) === consumerAgentId),
   );
   if (starts.size === 0 || targets.size === 0) return null;
   const reachable = (
@@ -458,12 +447,52 @@ function boundaryForAgent(
         );
       if (!flow.fromRoot) relevant.add(flow.fromNodeId);
     });
-    const providerRoots = unique(
+    const rawProviderRoots = unique(
       flows.flatMap((flow) => (flow.fromRoot ? [flow.fromRoot] : [])),
     );
-    const consumerRoots = unique(
+    const rawConsumerRoots = unique(
       flows.flatMap((flow) => (flow.toRoot ? [flow.toRoot] : [])),
     );
+    const providerRoots = unique(
+      flows.flatMap((flow) => {
+        const root = actorRoot(flow.fromNodeId, index);
+        return root ? [root] : [];
+      }),
+    );
+    const consumerRoots = unique(
+      flows.flatMap((flow) => {
+        const root = actorRoot(flow.toNodeId, index);
+        return root ? [root] : [];
+      }),
+    );
+    const terminalProviders = rawProviderRoots.filter(
+      (root) => !rawConsumerRoots.includes(root),
+    );
+    const terminalConsumers = rawConsumerRoots.filter(
+      (root) => !rawProviderRoots.includes(root),
+    );
+    for (const provider of terminalProviders) {
+      for (const consumer of terminalConsumers) {
+        if (
+          provider === consumer ||
+          (provider !== agentId && consumer !== agentId) ||
+          (providerRoots.includes(provider) && consumerRoots.includes(consumer))
+        )
+          continue;
+        diagnostics.push(
+          diagnostic(
+            "incompatible-contract-direction",
+            "graph.relationships.contractRef",
+            [
+              contractId,
+              provider,
+              consumer,
+              ...flows.map((flow) => flow.relationship.id),
+            ],
+          ),
+        );
+      }
+    }
     for (const provider of providerRoots) {
       for (const consumer of consumerRoots) {
         if (
@@ -741,7 +770,11 @@ function makeFingerprints(input: {
 }
 
 function identitiesFor(
-  request: CompileAgentBriefsRequest,
+  request: Pick<CompileAgentBriefsRequest, "plan" | "assignments"> & {
+    previous?: Readonly<{
+      briefs: readonly PersistedAgentBriefVersionRecord[];
+    }>;
+  },
 ): Map<PlanNodeId, PlanningAssignmentRef> {
   const supplied = new Map<PlanNodeId, PlanningAssignmentRef>();
   for (const entry of by(
@@ -786,9 +819,32 @@ function sealBrief(value: AgentBriefVersionRecord): AgentBriefVersionRecord {
   };
 }
 
-export function compileAgentBriefs(
-  request: CompileAgentBriefsRequest,
-): CompileAgentBriefsResult {
+type PersistedCompileAgentBriefsRequest = Omit<
+  CompileAgentBriefsRequest,
+  "previous"
+> & {
+  previous?: Omit<
+    NonNullable<CompileAgentBriefsRequest["previous"]>,
+    "briefs"
+  > & {
+    briefs: readonly PersistedAgentBriefVersionRecord[];
+  };
+};
+
+type PersistedCompiledBriefCandidate = Omit<CompiledBriefCandidate, "brief"> & {
+  brief: PersistedAgentBriefVersionRecord;
+};
+
+type PersistedCompileAgentBriefsResult = Omit<
+  CompileAgentBriefsResult,
+  "briefs"
+> & {
+  briefs: readonly PersistedCompiledBriefCandidate[];
+};
+
+function compilePersistedAgentBriefs(
+  request: PersistedCompileAgentBriefsRequest,
+): PersistedCompileAgentBriefsResult {
   const diagnostics: BuildPlanDiagnostic[] = [];
   if (request.projectId !== request.plan.projectId)
     diagnostics.push(
@@ -1016,7 +1072,7 @@ export function compileAgentBriefs(
   ))
     if (!previousByAgent.has(brief.plannedAgentId))
       previousByAgent.set(brief.plannedAgentId, brief);
-  const candidates: CompiledBriefCandidate[] = [];
+  const candidates: PersistedCompiledBriefCandidate[] = [];
 
   for (const agent of index.topLevelAgents) {
     const assignmentIndexes = assignmentGroups.get(agent.id) ?? [];
@@ -1265,7 +1321,7 @@ export function compileAgentBriefs(
       existingBriefRef: briefRef(previous),
       disposition: "retired",
       brief: previous,
-      bootstrap: createBuilderBootstrapContext({
+      bootstrap: createPersistedBuilderBootstrapContext({
         plan: request.previous!.plan,
         graph: request.previous!.graph,
         brief: previous,
@@ -1281,7 +1337,7 @@ export function compileAgentBriefs(
     graph: { nodes: [], relationships: [] },
     briefs: [],
   };
-  const impact = evaluateBuildPlanImpact({
+  const impact = evaluatePersistedBuildPlanImpact({
     previousSource: previous.plan.source,
     nextSource: request.source,
     briefs: previous.briefs,
@@ -1322,6 +1378,17 @@ export function compileAgentBriefs(
   };
 }
 
+export function compileAgentBriefs(
+  request: CompileAgentBriefsRequest,
+): CompileAgentBriefsResult {
+  const compilation = compilePersistedAgentBriefs(request);
+  if (
+    compilation.briefs.some((candidate) => candidate.brief.schemaVersion !== 2)
+  )
+    throw new Error("current compiler input produced a legacy brief");
+  return compilation as CompileAgentBriefsResult;
+}
+
 export class AgentBriefCompilationError extends Error {
   constructor(readonly diagnostics: readonly BuildPlanDiagnostic[]) {
     super("Agent brief compilation failed");
@@ -1345,7 +1412,7 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
             ],
           }
         : undefined;
-    const compilation = compileAgentBriefs({
+    const compilation = compilePersistedAgentBriefs({
       projectId: input.plan.projectId,
       source: input.plan.source,
       graph: input.graph,
@@ -1375,7 +1442,7 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
                 ? "staled"
                 : "changed",
       })),
-      compilation,
+      impact: compilation.impact,
     };
   }
 }

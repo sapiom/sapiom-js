@@ -1,5 +1,6 @@
 import type { AgentMapGraph, PlanNode } from "../shared/agent-map.js";
 import type {
+  AgentBriefVersionRecord,
   AgentBriefRef,
   BuilderBootstrapContext,
   BuilderBootstrapDigest,
@@ -87,12 +88,16 @@ export function selectRelevantMilestones(
     }));
 }
 
-export function createBuilderBootstrapContext(input: {
+type BuilderBootstrapInput<TBrief> = {
   plan: ProjectBuildPlanVersion;
   graph: AgentMapGraph;
-  brief: PersistedAgentBriefVersionRecord;
+  brief: TBrief;
   briefRef?: AgentBriefRef;
-}): BuilderBootstrapContext {
+};
+
+function projectBuilderBootstrapContext(
+  input: BuilderBootstrapInput<PersistedAgentBriefVersionRecord>,
+): BuilderBootstrapContext {
   const { plan, graph, brief } = input;
   const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
   const agent = nodes.get(brief.plannedAgentId);
@@ -184,6 +189,19 @@ export function createBuilderBootstrapContext(input: {
   )
     throw new BuilderBootstrapLimitError("bootstrap");
   return result;
+}
+
+export function createBuilderBootstrapContext(
+  input: BuilderBootstrapInput<AgentBriefVersionRecord>,
+): BuilderBootstrapContext {
+  return projectBuilderBootstrapContext(input);
+}
+
+/** Internal persistence bridge for immutable records from earlier schemas. */
+export function createPersistedBuilderBootstrapContext(
+  input: BuilderBootstrapInput<PersistedAgentBriefVersionRecord>,
+): BuilderBootstrapContext {
+  return projectBuilderBootstrapContext(input);
 }
 
 /** Serialize the canonical assignment data inside explicit untrusted delimiters. */

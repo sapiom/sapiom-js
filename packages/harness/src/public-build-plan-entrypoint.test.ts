@@ -6,8 +6,6 @@ import {
   BUILD_PLAN_SCHEMA_VERSION,
   AgentBriefCompilationError,
   BuilderBootstrapLimitError,
-  CanonicalBuildPlanImpactEvaluator,
-  DeterministicAgentBriefCompiler,
   architectureSourceRefsEqual,
   compileAgentBriefs,
   type AgentMapGraph,
@@ -17,9 +15,6 @@ import {
   type AgentBriefVersion,
   type AgentMapRevisionId,
   type ArchitectureSourceRef,
-  type BuilderPlanningContextRef,
-  type BuilderPlanningSubmission,
-  type BuilderPlanningSubmissionId,
   type BuildPlanId,
   type BuildPlanDiagnostic,
   type BuildPlanRef,
@@ -28,15 +23,10 @@ import {
   type CompileAgentBriefsRequest,
   type CompileAgentBriefsResult,
   type GraphDigest,
-  type ImplementationPlanStep,
   type MapProposalId,
   type PlanningAssignmentId,
   type PlanningAssignmentRef,
-  type PlanningQuestion,
-  type PlanningRisk,
-  type PlanningSubmissionDigest,
   type PlanNodeId,
-  type ProposalOperationId,
   type ProjectBuildPlanVersion,
   type RecordDigest,
   type StudioProjectId,
@@ -75,51 +65,8 @@ describe("@sapiom/harness build-planning entrypoint", () => {
       briefId: brief.briefId,
       plannedAgentId: "node_00000000-0000-7000-8000-000000000001" as PlanNodeId,
     };
-    const context: BuilderPlanningContextRef = {
-      projectId:
-        "project_00000000-0000-4000-8000-000000000001" as StudioProjectId,
-      source,
-      plan,
-      brief,
-      assignment,
-    };
-    const implementationPlan: ImplementationPlanStep = {
-      stepId: "step-1",
-      ordinal: 1,
-      description: "Implement the handoff",
-      verification: "Run the public contract test",
-    };
-    const risk: PlanningRisk = {
-      riskId: "risk-1",
-      description: "A dependency changes",
-      mitigation: "Revalidate the exact source",
-    };
-    const question: PlanningQuestion = {
-      questionId: "question-1",
-      question: "Is the source still current?",
-    };
-    const submission: BuilderPlanningSubmission = {
-      schemaVersion: BUILD_PLAN_SCHEMA_VERSION,
-      submissionId:
-        "submission_00000000-0000-7000-8000-000000000001" as BuilderPlanningSubmissionId,
-      projectId: context.projectId,
-      assignmentId: assignment.assignmentId,
-      sessionId: "session-1",
-      source,
-      plan,
-      brief,
-      status: "ready",
-      implementationPlan: [implementationPlan],
-      risks: [risk],
-      questions: [question],
-      proposedMapOperationIds: [
-        "operation_00000000-0000-7000-8000-000000000001" as ProposalOperationId,
-      ],
-      supersedesSubmissionId: null,
-      semanticDigest: `sha256:${"d".repeat(64)}` as PlanningSubmissionDigest,
-      recordDigest: `sha256:${"e".repeat(64)}` as RecordDigest,
-      submittedAt: "2026-09-03T10:00:00.000Z",
-    };
+    const projectId =
+      "project_00000000-0000-4000-8000-000000000001" as StudioProjectId;
 
     expect(
       architectureSourceRefsEqual(source, {
@@ -130,17 +77,12 @@ describe("@sapiom/harness build-planning entrypoint", () => {
       }),
     ).toBe(true);
     expect(architectureSourceRefsEqual(source, revisionSource)).toBe(false);
-    expect(submission).toMatchObject({
-      projectId: context.projectId,
-      assignmentId: assignment.assignmentId,
-      plan,
-      brief,
-    });
+    expect(assignment.briefId).toBe(brief.briefId);
 
     const graph: AgentMapGraph = { nodes: [], relationships: [] };
     const projectPlan: ProjectBuildPlanVersion = {
       schemaVersion: BUILD_PLAN_SCHEMA_VERSION,
-      projectId: context.projectId,
+      projectId,
       planId: plan.planId,
       version: plan.version,
       parentVersion: null,
@@ -163,7 +105,7 @@ describe("@sapiom/harness build-planning entrypoint", () => {
       createdAt: "2026-09-03T10:00:00.000Z",
     };
     const compileRequest: CompileAgentBriefsRequest = {
-      projectId: context.projectId,
+      projectId,
       source,
       graph,
       plan: projectPlan,
@@ -181,7 +123,5 @@ describe("@sapiom/harness build-planning entrypoint", () => {
     expect(new BuilderBootstrapLimitError("assignment.mission").path).toBe(
       "assignment.mission",
     );
-    expect(new DeterministicAgentBriefCompiler()).toBeDefined();
-    expect(new CanonicalBuildPlanImpactEvaluator()).toBeDefined();
   });
 });

@@ -7,7 +7,6 @@ import type {
   BuildPlanImpactResult,
   DependencyFingerprint,
   DependencyFingerprintKind,
-  ImpactDigest,
   PersistedAgentBriefVersionRecord,
   PlanContractId,
   ProjectBuildPlanVersion,
@@ -20,7 +19,7 @@ import {
 import type { PlanRelationshipId } from "../shared/agent-map.js";
 import {
   canonicalJson,
-  computeCanonicalDigest,
+  computeBuildPlanImpactDigest,
 } from "./build-plan-canonicalization.js";
 
 const compare = (left: string, right: string) =>
@@ -124,15 +123,9 @@ function graphChanges(previous: AgentMapGraph, next: AgentMapGraph) {
       canonicalJson(nextContracts.get(id) ?? []),
   ) as unknown as PlanContractId[];
   return {
-    changedNodeIds: changedNodeIds.slice(0, BUILD_PLAN_IMPACT_ID_LIST_LIMIT),
-    changedRelationshipIds: changedRelationshipIds.slice(
-      0,
-      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
-    ),
-    changedContractIds: changedContractIds.slice(
-      0,
-      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
-    ),
+    changedNodeIds,
+    changedRelationshipIds,
+    changedContractIds,
   };
 }
 
@@ -212,10 +205,7 @@ type ImpactWithoutDigest = Omit<BuildPlanImpactResult, "digest">;
 function sealImpact(value: ImpactWithoutDigest): BuildPlanImpactResult {
   return {
     ...value,
-    digest: computeCanonicalDigest(
-      "sapiom.build-plan-impact.v1",
-      value,
-    ) as ImpactDigest,
+    digest: computeBuildPlanImpactDigest(value),
   };
 }
 
@@ -307,7 +297,7 @@ function boundBuildPlanImpact(
   return evidenceFree;
 }
 
-export function evaluateBuildPlanImpact(input: {
+interface PersistedBuildPlanImpactInput {
   previousSource: ProjectBuildPlanVersion["source"];
   nextSource: ProjectBuildPlanVersion["source"];
   briefs: readonly PersistedAgentBriefVersionRecord[];
@@ -316,7 +306,11 @@ export function evaluateBuildPlanImpact(input: {
   previousGraph: AgentMapGraph;
   nextGraph: AgentMapGraph;
   nextBriefs: readonly PersistedAgentBriefVersionRecord[];
-}): BuildPlanImpactResult {
+}
+
+export function evaluatePersistedBuildPlanImpact(
+  input: PersistedBuildPlanImpactInput,
+): BuildPlanImpactResult {
   const previous = new Map(
     input.briefs.map((brief) => [brief.plannedAgentId, brief]),
   );
@@ -401,13 +395,37 @@ export function evaluateBuildPlanImpact(input: {
     preservedBriefIds: unique(preservedBriefIds),
     addedAgentIds,
     removedAgentIds,
-    ...changes,
+    changedNodeIds: changes.changedNodeIds.slice(
+      0,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
+    changedRelationshipIds: changes.changedRelationshipIds.slice(
+      0,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
+    changedContractIds: changes.changedContractIds.slice(
+      0,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
     semanticChange:
       addedAgentIds.length > 0 ||
       removedAgentIds.length > 0 ||
       assignmentChanges.some((entry) => entry.reasons.length > 0),
   };
   return boundBuildPlanImpact(withoutDigest);
+}
+
+export function evaluateBuildPlanImpact(input: {
+  previousSource: ProjectBuildPlanVersion["source"];
+  nextSource: ProjectBuildPlanVersion["source"];
+  briefs: readonly import("../shared/build-plan.js").AgentBriefVersionRecord[];
+  previousPlan: ProjectBuildPlanVersion;
+  nextPlan: ProjectBuildPlanVersion;
+  previousGraph: AgentMapGraph;
+  nextGraph: AgentMapGraph;
+  nextBriefs: readonly import("../shared/build-plan.js").AgentBriefVersionRecord[];
+}): BuildPlanImpactResult {
+  return evaluatePersistedBuildPlanImpact(input);
 }
 
 export class CanonicalBuildPlanImpactEvaluator implements BuildPlanImpactEvaluator {
@@ -424,7 +442,7 @@ export class CanonicalBuildPlanImpactEvaluator implements BuildPlanImpactEvaluat
       throw new Error(
         "canonical impact evaluation requires exact plans and graphs",
       );
-    return evaluateBuildPlanImpact({
+    return evaluatePersistedBuildPlanImpact({
       ...input,
       previousPlan: input.previousPlan,
       nextPlan: input.nextPlan,

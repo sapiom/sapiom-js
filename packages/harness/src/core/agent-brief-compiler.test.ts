@@ -52,6 +52,7 @@ describe("agent brief compiler", () => {
 
   it("produces distinct focused Research and Marketing briefs with one typed boundary", () => {
     const result = compileStock();
+    expect(result.diagnostics).toEqual([]);
     expect(result.completeness.status).toBe("complete");
     expect(result.briefs.map((entry) => entry.plannedAgentId)).toEqual(
       [RESEARCH_ID, MARKETING_ID].sort(),
@@ -221,6 +222,140 @@ describe("agent brief compiler", () => {
       ...graph.relationships[1]!,
       toNodeId: disconnectedReportId,
     };
+    const plan = stockResearchPlan(graph);
+    const result = compileAgentBriefs({
+      projectId: STOCK_PROJECT_ID,
+      source: plan.source,
+      graph,
+      plan,
+      assignments: stockAssignments(),
+    });
+
+    expect(result.completeness.status).toBe("incomplete");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "incompatible-contract-direction",
+        path: "graph.relationships.contractRef",
+        relatedIds: expect.arrayContaining([
+          REPORT_CONTRACT,
+          RESEARCH_ID,
+          MARKETING_ID,
+        ]),
+      }),
+    );
+    expect(
+      result.briefs.flatMap((candidate) => candidate.brief.dependencies),
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ contractIds: [REPORT_CONTRACT] }),
+      ]),
+    );
+  });
+
+  it("accepts a connected typed contract path through a third agent relay", () => {
+    const graph = stockResearchGraph();
+    const relayId = "node_10000000-0000-7000-8000-000000000009" as PlanNodeId;
+    graph.nodes.push({
+      id: relayId,
+      kind: "agent",
+      name: "Report Relay",
+      purpose: "Relay the typed report without changing its contract",
+      ownerAgentId: null,
+      contractRefs: [REPORT_CONTRACT],
+    });
+    graph.nodes.find((node) => node.id === REPORT_ID)!.ownerAgentId = relayId;
+    const base = stockResearchPlan(graph);
+    const relayCriterionId = "criterion_10000000-0000-7000-8000-000000000009";
+    const plan = stockResearchPlan(graph, {
+      assignments: [
+        ...base.assignments.map((assignment) =>
+          assignment.plannedAgentId === RESEARCH_ID
+            ? {
+                ...assignment,
+                deliverables: assignment.deliverables.map((deliverable) => ({
+                  ...deliverable,
+                  artifactNodeIds: [],
+                })),
+              }
+            : assignment,
+        ),
+        {
+          plannedAgentId: relayId,
+          mission: "Relay the research report to Marketing",
+          scope: {
+            inScope: ["Typed report relay"],
+            nonGoals: ["Research and campaign creation"],
+          },
+          deliverables: [
+            {
+              deliverableId:
+                "deliverable_10000000-0000-7000-8000-000000000009" as never,
+              description: "A relayed research report",
+              artifactNodeIds: [REPORT_ID],
+              acceptanceCriterionIds: [relayCriterionId as never],
+            },
+          ],
+          constraints: [],
+          acceptanceCriteria: [
+            {
+              criterionId: relayCriterionId as never,
+              ordinal: 1,
+              description: "The report reaches Marketing unchanged",
+              verification: "Match the shared contract reference",
+            },
+          ],
+          milestoneIds: [],
+          unresolvedDecisions: [],
+        },
+      ],
+    });
+    const result = compileAgentBriefs({
+      projectId: STOCK_PROJECT_ID,
+      source: plan.source,
+      graph,
+      plan,
+      assignments: [
+        ...stockAssignments(),
+        {
+          plannedAgentId: relayId,
+          assignmentId:
+            "assignment_10000000-0000-7000-8000-000000000009" as never,
+          briefId: "brief_10000000-0000-7000-8000-000000000009" as never,
+        },
+      ],
+    });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.completeness.status).toBe("complete");
+    expect(result.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "incompatible-contract-direction" }),
+      ]),
+    );
+    expect(
+      result.briefs.find(
+        (candidate) => candidate.plannedAgentId === RESEARCH_ID,
+      )!.brief.dependencies,
+    ).toContainEqual(
+      expect.objectContaining({
+        kind: "provides-input",
+        counterpartAgentId: MARKETING_ID,
+        contractIds: [REPORT_CONTRACT],
+        relationshipIds: [
+          "rel_10000000-0000-7000-8000-000000000001",
+          "rel_10000000-0000-7000-8000-000000000002",
+        ],
+      }),
+    );
+  });
+
+  it("does not treat an owned non-agent endpoint as a contract actor", () => {
+    const graph = stockResearchGraph();
+    graph.nodes.find((node) => node.id === REPORT_ID)!.ownerAgentId =
+      RESEARCH_ID;
+    graph.relationships = graph.relationships.filter(
+      (relationship) => relationship.fromNodeId !== ANALYST_ID,
+    );
     const plan = stockResearchPlan(graph);
     const result = compileAgentBriefs({
       projectId: STOCK_PROJECT_ID,

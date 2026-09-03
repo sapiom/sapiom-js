@@ -280,6 +280,82 @@ describe("canonical build plan impact evaluator", () => {
     ).toBe("unchanged");
   });
 
+  it("uses the full graph change set before bounding emitted change evidence", () => {
+    const base = initial();
+    const researchNode = base.graph.nodes.find(
+      (node) => node.id === RESEARCH_ID,
+    )!;
+    const subagents = Array.from({ length: 130 }, (_, index) => ({
+      id: `node_90000000-0000-7000-8000-${index
+        .toString(16)
+        .padStart(12, "0")}` as typeof RESEARCH_ID,
+      kind: "subagent" as const,
+      name: `Worker ${index}`,
+      purpose: "Before",
+      ownerAgentId: RESEARCH_ID,
+      contractRefs: [],
+    }));
+    const targetId = subagents.at(-1)!.id;
+    const previousGraph = {
+      nodes: [researchNode, ...subagents],
+      relationships: [],
+    };
+    const nextGraph = {
+      ...previousGraph,
+      nodes: previousGraph.nodes.map((node) =>
+        node.kind === "subagent" ? { ...node, purpose: "After" } : node,
+      ),
+    };
+    const brief = base.result.briefs.find(
+      (candidate) => candidate.plannedAgentId === RESEARCH_ID,
+    )!.brief as AgentBriefVersionRecord;
+    const previousBrief = {
+      ...brief,
+      ownedNodeIds: [RESEARCH_ID, targetId],
+      relevantNodeIds: [RESEARCH_ID, targetId],
+      dependencyFingerprints: [
+        {
+          kind: "owned-nodes" as const,
+          digest: `sha256:${"a".repeat(64)}`,
+          nodeIds: [targetId],
+          relationshipIds: [],
+          contractIds: [],
+        },
+      ],
+    };
+    const nextBrief = {
+      ...previousBrief,
+      dependencyFingerprints: previousBrief.dependencyFingerprints.map(
+        (fingerprint) => ({
+          ...fingerprint,
+          digest: `sha256:${"b".repeat(64)}`,
+        }),
+      ),
+    };
+    const impact = evaluateBuildPlanImpact({
+      previousSource: base.plan.source,
+      nextSource: base.plan.source,
+      briefs: [previousBrief],
+      previousPlan: base.plan,
+      nextPlan: base.plan,
+      previousGraph,
+      nextGraph,
+      nextBriefs: [nextBrief],
+    });
+
+    expect(impact.changedNodeIds).toHaveLength(128);
+    expect(impact.changedNodeIds).not.toContain(targetId);
+    expect(impact.assignmentChanges[0]).toMatchObject({
+      disposition: "stale",
+      reasons: [
+        {
+          code: "ownership-changed",
+          affectedNodeIds: [targetId],
+        },
+      ],
+    });
+  });
+
   it("projects schema-bound repeated evidence into a receipt-safe canonical impact", () => {
     const base = initial();
     const baseBrief = base.result.briefs.find(

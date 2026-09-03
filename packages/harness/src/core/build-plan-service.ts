@@ -102,7 +102,7 @@ export interface BriefChangeSummary {
 export interface AgentBriefCompileResult {
   briefs: readonly AgentBriefVersionRecord[];
   changes: readonly BriefChangeSummary[];
-  compilation?: import("../shared/build-plan.js").CompileAgentBriefsResult;
+  impact?: BuildPlanImpactResult;
 }
 
 /** Focused-brief compilation boundary used by build-plan authoring. */
@@ -1327,9 +1327,7 @@ export class BuildPlanService {
           0,
           BUILD_PLAN_MAX_DIAGNOSTICS,
         ),
-        ...(compiled.compilation
-          ? { impact: compiled.compilation.impact }
-          : {}),
+        ...(compiled.impact ? { impact: compiled.impact } : {}),
         replayed: false,
       },
     };
@@ -1527,9 +1525,9 @@ export class BuildPlanService {
           ...result,
           preview: plan,
           semanticDigest: plan.semanticDigest,
-          impactedAssignments: plan.assignments.map(
-            (assignment) => assignment.plannedAgentId,
-          ),
+          impactedAssignments: plan.assignments
+            .slice(0, 128)
+            .map((assignment) => assignment.plannedAgentId),
         }
       : result;
   }

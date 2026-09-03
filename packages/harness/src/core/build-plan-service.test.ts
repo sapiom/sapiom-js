@@ -13,6 +13,7 @@ import type {
   AgentBriefVersionRecord,
   ArchitectureSourceRef,
 } from "../shared/build-plan.js";
+import { emptyBuildPlanningAggregate } from "../shared/build-plan.js";
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import { BuildPlanContractValidator } from "./build-plan-contract-validator.js";
@@ -40,6 +41,7 @@ import {
   BRIEF_ID,
   graph,
   makeBrief,
+  makePlan,
   PLAN_ID,
   PROJECT_ID,
   proposalSource,
@@ -390,6 +392,135 @@ describe("BuildPlanService", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "source_mismatch" });
+  });
+
+  it("replays the exact full apply result above the 128-assignment projection cap", async () => {
+    const agentIds = Array.from(
+      { length: 129 },
+      (_, index) =>
+        `node_80000000-0000-7000-8000-${index
+          .toString(16)
+          .padStart(12, "0")}` as PlanNodeId,
+    );
+    const manyAgentGraph: AgentMapGraph = {
+      nodes: agentIds.map((id, index) => ({
+        id,
+        kind: "agent",
+        name: `Agent ${index}`,
+        purpose: `Own assignment ${index}`,
+        ownerAgentId: null,
+        contractRefs: [],
+      })),
+      relationships: [],
+    };
+    const source = {
+      kind: "revision" as const,
+      revisionId: "revision_80000000-0000-7000-8000-000000000001" as never,
+      revisionNumber: 1,
+      graphDigest: computeArchitectureGraphDigest(manyAgentGraph),
+    };
+    const current = makePlan({
+      source,
+      assignments: agentIds.map((plannedAgentId, index) => ({
+        plannedAgentId,
+        mission: `Implement assignment ${index}`,
+        scope: { inScope: [`Scope ${index}`], nonGoals: ["Deployment"] },
+        deliverables: [],
+        constraints: [],
+        acceptanceCriteria: [],
+        milestoneIds: [],
+        unresolvedDecisions: [],
+      })),
+    });
+    let planning = {
+      ...emptyBuildPlanningAggregate(),
+      planId: current.planId,
+      currentPlanVersion: current.version,
+      planVersions: [current],
+    };
+    const commitPlanVersion = vi.fn(
+      async (...args: Parameters<BuildPlanStore["commitPlanVersion"]>) => {
+        const [plan, , commit, compiled] = args;
+        planning = {
+          ...planning,
+          currentPlanVersion: plan.version,
+          planVersions: [...planning.planVersions, plan],
+          idempotencyReceipts: [
+            {
+              sessionId: commit.sessionId,
+              requestId: commit.requestId,
+              requestDigest: commit.requestDigest,
+              resultRecordDigest: plan.recordDigest,
+              ...(commit.result ? { result: commit.result } : {}),
+              createdAt: "2026-09-03T10:00:00.000Z",
+            },
+          ],
+        };
+        return {
+          plan: {
+            planId: plan.planId,
+            version: plan.version,
+            semanticDigest: plan.semanticDigest,
+          },
+          assignments: [...(compiled?.assignments ?? [])],
+          replayed: false,
+          ...(commit.result ? { receiptResult: commit.result } : {}),
+        };
+      },
+    );
+    const store = {
+      read: vi.fn(async () => structuredClone(planning)),
+      isCurrentProposalSource: vi.fn(async () => true),
+      commitPlanVersion,
+    } as unknown as BuildPlanStore;
+    const resolver = {
+      resolve: vi.fn(async () => ({
+        projectId: PROJECT_ID,
+        source,
+        graph: manyAgentGraph,
+      })),
+    };
+    const compiler = {
+      compile: vi.fn<AgentBriefCompiler["compile"]>(
+        async ({ assignments }) => ({
+          briefs: [],
+          changes: assignments.map(({ plannedAgentId }) => ({
+            plannedAgentId,
+            change: "preserved" as const,
+          })),
+        }),
+      ),
+    };
+    const service = new BuildPlanService({
+      store,
+      sourceResolver: resolver,
+      contractValidator: new BuildPlanContractValidator(resolver),
+      briefCompiler: compiler,
+      impactEvaluator: { evaluate: vi.fn(async () => ({})) },
+      clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
+    });
+    const request = {
+      schemaVersion: 1,
+      planId: current.planId,
+      expectedPlanVersion: current.version,
+      expectedSource: source,
+      requestId: "request-many-assignment-replay",
+      operations: [
+        {
+          op: "set-project-outcome" as const,
+          outcome: { summary: "Ship the many-agent plan" },
+        },
+      ],
+    };
+
+    const applied = await service.apply(identity, request);
+    const replayed = await service.apply(identity, request);
+
+    if (!("impactedAssignments" in applied))
+      throw new Error("expected a full apply result");
+    expect(applied.impactedAssignments).toHaveLength(128);
+    expect(replayed).toEqual({ ...applied, replayed: true });
+    expect(commitPlanVersion).toHaveBeenCalledTimes(1);
   });
 
   it("replays the original full apply and rebase results under concurrent request races", async () => {

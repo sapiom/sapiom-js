@@ -7,6 +7,7 @@ import type {
   AgentBriefId,
   AgentBriefVersion,
   AgentBriefVersionRecord,
+  BuildPlanImpactResult,
   BuildPlanRef,
   BuilderPlanningSubmission,
   BuilderPlanningSubmissionId,
@@ -28,6 +29,7 @@ import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {
   computeArchitectureGraphDigest,
+  computeBuildPlanImpactDigest,
   computePlanningSubmissionRecordDigest,
   computePlanningSubmissionSemanticDigest,
 } from "./build-plan-canonicalization.js";
@@ -246,6 +248,63 @@ describe("BuildPlanStore", () => {
     ).rejects.toMatchObject({
       code: "malformed_state",
     });
+  });
+
+  it("rejects a persisted receipt whose canonical impact digest was not resealed", async () => {
+    const { root, buildPlanStore } = await fixture();
+    const plan = makePlan();
+    const exactPlanRef = {
+      planId: plan.planId,
+      version: plan.version,
+      semanticDigest: plan.semanticDigest,
+    };
+    const withoutDigest = {
+      from: { source: plan.source, plan: exactPlanRef },
+      to: { source: plan.source, plan: exactPlanRef },
+      assignmentChanges: [],
+      staleBriefIds: [],
+      preservedBriefIds: [],
+      addedAgentIds: [],
+      removedAgentIds: [],
+      changedNodeIds: [],
+      changedRelationshipIds: [],
+      changedContractIds: [],
+      semanticChange: false,
+    } satisfies Omit<BuildPlanImpactResult, "digest">;
+    const impact: BuildPlanImpactResult = {
+      ...withoutDigest,
+      digest: computeBuildPlanImpactDigest(withoutDigest),
+    };
+    await buildPlanStore.commitPlanVersion(plan, graph, {
+      ...request,
+      result: {
+        operation: "apply",
+        briefChanges: [],
+        idMappings: [],
+        completeness: { status: "complete", issues: [] },
+        eligibility: {
+          planningEligible: true,
+          implementationEligible: false,
+          reasons: ["source-not-confirmed"],
+        },
+        diagnostics: [],
+        impact,
+      },
+    });
+    const file = path.join(root, "projects", PROJECT_ID, "workspace.json");
+    const persisted = JSON.parse(await fs.readFile(file, "utf8")) as {
+      buildPlanning: {
+        idempotencyReceipts: Array<{
+          result: { impact: { semanticChange: boolean } };
+        }>;
+      };
+    };
+    persisted.buildPlanning.idempotencyReceipts[0]!.result.impact.semanticChange = true;
+    await fs.writeFile(file, `${JSON.stringify(persisted)}\n`);
+
+    await expect(
+      new AgentMapWorkspaceStore(root).readAggregate(PROJECT_ID),
+    ).rejects.toMatchObject({ code: "malformed_state" });
   });
 
   it("detects same-size tampering when file identity metadata is restored", async () => {
