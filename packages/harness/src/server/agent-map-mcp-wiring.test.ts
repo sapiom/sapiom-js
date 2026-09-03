@@ -14,6 +14,7 @@ import type {
 } from "../shared/types.js";
 import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { computeArchitectureGraphDigest } from "../core/build-plan-canonicalization.js";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string;
@@ -315,10 +316,103 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
       },
       { timeout: 1_000 },
     );
+    const snapshot = await client.callTool({
+      name: "agent_map_read",
+      arguments: {},
+    });
+    const proposal = (
+      snapshot.structuredContent as {
+        proposal: {
+          id: string;
+          version: number;
+          nodes: unknown[];
+          relationships: unknown[];
+        };
+      }
+    ).proposal;
+    const graphDigest = computeArchitectureGraphDigest({
+      nodes: proposal.nodes,
+      relationships: proposal.relationships,
+    } as never);
+    const unavailableAuthoring = await client.callTool({
+      name: "build_plan_apply",
+      arguments: {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: {
+          kind: "proposal",
+          proposalId: proposal.id,
+          version: proposal.version,
+          graphDigest,
+        },
+        requestId: "request-production-boundary",
+        operations: [
+          {
+            op: "set-project-outcome",
+            outcome: { summary: "Production must compile this plan" },
+          },
+        ],
+      },
+    });
+    expect(unavailableAuthoring).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "authoring_unavailable",
+        recovery: "dependency_required",
+      },
+    });
+    const unavailableRevision = await client.callTool({
+      name: "build_plan_validate",
+      arguments: {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: {
+          kind: "revision",
+          revisionId: "revision_00000000-0000-7000-8000-000000000020",
+          revisionNumber: 1,
+          graphDigest,
+        },
+        operations: [
+          {
+            op: "set-project-outcome",
+            outcome: { summary: "Production must resolve this revision" },
+          },
+        ],
+      },
+    });
+    expect(unavailableRevision).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "revision_source_unavailable",
+        recovery: "dependency_required",
+      },
+    });
   } finally {
     events.close();
     await client.close();
   }
+  const refreshedPlanner = await fetch(
+    `http://127.0.0.1:${server.port}/api/projects/${projectId}/planner-sessions`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-harness-token": "boot-token",
+      },
+      body: JSON.stringify({ mode: "fresh", harness: "claude-code" }),
+    },
+  );
+  expect(refreshedPlanner.status).toBe(201);
+  const refreshedPrompt = await fs.readFile(
+    launches[1]!.systemPromptFile!,
+    "utf8",
+  );
+  expect(refreshedPrompt).toContain('"architectureSource":{"kind":"proposal"');
+  expect(refreshedPrompt).toContain('"version":1');
+  expect(refreshedPrompt).not.toContain('"architectureSource":null');
+
   const ordinary = await server.sessionManager.create({
     cwd: projectRoot,
     harness: "claude-code",
@@ -328,7 +422,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     userId: "local:machine-1",
     assignment: { kind: "unplanned" },
   });
-  const ordinaryLaunch = launches[1]!;
+  const ordinaryLaunch = launches[2]!;
   expect(ordinaryLaunch.agentMapMcp).toBeDefined();
   expect(await fs.readFile(ordinaryLaunch.systemPromptFile!, "utf8")).toBe(
     codingPrompt,

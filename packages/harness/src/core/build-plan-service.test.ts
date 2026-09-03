@@ -3,16 +3,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type {
+  AgentMapGraph,
+  DraftRef,
+  PlanNodeId,
+  PlanningSessionIdentity,
+} from "../shared/agent-map.js";
 import type { ArchitectureSourceRef } from "../shared/build-plan.js";
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import { BuildPlanContractValidator } from "./build-plan-contract-validator.js";
 import {
   type AgentBriefCompiler,
   BuildPlanService,
 } from "./build-plan-service.js";
 import { BuildPlanStore } from "./build-plan-store.js";
-import { computeArchitectureGraphDigest } from "./build-plan-canonicalization.js";
+import {
+  computeArchitectureGraphDigest,
+  computeBuildPlanRecordDigest,
+  computeBuildPlanSemanticDigest,
+} from "./build-plan-canonicalization.js";
 import {
   AGENT_ID,
   ASSIGNMENT_ID,
@@ -30,6 +40,8 @@ const identity: PlanningSessionIdentity = {
   userId: "planner-user",
   role: "map-planner",
 };
+const SECOND_AGENT_ID =
+  "node_00000000-0000-7000-8000-000000000006" as PlanNodeId;
 const baseOperations = [
   { op: "set-project-outcome" as const, outcome: { summary: "Ship safely" } },
   {
@@ -70,24 +82,30 @@ describe("BuildPlanService", () => {
     const workspace = new AgentMapWorkspaceStore(root, {
       ...(beforePersistStep ? { beforePersistStep } : {}),
     });
+    const allocator = {
+      allocateBuildPlanId: vi.fn(() => PLAN_ID),
+      allocateBriefId: vi.fn(() => BRIEF_ID),
+      allocateAssignmentId: vi.fn(() => ASSIGNMENT_ID),
+    };
     const store = new BuildPlanStore(workspace, {
-      allocator: {
-        allocateBuildPlanId: () => PLAN_ID,
-        allocateBriefId: () => BRIEF_ID,
-        allocateAssignmentId: () => ASSIGNMENT_ID,
-      },
+      allocator,
       now: () => new Date("2026-09-03T10:00:00.000Z"),
     });
+    const graphs = new Map([[computeArchitectureGraphDigest(graph), graph]]);
+    let resolveCount = 0;
+    let onResolve: ((count: number) => Promise<void> | void) | undefined;
     const resolver = {
       resolve: async (projectId: string, source: ArchitectureSourceRef) => {
         if (projectId !== PROJECT_ID) throw new Error("cross project");
+        resolveCount += 1;
+        await onResolve?.(resolveCount);
         return {
           projectId: PROJECT_ID,
           source,
-          graph:
-            source.graphDigest === computeArchitectureGraphDigest(graph)
-              ? graph
-              : { nodes: [], relationships: [] },
+          graph: graphs.get(source.graphDigest) ?? {
+            nodes: [],
+            relationships: [],
+          },
         };
       },
     };
@@ -105,12 +123,55 @@ describe("BuildPlanService", () => {
       idFactory: store,
       clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
     });
-    await workspace.readOrCreate(PROJECT_ID);
-    return { service, store, compiler, impact };
+    let operationNumber = 8;
+    const proposalService = new AgentMapProposalService(workspace, {
+      allocator: {
+        allocateNodeId: () => AGENT_ID,
+        allocateRelationshipId: () =>
+          "rel_00000000-0000-7000-8000-000000000009" as never,
+        allocateProposalId: () => proposalSource().proposalId,
+        allocateOperationId: () =>
+          `operation_00000000-0000-7000-8000-${String(operationNumber++).padStart(12, "0")}` as never,
+      },
+      now: () => new Date("2026-09-03T09:00:00.000Z"),
+    });
+    await proposalService.propose(identity, {
+      schemaVersion: 1,
+      proposalId: null,
+      expectedVersion: 0,
+      requestId: "seed-proposal",
+      operations: [
+        {
+          kind: "add-node",
+          draftRef: "seed-agent" as DraftRef,
+          node: {
+            kind: "agent",
+            name: graph.nodes[0]!.name,
+            purpose: graph.nodes[0]!.purpose,
+            ownerAgent: null,
+            contractRefs: [],
+          },
+        },
+      ],
+    });
+    return {
+      service,
+      store,
+      workspace,
+      proposalService,
+      allocator,
+      compiler,
+      impact,
+      onResolve: (callback: (count: number) => Promise<void> | void) => {
+        onResolve = callback;
+      },
+      registerGraph: (value: typeof graph) =>
+        graphs.set(computeArchitectureGraphDigest(value), value),
+    };
   }
 
   it("validates initial creation without allocating or persisting, then applies atomically", async () => {
-    const { service, store, compiler } = await fixture();
+    const { service, store, compiler, allocator } = await fixture();
     compiler.mockImplementation(async ({ plan, assignments }) => {
       const assignment = assignments[0]!;
       return {
@@ -148,32 +209,123 @@ describe("BuildPlanService", () => {
       reasons: ["source-not-confirmed"],
     });
     expect((await store.read(PROJECT_ID)).planVersions).toEqual([]);
+    const repeatedPreview = await service.validate(identity, request);
+    expect(repeatedPreview.plan).toEqual(preview.plan);
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
 
     const applied = await service.apply(identity, {
       ...request,
       requestId: "request-create",
     });
     expect(applied).toMatchObject({
-      plan: { planId: PLAN_ID, version: 1 },
+      plan: { version: 1 },
       briefChanges: [{ plannedAgentId: AGENT_ID, change: "created" }],
       replayed: false,
     });
     const persisted = await store.read(PROJECT_ID);
     expect(persisted.planVersions).toHaveLength(1);
     expect(persisted.currentBriefByAgentId[AGENT_ID]).toMatchObject({
-      briefId: BRIEF_ID,
       version: 1,
     });
     await expect(
       service.read(identity, {
         schemaVersion: 1,
-        plan: { planId: PLAN_ID, version: 1 },
+        plan: { planId: applied.plan.planId, version: 1 },
         include: ["assignment-intents", "history-summary"],
       }),
     ).resolves.toMatchObject({
-      plan: { planId: PLAN_ID, version: 1 },
+      plan: { planId: applied.plan.planId, version: 1 },
       assignmentIntents: [{ plannedAgentId: AGENT_ID }],
       history: { versionCount: 1, currentVersion: 1 },
+    });
+    const planOnly = await service.read(identity, {
+      schemaVersion: 1,
+      plan: { planId: applied.plan.planId, version: 1 },
+      include: ["plan"],
+    });
+    const state = planOnly.state!;
+    expect(state.assignments).toEqual([
+      expect.objectContaining({ plannedAgentId: AGENT_ID }),
+    ]);
+    expect(computeBuildPlanSemanticDigest(state)).toBe(state.semanticDigest);
+    expect(computeBuildPlanRecordDigest(state)).toBe(state.recordDigest);
+  });
+
+  it("does not recommit compiler-preserved current briefs", async () => {
+    const { service, store, compiler } = await fixture();
+    compiler.mockImplementationOnce(async ({ plan, assignments }) => {
+      const assignment = assignments[0]!;
+      return {
+        briefs: [
+          makeBrief(plan, {
+            briefId: assignment.briefId,
+            assignmentId: assignment.assignmentId,
+            plan: {
+              planId: plan.planId,
+              version: plan.version,
+              semanticDigest: plan.semanticDigest,
+            },
+            source: plan.source,
+            authoredBy: plan.authoredBy,
+            createdAt: plan.createdAt,
+          }),
+        ],
+        changes: [
+          { plannedAgentId: assignment.plannedAgentId, change: "created" },
+        ],
+      };
+    });
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-create-with-brief",
+      operations: baseOperations,
+    });
+    compiler.mockImplementation(async ({ currentBriefs }) => ({
+      briefs: currentBriefs,
+      changes: currentBriefs.map((brief) => ({
+        plannedAgentId: brief.plannedAgentId,
+        change: "preserved",
+      })),
+    }));
+
+    await expect(
+      service.apply(identity, {
+        schemaVersion: 1,
+        planId: created.plan.planId,
+        expectedPlanVersion: created.plan.version,
+        expectedSource: proposalSource(),
+        requestId: "request-preserved-brief",
+        operations: [
+          {
+            op: "set-project-outcome",
+            outcome: { summary: "Update without recompiling the brief" },
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      plan: { version: 2 },
+      briefChanges: [{ plannedAgentId: AGENT_ID, change: "preserved" }],
+    });
+    expect(
+      Object.values((await store.read(PROJECT_ID)).briefVersionsById),
+    ).toEqual([
+      expect.arrayContaining([expect.objectContaining({ version: 1 })]),
+    ]);
+    await expect(
+      service.read(identity, {
+        schemaVersion: 1,
+        include: ["brief-summaries"],
+      }),
+    ).resolves.toMatchObject({
+      plan: { version: 2 },
+      briefs: [{ version: 1, current: true, freshness: "stale" }],
     });
   });
 
@@ -187,7 +339,7 @@ describe("BuildPlanService", () => {
       requestId: "request-create",
       operations: baseOperations,
     };
-    await service.apply(identity, request);
+    const created = await service.apply(identity, request);
     await expect(service.apply(identity, request)).resolves.toMatchObject({
       replayed: true,
     });
@@ -203,7 +355,7 @@ describe("BuildPlanService", () => {
       service.apply(identity, {
         ...request,
         requestId: "request-stale",
-        planId: PLAN_ID,
+        planId: created.plan.planId,
         expectedPlanVersion: 2,
       }),
     ).rejects.toMatchObject({ code: "plan_version_conflict" });
@@ -211,7 +363,7 @@ describe("BuildPlanService", () => {
       service.apply(identity, {
         ...request,
         requestId: "request-source-mismatch",
-        planId: PLAN_ID,
+        planId: created.plan.planId,
         expectedPlanVersion: 1,
         expectedSource: {
           kind: "revision",
@@ -223,12 +375,306 @@ describe("BuildPlanService", () => {
     ).rejects.toMatchObject({ code: "source_mismatch" });
   });
 
+  it("replays the original full apply and rebase results under concurrent request races", async () => {
+    const { service, compiler, impact } = await fixture();
+    compiler.mockImplementation(async ({ assignments }) => ({
+      briefs: [],
+      changes: assignments.map(({ plannedAgentId }) => ({
+        plannedAgentId,
+        change: "created" as const,
+      })),
+    }));
+    const createRequest = {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-concurrent-create",
+      operations: baseOperations,
+    };
+    const applies = await Promise.all([
+      service.apply(identity, createRequest),
+      service.apply(identity, createRequest),
+    ]);
+    expect(applies.map(({ replayed }) => replayed).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(applies[1]).toEqual({
+      ...applies[0],
+      replayed: !applies[0]!.replayed,
+    });
+
+    const current = applies[0]!.plan;
+    impact.mockResolvedValue({
+      [AGENT_ID]: [
+        {
+          code: "source-changed",
+          affectedNodeIds: [AGENT_ID],
+          affectedRelationshipIds: [],
+          affectedContractIds: [],
+        },
+      ],
+    });
+    const revisionSource = {
+      kind: "revision" as const,
+      revisionId: "revision_00000000-0000-7000-8000-000000000020",
+      revisionNumber: 1,
+      graphDigest: proposalSource().graphDigest,
+    };
+    const rebaseRequest = {
+      schemaVersion: 1,
+      planId: current.planId,
+      expectedPlanVersion: current.version,
+      fromSource: proposalSource(),
+      toSource: revisionSource,
+      requestId: "request-concurrent-rebase",
+      resolutions: [],
+    };
+    const rebases = await Promise.all([
+      service.rebase(identity, rebaseRequest),
+      service.rebase(identity, rebaseRequest),
+    ]);
+    expect(rebases.map(({ replayed }) => replayed).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(rebases[1]).toEqual({
+      ...rebases[0],
+      replayed: !rebases[0]!.replayed,
+    });
+  });
+
+  it("allocates canonical subrecord IDs from bounded client correlations", async () => {
+    const { service, allocator, store } = await fixture();
+    const result = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-client-correlations",
+      operations: [
+        baseOperations[0]!,
+        {
+          op: "create-milestone",
+          clientRef: "milestone-alpha",
+          milestone: {
+            ordinal: 1,
+            title: "Alpha",
+            outcome: "Ready",
+            dependsOn: [],
+          },
+        },
+        {
+          op: "create-agent-assignment",
+          assignment: {
+            plannedAgentId: AGENT_ID,
+            mission: "Ship the feature",
+            scope: { inScope: ["Core"], nonGoals: ["Deploy"] },
+            deliverables: [
+              {
+                clientRef: "deliverable-alpha",
+                description: "Produce the artifact",
+                artifactNodeIds: [AGENT_ID],
+                acceptanceCriterionRefs: [{ clientRef: "criterion-alpha" }],
+              },
+            ],
+            constraints: [],
+            acceptanceCriteria: [
+              {
+                clientRef: "criterion-alpha",
+                ordinal: 1,
+                description: "It works",
+                verification: "Run tests",
+              },
+            ],
+            milestoneRefs: [{ clientRef: "milestone-alpha" }],
+            unresolvedDecisions: [
+              {
+                clientRef: "decision-alpha",
+                question: "Ready?",
+                required: false,
+                status: "resolved",
+                resolution: "Yes",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(result.idMappings.map(({ kind }) => kind).sort()).toEqual([
+      "criterion",
+      "decision",
+      "deliverable",
+      "milestone",
+    ]);
+    const persisted = (await store.read(PROJECT_ID)).planVersions[0]!;
+    expect(persisted.assignments[0]!.milestoneIds).toEqual([
+      result.idMappings.find(({ kind }) => kind === "milestone")!.id,
+    ]);
+    expect(persisted.assignments[0]!.deliverables[0]).toMatchObject({
+      deliverableId: result.idMappings.find(
+        ({ kind }) => kind === "deliverable",
+      )!.id,
+      acceptanceCriterionIds: [
+        result.idMappings.find(({ kind }) => kind === "criterion")!.id,
+      ],
+    });
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("reads briefs for the exact historical plan and marks current status separately", async () => {
+    const { service, compiler } = await fixture();
+    compiler.mockImplementation(
+      async ({ plan, assignments, currentBriefs }) => {
+        const assignment = assignments[0]!;
+        const prior = currentBriefs[0];
+        return {
+          briefs: [
+            makeBrief(plan, {
+              briefId: assignment.briefId,
+              assignmentId: assignment.assignmentId,
+              version: (prior ? prior.version + 1 : 1) as never,
+              parentVersion: prior?.version ?? null,
+              plan: {
+                planId: plan.planId,
+                version: plan.version,
+                semanticDigest: plan.semanticDigest,
+              },
+              source: plan.source,
+              authoredBy: plan.authoredBy,
+              createdAt: plan.createdAt,
+            }),
+          ],
+          changes: [
+            {
+              plannedAgentId: assignment.plannedAgentId,
+              change: prior ? "changed" : "created",
+            },
+          ],
+        };
+      },
+    );
+    const first = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "request-history-v1",
+      operations: baseOperations,
+    });
+    const second = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: first.plan.planId,
+      expectedPlanVersion: 1,
+      expectedSource: proposalSource(),
+      requestId: "request-history-v2",
+      operations: [
+        {
+          op: "set-project-outcome",
+          outcome: { summary: "Ship safely, then verify" },
+        },
+      ],
+    });
+    const versionOne = await service.read(identity, {
+      schemaVersion: 1,
+      plan: { planId: first.plan.planId, version: 1 },
+      include: ["brief-summaries"],
+    });
+    const versionTwo = await service.read(identity, {
+      schemaVersion: 1,
+      plan: { planId: second.plan.planId, version: 2 },
+      include: ["brief-summaries"],
+    });
+    expect(versionOne).toMatchObject({
+      current: false,
+      briefs: [{ version: 1, current: false }],
+    });
+    expect(versionTwo).toMatchObject({
+      current: true,
+      briefs: [{ version: 2, current: true }],
+    });
+  });
+
+  it("returns a reread conflict when an initial create loses a race", async () => {
+    const { service } = await fixture();
+    const create = (requestId: string) =>
+      service.apply(identity, {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        requestId,
+        operations: baseOperations,
+      });
+    const outcomes = await Promise.allSettled([
+      create("request-race-a"),
+      create("request-race-b"),
+    ]);
+    expect(
+      outcomes.filter(({ status }) => status === "fulfilled"),
+    ).toHaveLength(1);
+    const created = outcomes.find((outcome) => outcome.status === "fulfilled");
+    expect(created?.status).toBe("fulfilled");
+    const createdPlanId =
+      created?.status === "fulfilled" ? created.value.plan.planId : "";
+    expect(outcomes.find(({ status }) => status === "rejected")).toMatchObject({
+      reason: {
+        code: "plan_version_conflict",
+        currentPlan: { planId: createdPlanId, version: 1 },
+      },
+    });
+    await expect(create("request-stale-create")).rejects.toMatchObject({
+      code: "plan_version_conflict",
+      currentPlan: { planId: createdPlanId, version: 1 },
+    });
+  });
+
+  it("rejects a stale active proposal during validation", async () => {
+    const { service, proposalService } = await fixture();
+    await proposalService.propose(identity, {
+      schemaVersion: 1,
+      proposalId: proposalSource().proposalId,
+      expectedVersion: 1,
+      requestId: "advance-source-before-validation",
+      operations: [
+        {
+          kind: "update-node",
+          nodeId: AGENT_ID,
+          changes: { name: "New active source" },
+        },
+      ],
+    });
+    await expect(
+      service.validate(identity, {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        operations: baseOperations,
+      }),
+    ).rejects.toMatchObject({ code: "source_mismatch" });
+  });
+
   it("applies dependent milestone rewrites in one batch and requires explicit rebase resolutions", async () => {
-    const { service, impact } = await fixture();
+    const { service, impact, registerGraph } = await fixture();
     const source = proposalSource();
     const milestoneId = "milestone_00000000-0000-7000-8000-000000000010";
+    const deliverableId = "deliverable_00000000-0000-7000-8000-000000000011";
     const assignment = {
       ...baseOperations[1]!.assignment,
+      deliverables: [
+        {
+          deliverableId,
+          description: "Produce the owned architecture artifact",
+          artifactNodeIds: [AGENT_ID],
+          acceptanceCriterionIds: [],
+        },
+      ],
       milestoneIds: [milestoneId],
     };
     const created = await service.apply(identity, {
@@ -239,6 +685,18 @@ describe("BuildPlanService", () => {
       requestId: "request-create",
       operations: [
         baseOperations[0]!,
+        {
+          op: "set-repository-intents",
+          repositories: [
+            {
+              repositoryIntentId: "repository-primary",
+              plannedAgentId: AGENT_ID,
+              action: "create",
+              repositoryName: "primary",
+              notes: "Owned by the planned agent",
+            },
+          ],
+        },
         {
           op: "upsert-milestone",
           milestone: {
@@ -255,7 +713,7 @@ describe("BuildPlanService", () => {
     await expect(
       service.apply(identity, {
         schemaVersion: 1,
-        planId: PLAN_ID,
+        planId: created.plan.planId,
         expectedPlanVersion: created.plan.version,
         expectedSource: source,
         requestId: "request-invalid-removal",
@@ -264,7 +722,7 @@ describe("BuildPlanService", () => {
     ).rejects.toMatchObject({ code: "invalid_operation" });
     const edited = await service.apply(identity, {
       schemaVersion: 1,
-      planId: PLAN_ID,
+      planId: created.plan.planId,
       expectedPlanVersion: created.plan.version,
       expectedSource: source,
       requestId: "request-atomic-removal",
@@ -284,7 +742,7 @@ describe("BuildPlanService", () => {
     };
     const rebased = await service.rebase(identity, {
       schemaVersion: 1,
-      planId: PLAN_ID,
+      planId: created.plan.planId,
       expectedPlanVersion: edited.plan.version,
       fromSource: source,
       toSource: revisionSource,
@@ -293,9 +751,83 @@ describe("BuildPlanService", () => {
     });
     expect(rebased.plan.version).toBe(3);
     expect(rebased.plan.semanticDigest).toBe(edited.plan.semanticDigest);
-    const emptySource = {
+    const remappedGraph: AgentMapGraph = {
+      nodes: [
+        {
+          ...graph.nodes[0]!,
+          id: SECOND_AGENT_ID,
+          name: "Replacement builder",
+        },
+      ],
+      relationships: [],
+    };
+    registerGraph(remappedGraph);
+    const remappedSource = {
       ...revisionSource,
       revisionNumber: 2,
+      graphDigest: computeArchitectureGraphDigest(remappedGraph),
+    };
+    await expect(
+      service.rebase(identity, {
+        schemaVersion: 1,
+        planId: created.plan.planId,
+        expectedPlanVersion: rebased.plan.version,
+        fromSource: revisionSource,
+        toSource: remappedSource,
+        requestId: "request-unresolved-rebase",
+        resolutions: [
+          {
+            kind: "remap-agent",
+            fromPlannedAgentId: AGENT_ID,
+            toPlannedAgentId: SECOND_AGENT_ID,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "rebase_conflict" });
+    const remapped = await service.rebase(identity, {
+      schemaVersion: 1,
+      planId: created.plan.planId,
+      expectedPlanVersion: rebased.plan.version,
+      fromSource: revisionSource,
+      toSource: remappedSource,
+      requestId: "request-remapped-rebase",
+      resolutions: [
+        {
+          kind: "remap-agent",
+          fromPlannedAgentId: AGENT_ID,
+          toPlannedAgentId: SECOND_AGENT_ID,
+        },
+        {
+          kind: "remap-repository-intent",
+          repositoryIntentId: "repository-primary",
+          toPlannedAgentId: SECOND_AGENT_ID,
+        },
+        {
+          kind: "remap-artifact-reference",
+          plannedAgentId: SECOND_AGENT_ID,
+          deliverableId,
+          fromNodeId: AGENT_ID,
+          toNodeId: SECOND_AGENT_ID,
+        },
+      ],
+    });
+    const remappedPlan = await service.read(identity, {
+      schemaVersion: 1,
+      include: ["plan"],
+    });
+    expect(remappedPlan.state).toMatchObject({
+      assignments: [
+        {
+          plannedAgentId: SECOND_AGENT_ID,
+          deliverables: [{ artifactNodeIds: [SECOND_AGENT_ID] }],
+        },
+      ],
+      repositoryIntents: [{ plannedAgentId: SECOND_AGENT_ID }],
+    });
+
+    const emptySource = {
+      ...revisionSource,
+      revisionNumber: 3,
       graphDigest: computeArchitectureGraphDigest({
         nodes: [],
         relationships: [],
@@ -304,26 +836,24 @@ describe("BuildPlanService", () => {
     await expect(
       service.rebase(identity, {
         schemaVersion: 1,
-        planId: PLAN_ID,
-        expectedPlanVersion: rebased.plan.version,
-        fromSource: revisionSource,
-        toSource: emptySource,
-        requestId: "request-unresolved-rebase",
-        resolutions: [],
-      }),
-    ).rejects.toMatchObject({ code: "rebase_conflict" });
-    await expect(
-      service.rebase(identity, {
-        schemaVersion: 1,
-        planId: PLAN_ID,
-        expectedPlanVersion: rebased.plan.version,
-        fromSource: revisionSource,
+        planId: created.plan.planId,
+        expectedPlanVersion: remapped.plan.version,
+        fromSource: remappedSource,
         toSource: emptySource,
         requestId: "request-resolved-rebase",
-        resolutions: [{ kind: "remove-assignment", plannedAgentId: AGENT_ID }],
+        resolutions: [
+          {
+            kind: "remove-assignment",
+            plannedAgentId: SECOND_AGENT_ID,
+          },
+          {
+            kind: "remove-repository-intent",
+            repositoryIntentId: "repository-primary",
+          },
+        ],
       }),
-    ).resolves.toMatchObject({ plan: { version: 4 } });
-    expect(impact).toHaveBeenCalledTimes(2);
+    ).resolves.toMatchObject({ plan: { version: 5 } });
+    expect(impact).toHaveBeenCalledTimes(3);
   });
 
   it("denies builder identities even when model input contains no scope fields", async () => {
@@ -346,9 +876,78 @@ describe("BuildPlanService", () => {
     ).rejects.toMatchObject({ code: "forbidden_role" });
   });
 
+  it("fails closed when the active proposal changes after source validation", async () => {
+    const { service, proposalService, onResolve, allocator, store } =
+      await fixture();
+    let raceError: unknown;
+    onResolve(async (count) => {
+      if (count !== 2) return;
+      try {
+        await proposalService.propose(identity, {
+          schemaVersion: 1,
+          proposalId: proposalSource().proposalId,
+          expectedVersion: 1,
+          requestId: "race-source-update",
+          operations: [
+            {
+              kind: "update-node",
+              nodeId: AGENT_ID,
+              changes: { name: "Changed during compilation" },
+            },
+          ],
+        });
+      } catch (error) {
+        raceError = error;
+      }
+    });
+    const failure = await service
+      .apply(identity, {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        requestId: "request-source-race",
+        operations: baseOperations,
+      })
+      .catch((error: unknown) => error);
+    expect(raceError).toBeUndefined();
+    expect((await proposalService.read(PROJECT_ID)).proposal?.version).toBe(2);
+    expect((await store.read(PROJECT_ID)).planVersions).toEqual([]);
+    expect(failure).toMatchObject({
+      code: "plan_version_conflict",
+      issues: [],
+    });
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not consume durable allocators when compilation fails", async () => {
+    const { service, compiler, allocator, store } = await fixture();
+    compiler.mockRejectedValueOnce(new Error("compiler failed"));
+    await expect(
+      service.apply(identity, {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: proposalSource(),
+        requestId: "request-compiler-failure",
+        operations: baseOperations,
+      }),
+    ).rejects.toThrow("compiler failed");
+    expect((await store.read(PROJECT_ID)).planVersions).toEqual([]);
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
+  });
+
   it("leaves no receipt or version after an aggregate failure and permits retry", async () => {
     let fail = false;
-    const { service, store } = await fixture((step) => {
+    const { service, store, allocator } = await fixture((step) => {
       if (fail && step === "rename") throw new Error("injected write failure");
     });
     fail = true;
@@ -367,6 +966,11 @@ describe("BuildPlanService", () => {
       planVersions: [],
       idempotencyReceipts: [],
     });
+    expect(
+      Object.values(allocator).every(
+        (allocate) => allocate.mock.calls.length === 0,
+      ),
+    ).toBe(true);
     fail = false;
     await expect(service.apply(identity, request)).resolves.toMatchObject({
       plan: { version: 1 },

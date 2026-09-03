@@ -29,11 +29,11 @@ import {
  * zod-to-json-schema renders each ZodCatch from its inner schema; the final
  * refinement keeps every envelope field required in the advertised contract.
  */
-const preserveInvalidForService = <Schema extends z.ZodTypeAny>(
-  schema: Schema,
-) =>
+const preserveInvalidForService = <Schema extends z.ZodTypeAny>(schema: Schema) =>
   schema
-    .catch((context: { input: unknown }) => context.input as z.output<Schema>)
+    .catch(
+      (context: { input: unknown }) => context.input as z.output<Schema>,
+    )
     .refine((value) => value !== undefined);
 const preserveOptionalInvalidForService = <Schema extends z.ZodTypeAny>(
   schema: Schema,
@@ -137,6 +137,8 @@ export interface AgentMapToolEvent {
   outcome: "ok" | "error";
   errorCode?: string;
   role: PlanningSessionIdentity["role"];
+  projectId: string;
+  sessionId: string;
   latencyMs: number;
   operationCount?: number;
   diagnosticCount?: number;
@@ -177,6 +179,9 @@ function errorResult(error: unknown) {
             error.code === "plan_version_conflict" ||
             error.code === "source_mismatch"
               ? "reread"
+              : error.code === "authoring_unavailable" ||
+                  error.code === "revision_source_unavailable"
+                ? "dependency_required"
               : error.code === "idempotency_key_reused"
                 ? "new_request_id"
                 : "correct",
@@ -217,10 +222,7 @@ export function createAgentMapToolServer(
   service: AgentMapProposalService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
-  const server = new McpServer({
-    name: "sapiom-studio-agent-map",
-    version: "1",
-  });
+  const server = new McpServer({ name: "sapiom-studio-agent-map", version: "1" });
   const emit = (event: AgentMapToolEvent): void => {
     try {
       options.onEvent?.(event);
@@ -232,10 +234,12 @@ export function createAgentMapToolServer(
   const instrument = async <T>(
     tool: AgentMapToolEvent["tool"],
     operation: () => Promise<T>,
-    operationCount?: number,
+    readOperationCount?: () => number | undefined,
   ) => {
     const startedAt = Date.now();
+    let operationCount: number | undefined;
     try {
+      operationCount = readOperationCount?.();
       const value = await operation();
       const structured = (
         value as {
@@ -259,6 +263,8 @@ export function createAgentMapToolServer(
         tool,
         outcome: "ok",
         role: identity.role,
+        projectId: identity.projectId,
+        sessionId: identity.sessionId,
         latencyMs: Math.max(0, Date.now() - startedAt),
         ...(operationCount === undefined ? {} : { operationCount }),
         diagnosticCount: structured?.diagnostics?.length ?? 0,
@@ -285,6 +291,8 @@ export function createAgentMapToolServer(
         outcome: "error",
         errorCode: String(result.structuredContent.code),
         role: identity.role,
+        projectId: identity.projectId,
+        sessionId: identity.sessionId,
         latencyMs: Math.max(0, Date.now() - startedAt),
         ...(operationCount === undefined ? {} : { operationCount }),
         conflict: [
@@ -300,8 +308,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "agent_map_read",
     {
-      description:
-        "Read the current confirmed workspace and shared Agent Map proposal.",
+      description: "Read the current confirmed workspace and shared Agent Map proposal.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -310,53 +317,36 @@ export function createAgentMapToolServer(
         const snapshot = options.readSnapshot
           ? await options.readSnapshot()
           : await service.read(identity.projectId);
-        const proposal = (
-          snapshot as { proposal?: { version?: number } | null }
-        ).proposal;
-        return toolResult(
-          snapshot,
-          `Agent Map proposal version ${proposal?.version ?? 0}.`,
-        );
+        const proposal = (snapshot as { proposal?: { version?: number } | null }).proposal;
+        return toolResult(snapshot, `Agent Map proposal version ${proposal?.version ?? 0}.`);
       }),
   );
 
   server.registerTool(
     "agent_map_validate",
     {
-      description:
-        "Validate a complete proposal batch without mutating shared state or allocating IDs.",
+      description: "Validate a complete proposal batch without mutating shared state or allocating IDs.",
       inputSchema: batchSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (request) =>
       instrument("agent_map_validate", async () => {
         const result = await service.validate(identity, request);
-        return toolResult(
-          result,
-          `Proposal batch is valid at version ${result.currentVersion}.`,
-        );
+        return toolResult(result, `Proposal batch is valid at version ${result.currentVersion}.`);
       }),
   );
 
   server.registerTool(
     "agent_map_propose",
     {
-      description:
-        "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
+      description: "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
       inputSchema: batchSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (request) =>
       instrument("agent_map_propose", async () => {
         const result = await service.propose(identity, request);
-        return toolResult(
-          result,
-          `Accepted Agent Map proposal version ${result.version}.`,
-        );
+        return toolResult(result, `Accepted Agent Map proposal version ${result.version}.`);
       }),
   );
 
@@ -397,7 +387,10 @@ export function createAgentMapToolServer(
               `Build plan batch is valid for version ${result.plan.version}.`,
             );
           },
-          request.operations.length,
+          () =>
+            Array.isArray(request.operations)
+              ? request.operations.length
+              : undefined,
         ),
     );
     server.registerTool(
@@ -422,7 +415,10 @@ export function createAgentMapToolServer(
               `Accepted build plan version ${result.plan.version}.`,
             );
           },
-          request.operations.length,
+          () =>
+            Array.isArray(request.operations)
+              ? request.operations.length
+              : undefined,
         ),
     );
     server.registerTool(
@@ -447,7 +443,10 @@ export function createAgentMapToolServer(
               `Rebased build plan to version ${result.plan.version}.`,
             );
           },
-          request.resolutions.length,
+          () =>
+            Array.isArray(request.resolutions)
+              ? request.resolutions.length
+              : undefined,
         ),
     );
   }

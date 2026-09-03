@@ -14,10 +14,7 @@ import {
 } from "../core/agent-map-capability-registry.js";
 import type { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import type { BuildPlanService } from "../core/build-plan-service.js";
-import {
-  createAgentMapToolServer,
-  type AgentMapMcpToolsOptions,
-} from "./agent-map-mcp-tools.js";
+import { createAgentMapToolServer, type AgentMapMcpToolsOptions } from "./agent-map-mcp-tools.js";
 
 interface BoundTransport {
   transport: StreamableHTTPServerTransport;
@@ -26,16 +23,12 @@ interface BoundTransport {
   lastUsedAt: number;
 }
 
-export interface AgentMapMcpRouterOptions extends Omit<
-  AgentMapMcpToolsOptions,
-  "readSnapshot"
-> {
+export interface AgentMapMcpRouterOptions
+  extends Omit<AgentMapMcpToolsOptions, "readSnapshot"> {
   capabilities: AgentMapCapabilityRegistry;
   service: AgentMapProposalService;
   buildPlanService?: BuildPlanService;
-  readSnapshotFor?: (
-    identity: ResolvedAgentMapCapability["identity"],
-  ) => Promise<object>;
+  readSnapshotFor?: (identity: ResolvedAgentMapCapability["identity"]) => Promise<object>;
   maxSessions?: number;
   now?: () => number;
   /** Deterministic lifecycle seam for transport-failure regression tests. */
@@ -67,9 +60,7 @@ const protocolError = (response: Response, status: number, message: string) =>
   });
 
 /** Stateful Streamable HTTP router with capability-generation pinning. */
-export function createAgentMapMcpRouter(
-  options: AgentMapMcpRouterOptions,
-): AgentMapMcpRouter {
+export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): AgentMapMcpRouter {
   const router = Router();
   router.use(express.json({ limit: "1mb" }));
   const sessions = new Map<string, BoundTransport>();
@@ -96,11 +87,7 @@ export function createAgentMapMcpRouter(
     }
   };
 
-  const resolveBound = (
-    request: Request,
-    response: Response,
-    capability: ResolvedAgentMapCapability,
-  ) => {
+  const resolveBound = (request: Request, response: Response, capability: ResolvedAgentMapCapability) => {
     const sessionId = request.header("mcp-session-id");
     const bound = sessionId ? sessions.get(sessionId) : undefined;
     if (!sessionId || !bound) {
@@ -143,12 +130,9 @@ export function createAgentMapMcpRouter(
     if (requestedSessionId) {
       const bound = resolveBound(request, response, capability);
       if (!bound) return;
-      await bound.transport
-        .handleRequest(request, response, request.body)
-        .catch(() => {
-          if (!response.headersSent)
-            protocolError(response, 500, "Agent Map MCP request failed");
-        });
+      await bound.transport.handleRequest(request, response, request.body).catch(() => {
+        if (!response.headersSent) protocolError(response, 500, "Agent Map MCP request failed");
+      });
       return;
     }
     if (!isInitializeRequest(request.body)) {
@@ -156,9 +140,7 @@ export function createAgentMapMcpRouter(
       return;
     }
     if (sessions.size >= maxSessions) {
-      const oldest = [...sessions.entries()].sort(
-        (a, b) => a[1].lastUsedAt - b[1].lastUsedAt,
-      )[0];
+      const oldest = [...sessions.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt)[0];
       if (oldest) await closeBound(oldest[0], oldest[1]);
     }
     const transport = createTransport({
@@ -182,19 +164,13 @@ export function createAgentMapMcpRouter(
           }
         : {}),
     });
-    const bound: BoundTransport = {
-      transport,
-      server,
-      capability,
-      lastUsedAt: now(),
-    };
+    const bound: BoundTransport = { transport, server, capability, lastUsedAt: now() };
     await (async () => {
       await server.connect(transport);
       await transport.handleRequest(request, response, request.body);
     })().catch(async () => {
       await closeBound(transport.sessionId, bound);
-      if (!response.headersSent)
-        protocolError(response, 500, "Agent Map MCP request failed");
+      if (!response.headersSent) protocolError(response, 500, "Agent Map MCP request failed");
     });
   });
 
@@ -205,8 +181,7 @@ export function createAgentMapMcpRouter(
       const bound = resolveBound(request, response, capability);
       if (!bound) return;
       await bound.transport.handleRequest(request, response).catch(() => {
-        if (!response.headersSent)
-          protocolError(response, 500, "Agent Map MCP request failed");
+        if (!response.headersSent) protocolError(response, 500, "Agent Map MCP request failed");
       });
     });
   }

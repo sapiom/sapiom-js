@@ -59,6 +59,10 @@ const nodeId = generatedId("node");
 const milestoneId = generatedId("milestone");
 const criterionId = generatedId("criterion");
 const decisionId = generatedId("decision");
+const deliverableId = generatedId("deliverable");
+const clientRefSchema = opaqueId;
+const idOrClientRef = (schema: z.ZodTypeAny) =>
+  z.union([schema, z.object({ clientRef: clientRefSchema }).strict()]);
 
 const outcomeSchema = z.object({ summary: text() }).strict();
 const constraintSchema = z
@@ -113,10 +117,74 @@ const repositoryIntentSchema = z
   .strict();
 const deliverableSchema = z
   .object({
-    deliverableId: generatedId("deliverable"),
+    deliverableId,
     description: text(2_000),
     artifactNodeIds: unique(nodeId, (id) => id),
     acceptanceCriterionIds: unique(criterionId, (id) => id),
+  })
+  .strict();
+const createCriterionSchema = z
+  .object({
+    clientRef: clientRefSchema,
+    ordinal: positiveInt,
+    description: text(2_000),
+    verification: text(2_000),
+  })
+  .strict();
+const createDecisionSchema = z
+  .object({
+    clientRef: clientRefSchema,
+    question: text(2_000),
+    required: z.boolean(),
+    status: z.enum(["open", "resolved"]),
+    resolution: text(2_000).nullable(),
+  })
+  .strict()
+  .superRefine((decision, context) => {
+    if ((decision.status === "resolved") !== (decision.resolution !== null))
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["resolution"],
+        message: "decision status and resolution must agree",
+      });
+  });
+const createAssignmentSchema = z
+  .object({
+    plannedAgentId: nodeId,
+    mission: text(),
+    scope: z
+      .object({
+        inScope: unique(text(2_000), (value) => value),
+        nonGoals: unique(text(2_000), (value) => value),
+      })
+      .strict(),
+    deliverables: unique(
+      z
+        .object({
+          clientRef: clientRefSchema,
+          description: text(2_000),
+          artifactNodeIds: unique(nodeId, (id) => id),
+          acceptanceCriterionRefs: unique(
+            idOrClientRef(criterionId),
+            (value) =>
+              typeof value === "string" ? value : `client:${value.clientRef}`,
+          ),
+        })
+        .strict(),
+      (value) => value.clientRef,
+    ),
+    constraints: unique(constraintSchema, (value) => value.constraintId),
+    acceptanceCriteria: unique(
+      createCriterionSchema,
+      (value) => value.clientRef,
+    ),
+    milestoneRefs: unique(idOrClientRef(milestoneId), (value) =>
+      typeof value === "string" ? value : `client:${value.clientRef}`,
+    ),
+    unresolvedDecisions: unique(
+      createDecisionSchema,
+      (value) => value.clientRef,
+    ),
   })
   .strict();
 const assignmentSchema = z
@@ -144,6 +212,22 @@ export const buildPlanOperationSchema = z.discriminatedUnion("op", [
   z
     .object({ op: z.literal("upsert-milestone"), milestone: milestoneSchema })
     .strict(),
+  z
+    .object({
+      op: z.literal("create-milestone"),
+      clientRef: clientRefSchema,
+      milestone: z
+        .object({
+          ordinal: positiveInt,
+          title: text(240),
+          outcome: text(2_000),
+          dependsOn: unique(idOrClientRef(milestoneId), (value) =>
+            typeof value === "string" ? value : `client:${value.clientRef}`,
+          ),
+        })
+        .strict(),
+    })
+    .strict(),
   z.object({ op: z.literal("remove-milestone"), milestoneId }).strict(),
   z
     .object({
@@ -168,8 +252,20 @@ export const buildPlanOperationSchema = z.discriminatedUnion("op", [
     .strict(),
   z
     .object({
+      op: z.literal("create-integration-criterion"),
+      criterion: createCriterionSchema,
+    })
+    .strict(),
+  z
+    .object({
       op: z.literal("upsert-agent-assignment"),
       assignment: assignmentSchema,
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("create-agent-assignment"),
+      assignment: createAssignmentSchema,
     })
     .strict(),
   z
@@ -180,6 +276,12 @@ export const buildPlanOperationSchema = z.discriminatedUnion("op", [
     .strict(),
   z
     .object({ op: z.literal("upsert-decision"), decision: decisionSchema })
+    .strict(),
+  z
+    .object({
+      op: z.literal("create-decision"),
+      decision: createDecisionSchema,
+    })
     .strict(),
   z.object({ op: z.literal("remove-decision"), decisionId }).strict(),
 ]);
@@ -232,6 +334,36 @@ export const rebaseResolutionSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({ kind: z.literal("remove-assignment"), plannedAgentId: nodeId })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("remap-repository-intent"),
+      repositoryIntentId: opaqueId,
+      toPlannedAgentId: nodeId,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("remove-repository-intent"),
+      repositoryIntentId: opaqueId,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("remap-artifact-reference"),
+      plannedAgentId: nodeId,
+      deliverableId,
+      fromNodeId: nodeId,
+      toNodeId: nodeId,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("remove-artifact-reference"),
+      plannedAgentId: nodeId,
+      deliverableId,
+      nodeId,
+    })
     .strict(),
 ]);
 

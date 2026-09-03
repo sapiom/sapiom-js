@@ -15,6 +15,8 @@ import {
   type BriefStaleReason,
   type BuildMilestone,
   type BuildPlanId,
+  type BuildPlanIdempotencyReceipt,
+  type BuildPlanIdMapping,
   type BuildPlanImpactEvaluator,
   type BuildPlanRef,
   type PlanDecision,
@@ -64,7 +66,9 @@ export type BuildPlanServiceErrorCode =
   | "rebase_conflict"
   | "idempotency_key_reused"
   | "forbidden_role"
-  | "result_too_large";
+  | "result_too_large"
+  | "authoring_unavailable"
+  | "revision_source_unavailable";
 
 export interface BuildPlanSafeIssue {
   path?: string;
@@ -84,7 +88,7 @@ export class BuildPlanServiceError extends Error {
 }
 
 export interface BriefChangeSummary {
-  plannedAgentId: string;
+  plannedAgentId: PlanNodeId;
   change: "created" | "changed" | "staled" | "preserved";
 }
 
@@ -102,6 +106,27 @@ export interface AgentBriefCompiler {
     assignments: readonly PlanningAssignmentRef[];
   }): Promise<AgentBriefCompileResult>;
 }
+
+export class BuildPlanDependencyUnavailableError extends Error {
+  constructor(readonly dependency: "brief-compiler" | "impact-evaluator") {
+    super(`Build plan ${dependency} is unavailable`);
+    this.name = "BuildPlanDependencyUnavailableError";
+  }
+}
+
+/** Fail-closed production seam until SAP-3070 supplies the real compiler. */
+export const unavailableAgentBriefCompiler: AgentBriefCompiler = {
+  compile: async () => {
+    throw new BuildPlanDependencyUnavailableError("brief-compiler");
+  },
+};
+
+/** Fail-closed production seam until SAP-3070 supplies the real evaluator. */
+export const unavailableBuildPlanImpactEvaluator: BuildPlanImpactEvaluator = {
+  evaluate: async () => {
+    throw new BuildPlanDependencyUnavailableError("impact-evaluator");
+  },
+};
 
 export interface BuildPlanIdFactory {
   allocateBuildPlanId(): BuildPlanId;
@@ -134,6 +159,10 @@ const planRef = (plan: ProjectBuildPlanVersion): BuildPlanRef => ({
   version: plan.version,
   semanticDigest: plan.semanticDigest,
 });
+const deterministicId = (prefix: string, seed: string): string => {
+  const hex = createHash("sha256").update(seed).digest("hex");
+  return `${prefix}_${hex.slice(0, 8)}-${hex.slice(8, 12)}-7${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
 
 function assertPlanner(identity: PlanningSessionIdentity): void {
   if (identity.role !== "map-planner")
@@ -152,6 +181,20 @@ function currentBriefs(
     .filter((brief): brief is AgentBriefVersionRecord => Boolean(brief));
 }
 
+function briefsForPlan(
+  planning: Awaited<ReturnType<BuildPlanStore["read"]>>,
+  plan: ProjectBuildPlanVersion,
+): AgentBriefVersionRecord[] {
+  return Object.values(planning.briefVersionsById)
+    .flat()
+    .filter(
+      (brief) =>
+        brief.plan.planId === plan.planId &&
+        brief.plan.version === plan.version &&
+        brief.plan.semanticDigest === plan.semanticDigest,
+    );
+}
+
 function replaceBy<T>(
   items: readonly T[],
   value: T,
@@ -165,6 +208,10 @@ function replaceBy<T>(
 export function applyBuildPlanOperations(
   base: ProjectBuildPlanVersion,
   operations: readonly BuildPlanOperation[],
+  resolveClientId: (
+    kind: BuildPlanIdMapping["kind"],
+    clientRef: string,
+  ) => string,
 ): ProjectBuildPlanVersion {
   const next = structuredClone(base);
   for (const operation of operations) {
@@ -176,6 +223,21 @@ export function applyBuildPlanOperations(
         next.milestones = replaceBy(
           next.milestones,
           operation.milestone as unknown as BuildMilestone,
+          (item) => item.milestoneId,
+        );
+        break;
+      case "create-milestone":
+        next.milestones = replaceBy(
+          next.milestones,
+          {
+            ...operation.milestone,
+            milestoneId: resolveClientId("milestone", operation.clientRef),
+            dependsOn: operation.milestone.dependsOn.map((reference) =>
+              typeof reference === "string"
+                ? reference
+                : resolveClientId("milestone", reference.clientRef),
+            ),
+          } as unknown as BuildMilestone,
           (item) => item.milestoneId,
         );
         break;
@@ -195,6 +257,21 @@ export function applyBuildPlanOperations(
         next.integrationCriteria =
           operation.criteria as unknown as readonly AcceptanceCriterion[];
         break;
+      case "create-integration-criterion":
+        next.integrationCriteria = replaceBy(
+          next.integrationCriteria,
+          {
+            criterionId: resolveClientId(
+              "criterion",
+              operation.criterion.clientRef,
+            ),
+            ordinal: operation.criterion.ordinal,
+            description: operation.criterion.description,
+            verification: operation.criterion.verification,
+          } as AcceptanceCriterion,
+          (item) => item.criterionId,
+        );
+        break;
       case "upsert-agent-assignment":
         next.assignments = replaceBy(
           next.assignments,
@@ -202,6 +279,59 @@ export function applyBuildPlanOperations(
           (item) => item.plannedAgentId,
         );
         break;
+      case "create-agent-assignment": {
+        const criteria = operation.assignment.acceptanceCriteria.map(
+          (criterion) => ({
+            criterionId: resolveClientId("criterion", criterion.clientRef),
+            ordinal: criterion.ordinal,
+            description: criterion.description,
+            verification: criterion.verification,
+          }),
+        );
+        const decisions = operation.assignment.unresolvedDecisions.map(
+          (decision) => ({
+            decisionId: resolveClientId("decision", decision.clientRef),
+            question: decision.question,
+            required: decision.required,
+            status: decision.status,
+            resolution: decision.resolution,
+          }),
+        );
+        next.assignments = replaceBy(
+          next.assignments,
+          {
+            plannedAgentId: operation.assignment.plannedAgentId,
+            mission: operation.assignment.mission,
+            scope: operation.assignment.scope,
+            constraints: operation.assignment.constraints,
+            acceptanceCriteria: criteria,
+            deliverables: operation.assignment.deliverables.map(
+              (deliverable) => ({
+                deliverableId: resolveClientId(
+                  "deliverable",
+                  deliverable.clientRef,
+                ),
+                description: deliverable.description,
+                artifactNodeIds: deliverable.artifactNodeIds,
+                acceptanceCriterionIds: deliverable.acceptanceCriterionRefs.map(
+                  (reference) =>
+                    typeof reference === "string"
+                      ? reference
+                      : resolveClientId("criterion", reference.clientRef),
+                ),
+              }),
+            ),
+            milestoneIds: operation.assignment.milestoneRefs.map((reference) =>
+              typeof reference === "string"
+                ? reference
+                : resolveClientId("milestone", reference.clientRef),
+            ),
+            unresolvedDecisions: decisions,
+          } as unknown as AgentAssignmentIntent,
+          (item) => item.plannedAgentId,
+        );
+        break;
+      }
       case "remove-agent-assignment":
         next.assignments = next.assignments.filter(
           (item) => item.plannedAgentId !== operation.plannedAgentId,
@@ -211,6 +341,22 @@ export function applyBuildPlanOperations(
         next.unresolvedDecisions = replaceBy(
           next.unresolvedDecisions,
           operation.decision as unknown as PlanDecision,
+          (item) => item.decisionId,
+        );
+        break;
+      case "create-decision":
+        next.unresolvedDecisions = replaceBy(
+          next.unresolvedDecisions,
+          {
+            decisionId: resolveClientId(
+              "decision",
+              operation.decision.clientRef,
+            ),
+            question: operation.decision.question,
+            required: operation.decision.required,
+            status: operation.decision.status,
+            resolution: operation.decision.resolution,
+          } as PlanDecision,
           (item) => item.decisionId,
         );
         break;
@@ -241,7 +387,18 @@ export class BuildPlanService {
     if (!plan) throw new BuildPlanServiceError("plan_not_found");
     if (plan.projectId !== identity.projectId)
       throw new BuildPlanServiceError("cross_project_reference");
-    const briefs = currentBriefs(planning);
+    const briefs = briefsForPlan(planning, plan);
+    const summaryBriefs =
+      plan.version === planning.currentPlanVersion
+        ? [
+            ...new Map(
+              [...briefs, ...currentBriefs(planning)].map((brief) => [
+                `${brief.briefId}\0${brief.version}`,
+                brief,
+              ]),
+            ).values(),
+          ]
+        : briefs;
     const status = await this.dependencies.contractValidator.validate(
       plan,
       briefs,
@@ -259,6 +416,7 @@ export class BuildPlanService {
       schemaVersion: 1 as const,
       source: plan.source,
       plan: planRef(plan),
+      current: plan.version === planning.currentPlanVersion,
       completeness: {
         ...status.completeness,
         issues: include.has("diagnostics")
@@ -266,27 +424,29 @@ export class BuildPlanService {
           : [],
       },
       eligibility: status.eligibility,
-      ...(include.has("plan")
-        ? {
-            state: {
-              ...plan,
-              assignments: [],
-            },
-          }
-        : {}),
+      ...(include.has("plan") ? { state: plan } : {}),
       ...(include.has("assignment-intents")
         ? { assignmentIntents: plan.assignments }
         : {}),
       ...(include.has("brief-summaries")
         ? {
-            briefs: briefs.slice(0, 128).map((brief) => ({
+            briefs: summaryBriefs.slice(0, 128).map((brief) => ({
               plannedAgentId: brief.plannedAgentId,
               briefId: brief.briefId,
               version: brief.version,
               semanticDigest: brief.semanticDigest,
-              freshness: architectureSourceRefsEqual(brief.source, plan.source)
-                ? "current"
-                : "stale",
+              current:
+                planning.currentBriefByAgentId[brief.plannedAgentId]
+                  ?.briefId === brief.briefId &&
+                planning.currentBriefByAgentId[brief.plannedAgentId]
+                  ?.version === brief.version,
+              freshness:
+                brief.plan.planId === plan.planId &&
+                brief.plan.version === plan.version &&
+                brief.plan.semanticDigest === plan.semanticDigest &&
+                architectureSourceRefsEqual(brief.source, plan.source)
+                  ? "current"
+                  : "stale",
             })),
           }
         : {}),
@@ -305,7 +465,7 @@ export class BuildPlanService {
   async validate(identity: PlanningSessionIdentity, value: unknown) {
     assertPlanner(identity);
     const input = this.parse(buildPlanValidateRequestSchema, value);
-    const prepared = await this.prepare(identity, input, false);
+    const prepared = await this.prepare(identity, input);
     return { ...prepared.result, wouldApply: true };
   }
 
@@ -315,7 +475,7 @@ export class BuildPlanService {
     const digest = requestDigest({ ...input, requestId: undefined });
     const replay = await this.findReplay(identity, input.requestId, digest);
     if (replay) return replay;
-    const prepared = await this.prepare(identity, input, true);
+    const prepared = await this.prepare(identity, input);
     try {
       const committed = await this.dependencies.store.commitPlanVersion(
         prepared.plan,
@@ -324,12 +484,23 @@ export class BuildPlanService {
           sessionId: identity.sessionId,
           requestId: input.requestId,
           requestDigest: digest,
+          enforceCurrentProposalSource: true,
+          result: {
+            operation: "apply",
+            briefChanges: prepared.result.briefChanges,
+            idMappings: prepared.result.idMappings,
+            completeness: prepared.result.completeness,
+            eligibility: prepared.result.eligibility,
+            diagnostics: prepared.result.diagnostics,
+          },
         },
         {
           assignments: prepared.assignments,
           briefs: prepared.briefs,
         },
       );
+      if (committed.replayed)
+        return (await this.findReplay(identity, input.requestId, digest))!;
       return {
         ...prepared.result,
         plan: committed.plan,
@@ -369,23 +540,41 @@ export class BuildPlanService {
     );
     const from = await this.resolve(identity.projectId, fromSource);
     const to = await this.resolve(identity.projectId, toSource);
+    await this.assertCurrentProposalSource(identity.projectId, to.source);
     let assignments = structuredClone(current!.assignments);
+    let repositoryIntents: RepositoryIntent[] = [
+      ...structuredClone(current!.repositoryIntents),
+    ];
+    const resolutionConflict = (
+      message: string,
+      relatedIds: readonly string[],
+    ): never => {
+      throw new BuildPlanServiceError(
+        "rebase_conflict",
+        [{ path: "resolutions", message, relatedIds }],
+        planRef(current!),
+      );
+    };
     for (const resolution of input.resolutions) {
-      if (resolution.kind === "remove-assignment")
+      if (resolution.kind === "remove-assignment") {
+        if (
+          !assignments.some(
+            (item) => item.plannedAgentId === resolution.plannedAgentId,
+          )
+        )
+          resolutionConflict("Resolution does not match an assignment", [
+            resolution.plannedAgentId,
+          ]);
         assignments = assignments.filter(
           (item) => item.plannedAgentId !== resolution.plannedAgentId,
         );
-      else {
-        const found = assignments.find(
-          (item) => item.plannedAgentId === resolution.fromPlannedAgentId,
-        );
-        if (!found)
-          throw new BuildPlanServiceError("rebase_conflict", [
-            {
-              path: "resolutions",
-              message: "Resolution does not match an assignment",
-              relatedIds: [resolution.fromPlannedAgentId],
-            },
+      } else if (resolution.kind === "remap-agent") {
+        const found =
+          assignments.find(
+            (item) => item.plannedAgentId === resolution.fromPlannedAgentId,
+          ) ??
+          resolutionConflict("Resolution does not match an assignment", [
+            resolution.fromPlannedAgentId,
           ]);
         assignments = [
           ...assignments.filter(
@@ -396,6 +585,73 @@ export class BuildPlanService {
             plannedAgentId: resolution.toPlannedAgentId as PlanNodeId,
           },
         ];
+      } else if (resolution.kind === "remove-repository-intent") {
+        if (
+          !repositoryIntents.some(
+            (item) => item.repositoryIntentId === resolution.repositoryIntentId,
+          )
+        )
+          resolutionConflict("Resolution does not match a repository intent", [
+            resolution.repositoryIntentId,
+          ]);
+        repositoryIntents = repositoryIntents.filter(
+          (item) => item.repositoryIntentId !== resolution.repositoryIntentId,
+        );
+      } else if (resolution.kind === "remap-repository-intent") {
+        const index = repositoryIntents.findIndex(
+          (item) => item.repositoryIntentId === resolution.repositoryIntentId,
+        );
+        if (index < 0)
+          resolutionConflict("Resolution does not match a repository intent", [
+            resolution.repositoryIntentId,
+          ]);
+        repositoryIntents[index] = {
+          ...repositoryIntents[index]!,
+          plannedAgentId: resolution.toPlannedAgentId as PlanNodeId,
+        };
+      } else {
+        const assignment = assignments.find(
+          (item) => item.plannedAgentId === resolution.plannedAgentId,
+        );
+        const deliverable = assignment?.deliverables.find(
+          (item) => item.deliverableId === resolution.deliverableId,
+        );
+        const nodeId = (
+          resolution.kind === "remap-artifact-reference"
+            ? resolution.fromNodeId
+            : resolution.nodeId
+        ) as PlanNodeId;
+        const matchedDeliverable =
+          deliverable ??
+          resolutionConflict(
+            "Resolution does not match a deliverable artifact reference",
+            [resolution.plannedAgentId, resolution.deliverableId, nodeId],
+          );
+        if (!matchedDeliverable.artifactNodeIds.includes(nodeId))
+          resolutionConflict(
+            "Resolution does not match a deliverable artifact reference",
+            [resolution.plannedAgentId, resolution.deliverableId, nodeId],
+          );
+        const artifactNodeIds = matchedDeliverable.artifactNodeIds.flatMap(
+          (id) =>
+            id !== nodeId
+              ? [id]
+              : resolution.kind === "remap-artifact-reference"
+                ? [resolution.toNodeId as PlanNodeId]
+                : [],
+        );
+        assignments = assignments.map((item) =>
+          item.plannedAgentId !== resolution.plannedAgentId
+            ? item
+            : {
+                ...item,
+                deliverables: item.deliverables.map((candidate) =>
+                  candidate.deliverableId !== resolution.deliverableId
+                    ? candidate
+                    : { ...candidate, artifactNodeIds },
+                ),
+              },
+        );
       }
     }
     const targetAgents = new Set(
@@ -406,22 +662,68 @@ export class BuildPlanService {
     const unresolved = assignments.filter(
       (item) => !targetAgents.has(item.plannedAgentId),
     );
-    if (unresolved.length)
+    const targetNodes = new Set(to.graph.nodes.map((node) => node.id));
+    const unresolvedRepositories = repositoryIntents.filter(
+      (item) => !targetAgents.has(item.plannedAgentId),
+    );
+    const unresolvedArtifacts = assignments.flatMap((assignment) =>
+      assignment.deliverables.flatMap((deliverable) =>
+        deliverable.artifactNodeIds
+          .filter((nodeId) => !targetNodes.has(nodeId))
+          .map((nodeId) => ({ assignment, deliverable, nodeId })),
+      ),
+    );
+    if (
+      unresolved.length ||
+      unresolvedRepositories.length ||
+      unresolvedArtifacts.length
+    )
       throw new BuildPlanServiceError(
         "rebase_conflict",
         [
-          {
-            path: "resolutions",
-            message:
-              "Explicit resolution is required for removed or reowned agents",
-            relatedIds: unresolved
-              .map((item) => item.plannedAgentId)
-              .slice(0, 16),
-          },
+          ...(unresolved.length
+            ? [
+                {
+                  path: "resolutions",
+                  message:
+                    "Explicit resolution is required for removed or reowned agents",
+                  relatedIds: unresolved
+                    .map((item) => item.plannedAgentId)
+                    .slice(0, 16),
+                },
+              ]
+            : []),
+          ...(unresolvedRepositories.length
+            ? [
+                {
+                  path: "resolutions",
+                  message:
+                    "Explicit resolution is required for repository intents whose agent changed",
+                  relatedIds: unresolvedRepositories
+                    .map((item) => item.repositoryIntentId)
+                    .slice(0, 16),
+                },
+              ]
+            : []),
+          ...(unresolvedArtifacts.length
+            ? [
+                {
+                  path: "resolutions",
+                  message:
+                    "Explicit resolution is required for removed deliverable artifact references",
+                  relatedIds: unresolvedArtifacts
+                    .flatMap(({ deliverable, nodeId }) => [
+                      deliverable.deliverableId,
+                      nodeId,
+                    ])
+                    .slice(0, 16),
+                },
+              ]
+            : []),
         ],
         planRef(current!),
       );
-    const impacts = await this.dependencies.impactEvaluator.evaluate({
+    const impacts = await this.evaluateImpact({
       previousSource: from.source,
       nextSource: to.source,
       briefs: currentBriefs(planning),
@@ -430,6 +732,7 @@ export class BuildPlanService {
       ...current!,
       source: to.source,
       assignments,
+      repositoryIntents,
       version: (current!.version + 1) as ProjectBuildPlanVersion["version"],
       parentVersion: current!.version,
       changeKind: architectureSourceRefsEqual(from.source, to.source)
@@ -443,16 +746,17 @@ export class BuildPlanService {
       createdAt: this.dependencies.clock.now().toISOString(),
     });
     this.assertPlanReferences(draft, to.graph);
-    const assignmentsForCompile = this.assignmentRefs(planning, draft, true);
-    const compiled = await this.dependencies.briefCompiler.compile({
+    const assignmentsForCompile = this.assignmentRefs(planning, draft);
+    const compiled = await this.compileBriefs({
       plan: draft,
       graph: to.graph,
       currentBriefs: currentBriefs(planning),
       assignments: assignmentsForCompile,
     });
+    const committableBriefs = this.committableBriefs(draft, compiled.briefs);
     const status = await this.dependencies.contractValidator.validate(
       draft,
-      compiled.briefs,
+      committableBriefs,
     );
     this.assertNoInvalidDiagnostics(status.completeness);
     const briefChanges = this.impactChanges(impacts, compiled.changes);
@@ -463,6 +767,7 @@ export class BuildPlanService {
       completeness: status.completeness,
       eligibility: status.eligibility,
       briefChanges,
+      idMappings: [],
       diagnostics: status.completeness.issues,
       replayed: false,
     });
@@ -474,9 +779,20 @@ export class BuildPlanService {
           sessionId: identity.sessionId,
           requestId: input.requestId,
           requestDigest: digest,
+          enforceCurrentProposalSource: true,
+          result: {
+            operation: "rebase",
+            briefChanges,
+            idMappings: [],
+            completeness: status.completeness,
+            eligibility: status.eligibility,
+            diagnostics: status.completeness.issues,
+          },
         },
-        { assignments: assignmentsForCompile, briefs: compiled.briefs },
+        { assignments: assignmentsForCompile, briefs: committableBriefs },
       );
+      if (committed.replayed)
+        return (await this.findReplay(identity, input.requestId, digest))!;
       return { ...result, plan: committed.plan };
     } catch (error) {
       if (error instanceof BuildPlanStoreLimitError)
@@ -497,7 +813,6 @@ export class BuildPlanService {
   private async prepare(
     identity: PlanningSessionIdentity,
     input: BuildPlanValidateRequest | BuildPlanApplyRequest,
-    allocate: boolean,
   ) {
     const planning = await this.dependencies.store.read(identity.projectId);
     const current = planning.planVersions.at(-1);
@@ -522,11 +837,37 @@ export class BuildPlanService {
       expectedSource,
     );
     const source = await this.resolve(identity.projectId, expectedSource);
+    await this.assertCurrentProposalSource(identity.projectId, source.source);
+    const allocationSeed = canonicalJson({
+      projectId: identity.projectId,
+      expectedSource: input.expectedSource,
+      operations: input.operations,
+    });
     const id =
       current?.planId ??
-      (allocate
-        ? this.dependencies.idFactory.allocateBuildPlanId()
-        : ("build-plan_00000000-0000-7000-8000-000000000000" as BuildPlanId));
+      (deterministicId("build-plan", allocationSeed) as BuildPlanId);
+    const idMappings: BuildPlanIdMapping[] = [];
+    const mapped = new Map<string, string>();
+    const resolveClientId = (
+      kind: BuildPlanIdMapping["kind"],
+      clientRef: string,
+    ): string => {
+      const key = `${kind}\0${clientRef}`;
+      const existing = mapped.get(key);
+      if (existing) return existing;
+      const prefix =
+        kind === "milestone"
+          ? "milestone"
+          : kind === "criterion"
+            ? "criterion"
+            : kind === "deliverable"
+              ? "deliverable"
+              : "decision";
+      const allocated = deterministicId(prefix, `${id}\0${key}`);
+      mapped.set(key, allocated);
+      idMappings.push({ kind, clientRef, id: allocated });
+      return allocated;
+    };
     const seed =
       current ??
       ({
@@ -553,7 +894,11 @@ export class BuildPlanService {
         },
         createdAt: this.dependencies.clock.now().toISOString(),
       } as unknown as ProjectBuildPlanVersion);
-    const next = applyBuildPlanOperations(seed, input.operations);
+    const next = applyBuildPlanOperations(
+      seed,
+      input.operations,
+      resolveClientId,
+    );
     const draft = this.finalize({
       ...next,
       planId: id,
@@ -570,27 +915,24 @@ export class BuildPlanService {
       createdAt: this.dependencies.clock.now().toISOString(),
     });
     this.assertPlanReferences(draft, source.graph);
-    const assignmentsForCompile = this.assignmentRefs(
-      planning,
-      draft,
-      allocate,
-    );
-    const compiled = await this.dependencies.briefCompiler.compile({
+    const assignmentsForCompile = this.assignmentRefs(planning, draft);
+    const compiled = await this.compileBriefs({
       plan: draft,
       graph: source.graph,
       currentBriefs: currentBriefs(planning),
       assignments: assignmentsForCompile,
     });
+    const committableBriefs = this.committableBriefs(draft, compiled.briefs);
     const status = await this.dependencies.contractValidator.validate(
       draft,
-      compiled.briefs,
+      committableBriefs,
     );
     this.assertNoInvalidDiagnostics(status.completeness);
     const result = {
       plan: draft,
       source,
       assignments: assignmentsForCompile,
-      briefs: compiled.briefs,
+      briefs: committableBriefs,
       result: {
         schemaVersion: 1 as const,
         plan: planRef(draft),
@@ -601,6 +943,7 @@ export class BuildPlanService {
           .slice(0, 128)
           .map((item) => item.plannedAgentId),
         briefChanges: compiled.changes.slice(0, 128),
+        idMappings,
         completeness: status.completeness,
         eligibility: status.eligibility,
         diagnostics: status.completeness.issues.slice(
@@ -651,8 +994,14 @@ export class BuildPlanService {
         throw new BuildPlanServiceError("plan_not_found");
       return;
     }
+    if (planId === null)
+      throw new BuildPlanServiceError(
+        "plan_version_conflict",
+        [],
+        planRef(current),
+      );
     if (planId !== current.planId)
-      throw new BuildPlanServiceError("cross_project_reference");
+      throw new BuildPlanServiceError("plan_not_found");
     if (expectedVersion !== current.version)
       throw new BuildPlanServiceError(
         "plan_version_conflict",
@@ -711,6 +1060,24 @@ export class BuildPlanService {
     return current ? planRef(current) : undefined;
   }
 
+  private async assertCurrentProposalSource(
+    projectId: string,
+    source: ArchitectureSourceRef,
+  ): Promise<void> {
+    if (
+      source.kind === "proposal" &&
+      !(await this.dependencies.store.isCurrentProposalSource(
+        projectId,
+        source,
+      ))
+    )
+      throw new BuildPlanServiceError(
+        "source_mismatch",
+        [],
+        await this.currentRef(projectId),
+      );
+  }
+
   private async findReplay(
     identity: PlanningSessionIdentity,
     requestId: string,
@@ -724,24 +1091,48 @@ export class BuildPlanService {
     if (!receipt) return null;
     if (receipt.requestDigest !== digest)
       throw new BuildPlanServiceError("idempotency_key_reused");
+    return this.replayResult(identity, receipt);
+  }
+
+  private async replayResult(
+    identity: PlanningSessionIdentity,
+    receipt: BuildPlanIdempotencyReceipt,
+  ) {
+    const planning = await this.dependencies.store.read(identity.projectId);
     const plan = planning.planVersions.find(
       (item) => item.recordDigest === receipt.resultRecordDigest,
     );
     if (!plan) throw new BuildPlanServiceError("plan_not_found");
-    const status = await this.dependencies.contractValidator.validate(
-      plan,
-      currentBriefs(planning),
-    );
-    return {
+    const status = receipt.result
+      ? {
+          completeness: receipt.result.completeness,
+          eligibility: receipt.result.eligibility,
+        }
+      : await this.dependencies.contractValidator.validate(
+          plan,
+          briefsForPlan(planning, plan),
+        );
+    const result = {
       schemaVersion: 1 as const,
       plan: planRef(plan),
       source: plan.source,
       completeness: status.completeness,
       eligibility: status.eligibility,
-      briefChanges: [],
-      diagnostics: status.completeness.issues,
+      briefChanges: receipt.result?.briefChanges ?? [],
+      idMappings: receipt.result?.idMappings ?? [],
+      diagnostics: receipt.result?.diagnostics ?? status.completeness.issues,
       replayed: true,
     };
+    return receipt.result?.operation === "apply"
+      ? {
+          ...result,
+          preview: plan,
+          semanticDigest: plan.semanticDigest,
+          impactedAssignments: plan.assignments.map(
+            (assignment) => assignment.plannedAgentId,
+          ),
+        }
+      : result;
   }
 
   private impactChanges(
@@ -753,7 +1144,10 @@ export class BuildPlanService {
     );
     for (const [plannedAgentId, reasons] of Object.entries(impacts))
       if (reasons.length)
-        changes.set(plannedAgentId, { plannedAgentId, change: "staled" });
+        changes.set(plannedAgentId as PlanNodeId, {
+          plannedAgentId: plannedAgentId as PlanNodeId,
+          change: "staled",
+        });
     return [...changes.values()].slice(0, 128);
   }
 
@@ -835,9 +1229,8 @@ export class BuildPlanService {
   private assignmentRefs(
     planning: Awaited<ReturnType<BuildPlanStore["read"]>>,
     plan: ProjectBuildPlanVersion,
-    allocate: boolean,
   ): PlanningAssignmentRef[] {
-    return plan.assignments.map((assignment, index) => {
+    return plan.assignments.map((assignment) => {
       const existing = planning.assignmentByAgentId[assignment.plannedAgentId];
       if (existing)
         return {
@@ -845,20 +1238,67 @@ export class BuildPlanService {
           briefId: existing.briefId,
           plannedAgentId: assignment.plannedAgentId,
         };
-      if (allocate)
-        return {
-          assignmentId: this.dependencies.idFactory.allocateAssignmentId(),
-          briefId: this.dependencies.idFactory.allocateBriefId(),
-          plannedAgentId: assignment.plannedAgentId,
-        };
-      const suffix = (index + 1).toString(16).padStart(12, "0");
       return {
-        assignmentId:
-          `assignment_00000000-0000-7000-8000-${suffix}` as PlanningAssignmentId,
-        briefId: `brief_00000000-0000-7000-8000-${suffix}` as AgentBriefId,
+        assignmentId: deterministicId(
+          "assignment",
+          `${plan.planId}\0${assignment.plannedAgentId}`,
+        ) as PlanningAssignmentId,
+        briefId: deterministicId(
+          "brief",
+          `${plan.planId}\0${assignment.plannedAgentId}`,
+        ) as AgentBriefId,
         plannedAgentId: assignment.plannedAgentId,
       };
     });
+  }
+
+  private async compileBriefs(
+    input: Parameters<AgentBriefCompiler["compile"]>[0],
+  ): Promise<AgentBriefCompileResult> {
+    try {
+      return await this.dependencies.briefCompiler.compile(input);
+    } catch (error) {
+      if (error instanceof BuildPlanDependencyUnavailableError)
+        throw new BuildPlanServiceError("authoring_unavailable", [
+          {
+            path: error.dependency,
+            message:
+              "Build plan mutation is unavailable until its production planning dependency is installed",
+          },
+        ]);
+      throw error;
+    }
+  }
+
+  private async evaluateImpact(
+    input: Parameters<BuildPlanImpactEvaluator["evaluate"]>[0],
+  ) {
+    try {
+      return await this.dependencies.impactEvaluator.evaluate(input);
+    } catch (error) {
+      if (error instanceof BuildPlanDependencyUnavailableError)
+        throw new BuildPlanServiceError("authoring_unavailable", [
+          {
+            path: error.dependency,
+            message:
+              "Build plan rebase is unavailable until its production impact dependency is installed",
+          },
+        ]);
+      throw error;
+    }
+  }
+
+  private committableBriefs(
+    plan: ProjectBuildPlanVersion,
+    briefs: readonly AgentBriefVersionRecord[],
+  ): AgentBriefVersionRecord[] {
+    return briefs.filter(
+      (brief) =>
+        brief.plan.planId === plan.planId &&
+        brief.plan.version === plan.version &&
+        brief.plan.semanticDigest === plan.semanticDigest &&
+        architectureSourceRefsEqual(brief.source, plan.source),
+    );
   }
 
   private bounded<T>(value: T): T {

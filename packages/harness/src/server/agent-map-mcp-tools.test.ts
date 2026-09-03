@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PlanningSessionIdentity } from "../shared/agent-map.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { BuildPlanServiceError } from "../core/build-plan-service.js";
 import { createAgentMapToolServer } from "./agent-map-mcp-tools.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
@@ -38,12 +39,19 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       userId: "user",
       role: "map-planner",
     });
-    const builder = await toolsFor({
+    const manualBuilder = await toolsFor({
       projectId,
       sessionId: "builder",
       userId: "user",
       role: "agent-builder",
       assignment: { kind: "unplanned" },
+    });
+    const plannedBuilder = await toolsFor({
+      projectId,
+      sessionId: "planned-builder",
+      userId: "user",
+      role: "agent-builder",
+      assignment: { kind: "planned", agentId: "agent-1" },
     });
     expect(planner.map(({ name }) => name).sort()).toEqual([
       "agent_map_propose",
@@ -54,11 +62,12 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       "build_plan_rebase",
       "build_plan_validate",
     ]);
-    expect(builder.map(({ name }) => name).sort()).toEqual([
-      "agent_map_propose",
-      "agent_map_read",
-      "agent_map_validate",
-    ]);
+    for (const builder of [manualBuilder, plannedBuilder])
+      expect(builder.map(({ name }) => name).sort()).toEqual([
+        "agent_map_propose",
+        "agent_map_read",
+        "agent_map_validate",
+      ]);
     expect(
       planner.every((tool) => tool.inputSchema.additionalProperties === false),
     ).toBe(true);
@@ -131,6 +140,8 @@ describe("Agent Map MCP plan-authoring discovery", () => {
         tool: "build_plan_read",
         outcome: "ok",
         role: "map-planner",
+        projectId,
+        sessionId: "planner-call",
         planVersion: 3,
         sourceKind: "proposal",
         sourceVersion: 2,
@@ -139,4 +150,80 @@ describe("Agent Map MCP plan-authoring discovery", () => {
     await planner.client.close();
     await planner.server.close();
   });
+
+  it.each([
+    ["build_plan_validate", "operations"],
+    ["build_plan_apply", "operations"],
+    ["build_plan_rebase", "resolutions"],
+  ] as const)(
+    "returns structured invalid_operation for malformed %s collections",
+    async (tool, malformedField) => {
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      const invalid = vi.fn(async () => {
+        throw new BuildPlanServiceError("invalid_operation", [
+          { path: malformedField, message: "Expected array" },
+        ]);
+      });
+      const server = createAgentMapToolServer(
+        {
+          projectId,
+          sessionId: `malformed-${tool}`,
+          userId: "user",
+          role: "map-planner",
+        },
+        new AgentMapProposalService(
+          new AgentMapWorkspaceStore(`/tmp/agent-map-tools-${tool}`),
+        ),
+        {
+          buildPlanService: {
+            validate: invalid,
+            apply: invalid,
+            rebase: invalid,
+          } as never,
+        },
+      );
+      const client = new Client({ name: "malformed-test", version: "1" });
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const source = {
+        kind: "proposal",
+        proposalId: "proposal_00000000-0000-7000-8000-000000000005",
+        version: 1,
+        graphDigest: `sha256:${"0".repeat(64)}`,
+      };
+      const arguments_ =
+        tool === "build_plan_rebase"
+          ? {
+              schemaVersion: 1,
+              planId: "build-plan_00000000-0000-7000-8000-000000000002",
+              expectedPlanVersion: 1,
+              fromSource: source,
+              toSource: source,
+              requestId: "request-malformed",
+              resolutions: null,
+            }
+          : {
+              schemaVersion: 1,
+              planId: null,
+              expectedPlanVersion: null,
+              expectedSource: source,
+              ...(tool === "build_plan_apply"
+                ? { requestId: "request-malformed" }
+                : {}),
+              operations: null,
+            };
+      const result = await client.callTool({ name: tool, arguments: arguments_ });
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "invalid_operation",
+          recovery: "correct",
+        },
+      });
+      expect(invalid).toHaveBeenCalledOnce();
+      await client.close();
+      await server.close();
+    },
+  );
 });

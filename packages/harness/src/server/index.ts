@@ -32,6 +32,7 @@ import type {
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import type { PlannerLifecycleEvent } from "../shared/agent-map.js";
+import { architectureSourceRefsEqual } from "../shared/build-plan.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -160,8 +161,13 @@ import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { ArchitectureSourceResolver } from "../core/architecture-source-resolver.js";
 import { BuildPlanContractValidator } from "../core/build-plan-contract-validator.js";
-import { BuildPlanService } from "../core/build-plan-service.js";
+import {
+  BuildPlanService,
+  unavailableAgentBriefCompiler,
+  unavailableBuildPlanImpactEvaluator,
+} from "../core/build-plan-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
+import { computeArchitectureGraphDigest } from "../core/build-plan-canonicalization.js";
 import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
@@ -668,9 +674,7 @@ export const startServer = async (
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
   );
-  let emitAgentMapCapabilityEvent = (
-    _event: AgentMapCapabilityEvent,
-  ): void => {};
+  let emitAgentMapCapabilityEvent = (_event: AgentMapCapabilityEvent): void => {};
   const agentMapCapabilities = new AgentMapCapabilityRegistry({
     onEvent: (event) => emitAgentMapCapabilityEvent(event),
   });
@@ -2730,19 +2734,11 @@ export const startServer = async (
     store: buildPlanStore,
     sourceResolver: architectureSourceResolver,
     contractValidator: buildPlanContractValidator,
-    // SAP-3070 replaces these conservative boundaries with production brief
-    // compilation and graph-impact behavior. Keeping the seam here avoids a
-    // transport dependency on that implementation.
-    briefCompiler: {
-      compile: async ({ currentBriefs }) => ({
-        briefs: currentBriefs,
-        changes: currentBriefs.map((brief) => ({
-          plannedAgentId: brief.plannedAgentId,
-          change: "preserved" as const,
-        })),
-      }),
-    },
-    impactEvaluator: { evaluate: async () => ({}) },
+    // SAP-3070 replaces these explicit fail-closed boundaries. Registering
+    // authoring remains discoverable, but mutation cannot silently use fake
+    // compilation or impact behavior.
+    briefCompiler: unavailableAgentBriefCompiler,
+    impactEvaluator: unavailableBuildPlanImpactEvaluator,
     idFactory: buildPlanStore,
     clock: { now: () => new Date() },
   });
@@ -2793,6 +2789,8 @@ export const startServer = async (
           tool: event.tool,
           outcome: event.outcome,
           role: event.role,
+          project_id: event.projectId,
+          session_id: event.sessionId,
           latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
           ...(event.errorCode ? { error_code: event.errorCode } : {}),
           ...(event.operationCount !== undefined
@@ -2913,13 +2911,12 @@ export const startServer = async (
     currentUserId: () => planningUserId,
     machineId,
     defaultHarness: options.defaultHarnessKind ?? "claude-code",
-    // E1 owns the durable workspace pointers, but not the later revision,
-    // proposal, or build-plan detail records. Wire that shipped source
-    // explicitly so the focused-context contract emits honest null/empty
-    // detail slots today and has one allowlisted adapter boundary when those
-    // stores land; it must never fall back to scanning project files.
-    readFocusedContext: async (projectId, workspace) => {
-      const planning = await buildPlanStore.read(projectId);
+    // Proposal and build-plan details are durable in the aggregate. Confirmed
+    // revision snapshots are not shipped yet, so report that dependency as
+    // unavailable instead of inventing a source or scanning project files.
+    readFocusedContext: async (projectId, _workspace) => {
+      const aggregate = await agentMapWorkspaceStore.readAggregate(projectId);
+      const planning = aggregate.buildPlanning;
       const plan = planning.planVersions.at(-1);
       const briefs = Object.values(planning.currentBriefByAgentId)
         .map((ref) =>
@@ -2928,16 +2925,48 @@ export const startServer = async (
           ),
         )
         .filter((brief): brief is NonNullable<typeof brief> => Boolean(brief));
+      const exactBriefs = plan
+        ? Object.values(planning.briefVersionsById)
+            .flat()
+            .filter(
+              (brief) =>
+                brief.plan.planId === plan.planId &&
+                brief.plan.version === plan.version &&
+                brief.plan.semanticDigest === plan.semanticDigest,
+            )
+        : [];
       const planStatus = plan
-        ? await buildPlanContractValidator.validate(plan, briefs)
+        ? await buildPlanContractValidator.validate(plan, exactBriefs)
         : null;
+      const proposal =
+        aggregate.workspace.activeProposalId !== null &&
+        aggregate.proposal?.id === aggregate.workspace.activeProposalId
+          ? aggregate.proposal
+          : null;
       return {
+        architectureSource: proposal
+          ? {
+              kind: "proposal" as const,
+              proposalId: proposal.id,
+              version: proposal.version,
+              graphDigest: computeArchitectureGraphDigest({
+                nodes: proposal.nodes,
+                relationships: proposal.relationships,
+              }),
+            }
+          : aggregate.workspace.confirmedRevisionId === null
+            ? null
+            : {
+                status: "revision_source_unavailable" as const,
+                kind: "revision" as const,
+                revisionId: aggregate.workspace.confirmedRevisionId,
+              },
         confirmedRevision:
-          workspace.confirmedRevisionId === null
+          aggregate.workspace.confirmedRevisionId === null
             ? null
             : { digest: null, summaries: [] },
         activeProposal:
-          workspace.activeProposalId === null
+          aggregate.workspace.activeProposalId === null
             ? null
             : { status: null, summary: null },
         projectBuildPlan:
@@ -2954,8 +2983,10 @@ export const startServer = async (
                 briefCount: briefs.length,
                 staleBriefCount: briefs.filter(
                   (brief) =>
-                    JSON.stringify(brief.source) !==
-                    JSON.stringify(plan.source),
+                    brief.plan.planId !== plan.planId ||
+                    brief.plan.version !== plan.version ||
+                    brief.plan.semanticDigest !== plan.semanticDigest ||
+                    !architectureSourceRefsEqual(brief.source, plan.source),
                 ).length,
                 diagnostics: planStatus.completeness.issues.map(
                   ({ code, severity, path }) => ({ code, severity, path }),

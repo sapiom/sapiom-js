@@ -526,6 +526,105 @@ const receiptSchema = z
     requestId: opaqueId,
     requestDigest: digest,
     resultRecordDigest: digest,
+    result: z
+      .object({
+        operation: z.enum(["apply", "rebase"]),
+        briefChanges: z
+          .array(
+            z
+              .object({
+                plannedAgentId: nodeId,
+                change: z.enum(["created", "changed", "staled", "preserved"]),
+              })
+              .strict(),
+          )
+          .max(128),
+        idMappings: z
+          .array(
+            z
+              .object({
+                kind: z.enum([
+                  "milestone",
+                  "criterion",
+                  "deliverable",
+                  "decision",
+                ]),
+                clientRef: opaqueId,
+                id: opaqueId,
+              })
+              .strict(),
+          )
+          .max(128),
+        completeness: z
+          .object({
+            status: z.enum(["incomplete", "complete"]),
+            issues: z
+              .array(
+                z
+                  .object({
+                    code: z.enum([
+                      "missing-agent-assignment",
+                      "unknown-node-reference",
+                      "cross-project-reference",
+                      "missing-brief",
+                      "incompatible-contract-direction",
+                      "invalid-dependency",
+                      "unresolved-required-decision",
+                      "source-not-found",
+                      "source-digest-mismatch",
+                    ]),
+                    severity: z.enum(["error", "warning"]),
+                    path: z.string().max(512),
+                    message: z.string().max(256),
+                    relatedIds: z.array(opaqueId).max(16),
+                  })
+                  .strict(),
+              )
+              .max(64),
+          })
+          .strict(),
+        eligibility: z
+          .object({
+            planningEligible: z.boolean(),
+            implementationEligible: z.boolean(),
+            reasons: z
+              .array(
+                z.enum([
+                  "plan-incomplete",
+                  "brief-missing",
+                  "brief-stale",
+                  "source-not-confirmed",
+                ]),
+              )
+              .max(4),
+          })
+          .strict(),
+        diagnostics: z
+          .array(
+            z
+              .object({
+                code: z.enum([
+                  "missing-agent-assignment",
+                  "unknown-node-reference",
+                  "cross-project-reference",
+                  "missing-brief",
+                  "incompatible-contract-direction",
+                  "invalid-dependency",
+                  "unresolved-required-decision",
+                  "source-not-found",
+                  "source-digest-mismatch",
+                ]),
+                severity: z.enum(["error", "warning"]),
+                path: z.string().max(512),
+                message: z.string().max(256),
+                relatedIds: z.array(opaqueId).max(16),
+              })
+              .strict(),
+          )
+          .max(64),
+      })
+      .strict()
+      .optional(),
     createdAt: timestamp,
   })
   .strict();

@@ -388,7 +388,27 @@ export interface BuildPlanIdempotencyReceipt {
   requestId: string;
   requestDigest: string;
   resultRecordDigest: RecordDigest;
+  result?: BuildPlanReceiptResult;
   createdAt: string;
+}
+
+export interface BuildPlanIdMapping {
+  kind: "milestone" | "criterion" | "deliverable" | "decision";
+  clientRef: string;
+  id: string;
+}
+
+/** Bounded mutation metadata needed to reproduce an exact idempotent result. */
+export interface BuildPlanReceiptResult {
+  operation: "apply" | "rebase";
+  briefChanges: readonly Readonly<{
+    plannedAgentId: PlanNodeId;
+    change: "created" | "changed" | "staled" | "preserved";
+  }>[];
+  idMappings: readonly BuildPlanIdMapping[];
+  completeness: BuildPlanCompleteness;
+  eligibility: BuildPlanEligibility;
+  diagnostics: readonly BuildPlanDiagnostic[];
 }
 
 /** Permanent compact provenance for requests whose exact result aged out. */

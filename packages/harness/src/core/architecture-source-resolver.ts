@@ -25,7 +25,8 @@ export interface ResolvedArchitectureSource {
 export type ArchitectureSourceResolutionErrorCode =
   | "source_not_found"
   | "source_digest_mismatch"
-  | "cross_project";
+  | "cross_project"
+  | "revision_source_unavailable";
 
 export class ArchitectureSourceResolutionError extends Error {
   constructor(readonly code: ArchitectureSourceResolutionErrorCode) {
@@ -34,7 +35,9 @@ export class ArchitectureSourceResolutionError extends Error {
         ? "Architecture source was not found"
         : code === "source_digest_mismatch"
           ? "Architecture source digest does not match"
-          : "Architecture source belongs to another project",
+          : code === "revision_source_unavailable"
+            ? "Confirmed revision storage is unavailable"
+            : "Architecture source belongs to another project",
     );
     this.name = "ArchitectureSourceResolutionError";
   }
@@ -44,9 +47,9 @@ export class ArchitectureSourceResolutionError extends Error {
 export class ArchitectureSourceResolver {
   constructor(
     private readonly store: AgentMapWorkspaceStore,
-    private readonly readRevision: (
+    private readonly readRevision?: (
       revisionId: AgentMapRevisionId,
-    ) => Promise<AgentMapRevisionSnapshot | null> = async () => null,
+    ) => Promise<AgentMapRevisionSnapshot | null>,
   ) {}
 
   async resolve(
@@ -56,6 +59,10 @@ export class ArchitectureSourceResolver {
     const source = parseArchitectureSourceRef(input);
     let graph: AgentMapGraph;
     if (source.kind === "revision") {
+      if (!this.readRevision)
+        throw new ArchitectureSourceResolutionError(
+          "revision_source_unavailable",
+        );
       const revision = await this.readRevision(source.revisionId);
       if (
         !revision ||
@@ -77,6 +84,10 @@ export class ArchitectureSourceResolver {
         throw new ArchitectureSourceResolutionError("source_not_found");
       let base: AgentMapGraph = { nodes: [], relationships: [] };
       if (proposal.baseRevisionId !== null) {
+        if (!this.readRevision)
+          throw new ArchitectureSourceResolutionError(
+            "revision_source_unavailable",
+          );
         const revision = await this.readRevision(
           proposal.baseRevisionId as AgentMapRevisionId,
         );

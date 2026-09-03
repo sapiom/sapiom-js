@@ -13,9 +13,11 @@ import {
   type AgentBriefId,
   type AgentBriefRef,
   type AgentBriefVersionRecord,
+  type ArchitectureSourceRef,
   type BuildPlanIdempotencyReceipt,
   type BuildPlanId,
   type BuildPlanRef,
+  type BuildPlanReceiptResult,
   type BuilderPlanningSubmission,
   type PlanningAssignmentId,
   type PlanningAssignmentRef,
@@ -91,6 +93,9 @@ export interface BuildPlanCommitIdentity {
   sessionId: string;
   requestId: string;
   requestDigest: string;
+  result?: BuildPlanReceiptResult;
+  /** Service-layer exact-source CAS; legacy persistence callers omit it. */
+  enforceCurrentProposalSource?: true;
 }
 
 export interface BuildPlanStoreOptions {
@@ -178,6 +183,23 @@ export class BuildPlanStore {
     return (await this.store.readAggregate(projectId)).buildPlanning;
   }
 
+  async isCurrentProposalSource(
+    projectId: StudioProjectId,
+    source: ArchitectureSourceRef,
+  ): Promise<boolean> {
+    if (source.kind !== "proposal") return true;
+    const aggregate = await this.store.readAggregate(projectId);
+    return (
+      aggregate.workspace.activeProposalId === source.proposalId &&
+      aggregate.proposal?.id === source.proposalId &&
+      aggregate.proposal.version === source.version &&
+      computeArchitectureGraphDigest({
+        nodes: aggregate.proposal.nodes,
+        relationships: aggregate.proposal.relationships,
+      }) === source.graphDigest
+    );
+  }
+
   allocateBuildPlanId(): BuildPlanId {
     return this.allocator.allocateBuildPlanId();
   }
@@ -230,6 +252,7 @@ export class BuildPlanStore {
     plan: BuildPlanRef;
     assignments: PlanningAssignmentRef[];
     replayed: boolean;
+    receiptResult?: BuildPlanReceiptResult;
   }> {
     const plan = parseProjectBuildPlanVersion(input);
     if (
@@ -283,6 +306,7 @@ export class BuildPlanStore {
       plan: BuildPlanRef;
       assignments: PlanningAssignmentRef[];
       replayed: boolean;
+      receiptResult?: BuildPlanReceiptResult;
     }>(plan.projectId, async (aggregate) => {
       const planning = aggregate.buildPlanning;
       const priorReceipt = planning.idempotencyReceipts.find(
@@ -291,18 +315,27 @@ export class BuildPlanStore {
           entry.requestId === request.requestId,
       );
       if (priorReceipt) {
-        if (
-          priorReceipt.requestDigest !== request.requestDigest ||
-          priorReceipt.resultRecordDigest !== plan.recordDigest
-        )
+        if (priorReceipt.requestDigest !== request.requestDigest)
           throw new BuildPlanStoreConflictError("request_id_reused");
-        const assignments = plan.assignments.map((entry) =>
+        const original = planning.planVersions.find(
+          (entry) => entry.recordDigest === priorReceipt.resultRecordDigest,
+        );
+        if (!original)
+          throw new BuildPlanStoreConflictError("request_id_expired");
+        const assignments = original.assignments.map((entry) =>
           this.assignmentRef(
             planning.assignmentByAgentId[entry.plannedAgentId]!,
           ),
         );
         return {
-          value: { plan: this.planRef(plan), assignments, replayed: true },
+          value: {
+            plan: this.planRef(original),
+            assignments,
+            replayed: true,
+            ...(priorReceipt.result
+              ? { receiptResult: structuredClone(priorReceipt.result) }
+              : {}),
+          },
         };
       }
       if (
@@ -318,6 +351,18 @@ export class BuildPlanStore {
           "plan-versions",
           this.historyLimits.planVersions,
         );
+      if (
+        request.enforceCurrentProposalSource === true &&
+        plan.source.kind === "proposal" &&
+        (aggregate.workspace.activeProposalId !== plan.source.proposalId ||
+          aggregate.proposal?.id !== plan.source.proposalId ||
+          aggregate.proposal.version !== plan.source.version ||
+          computeArchitectureGraphDigest({
+            nodes: aggregate.proposal.nodes,
+            relationships: aggregate.proposal.relationships,
+          }) !== plan.source.graphDigest)
+      )
+        throw new BuildPlanStoreConflictError("version_conflict");
       if (
         (planning.planId !== null && planning.planId !== plan.planId) ||
         plan.version !== planning.planVersions.length + 1 ||
@@ -415,7 +460,10 @@ export class BuildPlanStore {
         currentBriefByAgentId[brief.plannedAgentId] = this.briefRef(brief);
       }
       const receipt: BuildPlanIdempotencyReceipt = {
-        ...request,
+        sessionId: request.sessionId,
+        requestId: request.requestId,
+        requestDigest: request.requestDigest,
+        ...(request.result ? { result: structuredClone(request.result) } : {}),
         resultRecordDigest: plan.recordDigest,
         createdAt: timestamp,
       };
@@ -460,6 +508,9 @@ export class BuildPlanStore {
             this.assignmentRef(assignmentByAgentId[id]!),
           ),
           replayed: false,
+          ...(receipt.result
+            ? { receiptResult: structuredClone(receipt.result) }
+            : {}),
         },
         next,
       };

@@ -218,6 +218,12 @@ describe("planner session context and identity", () => {
       userId: "user-1",
       onboardOnFirstResponse: false,
       details: {
+        architectureSource: {
+          kind: "proposal",
+          proposalId: "proposal_00000000-0000-7000-8000-000000000005",
+          version: 3,
+          graphDigest: `sha256:${"a".repeat(64)}`,
+        } as never,
         confirmedRevision: {
           digest: "d".repeat(2_000),
           summaries: Array.from(
@@ -248,6 +254,12 @@ describe("planner session context and identity", () => {
     });
     const parsed = JSON.parse(context.split("\n")[2]!) as {
       project: {
+        architectureSource: {
+          kind: string;
+          proposalId: string;
+          version: number;
+          graphDigest: string;
+        };
         confirmedRevision: { digest: string; summaries: string[] };
         activeProposal: { status: string };
         projectBuildPlan: {
@@ -261,6 +273,12 @@ describe("planner session context and identity", () => {
     };
 
     expect(parsed.project.confirmedRevision.digest).toHaveLength(512);
+    expect(parsed.project.architectureSource).toMatchObject({
+      kind: "proposal",
+      proposalId: "proposal_00000000-0000-7000-8000-000000000005",
+      version: 3,
+      graphDigest: `sha256:${"a".repeat(64)}`,
+    });
     expect(parsed.project.confirmedRevision.summaries).toHaveLength(32);
     expect(
       parsed.project.confirmedRevision.summaries[0]!.length,
@@ -275,6 +293,32 @@ describe("planner session context and identity", () => {
     expect(parsed.project.warnings).toHaveLength(16);
     expect(context.length).toBeLessThan(16_384);
     expect(context).not.toContain(project.rootBindings[0]!.localRootRef);
+  });
+
+  it("represents a planless confirmed revision as explicitly unavailable", () => {
+    const context = buildFocusedPlannerContext({
+      project,
+      workspace: {
+        ...workspace,
+        confirmedRevisionId:
+          "revision_00000000-0000-7000-8000-000000000006",
+      },
+      sessionId: "session-1",
+      userId: "user-1",
+      onboardOnFirstResponse: false,
+      details: {
+        architectureSource: {
+          status: "revision_source_unavailable",
+          kind: "revision",
+          revisionId: "revision_00000000-0000-7000-8000-000000000006",
+        },
+      },
+    });
+    expect(context).toContain('"status":"revision_source_unavailable"');
+    expect(context).toContain(
+      '"revisionId":"revision_00000000-0000-7000-8000-000000000006"',
+    );
+    expect(context).not.toContain('"architectureSource":null');
   });
 
   it("rechecks the live principal after an awaited dispatch binding lookup", async () => {

@@ -141,6 +141,26 @@ describe("ArchitectureSourceResolver", () => {
     ).rejects.toMatchObject({ code: "source_not_found" });
   });
 
+  it("fails closed when confirmed revision storage is not installed", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "source-resolver-"));
+    roots.push(root);
+    await expect(
+      new ArchitectureSourceResolver(new AgentMapWorkspaceStore(root)).resolve(
+        PROJECT_ID,
+        {
+          kind: "revision",
+          revisionId:
+            "revision_00000000-0000-7000-8000-000000000006" as AgentMapRevisionId,
+          revisionNumber: 1,
+          graphDigest: computeArchitectureGraphDigest({
+            nodes: [],
+            relationships: [],
+          }),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "revision_source_unavailable" });
+  });
+
   it("verifies the proposal base revision identity before materializing", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "source-resolver-"));
     roots.push(root);
