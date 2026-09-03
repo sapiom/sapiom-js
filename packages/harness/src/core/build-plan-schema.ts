@@ -63,6 +63,8 @@ const deliverableId = generatedId("deliverable");
 const clientRefSchema = opaqueId;
 const idOrClientRef = (schema: z.ZodTypeAny) =>
   z.union([schema, z.object({ clientRef: clientRefSchema }).strict()]);
+const identityKey = (value: string | { clientRef: string }) =>
+  typeof value === "string" ? value : `client:${value.clientRef}`;
 
 const outcomeSchema = z.object({ summary: text() }).strict();
 const constraintSchema = z
@@ -74,7 +76,7 @@ const constraintSchema = z
   .strict();
 const criterionSchema = z
   .object({
-    criterionId,
+    criterionId: idOrClientRef(criterionId),
     ordinal: positiveInt,
     description: text(2_000),
     verification: text(2_000),
@@ -82,7 +84,7 @@ const criterionSchema = z
   .strict();
 const decisionSchema = z
   .object({
-    decisionId,
+    decisionId: idOrClientRef(decisionId),
     question: text(2_000),
     required: z.boolean(),
     status: z.enum(["open", "resolved"]),
@@ -99,11 +101,11 @@ const decisionSchema = z
   });
 const milestoneSchema = z
   .object({
-    milestoneId,
+    milestoneId: idOrClientRef(milestoneId),
     ordinal: positiveInt,
     title: text(240),
     outcome: text(2_000),
-    dependsOn: unique(milestoneId, (id) => id),
+    dependsOn: unique(idOrClientRef(milestoneId), identityKey),
   })
   .strict();
 const repositoryIntentSchema = z
@@ -117,10 +119,10 @@ const repositoryIntentSchema = z
   .strict();
 const deliverableSchema = z
   .object({
-    deliverableId,
+    deliverableId: idOrClientRef(deliverableId),
     description: text(2_000),
     artifactNodeIds: unique(nodeId, (id) => id),
-    acceptanceCriterionIds: unique(criterionId, (id) => id),
+    acceptanceCriterionIds: unique(idOrClientRef(criterionId), identityKey),
   })
   .strict();
 const createCriterionSchema = z
@@ -197,11 +199,17 @@ const assignmentSchema = z
         nonGoals: unique(text(2_000), (value) => value),
       })
       .strict(),
-    deliverables: unique(deliverableSchema, (value) => value.deliverableId),
+    deliverables: unique(deliverableSchema, (value) =>
+      identityKey(value.deliverableId),
+    ),
     constraints: unique(constraintSchema, (value) => value.constraintId),
-    acceptanceCriteria: unique(criterionSchema, (value) => value.criterionId),
-    milestoneIds: unique(milestoneId, (id) => id),
-    unresolvedDecisions: unique(decisionSchema, (value) => value.decisionId),
+    acceptanceCriteria: unique(criterionSchema, (value) =>
+      identityKey(value.criterionId),
+    ),
+    milestoneIds: unique(idOrClientRef(milestoneId), identityKey),
+    unresolvedDecisions: unique(decisionSchema, (value) =>
+      identityKey(value.decisionId),
+    ),
   })
   .strict();
 
@@ -247,7 +255,9 @@ export const buildPlanOperationSchema = z.discriminatedUnion("op", [
   z
     .object({
       op: z.literal("set-integration-criteria"),
-      criteria: unique(criterionSchema, (value) => value.criterionId),
+      criteria: unique(criterionSchema, (value) =>
+        identityKey(value.criterionId),
+      ),
     })
     .strict(),
   z

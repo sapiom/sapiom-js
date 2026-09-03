@@ -7,6 +7,7 @@ import type {
 } from "../shared/agent-map.js";
 import {
   architectureSourceRefsEqual,
+  BUILD_PLAN_ID_MAPPING_LIMIT,
   type AcceptanceCriterion,
   type AgentAssignmentIntent,
   type AgentBriefId,
@@ -133,12 +134,6 @@ export const unavailableBuildPlanImpactEvaluator: BuildPlanImpactEvaluator = {
   },
 };
 
-export interface BuildPlanIdFactory {
-  allocateBuildPlanId(): BuildPlanId;
-  allocateBriefId(): AgentBriefId;
-  allocateAssignmentId(): PlanningAssignmentId;
-}
-
 export interface Clock {
   now(): Date;
 }
@@ -149,7 +144,6 @@ export interface BuildPlanServiceDependencies {
   contractValidator: BuildPlanContractValidator;
   briefCompiler: AgentBriefCompiler;
   impactEvaluator: BuildPlanImpactEvaluator;
-  idFactory: BuildPlanIdFactory;
   clock: Clock;
 }
 
@@ -215,43 +209,141 @@ function replaceBy<T>(
   return [...items.filter((item) => key(item) !== id), value];
 }
 
+function seedIdentityValues(
+  plan: ProjectBuildPlanVersion | undefined,
+): string[] {
+  if (!plan) return [];
+  return [
+    ...plan.milestones.map((item) => item.milestoneId),
+    ...plan.integrationCriteria.map((item) => item.criterionId),
+    ...plan.unresolvedDecisions.map((item) => item.decisionId),
+    ...plan.assignments.flatMap((assignment) => [
+      ...assignment.deliverables.map((item) => item.deliverableId),
+      ...assignment.acceptanceCriteria.map((item) => item.criterionId),
+      ...assignment.unresolvedDecisions.map((item) => item.decisionId),
+    ]),
+  ];
+}
+
+type AuthoredIdentity = string | Readonly<{ clientRef: string }>;
+
+interface BuildPlanClientIdResolver {
+  declare(kind: BuildPlanIdMapping["kind"], clientRef: string): string;
+  resolve(kind: BuildPlanIdMapping["kind"], clientRef: string): string;
+}
+
+function resolveExistingIdentity(
+  value: AuthoredIdentity,
+  kind: BuildPlanIdMapping["kind"],
+  existingAtStart: ReadonlySet<string>,
+  existingProspective: ReadonlySet<string>,
+  resolver: BuildPlanClientIdResolver,
+  path: string,
+): string {
+  const id =
+    typeof value === "string" ? value : resolver.resolve(kind, value.clientRef);
+  const exists =
+    typeof value === "string"
+      ? existingAtStart.has(id) && existingProspective.has(id)
+      : existingProspective.has(id);
+  if (!exists)
+    throw new BuildPlanServiceError("invalid_operation", [
+      {
+        path,
+        message:
+          typeof value === "string"
+            ? "Canonical IDs in update operations must already exist at this scope"
+            : "Client references in update operations must name a record created earlier in this batch at this scope",
+      },
+    ]);
+  return id;
+}
+
+function assertCreateTargetAbsent(exists: boolean, path: string): void {
+  if (exists)
+    throw new BuildPlanServiceError("invalid_operation", [
+      {
+        path,
+        message:
+          "Create operations cannot replace an existing or prospectively created record; use its update operation",
+      },
+    ]);
+}
+
 /** Pure authoring reducer shared by validate and apply. */
 export function applyBuildPlanOperations(
   base: ProjectBuildPlanVersion,
   operations: readonly BuildPlanOperation[],
-  resolveClientId: (
-    kind: BuildPlanIdMapping["kind"],
-    clientRef: string,
-  ) => string,
+  clientIds: BuildPlanClientIdResolver,
 ): ProjectBuildPlanVersion {
   const next = structuredClone(base);
+  const baseMilestoneIds = new Set<string>(
+    base.milestones.map((item) => item.milestoneId),
+  );
   for (const operation of operations) {
+    const prospectiveMilestoneIds = () =>
+      new Set<string>(next.milestones.map((item) => item.milestoneId));
     switch (operation.op) {
       case "set-project-outcome":
         next.outcome = operation.outcome;
         break;
-      case "upsert-milestone":
-        next.milestones = replaceBy(
-          next.milestones,
-          operation.milestone as unknown as BuildMilestone,
-          (item) => item.milestoneId,
+      case "upsert-milestone": {
+        const milestoneId = resolveExistingIdentity(
+          operation.milestone.milestoneId,
+          "milestone",
+          baseMilestoneIds,
+          prospectiveMilestoneIds(),
+          clientIds,
+          "operations.milestone.milestoneId",
         );
-        break;
-      case "create-milestone":
+        const dependsOn = operation.milestone.dependsOn.map((reference) =>
+          resolveExistingIdentity(
+            reference,
+            "milestone",
+            baseMilestoneIds,
+            prospectiveMilestoneIds(),
+            clientIds,
+            "operations.milestone.dependsOn",
+          ),
+        );
         next.milestones = replaceBy(
           next.milestones,
           {
             ...operation.milestone,
-            milestoneId: resolveClientId("milestone", operation.clientRef),
-            dependsOn: operation.milestone.dependsOn.map((reference) =>
-              typeof reference === "string"
-                ? reference
-                : resolveClientId("milestone", reference.clientRef),
-            ),
+            milestoneId,
+            dependsOn,
           } as unknown as BuildMilestone,
           (item) => item.milestoneId,
         );
         break;
+      }
+      case "create-milestone": {
+        const milestoneId = clientIds.declare("milestone", operation.clientRef);
+        assertCreateTargetAbsent(
+          prospectiveMilestoneIds().has(milestoneId),
+          "operations.clientRef",
+        );
+        const dependsOn = operation.milestone.dependsOn.map((reference) =>
+          resolveExistingIdentity(
+            reference,
+            "milestone",
+            baseMilestoneIds,
+            prospectiveMilestoneIds(),
+            clientIds,
+            "operations.milestone.dependsOn",
+          ),
+        );
+        next.milestones = replaceBy(
+          next.milestones,
+          {
+            ...operation.milestone,
+            milestoneId,
+            dependsOn,
+          } as unknown as BuildMilestone,
+          (item) => item.milestoneId,
+        );
+        break;
+      }
       case "remove-milestone":
         next.milestones = next.milestones.filter(
           (item) => item.milestoneId !== operation.milestoneId,
@@ -264,18 +356,41 @@ export function applyBuildPlanOperations(
         next.repositoryIntents =
           operation.repositories as unknown as readonly RepositoryIntent[];
         break;
-      case "set-integration-criteria":
-        next.integrationCriteria =
-          operation.criteria as unknown as readonly AcceptanceCriterion[];
+      case "set-integration-criteria": {
+        const baseIds = new Set(
+          base.integrationCriteria.map((item) => item.criterionId),
+        );
+        const prospectiveIds = new Set(
+          next.integrationCriteria.map((item) => item.criterionId),
+        );
+        next.integrationCriteria = operation.criteria.map((criterion) => ({
+          ...criterion,
+          criterionId: resolveExistingIdentity(
+            criterion.criterionId,
+            "criterion",
+            baseIds,
+            prospectiveIds,
+            clientIds,
+            "operations.criteria.criterionId",
+          ),
+        })) as unknown as readonly AcceptanceCriterion[];
         break;
-      case "create-integration-criterion":
+      }
+      case "create-integration-criterion": {
+        const criterionId = clientIds.declare(
+          "criterion",
+          operation.criterion.clientRef,
+        );
+        assertCreateTargetAbsent(
+          next.integrationCriteria.some(
+            (item) => item.criterionId === criterionId,
+          ),
+          "operations.criterion.clientRef",
+        );
         next.integrationCriteria = replaceBy(
           next.integrationCriteria,
           {
-            criterionId: resolveClientId(
-              "criterion",
-              operation.criterion.clientRef,
-            ),
+            criterionId,
             ordinal: operation.criterion.ordinal,
             description: operation.criterion.description,
             verification: operation.criterion.verification,
@@ -283,17 +398,121 @@ export function applyBuildPlanOperations(
           (item) => item.criterionId,
         );
         break;
-      case "upsert-agent-assignment":
+      }
+      case "upsert-agent-assignment": {
+        const baseAssignment = base.assignments.find(
+          (item) => item.plannedAgentId === operation.assignment.plannedAgentId,
+        );
+        const prospectiveAssignment = next.assignments.find(
+          (item) => item.plannedAgentId === operation.assignment.plannedAgentId,
+        );
+        const resolveScoped = (
+          value: AuthoredIdentity,
+          kind: BuildPlanIdMapping["kind"],
+          fromBase: readonly string[],
+          fromProspective: readonly string[],
+          path: string,
+        ) =>
+          resolveExistingIdentity(
+            value,
+            kind,
+            new Set(fromBase),
+            new Set(fromProspective),
+            clientIds,
+            path,
+          );
+        const baseCriterionIds =
+          baseAssignment?.acceptanceCriteria.map((item) => item.criterionId) ??
+          [];
+        const prospectiveCriterionIds =
+          prospectiveAssignment?.acceptanceCriteria.map(
+            (item) => item.criterionId,
+          ) ?? [];
+        const acceptanceCriteria = operation.assignment.acceptanceCriteria.map(
+          (criterion) => ({
+            ...criterion,
+            criterionId: resolveScoped(
+              criterion.criterionId,
+              "criterion",
+              baseCriterionIds,
+              prospectiveCriterionIds,
+              "operations.assignment.acceptanceCriteria.criterionId",
+            ),
+          }),
+        );
+        const deliverables = operation.assignment.deliverables.map(
+          (deliverable) => ({
+            ...deliverable,
+            deliverableId: resolveScoped(
+              deliverable.deliverableId,
+              "deliverable",
+              baseAssignment?.deliverables.map((item) => item.deliverableId) ??
+                [],
+              prospectiveAssignment?.deliverables.map(
+                (item) => item.deliverableId,
+              ) ?? [],
+              "operations.assignment.deliverables.deliverableId",
+            ),
+            acceptanceCriterionIds: deliverable.acceptanceCriterionIds.map(
+              (reference) =>
+                resolveScoped(
+                  reference,
+                  "criterion",
+                  baseCriterionIds,
+                  prospectiveCriterionIds,
+                  "operations.assignment.deliverables.acceptanceCriterionIds",
+                ),
+            ),
+          }),
+        );
+        const unresolvedDecisions =
+          operation.assignment.unresolvedDecisions.map((decision) => ({
+            ...decision,
+            decisionId: resolveScoped(
+              decision.decisionId,
+              "decision",
+              baseAssignment?.unresolvedDecisions.map(
+                (item) => item.decisionId,
+              ) ?? [],
+              prospectiveAssignment?.unresolvedDecisions.map(
+                (item) => item.decisionId,
+              ) ?? [],
+              "operations.assignment.unresolvedDecisions.decisionId",
+            ),
+          }));
         next.assignments = replaceBy(
           next.assignments,
-          operation.assignment as unknown as AgentAssignmentIntent,
+          {
+            ...operation.assignment,
+            acceptanceCriteria,
+            deliverables,
+            milestoneIds: operation.assignment.milestoneIds.map((reference) =>
+              resolveExistingIdentity(
+                reference,
+                "milestone",
+                baseMilestoneIds,
+                prospectiveMilestoneIds(),
+                clientIds,
+                "operations.assignment.milestoneIds",
+              ),
+            ),
+            unresolvedDecisions,
+          } as unknown as AgentAssignmentIntent,
           (item) => item.plannedAgentId,
         );
         break;
+      }
       case "create-agent-assignment": {
+        assertCreateTargetAbsent(
+          next.assignments.some(
+            (item) =>
+              item.plannedAgentId === operation.assignment.plannedAgentId,
+          ),
+          "operations.assignment.plannedAgentId",
+        );
         const criteria = operation.assignment.acceptanceCriteria.map(
           (criterion) => ({
-            criterionId: resolveClientId("criterion", criterion.clientRef),
+            criterionId: clientIds.declare("criterion", criterion.clientRef),
             ordinal: criterion.ordinal,
             description: criterion.description,
             verification: criterion.verification,
@@ -301,11 +520,41 @@ export function applyBuildPlanOperations(
         );
         const decisions = operation.assignment.unresolvedDecisions.map(
           (decision) => ({
-            decisionId: resolveClientId("decision", decision.clientRef),
+            decisionId: clientIds.declare("decision", decision.clientRef),
             question: decision.question,
             required: decision.required,
             status: decision.status,
             resolution: decision.resolution,
+          }),
+        );
+        const deliverables = operation.assignment.deliverables.map(
+          (deliverable) => ({
+            deliverableId: clientIds.declare(
+              "deliverable",
+              deliverable.clientRef,
+            ),
+            description: deliverable.description,
+            artifactNodeIds: deliverable.artifactNodeIds,
+            acceptanceCriterionIds: deliverable.acceptanceCriterionRefs.map(
+              (reference) =>
+                resolveExistingIdentity(
+                  reference,
+                  "criterion",
+                  new Set(
+                    base.assignments
+                      .find(
+                        (item) =>
+                          item.plannedAgentId ===
+                          operation.assignment.plannedAgentId,
+                      )
+                      ?.acceptanceCriteria.map((item) => item.criterionId) ??
+                      [],
+                  ),
+                  new Set(criteria.map((item) => item.criterionId)),
+                  clientIds,
+                  "operations.assignment.deliverables.acceptanceCriterionRefs",
+                ),
+            ),
           }),
         );
         next.assignments = replaceBy(
@@ -316,26 +565,16 @@ export function applyBuildPlanOperations(
             scope: operation.assignment.scope,
             constraints: operation.assignment.constraints,
             acceptanceCriteria: criteria,
-            deliverables: operation.assignment.deliverables.map(
-              (deliverable) => ({
-                deliverableId: resolveClientId(
-                  "deliverable",
-                  deliverable.clientRef,
-                ),
-                description: deliverable.description,
-                artifactNodeIds: deliverable.artifactNodeIds,
-                acceptanceCriterionIds: deliverable.acceptanceCriterionRefs.map(
-                  (reference) =>
-                    typeof reference === "string"
-                      ? reference
-                      : resolveClientId("criterion", reference.clientRef),
-                ),
-              }),
-            ),
+            deliverables,
             milestoneIds: operation.assignment.milestoneRefs.map((reference) =>
-              typeof reference === "string"
-                ? reference
-                : resolveClientId("milestone", reference.clientRef),
+              resolveExistingIdentity(
+                reference,
+                "milestone",
+                baseMilestoneIds,
+                prospectiveMilestoneIds(),
+                clientIds,
+                "operations.assignment.milestoneRefs",
+              ),
             ),
             unresolvedDecisions: decisions,
           } as unknown as AgentAssignmentIntent,
@@ -348,21 +587,37 @@ export function applyBuildPlanOperations(
           (item) => item.plannedAgentId !== operation.plannedAgentId,
         );
         break;
-      case "upsert-decision":
+      case "upsert-decision": {
+        const decisionId = resolveExistingIdentity(
+          operation.decision.decisionId,
+          "decision",
+          new Set(base.unresolvedDecisions.map((item) => item.decisionId)),
+          new Set(next.unresolvedDecisions.map((item) => item.decisionId)),
+          clientIds,
+          "operations.decision.decisionId",
+        );
         next.unresolvedDecisions = replaceBy(
           next.unresolvedDecisions,
-          operation.decision as unknown as PlanDecision,
+          { ...operation.decision, decisionId } as unknown as PlanDecision,
           (item) => item.decisionId,
         );
         break;
-      case "create-decision":
+      }
+      case "create-decision": {
+        const decisionId = clientIds.declare(
+          "decision",
+          operation.decision.clientRef,
+        );
+        assertCreateTargetAbsent(
+          next.unresolvedDecisions.some(
+            (item) => item.decisionId === decisionId,
+          ),
+          "operations.decision.clientRef",
+        );
         next.unresolvedDecisions = replaceBy(
           next.unresolvedDecisions,
           {
-            decisionId: resolveClientId(
-              "decision",
-              operation.decision.clientRef,
-            ),
+            decisionId,
             question: operation.decision.question,
             required: operation.decision.required,
             status: operation.decision.status,
@@ -371,6 +626,7 @@ export function applyBuildPlanOperations(
           (item) => item.decisionId,
         );
         break;
+      }
       case "remove-decision":
         next.unresolvedDecisions = next.unresolvedDecisions.filter(
           (item) => item.decisionId !== operation.decisionId,
@@ -879,14 +1135,28 @@ export class BuildPlanService {
       current?.planId ??
       (deterministicId("build-plan", allocationSeed) as BuildPlanId);
     const idMappings: BuildPlanIdMapping[] = [];
-    const mapped = new Map<string, string>();
-    const resolveClientId = (
+    const mapped = new Map<string, BuildPlanIdMapping>();
+    const mappedIds = new Set<string>();
+    const existingCanonicalIds = new Set([...seedIdentityValues(current)]);
+    const declareClientId = (
       kind: BuildPlanIdMapping["kind"],
       clientRef: string,
     ): string => {
-      const key = `${kind}\0${clientRef}`;
-      const existing = mapped.get(key);
-      if (existing) return existing;
+      if (mapped.has(clientRef))
+        throw new BuildPlanServiceError("invalid_operation", [
+          {
+            path: "operations.clientRef",
+            message:
+              "Each client reference may declare exactly one identity in a request",
+          },
+        ]);
+      if (idMappings.length >= BUILD_PLAN_ID_MAPPING_LIMIT)
+        throw new BuildPlanServiceError("result_too_large", [
+          {
+            path: "operations",
+            message: `A build-plan version can create at most ${BUILD_PLAN_ID_MAPPING_LIMIT} client-correlated identities; split the authoring work across plan versions`,
+          },
+        ]);
       const prefix =
         kind === "milestone"
           ? "milestone"
@@ -895,10 +1165,35 @@ export class BuildPlanService {
             : kind === "deliverable"
               ? "deliverable"
               : "decision";
-      const allocated = deterministicId(prefix, `${id}\0${key}`);
-      mapped.set(key, allocated);
-      idMappings.push({ kind, clientRef, id: allocated });
+      const allocated = deterministicId(prefix, `${id}\0${kind}\0${clientRef}`);
+      if (existingCanonicalIds.has(allocated) || mappedIds.has(allocated))
+        throw new BuildPlanServiceError("invalid_operation", [
+          {
+            path: "operations.clientRef",
+            message:
+              "A client reference cannot alias an existing canonical identity; use its canonical ID in an update operation",
+          },
+        ]);
+      const mapping = { kind, clientRef, id: allocated };
+      mapped.set(clientRef, mapping);
+      mappedIds.add(allocated);
+      idMappings.push(mapping);
       return allocated;
+    };
+    const resolveClientId = (
+      kind: BuildPlanIdMapping["kind"],
+      clientRef: string,
+    ): string => {
+      const mapping = mapped.get(clientRef);
+      if (!mapping || mapping.kind !== kind)
+        throw new BuildPlanServiceError("invalid_operation", [
+          {
+            path: "operations.clientRef",
+            message:
+              "A client reference must match an identity created earlier in the same request",
+          },
+        ]);
+      return mapping.id;
     };
     const seed =
       current ??
@@ -926,11 +1221,10 @@ export class BuildPlanService {
         },
         createdAt: this.dependencies.clock.now().toISOString(),
       } as unknown as ProjectBuildPlanVersion);
-    const next = applyBuildPlanOperations(
-      seed,
-      input.operations,
-      resolveClientId,
-    );
+    const next = applyBuildPlanOperations(seed, input.operations, {
+      declare: declareClientId,
+      resolve: resolveClientId,
+    });
     const draft = this.finalize({
       ...next,
       planId: id,

@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AGENT_BRIEF_VERSION_HISTORY_LIMIT,
   architectureSourceRefsEqual,
+  BUILD_PLAN_ID_MAPPING_LIMIT,
   BUILD_PLAN_VERSION_HISTORY_LIMIT,
   PLANNING_SUBMISSION_HISTORY_LIMIT,
   type AgentBriefVersionRecord,
@@ -629,7 +630,7 @@ const receiptSchema = z
               })
               .strict(),
           )
-          .max(128),
+          .max(BUILD_PLAN_ID_MAPPING_LIMIT),
         completeness: z
           .object({
             status: z.enum(["incomplete", "complete"]),

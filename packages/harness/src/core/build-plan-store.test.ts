@@ -363,6 +363,58 @@ describe("BuildPlanStore", () => {
     );
   });
 
+  it("enforces brief history limits inside an atomic plan commit", async () => {
+    const { root, workspaceStore, buildPlanStore } = await fixture(
+      {},
+      { historyLimits: { briefVersions: 1 } },
+    );
+    const firstPlan = makePlan();
+    const firstBrief = makeBrief(firstPlan);
+    await buildPlanStore.commitPlanVersion(firstPlan, graph, request, {
+      briefs: [firstBrief],
+    });
+    const secondPlan = makePlan({
+      version: 2 as BuildPlanVersion,
+      parentVersion: 1 as BuildPlanVersion,
+      changeKind: "edited",
+      outcome: { summary: "A second atomic plan version" },
+    });
+    const secondBrief = makeBrief(secondPlan, {
+      version: 2 as AgentBriefVersion,
+      parentVersion: 1 as AgentBriefVersion,
+    });
+    const before = await workspaceStore.readAggregate(PROJECT_ID);
+    const file = path.join(root, "projects", PROJECT_ID, "workspace.json");
+    const durableBefore = await fs.readFile(file, "utf8");
+
+    await expect(
+      buildPlanStore.commitPlanVersion(
+        secondPlan,
+        graph,
+        {
+          ...request,
+          requestId: "request-atomic-brief-limit",
+          requestDigest: `sha256:${"b".repeat(64)}`,
+        },
+        { briefs: [secondBrief] },
+      ),
+    ).rejects.toMatchObject({
+      code: "history_limit_exceeded",
+      historyKind: "brief-versions",
+      limit: 1,
+    });
+
+    expect(await workspaceStore.readAggregate(PROJECT_ID)).toEqual(before);
+    expect(await fs.readFile(file, "utf8")).toBe(durableBefore);
+    expect(before.buildPlanning).toMatchObject({
+      currentPlanVersion: 1,
+      planVersions: [{ version: 1 }],
+      currentBriefByAgentId: { [AGENT_ID]: { version: 1 } },
+      briefVersionsById: { [BRIEF_ID]: [{ version: 1 }] },
+      idempotencyReceipts: [{ requestId: request.requestId }],
+    });
+  });
+
   it("reports explicit brief and submission history limits", async () => {
     const briefFixture = await fixture(
       {},

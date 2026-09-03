@@ -2736,7 +2736,6 @@ export const startServer = async (
     contractValidator: buildPlanContractValidator,
     briefCompiler: new DeterministicAgentBriefCompiler(),
     impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
-    idFactory: buildPlanStore,
     clock: { now: () => new Date() },
   });
   emitAgentMapCapabilityEvent = (event) => {

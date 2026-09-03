@@ -213,7 +213,10 @@ describe("Agent Map MCP plan-authoring discovery", () => {
                 : {}),
               operations: null,
             };
-      const result = await client.callTool({ name: tool, arguments: arguments_ });
+      const result = await client.callTool({
+        name: tool,
+        arguments: arguments_,
+      });
       expect(result).toMatchObject({
         isError: true,
         structuredContent: {
@@ -226,4 +229,69 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       await server.close();
     },
   );
+
+  it("returns actionable bounded recovery for oversized authoring results", async () => {
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const apply = vi.fn(async () => {
+      throw new BuildPlanServiceError("result_too_large", [
+        {
+          path: "operations",
+          message: "Split the authoring work across plan versions",
+        },
+      ]);
+    });
+    const server = createAgentMapToolServer(
+      {
+        projectId,
+        sessionId: "oversized-result",
+        userId: "user",
+        role: "map-planner",
+      },
+      new AgentMapProposalService(
+        new AgentMapWorkspaceStore("/tmp/agent-map-tools-oversized"),
+      ),
+      { buildPlanService: { apply } as never },
+    );
+    const client = new Client({ name: "oversized-test", version: "1" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "build_plan_apply",
+      arguments: {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: {
+          kind: "proposal",
+          proposalId: "proposal_00000000-0000-7000-8000-000000000005",
+          version: 1,
+          graphDigest: `sha256:${"0".repeat(64)}`,
+        },
+        requestId: "request-oversized",
+        operations: [
+          {
+            op: "set-project-outcome",
+            outcome: { summary: "Bound this result" },
+          },
+        ],
+      },
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "result_too_large",
+        recovery: "split_batch",
+        issues: [
+          expect.objectContaining({
+            path: "operations",
+            message: expect.stringContaining("Split"),
+          }),
+        ],
+      },
+    });
+    await client.close();
+    await server.close();
+  });
 });

@@ -226,6 +226,8 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(systemPrompt).toContain(
     "Let the user's first real message be the first visible conversation turn",
   );
+  expect(systemPrompt).toContain("revision_source_unavailable");
+  expect(systemPrompt).toContain("do not retry it");
   expect(systemPrompt).not.toContain("In your first response, briefly explain");
   expect(systemPrompt).not.toContain(codingPrompt);
   expect(systemPrompt).not.toContain("You are the coding agent");
@@ -236,7 +238,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
     [
       "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map plus a validated delivery plan covering milestones, constraints, assignments, deliverables, and acceptance evidence. Architecture changes use Agent Map proposals; delivery intent uses exact-version build-plan tools and explicit rebasing. Start by describing the outcome you want.",
+      "Use this session to scope what you want to build—not to implement it yet. Build-plan reads, validation, application, deterministic brief compilation, and targeted impact evaluation are available for exact proposal sources. Confirmed-revision operations remain unavailable until the persisted revision reader is installed. Start by describing the outcome you want.",
     ].join("\n"),
   );
   const plannerEmitter = await fs.readFile(

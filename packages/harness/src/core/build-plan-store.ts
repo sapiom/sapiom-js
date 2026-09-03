@@ -443,6 +443,11 @@ export class BuildPlanStore {
       for (const brief of briefs) {
         const assignment = assignmentByAgentId[brief.plannedAgentId];
         const history = briefVersionsById[brief.briefId] ?? [];
+        if (history.length >= this.historyLimits.briefVersions)
+          throw new BuildPlanStoreLimitError(
+            "brief-versions",
+            this.historyLimits.briefVersions,
+          );
         if (
           !assignment ||
           assignment.status !== "active" ||
