@@ -28,12 +28,12 @@ afterEach(async () => {
 describe("createPendingSecretsStore", () => {
   it("round-trips a value through disk", async () => {
     const store = await createPendingSecretsStore(storePath());
-    await store.set(PROJECT, "ANTHROPIC_API_KEY", "sk-ant-secret");
+    await store.set(PROJECT, "API_KEY", "sk-secret");
 
     const reopened = await createPendingSecretsStore(storePath());
-    expect(reopened.names(PROJECT)).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(reopened.names(PROJECT)).toEqual(["API_KEY"]);
     expect(reopened.values(PROJECT)).toEqual({
-      ANTHROPIC_API_KEY: "sk-ant-secret",
+      API_KEY: "sk-secret",
     });
   });
 

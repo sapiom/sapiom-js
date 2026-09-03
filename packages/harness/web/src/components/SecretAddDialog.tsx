@@ -130,7 +130,7 @@ export function SecretAddDialog({
             that reads "saved" as "deployed". */}
         <SecretNotice testId="secret-destination-notice">
           {linked
-            ? "Applies to new runs. Existing runs keep the value they started with."
+            ? "Applies to new runs; runs already in flight keep the value they started with. A copy is also kept on this machine, so local runs get the same value."
             : "Saved on this machine and used by local runs. Deploying this agent uploads it to Sapiom."}
         </SecretNotice>
         {/* Submits the form on Enter without adding a second visible button. */}

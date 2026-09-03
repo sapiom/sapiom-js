@@ -307,6 +307,28 @@ describe("DELETE /api/workflows/:id/secrets/:key", () => {
     expect(calls.some((c) => c.op === "remove")).toBe(false);
   });
 
+  it("deletes a PENDING key on a linked agent, which the vault has never seen", async () => {
+    // The state the pending banner exists to describe: added while unlinked,
+    // then linked (or deployed from the terminal). The vault 404s a key it was
+    // never given, and treating that as a failure left the row undeletable —
+    // the delete dialog offers "remove local copy only" only when the key is
+    // ALSO synced, so this row's one offered action was the one that fails.
+    const { vault } = makeVault({
+      remove: async (_definitionId, key) => {
+        throw new VaultSecretError(`${key} could not be stored: not found.`, 404);
+      },
+    });
+    const base = startApp(vault);
+    await pending.set(LINKED, "NEVER_UPLOADED", "v");
+
+    const response = await fetch(url(base, LINKED, "/NEVER_UPLOADED"), {
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(204);
+    expect(pending.names(LINKED)).toEqual([]);
+  });
+
   it("keeps the local copy when the vault refuses the delete", async () => {
     const { vault } = makeVault({
       remove: async () => {

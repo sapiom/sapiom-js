@@ -14,8 +14,10 @@ import { parseDotEnv } from "../lib/secrets";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import type { AgentSecret } from "@shared/types";
 
+/* Provider-neutral by rule: no vendor name belongs in rendered copy unless the
+   name IS the contract, and a paste placeholder has no contract to state. */
 const PLACEHOLDER = `# Paste .env lines
-ANTHROPIC_API_KEY=sk-ant-…
+API_KEY=…
 STRIPE_API_KEY="sk_live_…"
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/…`;
 
@@ -114,12 +116,14 @@ export function SecretImportDialog({
                   : ""}
               </SecretNotice>
             )}
-            {!linked && (
-              <SecretNotice testId="secret-import-destination">
-                Saved on this machine. Deploying this agent uploads them to
-                Sapiom.
-              </SecretNotice>
-            )}
+            {/* Where these land, on BOTH paths. The linked branch used to say
+                nothing, which left the common case — pasting a .env onto a
+                deployed agent — silent about the local copy it writes. */}
+            <SecretNotice testId="secret-import-destination">
+              {linked
+                ? "Sent to Sapiom, and a copy is kept on this machine so local runs get the same values."
+                : "Saved on this machine. Deploying this agent uploads them to Sapiom."}
+            </SecretNotice>
           </div>
         )}
       </div>

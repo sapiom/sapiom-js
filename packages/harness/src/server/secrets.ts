@@ -292,13 +292,21 @@ export function createSecretsRouter(opts: SecretsRouterOpts): Router {
       try {
         await vault.remove(agent.definitionId, key);
       } catch (err) {
-        res.status(502).json({
-          error:
-            err instanceof VaultSecretError
-              ? err.message
-              : `${key} could not be removed.`,
-        });
-        return;
+        // "The vault does not hold this key" is the state the caller asked
+        // for, not a failure — and refusing here would strand the local copy
+        // of a PENDING key on a linked agent, which the delete dialog offers
+        // no other way to remove. The client already treats a 404 as success;
+        // this is the second layer, so no future client can reintroduce the
+        // dead end.
+        if (!(err instanceof VaultSecretError) || err.status !== 404) {
+          res.status(502).json({
+            error:
+              err instanceof VaultSecretError
+                ? err.message
+                : `${key} could not be removed.`,
+          });
+          return;
+        }
       }
     }
     await pending.remove(agent.path, key);

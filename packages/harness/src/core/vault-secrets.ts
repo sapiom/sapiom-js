@@ -174,6 +174,13 @@ export function createVaultSecretsClient(opts: {
         `${secretsPath(definitionId)}/${encodeURIComponent(key)}`,
         { method: "DELETE" },
       );
+      // DELETE is idempotent here: 404 means the vault does not hold this key,
+      // which is the state the caller asked for. Treating it as a failure made
+      // a locally-held key on a LINKED agent undeletable — the vault 404s a
+      // name it was never given, the route refused, and the local copy stayed.
+      // That is reachable from the ordinary path of adding a secret before
+      // linking, so it is the common case rather than an edge one.
+      if (response?.status === 404) return;
       if (!response || !response.ok) throw refuse(response, key);
     },
   };

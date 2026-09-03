@@ -300,14 +300,26 @@ test("E3.9/E3.10 — Steps says why it cannot answer for a project; Code is gone
     "aria-label",
     "Steps belong to one agent — select an agent to see them",
   );
+  // Secrets belongs to ONE agent for the same reason Steps does — the engine
+  // stores a credential per definition — so it is disabled here and says why.
+  // Sharper than Steps, in fact: a tab still listing the last agent's
+  // credentials under a project's name would invite a wrong conclusion about a
+  // different agent.
+  const secrets = page.getByTestId("right-tab-secrets");
+  await expect(secrets).toBeDisabled();
+  await expect(secrets).toHaveAttribute(
+    "data-tooltip",
+    "Secrets belong to one agent — select an agent to see them",
+  );
+
   // The map is what the Canvas tab shows at this altitude, so the tab set never
-  // grows a fourth peer for it.
+  // grows a peer for it. Three tabs — Canvas, Steps, Secrets — and no fourth.
   await expect(page.getByTestId("right-tab-canvas")).toHaveAttribute(
     "aria-selected",
     "true",
   );
   await expect(page.getByTestId("right-tab-code")).toHaveCount(0);
-  await expect(page.locator(".right-pane-tab")).toHaveCount(2);
+  await expect(page.locator(".right-pane-tab")).toHaveCount(3);
 
   // The held Steps intent is not destroyed by the trip up — it is restored on
   // the way back down.
