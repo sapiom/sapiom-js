@@ -165,6 +165,82 @@ test.describe("ordering", () => {
 });
 
 test.describe("the plan-first project children", () => {
+  test("the project plus starts a coding session at its root without creating an agent", async ({
+    page,
+  }) => {
+    const group = page.getByTestId("workspace-group-dashboard-keeper");
+    const row = group.getByTestId("project-row-dashboard-keeper");
+    const start = group.getByTestId("project-start-session-dashboard-keeper");
+
+    await expect(start).toHaveAttribute(
+      "aria-label",
+      "Start a session in dashboard-keeper",
+    );
+    await expect(start).toHaveAttribute("data-tooltip", "Start a session here");
+    expect(
+      await row
+        .locator(":scope > .workspace-row-action")
+        .evaluateAll((actions) =>
+          actions.map((action) => action.getAttribute("data-testid")),
+        ),
+    ).toEqual([
+      "project-start-session-dashboard-keeper",
+      "project-menu-dashboard-keeper",
+    ]);
+
+    // Prove the shortcut also works from map altitude: the new generic session
+    // becomes the visible workbench, while the planner remains resumable from
+    // Plan Agents and no scaffold request is made.
+    await group.getByTestId("agent-map-select").click();
+    await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await start.click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  lastCreateSession?: {
+                    req?: { cwd?: string; harness?: string };
+                  };
+                  createOrder?: string[];
+                };
+              }
+            ).__HARNESS_TEST__,
+        ),
+      )
+      .toMatchObject({
+        lastCreateSession: {
+          req: {
+            cwd: "/Users/demo/dashboard-keeper",
+            harness: "claude-code",
+          },
+        },
+      });
+    await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await expect(page.getByTestId("session-context-title")).toContainText(
+      "dashboard-keeper",
+    );
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: { createOrder?: string[] };
+            }
+          ).__HARNESS_TEST__?.createOrder ?? [],
+      ),
+    ).not.toContain("scaffold:/Users/demo/dashboard-keeper");
+  });
+
   test("a root agent is a separate target below the pinned Agent Map", async ({
     page,
   }) => {

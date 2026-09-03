@@ -1659,12 +1659,13 @@ export const App = (): JSX.Element => {
   const startProjectSession = async (
     root: string,
     label: string,
+    agentHarness: HarnessKind = "claude-code",
   ): Promise<void> => {
     if (startingProjectRootsRef.current.has(root)) return;
     startingProjectRootsRef.current.add(root);
     setStartingProject({ root, label });
     try {
-      await createSessionAt(root, "claude-code");
+      await createSessionAt(root, agentHarness);
     } catch (err) {
       harness.showToast(
         (err as Error).message || `Couldn't start a session in ${label}.`,
@@ -2775,7 +2776,15 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onCreateSession={handleCreateSession}
+            onStartProjectSession={(root, label) => {
+              // A project-row `+` explicitly asks to see a fresh coding
+              // session, even when Plan Agents or a legacy project map is the
+              // current altitude. The planner process stays resumable.
+              studioRestoreGenerationRef.current += 1;
+              setStudioSelection(null);
+              setSelectedProject(null);
+              return startProjectSession(root, label, preferredHarness());
+            }}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}

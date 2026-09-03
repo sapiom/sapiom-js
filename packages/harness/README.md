@@ -18,7 +18,9 @@ system prompt, in whatever project directory you choose.
 ## What you get
 
 - **Terminal sessions** — your agent, your subscription, your machine; the
-  Agent Studio only configures it. Multiple sessions, resumable chat history.
+  Agent Studio only configures it. The `+` beside a project starts a session at
+  that project root; the tab-strip `+` starts a sibling session. Sessions have
+  resumable chat history.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
   open-in-Sapiom actions. How that discovery is rooted and bounded, how a

@@ -88,7 +88,7 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
   });
 
-  test("a planning project hides every standalone agent-creation action", async ({
+  test("a planning project keeps sessions direct while hiding standalone agent creation", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
@@ -108,6 +108,9 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("planner-session-ended")).toBeVisible();
 
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    await expect(
+      group.getByTestId("project-start-session-blank-slate"),
+    ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
     // The visible empty row and the project menu used to be two doors into the
     // same direct-create flow. A planning project exposes neither: generated
