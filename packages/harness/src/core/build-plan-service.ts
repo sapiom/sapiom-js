@@ -18,6 +18,7 @@ import {
   type BuildPlanIdempotencyReceipt,
   type BuildPlanIdMapping,
   type BuildPlanImpactEvaluator,
+  type BuildPlanImpactResult,
   type BuildPlanRef,
   type PlanDecision,
   type PlanningAssignmentId,
@@ -95,6 +96,7 @@ export interface BriefChangeSummary {
 export interface AgentBriefCompileResult {
   briefs: readonly AgentBriefVersionRecord[];
   changes: readonly BriefChangeSummary[];
+  compilation?: import("../shared/build-plan.js").CompileAgentBriefsResult;
 }
 
 /** SAP-3070 implements this boundary; this ticket only orchestrates it. */
@@ -104,6 +106,9 @@ export interface AgentBriefCompiler {
     graph: AgentMapGraph;
     currentBriefs: readonly AgentBriefVersionRecord[];
     assignments: readonly PlanningAssignmentRef[];
+    previousPlan?: ProjectBuildPlanVersion;
+    previousGraph?: AgentMapGraph;
+    previousPlanRefs?: readonly BuildPlanRef[];
   }): Promise<AgentBriefCompileResult>;
 }
 
@@ -163,6 +168,12 @@ const deterministicId = (prefix: string, seed: string): string => {
   const hex = createHash("sha256").update(seed).digest("hex");
   return `${prefix}_${hex.slice(0, 8)}-${hex.slice(8, 12)}-7${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
+const isCanonicalImpact = (
+  value:
+    | BuildPlanImpactResult
+    | Readonly<Record<string, readonly BriefStaleReason[]>>,
+): value is BuildPlanImpactResult =>
+  Array.isArray((value as Partial<BuildPlanImpactResult>).assignmentChanges);
 
 function assertPlanner(identity: PlanningSessionIdentity): void {
   if (identity.role !== "map-planner")
@@ -441,9 +452,10 @@ export class BuildPlanService {
                 planning.currentBriefByAgentId[brief.plannedAgentId]
                   ?.version === brief.version,
               freshness:
-                brief.plan.planId === plan.planId &&
-                brief.plan.version === plan.version &&
-                brief.plan.semanticDigest === plan.semanticDigest &&
+                planning.currentBriefByAgentId[brief.plannedAgentId]
+                  ?.briefId === brief.briefId &&
+                planning.currentBriefByAgentId[brief.plannedAgentId]
+                  ?.version === brief.version &&
                 architectureSourceRefsEqual(brief.source, plan.source)
                   ? "current"
                   : "stale",
@@ -492,6 +504,9 @@ export class BuildPlanService {
             completeness: prepared.result.completeness,
             eligibility: prepared.result.eligibility,
             diagnostics: prepared.result.diagnostics,
+            ...(prepared.result.impact
+              ? { impact: prepared.result.impact }
+              : {}),
           },
         },
         {
@@ -723,11 +738,6 @@ export class BuildPlanService {
         ],
         planRef(current!),
       );
-    const impacts = await this.evaluateImpact({
-      previousSource: from.source,
-      nextSource: to.source,
-      briefs: currentBriefs(planning),
-    });
     const draft = this.finalize({
       ...current!,
       source: to.source,
@@ -752,11 +762,29 @@ export class BuildPlanService {
       graph: to.graph,
       currentBriefs: currentBriefs(planning),
       assignments: assignmentsForCompile,
+      previousPlan: current!,
+      previousGraph: from.graph,
+      previousPlanRefs: planning.planVersions.map(planRef),
     });
     const committableBriefs = this.committableBriefs(draft, compiled.briefs);
+    const effectiveBriefs = this.effectiveBriefs(
+      currentBriefs(planning),
+      committableBriefs,
+      draft,
+    );
+    const impacts = await this.evaluateImpact({
+      previousSource: from.source,
+      nextSource: to.source,
+      briefs: currentBriefs(planning),
+      previousPlan: current!,
+      nextPlan: draft,
+      previousGraph: from.graph,
+      nextGraph: to.graph,
+      nextBriefs: effectiveBriefs,
+    });
     const status = await this.dependencies.contractValidator.validate(
       draft,
-      committableBriefs,
+      effectiveBriefs,
     );
     this.assertNoInvalidDiagnostics(status.completeness);
     const briefChanges = this.impactChanges(impacts, compiled.changes);
@@ -769,6 +797,7 @@ export class BuildPlanService {
       briefChanges,
       idMappings: [],
       diagnostics: status.completeness.issues,
+      impact: this.canonicalImpact(impacts),
       replayed: false,
     });
     try {
@@ -787,6 +816,9 @@ export class BuildPlanService {
             completeness: status.completeness,
             eligibility: status.eligibility,
             diagnostics: status.completeness.issues,
+            ...(this.canonicalImpact(impacts)
+              ? { impact: this.canonicalImpact(impacts) }
+              : {}),
           },
         },
         { assignments: assignmentsForCompile, briefs: committableBriefs },
@@ -921,11 +953,23 @@ export class BuildPlanService {
       graph: source.graph,
       currentBriefs: currentBriefs(planning),
       assignments: assignmentsForCompile,
+      ...(current
+        ? {
+            previousPlan: current,
+            previousGraph: source.graph,
+            previousPlanRefs: planning.planVersions.map(planRef),
+          }
+        : {}),
     });
     const committableBriefs = this.committableBriefs(draft, compiled.briefs);
+    const effectiveBriefs = this.effectiveBriefs(
+      currentBriefs(planning),
+      committableBriefs,
+      draft,
+    );
     const status = await this.dependencies.contractValidator.validate(
       draft,
-      committableBriefs,
+      effectiveBriefs,
     );
     this.assertNoInvalidDiagnostics(status.completeness);
     const result = {
@@ -950,6 +994,7 @@ export class BuildPlanService {
           0,
           BUILD_PLAN_MAX_DIAGNOSTICS,
         ),
+        ...(compiled.compilation ? { impact: compiled.compilation.impact } : {}),
         replayed: false,
       },
     };
@@ -1121,6 +1166,7 @@ export class BuildPlanService {
       briefChanges: receipt.result?.briefChanges ?? [],
       idMappings: receipt.result?.idMappings ?? [],
       diagnostics: receipt.result?.diagnostics ?? status.completeness.issues,
+      ...(receipt.result?.impact ? { impact: receipt.result.impact } : {}),
       replayed: true,
     };
     return receipt.result?.operation === "apply"
@@ -1136,13 +1182,23 @@ export class BuildPlanService {
   }
 
   private impactChanges(
-    impacts: Readonly<Record<string, readonly BriefStaleReason[]>>,
+    impacts:
+      | BuildPlanImpactResult
+      | Readonly<Record<string, readonly BriefStaleReason[]>>,
     compiled: readonly BriefChangeSummary[],
   ): BriefChangeSummary[] {
     const changes = new Map(
       compiled.map((item) => [item.plannedAgentId, item]),
     );
-    for (const [plannedAgentId, reasons] of Object.entries(impacts))
+    const byAgent = isCanonicalImpact(impacts)
+      ? Object.fromEntries(
+          impacts.assignmentChanges.map((entry) => [
+            entry.plannedAgentId,
+            entry.reasons,
+          ]),
+        )
+      : impacts;
+    for (const [plannedAgentId, reasons] of Object.entries(byAgent))
       if (reasons.length)
         changes.set(plannedAgentId as PlanNodeId, {
           plannedAgentId: plannedAgentId as PlanNodeId,
@@ -1266,6 +1322,22 @@ export class BuildPlanService {
               "Build plan mutation is unavailable until its production planning dependency is installed",
           },
         ]);
+      if (
+        error &&
+        typeof error === "object" &&
+        "diagnostics" in error &&
+        Array.isArray(error.diagnostics)
+      )
+        throw new BuildPlanServiceError(
+          "incomplete_plan",
+          error.diagnostics
+            .slice(0, BUILD_PLAN_MAX_DIAGNOSTICS)
+            .map((issue: BuildPlanSafeIssue) => ({
+              path: issue.path,
+              message: issue.message,
+              relatedIds: issue.relatedIds,
+            })),
+        );
       throw error;
     }
   }
@@ -1299,6 +1371,31 @@ export class BuildPlanService {
         brief.plan.semanticDigest === plan.semanticDigest &&
         architectureSourceRefsEqual(brief.source, plan.source),
     );
+  }
+
+  private effectiveBriefs(
+    current: readonly AgentBriefVersionRecord[],
+    committable: readonly AgentBriefVersionRecord[],
+    plan: ProjectBuildPlanVersion,
+  ): AgentBriefVersionRecord[] {
+    const active = new Set(plan.assignments.map((entry) => entry.plannedAgentId));
+    const result = new Map(
+      current
+        .filter((brief) => active.has(brief.plannedAgentId))
+        .map((brief) => [brief.plannedAgentId, brief]),
+    );
+    committable.forEach((brief) => result.set(brief.plannedAgentId, brief));
+    return [...result.values()].sort((left, right) =>
+      left.plannedAgentId.localeCompare(right.plannedAgentId),
+    );
+  }
+
+  private canonicalImpact(
+    value:
+      | BuildPlanImpactResult
+      | Readonly<Record<string, readonly BriefStaleReason[]>>,
+  ): BuildPlanImpactResult | undefined {
+    return isCanonicalImpact(value) ? value : undefined;
   }
 
   private bounded<T>(value: T): T {

@@ -43,6 +43,24 @@ function diagnostic(
     "missing-brief": "A current assignment requires a focused brief",
     "incompatible-contract-direction":
       "A contract port direction conflicts with the architecture",
+    "ambiguous-contract-direction":
+      "Typed graph fields do not establish a contract direction",
+    "ownership-cycle": "Architecture ownership contains a cycle",
+    "multiple-top-level-owners":
+      "A stable node resolves to multiple top-level owners",
+    "dangling-ownership":
+      "Architecture ownership does not resolve to a top-level agent",
+    "authored-architecture-conflict":
+      "Authored intent conflicts with architecture-owned facts",
+    "brief-mission-missing": "The assignment requires a mission",
+    "brief-scope-missing": "The assignment requires explicit scope",
+    "brief-non-goals-suspicious": "The assignment has no explicit non-goals",
+    "brief-deliverable-missing": "The assignment requires a deliverable",
+    "brief-acceptance-criterion-missing":
+      "The assignment requires acceptance evidence",
+    "brief-change-protocol-missing":
+      "The brief requires an architecture change protocol",
+    "bootstrap-limit-exceeded": "Builder bootstrap content exceeds a safe bound",
     "invalid-dependency":
       "A dependency is not supported by the referenced architecture",
     "unresolved-required-decision": "A required decision remains unresolved",
@@ -118,9 +136,7 @@ function validateBrief(
       ]),
     );
   if (
-    brief.plan.planId !== plan.planId ||
-    brief.plan.version !== plan.version ||
-    brief.plan.semanticDigest !== plan.semanticDigest
+    brief.plan.planId !== plan.planId
   )
     issues.push(
       diagnostic("invalid-dependency", `${prefix}.plan`, [brief.plan.planId]),

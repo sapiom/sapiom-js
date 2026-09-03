@@ -45,7 +45,10 @@ function canonicalValue(value: unknown): unknown {
 export const canonicalJson = (value: unknown): string =>
   JSON.stringify(canonicalValue(value));
 
-const hash = (domain: string, value: unknown): string =>
+export const computeCanonicalDigest = (
+  domain: string,
+  value: unknown,
+): string =>
   `sha256:${createHash("sha256")
     .update(domain)
     .update("\0")
@@ -109,7 +112,7 @@ export function buildPlanSemanticProjection(plan: ProjectBuildPlanVersion) {
 export const computeBuildPlanSemanticDigest = (
   plan: ProjectBuildPlanVersion,
 ): BuildPlanSemanticDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.build-plan.semantic.v1",
     buildPlanSemanticProjection(plan),
   ) as BuildPlanSemanticDigest;
@@ -117,7 +120,7 @@ export const computeBuildPlanSemanticDigest = (
 export const computeBuildPlanRecordDigest = (
   plan: ProjectBuildPlanVersion,
 ): RecordDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.build-plan.record.v1",
     omit(plan, ["recordDigest"]),
   ) as RecordDigest;
@@ -127,10 +130,7 @@ export function agentBriefSemanticProjection(brief: AgentBriefVersionRecord) {
     schemaVersion: brief.schemaVersion,
     projectId: brief.projectId,
     plannedAgentId: brief.plannedAgentId,
-    plan: {
-      planId: brief.plan.planId,
-      semanticDigest: brief.plan.semanticDigest,
-    },
+    plan: { planId: brief.plan.planId },
     mission: brief.mission,
     scope: {
       inScope: [...brief.scope.inScope].sort(compare),
@@ -144,6 +144,9 @@ export function agentBriefSemanticProjection(brief: AgentBriefVersionRecord) {
     ).map((entry) => ({
       ...entry,
       relationshipIds: [...entry.relationshipIds].sort(compare),
+      ...(entry.executionModes
+        ? { executionModes: [...entry.executionModes].sort(compare) }
+        : {}),
     })),
     outputs: by(
       brief.outputs,
@@ -151,6 +154,9 @@ export function agentBriefSemanticProjection(brief: AgentBriefVersionRecord) {
     ).map((entry) => ({
       ...entry,
       relationshipIds: [...entry.relationshipIds].sort(compare),
+      ...(entry.executionModes
+        ? { executionModes: [...entry.executionModes].sort(compare) }
+        : {}),
     })),
     dependencies: by(brief.dependencies, (entry) => entry.dependencyId).map(
       (entry) => ({
@@ -169,13 +175,23 @@ export function agentBriefSemanticProjection(brief: AgentBriefVersionRecord) {
       ...brief.changeProtocol,
       instructions: [...brief.changeProtocol.instructions],
     },
+    compilerVersion: brief.compilerVersion,
+    dependencyFingerprints: by(
+      brief.dependencyFingerprints,
+      (entry) => entry.kind,
+    ).map((entry) => ({
+      ...entry,
+      nodeIds: [...entry.nodeIds].sort(compare),
+      relationshipIds: [...entry.relationshipIds].sort(compare),
+      contractIds: [...entry.contractIds].sort(compare),
+    })),
   };
 }
 
 export const computeAgentBriefSemanticDigest = (
   brief: AgentBriefVersionRecord,
 ): AgentBriefSemanticDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.agent-brief.semantic.v1",
     agentBriefSemanticProjection(brief),
   ) as AgentBriefSemanticDigest;
@@ -183,7 +199,7 @@ export const computeAgentBriefSemanticDigest = (
 export const computeAgentBriefRecordDigest = (
   brief: AgentBriefVersionRecord,
 ): RecordDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.agent-brief.record.v1",
     omit(brief, ["recordDigest"]),
   ) as RecordDigest;
@@ -200,7 +216,7 @@ export const computePlanningSubmissionSemanticDigest = (
     "recordDigest",
     "source",
   ]);
-  return hash("sapiom.planning-submission.semantic.v1", {
+  return computeCanonicalDigest("sapiom.planning-submission.semantic.v1", {
     ...meaning,
     plan: {
       planId: submission.plan.planId,
@@ -222,7 +238,7 @@ export const computePlanningSubmissionSemanticDigest = (
 export const computePlanningSubmissionRecordDigest = (
   submission: BuilderPlanningSubmission,
 ): RecordDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.planning-submission.record.v1",
     omit(submission, ["recordDigest"]),
   ) as RecordDigest;
@@ -230,7 +246,7 @@ export const computePlanningSubmissionRecordDigest = (
 export const computePlanningAssignmentRecordDigest = (
   assignment: PlanningAssignmentRecord,
 ): RecordDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.planning-assignment.record.v1",
     omit(assignment, ["recordDigest"]),
   ) as RecordDigest;
@@ -238,7 +254,7 @@ export const computePlanningAssignmentRecordDigest = (
 export const computeArchitectureGraphDigest = (
   graph: AgentMapGraph,
 ): GraphDigest =>
-  hash(
+  computeCanonicalDigest(
     "sapiom.agent-map.graph.v1",
     canonicalizeAgentMapGraph(graph),
   ) as GraphDigest;

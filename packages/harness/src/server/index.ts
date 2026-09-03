@@ -163,9 +163,9 @@ import { ArchitectureSourceResolver } from "../core/architecture-source-resolver
 import { BuildPlanContractValidator } from "../core/build-plan-contract-validator.js";
 import {
   BuildPlanService,
-  unavailableAgentBriefCompiler,
-  unavailableBuildPlanImpactEvaluator,
 } from "../core/build-plan-service.js";
+import { DeterministicAgentBriefCompiler } from "../core/agent-brief-compiler.js";
+import { CanonicalBuildPlanImpactEvaluator } from "../core/build-plan-impact-evaluator.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import { computeArchitectureGraphDigest } from "../core/build-plan-canonicalization.js";
 import {
@@ -2734,11 +2734,8 @@ export const startServer = async (
     store: buildPlanStore,
     sourceResolver: architectureSourceResolver,
     contractValidator: buildPlanContractValidator,
-    // SAP-3070 replaces these explicit fail-closed boundaries. Registering
-    // authoring remains discoverable, but mutation cannot silently use fake
-    // compilation or impact behavior.
-    briefCompiler: unavailableAgentBriefCompiler,
-    impactEvaluator: unavailableBuildPlanImpactEvaluator,
+    briefCompiler: new DeterministicAgentBriefCompiler(),
+    impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
     idFactory: buildPlanStore,
     clock: { now: () => new Date() },
   });

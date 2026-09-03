@@ -52,6 +52,11 @@ export type PlanningSubmissionDigest = BuildPlanBrand<
   string,
   "PlanningSubmissionDigest"
 >;
+export type BuilderBootstrapDigest = BuildPlanBrand<
+  string,
+  "BuilderBootstrapDigest"
+>;
+export type ImpactDigest = BuildPlanBrand<string, "ImpactDigest">;
 
 export type ArchitectureSourceRef =
   | Readonly<{
@@ -208,6 +213,7 @@ export interface BriefContractPort {
   contractId: PlanContractId;
   nodeId: PlanNodeId;
   relationshipIds: readonly PlanRelationshipId[];
+  executionModes?: readonly import("./agent-map.js").ExecutionMode[];
   description: string;
 }
 
@@ -228,10 +234,23 @@ export interface BriefDependency {
   description: string;
 }
 
+export type DependencyFingerprintKind =
+  | "owned-nodes"
+  | "relevant-nodes"
+  | "input-contracts"
+  | "output-contracts"
+  | "cross-agent-relationships"
+  | "shared-resources"
+  | "milestones"
+  | "shared-plan-content"
+  | "assignment-content";
+
 export interface DependencyFingerprint {
-  kind: "node" | "relationship" | "contract" | "plan";
-  id: string;
+  kind: DependencyFingerprintKind;
   digest: string;
+  nodeIds: readonly PlanNodeId[];
+  relationshipIds: readonly PlanRelationshipId[];
+  contractIds: readonly PlanContractId[];
 }
 
 export interface BriefChangeProtocol {
@@ -277,6 +296,18 @@ export interface BuildPlanDiagnostic {
     | "cross-project-reference"
     | "missing-brief"
     | "incompatible-contract-direction"
+    | "ambiguous-contract-direction"
+    | "ownership-cycle"
+    | "multiple-top-level-owners"
+    | "dangling-ownership"
+    | "authored-architecture-conflict"
+    | "brief-mission-missing"
+    | "brief-scope-missing"
+    | "brief-non-goals-suspicious"
+    | "brief-deliverable-missing"
+    | "brief-acceptance-criterion-missing"
+    | "brief-change-protocol-missing"
+    | "bootstrap-limit-exceeded"
     | "invalid-dependency"
     | "unresolved-required-decision"
     | "source-not-found"
@@ -315,6 +346,129 @@ export type BriefFreshness = Readonly<{
   evaluatedAgainst: ArchitectureSourceRef;
   reasons: readonly BriefStaleReason[];
 }>;
+
+export interface PlanNodeSummary {
+  id: PlanNodeId;
+  kind: import("./agent-map.js").PlanNodeKind;
+  name: string;
+  purpose: string;
+  ownerAgentId: PlanNodeId | null;
+  contractRefs: readonly string[];
+}
+
+export interface BuildMilestoneSummary {
+  milestoneId: MilestoneId;
+  ordinal: number;
+  title: string;
+  outcome: string;
+  dependsOn: readonly MilestoneId[];
+}
+
+export interface FocusedAgentBriefProjection {
+  mission: string;
+  scope: Readonly<{ inScope: readonly string[]; nonGoals: readonly string[] }>;
+  inputs: readonly BriefContractPort[];
+  outputs: readonly BriefContractPort[];
+  dependencies: readonly BriefDependency[];
+  deliverables: readonly BriefDeliverable[];
+  acceptanceCriteria: readonly AcceptanceCriterion[];
+  constraints: readonly PlanConstraint[];
+  repositoryIntents: readonly RepositoryIntent[];
+  unresolvedDecisions: readonly PlanDecision[];
+  changeProtocol: BriefChangeProtocol;
+}
+
+export interface BuilderBootstrapContext {
+  schemaVersion: 1;
+  compilerVersion: string;
+  assignmentId: PlanningAssignmentId;
+  plannedAgentId: PlanNodeId;
+  architectureSource: ArchitectureSourceRef;
+  plan: BuildPlanRef;
+  brief: AgentBriefRef;
+  contextDigest: BuilderBootstrapDigest;
+  project: Readonly<{
+    outcome: string;
+    relevantMilestones: readonly BuildMilestoneSummary[];
+    sharedConstraints: readonly PlanConstraint[];
+    integrationCriteria: readonly AcceptanceCriterion[];
+  }>;
+  architecture: Readonly<{
+    agent: PlanNodeSummary;
+    ownedNodes: readonly PlanNodeSummary[];
+    relevantNodes: readonly PlanNodeSummary[];
+    contracts: readonly BriefContractPort[];
+  }>;
+  assignment: FocusedAgentBriefProjection;
+}
+
+export interface AssignmentImpact {
+  plannedAgentId: PlanNodeId;
+  assignmentId: PlanningAssignmentId | null;
+  briefId: AgentBriefId | null;
+  disposition:
+    | "added"
+    | "removed"
+    | "stale"
+    | "preserved"
+    | "presentation-refreshed";
+  reasons: readonly BriefStaleReason[];
+}
+
+export interface BuildPlanImpactResult {
+  from: Readonly<{ source: ArchitectureSourceRef; plan: BuildPlanRef }>;
+  to: Readonly<{ source: ArchitectureSourceRef; plan: BuildPlanRef }>;
+  assignmentChanges: readonly AssignmentImpact[];
+  staleBriefIds: readonly AgentBriefId[];
+  preservedBriefIds: readonly AgentBriefId[];
+  addedAgentIds: readonly PlanNodeId[];
+  removedAgentIds: readonly PlanNodeId[];
+  changedNodeIds: readonly PlanNodeId[];
+  changedRelationshipIds: readonly PlanRelationshipId[];
+  changedContractIds: readonly PlanContractId[];
+  semanticChange: boolean;
+  digest: ImpactDigest;
+}
+
+export interface CompiledBriefCandidate {
+  plannedAgentId: PlanNodeId;
+  assignmentId: PlanningAssignmentId;
+  existingBriefRef: AgentBriefRef | null;
+  disposition:
+    | "created"
+    | "new-version"
+    | "source-rebound"
+    | "unchanged"
+    | "retired";
+  brief: AgentBriefVersionRecord;
+  bootstrap: BuilderBootstrapContext;
+}
+
+export interface CompileAgentBriefsRequest {
+  projectId: StudioProjectId;
+  source: ArchitectureSourceRef;
+  graph: import("./agent-map.js").AgentMapGraph;
+  plan: ProjectBuildPlanVersion;
+  /** Stable identities are resolved by the calling orchestration boundary. */
+  assignments?: readonly PlanningAssignmentRef[];
+  previous?: Readonly<{
+    plan: ProjectBuildPlanVersion;
+    graph: import("./agent-map.js").AgentMapGraph;
+    briefs: readonly AgentBriefVersionRecord[];
+    /** Exact bounded aggregate lineage against which historical briefs bind. */
+    allowedPlanRefs?: readonly BuildPlanRef[];
+  }>;
+}
+
+export interface CompileAgentBriefsResult {
+  plan: BuildPlanRef;
+  source: ArchitectureSourceRef;
+  briefs: readonly CompiledBriefCandidate[];
+  impact: BuildPlanImpactResult;
+  completeness: BuildPlanCompleteness;
+  eligibility: BuildPlanEligibility;
+  diagnostics: readonly BuildPlanDiagnostic[];
+}
 
 export type EligibilityReason =
   | "plan-incomplete"
@@ -409,6 +563,7 @@ export interface BuildPlanReceiptResult {
   completeness: BuildPlanCompleteness;
   eligibility: BuildPlanEligibility;
   diagnostics: readonly BuildPlanDiagnostic[];
+  impact?: BuildPlanImpactResult;
 }
 
 /** Permanent compact provenance for requests whose exact result aged out. */
@@ -439,7 +594,18 @@ export interface BuildPlanImpactEvaluator {
     previousSource: ArchitectureSourceRef;
     nextSource: ArchitectureSourceRef;
     briefs: readonly AgentBriefVersionRecord[];
-  }): Promise<Readonly<Record<string, readonly BriefStaleReason[]>>>;
+    previousPlan?: ProjectBuildPlanVersion;
+    nextPlan?: ProjectBuildPlanVersion;
+    previousGraph?: import("./agent-map.js").AgentMapGraph;
+    nextGraph?: import("./agent-map.js").AgentMapGraph;
+    nextBriefs?: readonly AgentBriefVersionRecord[];
+  }):
+    | BuildPlanImpactResult
+    | Readonly<Record<string, readonly BriefStaleReason[]>>
+    | Promise<
+        | BuildPlanImpactResult
+        | Readonly<Record<string, readonly BriefStaleReason[]>>
+      >;
 }
 
 export const emptyBuildPlanningAggregate = (): BuildPlanningAggregateV1 => ({

@@ -17,6 +17,14 @@ import {
   type AgentBriefCompiler,
   BuildPlanService,
 } from "./build-plan-service.js";
+import { DeterministicAgentBriefCompiler } from "./agent-brief-compiler.js";
+import { CanonicalBuildPlanImpactEvaluator } from "./build-plan-impact-evaluator.js";
+import {
+  MARKETING_ID,
+  RESEARCH_ID,
+  stockResearchGraph,
+  stockResearchPlan,
+} from "./agent-brief-compiler.test-support.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {
   computeArchitectureGraphDigest,
@@ -162,6 +170,7 @@ describe("BuildPlanService", () => {
       allocator,
       compiler,
       impact,
+      resolver,
       onResolve: (callback: (count: number) => Promise<void> | void) => {
         onResolve = callback;
       },
@@ -325,7 +334,7 @@ describe("BuildPlanService", () => {
       }),
     ).resolves.toMatchObject({
       plan: { version: 2 },
-      briefs: [{ version: 1, current: true, freshness: "stale" }],
+      briefs: [{ version: 1, current: true, freshness: "current" }],
     });
   });
 
@@ -976,5 +985,197 @@ describe("BuildPlanService", () => {
       plan: { version: 1 },
       replayed: false,
     });
+  });
+
+  it("persists real compiler output and returns the canonical rebound impact", async () => {
+    const { store, resolver } = await fixture();
+    const service = new BuildPlanService({
+      store,
+      sourceResolver: resolver,
+      contractValidator: new BuildPlanContractValidator(resolver),
+      briefCompiler: new DeterministicAgentBriefCompiler(),
+      impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
+      idFactory: store,
+      clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
+    });
+    const operations = [
+      baseOperations[0]!,
+      {
+        op: "upsert-agent-assignment" as const,
+        assignment: {
+          ...baseOperations[1]!.assignment,
+          deliverables: [
+            {
+              deliverableId:
+                "deliverable_00000000-0000-7000-8000-000000000021",
+              description: "A tested implementation plan",
+              artifactNodeIds: [],
+              acceptanceCriterionIds: [
+                "criterion_00000000-0000-7000-8000-000000000022",
+              ],
+            },
+          ],
+          acceptanceCriteria: [
+            {
+              criterionId:
+                "criterion_00000000-0000-7000-8000-000000000022",
+              ordinal: 1,
+              description: "The plan is verifiable",
+              verification: "Run the compiler suite",
+            },
+          ],
+        },
+      },
+    ];
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      requestId: "production-create",
+      operations,
+    });
+    expect(created.impact).toMatchObject({ semanticChange: true });
+    expect(Object.values((await store.read(PROJECT_ID)).briefVersionsById)[0]).toHaveLength(1);
+
+    const revisionSource = {
+      kind: "revision" as const,
+      revisionId:
+        "revision_00000000-0000-7000-8000-000000000023" as never,
+      revisionNumber: 1,
+      graphDigest: proposalSource().graphDigest,
+    };
+    const rebased = await service.rebase(identity, {
+      schemaVersion: 1,
+      planId: created.plan.planId,
+      expectedPlanVersion: created.plan.version,
+      fromSource: proposalSource(),
+      toSource: revisionSource,
+      requestId: "production-rebase",
+      resolutions: [],
+    });
+    expect(rebased.impact).toMatchObject({
+      semanticChange: false,
+      staleBriefIds: [],
+      preservedBriefIds: [
+        (await store.read(PROJECT_ID)).currentBriefByAgentId[AGENT_ID]!.briefId,
+      ],
+    });
+    const persisted = await store.read(PROJECT_ID);
+    expect(Object.values(persisted.briefVersionsById)[0]).toHaveLength(2);
+    expect(Object.values(persisted.briefVersionsById)[0]![1]).toMatchObject({
+      source: revisionSource,
+      version: 2,
+    });
+    await expect(
+      service.rebase(identity, {
+        schemaVersion: 1,
+        planId: created.plan.planId,
+        expectedPlanVersion: created.plan.version,
+        fromSource: proposalSource(),
+        toSource: revisionSource,
+        requestId: "production-rebase",
+        resolutions: [],
+      }),
+    ).resolves.toEqual({ ...rebased, replayed: true });
+  });
+
+  it("validates effective two-agent briefs while persisting only semantic changes", async () => {
+    const { store } = await fixture();
+    const graph = stockResearchGraph();
+    const source = {
+      kind: "revision" as const,
+      revisionId:
+        "revision_10000000-0000-7000-8000-000000000031" as never,
+      revisionNumber: 1,
+      graphDigest: computeArchitectureGraphDigest(graph),
+    };
+    const resolver = {
+      resolve: async () => ({ projectId: PROJECT_ID, source, graph }),
+    };
+    const service = new BuildPlanService({
+      store,
+      sourceResolver: resolver,
+      contractValidator: new BuildPlanContractValidator(resolver),
+      briefCompiler: new DeterministicAgentBriefCompiler(),
+      impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
+      idFactory: store,
+      clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
+    });
+    const fixturePlan = stockResearchPlan(graph);
+    const assignments = fixturePlan.assignments.map((entry) => ({
+      ...entry,
+      milestoneIds: [],
+    }));
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: source,
+      requestId: "two-agent-create",
+      operations: [
+        { op: "set-project-outcome", outcome: fixturePlan.outcome },
+        ...assignments.map((assignment) => ({
+          op: "upsert-agent-assignment" as const,
+          assignment,
+        })),
+      ],
+    });
+    const initial = await store.read(PROJECT_ID);
+    const researchBriefId = initial.currentBriefByAgentId[RESEARCH_ID]!.briefId;
+    const marketingBriefId = initial.currentBriefByAgentId[MARKETING_ID]!.briefId;
+    const marketing = assignments.find(
+      (entry) => entry.plannedAgentId === MARKETING_ID,
+    )!;
+    const changed = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: created.plan.planId,
+      expectedPlanVersion: created.plan.version,
+      expectedSource: source,
+      requestId: "two-agent-marketing-change",
+      operations: [
+        {
+          op: "upsert-agent-assignment",
+          assignment: { ...marketing, mission: "Publish a revised campaign" },
+        },
+      ],
+    });
+    expect(changed).toMatchObject({
+      plan: { version: 2 },
+      completeness: { status: "complete" },
+      eligibility: {
+        planningEligible: true,
+        implementationEligible: true,
+      },
+      briefChanges: expect.arrayContaining([
+        { plannedAgentId: RESEARCH_ID, change: "preserved" },
+        { plannedAgentId: MARKETING_ID, change: "changed" },
+      ]),
+    });
+    const afterChange = await store.read(PROJECT_ID);
+    expect(afterChange.currentBriefByAgentId).toMatchObject({
+      [RESEARCH_ID]: { briefId: researchBriefId, version: 1 },
+      [MARKETING_ID]: { briefId: marketingBriefId, version: 2 },
+    });
+    expect(afterChange.briefVersionsById[researchBriefId]).toHaveLength(1);
+    expect(afterChange.briefVersionsById[marketingBriefId]).toHaveLength(2);
+    expect(afterChange.idempotencyReceipts.at(-1)?.result?.impact).toEqual(
+      changed.impact,
+    );
+
+    const unchanged = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: changed.plan.planId,
+      expectedPlanVersion: changed.plan.version,
+      expectedSource: source,
+      requestId: "two-agent-unchanged",
+      operations: [
+        { op: "set-project-outcome", outcome: fixturePlan.outcome },
+      ],
+    });
+    expect(unchanged.completeness.status).toBe("complete");
+    const afterUnchanged = await store.read(PROJECT_ID);
+    expect(afterUnchanged.briefVersionsById[researchBriefId]).toHaveLength(1);
+    expect(afterUnchanged.briefVersionsById[marketingBriefId]).toHaveLength(2);
   });
 });

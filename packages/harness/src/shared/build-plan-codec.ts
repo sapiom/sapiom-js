@@ -304,6 +304,10 @@ const contractPortSchema = z
     contractId: opaqueId,
     nodeId,
     relationshipIds: unique(relationshipId, (entry) => entry),
+    executionModes: unique(
+      z.enum(["synchronous", "asynchronous", "scheduled", "human-triggered"]),
+      (entry) => entry,
+    ).optional(),
     description: text(2_000),
   })
   .strict();
@@ -328,9 +332,21 @@ const dependencySchema = z
   .strict();
 const fingerprintSchema = z
   .object({
-    kind: z.enum(["node", "relationship", "contract", "plan"]),
-    id: opaqueId,
+    kind: z.enum([
+      "owned-nodes",
+      "relevant-nodes",
+      "input-contracts",
+      "output-contracts",
+      "cross-agent-relationships",
+      "shared-resources",
+      "milestones",
+      "shared-plan-content",
+      "assignment-content",
+    ]),
     digest,
+    nodeIds: unique(nodeId, (entry) => entry),
+    relationshipIds: unique(relationshipId, (entry) => entry),
+    contractIds: unique(opaqueId, (entry) => entry),
   })
   .strict();
 
@@ -372,7 +388,7 @@ export const agentBriefVersionRecordSchema = z
     compilerVersion: opaqueId,
     dependencyFingerprints: unique(
       fingerprintSchema,
-      (entry) => `${entry.kind}\0${entry.id}`,
+      (entry) => entry.kind,
     ),
     semanticDigest: digest,
     recordDigest: digest,
@@ -520,6 +536,65 @@ export const builderPlanningSubmissionSchema = z
       });
   });
 
+const staleReasonSchema = z
+  .object({
+    code: z.enum([
+      "source-changed",
+      "agent-added",
+      "agent-removed",
+      "ownership-changed",
+      "contract-changed",
+      "relationship-changed",
+      "relevant-node-changed",
+      "shared-plan-content-changed",
+      "assignment-content-changed",
+    ]),
+    affectedNodeIds: unique(nodeId, (entry) => entry),
+    affectedRelationshipIds: unique(relationshipId, (entry) => entry),
+    affectedContractIds: unique(opaqueId, (entry) => entry),
+    previousFingerprint: digest.optional(),
+    currentFingerprint: digest.optional(),
+  })
+  .strict();
+const impactSchema = z
+  .object({
+    from: z
+      .object({ source: architectureSourceRefSchema, plan: buildPlanRefSchema })
+      .strict(),
+    to: z
+      .object({ source: architectureSourceRefSchema, plan: buildPlanRefSchema })
+      .strict(),
+    assignmentChanges: z
+      .array(
+        z
+          .object({
+            plannedAgentId: nodeId,
+            assignmentId: generatedId("assignment").nullable(),
+            briefId: generatedId("brief").nullable(),
+            disposition: z.enum([
+              "added",
+              "removed",
+              "stale",
+              "preserved",
+              "presentation-refreshed",
+            ]),
+            reasons: z.array(staleReasonSchema).max(9),
+          })
+          .strict(),
+      )
+      .max(256),
+    staleBriefIds: unique(generatedId("brief"), (entry) => entry),
+    preservedBriefIds: unique(generatedId("brief"), (entry) => entry),
+    addedAgentIds: unique(nodeId, (entry) => entry),
+    removedAgentIds: unique(nodeId, (entry) => entry),
+    changedNodeIds: unique(nodeId, (entry) => entry),
+    changedRelationshipIds: unique(relationshipId, (entry) => entry),
+    changedContractIds: unique(opaqueId, (entry) => entry),
+    semanticChange: z.boolean(),
+    digest,
+  })
+  .strict();
+
 const receiptSchema = z
   .object({
     sessionId: opaqueId,
@@ -568,6 +643,18 @@ const receiptSchema = z
                       "cross-project-reference",
                       "missing-brief",
                       "incompatible-contract-direction",
+                      "ambiguous-contract-direction",
+                      "ownership-cycle",
+                      "multiple-top-level-owners",
+                      "dangling-ownership",
+                      "authored-architecture-conflict",
+                      "brief-mission-missing",
+                      "brief-scope-missing",
+                      "brief-non-goals-suspicious",
+                      "brief-deliverable-missing",
+                      "brief-acceptance-criterion-missing",
+                      "brief-change-protocol-missing",
+                      "bootstrap-limit-exceeded",
                       "invalid-dependency",
                       "unresolved-required-decision",
                       "source-not-found",
@@ -609,6 +696,18 @@ const receiptSchema = z
                   "cross-project-reference",
                   "missing-brief",
                   "incompatible-contract-direction",
+                  "ambiguous-contract-direction",
+                  "ownership-cycle",
+                  "multiple-top-level-owners",
+                  "dangling-ownership",
+                  "authored-architecture-conflict",
+                  "brief-mission-missing",
+                  "brief-scope-missing",
+                  "brief-non-goals-suspicious",
+                  "brief-deliverable-missing",
+                  "brief-acceptance-criterion-missing",
+                  "brief-change-protocol-missing",
+                  "bootstrap-limit-exceeded",
                   "invalid-dependency",
                   "unresolved-required-decision",
                   "source-not-found",
@@ -622,6 +721,7 @@ const receiptSchema = z
               .strict(),
           )
           .max(64),
+        impact: impactSchema.optional(),
       })
       .strict()
       .optional(),

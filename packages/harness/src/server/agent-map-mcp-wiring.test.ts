@@ -325,7 +325,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
         proposal: {
           id: string;
           version: number;
-          nodes: unknown[];
+          nodes: Array<{ id: string }>;
           relationships: unknown[];
         };
       }
@@ -334,34 +334,6 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
       nodes: proposal.nodes,
       relationships: proposal.relationships,
     } as never);
-    const unavailableAuthoring = await client.callTool({
-      name: "build_plan_apply",
-      arguments: {
-        schemaVersion: 1,
-        planId: null,
-        expectedPlanVersion: null,
-        expectedSource: {
-          kind: "proposal",
-          proposalId: proposal.id,
-          version: proposal.version,
-          graphDigest,
-        },
-        requestId: "request-production-boundary",
-        operations: [
-          {
-            op: "set-project-outcome",
-            outcome: { summary: "Production must compile this plan" },
-          },
-        ],
-      },
-    });
-    expect(unavailableAuthoring).toMatchObject({
-      isError: true,
-      structuredContent: {
-        code: "authoring_unavailable",
-        recovery: "dependency_required",
-      },
-    });
     const unavailableRevision = await client.callTool({
       name: "build_plan_validate",
       arguments: {
@@ -387,6 +359,63 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
       structuredContent: {
         code: "revision_source_unavailable",
         recovery: "dependency_required",
+      },
+    });
+    const productionAuthoring = await client.callTool({
+      name: "build_plan_apply",
+      arguments: {
+        schemaVersion: 1,
+        planId: null,
+        expectedPlanVersion: null,
+        expectedSource: {
+          kind: "proposal",
+          proposalId: proposal.id,
+          version: proposal.version,
+          graphDigest,
+        },
+        requestId: "request-production-boundary",
+        operations: [
+          {
+            op: "set-project-outcome",
+            outcome: { summary: "Production must compile this plan" },
+          },
+          {
+            op: "create-agent-assignment",
+            assignment: {
+              plannedAgentId: proposal.nodes[0]!.id,
+              mission: "Compile a production focused brief",
+              scope: { inScope: ["Core implementation"], nonGoals: ["Deploy"] },
+              deliverables: [
+                {
+                  clientRef: "production-deliverable",
+                  description: "A verified implementation plan",
+                  artifactNodeIds: [],
+                  acceptanceCriterionRefs: [{ clientRef: "production-criterion" }],
+                },
+              ],
+              constraints: [],
+              acceptanceCriteria: [
+                {
+                  clientRef: "production-criterion",
+                  ordinal: 1,
+                  description: "The focused brief is complete",
+                  verification: "Read the persisted brief",
+                },
+              ],
+              milestoneRefs: [],
+              unresolvedDecisions: [],
+            },
+          },
+        ],
+      },
+    });
+    expect(productionAuthoring.isError).not.toBe(true);
+    expect(productionAuthoring).toMatchObject({
+      structuredContent: {
+        plan: { version: 1 },
+        briefChanges: [
+          { plannedAgentId: proposal.nodes[0]!.id, change: "created" },
+        ],
       },
     });
   } finally {

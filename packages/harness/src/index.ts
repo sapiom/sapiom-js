@@ -41,6 +41,13 @@ export type {
   AgentMapRevisionId,
   ArchitectureSourceRef,
   BuilderPlanningContextRef,
+  BuilderBootstrapContext,
+  BuilderBootstrapDigest,
+  BuildPlanImpactResult,
+  CompileAgentBriefsRequest,
+  CompileAgentBriefsResult,
+  CompiledBriefCandidate,
+  DependencyFingerprintKind,
   BuilderPlanningSubmission,
   BuilderPlanningSubmissionId,
   BuildPlanId,
@@ -56,6 +63,20 @@ export type {
   PlanningSubmissionDigest,
   RecordDigest,
 } from "./shared/build-plan.js";
+export {
+  AGENT_BRIEF_COMPILER_VERSION,
+  compileAgentBriefs,
+  DeterministicAgentBriefCompiler,
+} from "./core/agent-brief-compiler.js";
+export {
+  CanonicalBuildPlanImpactEvaluator,
+  evaluateBuildPlanImpact,
+} from "./core/build-plan-impact-evaluator.js";
+export {
+  BUILDER_BOOTSTRAP_MAX_BYTES,
+  createBuilderBootstrapContext,
+  serializeBuilderBootstrapContext,
+} from "./core/builder-bootstrap-context.js";
 export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {
