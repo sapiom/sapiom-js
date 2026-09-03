@@ -21,6 +21,15 @@ const copyScript = readFileSync(new URL("../../scripts/copy-renderer.mjs", impor
 /** Every linked stylesheet, in document order — the order IS the contract. */
 const stylesheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)" \/>/g)].map((m) => m[1]);
 
+describe("update.html theme boot policy", () => {
+  it("preserves forced and stored choices and otherwise defaults to light", () => {
+    expect(html).toMatch(/forced === "light" \|\| forced === "dark"\s*\? forced/);
+    expect(html).toMatch(/stored === "light" \|\| stored === "dark"\s*\? stored\s*:\s*"light"/);
+    expect(html).not.toContain("prefers-color-scheme");
+    expect(html).not.toContain("matchMedia");
+  });
+});
+
 describe("update.html design-system wiring", () => {
   it("scopes the Studio preset on <html>, where data-theme also lives", () => {
     expect(html).toMatch(/<html lang="en" data-product="sapiom-studio">/);

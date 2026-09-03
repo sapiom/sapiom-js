@@ -38,9 +38,9 @@ export const CANVAS_TEMPLATE_FILE = `${CANVAS_DIR}/_template.html`;
 function themeStyleBlock(): string {
   // Values ported 1:1 from web/src/styles.css's :root (light, default) and
   // [data-theme="dark"] tokens — kept in sync by eye; see this module's own
-  // doc comment. Dark is also this canvas kit's own fallback default
-  // (prefers-color-scheme: no-preference) since it's the app's own default
-  // canvas look before per-theme passthrough landed for embedded iframes.
+  // doc comment. With no explicit theme, the canvas uses the same light product
+  // default as the Studio shell; embedded canvases still receive the shell's
+  // current theme explicitly.
   return `
 :root {
   /* The whole graph column is the raised "lighter white" (--surface-raised in
@@ -74,20 +74,6 @@ function themeStyleBlock(): string {
   --canvas-passed: #4ade80;
   --canvas-escalation: #f59e0b;
   --canvas-failure: #f87171;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-canvas-theme]) {
-    --canvas-bg: #0f0f0f;
-    --canvas-panel: #1a1a1a;
-    --canvas-border: #2e2e2e;
-    --canvas-border-strong: #3a3a3a;
-    --canvas-text: #fafafa;
-    --canvas-text-dim: #a1a1aa;
-    --canvas-accent: #6be195;
-    --canvas-success: #6be195;
-    --canvas-escalation: #f59e0b;
-    --canvas-failure: #f87171;
-  }
 }
 * { box-sizing: border-box; }
 html, body {
@@ -274,16 +260,15 @@ template { display: none; }
 `.trim();
 }
 
-/** Reads the current theme from `?theme=light|dark`, falling back to
- *  `prefers-color-scheme` (the CSS `@media` block above) when the param is
- *  absent — the only script in the whole document. */
+/** Reads the current theme from `?theme=light|dark`, falling back to the
+ *  Studio's light product default when the param is absent — the only script
+ *  in the whole document. */
 const THEME_SCRIPT = `
 (function () {
   var params = new URLSearchParams(location.search);
   var theme = params.get("theme");
-  if (theme === "light" || theme === "dark") {
-    document.documentElement.setAttribute("data-canvas-theme", theme);
-  }
+  theme = theme === "light" || theme === "dark" ? theme : "light";
+  document.documentElement.setAttribute("data-canvas-theme", theme);
 })();
 `.trim();
 

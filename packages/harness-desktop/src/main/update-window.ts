@@ -17,7 +17,7 @@
  * sender being THIS window's exact `webContents` and registered only while it is
  * open. No page — SPA or canvas — can reach them.
  */
-import { BrowserWindow, ipcMain, nativeTheme, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import {
   UPDATE_AUTO_ARG,
   UPDATE_DECIDE,
@@ -41,9 +41,9 @@ function toChoice(raw: unknown): UpdateChoice {
  *
  * This window's file:// origin can't see the SPA's (http://localhost) localStorage,
  * so it can't resolve the app's chosen theme the way the SPA does — it would fall
- * back to the OS and drift out of sync whenever the user picked a non-OS theme. So
- * ask the SPA window directly for the `data-theme` it already resolved. Best-effort:
- * a destroyed window or an error falls back to the OS theme (nativeTheme).
+ * otherwise drift out of sync whenever the user picked an explicit theme. So ask
+ * the SPA window directly for the `data-theme` it already resolved. Best-effort:
+ * a destroyed window or an error falls back to the light product default.
  */
 async function readParentTheme(parent: BrowserWindow): Promise<"dark" | "light" | undefined> {
   if (parent.isDestroyed()) return undefined;
@@ -80,7 +80,7 @@ export async function showUpdatePrompt(parent: BrowserWindow, opts: UpdatePrompt
   // (below) and the renderer's data-theme (via the loadFile query), so the window
   // is in sync with the app from the very first frame — not the OS default.
   const theme = await readParentTheme(parent);
-  const dark = theme ? theme === "dark" : nativeTheme.shouldUseDarkColors;
+  const dark = theme === "dark";
   const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
     parent,

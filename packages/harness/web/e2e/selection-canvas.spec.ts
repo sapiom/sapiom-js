@@ -283,8 +283,8 @@ test.describe("boards for agents with no session", () => {
     await expect(boardFrame(page)).toHaveAttribute("srcdoc", /gateway — mock agent board/);
     // The theme bridge: a `srcdoc` frame has no URL, so the served document's
     // `?theme=` reader has nothing to read and the app hands it the theme in an
-    // appended script instead. Without it the board paints by
-    // `prefers-color-scheme` and can come up light inside a dark app.
+    // appended script instead. Without it the board uses the light product
+    // default and can come up light inside a dark app.
     await expect(
       page.frameLocator(".canvas-iframe").locator("html"),
     ).toHaveAttribute("data-canvas-theme", /light|dark/);

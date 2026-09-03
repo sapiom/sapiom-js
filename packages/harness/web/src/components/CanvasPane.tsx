@@ -66,11 +66,11 @@ interface WorkflowBoard {
  * The two theme scripts, WRITTEN OUT RATHER THAN BUILT.
  *
  * A served document reads `?theme=` off its own URL; a `srcdoc` frame has no
- * URL and no query string, so it would fall back to `prefers-color-scheme` and
- * paint light while the app is dark. Appending a script is enough — the parser
- * hoists a trailing script into the body and it runs before first paint of the
- * board's own content. Both attribute names are set because the server template
- * keys on `data-canvas-theme` and the bundled demo document on `data-theme`.
+ * URL and no query string, so it would use the light product default even when
+ * the app is dark. Appending a script is enough — the parser hoists a trailing
+ * script into the body and it runs before first paint of the board's own content.
+ * Both attribute names are set because the server template keys on
+ * `data-canvas-theme` and the bundled demo document on `data-theme`.
  *
  * The value used to be interpolated with `JSON.stringify`, which is the classic
  * near-miss: JSON escaping is not SCRIPT escaping, and a value containing

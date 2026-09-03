@@ -118,10 +118,11 @@ describe("renderCanvasDocument", () => {
     expect(html).toContain("marker-content-xyz");
   });
 
-  it("bakes in both light and dark palettes, keyed off data-canvas-theme / prefers-color-scheme", () => {
+  it("bakes in both palettes and defaults to light without consulting the OS", () => {
     const html = renderCanvasDocument("");
     expect(html).toContain('[data-canvas-theme="dark"]');
-    expect(html).toContain("prefers-color-scheme: dark");
+    expect(html).toMatch(/theme === "light" \|\| theme === "dark" \? theme : "light"/);
+    expect(html).not.toContain("prefers-color-scheme");
     // Exact dark-theme accent hex from web/src/styles.css — same palette the
     // rest of the app renders in dark mode.
     expect(html).toContain("#6be195");

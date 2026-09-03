@@ -87,6 +87,17 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+test("the generated document defaults to light even when the OS prefers dark", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  const { url } = await renderToFileUrl(ORDER_TRIAGE, "order-triage");
+  await page.goto(url);
+
+  await expect(page.locator("html")).toHaveAttribute("data-canvas-theme", "light");
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+    "rgb(255, 255, 255)",
+  );
+});
+
 test("the generated document leaves no unresolved template placeholders", async ({ page }) => {
   const { url, file } = await renderToFileUrl(ORDER_TRIAGE, "order-triage");
   await page.goto(url);

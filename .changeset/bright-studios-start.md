@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 ---
 
-Default Agent Studio to light mode when the user has not saved an explicit light or dark preference.
+Agent Studio now defaults to light mode when no explicit light or dark preference is stored. Previously it followed the OS `prefers-color-scheme`; that fallback is removed. A stored light or dark choice still wins — toggle once to pin dark.

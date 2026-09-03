@@ -54,6 +54,11 @@ describe("setup window backgroundColor matches the light Studio --s1 surface tok
 describe("update window backgroundColor matches the app's --bg base surface token", () => {
   // The update window fills with --bg (the app's base background) so it reads as the
   // same black as the app — see update.css — not the raised --s1 the setup window uses.
+  it("uses light when the parent theme cannot be read", () => {
+    expect(updateWindowSrc).toContain('const dark = theme === "dark";');
+    expect(updateWindowSrc).not.toContain("nativeTheme");
+  });
+
   it("sets a themed pre-paint background at all (no flash)", () => {
     expect(updateBg, "update-window.ts should set backgroundColor from the resolved theme").not.toBeNull();
   });
