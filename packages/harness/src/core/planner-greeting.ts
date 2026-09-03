@@ -1169,7 +1169,7 @@ export class PlannerGreetingCoordinator {
     if (state.inputs.length > 0) {
       state.metadata.greeting = { status: "skipped", reason: "user-proceeded" };
       await this.persist(sessionId, state);
-      this.clearCorrelation(sessionId);
+      if (expectedKey === "pending") this.clearCorrelation(sessionId);
       this.emit({
         name: "planner_greeting.skipped",
         projectId: state.metadata.identity.projectId,
@@ -1252,9 +1252,11 @@ export class PlannerGreetingCoordinator {
           // projected as infrastructure, while its late completion cannot
           // deliver the now-skipped startup turn.
           this.retireAttemptCorrelation(sessionId, attemptId);
-        } else {
+        } else if (greeting.status === "pending") {
           this.clearCorrelation(sessionId);
         }
+        // A failed attempt's surviving entries were deliberately retired by
+        // setFailure. Keep those tombstones until delayed hooks consume them.
         this.emit({
           name: "planner_greeting.skipped",
           projectId: state.metadata.identity.projectId,

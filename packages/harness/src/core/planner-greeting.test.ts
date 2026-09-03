@@ -139,6 +139,46 @@ describe("PlannerGreetingCoordinator", () => {
     expect(durable.inputs).toEqual([]);
   });
 
+  it("keeps an uncertain failed startup classified when the user proceeds", async () => {
+    let calls = 0;
+    manager.submitInput = async (_id, text) => {
+      submitted.push(text);
+      calls += 1;
+      if (calls === 1) throw new Error("uncertain PTY write");
+      return true;
+    };
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    const greeting = submitted[0]!;
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "injection_failed",
+    });
+
+    await coordinator.enqueue(session.id, "continue with my request");
+    expect(submitted).toEqual([greeting, "continue with my request"]);
+    const localPrompt = coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: greeting }),
+    );
+    expect(localPrompt.payload).toMatchObject({
+      prompt: greeting,
+      plannerOrigin: "infrastructure",
+    });
+    expect(coordinator.redactForTelemetry(localPrompt).payload).toMatchObject({
+      planner: true,
+      origin: "infrastructure",
+    });
+    expect(session.planning?.greeting).toEqual({
+      status: "skipped",
+      reason: "user-proceeded",
+    });
+  });
+
   it("rejects a planner session identity that could escape the queue root", async () => {
     session = plannerSession("../outside-planner-root");
     const coordinator = new PlannerGreetingCoordinator({
