@@ -502,7 +502,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("planning-fanout-consent")).toBeVisible();
     await page.getByTestId("open-planning-sessions").click();
     await expect(page.getByTestId("toast")).toContainText(
-      "Opened or reused 1 planning sessions; 1 is unavailable from this coordinator.",
+      "Opened or reused 1 planning session; 1 is unavailable from this coordinator.",
     );
   });
 

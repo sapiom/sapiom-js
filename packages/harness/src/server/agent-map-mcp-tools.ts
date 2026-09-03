@@ -567,8 +567,8 @@ export function createAgentMapToolServer(
           return toolResult(
             outcome,
             unavailable === 0
-              ? `Reconciled ${outcome.bindings.length} planning sessions.`
-              : `Reconciled ${outcome.bindings.length - unavailable} planning sessions; ${unavailable} ${unavailable === 1 ? "is" : "are"} locally unreachable.`,
+              ? `Reconciled ${outcome.bindings.length} planning ${outcome.bindings.length === 1 ? "session" : "sessions"}.`
+              : `Reconciled ${outcome.bindings.length - unavailable} planning ${outcome.bindings.length - unavailable === 1 ? "session" : "sessions"}; ${unavailable} ${unavailable === 1 ? "is" : "are"} locally unreachable.`,
           );
         }),
     );

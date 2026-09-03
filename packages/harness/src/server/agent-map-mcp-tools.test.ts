@@ -84,7 +84,7 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       userId: "user",
       role: "map-planner",
     };
-    const assignmentIds = ["assignment-a", "assignment-b", "assignment-c"];
+    const assignmentIds = ["assignment-a", "assignment-b"];
     const openOrReuse = vi.fn(async () => ({
       bindings: assignmentIds.map((assignmentId) => ({ assignmentId })),
       unreachableAssignmentIds: [assignmentIds[1]],
@@ -127,7 +127,7 @@ describe("Agent Map MCP plan-authoring discovery", () => {
       content: [
         expect.objectContaining({
           text: expect.stringContaining(
-            "Reconciled 2 planning sessions; 1 is locally unreachable.",
+            "Reconciled 1 planning session; 1 is locally unreachable.",
           ),
         }),
       ],

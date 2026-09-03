@@ -401,12 +401,12 @@ export const App = (): JSX.Element => {
         const reachableCount =
           outcome.bindings.length - outcome.unreachableAssignmentIds.length;
         harness.showToast(
-          `Opened or reused ${reachableCount} planning sessions; ${outcome.unreachableAssignmentIds.length} ${outcome.unreachableAssignmentIds.length === 1 ? "is" : "are"} unavailable from this coordinator.`,
+          `Opened or reused ${reachableCount} planning ${reachableCount === 1 ? "session" : "sessions"}; ${outcome.unreachableAssignmentIds.length} ${outcome.unreachableAssignmentIds.length === 1 ? "is" : "are"} unavailable from this coordinator.`,
           "error",
         );
       } else {
         harness.showToast(
-          `Opened or reused ${outcome.bindings.length} planning sessions`,
+          `Opened or reused ${outcome.bindings.length} planning ${outcome.bindings.length === 1 ? "session" : "sessions"}`,
           "info",
         );
       }
