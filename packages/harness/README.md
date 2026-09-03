@@ -63,7 +63,7 @@ the coding agent's ordinary provider traffic, and opt-in telemetry.
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
   your coding agent is told about can improve without you upgrading this package.
-  It sends no session content, no identifiers and no API key, and it is *not*
+  It sends no session content, no identifiers and no API key, and it is _not_
   gated on the telemetry opt-in — it fetches configuration rather than reporting
   usage. It is bounded at 5 seconds and falls back to the prompt bundled in this
   package on any failure, so an offline session behaves exactly as before.
@@ -83,6 +83,10 @@ SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
 
 ### Agent Map planner sessions
+
+In Studio, the pinned **Plan Agents** tab opens the project's Agent Map.
+**Plan Agents** names the planning entry point; **Agent Map** remains the name
+of the proposal view and its underlying protocol.
 
 The authenticated local API owns planner identity; a model or generic session
 request cannot assign itself the `map-planner` role. The public planner surface
