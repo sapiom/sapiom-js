@@ -459,12 +459,11 @@ describe("BuildPlanService", () => {
 
   it("allocates canonical subrecord IDs from bounded client correlations", async () => {
     const { service, allocator, store } = await fixture();
-    const result = await service.apply(identity, {
+    const request = {
       schemaVersion: 1,
       planId: null,
       expectedPlanVersion: null,
       expectedSource: proposalSource(),
-      requestId: "request-client-correlations",
       operations: [
         baseOperations[0]!,
         {
@@ -513,7 +512,13 @@ describe("BuildPlanService", () => {
           },
         },
       ],
+    };
+    const preview = await service.validate(identity, request);
+    const result = await service.apply(identity, {
+      ...request,
+      requestId: "request-client-correlations",
     });
+    expect(result.idMappings).toEqual(preview.idMappings);
     expect(result.idMappings.map(({ kind }) => kind).sort()).toEqual([
       "criterion",
       "decision",
@@ -1068,6 +1073,16 @@ describe("BuildPlanService", () => {
           dependsOn: [],
         },
       },
+      recreate: {
+        op: "create-milestone",
+        clientRef: "create-once-milestone",
+        milestone: {
+          ordinal: 2,
+          title: "Create twice",
+          outcome: "Preserve the first",
+          dependsOn: [],
+        },
+      },
     },
     {
       label: "integration criterion",
@@ -1078,6 +1093,15 @@ describe("BuildPlanService", () => {
           ordinal: 1,
           description: "Create once",
           verification: "Never overwrite",
+        },
+      },
+      recreate: {
+        op: "create-integration-criterion",
+        criterion: {
+          clientRef: "create-once-integration",
+          ordinal: 2,
+          description: "Create twice",
+          verification: "Preserve the first",
         },
       },
     },
@@ -1093,10 +1117,20 @@ describe("BuildPlanService", () => {
           resolution: "Never overwrite",
         },
       },
+      recreate: {
+        op: "create-decision",
+        decision: {
+          clientRef: "create-once-decision",
+          question: "Create twice?",
+          required: false,
+          status: "resolved",
+          resolution: "Preserve the first",
+        },
+      },
     },
   ])(
-    "does not let a later create overwrite an existing $label",
-    async ({ label, create }) => {
+    "gives the same clientRef a fresh $label identity in a later request",
+    async ({ label, create, recreate }) => {
       const { service, store, compiler, allocator } = await fixture();
       const request = {
         schemaVersion: 1,
@@ -1113,28 +1147,132 @@ describe("BuildPlanService", () => {
       });
       compiler.mockClear();
 
-      await expect(
-        service.apply(identity, {
-          ...request,
-          planId: created.plan.planId,
-          expectedPlanVersion: created.plan.version,
-          requestId: `request-recreate-${label}`,
-          operations: [create],
-        }),
-      ).rejects.toMatchObject({ code: "invalid_operation" });
-      expect(compiler).not.toHaveBeenCalled();
+      const recreated = await service.apply(identity, {
+        ...request,
+        planId: created.plan.planId,
+        expectedPlanVersion: created.plan.version,
+        requestId: `request-recreate-${label}`,
+        operations: [recreate],
+      });
+      expect(recreated.idMappings).toHaveLength(1);
+      expect(recreated.idMappings[0]?.clientRef).toBe(
+        created.idMappings[0]?.clientRef,
+      );
+      expect(recreated.idMappings[0]?.id).not.toBe(created.idMappings[0]?.id);
+      expect(compiler).toHaveBeenCalledOnce();
       expect(
         Object.values(allocator).every(
           (allocate) => allocate.mock.calls.length === 0,
         ),
       ).toBe(true);
-      expect(await store.read(PROJECT_ID)).toMatchObject({
-        currentPlanVersion: 1,
-        planVersions: [{ version: 1 }],
-        idempotencyReceipts: [{ requestId: request.requestId }],
+      const planning = await store.read(PROJECT_ID);
+      expect(JSON.stringify(planning.planVersions[1])).toContain(
+        created.idMappings[0]!.id,
+      );
+      expect(JSON.stringify(planning.planVersions[1])).toContain(
+        recreated.idMappings[0]!.id,
+      );
+      expect(planning).toMatchObject({
+        currentPlanVersion: 2,
+        planVersions: [{ version: 1 }, { version: 2 }],
+        idempotencyReceipts: [
+          { requestId: request.requestId },
+          { requestId: `request-recreate-${label}` },
+        ],
       });
     },
   );
+
+  it("allocates a fresh historical identity when a removed clientRef is recreated", async () => {
+    const { service, store } = await fixture();
+    const firstRequest = {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: proposalSource(),
+      operations: [
+        ...baseOperations,
+        {
+          op: "create-milestone",
+          clientRef: "reusable-milestone-ref",
+          milestone: {
+            ordinal: 1,
+            title: "Original milestone",
+            outcome: "Preserve this history",
+            dependsOn: [],
+          },
+        },
+      ],
+    };
+    const firstPreview = await service.validate(identity, firstRequest);
+    const first = await service.apply(identity, {
+      ...firstRequest,
+      requestId: "request-historical-create-v1",
+    });
+    expect(first.idMappings).toEqual(firstPreview.idMappings);
+    const firstMilestoneId = first.idMappings[0]!.id;
+    const firstRecord = structuredClone(
+      (await store.read(PROJECT_ID)).planVersions[0]!,
+    );
+
+    const removed = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: first.plan.planId,
+      expectedPlanVersion: first.plan.version,
+      expectedSource: proposalSource(),
+      requestId: "request-historical-remove-v2",
+      operations: [{ op: "remove-milestone", milestoneId: firstMilestoneId }],
+    });
+    const recreateRequest = {
+      schemaVersion: 1,
+      planId: first.plan.planId,
+      expectedPlanVersion: removed.plan.version,
+      expectedSource: proposalSource(),
+      operations: [
+        {
+          op: "create-milestone",
+          clientRef: "reusable-milestone-ref",
+          milestone: {
+            ordinal: 1,
+            title: "Recreated milestone",
+            outcome: "Receive a fresh identity",
+            dependsOn: [],
+          },
+        },
+      ],
+    };
+    const recreatePreview = await service.validate(identity, recreateRequest);
+    const recreatedRequest = {
+      ...recreateRequest,
+      requestId: "request-historical-recreate-v3",
+    };
+    const recreated = await service.apply(identity, recreatedRequest);
+    expect(recreated.idMappings).toEqual(recreatePreview.idMappings);
+    expect(recreated.idMappings[0]?.id).not.toBe(firstMilestoneId);
+    await expect(
+      service.apply(identity, recreatedRequest),
+    ).resolves.toMatchObject({
+      replayed: true,
+      idMappings: recreated.idMappings,
+    });
+
+    const planning = await store.read(PROJECT_ID);
+    expect(planning.planVersions).toHaveLength(3);
+    expect(planning.planVersions[0]).toEqual(firstRecord);
+    expect(planning.planVersions[0]?.milestones).toEqual([
+      expect.objectContaining({
+        milestoneId: firstMilestoneId,
+        title: "Original milestone",
+      }),
+    ]);
+    expect(planning.planVersions[1]?.milestones).toEqual([]);
+    expect(planning.planVersions[2]?.milestones).toEqual([
+      expect.objectContaining({
+        milestoneId: recreated.idMappings[0]?.id,
+        title: "Recreated milestone",
+      }),
+    ]);
+  });
 
   it("does not let create-agent-assignment replace an existing assignment", async () => {
     const { service, store, compiler, allocator } = await fixture();

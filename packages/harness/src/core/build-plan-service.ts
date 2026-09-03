@@ -1126,6 +1126,7 @@ export class BuildPlanService {
     );
     const source = await this.resolve(identity.projectId, expectedSource);
     await this.assertCurrentProposalSource(identity.projectId, source.source);
+    const prospectiveVersion = (current?.version ?? 0) + 1;
     const allocationSeed = canonicalJson({
       projectId: identity.projectId,
       expectedSource: input.expectedSource,
@@ -1165,7 +1166,10 @@ export class BuildPlanService {
             : kind === "deliverable"
               ? "deliverable"
               : "decision";
-      const allocated = deterministicId(prefix, `${id}\0${kind}\0${clientRef}`);
+      const allocated = deterministicId(
+        prefix,
+        `${id}\0${prospectiveVersion}\0${kind}\0${clientRef}`,
+      );
       if (existingCanonicalIds.has(allocated) || mappedIds.has(allocated))
         throw new BuildPlanServiceError("invalid_operation", [
           {
@@ -1228,8 +1232,7 @@ export class BuildPlanService {
     const draft = this.finalize({
       ...next,
       planId: id,
-      version: ((current?.version ?? 0) +
-        1) as ProjectBuildPlanVersion["version"],
+      version: prospectiveVersion as ProjectBuildPlanVersion["version"],
       parentVersion: current?.version ?? null,
       changeKind: current ? "edited" : "created",
       source: source.source,
