@@ -1619,9 +1619,9 @@ export class SessionManager {
       if (handle.trustedInputPasting) {
         // In particular, CR inside a multiline paste is content, not trusted
         // Enter, and must never reset invalid state or arm an inner `/clear`.
-        if (char === "\r" || char === "\n") {
-          handle.trustedSubmissionLine += " ";
-        } else if (
+        if (
+          char !== "\r" &&
+          char !== "\n" &&
           char >= " " &&
           char !== "\x7f" &&
           handle.trustedSubmissionLine.length < TRUSTED_INPUT_LINE_MAX

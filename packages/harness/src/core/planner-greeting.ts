@@ -96,6 +96,29 @@ export interface AcceptedPlannerUserInput {
   acceptedAt: string;
 }
 
+function newestAcceptedUserInput(
+  state: PersistedPlannerState,
+  candidates: readonly AcceptedPlannerUserInput[],
+): AcceptedPlannerUserInput | null {
+  let latest =
+    state.lastAcceptedUserInputId !== null &&
+    state.lastAcceptedUserInputAt !== null
+      ? {
+          inputId: state.lastAcceptedUserInputId,
+          acceptedAt: state.lastAcceptedUserInputAt,
+        }
+      : null;
+  for (const candidate of candidates) {
+    if (
+      latest === null ||
+      Date.parse(candidate.acceptedAt) > Date.parse(latest.acceptedAt)
+    ) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
+
 export class PlannerGreetingRetryUnavailableError extends Error {
   readonly code = "greeting_retry_unavailable";
 
@@ -178,7 +201,8 @@ function isPersistedPlannerState(
         input.sessionId === session.id &&
         typeof input.text === "string" &&
         input.text.length <= 100_000 &&
-        typeof input.acceptedAt === "string",
+        typeof input.acceptedAt === "string" &&
+        Number.isFinite(Date.parse(input.acceptedAt)),
     ) ||
     metadata.queuedInputIds.length !== inputs.length ||
     metadata.queuedInputIds.some(
@@ -599,18 +623,22 @@ export class PlannerGreetingCoordinator {
     const accepted = await this.acceptedInputIds(sessionId);
     if (accepted === null || accepted.size === 0) return state;
     const acceptedInputs = state.inputs.filter((input) => accepted.has(input.id));
-    const acceptedUserInputs = acceptedInputs.filter(
-      (input) => input.text.trim() !== "",
+    const latestAcceptedInput = newestAcceptedUserInput(
+      state,
+      acceptedInputs
+        .filter((input) => input.text.trim() !== "")
+        .map((input) => ({
+          inputId: input.id,
+          acceptedAt: input.acceptedAt,
+        })),
     );
     const remaining = state.inputs.filter((input) => !accepted.has(input.id));
     if (remaining.length === state.inputs.length) return state;
     const reconciled: PersistedPlannerState = {
       ...structuredClone(state),
       inputs: remaining,
-      lastAcceptedUserInputId:
-        acceptedUserInputs.at(-1)?.id ?? state.lastAcceptedUserInputId,
-      lastAcceptedUserInputAt:
-        acceptedUserInputs.at(-1)?.acceptedAt ?? state.lastAcceptedUserInputAt,
+      lastAcceptedUserInputId: latestAcceptedInput?.inputId ?? null,
+      lastAcceptedUserInputAt: latestAcceptedInput?.acceptedAt ?? null,
       dispatchingInputId:
         state.dispatchingInputId && accepted.has(state.dispatchingInputId)
           ? null
@@ -1405,16 +1433,18 @@ export class PlannerGreetingCoordinator {
         return;
       }
 
+      const latestAcceptedInput = newestAcceptedUserInput(
+        state,
+        input.text.trim() === ""
+          ? []
+          : [{ inputId: input.id, acceptedAt: input.acceptedAt }],
+      );
       const committed: PersistedPlannerState = {
         ...structuredClone(state),
         inputs: state.inputs.slice(1),
         dispatchingInputId: null,
-        lastAcceptedUserInputId:
-          input.text.trim() === "" ? state.lastAcceptedUserInputId : input.id,
-        lastAcceptedUserInputAt:
-          input.text.trim() === ""
-            ? state.lastAcceptedUserInputAt
-            : input.acceptedAt,
+        lastAcceptedUserInputId: latestAcceptedInput?.inputId ?? null,
+        lastAcceptedUserInputAt: latestAcceptedInput?.acceptedAt ?? null,
         metadata: {
           ...structuredClone(state.metadata),
           queuedInputIds: state.metadata.queuedInputIds.slice(1),
@@ -1475,10 +1505,13 @@ export class PlannerGreetingCoordinator {
       const state = await this.reconcileAcceptedInputs(
         await this.load(session),
       );
+      const latestAcceptedInput = newestAcceptedUserInput(state, [
+        { inputId, acceptedAt },
+      ]);
       await this.persist(sessionId, {
         ...structuredClone(state),
-        lastAcceptedUserInputId: inputId,
-        lastAcceptedUserInputAt: acceptedAt,
+        lastAcceptedUserInputId: latestAcceptedInput?.inputId ?? null,
+        lastAcceptedUserInputAt: latestAcceptedInput?.acceptedAt ?? null,
       });
     });
   }

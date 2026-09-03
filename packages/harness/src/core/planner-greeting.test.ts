@@ -91,7 +91,10 @@ describe("PlannerGreetingCoordinator", () => {
       sessionManager: manager,
       deliveryTimeoutMs: 60_000,
     });
-    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.register(session, {
+      emptyProject: true,
+      mode: "created",
+    });
     await coordinator.onSessionStatus(session);
     expect(submitted).toHaveLength(1);
     const greeting = submitted[0]!;
@@ -180,6 +183,41 @@ describe("PlannerGreetingCoordinator", () => {
     await expect(restarted.latestAcceptedUserInput(session.id)).resolves.toEqual(
       rawTerminalSubmission,
     );
+  });
+
+  it("never lets delayed old queue delivery move the input watermark backward", async () => {
+    let acceptedAt = "2026-09-03T11:00:00.000Z";
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      now: () => acceptedAt,
+      deliveryTimeoutMs: 60_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await coordinator.onSessionStatus(session);
+    const greeting = submitted[0]!;
+
+    acceptedAt = "2026-09-03T11:00:01.000Z";
+    await coordinator.enqueue(session.id, "queued before preparation");
+    acceptedAt = "2026-09-03T11:00:03.000Z";
+    await coordinator.recordRawUserSubmission(session.id);
+    const rawReply = await coordinator.latestAcceptedUserInput(session.id);
+    expect(rawReply).toMatchObject({ acceptedAt });
+
+    coordinator.decorateLocalEvent(
+      event(session.id, "prompt.submitted", { prompt: greeting }),
+    );
+    acceptedAt = "2026-09-03T11:00:04.000Z";
+    await coordinator.onEventPersisted(
+      event(session.id, "turn.completed", {
+        assistantText: "What should we build?",
+      }),
+    );
+
+    expect(submitted).toContain("queued before preparation");
+    await expect(
+      coordinator.latestAcceptedUserInput(session.id),
+    ).resolves.toEqual(rawReply);
   });
 
   it("ignores raw submissions from ordinary sessions", async () => {
