@@ -69,7 +69,12 @@ function session(
     boundWorkflowPath: null,
     ready: false,
     planning: {
-      identity: { projectId, sessionId: id, userId: "user-1", role: "map-planner" },
+      identity: {
+        projectId,
+        sessionId: id,
+        userId: "user-1",
+        role: "map-planner",
+      },
       greeting: { status: "pending" },
       queuedInputIds: [],
     },
@@ -123,12 +128,15 @@ function fixture(
       [...existing, ...created].some(
         (candidate) => candidate.id === id && candidate.status === "running",
       ),
-    get: (id: string) => [...existing, ...created].find((candidate) => candidate.id === id),
+    get: (id: string) =>
+      [...existing, ...created].find((candidate) => candidate.id === id),
     setPlanningMetadata: async (
       id: string,
       metadata: NonNullable<HarnessSession["planning"]>,
     ) => {
-      const value = [...existing, ...created].find((candidate) => candidate.id === id);
+      const value = [...existing, ...created].find(
+        (candidate) => candidate.id === id,
+      );
       if (value) value.planning = structuredClone(metadata);
     },
     submitInput: vi.fn(async () => true),
@@ -185,6 +193,9 @@ describe("planner session context and identity", () => {
     expect(context).toContain(project.rootBindings[0]!.id);
     expect(context).toContain('"role":"map-planner"');
     expect(context).toContain('"empty":true');
+    expect(context).toContain('"status":"not_created"');
+    expect(context).toContain("build_plan_rebase");
+    expect(context).toContain("fresh request ID");
     expect(context).toContain("In your first response, briefly explain");
     expect(context).not.toContain("/Users/private");
     expect(context).not.toContain("private-workspace-key");
@@ -209,12 +220,29 @@ describe("planner session context and identity", () => {
       details: {
         confirmedRevision: {
           digest: "d".repeat(2_000),
-          summaries: Array.from({ length: 80 }, (_, index) =>
-            `node-${index}-${"s".repeat(400)}`,
+          summaries: Array.from(
+            { length: 80 },
+            (_, index) => `node-${index}-${"s".repeat(400)}`,
           ),
         },
         activeProposal: { status: "draft", summary: "proposal summary" },
-        projectBuildPlan: { status: "pending", summary: "build summary" },
+        projectBuildPlan: {
+          status: "incomplete",
+          summary: "build summary",
+          version: 7,
+          digest: "sha256:plan",
+          source: { kind: "proposal", version: 3, graphDigest: "sha256:graph" },
+          planningEligible: true,
+          implementationEligible: false,
+          assignmentCount: 5,
+          briefCount: 4,
+          staleBriefCount: 1,
+          diagnostics: Array.from({ length: 20 }, (_, index) => ({
+            code: `diagnostic-${index}`,
+            severity: "warning",
+            path: `assignments[${index}]`,
+          })),
+        },
         warnings: Array.from({ length: 40 }, (_, index) => `warning-${index}`),
       },
     });
@@ -222,16 +250,28 @@ describe("planner session context and identity", () => {
       project: {
         confirmedRevision: { digest: string; summaries: string[] };
         activeProposal: { status: string };
-        projectBuildPlan: { status: string };
+        projectBuildPlan: {
+          status: string;
+          version: number;
+          assignmentCount: number;
+          diagnostics: unknown[];
+        };
         warnings: string[];
       };
     };
 
     expect(parsed.project.confirmedRevision.digest).toHaveLength(512);
     expect(parsed.project.confirmedRevision.summaries).toHaveLength(32);
-    expect(parsed.project.confirmedRevision.summaries[0]!.length).toBeLessThanOrEqual(256);
+    expect(
+      parsed.project.confirmedRevision.summaries[0]!.length,
+    ).toBeLessThanOrEqual(256);
     expect(parsed.project.activeProposal.status).toBe("draft");
-    expect(parsed.project.projectBuildPlan.status).toBe("pending");
+    expect(parsed.project.projectBuildPlan).toMatchObject({
+      status: "incomplete",
+      version: 7,
+      assignmentCount: 5,
+    });
+    expect(parsed.project.projectBuildPlan.diagnostics).toHaveLength(8);
     expect(parsed.project.warnings).toHaveLength(16);
     expect(context.length).toBeLessThan(16_384);
     expect(context).not.toContain(project.rootBindings[0]!.localRootRef);
@@ -276,7 +316,11 @@ describe("PlanningSessionService", () => {
       greeting: { status: "skipped", reason: "user-proceeded" },
       queuedInputIds: [],
     });
-    expect(contexts.every((value) => !value.includes(project.rootBindings[0]!.localRootRef))).toBe(true);
+    expect(
+      contexts.every(
+        (value) => !value.includes(project.rootBindings[0]!.localRootRef),
+      ),
+    ).toBe(true);
     expect(contexts).toEqual([
       expect.stringContaining(
         "Let the user's first real message be the first visible conversation turn",
@@ -373,7 +417,10 @@ describe("PlanningSessionService", () => {
 
     await expect(
       service.open(projectId, { mode: "resume-or-create" }),
-    ).resolves.toMatchObject({ resolution: "live", session: { id: secondary.id } });
+    ).resolves.toMatchObject({
+      resolution: "live",
+      session: { id: secondary.id },
+    });
     await expect(service.requireOwned(projectId, secondary.id)).resolves.toBe(
       secondary,
     );
@@ -398,7 +445,7 @@ describe("PlanningSessionService", () => {
       service as unknown as {
         options: { readRecord: () => Promise<SessionRecord> };
       }
-    ).options.readRecord = async () => ({ turnCount: 1 } as SessionRecord);
+    ).options.readRecord = async () => ({ turnCount: 1 }) as SessionRecord;
 
     const result = await service.open(projectId, {
       mode: "resume-or-create",
@@ -418,7 +465,9 @@ describe("PlanningSessionService", () => {
   it("re-resolves current bindings for every scoped operation", async () => {
     const owned = session("owned-root");
     const { service, setProject } = fixture([owned]);
-    await expect(service.requireOwned(projectId, owned.id)).resolves.toBe(owned);
+    await expect(service.requireOwned(projectId, owned.id)).resolves.toBe(
+      owned,
+    );
 
     setProject({
       ...project,
@@ -428,7 +477,9 @@ describe("PlanningSessionService", () => {
       })),
     });
 
-    await expect(service.requireOwned(projectId, owned.id)).rejects.toMatchObject({
+    await expect(
+      service.requireOwned(projectId, owned.id),
+    ).rejects.toMatchObject({
       code: "forbidden",
     });
   });
@@ -436,17 +487,23 @@ describe("PlanningSessionService", () => {
   it("isolates planners across authenticated, local, and replacement principals", async () => {
     const accountA = session("account-a");
     const { service, setUserId } = fixture([accountA]);
-    await expect(service.requireOwned(projectId, accountA.id)).resolves.toBe(accountA);
+    await expect(service.requireOwned(projectId, accountA.id)).resolves.toBe(
+      accountA,
+    );
 
     setUserId(null);
-    await expect(service.requireOwned(projectId, accountA.id)).rejects.toMatchObject({
+    await expect(
+      service.requireOwned(projectId, accountA.id),
+    ).rejects.toMatchObject({
       code: "forbidden",
     });
     const local = await service.open(projectId, { mode: "fresh" });
     expect(local.session.planning?.identity.userId).toBe("local:machine-1");
 
     setUserId("user-b");
-    await expect(service.requireOwned(projectId, local.session.id)).rejects.toMatchObject({
+    await expect(
+      service.requireOwned(projectId, local.session.id),
+    ).rejects.toMatchObject({
       code: "forbidden",
     });
     const accountB = await service.open(projectId, { mode: "fresh" });
@@ -500,6 +557,8 @@ describe("PlanningSessionService", () => {
       reason: "user-proceeded",
     });
     expect(contexts[0]).toContain(projectId);
+    expect(contexts[0]).toContain("build_plan_rebase");
+    expect(contexts[0]).toContain('"status":"not_created"');
     expect(contexts[0]).not.toContain(
       "In your first response, briefly explain",
     );
@@ -511,12 +570,15 @@ describe("PlanningSessionService", () => {
       status: "exited",
       agentSessionId: "stale-vendor-session",
     });
-    const { service, resume, create, contexts, sessionStartMessages } = fixture([
-      prior,
-    ]);
+    const { service, resume, create, contexts, sessionStartMessages } = fixture(
+      [prior],
+    );
     resume.mockRejectedValueOnce(new Error("not resumable"));
-    (service as unknown as { options: { readRecord: () => Promise<SessionRecord> } }).options.readRecord =
-      async () => ({ turnCount: 1 } as SessionRecord);
+    (
+      service as unknown as {
+        options: { readRecord: () => Promise<SessionRecord> };
+      }
+    ).options.readRecord = async () => ({ turnCount: 1 }) as SessionRecord;
 
     const result = await service.open(projectId, { mode: "resume-or-create" });
 
@@ -568,7 +630,7 @@ describe("PlanningSessionService", () => {
         };
       }
     ).options;
-    options.readRecord = async () => ({ turnCount: 1 } as SessionRecord);
+    options.readRecord = async () => ({ turnCount: 1 }) as SessionRecord;
     options.onPlannerSession = (value, context) =>
       afterRestart.register(value, context);
 
@@ -637,7 +699,9 @@ describe("PlanningSessionService", () => {
         agentSessionId: "missing-vendor-history",
       });
       const { service, resume, manager } = fixture([prior]);
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "planner-handoff-fault-"));
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "planner-handoff-fault-"),
+      );
       const seed = new PlannerGreetingCoordinator({
         root,
         sessionManager: manager,
@@ -803,7 +867,9 @@ describe("PlanningSessionService", () => {
       coordinator.register(value, context);
 
     try {
-      const result = await service.open(projectId, { mode: "resume-or-create" });
+      const result = await service.open(projectId, {
+        mode: "resume-or-create",
+      });
       expect(result.resolution).toBe("rehydrated");
       expect(result.session.planning?.greeting).toEqual({
         status: "delivered",

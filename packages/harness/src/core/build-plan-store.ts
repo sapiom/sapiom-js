@@ -182,6 +182,14 @@ export class BuildPlanStore {
     return this.allocator.allocateBuildPlanId();
   }
 
+  allocateBriefId(): AgentBriefId {
+    return this.allocator.allocateBriefId();
+  }
+
+  allocateAssignmentId(): PlanningAssignmentId {
+    return this.allocator.allocateAssignmentId();
+  }
+
   async readPlanForProject(projectId: StudioProjectId, ref: BuildPlanRef) {
     const planning = await this.read(projectId);
     const plan = planning.planVersions.find(
@@ -214,6 +222,10 @@ export class BuildPlanStore {
     input: ProjectBuildPlanVersion,
     graph: AgentMapGraph,
     request: BuildPlanCommitIdentity,
+    compiled: {
+      assignments?: readonly PlanningAssignmentRef[];
+      briefs?: readonly AgentBriefVersionRecord[];
+    } = {},
   ): Promise<{
     plan: BuildPlanRef;
     assignments: PlanningAssignmentRef[];
@@ -230,13 +242,43 @@ export class BuildPlanStore {
       .filter((node) => node.kind === "agent" && node.ownerAgentId === null)
       .map((node) => node.id)
       .sort();
-    const authoredAgentIds = plan.assignments
-      .map((entry) => entry.plannedAgentId)
-      .sort();
-    if (JSON.stringify(topLevelAgentIds) !== JSON.stringify(authoredAgentIds))
-      throw new Error(
-        "build plan assignments must exactly match top-level agents",
-      );
+    const topLevelAgentIdSet = new Set(topLevelAgentIds);
+    if (
+      plan.assignments.some(
+        (entry) => !topLevelAgentIdSet.has(entry.plannedAgentId),
+      )
+    )
+      throw new Error("build plan assignment must target a top-level agent");
+    const suppliedAssignments = new Map(
+      (compiled.assignments ?? []).map((entry) => [
+        entry.plannedAgentId,
+        entry,
+      ]),
+    );
+    if (
+      suppliedAssignments.size !== (compiled.assignments ?? []).length ||
+      [...suppliedAssignments.keys()].some(
+        (agentId) =>
+          !plan.assignments.some((entry) => entry.plannedAgentId === agentId),
+      ) ||
+      new Set(
+        (compiled.assignments ?? []).flatMap((entry) => [
+          entry.assignmentId,
+          entry.briefId,
+        ]),
+      ).size !==
+        (compiled.assignments ?? []).length * 2
+    )
+      throw new Error("invalid supplied assignment identities");
+    const briefs = (compiled.briefs ?? []).map(parseAgentBriefVersionRecord);
+    for (const brief of briefs) {
+      if (
+        brief.projectId !== plan.projectId ||
+        computeAgentBriefSemanticDigest(brief) !== brief.semanticDigest ||
+        computeAgentBriefRecordDigest(brief) !== brief.recordDigest
+      )
+        throw new Error("invalid agent brief digest");
+    }
     return this.store.transact<{
       plan: BuildPlanRef;
       assignments: PlanningAssignmentRef[];
@@ -283,7 +325,10 @@ export class BuildPlanStore {
       )
         throw new BuildPlanStoreConflictError("version_conflict");
       const timestamp = this.now().toISOString();
-      const active = new Set(topLevelAgentIds);
+      const authoredAgentIds = plan.assignments.map(
+        (entry) => entry.plannedAgentId,
+      );
+      const active = new Set(authoredAgentIds);
       const assignmentByAgentId = { ...planning.assignmentByAgentId };
       const currentBriefByAgentId = { ...planning.currentBriefByAgentId };
       for (const [agentId, existing] of Object.entries(assignmentByAgentId)) {
@@ -307,8 +352,16 @@ export class BuildPlanStore {
           delete currentBriefByAgentId[agentId];
         }
       }
-      for (const agentId of topLevelAgentIds) {
+      for (const agentId of authoredAgentIds) {
         const existing = assignmentByAgentId[agentId];
+        const supplied = suppliedAssignments.get(agentId);
+        if (
+          existing &&
+          supplied &&
+          (supplied.assignmentId !== existing.assignmentId ||
+            supplied.briefId !== existing.briefId)
+        )
+          throw new BuildPlanStoreConflictError("version_conflict");
         assignmentByAgentId[agentId] = existing
           ? existing.status === "retired"
             ? sealAssignment({
@@ -328,8 +381,9 @@ export class BuildPlanStore {
           : sealAssignment({
               schemaVersion: 1,
               projectId: plan.projectId,
-              assignmentId: this.allocator.allocateAssignmentId(),
-              briefId: this.allocator.allocateBriefId(),
+              assignmentId:
+                supplied?.assignmentId ?? this.allocator.allocateAssignmentId(),
+              briefId: supplied?.briefId ?? this.allocator.allocateBriefId(),
               plannedAgentId: agentId,
               status: "active",
               createdAt: timestamp,
@@ -339,6 +393,26 @@ export class BuildPlanStore {
               ],
               recordDigest: ZERO_RECORD_DIGEST,
             });
+      }
+      const briefVersionsById = { ...planning.briefVersionsById };
+      for (const brief of briefs) {
+        const assignment = assignmentByAgentId[brief.plannedAgentId];
+        const history = briefVersionsById[brief.briefId] ?? [];
+        if (
+          !assignment ||
+          assignment.status !== "active" ||
+          assignment.assignmentId !== brief.assignmentId ||
+          assignment.briefId !== brief.briefId ||
+          brief.plan.planId !== plan.planId ||
+          brief.plan.version !== plan.version ||
+          brief.plan.semanticDigest !== plan.semanticDigest ||
+          !architectureSourceRefsEqual(brief.source, plan.source) ||
+          brief.version !== history.length + 1 ||
+          brief.parentVersion !== (history.at(-1)?.version ?? null)
+        )
+          throw new BuildPlanStoreConflictError("version_conflict");
+        briefVersionsById[brief.briefId] = [...history, brief];
+        currentBriefByAgentId[brief.plannedAgentId] = this.briefRef(brief);
       }
       const receipt: BuildPlanIdempotencyReceipt = {
         ...request,
@@ -356,6 +430,7 @@ export class BuildPlanStore {
         currentPlanVersion: plan.version,
         planVersions: [...planning.planVersions, plan],
         currentBriefByAgentId,
+        briefVersionsById,
         assignmentByAgentId,
         idempotencyReceipts: retainedReceipts.slice(
           -this.receiptRetentionLimit,
@@ -381,7 +456,7 @@ export class BuildPlanStore {
       return {
         value: {
           plan: this.planRef(plan),
-          assignments: topLevelAgentIds.map((id) =>
+          assignments: authoredAgentIds.map((id) =>
             this.assignmentRef(assignmentByAgentId[id]!),
           ),
           replayed: false,

@@ -158,6 +158,10 @@ import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import { ArchitectureSourceResolver } from "../core/architecture-source-resolver.js";
+import { BuildPlanContractValidator } from "../core/build-plan-contract-validator.js";
+import { BuildPlanService } from "../core/build-plan-service.js";
+import { BuildPlanStore } from "../core/build-plan-store.js";
 import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
@@ -664,7 +668,9 @@ export const startServer = async (
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
   );
-  let emitAgentMapCapabilityEvent = (_event: AgentMapCapabilityEvent): void => {};
+  let emitAgentMapCapabilityEvent = (
+    _event: AgentMapCapabilityEvent,
+  ): void => {};
   const agentMapCapabilities = new AgentMapCapabilityRegistry({
     onEvent: (event) => emitAgentMapCapabilityEvent(event),
   });
@@ -2713,6 +2719,33 @@ export const startServer = async (
         bus.publish({ type: "agent-map.proposal.changed", delta }),
     },
   );
+  const architectureSourceResolver = new ArchitectureSourceResolver(
+    agentMapWorkspaceStore,
+  );
+  const buildPlanStore = new BuildPlanStore(agentMapWorkspaceStore);
+  const buildPlanContractValidator = new BuildPlanContractValidator(
+    architectureSourceResolver,
+  );
+  const buildPlanService = new BuildPlanService({
+    store: buildPlanStore,
+    sourceResolver: architectureSourceResolver,
+    contractValidator: buildPlanContractValidator,
+    // SAP-3070 replaces these conservative boundaries with production brief
+    // compilation and graph-impact behavior. Keeping the seam here avoids a
+    // transport dependency on that implementation.
+    briefCompiler: {
+      compile: async ({ currentBriefs }) => ({
+        briefs: currentBriefs,
+        changes: currentBriefs.map((brief) => ({
+          plannedAgentId: brief.plannedAgentId,
+          change: "preserved" as const,
+        })),
+      }),
+    },
+    impactEvaluator: { evaluate: async () => ({}) },
+    idFactory: buildPlanStore,
+    clock: { now: () => new Date() },
+  });
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -2737,6 +2770,7 @@ export const startServer = async (
   agentMapMcp = createAgentMapMcpRouter({
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
+    buildPlanService,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
@@ -2761,6 +2795,22 @@ export const startServer = async (
           role: event.role,
           latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
           ...(event.errorCode ? { error_code: event.errorCode } : {}),
+          ...(event.operationCount !== undefined
+            ? { operation_count: event.operationCount }
+            : {}),
+          ...(event.diagnosticCount !== undefined
+            ? { diagnostic_count: event.diagnosticCount }
+            : {}),
+          ...(event.replayed !== undefined ? { replayed: event.replayed } : {}),
+          ...(event.conflict !== undefined ? { conflict: event.conflict } : {}),
+          ...(event.planVersion !== undefined
+            ? { plan_version: event.planVersion }
+            : {}),
+          ...(event.sourceKind ? { source_kind: event.sourceKind } : {}),
+          ...(event.sourceVersion !== undefined
+            ? { source_version: event.sourceVersion }
+            : {}),
+          ...(event.briefCounts ? { brief_counts: event.briefCounts } : {}),
         },
       };
       void eventStore.append(analyticsEvent).catch(() => {});
@@ -2868,21 +2918,53 @@ export const startServer = async (
     // explicitly so the focused-context contract emits honest null/empty
     // detail slots today and has one allowlisted adapter boundary when those
     // stores land; it must never fall back to scanning project files.
-    readFocusedContext: async (_projectId, workspace) => ({
-      confirmedRevision:
-        workspace.confirmedRevisionId === null
-          ? null
-          : { digest: null, summaries: [] },
-      activeProposal:
-        workspace.activeProposalId === null
-          ? null
-          : { status: null, summary: null },
-      projectBuildPlan:
-        workspace.projectBuildPlanId === null
-          ? null
-          : { status: null, summary: null },
-      warnings: [],
-    }),
+    readFocusedContext: async (projectId, workspace) => {
+      const planning = await buildPlanStore.read(projectId);
+      const plan = planning.planVersions.at(-1);
+      const briefs = Object.values(planning.currentBriefByAgentId)
+        .map((ref) =>
+          planning.briefVersionsById[ref.briefId]?.find(
+            (brief) => brief.version === ref.version,
+          ),
+        )
+        .filter((brief): brief is NonNullable<typeof brief> => Boolean(brief));
+      const planStatus = plan
+        ? await buildPlanContractValidator.validate(plan, briefs)
+        : null;
+      return {
+        confirmedRevision:
+          workspace.confirmedRevisionId === null
+            ? null
+            : { digest: null, summaries: [] },
+        activeProposal:
+          workspace.activeProposalId === null
+            ? null
+            : { status: null, summary: null },
+        projectBuildPlan:
+          plan && planStatus
+            ? {
+                status: planStatus.completeness.status,
+                version: plan.version,
+                digest: plan.semanticDigest,
+                source: plan.source,
+                planningEligible: planStatus.eligibility.planningEligible,
+                implementationEligible:
+                  planStatus.eligibility.implementationEligible,
+                assignmentCount: plan.assignments.length,
+                briefCount: briefs.length,
+                staleBriefCount: briefs.filter(
+                  (brief) =>
+                    JSON.stringify(brief.source) !==
+                    JSON.stringify(plan.source),
+                ).length,
+                diagnostics: planStatus.completeness.issues.map(
+                  ({ code, severity, path }) => ({ code, severity, path }),
+                ),
+              }
+            : null,
+        warnings: [],
+      };
+    },
     onPlannerSession: (session, context) =>
       plannerGreeting.register(session, context),
     onEvent: emitPlannerLifecycle,

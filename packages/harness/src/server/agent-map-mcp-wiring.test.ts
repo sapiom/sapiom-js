@@ -235,7 +235,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
     [
       "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map plus a validated delivery plan covering milestones, constraints, assignments, deliverables, and acceptance evidence. Architecture changes use Agent Map proposals; delivery intent uses exact-version build-plan tools and explicit rebasing. Start by describing the outcome you want.",
     ].join("\n"),
   );
   const plannerEmitter = await fs.readFile(
@@ -258,6 +258,10 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "agent_map_propose",
     "agent_map_read",
     "agent_map_validate",
+    "build_plan_apply",
+    "build_plan_read",
+    "build_plan_rebase",
+    "build_plan_validate",
   ]);
 
   const proposalEvents: BusMessage[] = [];
