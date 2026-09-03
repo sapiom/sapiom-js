@@ -15,10 +15,22 @@ import {
   parseMapChangeProposal,
   type PersistedAgentMapProposalReceipt,
 } from "../shared/agent-map-codec.js";
+import {
+  emptyBuildPlanningAggregate,
+  type BuildPlanningAggregateV1,
+} from "../shared/build-plan.js";
+import { parseBuildPlanningAggregate } from "../shared/build-plan-codec.js";
+import {
+  computeAgentBriefRecordDigest,
+  computeAgentBriefSemanticDigest,
+  computeBuildPlanRecordDigest,
+  computeBuildPlanSemanticDigest,
+  computePlanningSubmissionSemanticDigest,
+} from "./build-plan-canonicalization.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 
-export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = 1;
+export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = 2;
 
 export type AgentMapProposalReceipt = PersistedAgentMapProposalReceipt;
 
@@ -27,6 +39,7 @@ export interface AgentMapProjectAggregate {
   workspace: AgentMapWorkspaceState;
   proposal: MapChangeProposal | null;
   receipts: AgentMapProposalReceipt[];
+  buildPlanning: BuildPlanningAggregateV1;
 }
 
 export interface AgentMapStoreSnapshot {
@@ -142,31 +155,11 @@ export function parseAgentMapWorkspaceState(
 const storageError = () =>
   new AgentMapWorkspaceStoreError("storage_unavailable");
 
-function parseAggregate(
+function parseArchitectureFields(
   value: unknown,
   projectId: StudioProjectId,
-): AgentMapProjectAggregate {
-  if (
-    isRecord(value) &&
-    Number.isSafeInteger(value.storageSchemaVersion) &&
-    (value.storageSchemaVersion as number) >
-      AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION
-  )
-    throw new AgentMapWorkspaceStoreError(
-      "unsupported_schema",
-      value.storageSchemaVersion as number,
-    );
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "storageSchemaVersion",
-      "workspace",
-      "proposal",
-      "receipts",
-    ]) ||
-    value.storageSchemaVersion !== AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION ||
-    !Array.isArray(value.receipts)
-  )
+): Pick<AgentMapProjectAggregate, "workspace" | "proposal" | "receipts"> {
+  if (!isRecord(value) || !Array.isArray(value.receipts))
     throw new AgentMapWorkspaceStoreError("malformed_state");
   const workspace = parseAgentMapWorkspaceState(value.workspace, projectId);
   let proposal: MapChangeProposal | null = null;
@@ -228,12 +221,96 @@ function parseAggregate(
     ).size !== receipts.length
   )
     throw new AgentMapWorkspaceStoreError("malformed_state");
+  return { workspace, proposal, receipts };
+}
+
+function parseAggregate(
+  value: unknown,
+  projectId: StudioProjectId,
+): AgentMapProjectAggregate {
+  if (
+    isRecord(value) &&
+    Number.isSafeInteger(value.storageSchemaVersion) &&
+    (value.storageSchemaVersion as number) >
+      AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION
+  )
+    throw new AgentMapWorkspaceStoreError(
+      "unsupported_schema",
+      value.storageSchemaVersion as number,
+    );
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "storageSchemaVersion",
+      "workspace",
+      "proposal",
+      "receipts",
+      "buildPlanning",
+    ]) ||
+    value.storageSchemaVersion !== AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION
+  )
+    throw new AgentMapWorkspaceStoreError("malformed_state");
+  const architecture = parseArchitectureFields(value, projectId);
+  let buildPlanning: BuildPlanningAggregateV1;
+  try {
+    buildPlanning = parseBuildPlanningAggregate(value.buildPlanning, projectId);
+  } catch {
+    throw new AgentMapWorkspaceStoreError("malformed_state");
+  }
+  if (
+    buildPlanning.planVersions.some(
+      (plan) =>
+        computeBuildPlanSemanticDigest(plan) !== plan.semanticDigest ||
+        computeBuildPlanRecordDigest(plan) !== plan.recordDigest,
+    ) ||
+    Object.values(buildPlanning.briefVersionsById)
+      .flat()
+      .some(
+        (brief) =>
+          computeAgentBriefSemanticDigest(brief) !== brief.semanticDigest ||
+          computeAgentBriefRecordDigest(brief) !== brief.recordDigest,
+      ) ||
+    Object.values(buildPlanning.submissionsByAssignmentId)
+      .flat()
+      .some(
+        (submission) =>
+          computePlanningSubmissionSemanticDigest(submission) !==
+          submission.semanticDigest,
+      )
+  )
+    throw new AgentMapWorkspaceStoreError("malformed_state");
+  if (architecture.workspace.projectBuildPlanId !== buildPlanning.planId)
+    throw new AgentMapWorkspaceStoreError("malformed_state");
   return structuredClone({
     storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
-    workspace,
-    proposal,
-    receipts,
-  }) as AgentMapProjectAggregate;
+    ...architecture,
+    buildPlanning,
+  });
+}
+
+function migrateAggregateV1(
+  value: unknown,
+  projectId: StudioProjectId,
+): AgentMapProjectAggregate {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "storageSchemaVersion",
+      "workspace",
+      "proposal",
+      "receipts",
+    ]) ||
+    value.storageSchemaVersion !== 1
+  )
+    throw new AgentMapWorkspaceStoreError("malformed_state");
+  const architecture = parseArchitectureFields(value, projectId);
+  if (architecture.workspace.projectBuildPlanId !== null)
+    throw new AgentMapWorkspaceStoreError("malformed_state");
+  return {
+    storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
+    ...architecture,
+    buildPlanning: emptyBuildPlanningAggregate(),
+  };
 }
 
 /** Crash-atomic owner of workspace, active proposal, history, and private receipts. */
@@ -285,6 +362,7 @@ export class AgentMapWorkspaceStore {
       },
       proposal: null,
       receipts: [],
+      buildPlanning: emptyBuildPlanningAggregate(),
     };
   }
 
@@ -313,16 +391,23 @@ export class AgentMapWorkspaceStore {
       const workspace = parseAgentMapWorkspaceState(decoded, projectId);
       return {
         aggregate: {
-          storageSchemaVersion: 1,
+          storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
           workspace,
           proposal: null,
           receipts: [],
+          buildPlanning: emptyBuildPlanningAggregate(),
         },
         needsWrite: true,
         created: false,
       };
     } catch (error) {
       if (isRecord(decoded) && "storageSchemaVersion" in decoded) {
+        if (decoded.storageSchemaVersion === 1)
+          return {
+            aggregate: migrateAggregateV1(decoded, projectId),
+            needsWrite: true,
+            created: false,
+          };
         return {
           aggregate: parseAggregate(decoded, projectId),
           needsWrite: false,

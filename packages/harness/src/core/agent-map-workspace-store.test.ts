@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+import { emptyBuildPlanningAggregate } from "../shared/build-plan.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 
@@ -130,11 +131,52 @@ describe("AgentMapWorkspaceStore", () => {
       new AgentMapWorkspaceStore(root).readOrCreate(projectId),
     ).resolves.toEqual(workspace);
     expect(JSON.parse(await fs.readFile(workspacePath, "utf8"))).toEqual({
-      storageSchemaVersion: 1,
+      storageSchemaVersion: 2,
       workspace,
       proposal: null,
       receipts: [],
+      buildPlanning: emptyBuildPlanningAggregate(),
     });
+  });
+
+  it("migrates an E2 aggregate without changing architecture state", async () => {
+    const root = await fixture();
+    const workspacePath = path.join(
+      root,
+      "projects",
+      projectId,
+      "workspace.json",
+    );
+    const workspace = {
+      projectId,
+      schemaVersion: 1,
+      recordVersion: 3,
+      confirmedRevisionId: null,
+      activeProposalId: null,
+      projectBuildPlanId: null,
+      createdAt: "2026-09-01T12:00:00.000Z",
+      updatedAt: "2026-09-01T12:01:00.000Z",
+    };
+    await fs.mkdir(path.dirname(workspacePath), { recursive: true });
+    await fs.writeFile(
+      workspacePath,
+      `${JSON.stringify({ storageSchemaVersion: 1, workspace, proposal: null, receipts: [] })}\n`,
+    );
+
+    const aggregate = await new AgentMapWorkspaceStore(root).readAggregate(
+      projectId,
+    );
+
+    expect(aggregate).toEqual({
+      storageSchemaVersion: 2,
+      workspace,
+      proposal: null,
+      receipts: [],
+      buildPlanning: emptyBuildPlanningAggregate(),
+    });
+    expect(JSON.parse(await fs.readFile(workspacePath, "utf8"))).toEqual(
+      aggregate,
+    );
   });
 
   it("rejects future aggregate schemas without rewriting them", async () => {

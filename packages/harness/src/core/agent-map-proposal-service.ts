@@ -225,6 +225,31 @@ function applyOperations(
   });
 }
 
+/**
+ * Materialize one exact proposal version from its immutable operation history.
+ * Shared with build planning so exact-source reads cannot drift from E2.
+ */
+export function materializeAgentMapProposalVersion(
+  base: AgentMapGraph,
+  proposal: MapChangeProposal | null,
+  version: number,
+): AgentMapGraph {
+  if (!Number.isSafeInteger(version) || version < 0)
+    throw new RangeError("proposal version must be a non-negative integer");
+  if (!proposal) {
+    if (version !== 0) throw new RangeError("proposal version is unavailable");
+    return canonicalizeAgentMapGraph(base);
+  }
+  if (version > proposal.version)
+    throw new RangeError("proposal version is unavailable");
+  const operations: MapOperation[] = [];
+  for (const record of proposal.history) {
+    if (record.acceptedVersion > version) break;
+    operations.push(record.operation);
+  }
+  return applyOperations(base, operations);
+}
+
 function affectedFromTouchSets(
   left: ProposalTouchSet,
   right: ProposalTouchSet,
@@ -296,13 +321,7 @@ export class AgentMapProposalService {
     proposal: MapChangeProposal | null,
     version: number,
   ): AgentMapGraph {
-    if (!proposal || version === 0) return base;
-    const operations: MapOperation[] = [];
-    for (const record of proposal.history) {
-      if (record.acceptedVersion > version) break;
-      operations.push(record.operation);
-    }
-    return applyOperations(base, operations);
+    return materializeAgentMapProposalVersion(base, proposal, version);
   }
 
   /** History is authoritative; receipt retention cannot change stale conflicts. */
