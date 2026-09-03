@@ -18,10 +18,10 @@
       //
       // The app's live theme is handed in by the main process as a `?theme=` query
       // (see update-window.ts). It has to be — this window's file:// origin can't
-      // read the SPA's (http://localhost) localStorage, so guessing from THIS
-      // origin's storage or the OS would drift out of sync with the app whenever
-      // the user picked a non-OS theme. The query wins; localStorage then the
-      // light product default are fallbacks so the window is never unthemed.
+      // read the SPA's (http://localhost) localStorage, so this origin's storage
+      // cannot reliably reflect the app's explicit choice. The query wins;
+      // localStorage then the light product default are fallbacks so the window
+      // is never unthemed.
       (function () {
         var forced = null;
         try {
