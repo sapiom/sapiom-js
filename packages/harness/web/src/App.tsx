@@ -658,10 +658,14 @@ export const App = (): JSX.Element => {
   const [rightCollapsed, setRightCollapsed] = useState(
     () => isMobileShell() || (loadUiPrefs().rightCollapsed ?? false),
   );
-  // Canvas full-screen expand — lifted here so its control sits next to the
-  // collapse-panel toggle in the right-pane tab bar (the frame itself lives in
-  // CanvasPane, which reads these props).
+  // Right-surface full-screen expand — lifted here so its control sits next to
+  // the collapse-panel toggle in the shared tab bar. The active CanvasPane or
+  // AgentMapPane lifts its own frame without remounting the graph.
   const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const toggleCanvasExpanded = useCallback(
+    () => setCanvasExpanded((value) => !value),
+    [],
+  );
 
   // Back/forward across every screen the shell can show. The stack is fed by
   // the place the shell IS (derived below), not by instrumenting each door, so
@@ -3372,21 +3376,28 @@ export const App = (): JSX.Element => {
                             : "linked"}
                     </a>
                   )}
-                {/* Canvas expand / Steps Focus sits beside the panel toggle.
-                    Absent at map altitude: expand is the board's own frame
-                    control, and the map has its own pan/zoom/fit. */}
-                {!atMapAltitude && (
+                {/* Full view belongs to the graph surface currently shown:
+                    Agent Map at project altitude, Canvas / Focus below it. */}
+                {(!atMapAltitude || planningWorkspace) && (
                   <button
                     className="theme-toggle"
                     data-testid="canvas-expand"
                     hidden={canvasExpanded}
                     aria-label={
-                      shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
+                      planningWorkspace
+                        ? "Expand Agent Map"
+                        : shownTab === "steps"
+                          ? "Open Focus mode"
+                          : "Expand canvas"
                     }
                     title={
-                      shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
+                      planningWorkspace
+                        ? "Expand Agent Map"
+                        : shownTab === "steps"
+                          ? "Open Focus mode"
+                          : "Expand canvas"
                     }
-                    onClick={() => setCanvasExpanded((v) => !v)}
+                    onClick={toggleCanvasExpanded}
                   >
                     <Icon name="Maximize2" size={15} />
                   </button>
@@ -3424,6 +3435,8 @@ export const App = (): JSX.Element => {
                 <AgentMapPane
                   state={agentMapEntry.state.workspace}
                   onRetry={agentMapEntry.retryWorkspace}
+                  expanded={canvasExpanded}
+                  onToggleExpanded={toggleCanvasExpanded}
                 />
               ) : legacyView.altitude === "map" ? (
                 <WorkspaceGraphView
@@ -3505,8 +3518,8 @@ export const App = (): JSX.Element => {
                       contract,
                     );
                 }}
-                expanded={canvasExpanded}
-                onToggleExpanded={() => setCanvasExpanded((v) => !v)}
+                expanded={canvasExpanded && !atMapAltitude}
+                onToggleExpanded={toggleCanvasExpanded}
                 macros={state.macros}
                 tasks={harness.tasks}
                 surface={shownTab === "steps" ? "steps" : "board"}

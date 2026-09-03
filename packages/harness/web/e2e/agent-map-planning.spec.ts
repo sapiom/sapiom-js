@@ -239,6 +239,52 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     ).toContainText("Agent builder · unplanned");
   });
 
+  test("expands the Agent Map in place and unwinds its inspector before full view", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+    );
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openDashboardMap(page);
+
+    const map = page.getByTestId("agent-map-live");
+    await expect(map).toBeVisible();
+    const subject = page.getByTestId("agent-map-subject");
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    const adjustedView = await subject.evaluate(
+      (element) => (element as HTMLElement).style.transform,
+    );
+
+    const expand = page.getByTestId("canvas-expand");
+    await expect(expand).toHaveAccessibleName("Expand Agent Map");
+    await expand.click();
+
+    const frame = page.getByTestId("agent-map-frame");
+    await expect(frame).toHaveClass(/is-expanded/);
+    await expect(frame).toHaveCSS("position", "fixed");
+    await expect
+      .poll(() =>
+        subject.evaluate((element) => (element as HTMLElement).style.transform),
+      )
+      .toBe(adjustedView);
+
+    await page
+      .getByRole("button", { name: "ResearchReport, artifact, Proposed" })
+      .click();
+    await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("agent-map-inspector")).toHaveCount(0);
+    await expect(frame).toHaveClass(/is-expanded/);
+
+    await page.keyboard.press("Escape");
+    await expect(frame).not.toHaveClass(/is-expanded/);
+
+    await expand.click();
+    await page.getByTestId("canvas-expand-exit").click();
+    await expect(frame).not.toHaveClass(/is-expanded/);
+  });
+
   test("a generating greeting still renders the raw planner CLI", async ({
     page,
   }) => {
