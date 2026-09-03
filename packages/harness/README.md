@@ -56,9 +56,9 @@ from what its other components do on their own (the app's product analytics, and
 `npx @sapiom/mcp@latest` fetching and running the local MCP server each session):
 
 Planner-session bootstrap makes no additional network request. Its focused
-context, greeting coordination, FIFO, and lifecycle persistence stay inside the
-local server. Existing outbound surfaces remain the system-prompt fetch below,
-the coding agent's ordinary provider traffic, and opt-in telemetry.
+context, automatic empty-map inspection turn, FIFO, and lifecycle persistence
+stay inside the local server. Existing outbound surfaces remain the system-prompt
+fetch below, the coding agent's ordinary provider traffic, and opt-in telemetry.
 
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
@@ -93,9 +93,17 @@ is project-scoped:
   live/resumable planner or creates one. Use `{ "mode": "fresh" }` to always
   create a new planner.
 - `POST /api/projects/:projectId/planner-sessions/:sessionId/messages` durably
-  accepts planner input and releases it FIFO after greeting resolution.
+  accepts planner input and releases it FIFO after startup-turn resolution.
 - `POST /api/projects/:projectId/planner-sessions/:sessionId/greeting/retry`
-  retries an eligible failed automatic greeting.
+  retries an eligible failed automatic startup turn.
+
+When a newly created planner sees no confirmed revision, active proposal, or
+project build plan, it dispatches one server-authored startup turn after CLI
+readiness. The planner reads the authoritative map, inspects the project
+read-only for existing agents and evidence-backed relationships, validates the
+result, and creates a proposal for the user to review. It never confirms or
+implements that proposal automatically. Live, resumed, and rehydrated sessions
+preserve their prior startup state instead of replaying the turn.
 
 Planner metadata is part of the session registry. Its input FIFO and greeting
 attempt state live at

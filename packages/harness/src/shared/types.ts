@@ -832,15 +832,10 @@ export type AnalyticsEventType =
   | "planner_session.created"
   | "planner_session.resumed"
   | "planner_session.input_delivery_uncertain"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
   | "planner_greeting.attempted"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
   | "planner_greeting.delivered"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
   | "planner_greeting.failed"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
   | "planner_greeting.skipped"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
   | "planner_greeting.retried";
 
 /**

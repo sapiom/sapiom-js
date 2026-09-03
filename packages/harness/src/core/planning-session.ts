@@ -203,7 +203,7 @@ export function buildFocusedPlannerContext(input: {
   };
   return [
     "<agent-map-planner-context>",
-    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive Claude Code transcript is user-visible. Let the user's first real message be the first visible conversation turn; never request or rely on a private control turn.${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to their request." : ""} Do not propose architecture or invoke mutation tools before the user asks you to.`,
+    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive planner transcript is user-visible.${emptyProject ? " A newly created planner for an empty project may receive a server-authored Agent Studio startup turn before any human message; follow it as an explicit request to inspect the project and draft a reviewable initial map." : ""}${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to the startup task." : ""} Outside that startup turn, do not propose architecture or invoke mutation tools before the user asks you to.`,
     JSON.stringify(context),
     "</agent-map-planner-context>",
   ].join("\n");
@@ -331,6 +331,8 @@ export class PlanningSessionService {
       workspace.confirmedRevisionId === null &&
       workspace.activeProposalId === null &&
       workspace.projectBuildPlanId === null;
+    const initialGreeting: PlannerGreetingState =
+      mode === "created" && emptyProject ? { status: "pending" } : greeting;
     const harness = request.harness ?? this.options.defaultHarness;
     const cwd = launchRoot(project);
     const details = await this.focusedDetails(project, workspace);
@@ -343,7 +345,7 @@ export class PlanningSessionService {
       },
       {
         planning: (sessionId) =>
-          planningFor(project.projectId, sessionId, principal, greeting),
+          planningFor(project.projectId, sessionId, principal, initialGreeting),
         promptAppendix: (sessionId) =>
           buildFocusedPlannerContext({
             project,
@@ -456,10 +458,8 @@ export class PlanningSessionService {
         session: await this.create(
           project,
           request,
-          // Claude Code has no hidden assistant-first turn. A pending greeting
-          // is dispatched as ordinary PTY input and therefore appears as a
-          // synthetic user message in the raw CLI. Keep onboarding in the
-          // hidden prompt appendix above and let the user's real input lead.
+          // create() promotes this to the durable automatic startup turn only
+          // while the project still has no map, proposal, or build plan.
           { status: "skipped", reason: "user-proceeded" },
           undefined,
           "created",

@@ -202,10 +202,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(created.session.agentMapIdentity).toEqual(
     created.session.planning.identity,
   );
-  expect(created.session.planning.greeting).toEqual({
-    status: "skipped",
-    reason: "user-proceeded",
-  });
+  expect(created.session.planning.greeting).toEqual({ status: "pending" });
 
   const launchOpts = launches[0]!;
   const metadata = launchOpts.agentMapMcp;
@@ -223,7 +220,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "Do not act as a coding or implementation agent",
   );
   expect(systemPrompt).toContain(
-    "Let the user's first real message be the first visible conversation turn",
+    "may receive a server-authored Agent Studio startup turn",
   );
   expect(systemPrompt).not.toContain("In your first response, briefly explain");
   expect(systemPrompt).not.toContain(codingPrompt);
@@ -235,7 +232,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
     [
       "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+      "If this project does not have an Agent Map yet, Agent Studio will automatically inspect it for existing agents and draft an evidence-backed proposal for you to review. It will not confirm or implement the proposal automatically. If a map already exists, use this session to review, refine, or extend it.",
     ].join("\n"),
   );
   const plannerEmitter = await fs.readFile(

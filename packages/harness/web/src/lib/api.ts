@@ -391,7 +391,7 @@ export interface HarnessApi {
     sessionId: string,
     request: PlannerMessageRequest,
   ): Promise<PlannerSessionMetadataResponse>;
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** Retries an eligible failed automatic planner startup turn. */
   retryPlannerGreeting(
     projectId: StudioProjectId,
     sessionId: string,

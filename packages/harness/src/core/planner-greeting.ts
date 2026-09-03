@@ -70,7 +70,9 @@ export interface PlannerGreetingCoordinatorOptions {
   sessionManager: SessionManager;
   now?: () => string;
   generateId?: () => string;
-  /** Applies both while waiting for readiness and while awaiting a model turn. */
+  /** Maximum wait for the CLI to become ready for its automatic startup turn. */
+  readinessTimeoutMs?: number;
+  /** Maximum wait for the automatic model turn once it reaches the CLI. */
   deliveryTimeoutMs?: number;
   /** Test seam for classifying queue-store failures without exposing raw errors. */
   writeState?: (file: string, state: unknown) => Promise<void>;
@@ -237,19 +239,32 @@ export function plannerGreetingPrompt(
   emptyProject: boolean,
   attemptId?: string,
 ): string {
-  const question = emptyProject
-    ? "Ask exactly one open-ended question about what kind of agent architecture the user wants to build."
-    : "Briefly acknowledge that a current plan exists, then ask exactly one open-ended question about what the user wants to review, extend, or change.";
+  const instructions = emptyProject
+    ? [
+        "This is an Agent Studio startup task for the project planning agent.",
+        "First call agent_map_read so the persisted Agent Map, not prior assistant prose, is authoritative.",
+        "If a proposal, confirmed revision, or project build plan now exists, do not modify it; briefly summarize what is present and ask the user what they want to review or change.",
+        "If the Agent Map is still empty, inspect the current project read-only for existing agent definitions, subagents, registries, calls, contracts, inputs, outputs, resources, connectors, and artifacts. You may browse files and run read-only searches, but do not edit source code or run implementation work.",
+        "Draft one node for each actual top-level agent you find, plus subagents, resources, connectors, and artifacts only where the project provides concrete evidence for them.",
+        "Add relationships only when explicit code or configuration evidence supports the direction and semantics; never guess from names, proximity, or likely architecture.",
+        "Call agent_map_validate before agent_map_propose, then create one reviewable proposal containing the evidence-backed topology. If proposing reports a version conflict, call agent_map_read again and do not overwrite newer work.",
+        "Never confirm, launch, deploy, or implement the proposal automatically.",
+        "After proposing, briefly summarize what you mapped, identify uncertainties or omitted relationships, and ask the user to review or correct it.",
+        "If the project contains no existing agents, do not create placeholder nodes; explain that nothing was found and ask one open-ended question about the outcome the user wants to build.",
+      ]
+    : [
+        "This is an Agent Studio startup turn for the project planning agent.",
+        "Respond with one brief greeting.",
+        "Explain that you and the user will plan the agents, responsibilities, data flow, resources, and connectors together.",
+        "Briefly acknowledge that a current plan exists, then ask exactly one open-ended question about what the user wants to review, extend, or change.",
+        "Do not propose an architecture, create nodes or relationships, invoke tools, or ask a second question before the user replies.",
+      ];
   return [
-    "This is a private Agent Studio control turn.",
-    "Respond as the project planning agent with one brief greeting.",
-    "Explain that you and the user will plan the agents, responsibilities, data flow, resources, and connectors together.",
-    question,
-    "Do not propose an architecture, create nodes or relationships, invoke tools, or ask a second question before the user replies.",
+    ...instructions,
     ...(attemptId
       ? [`Internal attempt ID: ${attemptId}. Never mention this ID in your response.`]
       : []),
-  ].join(" ");
+  ].join("\n");
 }
 
 const PLANNER_SESSION_SOURCES = new Set([
@@ -321,6 +336,7 @@ export class PlannerGreetingCoordinator {
   private readonly root: string;
   private readonly now: () => string;
   private readonly generateId: () => string;
+  private readonly readinessTimeoutMs: number;
   private readonly deliveryTimeoutMs: number;
   private readonly states = new Map<string, PersistedPlannerState>();
   private readonly writes = new Map<string, Promise<unknown>>();
@@ -344,7 +360,12 @@ export class PlannerGreetingCoordinator {
     this.root = path.resolve(options.root);
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
-    this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 45_000;
+    // Preserve the old single-timeout behavior for callers that explicitly
+    // configured deliveryTimeoutMs while allowing repository inspection much
+    // longer than the CLI readiness handshake in production.
+    this.readinessTimeoutMs =
+      options.readinessTimeoutMs ?? options.deliveryTimeoutMs ?? 45_000;
+    this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 300_000;
   }
 
   private sessionDirectory(sessionId: string): string {
@@ -639,7 +660,7 @@ export class PlannerGreetingCoordinator {
           "[harness] planner greeting timeout transition failed: persistence_failed",
         );
       });
-    }, this.deliveryTimeoutMs);
+    }, key === "pending" ? this.readinessTimeoutMs : this.deliveryTimeoutMs);
     handle.unref?.();
     this.timers.set(sessionId, { key, handle });
   }

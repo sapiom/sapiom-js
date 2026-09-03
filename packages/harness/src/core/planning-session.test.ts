@@ -185,6 +185,9 @@ describe("planner session context and identity", () => {
     expect(context).toContain(project.rootBindings[0]!.id);
     expect(context).toContain('"role":"map-planner"');
     expect(context).toContain('"empty":true');
+    expect(context).toContain(
+      "may receive a server-authored Agent Studio startup turn",
+    );
     expect(context).toContain("In your first response, briefly explain");
     expect(context).not.toContain("/Users/private");
     expect(context).not.toContain("private-workspace-key");
@@ -273,16 +276,16 @@ describe("PlanningSessionService", () => {
         userId: "user-1",
         role: "map-planner",
       },
-      greeting: { status: "skipped", reason: "user-proceeded" },
+      greeting: { status: "pending" },
       queuedInputIds: [],
     });
     expect(contexts.every((value) => !value.includes(project.rootBindings[0]!.localRootRef))).toBe(true);
     expect(contexts).toEqual([
       expect.stringContaining(
-        "Let the user's first real message be the first visible conversation turn",
+        "may receive a server-authored Agent Studio startup turn",
       ),
       expect.stringContaining(
-        "Let the user's first real message be the first visible conversation turn",
+        "may receive a server-authored Agent Studio startup turn",
       ),
     ]);
     expect(contexts.join("\n")).not.toContain(
@@ -307,14 +310,21 @@ describe("PlanningSessionService", () => {
     );
   });
 
-  it("does not replay first-time onboarding for an already-planned project", async () => {
+  it("does not start automatic mapping for an already-planned project", async () => {
     const { service, contexts } = fixture([], project, {
       ...workspace,
       confirmedRevisionId: "revision-1",
     });
 
-    await service.open(projectId, { mode: "fresh" });
+    const result = await service.open(projectId, { mode: "fresh" });
 
+    expect(result.session.planning?.greeting).toEqual({
+      status: "skipped",
+      reason: "user-proceeded",
+    });
+    expect(contexts[0]).not.toContain(
+      "may receive a server-authored Agent Studio startup turn",
+    );
     expect(contexts[0]).not.toContain(
       "In your first response, briefly explain",
     );
@@ -328,7 +338,10 @@ describe("PlanningSessionService", () => {
     ]);
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(first).toMatchObject({ resolution: "created" });
+    expect(first).toMatchObject({
+      resolution: "created",
+      session: { planning: { greeting: { status: "pending" } } },
+    });
     expect(second).toMatchObject({
       resolution: "live",
       session: { id: first.session.id },

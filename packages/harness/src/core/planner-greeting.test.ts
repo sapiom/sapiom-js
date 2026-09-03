@@ -581,6 +581,43 @@ describe("PlannerGreetingCoordinator", () => {
     expect(session.planning?.queuedInputIds).toEqual([]);
   });
 
+  it("uses a short readiness deadline without cutting off a longer startup mapping turn", async () => {
+    vi.useFakeTimers();
+    session.ready = false;
+    const coordinator = new PlannerGreetingCoordinator({
+      root,
+      sessionManager: manager,
+      readinessTimeoutMs: 100,
+      deliveryTimeoutMs: 1_000,
+    });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    await vi.advanceTimersByTimeAsync(101);
+    await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
+      .writes.get(session.id);
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "session_not_ready",
+    });
+
+    session = plannerSession("session-2");
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    expect(session.planning?.greeting.status).toBe("generating");
+    expect(submitted).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(session.planning?.greeting.status).toBe("generating");
+
+    await vi.advanceTimersByTimeAsync(900);
+    await (coordinator as unknown as { writes: Map<string, Promise<unknown>> })
+      .writes.get(session.id);
+    expect(session.planning?.greeting).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "delivery_timeout",
+    });
+  });
+
   it("contains timer persistence rejection with only a bounded local classification", async () => {
     vi.useFakeTimers();
     session.ready = false;
@@ -940,20 +977,33 @@ describe("PlannerGreetingCoordinator", () => {
 });
 
 describe("plannerGreetingPrompt", () => {
-  it("keeps the automatic greeting scoped to collaborative planning and one question", () => {
+  it("asks an empty project to inspect existing agents and draft a safe proposal", () => {
     const empty = plannerGreetingPrompt(true);
+    expect(empty).toContain("Agent Studio startup task");
+    expect(empty).toContain("agent_map_read");
+    expect(empty).toContain("inspect the current project read-only");
+    expect(empty).toContain("explicit code or configuration evidence");
+    expect(empty).toContain("agent_map_validate");
+    expect(empty).toContain("agent_map_propose");
+    expect(empty).toContain("Never confirm");
+    expect(empty).toContain("do not create placeholder nodes");
+  });
+
+  it("keeps the legacy existing-plan greeting conversational", () => {
     const existing = plannerGreetingPrompt(false);
-    for (const prompt of [empty, existing]) {
-      expect(prompt).toContain("project planning agent");
-      expect(prompt).toContain("agents, responsibilities, data flow, resources, and connectors");
-      expect(prompt).toContain("exactly one open-ended question");
-      expect(prompt).toContain("Do not propose an architecture");
-      expect(prompt).toContain("invoke tools");
-    }
-    expect(empty).toContain(
-      "what kind of agent architecture the user wants to build",
+    expect(existing).toContain("project planning agent");
+    expect(existing).toContain(
+      "agents, responsibilities, data flow, resources, and connectors",
     );
+    expect(existing).toContain("exactly one open-ended question");
+    expect(existing).toContain("Do not propose an architecture");
+    expect(existing).toContain("invoke tools");
     expect(existing).toContain("current plan exists");
+    expect(existing).not.toContain("agent_map_propose");
+  });
+
+  it("keeps attempt correlation out of the planner response", () => {
+    const empty = plannerGreetingPrompt(true);
     const attempted = plannerGreetingPrompt(true, "attempt-private-1");
     expect(attempted).toContain("Internal attempt ID: attempt-private-1");
     expect(attempted).toContain("Never mention this ID");

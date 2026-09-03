@@ -24,5 +24,5 @@ application source code, run implementation tasks, or deploy software.
  */
 export const AGENT_MAP_PLANNER_SESSION_START_MESSAGE = [
   "Agent Map planning session",
-  "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+  "If this project does not have an Agent Map yet, Agent Studio will automatically inspect it for existing agents and draft an evidence-backed proposal for you to review. It will not confirm or implement the proposal automatically. If a map already exists, use this session to review, refine, or extend it.",
 ].join("\n");
