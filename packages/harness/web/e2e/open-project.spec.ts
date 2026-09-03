@@ -88,26 +88,40 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
   });
 
-  test("an empty project offers the one thing you opened it for", async ({
+  test("an empty planning project creates agents only through its Agent Map", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill(BLANK);
     await page.getByTestId("open-project").click();
 
-    const empty = page.getByTestId("project-empty-blank-slate");
-    await expect(empty).toBeVisible();
-    // And it is a CONTROL, not a label: the whole reason to open a folder with
-    // no agent in it is to put the first one there, so the row that states the
-    // emptiness is the row that offers to end it.
-    await expect(empty).toHaveText("Create the first agent here");
-    await expect(empty).toBeEnabled();
-    await expect(empty).toHaveAttribute(
-      "data-tooltip",
-      "Start an agent in /Users/demo/blank-slate",
-    );
-    // NOT the rail-wide empty state leaking down: that one says "No agents
-    // yet" and only exists when the rail has nothing at all.
+    const group = page.getByTestId("workspace-group-blank-slate");
+    await expect(group.getByTestId("agent-map-row")).toBeVisible();
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    await expect(page.getByTestId("planner-loading")).toHaveCount(0);
+
+    // Once the initial planner is no longer a live bare session, the old rail
+    // exposed its standalone-agent shortcut again. Ending it reproduces the
+    // stable empty-project state from the reported sidebar.
+    await page.getByTestId("session-menu").click();
+    await page.getByTestId("session-end-btn").click();
+    await page.getByTestId("end-session-confirm-btn").click();
+    await expect(page.getByTestId("planner-session-ended")).toBeVisible();
+
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+
+    // The visible empty row and the project menu used to be two doors into the
+    // same direct-create flow. A planning project exposes neither: generated
+    // agents enter through an approved map, while project removal remains an
+    // ordinary project-level action.
+    await openProjectMenu(page, "blank-slate");
+    await expect(
+      page.getByTestId("project-create-agent-blank-slate"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("project-remove-blank-slate")).toBeVisible();
+
+    // NOT the rail-wide empty state leaking down: that one says "No agents yet"
+    // and only exists when the rail has nothing at all.
     await expect(page.locator(".rail-empty")).toHaveCount(0);
   });
 

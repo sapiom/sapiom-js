@@ -1231,7 +1231,12 @@ export function WorkflowsRail({
             const studioProject = studioProjects?.find(
               (candidate) => candidate.projectId === workspaceScope?.projectId,
             );
-            const planFirst = axis === "project" && studioProject != null;
+            // A durable Studio project is owned by its Agent Map: agents enter
+            // through planning and approval, never through the legacy direct-
+            // create affordances. Keep this independent of the selected axis so
+            // switching to Group cannot bring the bypass back.
+            const plannerManaged = studioProject != null;
+            const planFirst = axis === "project" && plannerManaged;
             const mapSelected =
               planFirst &&
               studioSelection?.kind === "agent-map" &&
@@ -1401,7 +1406,7 @@ export function WorkflowsRail({
                       <ProjectRowMenu
                         label={project.label}
                         create={
-                          creating
+                          plannerManaged || creating
                             ? null
                             : bare
                               ? {
@@ -1463,47 +1468,43 @@ export function WorkflowsRail({
                     )}
                   </>
                 )}
-                {/* AN EMPTY PROJECT SAYS SO, on its own row.
+                {/* AN EMPTY LEGACY PROJECT SAYS SO, on its own row.
                     `projectIsEmpty` is the one emptiness answer and it consults
                     `rootAgent` — a merged root-agent project has nothing in
                     `dirs` or `agents` and a naive check would print this line
-                    under an agent row. A project with no agents is now an
-                    ordinary state rather than an impossible one: you open a
-                    project in order to build the first agent in it, so the row
-                    has to be able to stand there and say what it is. `creating`
-                    already has its own spinner, and a bare project with a live
-                    session already has its Scaffold affordance, so neither
-                    reaches this. */}
+                    under an agent row. A planner-managed project deliberately
+                    renders no direct-create row: its pinned Agent Map is the
+                    only route to generating agents. `creating` already has its
+                    own spinner, and a bare legacy project with a live session
+                    already has its Scaffold affordance, so neither reaches
+                    this. */}
                 {!collapsed && empty && !creating && bare == null && (
                   <>
-                    <div className="workspace-row is-nested workspace-row-empty">
-                      <span
-                        className="row-disclosure row-disclosure-static"
-                        aria-hidden="true"
-                      />
-                      {/* A ROW YOU CAN ACT ON. An empty project stating its
-                        emptiness and offering nothing is a dead end — and the
-                        whole reason to open a folder with no agent in it is to
-                        put the first one there. This is that action, aimed at
-                        THIS folder: a session rooted here, with the scaffold
-                        prompt already sent. */}
-                      <button
-                        type="button"
-                        className="tree-row tree-row-empty-action"
-                        data-testid={`project-empty-${project.label}`}
-                        data-tooltip={`Start an agent in ${project.root}`}
-                        onClick={() =>
-                          onCreateAgent(project.root, project.label)
-                        }
-                      >
-                        <Icon name="Sparkles" size={13} />
-                        <span className="tree-row-label">
-                          {(unsearchedCheckouts[project.root]?.length ?? 0) > 0
-                            ? "Create an agent here"
-                            : "Create the first agent here"}
-                        </span>
-                      </button>
-                    </div>
+                    {!plannerManaged && (
+                      <div className="workspace-row is-nested workspace-row-empty">
+                        <span
+                          className="row-disclosure row-disclosure-static"
+                          aria-hidden="true"
+                        />
+                        <button
+                          type="button"
+                          className="tree-row tree-row-empty-action"
+                          data-testid={`project-empty-${project.label}`}
+                          data-tooltip={`Start an agent in ${project.root}`}
+                          onClick={() =>
+                            onCreateAgent(project.root, project.label)
+                          }
+                        >
+                          <Icon name="Sparkles" size={13} />
+                          <span className="tree-row-label">
+                            {(unsearchedCheckouts[project.root]?.length ?? 0) >
+                            0
+                              ? "Create an agent here"
+                              : "Create the first agent here"}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                     {/* THE BOUNDARY'S OWN ANSWER, when there is one.
                         A scan stops at every separate checkout, so a folder that
                         is not itself a repo but holds several clones finds
