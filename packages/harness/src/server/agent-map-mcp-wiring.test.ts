@@ -423,6 +423,41 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
         ],
       },
     });
+    const createdPlan = (
+      productionAuthoring.structuredContent as {
+        plan: { planId: string; version: number };
+      }
+    ).plan;
+    const unchangedAuthoring = await client.callTool({
+      name: "build_plan_apply",
+      arguments: {
+        schemaVersion: 1,
+        planId: createdPlan.planId,
+        expectedPlanVersion: createdPlan.version,
+        expectedSource: {
+          kind: "proposal",
+          proposalId: proposal.id,
+          version: proposal.version,
+          graphDigest,
+        },
+        requestId: "request-production-unchanged",
+        operations: [
+          {
+            op: "set-project-outcome",
+            outcome: { summary: "Production must compile this plan" },
+          },
+        ],
+      },
+    });
+    expect(unchangedAuthoring.isError).not.toBe(true);
+    expect(unchangedAuthoring).toMatchObject({
+      structuredContent: {
+        plan: { version: 2 },
+        briefChanges: [
+          { plannedAgentId: proposal.nodes[0]!.id, change: "preserved" },
+        ],
+      },
+    });
   } finally {
     events.close();
     await client.close();
@@ -444,7 +479,10 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "utf8",
   );
   expect(refreshedPrompt).toContain('"architectureSource":{"kind":"proposal"');
-  expect(refreshedPrompt).toContain('"version":1');
+  expect(refreshedPrompt).toContain('"version":2');
+  expect(refreshedPrompt).toContain('"status":"complete"');
+  expect(refreshedPrompt).toContain('"briefCount":1');
+  expect(refreshedPrompt).toContain('"staleBriefCount":0');
   expect(refreshedPrompt).not.toContain('"architectureSource":null');
 
   const ordinary = await server.sessionManager.create({

@@ -21,11 +21,16 @@ import type {
   PlanContractId,
   PlanningAssignmentId,
   PlanningAssignmentRef,
+  PersistedAgentBriefVersionRecord,
   ProjectBuildPlanVersion,
   RecordDigest,
 } from "../shared/build-plan.js";
-import { architectureSourceRefsEqual } from "../shared/build-plan.js";
-import { BUILD_PLAN_VERSION_HISTORY_LIMIT } from "../shared/build-plan.js";
+import {
+  AGENT_BRIEF_DIGEST_VERSION,
+  AGENT_BRIEF_SCHEMA_VERSION,
+  architectureSourceRefsEqual,
+  BUILD_PLAN_VERSION_HISTORY_LIMIT,
+} from "../shared/build-plan.js";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
@@ -38,9 +43,11 @@ import {
 import {
   BuilderBootstrapLimitError,
   createBuilderBootstrapContext,
+  createPersistedBuilderBootstrapContext,
   BUILDER_BOOTSTRAP_COMPILER_VERSION,
+  selectRelevantMilestones,
 } from "./builder-bootstrap-context.js";
-import { evaluateBuildPlanImpact } from "./build-plan-impact-evaluator.js";
+import { evaluatePersistedBuildPlanImpact } from "./build-plan-impact-evaluator.js";
 import type {
   AgentBriefCompiler,
   AgentBriefCompileResult,
@@ -65,7 +72,7 @@ const planRef = (plan: ProjectBuildPlanVersion) => ({
   version: plan.version,
   semanticDigest: plan.semanticDigest,
 });
-const briefRef = (brief: AgentBriefVersionRecord) => ({
+const briefRef = (brief: PersistedAgentBriefVersionRecord) => ({
   briefId: brief.briefId,
   version: brief.version,
   semanticDigest: brief.semanticDigest,
@@ -282,6 +289,57 @@ function effectiveFlow(
   };
 }
 
+function actorRoot(nodeId: PlanNodeId, index: GraphIndex): PlanNodeId | null {
+  const node = index.nodes.get(nodeId);
+  return node?.kind === "agent" || node?.kind === "subagent"
+    ? (index.rootByNodeId.get(nodeId) ?? null)
+    : null;
+}
+
+function connectedFlowEvidence(
+  flows: readonly Flow[],
+  providerAgentId: PlanNodeId,
+  consumerAgentId: PlanNodeId,
+  index: GraphIndex,
+): Flow[] | null {
+  const eligible = flows;
+  const starts = new Set(
+    eligible
+      .flatMap((flow) => [flow.fromNodeId, flow.toNodeId])
+      .filter((nodeId) => actorRoot(nodeId, index) === providerAgentId),
+  );
+  const targets = new Set(
+    eligible
+      .flatMap((flow) => [flow.fromNodeId, flow.toNodeId])
+      .filter((nodeId) => actorRoot(nodeId, index) === consumerAgentId),
+  );
+  if (starts.size === 0 || targets.size === 0) return null;
+  const reachable = (
+    initial: ReadonlySet<PlanNodeId>,
+    reverse: boolean,
+  ): Set<PlanNodeId> => {
+    const reached = new Set(initial);
+    const queue = [...initial];
+    for (let offset = 0; offset < queue.length; offset += 1) {
+      const current = queue[offset]!;
+      for (const flow of eligible) {
+        const from = reverse ? flow.toNodeId : flow.fromNodeId;
+        const to = reverse ? flow.fromNodeId : flow.toNodeId;
+        if (from !== current || reached.has(to)) continue;
+        reached.add(to);
+        queue.push(to);
+      }
+    }
+    return reached;
+  };
+  const forward = reachable(starts, false);
+  if (![...targets].some((target) => forward.has(target))) return null;
+  const backward = reachable(targets, true);
+  return eligible.filter(
+    (flow) => forward.has(flow.fromNodeId) && backward.has(flow.toNodeId),
+  );
+}
+
 const port = (
   contractId: PlanContractId,
   nodeId: PlanNodeId,
@@ -389,12 +447,52 @@ function boundaryForAgent(
         );
       if (!flow.fromRoot) relevant.add(flow.fromNodeId);
     });
-    const providerRoots = unique(
+    const rawProviderRoots = unique(
       flows.flatMap((flow) => (flow.fromRoot ? [flow.fromRoot] : [])),
     );
-    const consumerRoots = unique(
+    const rawConsumerRoots = unique(
       flows.flatMap((flow) => (flow.toRoot ? [flow.toRoot] : [])),
     );
+    const providerRoots = unique(
+      flows.flatMap((flow) => {
+        const root = actorRoot(flow.fromNodeId, index);
+        return root ? [root] : [];
+      }),
+    );
+    const consumerRoots = unique(
+      flows.flatMap((flow) => {
+        const root = actorRoot(flow.toNodeId, index);
+        return root ? [root] : [];
+      }),
+    );
+    const terminalProviders = rawProviderRoots.filter(
+      (root) => !rawConsumerRoots.includes(root),
+    );
+    const terminalConsumers = rawConsumerRoots.filter(
+      (root) => !rawProviderRoots.includes(root),
+    );
+    for (const provider of terminalProviders) {
+      for (const consumer of terminalConsumers) {
+        if (
+          provider === consumer ||
+          (provider !== agentId && consumer !== agentId) ||
+          (providerRoots.includes(provider) && consumerRoots.includes(consumer))
+        )
+          continue;
+        diagnostics.push(
+          diagnostic(
+            "incompatible-contract-direction",
+            "graph.relationships.contractRef",
+            [
+              contractId,
+              provider,
+              consumer,
+              ...flows.map((flow) => flow.relationship.id),
+            ],
+          ),
+        );
+      }
+    }
     for (const provider of providerRoots) {
       for (const consumer of consumerRoots) {
         if (
@@ -402,14 +500,27 @@ function boundaryForAgent(
           (provider !== agentId && consumer !== agentId)
         )
           continue;
-        const evidence = flows.filter(
-          (flow) =>
-            (flow.fromRoot === provider &&
-              (flow.toRoot === consumer || flow.toRoot === null)) ||
-            (flow.toRoot === consumer &&
-              (flow.fromRoot === provider || flow.fromRoot === null)),
+        const evidence = connectedFlowEvidence(
+          flows,
+          provider,
+          consumer,
+          index,
         );
-        if (evidence.length === 0) continue;
+        if (!evidence) {
+          diagnostics.push(
+            diagnostic(
+              "incompatible-contract-direction",
+              "graph.relationships.contractRef",
+              [
+                contractId,
+                provider,
+                consumer,
+                ...flows.map((flow) => flow.relationship.id),
+              ],
+            ),
+          );
+          continue;
+        }
         const providing = provider === agentId;
         const counterpartAgentId = providing ? consumer : provider;
         dependencies.push({
@@ -595,9 +706,9 @@ function makeFingerprints(input: {
   const canonicalAssignment = canonicalPlan.assignments.find(
     (entry) => entry.plannedAgentId === input.agentId,
   )!;
-  const milestoneIds = unique(assignment.milestoneIds);
-  const milestones = canonicalPlan.milestones.filter((entry) =>
-    milestoneIds.includes(entry.milestoneId),
+  const milestones = selectRelevantMilestones(
+    input.plan,
+    assignment.milestoneIds,
   );
   const ports = (values: readonly BriefContractPort[]) => ({
     values,
@@ -659,7 +770,11 @@ function makeFingerprints(input: {
 }
 
 function identitiesFor(
-  request: CompileAgentBriefsRequest,
+  request: Pick<CompileAgentBriefsRequest, "plan" | "assignments"> & {
+    previous?: Readonly<{
+      briefs: readonly PersistedAgentBriefVersionRecord[];
+    }>;
+  },
 ): Map<PlanNodeId, PlanningAssignmentRef> {
   const supplied = new Map<PlanNodeId, PlanningAssignmentRef>();
   for (const entry of by(
@@ -704,9 +819,32 @@ function sealBrief(value: AgentBriefVersionRecord): AgentBriefVersionRecord {
   };
 }
 
-export function compileAgentBriefs(
-  request: CompileAgentBriefsRequest,
-): CompileAgentBriefsResult {
+type PersistedCompileAgentBriefsRequest = Omit<
+  CompileAgentBriefsRequest,
+  "previous"
+> & {
+  previous?: Omit<
+    NonNullable<CompileAgentBriefsRequest["previous"]>,
+    "briefs"
+  > & {
+    briefs: readonly PersistedAgentBriefVersionRecord[];
+  };
+};
+
+type PersistedCompiledBriefCandidate = Omit<CompiledBriefCandidate, "brief"> & {
+  brief: PersistedAgentBriefVersionRecord;
+};
+
+type PersistedCompileAgentBriefsResult = Omit<
+  CompileAgentBriefsResult,
+  "briefs"
+> & {
+  briefs: readonly PersistedCompiledBriefCandidate[];
+};
+
+function compilePersistedAgentBriefs(
+  request: PersistedCompileAgentBriefsRequest,
+): PersistedCompileAgentBriefsResult {
   const diagnostics: BuildPlanDiagnostic[] = [];
   if (request.projectId !== request.plan.projectId)
     diagnostics.push(
@@ -756,7 +894,11 @@ export function compileAgentBriefs(
       number,
       (typeof allowedPlanRefs)[number]
     >();
-    for (const [refIndex, ref] of allowedPlanRefs.entries()) {
+    for (const [refIndex, ref] of by(
+      allowedPlanRefs,
+      (entry) =>
+        `${String(entry.version).padStart(16, "0")}\0${entry.planId}\0${entry.semanticDigest}`,
+    ).entries()) {
       const existing = allowedByVersion.get(ref.version);
       if (
         ref.planId !== previous.plan.planId ||
@@ -824,7 +966,11 @@ export function compileAgentBriefs(
         ]),
       );
     const seenPreviousAgents = new Set<PlanNodeId>();
-    previous.briefs.forEach((brief, briefIndex) => {
+    by(
+      previous.briefs,
+      (brief) =>
+        `${brief.plannedAgentId}\0${brief.assignmentId}\0${brief.briefId}\0${brief.version}`,
+    ).forEach((brief, briefIndex) => {
       if (seenPreviousAgents.has(brief.plannedAgentId))
         diagnostics.push(
           diagnostic(
@@ -863,8 +1009,21 @@ export function compileAgentBriefs(
   }
   const suppliedIdentityOwners = new Map<string, PlanNodeId>();
   const suppliedAgentIds = new Set<PlanNodeId>();
-  for (const [assignmentIndex, assignment] of (
-    request.assignments ?? []
+  const previousIdentityByAgent = new Map<
+    PlanNodeId,
+    PersistedAgentBriefVersionRecord
+  >();
+  for (const brief of by(
+    request.previous?.briefs ?? [],
+    (entry) =>
+      `${entry.plannedAgentId}\0${entry.assignmentId}\0${entry.briefId}`,
+  ))
+    if (!previousIdentityByAgent.has(brief.plannedAgentId))
+      previousIdentityByAgent.set(brief.plannedAgentId, brief);
+  for (const [assignmentIndex, assignment] of by(
+    request.assignments ?? [],
+    (entry) =>
+      `${entry.plannedAgentId}\0${entry.assignmentId}\0${entry.briefId}`,
   ).entries()) {
     const identities = [assignment.assignmentId, assignment.briefId];
     const duplicateAgent = suppliedAgentIds.has(assignment.plannedAgentId);
@@ -877,7 +1036,14 @@ export function compileAgentBriefs(
     identities.forEach((id) =>
       suppliedIdentityOwners.set(id, assignment.plannedAgentId),
     );
-    if (duplicateAgent || conflictingOwner)
+    const previousIdentity = previousIdentityByAgent.get(
+      assignment.plannedAgentId,
+    );
+    const conflictsWithPrevious =
+      previousIdentity !== undefined &&
+      (previousIdentity.assignmentId !== assignment.assignmentId ||
+        previousIdentity.briefId !== assignment.briefId);
+    if (duplicateAgent || conflictingOwner || conflictsWithPrevious)
       diagnostics.push(
         diagnostic("invalid-dependency", `assignments[${assignmentIndex}]`, [
           assignment.plannedAgentId,
@@ -895,7 +1061,10 @@ export function compileAgentBriefs(
     ]),
   );
   const identities = identitiesFor(request);
-  const previousByAgent = new Map<PlanNodeId, AgentBriefVersionRecord>();
+  const previousByAgent = new Map<
+    PlanNodeId,
+    PersistedAgentBriefVersionRecord
+  >();
   for (const brief of by(
     request.previous?.briefs ?? [],
     (entry) =>
@@ -903,7 +1072,7 @@ export function compileAgentBriefs(
   ))
     if (!previousByAgent.has(brief.plannedAgentId))
       previousByAgent.set(brief.plannedAgentId, brief);
-  const candidates: CompiledBriefCandidate[] = [];
+  const candidates: PersistedCompiledBriefCandidate[] = [];
 
   for (const agent of index.topLevelAgents) {
     const assignmentIndexes = assignmentGroups.get(agent.id) ?? [];
@@ -1044,7 +1213,8 @@ export function compileAgentBriefs(
     });
     const previous = previousByAgent.get(agent.id);
     const draft = sealBrief({
-      schemaVersion: 1,
+      schemaVersion: AGENT_BRIEF_SCHEMA_VERSION,
+      digestVersion: AGENT_BRIEF_DIGEST_VERSION,
       projectId: request.projectId,
       briefId: identity.briefId,
       version: ((previous?.version ?? 0) +
@@ -1098,7 +1268,10 @@ export function compileAgentBriefs(
       authoredBy: request.plan.authoredBy,
       createdAt: request.plan.createdAt,
     });
-    const sameSemantic = previous?.semanticDigest === draft.semanticDigest;
+    const sameSemantic =
+      previous?.schemaVersion === AGENT_BRIEF_SCHEMA_VERSION &&
+      previous.digestVersion === AGENT_BRIEF_DIGEST_VERSION &&
+      previous.semanticDigest === draft.semanticDigest;
     const sameSource = previous
       ? architectureSourceRefsEqual(previous.source, request.source)
       : false;
@@ -1109,7 +1282,10 @@ export function compileAgentBriefs(
         : !sameSource
           ? "source-rebound"
           : "unchanged";
-    const brief = disposition === "unchanged" ? previous! : draft;
+    const brief =
+      disposition === "unchanged"
+        ? (previous as AgentBriefVersionRecord)
+        : draft;
     try {
       candidates.push({
         plannedAgentId: agent.id,
@@ -1145,7 +1321,7 @@ export function compileAgentBriefs(
       existingBriefRef: briefRef(previous),
       disposition: "retired",
       brief: previous,
-      bootstrap: createBuilderBootstrapContext({
+      bootstrap: createPersistedBuilderBootstrapContext({
         plan: request.previous!.plan,
         graph: request.previous!.graph,
         brief: previous,
@@ -1161,7 +1337,7 @@ export function compileAgentBriefs(
     graph: { nodes: [], relationships: [] },
     briefs: [],
   };
-  const impact = evaluateBuildPlanImpact({
+  const impact = evaluatePersistedBuildPlanImpact({
     previousSource: previous.plan.source,
     nextSource: request.source,
     briefs: previous.briefs,
@@ -1203,13 +1379,36 @@ export function compileAgentBriefs(
 }
 
 export class AgentBriefCompilationError extends Error {
-  constructor(readonly diagnostics: readonly BuildPlanDiagnostic[]) {
-    super("Agent brief compilation failed");
+  constructor(
+    readonly diagnostics: readonly BuildPlanDiagnostic[],
+    readonly code:
+      | "invalid-compilation"
+      | "legacy-brief-result" = "invalid-compilation",
+  ) {
+    super(
+      code === "legacy-brief-result"
+        ? "Agent brief compiler produced a legacy brief"
+        : "Agent brief compilation failed",
+    );
     this.name = "AgentBriefCompilationError";
   }
 }
 
-/** Production adapter for SAP-3068's authoring orchestration seam. */
+export function compileAgentBriefs(
+  request: CompileAgentBriefsRequest,
+): CompileAgentBriefsResult {
+  const compilation = compilePersistedAgentBriefs(request);
+  if (
+    compilation.briefs.some(
+      (candidate) =>
+        candidate.brief.schemaVersion !== AGENT_BRIEF_SCHEMA_VERSION,
+    )
+  )
+    throw new AgentBriefCompilationError([], "legacy-brief-result");
+  return compilation as CompileAgentBriefsResult;
+}
+
+/** Production adapter for the build-plan authoring orchestration seam. */
 export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
   async compile(
     input: Parameters<AgentBriefCompiler["compile"]>[0],
@@ -1225,7 +1424,7 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
             ],
           }
         : undefined;
-    const compilation = compileAgentBriefs({
+    const compilation = compilePersistedAgentBriefs({
       projectId: input.plan.projectId,
       source: input.plan.source,
       graph: input.graph,
@@ -1237,10 +1436,11 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
       throw new AgentBriefCompilationError(compilation.diagnostics);
     return {
       briefs: compilation.briefs
-        .filter((entry) =>
-          ["created", "new-version", "source-rebound"].includes(
-            entry.disposition,
-          ),
+        .filter(
+          (entry): entry is typeof entry & { brief: AgentBriefVersionRecord } =>
+            ["created", "new-version", "source-rebound"].includes(
+              entry.disposition,
+            ) && entry.brief.schemaVersion === AGENT_BRIEF_SCHEMA_VERSION,
         )
         .map((entry) => entry.brief),
       changes: compilation.briefs.map((entry) => ({
@@ -1254,7 +1454,7 @@ export class DeterministicAgentBriefCompiler implements AgentBriefCompiler {
                 ? "staled"
                 : "changed",
       })),
-      compilation,
+      impact: compilation.impact,
     };
   }
 }

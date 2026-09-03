@@ -12,6 +12,7 @@ export {
 } from "./shared/agent-map.js";
 export type {
   AcceptedProposalDelta,
+  AgentMapGraph,
   ExecutionMode,
   MapOperation,
   MapProposalId,
@@ -28,52 +29,78 @@ export type {
   StudioProjectId,
 } from "./shared/agent-map.js";
 export {
+  AGENT_BRIEF_DIGEST_VERSION,
+  AGENT_BRIEF_SCHEMA_VERSION,
   BUILD_PLAN_SCHEMA_VERSION,
   architectureSourceRefsEqual,
 } from "./shared/build-plan.js";
-// Deliberate v1 planning handoff surface. Keep this list explicit, but include
-// every branded/member type needed to construct and consume the six records.
+// Curated transitive type closure for the supported pure planning APIs.
 export type {
+  AcceptanceCriterion,
+  AcceptanceCriterionId,
+  AgentAssignmentIntent,
   AgentBriefId,
   AgentBriefRef,
   AgentBriefSemanticDigest,
   AgentBriefVersion,
+  AgentBriefVersionRecord,
   AgentMapRevisionId,
   ArchitectureSourceRef,
-  BuilderPlanningContextRef,
+  AssignmentImpact,
+  BriefChangeProtocol,
+  BriefContractPort,
+  BriefDeliverable,
+  BriefDependency,
+  BriefDependencyId,
+  BriefFreshness,
+  BriefStaleReason,
   BuilderBootstrapContext,
   BuilderBootstrapDigest,
-  BuildPlanImpactResult,
-  CompileAgentBriefsRequest,
-  CompileAgentBriefsResult,
-  CompiledBriefCandidate,
-  DependencyFingerprintKind,
-  BuilderPlanningSubmission,
-  BuilderPlanningSubmissionId,
+  BuildMilestone,
+  BuildMilestoneSummary,
+  BuildPlanCompleteness,
+  BuildPlanEligibility,
   BuildPlanId,
+  BuildPlanImpactResult,
   BuildPlanRef,
   BuildPlanSemanticDigest,
   BuildPlanVersion,
+  BuildPlanDiagnostic,
+  CompileAgentBriefsRequest,
+  CompileAgentBriefsResult,
+  CompiledBriefCandidate,
+  DeliverableId,
+  DependencyFingerprint,
+  DependencyFingerprintKind,
+  EligibilityReason,
+  FocusedAgentBriefProjection,
   GraphDigest,
-  ImplementationPlanStep,
+  ImpactDigest,
+  MilestoneId,
+  PlanConstraint,
+  PlanContractId,
+  PlanDecision,
+  PlanDecisionId,
+  PlanningActorRef,
   PlanningAssignmentId,
   PlanningAssignmentRef,
-  PlanningQuestion,
-  PlanningRisk,
-  PlanningSubmissionDigest,
+  PlanNodeSummary,
+  ProjectBuildPlanVersion,
+  ProjectOutcome,
   RecordDigest,
+  RepositoryIntent,
 } from "./shared/build-plan.js";
 export {
   AGENT_BRIEF_COMPILER_VERSION,
+  AgentBriefCompilationError,
   compileAgentBriefs,
-  DeterministicAgentBriefCompiler,
 } from "./core/agent-brief-compiler.js";
-export {
-  CanonicalBuildPlanImpactEvaluator,
-  evaluateBuildPlanImpact,
-} from "./core/build-plan-impact-evaluator.js";
+export { evaluateBuildPlanImpact } from "./core/build-plan-impact-evaluator.js";
 export {
   BUILDER_BOOTSTRAP_MAX_BYTES,
+  BUILDER_BOOTSTRAP_MAX_LIST_LENGTH,
+  BUILDER_BOOTSTRAP_MAX_STRING_LENGTH,
+  BuilderBootstrapLimitError,
   createBuilderBootstrapContext,
   serializeBuilderBootstrapContext,
 } from "./core/builder-bootstrap-context.js";
@@ -103,8 +130,8 @@ export type {
   ExternalHarnessAdapterInfo,
 } from "./core/adapters/adapter.js";
 
-// Embedding surface (SAP: harness-desktop) — lets a second host (the Electron
-// app) reuse the exact server + setup flow the CLI (`bin.ts`) runs, instead of
+// Embedding surface — lets a second host reuse the exact server + setup flow
+// the CLI (`bin.ts`) runs, instead of
 // forking it. `ensureConsent`/`printDoctorReport` are intentionally NOT exported:
 // they are TTY-shaped, and a native host supplies `telemetryOptIn`/`consentSource`
 // to `startServer` directly — which is why `saveSettings` is exported too: a

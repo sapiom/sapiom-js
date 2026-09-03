@@ -151,11 +151,11 @@
         "assignmentId": "assignment_10000000-0000-7000-8000-000000000001",
         "brief": {
           "briefId": "brief_10000000-0000-7000-8000-000000000001",
-          "semanticDigest": "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
+          "semanticDigest": "sha256:7a542ea3bc010f2613c387b8cd673550d9cb6ca7293f82ecf2b4d7ffd8a29541",
           "version": 1
         },
         "compilerVersion": "1.0.0",
-        "contextDigest": "sha256:bc66bf9db1260f15b4f0f091887178b899888a645b5bb535c602e46fd13c888b",
+        "contextDigest": "sha256:d054723372496ce99a594bafe250dd2daef1484ccbf289045068554e99b16afc",
         "plan": {
           "planId": "build-plan_10000000-0000-7000-8000-000000000001",
           "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
@@ -348,6 +348,7 @@
             "relationshipIds": []
           }
         ],
+        "digestVersion": 2,
         "inputs": [],
         "milestones": ["milestone_10000000-0000-7000-8000-000000000001"],
         "mission": "Produce a cited report that supports the campaign outcome",
@@ -372,17 +373,17 @@
         },
         "plannedAgentId": "node_10000000-0000-7000-8000-000000000001",
         "projectId": "project_10000000-0000-4000-8000-000000000001",
-        "recordDigest": "sha256:9afc89433a3bae3590c3a65f916acb636213d255a386ce444e5d2b6d316fae38",
+        "recordDigest": "sha256:34d1b8b6c72ed32fc7a86e2a755fde1b7b1a9b71b4ca59ce643e97cc0c8bbb0c",
         "relevantNodeIds": [
           "node_10000000-0000-7000-8000-000000000004",
           "node_10000000-0000-7000-8000-000000000005"
         ],
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "scope": {
           "inScope": ["Source and analyze company evidence"],
           "nonGoals": ["Publishing campaign copy"]
         },
-        "semanticDigest": "sha256:7b3f71416d3441209162134fa85645866636d298785a4fa2ac753c0eb6c08a25",
+        "semanticDigest": "sha256:7a542ea3bc010f2613c387b8cd673550d9cb6ca7293f82ecf2b4d7ffd8a29541",
         "source": {
           "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
           "kind": "proposal",
@@ -547,11 +548,11 @@
         "assignmentId": "assignment_10000000-0000-7000-8000-000000000002",
         "brief": {
           "briefId": "brief_10000000-0000-7000-8000-000000000002",
-          "semanticDigest": "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+          "semanticDigest": "sha256:72251a62f1ce57781c6127566c7d54faa56f25337b2ba236f80b70ae2ec97376",
           "version": 1
         },
         "compilerVersion": "1.0.0",
-        "contextDigest": "sha256:c3077bb88e615695b71f4d81f4b1d7d12571032d102ef941a345acc44eeaaeb1",
+        "contextDigest": "sha256:8d11e411bda6ad1e0b38c753af9dc352a8988d7714fbb6b9457a234df7956bc8",
         "plan": {
           "planId": "build-plan_10000000-0000-7000-8000-000000000001",
           "semanticDigest": "sha256:a0f9a10b5ed67855e75b21759c683381dff3b0a6f0d96a63e906d2c9a0b80f31",
@@ -742,6 +743,7 @@
             "relationshipIds": []
           }
         ],
+        "digestVersion": 2,
         "inputs": [
           {
             "contractId": "contract-research-report",
@@ -763,18 +765,18 @@
         },
         "plannedAgentId": "node_10000000-0000-7000-8000-000000000002",
         "projectId": "project_10000000-0000-4000-8000-000000000001",
-        "recordDigest": "sha256:ea608d0ea468aa5952cc0db91793abbf3a7621f49f0c29bdcd0996bbe6f86469",
+        "recordDigest": "sha256:ea64d0d26ee91295f36ec9bad2cc22724c808ba0f9db5edc8c164038d9f44736",
         "relevantNodeIds": [
           "node_10000000-0000-7000-8000-000000000004",
           "node_10000000-0000-7000-8000-000000000005",
           "node_10000000-0000-7000-8000-000000000006"
         ],
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "scope": {
           "inScope": ["Create campaign content from approved research"],
           "nonGoals": ["Changing research conclusions"]
         },
-        "semanticDigest": "sha256:c1bb5e745a4d8770c481185fd871c400d18da16c64bc010f953b20c02e68a285",
+        "semanticDigest": "sha256:72251a62f1ce57781c6127566c7d54faa56f25337b2ba236f80b70ae2ec97376",
         "source": {
           "graphDigest": "sha256:b8ee7dbee10dfc68553a4621c6ea89bf32c8d1272b8283e94ee2e97d1197ba7f",
           "kind": "proposal",

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["type-tests/public-build-plan-consumer.ts"],
+  "exclude": ["node_modules", "dist", "web"]
+}

@@ -9,7 +9,11 @@ import type {
   PlanNodeId,
   PlanningSessionIdentity,
 } from "../shared/agent-map.js";
-import type { ArchitectureSourceRef } from "../shared/build-plan.js";
+import type {
+  AgentBriefVersionRecord,
+  ArchitectureSourceRef,
+} from "../shared/build-plan.js";
+import { emptyBuildPlanningAggregate } from "../shared/build-plan.js";
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import { BuildPlanContractValidator } from "./build-plan-contract-validator.js";
@@ -24,6 +28,7 @@ import {
   RESEARCH_ID,
   stockResearchGraph,
   stockResearchPlan,
+  stockResearchRelayFixture,
 } from "./agent-brief-compiler.test-support.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {
@@ -37,6 +42,7 @@ import {
   BRIEF_ID,
   graph,
   makeBrief,
+  makePlan,
   PLAN_ID,
   PROJECT_ID,
   proposalSource,
@@ -300,7 +306,9 @@ describe("BuildPlanService", () => {
       operations: baseOperations,
     });
     compiler.mockImplementation(async ({ currentBriefs }) => ({
-      briefs: currentBriefs,
+      briefs: currentBriefs.filter(
+        (brief): brief is AgentBriefVersionRecord => brief.schemaVersion === 2,
+      ),
       changes: currentBriefs.map((brief) => ({
         plannedAgentId: brief.plannedAgentId,
         change: "preserved",
@@ -385,6 +393,135 @@ describe("BuildPlanService", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "source_mismatch" });
+  });
+
+  it("replays the exact full apply result above the 128-assignment projection cap", async () => {
+    const agentIds = Array.from(
+      { length: 129 },
+      (_, index) =>
+        `node_80000000-0000-7000-8000-${index
+          .toString(16)
+          .padStart(12, "0")}` as PlanNodeId,
+    );
+    const manyAgentGraph: AgentMapGraph = {
+      nodes: agentIds.map((id, index) => ({
+        id,
+        kind: "agent",
+        name: `Agent ${index}`,
+        purpose: `Own assignment ${index}`,
+        ownerAgentId: null,
+        contractRefs: [],
+      })),
+      relationships: [],
+    };
+    const source = {
+      kind: "revision" as const,
+      revisionId: "revision_80000000-0000-7000-8000-000000000001" as never,
+      revisionNumber: 1,
+      graphDigest: computeArchitectureGraphDigest(manyAgentGraph),
+    };
+    const current = makePlan({
+      source,
+      assignments: agentIds.map((plannedAgentId, index) => ({
+        plannedAgentId,
+        mission: `Implement assignment ${index}`,
+        scope: { inScope: [`Scope ${index}`], nonGoals: ["Deployment"] },
+        deliverables: [],
+        constraints: [],
+        acceptanceCriteria: [],
+        milestoneIds: [],
+        unresolvedDecisions: [],
+      })),
+    });
+    let planning = {
+      ...emptyBuildPlanningAggregate(),
+      planId: current.planId,
+      currentPlanVersion: current.version,
+      planVersions: [current],
+    };
+    const commitPlanVersion = vi.fn(
+      async (...args: Parameters<BuildPlanStore["commitPlanVersion"]>) => {
+        const [plan, , commit, compiled] = args;
+        planning = {
+          ...planning,
+          currentPlanVersion: plan.version,
+          planVersions: [...planning.planVersions, plan],
+          idempotencyReceipts: [
+            {
+              sessionId: commit.sessionId,
+              requestId: commit.requestId,
+              requestDigest: commit.requestDigest,
+              resultRecordDigest: plan.recordDigest,
+              ...(commit.result ? { result: commit.result } : {}),
+              createdAt: "2026-09-03T10:00:00.000Z",
+            },
+          ],
+        };
+        return {
+          plan: {
+            planId: plan.planId,
+            version: plan.version,
+            semanticDigest: plan.semanticDigest,
+          },
+          assignments: [...(compiled?.assignments ?? [])],
+          replayed: false,
+          ...(commit.result ? { receiptResult: commit.result } : {}),
+        };
+      },
+    );
+    const store = {
+      read: vi.fn(async () => structuredClone(planning)),
+      isCurrentProposalSource: vi.fn(async () => true),
+      commitPlanVersion,
+    } as unknown as BuildPlanStore;
+    const resolver = {
+      resolve: vi.fn(async () => ({
+        projectId: PROJECT_ID,
+        source,
+        graph: manyAgentGraph,
+      })),
+    };
+    const compiler = {
+      compile: vi.fn<AgentBriefCompiler["compile"]>(
+        async ({ assignments }) => ({
+          briefs: [],
+          changes: assignments.map(({ plannedAgentId }) => ({
+            plannedAgentId,
+            change: "preserved" as const,
+          })),
+        }),
+      ),
+    };
+    const service = new BuildPlanService({
+      store,
+      sourceResolver: resolver,
+      contractValidator: new BuildPlanContractValidator(resolver),
+      briefCompiler: compiler,
+      impactEvaluator: { evaluate: vi.fn(async () => ({})) },
+      clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
+    });
+    const request = {
+      schemaVersion: 1,
+      planId: current.planId,
+      expectedPlanVersion: current.version,
+      expectedSource: source,
+      requestId: "request-many-assignment-replay",
+      operations: [
+        {
+          op: "set-project-outcome" as const,
+          outcome: { summary: "Ship the many-agent plan" },
+        },
+      ],
+    };
+
+    const applied = await service.apply(identity, request);
+    const replayed = await service.apply(identity, request);
+
+    if (!("impactedAssignments" in applied))
+      throw new Error("expected a full apply result");
+    expect(applied.impactedAssignments).toHaveLength(128);
+    expect(replayed).toEqual({ ...applied, replayed: true });
+    expect(commitPlanVersion).toHaveBeenCalledTimes(1);
   });
 
   it("replays the original full apply and rebase results under concurrent request races", async () => {
@@ -2110,6 +2247,82 @@ describe("BuildPlanService", () => {
         resolutions: [],
       }),
     ).resolves.toEqual({ ...rebased, replayed: true });
+  });
+
+  it("persists real compiler briefs across a third-agent-owned relay", async () => {
+    const { store } = await fixture();
+    const relay = stockResearchRelayFixture();
+    const source = {
+      kind: "revision" as const,
+      revisionId: "revision_10000000-0000-7000-8000-000000000041" as never,
+      revisionNumber: 1,
+      graphDigest: computeArchitectureGraphDigest(relay.graph),
+    };
+    const resolver = {
+      resolve: async () => ({
+        projectId: PROJECT_ID,
+        source,
+        graph: relay.graph,
+      }),
+    };
+    const service = new BuildPlanService({
+      store,
+      sourceResolver: resolver,
+      contractValidator: new BuildPlanContractValidator(resolver),
+      briefCompiler: new DeterministicAgentBriefCompiler(),
+      impactEvaluator: new CanonicalBuildPlanImpactEvaluator(),
+      clock: { now: () => new Date("2026-09-03T10:00:00.000Z") },
+    });
+
+    const created = await service.apply(identity, {
+      schemaVersion: 1,
+      planId: null,
+      expectedPlanVersion: null,
+      expectedSource: source,
+      requestId: "relay-create",
+      operations: [
+        { op: "set-project-outcome", outcome: relay.plan.outcome },
+        ...relay.plan.assignments.map((assignment) => ({
+          op: "create-agent-assignment" as const,
+          assignment: {
+            plannedAgentId: assignment.plannedAgentId,
+            mission: assignment.mission,
+            scope: assignment.scope,
+            deliverables: assignment.deliverables.map((deliverable) => ({
+              clientRef: `deliverable-${assignment.plannedAgentId}`,
+              description: deliverable.description,
+              artifactNodeIds: deliverable.artifactNodeIds,
+              acceptanceCriterionRefs: [
+                { clientRef: `criterion-${assignment.plannedAgentId}` },
+              ],
+            })),
+            constraints: assignment.constraints,
+            acceptanceCriteria: assignment.acceptanceCriteria.map(
+              (criterion) => ({
+                clientRef: `criterion-${assignment.plannedAgentId}`,
+                ordinal: criterion.ordinal,
+                description: criterion.description,
+                verification: criterion.verification,
+              }),
+            ),
+            milestoneRefs: [],
+            unresolvedDecisions: [],
+          },
+        })),
+      ],
+    });
+
+    expect(created).toMatchObject({
+      completeness: { status: "complete", issues: [] },
+      eligibility: {
+        planningEligible: true,
+        implementationEligible: true,
+      },
+    });
+    expect(created.briefChanges).toHaveLength(3);
+    expect(
+      Object.keys((await store.read(PROJECT_ID)).currentBriefByAgentId).sort(),
+    ).toEqual(relay.plan.assignments.map((item) => item.plannedAgentId).sort());
   });
 
   it("validates effective two-agent briefs while persisting only semantic changes", async () => {

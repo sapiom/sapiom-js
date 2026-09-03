@@ -32,7 +32,6 @@ import type {
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import type { PlannerLifecycleEvent } from "../shared/agent-map.js";
-import { architectureSourceRefsEqual } from "../shared/build-plan.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -161,7 +160,10 @@ import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { ArchitectureSourceResolver } from "../core/architecture-source-resolver.js";
-import { BuildPlanContractValidator } from "../core/build-plan-contract-validator.js";
+import {
+  BuildPlanContractValidator,
+  computeBriefFreshness,
+} from "../core/build-plan-contract-validator.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import { DeterministicAgentBriefCompiler } from "../core/agent-brief-compiler.js";
 import { CanonicalBuildPlanImpactEvaluator } from "../core/build-plan-impact-evaluator.js";
@@ -2945,18 +2947,8 @@ export const startServer = async (
           ),
         )
         .filter((brief): brief is NonNullable<typeof brief> => Boolean(brief));
-      const exactBriefs = plan
-        ? Object.values(planning.briefVersionsById)
-            .flat()
-            .filter(
-              (brief) =>
-                brief.plan.planId === plan.planId &&
-                brief.plan.version === plan.version &&
-                brief.plan.semanticDigest === plan.semanticDigest,
-            )
-        : [];
       const planStatus = plan
-        ? await buildPlanContractValidator.validate(plan, exactBriefs)
+        ? await buildPlanContractValidator.validate(plan, briefs)
         : null;
       const proposal =
         aggregate.workspace.activeProposalId !== null &&
@@ -3003,10 +2995,8 @@ export const startServer = async (
                 briefCount: briefs.length,
                 staleBriefCount: briefs.filter(
                   (brief) =>
-                    brief.plan.planId !== plan.planId ||
-                    brief.plan.version !== plan.version ||
-                    brief.plan.semanticDigest !== plan.semanticDigest ||
-                    !architectureSourceRefsEqual(brief.source, plan.source),
+                    computeBriefFreshness(brief, plan.source).status ===
+                    "stale",
                 ).length,
                 diagnostics: planStatus.completeness.issues.map(
                   ({ code, severity, path }) => ({ code, severity, path }),

@@ -24,6 +24,11 @@ import {
   BuildPlanContractValidator,
   computeBriefFreshness,
 } from "./build-plan-contract-validator.js";
+import { compileAgentBriefs } from "./agent-brief-compiler.js";
+import {
+  STOCK_PROJECT_ID,
+  stockResearchRelayFixture,
+} from "./agent-brief-compiler.test-support.js";
 
 const validator = new BuildPlanContractValidator({
   resolve: async (_projectId, source) => ({
@@ -151,6 +156,97 @@ describe("BuildPlanContractValidator", () => {
 
     expect(result.completeness.issues).toEqual([]);
     expect(result.completeness.status).toBe("complete");
+  });
+
+  it("accepts compiler evidence through a third-agent-owned relay", async () => {
+    const {
+      graph: relayGraph,
+      plan,
+      assignments,
+    } = stockResearchRelayFixture();
+    const compilation = compileAgentBriefs({
+      projectId: STOCK_PROJECT_ID,
+      source: plan.source,
+      graph: relayGraph,
+      plan,
+      assignments,
+    });
+    expect(compilation.diagnostics).toEqual([]);
+    expect(compilation.completeness.status).toBe("complete");
+
+    const relayValidator = new BuildPlanContractValidator({
+      resolve: async (_projectId, source) => ({
+        projectId: STOCK_PROJECT_ID,
+        source,
+        graph: relayGraph,
+      }),
+    });
+    const result = await relayValidator.validate(
+      plan,
+      compilation.briefs.map((candidate) => candidate.brief),
+    );
+
+    expect(result.completeness).toEqual({ status: "complete", issues: [] });
+    expect(result.eligibility.planningEligible).toBe(true);
+  });
+
+  it("rejects disconnected carriers that only share a contract", async () => {
+    const fixture = reportFlowFixture();
+    const disconnectedArtifactId =
+      "node_00000000-0000-7000-8000-000000000023" as PlanNodeId;
+    fixture.reportGraph.nodes.push({
+      id: disconnectedArtifactId,
+      kind: "artifact",
+      name: "DisconnectedResearchReport",
+      purpose: "Carry unrelated findings under the same contract",
+      ownerAgentId: null,
+      contractRefs: [fixture.contractId],
+    });
+    fixture.reportGraph.relationships.find(
+      (relationship) => relationship.id === fixture.readRelationshipId,
+    )!.toNodeId = disconnectedArtifactId;
+
+    const result = await fixture.validator.validate(fixture.plan, [
+      fixture.researchBrief,
+      fixture.marketingBrief,
+    ]);
+
+    expect(result.completeness.issues.map(({ code }) => code)).toEqual([
+      "invalid-dependency",
+      "invalid-dependency",
+    ]);
+  });
+
+  it("rejects an owned non-agent contract terminal", async () => {
+    const fixture = reportFlowFixture();
+    fixture.reportGraph.nodes.find(
+      (node) => node.id === fixture.reportArtifactId,
+    )!.ownerAgentId = AGENT_ID;
+    fixture.reportGraph.relationships =
+      fixture.reportGraph.relationships.filter(
+        (relationship) => relationship.id !== fixture.writeRelationshipId,
+      );
+    const researchBrief = makeBrief(fixture.plan, {
+      ...fixture.researchBrief,
+      outputs: [],
+      dependencies: [],
+    });
+    const marketingBrief = makeBrief(fixture.plan, {
+      ...fixture.marketingBrief,
+      dependencies: fixture.marketingBrief.dependencies.map((dependency) => ({
+        ...dependency,
+        relationshipIds: [fixture.readRelationshipId],
+      })),
+    });
+
+    const result = await fixture.validator.validate(fixture.plan, [
+      researchBrief,
+      marketingBrief,
+    ]);
+
+    expect(result.completeness.issues.map(({ code }) => code)).toEqual([
+      "invalid-dependency",
+    ]);
   });
 
   it("rejects report-flow evidence with the wrong dependency direction", async () => {
@@ -483,6 +579,11 @@ function reportFlowFixture() {
     plan,
     researchBrief,
     marketingBrief,
+    reportGraph,
+    reportArtifactId,
+    writeRelationshipId,
+    readRelationshipId,
+    contractId,
     otherContractId,
   };
 }

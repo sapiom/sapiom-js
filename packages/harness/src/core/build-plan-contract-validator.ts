@@ -5,7 +5,7 @@ import type {
 } from "../shared/agent-map.js";
 import {
   architectureSourceRefsEqual,
-  type AgentBriefVersionRecord,
+  type PersistedAgentBriefVersionRecord,
   type ArchitectureSourceRef,
   type BriefFreshness,
   type BuildPlanCompleteness,
@@ -123,7 +123,7 @@ function effectiveDataFlow(
 }
 
 function validateBrief(
-  brief: AgentBriefVersionRecord,
+  brief: PersistedAgentBriefVersionRecord,
   plan: ProjectBuildPlanVersion,
   graph: AgentMapGraph,
   index: number,
@@ -172,22 +172,6 @@ function validateBrief(
     consumerAgentId: PlanNodeId,
   ): boolean => {
     if (evidence.length === 0) return false;
-    const isAllowedNode = (nodeId: PlanNodeId): boolean => {
-      const root = ownershipRoot(nodeId);
-      return (
-        root === producerAgentId ||
-        root === consumerAgentId ||
-        (root === null && isCarrierNode(nodeId))
-      );
-    };
-    if (
-      evidence.some(
-        ({ fromNodeId, toNodeId }) =>
-          !isAllowedNode(fromNodeId) || !isAllowedNode(toNodeId),
-      )
-    )
-      return false;
-
     const isActorFor = (nodeId: PlanNodeId, agentId: PlanNodeId): boolean => {
       const kind = nodes.get(nodeId)?.kind;
       return (
@@ -450,7 +434,7 @@ export class BuildPlanContractValidator {
 
   async validate(
     plan: ProjectBuildPlanVersion,
-    briefs: readonly AgentBriefVersionRecord[],
+    briefs: readonly PersistedAgentBriefVersionRecord[],
   ): Promise<{
     completeness: BuildPlanCompleteness;
     eligibility: BuildPlanEligibility;
@@ -533,7 +517,10 @@ export class BuildPlanContractValidator {
           ),
         );
     });
-    const briefsByAgent = new Map<PlanNodeId, AgentBriefVersionRecord>();
+    const briefsByAgent = new Map<
+      PlanNodeId,
+      PersistedAgentBriefVersionRecord
+    >();
     briefs.forEach((brief, index) => {
       if (briefsByAgent.has(brief.plannedAgentId))
         issues.push(
@@ -570,7 +557,7 @@ export class BuildPlanContractValidator {
 }
 
 export function computeBriefFreshness(
-  brief: AgentBriefVersionRecord,
+  brief: PersistedAgentBriefVersionRecord,
   evaluatedAgainst: ArchitectureSourceRef,
 ): BriefFreshness {
   if (architectureSourceRefsEqual(brief.source, evaluatedAgainst))

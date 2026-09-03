@@ -1,9 +1,14 @@
 import { z } from "zod";
 
 import {
+  AGENT_BRIEF_DIGEST_VERSION,
+  AGENT_BRIEF_SCHEMA_VERSION,
   AGENT_BRIEF_VERSION_HISTORY_LIMIT,
   architectureSourceRefsEqual,
   BUILD_PLAN_ID_MAPPING_LIMIT,
+  BUILD_PLAN_IMPACT_ASSIGNMENT_LIMIT,
+  BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+  BUILD_PLAN_IMPACT_REASON_ID_LIMIT,
   BUILD_PLAN_VERSION_HISTORY_LIMIT,
   PLANNING_SUBMISSION_HISTORY_LIMIT,
   type AgentBriefVersionRecord,
@@ -11,6 +16,7 @@ import {
   type BuilderPlanningSubmission,
   type BuildPlanningAggregateV1,
   type PlanningAssignmentRecord,
+  type PersistedAgentBriefVersionRecord,
   type ProjectBuildPlanVersion,
 } from "./build-plan.js";
 
@@ -66,10 +72,11 @@ const text = (maximum: number) =>
 const unique = <T extends z.ZodTypeAny>(
   schema: T,
   key: (entry: z.infer<T>) => string,
+  maximum = 256,
 ) =>
   z
     .array(schema)
-    .max(256)
+    .max(maximum)
     .superRefine((entries, context) => {
       const seen = new Set<string>();
       entries.forEach((entry, index) => {
@@ -275,6 +282,36 @@ export const projectBuildPlanVersionSchema = z
           message: "invalid milestone dependency",
         });
     });
+    const milestonesById = new Map(
+      plan.milestones.map((milestone) => [milestone.milestoneId, milestone]),
+    );
+    const state = new Map<string, "visiting" | "visited">();
+    const stack: string[] = [];
+    const cyclicIds = new Set<string>();
+    const visitMilestone = (milestoneId: string): void => {
+      if (state.get(milestoneId) === "visited") return;
+      if (state.get(milestoneId) === "visiting") {
+        const start = stack.indexOf(milestoneId);
+        stack.slice(start).forEach((id) => cyclicIds.add(id));
+        return;
+      }
+      state.set(milestoneId, "visiting");
+      stack.push(milestoneId);
+      milestonesById
+        .get(milestoneId as (typeof plan.milestones)[number]["milestoneId"])
+        ?.dependsOn.forEach(visitMilestone);
+      stack.pop();
+      state.set(milestoneId, "visited");
+    };
+    [...milestonesById.keys()].sort().forEach(visitMilestone);
+    plan.milestones.forEach((milestone, index) => {
+      if (cyclicIds.has(milestone.milestoneId))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["milestones", index, "dependsOn"],
+          message: "milestone dependencies must be acyclic",
+        });
+    });
     plan.assignments.forEach((assignment, index) => {
       if (assignment.milestoneIds.some((id) => !milestoneIds.has(id)))
         context.addIssue({
@@ -351,21 +388,110 @@ const fingerprintSchema = z
   })
   .strict();
 
+const legacyFingerprintSchema = z
+  .object({
+    kind: z.enum(["node", "relationship", "contract", "plan"]),
+    id: opaqueId,
+    digest,
+  })
+  .strict();
+
+const legacyContractPortSchema = z
+  .object({
+    contractId: opaqueId,
+    nodeId,
+    relationshipIds: unique(relationshipId, (entry) => entry),
+    description: text(2_000),
+  })
+  .strict();
+
+const briefRecordCommonShape = {
+  projectId,
+  briefId: generatedId("brief"),
+  version,
+  parentVersion: version.nullable(),
+  plannedAgentId: nodeId,
+  assignmentId: generatedId("assignment"),
+  plan: buildPlanRefSchema,
+  source: architectureSourceRefSchema,
+  mission: text(4_000),
+  scope: scopeSchema,
+  ownedNodeIds: unique(nodeId, (entry) => entry),
+  relevantNodeIds: unique(nodeId, (entry) => entry),
+  dependencies: unique(dependencySchema, (entry) => entry.dependencyId),
+  deliverables: unique(deliverableSchema, (entry) => entry.deliverableId),
+  acceptanceCriteria: unique(criterionSchema, (entry) => entry.criterionId),
+  constraints: unique(constraintSchema, (entry) => entry.constraintId),
+  milestones: unique(generatedId("milestone"), (entry) => entry),
+  unresolvedDecisions: unique(decisionSchema, (entry) => entry.decisionId),
+  changeProtocol: z
+    .object({
+      proposeArchitectureChanges: z.boolean(),
+      instructions: unique(text(2_000), (entry) => entry),
+    })
+    .strict(),
+  compilerVersion: opaqueId,
+  semanticDigest: digest,
+  recordDigest: digest,
+  authoredBy: actorSchema,
+  createdAt: timestamp,
+};
+
+const validateBriefRecord = (
+  brief: {
+    version: number;
+    parentVersion: number | null;
+    ownedNodeIds: readonly string[];
+    plannedAgentId: string;
+    acceptanceCriteria: readonly { criterionId: string; ordinal: number }[];
+    deliverables: readonly { acceptanceCriterionIds: readonly string[] }[];
+  },
+  context: z.RefinementCtx,
+) => {
+  if (brief.version === 1 && brief.parentVersion !== null)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["parentVersion"],
+      message: "first version has no parent",
+    });
+  if (brief.version > 1 && brief.parentVersion !== brief.version - 1)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["parentVersion"],
+      message: "parent must be previous version",
+    });
+  if (!brief.ownedNodeIds.includes(brief.plannedAgentId))
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ownedNodeIds"],
+      message: "brief must own its planned agent",
+    });
+  if (hasDuplicateOrdinals(brief.acceptanceCriteria))
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["acceptanceCriteria"],
+      message: "ordered records require unique ordinals",
+    });
+  const criterionIds = new Set(
+    brief.acceptanceCriteria.map((entry) => entry.criterionId),
+  );
+  if (
+    brief.deliverables.some((deliverable) =>
+      deliverable.acceptanceCriterionIds.some((id) => !criterionIds.has(id)),
+    )
+  )
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["deliverables"],
+      message: "unknown acceptance criterion",
+    });
+};
+
 export const agentBriefVersionRecordSchema = z
   .object({
-    schemaVersion: z.literal(1),
-    projectId,
-    briefId: generatedId("brief"),
-    version,
-    parentVersion: version.nullable(),
-    plannedAgentId: nodeId,
-    assignmentId: generatedId("assignment"),
-    plan: buildPlanRefSchema,
-    source: architectureSourceRefSchema,
-    mission: text(4_000),
-    scope: scopeSchema,
-    ownedNodeIds: unique(nodeId, (entry) => entry),
-    relevantNodeIds: unique(nodeId, (entry) => entry),
+    schemaVersion: z.literal(AGENT_BRIEF_SCHEMA_VERSION),
+    digestVersion: z.literal(AGENT_BRIEF_DIGEST_VERSION),
+    ...briefRecordCommonShape,
     inputs: unique(
       contractPortSchema,
       (entry) => `${entry.contractId}\0${entry.nodeId}`,
@@ -374,65 +500,35 @@ export const agentBriefVersionRecordSchema = z
       contractPortSchema,
       (entry) => `${entry.contractId}\0${entry.nodeId}`,
     ),
-    dependencies: unique(dependencySchema, (entry) => entry.dependencyId),
-    deliverables: unique(deliverableSchema, (entry) => entry.deliverableId),
-    acceptanceCriteria: unique(criterionSchema, (entry) => entry.criterionId),
-    constraints: unique(constraintSchema, (entry) => entry.constraintId),
-    milestones: unique(generatedId("milestone"), (entry) => entry),
-    unresolvedDecisions: unique(decisionSchema, (entry) => entry.decisionId),
-    changeProtocol: z
-      .object({
-        proposeArchitectureChanges: z.boolean(),
-        instructions: unique(text(2_000), (entry) => entry),
-      })
-      .strict(),
-    compilerVersion: opaqueId,
     dependencyFingerprints: unique(fingerprintSchema, (entry) => entry.kind),
-    semanticDigest: digest,
-    recordDigest: digest,
-    authoredBy: actorSchema,
-    createdAt: timestamp,
   })
   .strict()
-  .superRefine((brief, context) => {
-    if (brief.version === 1 && brief.parentVersion !== null)
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["parentVersion"],
-        message: "first version has no parent",
-      });
-    if (brief.version > 1 && brief.parentVersion !== brief.version - 1)
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["parentVersion"],
-        message: "parent must be previous version",
-      });
-    if (!brief.ownedNodeIds.includes(brief.plannedAgentId))
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["ownedNodeIds"],
-        message: "brief must own its planned agent",
-      });
-    if (hasDuplicateOrdinals(brief.acceptanceCriteria))
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["acceptanceCriteria"],
-        message: "ordered records require unique ordinals",
-      });
-    const criterionIds = new Set(
-      brief.acceptanceCriteria.map((entry) => entry.criterionId),
-    );
-    if (
-      brief.deliverables.some((deliverable) =>
-        deliverable.acceptanceCriterionIds.some((id) => !criterionIds.has(id)),
-      )
-    )
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["deliverables"],
-        message: "unknown acceptance criterion",
-      });
-  });
+  .superRefine(validateBriefRecord);
+
+export const legacyAgentBriefVersionRecordSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    ...briefRecordCommonShape,
+    inputs: unique(
+      legacyContractPortSchema,
+      (entry) => `${entry.contractId}\0${entry.nodeId}`,
+    ),
+    outputs: unique(
+      legacyContractPortSchema,
+      (entry) => `${entry.contractId}\0${entry.nodeId}`,
+    ),
+    dependencyFingerprints: unique(
+      legacyFingerprintSchema,
+      (entry) => `${entry.kind}\0${entry.id}`,
+    ),
+  })
+  .strict()
+  .superRefine(validateBriefRecord);
+
+const persistedAgentBriefVersionRecordSchema = z.union([
+  agentBriefVersionRecordSchema,
+  legacyAgentBriefVersionRecordSchema,
+]);
 
 export const planningAssignmentRecordSchema = z
   .object({
@@ -547,9 +643,21 @@ const staleReasonSchema = z
       "shared-plan-content-changed",
       "assignment-content-changed",
     ]),
-    affectedNodeIds: unique(nodeId, (entry) => entry),
-    affectedRelationshipIds: unique(relationshipId, (entry) => entry),
-    affectedContractIds: unique(opaqueId, (entry) => entry),
+    affectedNodeIds: unique(
+      nodeId,
+      (entry) => entry,
+      BUILD_PLAN_IMPACT_REASON_ID_LIMIT,
+    ),
+    affectedRelationshipIds: unique(
+      relationshipId,
+      (entry) => entry,
+      BUILD_PLAN_IMPACT_REASON_ID_LIMIT,
+    ),
+    affectedContractIds: unique(
+      opaqueId,
+      (entry) => entry,
+      BUILD_PLAN_IMPACT_REASON_ID_LIMIT,
+    ),
     previousFingerprint: digest.optional(),
     currentFingerprint: digest.optional(),
   })
@@ -652,14 +760,26 @@ const impactSchema = z
           })
           .strict(),
       )
-      .max(256),
+      .max(BUILD_PLAN_IMPACT_ASSIGNMENT_LIMIT),
     staleBriefIds: unique(generatedId("brief"), (entry) => entry),
     preservedBriefIds: unique(generatedId("brief"), (entry) => entry),
     addedAgentIds: unique(nodeId, (entry) => entry),
     removedAgentIds: unique(nodeId, (entry) => entry),
-    changedNodeIds: unique(nodeId, (entry) => entry),
-    changedRelationshipIds: unique(relationshipId, (entry) => entry),
-    changedContractIds: unique(opaqueId, (entry) => entry),
+    changedNodeIds: unique(
+      nodeId,
+      (entry) => entry,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
+    changedRelationshipIds: unique(
+      relationshipId,
+      (entry) => entry,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
+    changedContractIds: unique(
+      opaqueId,
+      (entry) => entry,
+      BUILD_PLAN_IMPACT_ID_LIST_LIMIT,
+    ),
     semanticChange: z.boolean(),
     digest,
   })
@@ -814,7 +934,7 @@ const buildPlanningAggregateSchema = z
     briefVersionsById: z.record(
       generatedId("brief"),
       z
-        .array(agentBriefVersionRecordSchema)
+        .array(persistedAgentBriefVersionRecordSchema)
         .max(AGENT_BRIEF_VERSION_HISTORY_LIMIT),
     ),
     assignmentByAgentId: z.record(nodeId, planningAssignmentRecordSchema),
@@ -860,6 +980,14 @@ export function parseAgentBriefVersionRecord(
   return agentBriefVersionRecordSchema.parse(
     value,
   ) as unknown as AgentBriefVersionRecord;
+}
+
+export function parsePersistedAgentBriefVersionRecord(
+  value: unknown,
+): PersistedAgentBriefVersionRecord {
+  return persistedAgentBriefVersionRecordSchema.parse(
+    value,
+  ) as unknown as PersistedAgentBriefVersionRecord;
 }
 
 export function parsePlanningAssignmentRecord(
@@ -956,7 +1084,7 @@ export function parseBuildPlanningAggregate(
     .sort();
   if (JSON.stringify(activeAgentIds) !== JSON.stringify(plannedAgentIds))
     fail();
-  const briefs = new Map<string, AgentBriefVersionRecord>();
+  const briefs = new Map<string, PersistedAgentBriefVersionRecord>();
   for (const [briefId, history] of Object.entries(
     aggregate.briefVersionsById,
   )) {

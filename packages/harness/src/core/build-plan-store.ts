@@ -22,6 +22,7 @@ import {
   type PlanningAssignmentId,
   type PlanningAssignmentRef,
   type PlanningAssignmentRecord,
+  type PersistedAgentBriefVersionRecord,
   type ProjectBuildPlanVersion,
   type RecordDigest,
 } from "../shared/build-plan.js";
@@ -668,7 +669,7 @@ export class BuildPlanStore {
     };
   }
 
-  private briefRef(brief: AgentBriefVersionRecord): AgentBriefRef {
+  private briefRef(brief: PersistedAgentBriefVersionRecord): AgentBriefRef {
     return {
       briefId: brief.briefId,
       version: brief.version,
