@@ -2819,6 +2819,8 @@ export class MockApi implements HarnessApi {
         } as BuilderPlanningSessionBinding["brief"];
         const bindingId =
           `builder-binding_${node.id.slice("node_".length)}` as BuilderPlanningSessionBinding["bindingId"];
+        const bootstrapDigest = (bootstrapDigests[index] ??
+          bootstrapDigests[0]) as BuilderPlanningSessionBinding["bootstrapDigest"];
         session.title = node.name;
         session.executionPolicy = "planning-readonly";
         session.agentMapIdentity = {
@@ -2830,14 +2832,14 @@ export class MockApi implements HarnessApi {
         };
         session.builderPlanning = {
           bindingId,
+          lifecycleEpoch: 0,
           purpose: "implementation-planning",
           assignmentId,
           plannedAgentId: node.id,
           source: request.source,
           plan: request.plan,
           brief,
-          bootstrapDigest: (bootstrapDigests[index] ??
-            bootstrapDigests[0]) as BuilderPlanningSessionBinding["bootstrapDigest"],
+          bootstrapDigest,
           state: "planning",
           primary: true,
         };
@@ -2864,8 +2866,9 @@ export class MockApi implements HarnessApi {
           source: request.source,
           plan: request.plan,
           brief,
-          bootstrapDigest: session.builderPlanning.bootstrapDigest,
+          bootstrapDigest,
           executionPolicy: "planning-readonly",
+          lifecycleEpoch: 0,
           spawnEpoch: 1,
           spawnClaimId: null,
           spawnClaimedAt: null,
@@ -2939,7 +2942,11 @@ export class MockApi implements HarnessApi {
         staleBuilderPlanningAssignment: (plannedAgentId: string) =>
           updateBuilder(plannedAgentId, (session) => ({
             ...session,
-            builderPlanning: { ...session.builderPlanning!, state: "stale" },
+            builderPlanning: {
+              ...session.builderPlanning!,
+              lifecycleEpoch: session.builderPlanning!.lifecycleEpoch + 1,
+              state: "stale",
+            },
           })),
         setBuilderPlanningState: (
           plannedAgentId: string,
@@ -2947,7 +2954,11 @@ export class MockApi implements HarnessApi {
         ) =>
           updateBuilder(plannedAgentId, (session) => ({
             ...session,
-            builderPlanning: { ...session.builderPlanning!, state },
+            builderPlanning: {
+              ...session.builderPlanning!,
+              lifecycleEpoch: session.builderPlanning!.lifecycleEpoch + 1,
+              state,
+            },
           })),
       };
     }

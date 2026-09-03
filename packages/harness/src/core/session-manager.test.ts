@@ -1912,6 +1912,7 @@ describe("SessionManager", () => {
     const { manager, spawns } = makeManager({ buildLaunchOpts });
     const metadata = {
       bindingId: "builder-binding_00000000-0000-7000-8000-000000000001",
+      lifecycleEpoch: 1,
       purpose: "implementation-planning",
       assignmentId: "assignment_00000000-0000-7000-8000-000000000001",
       plannedAgentId: "node_00000000-0000-7000-8000-000000000001",
@@ -1967,6 +1968,31 @@ describe("SessionManager", () => {
       expect.anything(),
       expect.objectContaining({ resume: true, agentMapCapability: false }),
     );
+
+    const expected = structuredClone(session.builderPlanning!);
+    const submitted = {
+      ...expected,
+      lifecycleEpoch: expected.lifecycleEpoch + 1,
+      state: "submitted" as const,
+    };
+    await expect(
+      manager.setBuilderPlanningMetadata(session.id, expected, submitted),
+    ).resolves.toBe(true);
+    await expect(
+      manager.setBuilderPlanningMetadata(session.id, expected, {
+        ...expected,
+        lifecycleEpoch: expected.lifecycleEpoch + 1,
+        state: "stale",
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      manager.setBuilderPlanningMetadata(session.id, submitted, {
+        ...submitted,
+        lifecycleEpoch: submitted.lifecycleEpoch + 1,
+        bootstrapDigest: `sha256:${"5".repeat(64)}` as never,
+      }),
+    ).resolves.toBe(false);
+    expect(session.builderPlanning).toEqual(submitted);
   });
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {

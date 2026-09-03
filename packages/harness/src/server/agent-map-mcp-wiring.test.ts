@@ -180,6 +180,7 @@ it("withholds Agent Map transport and mutation instructions from a secondary bui
   });
   const metadata = {
     bindingId: "builder-binding_00000000-0000-7000-8000-000000000001",
+    lifecycleEpoch: 1,
     purpose: "implementation-planning",
     assignmentId: "assignment_00000000-0000-7000-8000-000000000001",
     plannedAgentId: "node_00000000-0000-7000-8000-000000000001",

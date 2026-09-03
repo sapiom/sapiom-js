@@ -166,6 +166,8 @@ export type BuilderPlanningLifecycleState =
 /** Exact, server-authored builder compatibility metadata projected to Studio. */
 export interface BuilderPlanningSessionMetadata {
   bindingId: string;
+  /** Monotonic durable binding revision used to reject stale projections. */
+  lifecycleEpoch: number;
   purpose: "implementation-planning";
   assignmentId: import("./build-plan.js").PlanningAssignmentId;
   plannedAgentId: import("./agent-map.js").PlanNodeId;

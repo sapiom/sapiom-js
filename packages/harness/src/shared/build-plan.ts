@@ -643,6 +643,8 @@ export interface BuilderPlanningSessionBinding {
   brief: AgentBriefRef;
   bootstrapDigest: BuilderBootstrapDigest;
   executionPolicy: "planning-readonly";
+  /** Monotonic durable revision for lifecycle and projection CAS. */
+  lifecycleEpoch: number;
   /** Monotonic durable create/reconcile claim for this stable binding. */
   spawnEpoch: number;
   spawnClaimId: string | null;

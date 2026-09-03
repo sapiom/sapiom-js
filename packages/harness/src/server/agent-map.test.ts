@@ -16,7 +16,10 @@ import {
   PlanningSessionError,
   type PlanningSessionService,
 } from "../core/planning-session.js";
-import type { BuilderPlanningSessionService } from "../core/builder-planning-session.js";
+import {
+  BuilderPlanningSessionError,
+  type BuilderPlanningSessionService,
+} from "../core/builder-planning-session.js";
 import type { AgentMapWorkspaceResponse } from "../shared/agent-map.js";
 import type { HarnessSession } from "../shared/types.js";
 import { createBootTokenMiddleware } from "./auth.js";
@@ -731,6 +734,22 @@ describe("createAgentMapRouter", () => {
       plannerSession.planning!.identity,
       expect.objectContaining({ ...body, approvalId: expect.any(String) }),
     );
+
+    open.mockRejectedValueOnce(
+      new BuilderPlanningSessionError("session_unreachable"),
+    );
+    const unreachable = await fetch(route, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify(body),
+    });
+    expect(unreachable.status).toBe(409);
+    expect(await unreachable.json()).toMatchObject({
+      code: "session_unreachable",
+    });
   });
 
   it("keeps planning preview side-effect free for unknown project ids", async () => {

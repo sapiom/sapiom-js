@@ -708,6 +708,7 @@ const builderBindingSchema = z
     brief: briefRefSchema,
     bootstrapDigest: digest,
     executionPolicy: z.literal("planning-readonly"),
+    lifecycleEpoch: z.number().int().min(0).max(1_000_000),
     spawnEpoch: z.number().int().min(0).max(1_000_000),
     spawnClaimId: opaqueId.nullable(),
     spawnClaimedAt: timestamp.nullable(),

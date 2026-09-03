@@ -984,6 +984,7 @@ describe("createRestRouter", () => {
         executionPolicy: "planning-readonly",
         builderPlanning: {
           bindingId: "builder-binding-1",
+          lifecycleEpoch: 1,
           purpose: "implementation-planning",
           assignmentId:
             "assignment_00000000-0000-7000-8000-000000000001" as never,

@@ -15,6 +15,7 @@ import {
   ENV,
   HARNESS_PATHS,
   type CreateSessionRequest,
+  type BuilderPlanningSessionMetadata,
   type HarnessAdapter,
   type HarnessKind,
   type HarnessSession,
@@ -64,6 +65,34 @@ export class SessionInputGuardRejectedError extends Error {
     super("session input authorization changed before submission");
     this.name = "SessionInputGuardRejectedError";
   }
+}
+
+function sameBuilderPlanningContext(
+  left: BuilderPlanningSessionMetadata,
+  right: BuilderPlanningSessionMetadata,
+): boolean {
+  return (
+    left.bindingId === right.bindingId &&
+    left.purpose === right.purpose &&
+    left.assignmentId === right.assignmentId &&
+    left.plannedAgentId === right.plannedAgentId &&
+    JSON.stringify(left.source) === JSON.stringify(right.source) &&
+    JSON.stringify(left.plan) === JSON.stringify(right.plan) &&
+    JSON.stringify(left.brief) === JSON.stringify(right.brief) &&
+    left.bootstrapDigest === right.bootstrapDigest &&
+    (left.primary !== false) === (right.primary !== false)
+  );
+}
+
+function sameBuilderPlanningMetadata(
+  left: BuilderPlanningSessionMetadata,
+  right: BuilderPlanningSessionMetadata,
+): boolean {
+  return (
+    sameBuilderPlanningContext(left, right) &&
+    left.lifecycleEpoch === right.lifecycleEpoch &&
+    left.state === right.state
+  );
 }
 
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
@@ -628,6 +657,13 @@ export class SessionManager {
         session.builderPlanning.primary === undefined
       ) {
         session.builderPlanning.primary = true;
+        dirty = true;
+      }
+      if (
+        session.builderPlanning &&
+        session.builderPlanning.lifecycleEpoch === undefined
+      ) {
+        session.builderPlanning.lifecycleEpoch = 0;
         dirty = true;
       }
       if (session.status !== "exited") {
@@ -1682,19 +1718,31 @@ export class SessionManager {
   /** Persist the server-owned builder lifecycle projection for Studio tabs. */
   async setBuilderPlanningMetadata(
     id: string,
-    metadata: import("../shared/types.js").BuilderPlanningSessionMetadata,
-  ): Promise<void> {
+    expected: BuilderPlanningSessionMetadata,
+    metadata: BuilderPlanningSessionMetadata,
+  ): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (
       session.executionPolicy !== "planning-readonly" ||
-      session.builderPlanning?.bindingId !== metadata.bindingId
+      !session.builderPlanning
     ) {
       throw new Error("builder planning metadata is not compatible");
     }
+    if (
+      !sameBuilderPlanningMetadata(session.builderPlanning, expected) ||
+      !sameBuilderPlanningContext(expected, metadata) ||
+      metadata.lifecycleEpoch < expected.lifecycleEpoch ||
+      (metadata.lifecycleEpoch === expected.lifecycleEpoch &&
+        !sameBuilderPlanningMetadata(expected, metadata))
+    )
+      return false;
+    if (sameBuilderPlanningMetadata(session.builderPlanning, metadata))
+      return true;
     session.builderPlanning = structuredClone(metadata);
     await this.persist();
     this.emitStatus(session);
+    return true;
   }
 
   /**
