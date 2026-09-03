@@ -153,14 +153,20 @@ export function SessionBar({
         {overviewMode ? (
           <div className="session-current session-current-static">
             <Icon name="Radio" size={13} />
-            <span className="session-context-title" data-testid="session-context-title">
+            <span
+              className="session-context-title"
+              data-testid="session-context-title"
+            >
               Overview
             </span>
           </div>
         ) : openedAgentName ? (
           /* An agent is open with no live session in its workspace. */
           <div className="session-current session-current-static">
-            <span className="session-context-title" data-testid="session-context-title">
+            <span
+              className="session-context-title"
+              data-testid="session-context-title"
+            >
               {openedAgentName}
             </span>
             <span
@@ -176,7 +182,10 @@ export function SessionBar({
           /* Past-session review: nothing is running here. */
           <div className="session-current session-current-static">
             <Icon name="History" size={13} />
-            <span className="session-context-title" data-testid="session-context-title">
+            <span
+              className="session-context-title"
+              data-testid="session-context-title"
+            >
               {reviewTitle}
             </span>
             <span
@@ -202,7 +211,10 @@ export function SessionBar({
               onClick={onBack}
             >
               <Icon name="ArrowLeft" size={13} />
-              <span className="session-context-title" data-testid="session-context-title">
+              <span
+                className="session-context-title"
+                data-testid="session-context-title"
+              >
                 Back
               </span>
             </button>
@@ -445,7 +457,7 @@ export function SessionBar({
           triggerRef={menuTriggerRef}
           description={
             planning
-              ? "This stops the planning conversation and any work the planner is doing right now. You can start a fresh planning session from the Agent Map."
+              ? "This stops the planning conversation and any work the planner is doing right now. You can start a fresh planning session from Plan Agents."
               : undefined
           }
           onCancel={() => setConfirmingClose(false)}

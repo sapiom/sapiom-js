@@ -417,6 +417,9 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("end-session-confirm")).toContainText(
       "stops the planning conversation",
     );
+    await expect(page.getByTestId("end-session-confirm")).toContainText(
+      "fresh planning session from Plan Agents",
+    );
     await expect(page.getByTestId("end-session-confirm")).not.toContainText(
       "live terminal",
     );
