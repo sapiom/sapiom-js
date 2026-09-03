@@ -304,7 +304,50 @@ const SAFE_INTERPOLATED_LABELS: Record<string, string> = {
     "Ours, low-cardinality, and the label that makes the on-ramp funnel readable.",
   "CanvasOverviewPanel.tsx": "Static labels only; interpolation is over our own counts.",
   "SchemaInputFields.tsx": "`Remove item ${index + 1}` — a list position, not a name.",
+  "RunTargetMenu.tsx":
+    "`${target.label}: ${disabledReason}` — both ours: `label` is the hardcoded " +
+    "\"Local\"/\"Cloud\" literal in this file, and `disabledReason` is our own copy. " +
+    "No user-authored value reaches this label. Surfaced when the detector was " +
+    "widened to brace matching; it had been invisible to the old regex.",
 };
+
+/**
+ * Every `aria-label={…}` expression in a source file, brace-matched.
+ *
+ * The first version of this check was `/aria-label=\{`[^`]*\$\{/` — a regex
+ * that required a backtick IMMEDIATELY after the brace. That missed three
+ * real components: a ternary (`aria-label={cond ? `…${x}` : y}`), a label
+ * broken across lines, and anything routed through a helper. Two of them had
+ * been interpolating a project name into a label for months with no failing
+ * test, which is precisely the hole this file exists to close.
+ *
+ * Brace matching handles all of those, including `${}` nested inside the
+ * expression, because an interpolation's own braces are balanced.
+ */
+function ariaLabelExpressions(source: string): string[] {
+  const out: string[] = [];
+  const opener = /aria-label=\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(source)) !== null) {
+    let depth = 1;
+    let i = match.index + match[0].length;
+    let expr = "";
+    while (i < source.length && depth > 0) {
+      const ch = source[i];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      if (depth > 0) expr += ch;
+      i += 1;
+    }
+    out.push(expr);
+  }
+  return out;
+}
+
+/** True when any aria-label on this component is built by interpolation. */
+function interpolatesAriaLabel(source: string): boolean {
+  return ariaLabelExpressions(source).some((expr) => expr.includes("${"));
+}
 
 describe("components that build an aria-label by interpolation must tag their surface", () => {
   const componentsDir = fileURLToPath(new URL("../../components", import.meta.url));
@@ -318,7 +361,7 @@ describe("components that build an aria-label by interpolation must tag their su
       file: file.split(/[\\/]/).pop() ?? file,
       source: readFileSync(`${componentsDir}/${file}`, "utf8"),
     }))
-    .filter(({ source }) => /aria-label=\{`[^`]*\$\{/.test(source));
+    .filter(({ source }) => interpolatesAriaLabel(source));
 
   it("finds the interpolating components at all (guards the regex itself)", () => {
     expect(offenders.length).toBeGreaterThan(0);

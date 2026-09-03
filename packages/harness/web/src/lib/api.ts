@@ -32,6 +32,8 @@ import type {
   StepView,
   WorkflowInputContractResponse,
   WorkflowInfo,
+  AgentVersionsView,
+  AgentVersionView,
 } from "@shared/types";
 import {
   type SystemGraph,
@@ -435,6 +437,23 @@ export interface HarnessApi {
   /** The rail's plan card view, relayed by the server from core (key stays
    *  server-side). Never rejects on a degraded read — inspect `source`. */
   getAccountPlan(): Promise<AccountPlanView>;
+  /** An agent's release history: labelled versions first, then recent builds.
+   *  Relayed by the server from core, so the key stays server-side. */
+  /** `projectDir` lets the server report what the local copy would deploy as. */
+  getAgentVersions(
+    definitionId: string,
+    projectDir?: string | null,
+  ): Promise<AgentVersionsView>;
+  /** Make `sha` the live version. The caller decides whether to confirm first
+   *  (only pinning to an older build needs it). */
+  activateAgentVersion(definitionId: string, sha: string): Promise<void>;
+  /** Release the pin so the agent follows the newest ready build again. */
+  resumeFollowingLatest(definitionId: string): Promise<void>;
+  /** Create a label or move an existing one onto `sha`. Core owns the rules —
+   *  a reserved or malformed name comes back as its 4xx. */
+  setAgentVersionLabel(definitionId: string, name: string, sha: string): Promise<void>;
+  /** Remove a label from whichever version holds it. */
+  removeAgentVersionLabel(definitionId: string, name: string): Promise<void>;
   /** Live run render state (upstream feat/harness-runtime-analytics):
    *  GET /api/runs/:id/state = inspect -> decode -> renderRunState. Poll
    *  after an execution.started bus message until the run is terminal. */
@@ -756,6 +775,51 @@ class RealApi implements HarnessApi {
 
   getAccountPlan(): Promise<AccountPlanView> {
     return this.request<AccountPlanView>("/api/account/plan");
+  }
+
+  getAgentVersions(
+    definitionId: string,
+    projectDir?: string | null,
+  ): Promise<AgentVersionsView> {
+    const query = projectDir ? `?dir=${encodeURIComponent(projectDir)}` : "";
+    return this.request<AgentVersionsView>(
+      `/api/versions/${encodeURIComponent(definitionId)}${query}`,
+    );
+  }
+
+  async activateAgentVersion(definitionId: string, sha: string): Promise<void> {
+    await this.request<unknown>(
+      `/api/versions/${encodeURIComponent(definitionId)}/activate`,
+      { method: "POST", body: JSON.stringify({ sha }) },
+    );
+  }
+
+  async resumeFollowingLatest(definitionId: string): Promise<void> {
+    await this.request<unknown>(
+      `/api/versions/${encodeURIComponent(definitionId)}/pin`,
+      { method: "DELETE" },
+    );
+  }
+
+  async setAgentVersionLabel(
+    definitionId: string,
+    name: string,
+    sha: string,
+  ): Promise<void> {
+    await this.request<unknown>(
+      `/api/versions/${encodeURIComponent(definitionId)}/labels/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify({ sha }) },
+    );
+  }
+
+  async removeAgentVersionLabel(
+    definitionId: string,
+    name: string,
+  ): Promise<void> {
+    await this.request<unknown>(
+      `/api/versions/${encodeURIComponent(definitionId)}/labels/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
   }
 
   getRunState(executionId: string): Promise<RunView> {
@@ -1316,6 +1380,107 @@ const MOCK_POLSIA_GRAPH_EDGES: SystemGraph["edges"] = [
     mode: "async",
   },
 ];
+
+/**
+ * Mock version history — mutable so mock mode exercises activate, pin release
+ * and label moves rather than showing a frozen list. Keyed by definitionId so
+ * two agents do not share one history.
+ */
+const MOCK_VERSIONS = new Map<string, AgentVersionView[]>();
+
+function mockVersionsFor(definitionId: string): AgentVersionsView {
+  if (!MOCK_VERSIONS.has(definitionId)) {
+    MOCK_VERSIONS.set(definitionId, [
+      {
+        sha: "7a9e3b7dece9f390bbf712f724117541c5237817",
+        subject: "",
+        author: "",
+        committedAt: "2026-09-02T14:41:59.217Z",
+        deployedAt: "2026-09-02T14:41:59.217Z",
+        buildStatus: "ready",
+        tags: ["latest", "0.0.2"],
+        isActive: false,
+      },
+      {
+        sha: "2f86780534d145719dd7708009ccb1cd440220f2",
+        subject: "deploy",
+        author: "Sapiom Deploy",
+        committedAt: "2026-09-02T14:40:55.000Z",
+        deployedAt: "2026-09-02T14:40:57.163Z",
+        buildStatus: "ready",
+        tags: ["0.0.1"],
+        isActive: true,
+        source: "pinned",
+      },
+    ]);
+  }
+  const rows = MOCK_VERSIONS.get(definitionId) ?? [];
+  const active = rows.find((v) => v.isActive) ?? null;
+  return {
+    versions: rows,
+    activeSha: active?.sha ?? null,
+    pinned: active?.source === "pinned",
+    total: rows.length,
+    // Mock mode has no project on disk to pack, so there is nothing honest to
+    // say about a local copy.
+    local: null,
+  };
+}
+
+function mockActivate(definitionId: string, sha: string): void {
+  const rows = MOCK_VERSIONS.get(definitionId);
+  if (!rows) return;
+  const newest = rows.find((v) => v.tags.includes("latest"))?.sha;
+  MOCK_VERSIONS.set(
+    definitionId,
+    rows.map((v) => ({
+      ...v,
+      isActive: v.sha === sha,
+      // Activating the newest build is a return to following latest, so it
+      // leaves no pin behind; anything older pins.
+      source: v.sha === sha && sha !== newest ? "pinned" : undefined,
+    })),
+  );
+}
+
+function mockResumeLatest(definitionId: string): void {
+  const rows = MOCK_VERSIONS.get(definitionId);
+  if (!rows) return;
+  const newest = rows.find((v) => v.tags.includes("latest"))?.sha;
+  MOCK_VERSIONS.set(
+    definitionId,
+    rows.map((v) => ({
+      ...v,
+      isActive: v.sha === newest,
+      source: undefined,
+    })),
+  );
+}
+
+function mockSetLabel(definitionId: string, name: string, sha: string): void {
+  const rows = MOCK_VERSIONS.get(definitionId);
+  if (!rows) return;
+  MOCK_VERSIONS.set(
+    definitionId,
+    rows.map((v) => ({
+      ...v,
+      // A label points at exactly one version, so setting it elsewhere moves it.
+      tags:
+        v.sha === sha
+          ? Array.from(new Set([...v.tags, name]))
+          : v.tags.filter((t) => t !== name),
+    })),
+  );
+}
+
+function mockRemoveLabel(definitionId: string, name: string): void {
+  const rows = MOCK_VERSIONS.get(definitionId);
+  if (!rows) return;
+  MOCK_VERSIONS.set(
+    definitionId,
+    rows.map((v) => ({ ...v, tags: v.tags.filter((t) => t !== name) })),
+  );
+}
 
 class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
@@ -2336,6 +2501,48 @@ class MockApi implements HarnessApi {
   async getAccountPlan(): Promise<AccountPlanView> {
     await delay(150);
     return MOCK_ACCOUNT_PLAN;
+  }
+
+  async getAgentVersions(definitionId: string): Promise<AgentVersionsView> {
+    await delay(150);
+    return mockVersionsFor(definitionId);
+  }
+
+  async activateAgentVersion(
+    definitionId: string,
+    sha: string,
+  ): Promise<void> {
+    await delay(120);
+    mockActivate(definitionId, sha);
+  }
+
+  async resumeFollowingLatest(definitionId: string): Promise<void> {
+    await delay(120);
+    mockResumeLatest(definitionId);
+  }
+
+  async setAgentVersionLabel(
+    definitionId: string,
+    name: string,
+    sha: string,
+  ): Promise<void> {
+    await delay(120);
+    if (name === "latest") {
+      throw new ApiError(
+        400,
+        "'latest' is computed from the newest ready build and cannot be set.",
+        undefined,
+      );
+    }
+    mockSetLabel(definitionId, name, sha);
+  }
+
+  async removeAgentVersionLabel(
+    definitionId: string,
+    name: string,
+  ): Promise<void> {
+    await delay(120);
+    mockRemoveLabel(definitionId, name);
   }
 
   async getTemplate(id: string): Promise<TemplateDetailView> {

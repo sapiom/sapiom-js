@@ -3758,7 +3758,7 @@ button.rail-footer-card:hover {
   overflow: auto;
   padding: var(--sp2);
   border: 1px solid var(--ui-line);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--text);
   font-family: var(--font-mono);
@@ -10661,4 +10661,414 @@ button.system-graph-node.is-navigable:focus-visible {
 .tree-row-note svg {
   flex: 0 0 auto;
   opacity: 0.7;
+}
+
+/* ---------------------------------------------------------------------------
+   Versions tab — release history, activation and labels.
+
+   Same anatomy as the sibling right-pane tabs: flex column, the shared
+   .workflow-actions-header subheader, then a --pane-pad-x body. Rows are a
+   grid so the sha, labels, age, message and action align down the pane
+   regardless of how many labels a version carries.
+   -------------------------------------------------------------------------- */
+.versions-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.versions-panel-empty {
+  flex: 1;
+}
+
+.versions-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp3) var(--pane-pad-x) var(--sp4);
+}
+
+/* A pin blocks later deploys from going live — stated, not implied, because an
+   agent that silently ignores a deploy is a genuinely confusing afternoon. */
+.versions-pin-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp2) var(--sp3);
+  margin-bottom: var(--sp3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+}
+
+.versions-pin-banner > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.versions-pin-banner svg {
+  flex: 0 0 auto;
+}
+
+.versions-error {
+  padding: var(--sp2) var(--sp3);
+  margin-bottom: var(--sp3);
+  border: 1px solid var(--border-warning);
+  border-radius: var(--radius-md);
+  color: var(--red-text);
+  font-size: var(--type-meta);
+}
+
+.versions-loading {
+  padding: var(--sp3) 0;
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+}
+
+.versions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* sha · labels (flexible) · age · message · action */
+.versions-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(8rem, 1fr) 4.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp2) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--type-meta);
+}
+
+.versions-row:last-child {
+  border-bottom: 0;
+}
+
+.versions-row.is-busy {
+  opacity: 0.6;
+}
+
+.versions-row.is-active {
+  /* The live row is the one the eye should land on first. */
+  color: var(--text);
+}
+
+.versions-sha {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+/* Wraps: a version can carry several labels, and the row grows rather than
+   letting them escape the cell (the dashboard had exactly that bug). */
+.versions-labels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp1);
+  min-width: 0;
+}
+
+.version-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `latest` is computed from the newest ready build and cannot be stored, so it
+   gets no remove control and reads as ambient rather than editable. */
+.version-chip.is-computed {
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+}
+
+.version-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.version-chip-remove:hover:not(:disabled) {
+  color: var(--red-text);
+}
+
+.version-chip-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.version-label-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.version-label-add:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.version-label-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.version-label-input {
+  width: 6rem;
+  padding: 1px 6px;
+  border: 1px solid var(--text-dim);
+  border-radius: 999px;
+  background: var(--surface-base);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.versions-when,
+.versions-subject {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.versions-status {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.versions-live {
+  color: var(--green-text);
+}
+
+/* Version picker beside the agent name in the actions header. */
+.version-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.version-picker:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.version-picker-menu {
+  min-width: 15rem;
+  padding: var(--sp1);
+}
+
+.version-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  padding: var(--sp1) var(--sp2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: var(--type-meta);
+  text-align: left;
+  cursor: pointer;
+}
+
+.version-picker-item:hover:not(:disabled) {
+  background: var(--surface-inset);
+}
+
+.version-picker-item[aria-current="true"] {
+  color: var(--green-text);
+}
+
+.version-picker-item .versions-sha {
+  font-size: 11px;
+}
+
+/* The picker states BOTH halves — cloud and local — because they drift apart
+   the moment a file is edited, and "which one am I looking at?" has to be
+   answerable without opening a tab. */
+.version-picker-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.version-picker-key {
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Local differs from what is live: worth noticing, not worth alarming. */
+.version-picker-part.is-diverged {
+  color: var(--amber-text);
+}
+
+.version-picker-local-tag {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* The Versions header answers "which version is live, under which label?"
+   outright. Before this it showed only a count, leaving the answer to be
+   inferred from a `Live` marker somewhere down the list — which is precisely
+   the question the tab exists to answer. */
+.versions-live-summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.versions-live-summary strong {
+  color: var(--text);
+  font-weight: 560;
+}
+
+.versions-live-summary .versions-sha {
+  font-size: 11px;
+}
+
+.versions-live-aka,
+.versions-live-pin {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.versions-live-pin::before {
+  content: "· ";
+}
+
+/* Working copy differs from what is live: notable, not alarming. */
+.versions-live-summary.is-diverged strong {
+  color: var(--amber-text);
+}
+
+/* ---------------------------------------------------------------------------
+   Versions: button spacing.
+
+   The buttons themselves are the app's own `.btn-ghost` / `.btn-primary` —
+   these rules only position them. An earlier pass invented `.btn` and
+   `.btn-sm`, neither of which exists in this stylesheet, so those controls
+   rendered with no padding, border or hover at all.
+   -------------------------------------------------------------------------- */
+
+/* Banner action sits at the end of the pinned notice, clear of the text. */
+.versions-banner-action {
+  margin-left: var(--sp2);
+  flex: 0 0 auto;
+}
+
+/* Row action is the last grid cell: keep it off the pane's right edge and
+   stop it stretching to the column width. */
+.versions-row-action {
+  margin-left: var(--sp2);
+  justify-self: end;
+}
+
+/* The picker inherits .btn-ghost; it only needs a tighter type scale and gap
+   for the cloud/local pair it carries. */
+.version-picker {
+  gap: var(--sp2);
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* Give the header's summaries room from the name and from each other. */
+.versions-panel-header .versions-live-summary {
+  margin-left: var(--sp3);
+}
+
+/* Stop the agent name being squeezed out of existence.
+ *
+ * This subheader packs four items beside the name — two live summaries, the
+ * picker chip and the count — and every one of them defaulted to
+ * `flex: 0 1 auto` with `min-width: auto`, so none could shrink. The name is
+ * the only flexible item (`flex: 1; min-width: 0` from
+ * `.workflow-actions-name`), which means it absorbed the ENTIRE deficit:
+ * measured at a 776px header, the siblings claimed 676px and the name was left
+ * 12px for text needing 33px, rendering "hello" as "h.".
+ *
+ * Fixed by scope, not by touching `.workflow-actions-name` itself — the canvas
+ * header uses that rule too and is not crowded the same way. Here the name
+ * gets a floor and the two widest items yield space instead. */
+.versions-panel-header .workflow-actions-name {
+  flex: 0 1 auto;
+  min-width: 3.5rem;
+}
+
+.versions-panel-header .versions-live-summary,
+.versions-panel-header .version-picker {
+  min-width: 0;
+}
+
+/* In THIS header the chip's local half is pure duplication — the `YOUR FILES`
+ * summary immediately to its left states the same thing. Dropping it frees
+ * ~115px, which is what stops both halves being clipped mid-word ("· pinne",
+ * "not deploye") once the name has its floor. The chip keeps both halves
+ * everywhere else: in the canvas header it is the only thing saying either.
+ *
+ * Targeted as an adjacent sibling rather than `:nth-child`, because the local
+ * part is conditional — it is absent entirely when there is nothing to say
+ * about the working copy, and an index would then point at the wrong element.
+ * No information is lost to assistive tech either: the visible summary carries
+ * it. */
+.versions-panel-header .version-picker-part + .version-picker-part {
+  display: none;
+}
+
+/* Backstop: if the header is still over-subscribed at a narrow width, the chip
+ * clips rather than shoving the agent name back out of existence. */
+.versions-panel-header .version-picker > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The label controls are chips, not buttons — keep them clear of the sha. */
+.versions-labels {
+  margin-left: var(--sp1);
 }

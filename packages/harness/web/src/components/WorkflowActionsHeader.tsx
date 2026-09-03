@@ -8,6 +8,7 @@ import { displayAgentName } from "../lib/agent-name";
 import { relativeTimeLabel } from "../lib/relative-time";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { AnchoredPopover } from "./AnchoredPopover";
+import { VersionPicker } from "./VersionPicker";
 import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -179,6 +180,14 @@ export function WorkflowActionsHeader({
         <span className="workflow-actions-count" data-testid="canvas-steps-count">
           {stepsSummary ?? "no steps"}
         </span>
+        {/* What is running right now, next to the name that identifies it.
+            Renders nothing until there is a deployed history to pick from. */}
+        <VersionPicker
+          definitionId={
+            workflow.definitionId != null ? String(workflow.definitionId) : null
+          }
+          projectDir={workflow.path}
+        />
         {/* One observed run: a plain status chip. Several: the chip is
             the run picker — any past run is one click away. */}
         {run && runs.length <= 1 && (

@@ -51,6 +51,7 @@ import type { WorkspaceKey } from "@shared/system-graph";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { CodePanel } from "./components/CodePanel";
+import { VersionsPanel } from "./components/VersionsPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ConnectivityBanner,
@@ -103,7 +104,8 @@ import {
   type DeepLinkAgentTarget,
   type DeepLinkTarget,
 } from "./lib/desktop";
-import { deepLinkFromSearch } from "./lib/deep-link";
+import { deepLinkFromSearch, tabFromSearch } from "./lib/deep-link";
+import type { RightPaneTab } from "./lib/deep-link";
 import { editorLabel, editorUrl, resolveEditor } from "./lib/editors";
 import { CloneAgentConfirm } from "./components/CloneAgentConfirm";
 import {
@@ -153,7 +155,7 @@ import {
   workflowDeploymentState,
 } from "./lib/workflow-deployment";
 
-type RightTab = "canvas" | "steps" | "code";
+type RightTab = RightPaneTab;
 
 /**
  * How long a held initial prompt waits for the coding agent to become ready
@@ -267,8 +269,15 @@ export const App = (): JSX.Element => {
   // Right tab is part of the held arrangement: restored on reload.
   // Guard against a stored "skills" value (tab removed) — fall back to canvas.
   const [rightTab, setRightTab] = useState<RightTab>(() => {
+    // `?tab=` wins over the stored preference: an explicit link is a deliberate
+    // instruction, and it is what makes a pane linkable and demonstrable.
+    const fromUrl = tabFromSearch();
+    if (fromUrl) return fromUrl;
     const stored = loadUiPrefs().rightTab;
-    return stored === "canvas" || stored === "steps" || stored === "code"
+    return stored === "canvas" ||
+      stored === "steps" ||
+      stored === "code" ||
+      stored === "versions"
       ? stored
       : "canvas";
   });
@@ -2283,6 +2292,19 @@ export const App = (): JSX.Element => {
                 <Icon name="Code" size={14} />
                 Code
               </button>
+              <button
+                role="tab"
+                aria-selected={rightTab === "versions"}
+                className={
+                  "right-pane-tab" +
+                  (rightTab === "versions" ? " is-active" : "")
+                }
+                onClick={() => setRightTab("versions")}
+                data-testid="right-tab-versions"
+              >
+                <Icon name="History" size={14} />
+                Versions
+              </button>
               <div className="right-pane-corner">
                 {/* Cloud-status pill → dashboard. The board has no subheader,
                     so the link/build state lives here in the tab bar. */}
@@ -2453,6 +2475,25 @@ export const App = (): JSX.Element => {
                 onDescribeWorkflow={handleDescribeWithAI}
               />
             </div>
+
+            {/* Mounted only once opened, and unmounted when closed: the panel
+                fetches on mount, so keeping it alive behind `is-hidden` (the
+                Code tab's trick) would hold a stale history for an agent the
+                user has since switched away from. */}
+            {rightTab === "versions" && (
+              <div
+                className="right-pane-panel"
+                data-testid="right-panel-versions"
+              >
+                <VersionsPanel
+                  /* Follows the board's selection, like the Code tab: which
+                     version is live is a property of the agent, not of
+                     whichever session happens to be running. */
+                  boundWorkflow={rightPaneWorkflow}
+                  noSessionAgent={null}
+                />
+              </div>
+            )}
 
             {(rightTab === "code" || codePanelEverShown) && (
               <div

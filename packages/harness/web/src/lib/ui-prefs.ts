@@ -13,7 +13,7 @@ import type { RailAxis, RailSort } from "./project-tree";
 export interface UiPrefs {
   railCollapsed?: boolean;
   rightCollapsed?: boolean;
-  rightTab?: "canvas" | "steps" | "code";
+  rightTab?: "canvas" | "steps" | "code" | "versions";
   /**
    * Rows the user collapsed in the rail tree, as NAMESPACED keys
    * (`project:<abs path>`, `dir:<abs path>`) — see ProjectTreeRows' `dirKey` /
