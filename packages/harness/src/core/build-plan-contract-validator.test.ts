@@ -384,7 +384,7 @@ function reportFlowFixture() {
         kind: "artifact",
         name: "ResearchReport",
         purpose: "Carry research findings",
-        ownerAgentId: AGENT_ID,
+        ownerAgentId: null,
         contractRefs: [contractId],
       },
     ],
@@ -417,7 +417,7 @@ function reportFlowFixture() {
     ],
   });
   const researchBrief = makeBrief(plan, {
-    ownedNodeIds: [AGENT_ID, reportArtifactId],
+    ownedNodeIds: [AGENT_ID],
     relevantNodeIds: [AGENT_ID, marketingAgentId, reportArtifactId],
     outputs: [
       {

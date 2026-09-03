@@ -5,7 +5,11 @@
     "moduleResolution": "Node16",
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@sapiom/harness": ["./src/index.ts"]
+    }
   },
   "include": ["src/**/*"],
   // __fixtures__ trees are bundled independently by esbuild inside
