@@ -1617,8 +1617,8 @@ export class SessionManager {
         continue;
       }
       if (handle.trustedInputPasting) {
-        // In particular, CR inside a multiline paste is content, not trusted
-        // Enter, and must never reset invalid state or arm an inner `/clear`.
+        // CR/LF inside a multiline paste are separators, not trusted Enter;
+        // discard them so they neither submit nor consume the bounded buffer.
         if (
           char !== "\r" &&
           char !== "\n" &&

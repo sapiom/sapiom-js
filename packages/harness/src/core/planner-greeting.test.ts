@@ -366,10 +366,12 @@ describe("PlannerGreetingCoordinator", () => {
       status: "delivered",
       messageId: "greeting-message",
     };
+    let acceptedAt = "2026-09-03T11:00:01.000Z";
     let failAcceptedDequeue = true;
     const first = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
+      now: () => acceptedAt,
       deliveryTimeoutMs: 60_000,
       writeState: async (file, value) => {
         const state = value as {
@@ -400,7 +402,12 @@ describe("PlannerGreetingCoordinator", () => {
         path.join(root, session.id, "input-queue.json"),
         "utf8",
       ),
-    ) as { dispatchingInputId: string | null; inputs: Array<{ id: string }> };
+    ) as {
+      dispatchingInputId: string | null;
+      inputs: Array<{ id: string }>;
+      lastAcceptedUserInputId: string | null;
+      lastAcceptedUserInputAt: string | null;
+    };
     expect(durableBeforeRestart.dispatchingInputId).toBe(
       durableBeforeRestart.inputs[0]!.id,
     );
@@ -414,9 +421,20 @@ describe("PlannerGreetingCoordinator", () => {
       durableBeforeRestart.inputs[0]!.id,
     ]);
 
+    // Model a newer raw reply that committed while the earlier accepted-ledger
+    // dequeue was still awaiting restart reconciliation.
+    acceptedAt = "2026-09-03T11:00:03.000Z";
+    durableBeforeRestart.lastAcceptedUserInputId = "raw-reply-after-ledger-crash";
+    durableBeforeRestart.lastAcceptedUserInputAt = acceptedAt;
+    await fs.writeFile(
+      path.join(root, session.id, "input-queue.json"),
+      `${JSON.stringify(durableBeforeRestart, null, 2)}\n`,
+    );
+
     const restarted = new PlannerGreetingCoordinator({
       root,
       sessionManager: manager,
+      now: () => acceptedAt,
       deliveryTimeoutMs: 60_000,
     });
     await restarted.register(session, { emptyProject: true, mode: "boot" });
@@ -432,7 +450,15 @@ describe("PlannerGreetingCoordinator", () => {
     expect(durableAfterRestart).toMatchObject({
       dispatchingInputId: null,
       inputs: [],
+      lastAcceptedUserInputId: "raw-reply-after-ledger-crash",
+      lastAcceptedUserInputAt: "2026-09-03T11:00:03.000Z",
     });
+    await expect(restarted.latestAcceptedUserInput(session.id)).resolves.toEqual(
+      {
+        inputId: "raw-reply-after-ledger-crash",
+        acceptedAt: "2026-09-03T11:00:03.000Z",
+      },
+    );
   });
 
   it("does not publish a phantom dispatch intent when its durable write fails", async () => {
