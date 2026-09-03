@@ -25,6 +25,8 @@ import {
   computeAgentBriefSemanticDigest,
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
+  computePlanningAssignmentRecordDigest,
+  computePlanningSubmissionRecordDigest,
   computePlanningSubmissionSemanticDigest,
 } from "./build-plan-canonicalization.js";
 import { DurableFileLock } from "./durable-file-lock.js";
@@ -257,6 +259,19 @@ function parseAggregate(
   } catch {
     throw new AgentMapWorkspaceStoreError("malformed_state");
   }
+  if (architecture.workspace.projectBuildPlanId !== buildPlanning.planId)
+    throw new AgentMapWorkspaceStoreError("malformed_state");
+  return structuredClone({
+    storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
+    ...architecture,
+    buildPlanning,
+  });
+}
+
+/** Full immutable-record verification, run on initial/change load and writes. */
+function assertBuildPlanningIntegrity(
+  buildPlanning: BuildPlanningAggregateV1,
+): void {
   if (
     buildPlanning.planVersions.some(
       (plan) =>
@@ -270,22 +285,22 @@ function parseAggregate(
           computeAgentBriefSemanticDigest(brief) !== brief.semanticDigest ||
           computeAgentBriefRecordDigest(brief) !== brief.recordDigest,
       ) ||
+    Object.values(buildPlanning.assignmentByAgentId).some(
+      (assignment) =>
+        computePlanningAssignmentRecordDigest(assignment) !==
+        assignment.recordDigest,
+    ) ||
     Object.values(buildPlanning.submissionsByAssignmentId)
       .flat()
       .some(
         (submission) =>
           computePlanningSubmissionSemanticDigest(submission) !==
-          submission.semanticDigest,
+            submission.semanticDigest ||
+          computePlanningSubmissionRecordDigest(submission) !==
+            submission.recordDigest,
       )
   )
     throw new AgentMapWorkspaceStoreError("malformed_state");
-  if (architecture.workspace.projectBuildPlanId !== buildPlanning.planId)
-    throw new AgentMapWorkspaceStoreError("malformed_state");
-  return structuredClone({
-    storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
-    ...architecture,
-    buildPlanning,
-  });
 }
 
 function migrateAggregateV1(
@@ -316,6 +331,7 @@ function migrateAggregateV1(
 /** Crash-atomic owner of workspace, active proposal, history, and private receipts. */
 export class AgentMapWorkspaceStore {
   private readonly queues = new Map<StudioProjectId, Promise<void>>();
+  private readonly verifiedFileIdentity = new Map<StudioProjectId, string>();
 
   constructor(
     private readonly agentMapRoot: string,
@@ -373,8 +389,12 @@ export class AgentMapWorkspaceStore {
   }> {
     const file = this.workspacePath(projectId);
     let decoded: unknown;
+    let fileIdentity: string;
     try {
-      decoded = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
+      const raw = await fs.readFile(file, "utf8");
+      const stat = await fs.stat(file, { bigint: true });
+      fileIdentity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+      decoded = JSON.parse(raw) as unknown;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT")
         return {
@@ -408,8 +428,13 @@ export class AgentMapWorkspaceStore {
             needsWrite: true,
             created: false,
           };
+        const aggregate = parseAggregate(decoded, projectId);
+        if (this.verifiedFileIdentity.get(projectId) !== fileIdentity) {
+          assertBuildPlanningIntegrity(aggregate.buildPlanning);
+          this.verifiedFileIdentity.set(projectId, fileIdentity);
+        }
         return {
-          aggregate: parseAggregate(decoded, projectId),
+          aggregate,
           needsWrite: false,
           created: false,
         };
@@ -444,6 +469,11 @@ export class AgentMapWorkspaceStore {
       } finally {
         await directoryHandle.close();
       }
+      const stat = await fs.stat(file, { bigint: true });
+      this.verifiedFileIdentity.set(
+        projectId,
+        `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`,
+      );
     } catch {
       throw storageError();
     } finally {
@@ -488,6 +518,7 @@ export class AgentMapWorkspaceStore {
           const next = outcome.next
             ? parseAggregate(outcome.next, projectId)
             : loaded.aggregate;
+          if (outcome.next) assertBuildPlanningIntegrity(next.buildPlanning);
           await this.persist(projectId, next);
         }
         if (loaded.created)

@@ -8,6 +8,9 @@ import type {
 
 export const BUILD_PLAN_SCHEMA_VERSION = 1 as const;
 export const BUILD_PLANNING_AGGREGATE_SCHEMA_VERSION = 1 as const;
+export const BUILD_PLAN_VERSION_HISTORY_LIMIT = 1_024;
+export const AGENT_BRIEF_VERSION_HISTORY_LIMIT = 1_024;
+export const PLANNING_SUBMISSION_HISTORY_LIMIT = 1_024;
 
 type BuildPlanBrand<T, TBrand extends string> = T & {
   readonly __brand: TBrand;
@@ -63,6 +66,25 @@ export type ArchitectureSourceRef =
       revisionNumber: number;
       graphDigest: GraphDigest;
     }>;
+
+/** Compare exact source identities without depending on object property order. */
+export function architectureSourceRefsEqual(
+  left: ArchitectureSourceRef,
+  right: ArchitectureSourceRef,
+): boolean {
+  if (left.kind !== right.kind || left.graphDigest !== right.graphDigest)
+    return false;
+  if (left.kind === "proposal" && right.kind === "proposal")
+    return (
+      left.proposalId === right.proposalId && left.version === right.version
+    );
+  if (left.kind === "revision" && right.kind === "revision")
+    return (
+      left.revisionId === right.revisionId &&
+      left.revisionNumber === right.revisionNumber
+    );
+  return false;
+}
 
 export interface BuildPlanRef {
   planId: BuildPlanId;
@@ -340,6 +362,7 @@ export interface BuilderPlanningSubmission {
   proposedMapOperationIds: readonly ProposalOperationId[];
   supersedesSubmissionId: BuilderPlanningSubmissionId | null;
   semanticDigest: PlanningSubmissionDigest;
+  recordDigest: RecordDigest;
   submittedAt: string;
 }
 
@@ -357,6 +380,7 @@ export interface PlanningAssignmentRecord {
     at: string;
     planVersion: BuildPlanVersion;
   }>[];
+  recordDigest: RecordDigest;
 }
 
 export interface BuildPlanIdempotencyReceipt {
@@ -365,6 +389,12 @@ export interface BuildPlanIdempotencyReceipt {
   requestDigest: string;
   resultRecordDigest: RecordDigest;
   createdAt: string;
+}
+
+/** Permanent compact provenance for requests whose exact result aged out. */
+export interface BuildPlanIdempotencyTombstone {
+  sessionId: string;
+  requestId: string;
 }
 
 export interface BuildPlanningAggregateV1 {
@@ -381,6 +411,7 @@ export interface BuildPlanningAggregateV1 {
     Record<string, readonly BuilderPlanningSubmission[]>
   >;
   idempotencyReceipts: readonly BuildPlanIdempotencyReceipt[];
+  idempotencyTombstones: readonly BuildPlanIdempotencyTombstone[];
 }
 
 export interface BuildPlanImpactEvaluator {
@@ -401,4 +432,5 @@ export const emptyBuildPlanningAggregate = (): BuildPlanningAggregateV1 => ({
   assignmentByAgentId: {},
   submissionsByAssignmentId: {},
   idempotencyReceipts: [],
+  idempotencyTombstones: [],
 });

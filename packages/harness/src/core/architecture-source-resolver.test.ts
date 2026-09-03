@@ -112,4 +112,103 @@ describe("ArchitectureSourceResolver", () => {
       }),
     ).rejects.toMatchObject({ code: "cross_project" });
   });
+
+  it("rejects a revision reader that returns a different revision identity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "source-resolver-"));
+    roots.push(root);
+    const requestedId =
+      "revision_00000000-0000-7000-8000-000000000006" as AgentMapRevisionId;
+    const returnedId =
+      "revision_00000000-0000-7000-8000-000000000007" as AgentMapRevisionId;
+    const graph = { nodes: [], relationships: [] };
+    const resolver = new ArchitectureSourceResolver(
+      new AgentMapWorkspaceStore(root),
+      async () => ({
+        projectId: PROJECT_ID,
+        revisionId: returnedId,
+        revisionNumber: 2,
+        graph,
+      }),
+    );
+
+    await expect(
+      resolver.resolve(PROJECT_ID, {
+        kind: "revision",
+        revisionId: requestedId,
+        revisionNumber: 2,
+        graphDigest: computeArchitectureGraphDigest(graph),
+      }),
+    ).rejects.toMatchObject({ code: "source_not_found" });
+  });
+
+  it("verifies the proposal base revision identity before materializing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "source-resolver-"));
+    roots.push(root);
+    const store = new AgentMapWorkspaceStore(root);
+    const baseRevisionId =
+      "revision_00000000-0000-7000-8000-000000000006" as AgentMapRevisionId;
+    const wrongRevisionId =
+      "revision_00000000-0000-7000-8000-000000000007" as AgentMapRevisionId;
+    await store.readOrCreate(PROJECT_ID);
+    await store.transact(PROJECT_ID, async (aggregate) => ({
+      value: undefined,
+      next: {
+        ...aggregate,
+        workspace: {
+          ...aggregate.workspace,
+          confirmedRevisionId: baseRevisionId,
+          recordVersion: aggregate.workspace.recordVersion + 1,
+          updatedAt: "2026-09-03T09:00:00.000Z",
+        },
+      },
+    }));
+    const service = new AgentMapProposalService(store, {
+      readBaseRevision: async () => ({ nodes: [], relationships: [] }),
+    });
+    const identity: PlanningSessionIdentity = {
+      projectId: PROJECT_ID,
+      userId: "user-1",
+      sessionId: "session-1",
+      role: "map-planner",
+    };
+    const created = await service.propose(identity, {
+      schemaVersion: 1,
+      proposalId: null,
+      expectedVersion: 0,
+      requestId: "request-base",
+      operations: [
+        {
+          kind: "add-node",
+          draftRef: "draft-base" as DraftRef,
+          node: {
+            kind: "agent",
+            name: "Builder",
+            purpose: "Build",
+            ownerAgent: null,
+            contractRefs: [],
+          },
+        },
+      ],
+    });
+    const proposal = (await store.readAggregate(PROJECT_ID)).proposal!;
+    const source = {
+      kind: "proposal" as const,
+      proposalId: created.proposalId,
+      version: 1,
+      graphDigest: computeArchitectureGraphDigest({
+        nodes: proposal.nodes,
+        relationships: proposal.relationships,
+      }),
+    };
+    const resolver = new ArchitectureSourceResolver(store, async () => ({
+      projectId: PROJECT_ID,
+      revisionId: wrongRevisionId,
+      revisionNumber: 1,
+      graph: { nodes: [], relationships: [] },
+    }));
+
+    await expect(resolver.resolve(PROJECT_ID, source)).rejects.toMatchObject({
+      code: "source_not_found",
+    });
+  });
 });

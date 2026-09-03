@@ -1,12 +1,16 @@
 import { z } from "zod";
 
-import type {
-  AgentBriefVersionRecord,
-  ArchitectureSourceRef,
-  BuilderPlanningSubmission,
-  BuildPlanningAggregateV1,
-  PlanningAssignmentRecord,
-  ProjectBuildPlanVersion,
+import {
+  AGENT_BRIEF_VERSION_HISTORY_LIMIT,
+  architectureSourceRefsEqual,
+  BUILD_PLAN_VERSION_HISTORY_LIMIT,
+  PLANNING_SUBMISSION_HISTORY_LIMIT,
+  type AgentBriefVersionRecord,
+  type ArchitectureSourceRef,
+  type BuilderPlanningSubmission,
+  type BuildPlanningAggregateV1,
+  type PlanningAssignmentRecord,
+  type ProjectBuildPlanVersion,
 } from "./build-plan.js";
 
 const UUID_V7 =
@@ -438,6 +442,7 @@ export const planningAssignmentRecordSchema = z
       )
       .min(1)
       .max(1_024),
+    recordDigest: digest,
   })
   .strict()
   .superRefine((assignment, context) => {
@@ -502,6 +507,7 @@ export const builderPlanningSubmissionSchema = z
     proposedMapOperationIds: unique(operationId, (entry) => entry),
     supersedesSubmissionId: generatedId("submission").nullable(),
     semanticDigest: digest,
+    recordDigest: digest,
     submittedAt: timestamp,
   })
   .strict()
@@ -523,31 +529,38 @@ const receiptSchema = z
     createdAt: timestamp,
   })
   .strict();
+const tombstoneSchema = z
+  .object({ sessionId: opaqueId, requestId: opaqueId })
+  .strict();
 
 const buildPlanningAggregateSchema = z
   .object({
     schemaVersion: z.literal(1),
     planId: generatedId("build-plan").nullable(),
     currentPlanVersion: version.nullable(),
-    planVersions: z.array(projectBuildPlanVersionSchema).max(1_024),
+    planVersions: z
+      .array(projectBuildPlanVersionSchema)
+      .max(BUILD_PLAN_VERSION_HISTORY_LIMIT),
     currentBriefByAgentId: z.record(nodeId, briefRefSchema),
     briefVersionsById: z.record(
       generatedId("brief"),
-      z.array(agentBriefVersionRecordSchema).max(1_024),
+      z
+        .array(agentBriefVersionRecordSchema)
+        .max(AGENT_BRIEF_VERSION_HISTORY_LIMIT),
     ),
     assignmentByAgentId: z.record(nodeId, planningAssignmentRecordSchema),
     submissionsByAssignmentId: z.record(
       generatedId("assignment"),
-      z.array(builderPlanningSubmissionSchema).max(1_024),
+      z
+        .array(builderPlanningSubmissionSchema)
+        .max(PLANNING_SUBMISSION_HISTORY_LIMIT),
     ),
     idempotencyReceipts: z.array(receiptSchema).max(256),
+    idempotencyTombstones: z
+      .array(tombstoneSchema)
+      .max(BUILD_PLAN_VERSION_HISTORY_LIMIT),
   })
   .strict();
-
-const sameSource = (
-  left: ArchitectureSourceRef,
-  right: ArchitectureSourceRef,
-) => JSON.stringify(left) === JSON.stringify(right);
 
 export function parseArchitectureSourceRef(
   value: unknown,
@@ -678,7 +691,7 @@ export function parseBuildPlanningAggregate(
         brief.version !== index + 1 ||
         !plan ||
         plan.semanticDigest !== brief.plan.semanticDigest ||
-        !sameSource(plan.source, brief.source) ||
+        !architectureSourceRefsEqual(plan.source, brief.source) ||
         !assignment ||
         assignment.briefId !== brief.briefId ||
         assignment.plannedAgentId !== brief.plannedAgentId
@@ -721,7 +734,7 @@ export function parseBuildPlanningAggregate(
         submission.assignmentId !== assignmentId ||
         !plan ||
         plan.semanticDigest !== submission.plan.semanticDigest ||
-        !sameSource(plan.source, submission.source) ||
+        !architectureSourceRefsEqual(plan.source, submission.source) ||
         !brief ||
         brief.semanticDigest !== submission.brief.semanticDigest ||
         brief.assignmentId !== assignmentId ||
@@ -740,6 +753,21 @@ export function parseBuildPlanningAggregate(
         (entry) => `${entry.sessionId}\0${entry.requestId}`,
       ),
     ).size !== aggregate.idempotencyReceipts.length
+  )
+    fail();
+  const receiptKeys = new Set(
+    aggregate.idempotencyReceipts.map(
+      (entry) => `${entry.sessionId}\0${entry.requestId}`,
+    ),
+  );
+  const tombstoneKeys = aggregate.idempotencyTombstones.map(
+    (entry) => `${entry.sessionId}\0${entry.requestId}`,
+  );
+  if (
+    new Set(tombstoneKeys).size !== tombstoneKeys.length ||
+    tombstoneKeys.some((key) => receiptKeys.has(key)) ||
+    aggregate.idempotencyReceipts.length + tombstoneKeys.length >
+      aggregate.planVersions.length
   )
     fail();
   if (

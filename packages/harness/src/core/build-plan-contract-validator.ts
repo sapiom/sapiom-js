@@ -1,12 +1,13 @@
 import type { AgentMapGraph, PlanNodeId } from "../shared/agent-map.js";
-import type {
-  AgentBriefVersionRecord,
-  ArchitectureSourceRef,
-  BriefFreshness,
-  BuildPlanCompleteness,
-  BuildPlanDiagnostic,
-  BuildPlanEligibility,
-  ProjectBuildPlanVersion,
+import {
+  architectureSourceRefsEqual,
+  type AgentBriefVersionRecord,
+  type ArchitectureSourceRef,
+  type BriefFreshness,
+  type BuildPlanCompleteness,
+  type BuildPlanDiagnostic,
+  type BuildPlanEligibility,
+  type ProjectBuildPlanVersion,
 } from "../shared/build-plan.js";
 import {
   ArchitectureSourceResolutionError,
@@ -24,10 +25,6 @@ export interface ExactArchitectureSourceResolver {
 
 const compare = (left: string, right: string) =>
   left < right ? -1 : left > right ? 1 : 0;
-const sameSource = (
-  left: ArchitectureSourceRef,
-  right: ArchitectureSourceRef,
-) => JSON.stringify(left) === JSON.stringify(right);
 
 function diagnostic(
   code: BuildPlanDiagnostic["code"],
@@ -97,7 +94,7 @@ function validateBrief(
     issues.push(
       diagnostic("invalid-dependency", `${prefix}.plan`, [brief.plan.planId]),
     );
-  if (!sameSource(brief.source, plan.source))
+  if (!architectureSourceRefsEqual(brief.source, plan.source))
     issues.push(
       diagnostic("source-digest-mismatch", `${prefix}.source`, [brief.briefId]),
     );
@@ -105,23 +102,20 @@ function validateBrief(
   const relationships = new Map(
     graph.relationships.map((entry) => [entry.id, entry]),
   );
-  const knownContracts = new Set([
-    ...graph.nodes.flatMap((node) => node.contractRefs),
-    ...graph.relationships.flatMap((entry) =>
-      entry.contractRef === null ? [] : [entry.contractRef],
-    ),
-  ]);
-  const owned = new Set(brief.ownedNodeIds);
-  const belongsToPlannedAgent = (nodeId: PlanNodeId): boolean => {
+  const ownershipRoot = (nodeId: PlanNodeId): PlanNodeId | null => {
     const visited = new Set<PlanNodeId>();
     let current = nodes.get(nodeId);
-    while (current && current.ownerAgentId !== null) {
-      if (visited.has(current.id)) return false;
+    while (current) {
+      if (visited.has(current.id)) return null;
       visited.add(current.id);
+      if (current.ownerAgentId === null)
+        return current.kind === "agent" ? current.id : null;
       current = nodes.get(current.ownerAgentId);
     }
-    return current?.id === brief.plannedAgentId;
+    return null;
   };
+  const belongsToPlannedAgent = (nodeId: PlanNodeId): boolean =>
+    ownershipRoot(nodeId) === brief.plannedAgentId;
   const plannedNode = nodes.get(brief.plannedAgentId);
   if (
     !plannedNode ||
@@ -154,6 +148,8 @@ function validateBrief(
         );
     });
   [...brief.inputs, ...brief.outputs].forEach((port, portIndex) => {
+    const isInput = portIndex < brief.inputs.length;
+    const evidence = port.relationshipIds.map((id) => relationships.get(id));
     if (!nodes.has(port.nodeId))
       issues.push(
         diagnostic(
@@ -162,52 +158,130 @@ function validateBrief(
           [port.nodeId],
         ),
       );
-    if (!knownContracts.has(port.contractId))
+    const validEvidence =
+      port.relationshipIds.length > 0 &&
+      evidence.every(
+        (relation) =>
+          relation !== undefined &&
+          relation.contractRef === port.contractId &&
+          (isInput
+            ? relation.toNodeId === port.nodeId &&
+              belongsToPlannedAgent(relation.toNodeId) &&
+              ownershipRoot(relation.fromNodeId) !== brief.plannedAgentId
+            : relation.fromNodeId === port.nodeId &&
+              belongsToPlannedAgent(relation.fromNodeId) &&
+              ownershipRoot(relation.toNodeId) !== brief.plannedAgentId),
+      );
+    if (!validEvidence)
       issues.push(
         diagnostic(
-          "invalid-dependency",
-          `${prefix}.ports[${portIndex}].contractId`,
-          [port.contractId],
+          "incompatible-contract-direction",
+          `${prefix}.ports[${portIndex}].relationshipIds`,
+          [port.contractId, ...port.relationshipIds],
         ),
       );
-    port.relationshipIds.forEach((id) => {
-      const relation = relationships.get(id);
-      const isInput = portIndex < brief.inputs.length;
-      if (
-        !relation ||
-        (isInput
-          ? !owned.has(relation.toNodeId)
-          : !owned.has(relation.fromNodeId))
-      )
-        issues.push(
-          diagnostic(
-            "incompatible-contract-direction",
-            `${prefix}.ports[${portIndex}].relationshipIds`,
-            [id],
-          ),
-        );
-    });
   });
   brief.dependencies.forEach((dependency, dependencyIndex) => {
     const counterpart = nodes.get(dependency.counterpartAgentId);
-    const supported = dependency.relationshipIds.every((id) => {
-      const relation = relationships.get(id);
-      return (
-        relation &&
-        ((owned.has(relation.fromNodeId) &&
-          relation.toNodeId === dependency.counterpartAgentId) ||
-          (owned.has(relation.toNodeId) &&
-            relation.fromNodeId === dependency.counterpartAgentId))
-      );
-    });
-    const contractsExist = dependency.contractIds.every((id) =>
-      knownContracts.has(id),
+    const evidence = dependency.relationshipIds
+      .map((id) => relationships.get(id))
+      .filter((entry) => entry !== undefined);
+    const ownToCounterpart = evidence.filter(
+      (relation) =>
+        ownershipRoot(relation.fromNodeId) === brief.plannedAgentId &&
+        ownershipRoot(relation.toNodeId) === dependency.counterpartAgentId,
     );
+    const counterpartToOwn = evidence.filter(
+      (relation) =>
+        ownershipRoot(relation.fromNodeId) === dependency.counterpartAgentId &&
+        ownershipRoot(relation.toNodeId) === brief.plannedAgentId,
+    );
+    const supportsDirection =
+      dependency.direction === "upstream"
+        ? counterpartToOwn.length > 0
+        : dependency.direction === "downstream"
+          ? ownToCounterpart.length > 0
+          : ownToCounterpart.length > 0 && counterpartToOwn.length > 0;
+    const evidencedContracts = new Set(
+      evidence.flatMap((relation) =>
+        relation.contractRef === null ? [] : [relation.contractRef],
+      ),
+    );
+    const contractsLinked = dependency.contractIds.every((id) =>
+      evidencedContracts.has(id),
+    );
+    const milestoneIds = new Set(
+      plan.milestones.map(({ milestoneId }) => milestoneId),
+    );
+    const milestonesLinked = dependency.requiredByMilestoneIds.every(
+      (id) => milestoneIds.has(id) && brief.milestones.includes(id),
+    );
+    const sharedResourceIds = graph.nodes
+      .filter(
+        (node) =>
+          node.kind === "resource" ||
+          node.kind === "connector" ||
+          node.kind === "artifact",
+      )
+      .map((node) => node.id)
+      .filter((resourceId) => {
+        const adjacentRoots = new Set<PlanNodeId>();
+        for (const relation of evidence) {
+          if (relation.fromNodeId === resourceId) {
+            const root = ownershipRoot(relation.toNodeId);
+            if (root !== null) adjacentRoots.add(root);
+          }
+          if (relation.toNodeId === resourceId) {
+            const root = ownershipRoot(relation.fromNodeId);
+            if (root !== null) adjacentRoots.add(root);
+          }
+        }
+        return (
+          adjacentRoots.has(brief.plannedAgentId) &&
+          adjacentRoots.has(dependency.counterpartAgentId)
+        );
+      });
+    const allEvidenceResolved =
+      evidence.length === dependency.relationshipIds.length &&
+      evidence.length > 0;
+    const allEvidenceCrossesBoundary =
+      ownToCounterpart.length + counterpartToOwn.length === evidence.length;
+    const allEvidenceUsesSharedResource = evidence.every((relation) =>
+      sharedResourceIds.some(
+        (resourceId) =>
+          relation.fromNodeId === resourceId ||
+          relation.toNodeId === resourceId,
+      ),
+    );
+    const supported =
+      allEvidenceResolved &&
+      contractsLinked &&
+      milestonesLinked &&
+      (dependency.kind === "consumes-output"
+        ? dependency.direction === "upstream" &&
+          dependency.contractIds.length > 0 &&
+          counterpartToOwn.length === evidence.length
+        : dependency.kind === "provides-input"
+          ? dependency.direction === "downstream" &&
+            dependency.contractIds.length > 0 &&
+            ownToCounterpart.length === evidence.length
+          : dependency.kind === "shared-resource"
+            ? dependency.direction === "bidirectional" &&
+              sharedResourceIds.length > 0 &&
+              allEvidenceUsesSharedResource
+            : dependency.kind === "sequence-gate"
+              ? dependency.requiredByMilestoneIds.length > 0 &&
+                dependency.blocking &&
+                allEvidenceCrossesBoundary &&
+                supportsDirection
+              : allEvidenceCrossesBoundary && supportsDirection);
     if (
       !counterpart ||
       counterpart.kind !== "agent" ||
+      counterpart.ownerAgentId !== null ||
+      dependency.counterpartAgentId === brief.plannedAgentId ||
       !supported ||
-      !contractsExist
+      !contractsLinked
     )
       issues.push(
         diagnostic(
@@ -358,7 +432,7 @@ export function computeBriefFreshness(
   brief: AgentBriefVersionRecord,
   evaluatedAgainst: ArchitectureSourceRef,
 ): BriefFreshness {
-  if (sameSource(brief.source, evaluatedAgainst))
+  if (architectureSourceRefsEqual(brief.source, evaluatedAgainst))
     return { status: "current", evaluatedAgainst, reasons: [] };
   return {
     status: "stale",

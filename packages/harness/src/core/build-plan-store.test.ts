@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type {
   AgentBriefId,
+  AgentBriefVersion,
+  AgentBriefVersionRecord,
+  BuildPlanRef,
   BuilderPlanningSubmission,
   BuilderPlanningSubmissionId,
   PlanningAssignmentId,
@@ -24,6 +27,7 @@ import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {
   computeArchitectureGraphDigest,
+  computePlanningSubmissionRecordDigest,
   computePlanningSubmissionSemanticDigest,
 } from "./build-plan-canonicalization.js";
 
@@ -44,19 +48,63 @@ describe("BuildPlanStore", () => {
   );
   async function fixture(
     options: ConstructorParameters<typeof AgentMapWorkspaceStore>[1] = {},
+    buildPlanOptions: ConstructorParameters<typeof BuildPlanStore>[1] = {},
   ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "build-plan-store-"));
     roots.push(root);
     const workspaceStore = new AgentMapWorkspaceStore(root, options);
     const buildPlanStore = new BuildPlanStore(workspaceStore, {
-      allocator: {
+      ...buildPlanOptions,
+      allocator: buildPlanOptions.allocator ?? {
         allocateBuildPlanId: () => makePlan().planId,
         allocateBriefId: () => BRIEF_ID as AgentBriefId,
         allocateAssignmentId: () => ASSIGNMENT_ID as PlanningAssignmentId,
       },
-      now: () => new Date("2026-09-03T09:05:00.000Z"),
+      now: buildPlanOptions.now ?? (() => new Date("2026-09-03T09:05:00.000Z")),
     });
     return { root, workspaceStore, buildPlanStore };
+  }
+
+  function submissionFor(
+    plan: BuildPlanRef,
+    brief: AgentBriefVersionRecord,
+    overrides: Partial<BuilderPlanningSubmission> = {},
+  ): BuilderPlanningSubmission {
+    const draft = {
+      schemaVersion: 1,
+      submissionId:
+        "submission_00000000-0000-7000-8000-000000000008" as BuilderPlanningSubmissionId,
+      projectId: PROJECT_ID,
+      assignmentId: brief.assignmentId,
+      sessionId: "builder-session-1",
+      source: brief.source,
+      plan,
+      brief: {
+        briefId: brief.briefId,
+        version: brief.version,
+        semanticDigest: brief.semanticDigest,
+      },
+      status: "ready",
+      implementationPlan: [
+        {
+          stepId: "step-1",
+          ordinal: 1,
+          description: "Implement",
+          verification: "Run tests",
+        },
+      ],
+      risks: [],
+      questions: [],
+      proposedMapOperationIds: [],
+      supersedesSubmissionId: null,
+      semanticDigest: `sha256:${"0".repeat(64)}`,
+      recordDigest: `sha256:${"0".repeat(64)}`,
+      submittedAt: "2026-09-03T09:10:00.000Z",
+      ...overrides,
+    } as unknown as BuilderPlanningSubmission;
+    draft.semanticDigest = computePlanningSubmissionSemanticDigest(draft);
+    draft.recordDigest = computePlanningSubmissionRecordDigest(draft);
+    return draft;
   }
 
   it("persists stable assignments, immutable brief history, replay, and restart", async () => {
@@ -68,7 +116,7 @@ describe("BuildPlanStore", () => {
       briefId: first.assignments[0]!.briefId,
       assignmentId: first.assignments[0]!.assignmentId,
     });
-    await buildPlanStore.commitBriefVersions(PROJECT_ID, [brief]);
+    await buildPlanStore.commitBriefVersions(PROJECT_ID, first.plan, [brief]);
     const submission = {
       schemaVersion: 1,
       submissionId:
@@ -97,10 +145,12 @@ describe("BuildPlanStore", () => {
       proposedMapOperationIds: [],
       supersedesSubmissionId: null,
       semanticDigest: `sha256:${"0".repeat(64)}`,
+      recordDigest: `sha256:${"0".repeat(64)}`,
       submittedAt: "2026-09-03T09:10:00.000Z",
     } as unknown as BuilderPlanningSubmission;
     submission.semanticDigest =
       computePlanningSubmissionSemanticDigest(submission);
+    submission.recordDigest = computePlanningSubmissionRecordDigest(submission);
     await buildPlanStore.commitSubmission(submission);
 
     const restarted = new BuildPlanStore(new AgentMapWorkspaceStore(root));
@@ -124,8 +174,8 @@ describe("BuildPlanStore", () => {
     ).toEqual(brief);
   });
 
-  it("rejects record corruption after restart", async () => {
-    const { root, buildPlanStore } = await fixture();
+  it("revalidates record integrity when the on-disk file changes", async () => {
+    const { root, workspaceStore, buildPlanStore } = await fixture();
     await buildPlanStore.commitPlanVersion(makePlan(), graph, request);
     const file = path.join(root, "projects", PROJECT_ID, "workspace.json");
     const persisted = JSON.parse(await fs.readFile(file, "utf8")) as {
@@ -135,7 +185,7 @@ describe("BuildPlanStore", () => {
     await fs.writeFile(file, `${JSON.stringify(persisted)}\n`);
 
     await expect(
-      new AgentMapWorkspaceStore(root).readAggregate(PROJECT_ID),
+      workspaceStore.readAggregate(PROJECT_ID),
     ).rejects.toMatchObject({
       code: "malformed_state",
     });
@@ -191,6 +241,228 @@ describe("BuildPlanStore", () => {
       retiredAt: null,
     });
   });
+
+  it("rejects a delayed brief compiler after the current plan advances", async () => {
+    const { buildPlanStore } = await fixture();
+    const firstPlan = makePlan();
+    const first = await buildPlanStore.commitPlanVersion(
+      firstPlan,
+      graph,
+      request,
+    );
+    const delayedBrief = makeBrief(firstPlan, {
+      briefId: first.assignments[0]!.briefId,
+      assignmentId: first.assignments[0]!.assignmentId,
+    });
+    const secondPlan = makePlan({
+      version: 2 as BuildPlanVersion,
+      parentVersion: 1 as BuildPlanVersion,
+      changeKind: "edited",
+      source: { ...proposalSource(), version: 2 },
+    });
+    await buildPlanStore.commitPlanVersion(secondPlan, graph, {
+      ...request,
+      requestId: "request-2",
+      requestDigest: `sha256:${"b".repeat(64)}`,
+    });
+
+    await expect(
+      buildPlanStore.commitBriefVersions(PROJECT_ID, first.plan, [
+        delayedBrief,
+      ]),
+    ).rejects.toMatchObject({ code: "version_conflict" });
+    expect(
+      (await buildPlanStore.read(PROJECT_ID)).currentBriefByAgentId,
+    ).toEqual({});
+  });
+
+  it("fails closed when an exact idempotency receipt ages into a tombstone", async () => {
+    const { buildPlanStore } = await fixture({}, { receiptRetentionLimit: 1 });
+    const firstPlan = makePlan();
+    await buildPlanStore.commitPlanVersion(firstPlan, graph, request);
+    const secondPlan = makePlan({
+      version: 2 as BuildPlanVersion,
+      parentVersion: 1 as BuildPlanVersion,
+      changeKind: "edited",
+      source: { ...proposalSource(), version: 2 },
+    });
+    await buildPlanStore.commitPlanVersion(secondPlan, graph, {
+      ...request,
+      requestId: "request-2",
+      requestDigest: `sha256:${"b".repeat(64)}`,
+    });
+
+    await expect(
+      buildPlanStore.commitPlanVersion(firstPlan, graph, request),
+    ).rejects.toMatchObject({ code: "request_id_expired" });
+    await expect(
+      buildPlanStore.commitPlanVersion(firstPlan, graph, {
+        ...request,
+        requestDigest: `sha256:${"f".repeat(64)}`,
+      }),
+    ).rejects.toMatchObject({ code: "request_id_expired" });
+    expect(
+      (await buildPlanStore.read(PROJECT_ID)).idempotencyTombstones,
+    ).toEqual([{ sessionId: request.sessionId, requestId: request.requestId }]);
+  });
+
+  it("reports explicit limits without allocating another durable version", async () => {
+    const { buildPlanStore } = await fixture(
+      {},
+      { historyLimits: { planVersions: 1 } },
+    );
+    await buildPlanStore.commitPlanVersion(makePlan(), graph, request);
+    const secondPlan = makePlan({
+      version: 2 as BuildPlanVersion,
+      parentVersion: 1 as BuildPlanVersion,
+      changeKind: "edited",
+      source: { ...proposalSource(), version: 2 },
+    });
+
+    await expect(
+      buildPlanStore.commitPlanVersion(secondPlan, graph, {
+        ...request,
+        requestId: "request-2",
+      }),
+    ).rejects.toMatchObject({
+      code: "history_limit_exceeded",
+      historyKind: "plan-versions",
+      limit: 1,
+    });
+    expect((await buildPlanStore.read(PROJECT_ID)).planVersions).toHaveLength(
+      1,
+    );
+  });
+
+  it("reports explicit brief and submission history limits", async () => {
+    const briefFixture = await fixture(
+      {},
+      { historyLimits: { briefVersions: 1 } },
+    );
+    const briefPlan = makePlan();
+    const briefCommit = await briefFixture.buildPlanStore.commitPlanVersion(
+      briefPlan,
+      graph,
+      request,
+    );
+    const firstBrief = makeBrief(briefPlan, {
+      briefId: briefCommit.assignments[0]!.briefId,
+      assignmentId: briefCommit.assignments[0]!.assignmentId,
+    });
+    await briefFixture.buildPlanStore.commitBriefVersions(
+      PROJECT_ID,
+      briefCommit.plan,
+      [firstBrief],
+    );
+    const secondBrief = makeBrief(briefPlan, {
+      ...firstBrief,
+      version: 2 as AgentBriefVersion,
+      parentVersion: 1 as AgentBriefVersion,
+    });
+    await expect(
+      briefFixture.buildPlanStore.commitBriefVersions(
+        PROJECT_ID,
+        briefCommit.plan,
+        [secondBrief],
+      ),
+    ).rejects.toMatchObject({
+      code: "history_limit_exceeded",
+      historyKind: "brief-versions",
+      limit: 1,
+    });
+
+    const submissionFixture = await fixture(
+      {},
+      { historyLimits: { planningSubmissions: 1 } },
+    );
+    const submissionPlan = makePlan();
+    const submissionCommit =
+      await submissionFixture.buildPlanStore.commitPlanVersion(
+        submissionPlan,
+        graph,
+        request,
+      );
+    const submissionBrief = makeBrief(submissionPlan, {
+      briefId: submissionCommit.assignments[0]!.briefId,
+      assignmentId: submissionCommit.assignments[0]!.assignmentId,
+    });
+    await submissionFixture.buildPlanStore.commitBriefVersions(
+      PROJECT_ID,
+      submissionCommit.plan,
+      [submissionBrief],
+    );
+    const firstSubmission = submissionFor(
+      submissionCommit.plan,
+      submissionBrief,
+    );
+    await submissionFixture.buildPlanStore.commitSubmission(firstSubmission);
+    const secondSubmission = submissionFor(
+      submissionCommit.plan,
+      submissionBrief,
+      {
+        submissionId:
+          "submission_00000000-0000-7000-8000-000000000009" as BuilderPlanningSubmissionId,
+        supersedesSubmissionId: firstSubmission.submissionId,
+        submittedAt: "2026-09-03T09:11:00.000Z",
+      },
+    );
+    await expect(
+      submissionFixture.buildPlanStore.commitSubmission(secondSubmission),
+    ).rejects.toMatchObject({
+      code: "history_limit_exceeded",
+      historyKind: "planning-submissions",
+      limit: 1,
+    });
+  });
+
+  it.each(["assignment transition", "submission provenance"] as const)(
+    "detects %s tampering after restart",
+    async (target) => {
+      const { root, buildPlanStore } = await fixture();
+      const plan = makePlan();
+      const committed = await buildPlanStore.commitPlanVersion(
+        plan,
+        graph,
+        request,
+      );
+      const brief = makeBrief(plan, {
+        briefId: committed.assignments[0]!.briefId,
+        assignmentId: committed.assignments[0]!.assignmentId,
+      });
+      await buildPlanStore.commitBriefVersions(PROJECT_ID, committed.plan, [
+        brief,
+      ]);
+      await buildPlanStore.commitSubmission(
+        submissionFor(committed.plan, brief),
+      );
+      const file = path.join(root, "projects", PROJECT_ID, "workspace.json");
+      const persisted = JSON.parse(await fs.readFile(file, "utf8")) as {
+        buildPlanning: {
+          assignmentByAgentId: Record<
+            string,
+            { transitions: Array<{ at: string }> }
+          >;
+          submissionsByAssignmentId: Record<
+            string,
+            Array<{ sessionId: string }>
+          >;
+        };
+      };
+      if (target === "assignment transition")
+        persisted.buildPlanning.assignmentByAgentId[
+          AGENT_ID
+        ]!.transitions[0]!.at = "2026-09-03T09:06:00.000Z";
+      else
+        persisted.buildPlanning.submissionsByAssignmentId[
+          ASSIGNMENT_ID
+        ]![0]!.sessionId = "tampered-session";
+      await fs.writeFile(file, `${JSON.stringify(persisted)}\n`);
+
+      await expect(
+        new AgentMapWorkspaceStore(root).readAggregate(PROJECT_ID),
+      ).rejects.toMatchObject({ code: "malformed_state" });
+    },
+  );
 
   it("does not publish IDs or versions when the atomic replace fails", async () => {
     let fail = false;

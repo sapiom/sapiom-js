@@ -5,18 +5,23 @@ import type {
   PlanNodeId,
   StudioProjectId,
 } from "../shared/agent-map.js";
-import type {
-  AgentBriefId,
-  AgentBriefRef,
-  AgentBriefVersionRecord,
-  BuildPlanIdempotencyReceipt,
-  BuildPlanId,
-  BuildPlanRef,
-  BuilderPlanningSubmission,
-  PlanningAssignmentId,
-  PlanningAssignmentRef,
-  PlanningAssignmentRecord,
-  ProjectBuildPlanVersion,
+import {
+  AGENT_BRIEF_VERSION_HISTORY_LIMIT,
+  architectureSourceRefsEqual,
+  BUILD_PLAN_VERSION_HISTORY_LIMIT,
+  PLANNING_SUBMISSION_HISTORY_LIMIT,
+  type AgentBriefId,
+  type AgentBriefRef,
+  type AgentBriefVersionRecord,
+  type BuildPlanIdempotencyReceipt,
+  type BuildPlanId,
+  type BuildPlanRef,
+  type BuilderPlanningSubmission,
+  type PlanningAssignmentId,
+  type PlanningAssignmentRef,
+  type PlanningAssignmentRecord,
+  type ProjectBuildPlanVersion,
+  type RecordDigest,
 } from "../shared/build-plan.js";
 import {
   parseAgentBriefVersionRecord,
@@ -30,17 +35,43 @@ import {
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
   computeArchitectureGraphDigest,
+  computePlanningAssignmentRecordDigest,
+  computePlanningSubmissionRecordDigest,
   computePlanningSubmissionSemanticDigest,
 } from "./build-plan-canonicalization.js";
 
 export class BuildPlanStoreConflictError extends Error {
-  constructor(readonly code: "version_conflict" | "request_id_reused") {
+  constructor(
+    readonly code:
+      | "version_conflict"
+      | "request_id_reused"
+      | "request_id_expired",
+  ) {
     super(
       code === "version_conflict"
         ? "Build planning version changed"
-        : "Build planning request ID was reused",
+        : code === "request_id_reused"
+          ? "Build planning request ID was reused"
+          : "Build planning request replay has expired",
     );
     this.name = "BuildPlanStoreConflictError";
+  }
+}
+
+export type BuildPlanHistoryKind =
+  | "plan-versions"
+  | "brief-versions"
+  | "planning-submissions";
+
+export class BuildPlanStoreLimitError extends Error {
+  readonly code = "history_limit_exceeded" as const;
+
+  constructor(
+    readonly historyKind: BuildPlanHistoryKind,
+    readonly limit: number,
+  ) {
+    super(`Build planning ${historyKind} history limit was reached`);
+    this.name = "BuildPlanStoreLimitError";
   }
 }
 
@@ -62,21 +93,85 @@ export interface BuildPlanCommitIdentity {
   requestDigest: string;
 }
 
-const sameSource = (left: unknown, right: unknown) =>
-  JSON.stringify(left) === JSON.stringify(right);
+export interface BuildPlanStoreOptions {
+  allocator?: BuildPlanIdentityAllocator;
+  now?: () => Date;
+  receiptRetentionLimit?: number;
+  historyLimits?: Partial<
+    Readonly<{
+      planVersions: number;
+      briefVersions: number;
+      planningSubmissions: number;
+    }>
+  >;
+}
+
+const ZERO_RECORD_DIGEST = `sha256:${"0".repeat(64)}` as RecordDigest;
+const sealAssignment = (
+  assignment: PlanningAssignmentRecord,
+): PlanningAssignmentRecord => ({
+  ...assignment,
+  recordDigest: computePlanningAssignmentRecordDigest(assignment),
+});
+const samePlanRef = (left: BuildPlanRef, right: BuildPlanRef) =>
+  left.planId === right.planId &&
+  left.version === right.version &&
+  left.semanticDigest === right.semanticDigest;
 
 /** Persistence primitives over the same crash-atomic E2 project aggregate. */
 export class BuildPlanStore {
   private readonly allocator: BuildPlanIdentityAllocator;
   private readonly now: () => Date;
+  private readonly receiptRetentionLimit: number;
+  private readonly historyLimits: {
+    planVersions: number;
+    briefVersions: number;
+    planningSubmissions: number;
+  };
 
   constructor(
     private readonly store: AgentMapWorkspaceStore,
-    options: { allocator?: BuildPlanIdentityAllocator; now?: () => Date } = {},
+    options: BuildPlanStoreOptions = {},
   ) {
     this.allocator =
       options.allocator ?? new UuidV7BuildPlanIdentityAllocator();
     this.now = options.now ?? (() => new Date());
+    const requestedReceiptLimit = options.receiptRetentionLimit ?? 256;
+    if (
+      !Number.isSafeInteger(requestedReceiptLimit) ||
+      requestedReceiptLimit < 1
+    )
+      throw new RangeError("receiptRetentionLimit must be a positive integer");
+    this.receiptRetentionLimit = Math.min(requestedReceiptLimit, 256);
+    this.historyLimits = {
+      planVersions:
+        options.historyLimits?.planVersions ?? BUILD_PLAN_VERSION_HISTORY_LIMIT,
+      briefVersions:
+        options.historyLimits?.briefVersions ??
+        AGENT_BRIEF_VERSION_HISTORY_LIMIT,
+      planningSubmissions:
+        options.historyLimits?.planningSubmissions ??
+        PLANNING_SUBMISSION_HISTORY_LIMIT,
+    };
+    for (const [name, limit, maximum] of [
+      [
+        "planVersions",
+        this.historyLimits.planVersions,
+        BUILD_PLAN_VERSION_HISTORY_LIMIT,
+      ],
+      [
+        "briefVersions",
+        this.historyLimits.briefVersions,
+        AGENT_BRIEF_VERSION_HISTORY_LIMIT,
+      ],
+      [
+        "planningSubmissions",
+        this.historyLimits.planningSubmissions,
+        PLANNING_SUBMISSION_HISTORY_LIMIT,
+      ],
+    ] as const)
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximum)
+        throw new RangeError(`${name} history limit is invalid`);
   }
 
   async read(projectId: StudioProjectId) {
@@ -169,6 +264,19 @@ export class BuildPlanStore {
         };
       }
       if (
+        planning.idempotencyTombstones.some(
+          (entry) =>
+            entry.sessionId === request.sessionId &&
+            entry.requestId === request.requestId,
+        )
+      )
+        throw new BuildPlanStoreConflictError("request_id_expired");
+      if (planning.planVersions.length >= this.historyLimits.planVersions)
+        throw new BuildPlanStoreLimitError(
+          "plan-versions",
+          this.historyLimits.planVersions,
+        );
+      if (
         (planning.planId !== null && planning.planId !== plan.planId) ||
         plan.version !== planning.planVersions.length + 1 ||
         plan.parentVersion !== planning.currentPlanVersion
@@ -183,7 +291,7 @@ export class BuildPlanStore {
           !active.has(agentId as PlanNodeId) &&
           existing.status === "active"
         ) {
-          assignmentByAgentId[agentId] = {
+          assignmentByAgentId[agentId] = sealAssignment({
             ...existing,
             status: "retired",
             retiredAt: timestamp,
@@ -195,7 +303,7 @@ export class BuildPlanStore {
                 planVersion: plan.version,
               },
             ],
-          };
+          });
           delete currentBriefByAgentId[agentId];
         }
       }
@@ -203,7 +311,7 @@ export class BuildPlanStore {
         const existing = assignmentByAgentId[agentId];
         assignmentByAgentId[agentId] = existing
           ? existing.status === "retired"
-            ? {
+            ? sealAssignment({
                 ...existing,
                 status: "active",
                 retiredAt: null,
@@ -215,9 +323,9 @@ export class BuildPlanStore {
                     planVersion: plan.version,
                   },
                 ],
-              }
+              })
             : existing
-          : {
+          : sealAssignment({
               schemaVersion: 1,
               projectId: plan.projectId,
               assignmentId: this.allocator.allocateAssignmentId(),
@@ -229,13 +337,19 @@ export class BuildPlanStore {
               transitions: [
                 { status: "active", at: timestamp, planVersion: plan.version },
               ],
-            };
+              recordDigest: ZERO_RECORD_DIGEST,
+            });
       }
       const receipt: BuildPlanIdempotencyReceipt = {
         ...request,
         resultRecordDigest: plan.recordDigest,
         createdAt: timestamp,
       };
+      const retainedReceipts = [...planning.idempotencyReceipts, receipt];
+      const expiredReceipts = retainedReceipts.slice(
+        0,
+        -this.receiptRetentionLimit,
+      );
       const nextPlanning = {
         ...planning,
         planId: plan.planId,
@@ -243,9 +357,16 @@ export class BuildPlanStore {
         planVersions: [...planning.planVersions, plan],
         currentBriefByAgentId,
         assignmentByAgentId,
-        idempotencyReceipts: [...planning.idempotencyReceipts, receipt].slice(
-          -256,
+        idempotencyReceipts: retainedReceipts.slice(
+          -this.receiptRetentionLimit,
         ),
+        idempotencyTombstones: [
+          ...planning.idempotencyTombstones,
+          ...expiredReceipts.map(({ sessionId, requestId }) => ({
+            sessionId,
+            requestId,
+          })),
+        ],
       };
       const next = {
         ...aggregate,
@@ -272,6 +393,7 @@ export class BuildPlanStore {
 
   async commitBriefVersions(
     projectId: StudioProjectId,
+    expectedPlan: BuildPlanRef,
     input: readonly AgentBriefVersionRecord[],
   ): Promise<AgentBriefRef[]> {
     const briefs = input.map(parseAgentBriefVersionRecord);
@@ -285,11 +407,19 @@ export class BuildPlanStore {
     }
     return this.store.transact(projectId, async (aggregate) => {
       const planning = aggregate.buildPlanning;
+      const currentPlan = planning.planVersions.at(-1);
+      if (!currentPlan || !samePlanRef(this.planRef(currentPlan), expectedPlan))
+        throw new BuildPlanStoreConflictError("version_conflict");
       const histories = { ...planning.briefVersionsById };
       const current = { ...planning.currentBriefByAgentId };
       for (const brief of briefs) {
         const assignment = planning.assignmentByAgentId[brief.plannedAgentId];
         const history = histories[brief.briefId] ?? [];
+        if (history.length >= this.historyLimits.briefVersions)
+          throw new BuildPlanStoreLimitError(
+            "brief-versions",
+            this.historyLimits.briefVersions,
+          );
         const plan = planning.planVersions.find(
           (entry) =>
             entry.planId === brief.plan.planId &&
@@ -304,7 +434,8 @@ export class BuildPlanStore {
           brief.parentVersion !== (history.at(-1)?.version ?? null) ||
           !plan ||
           plan.semanticDigest !== brief.plan.semanticDigest ||
-          !sameSource(plan.source, brief.source)
+          !samePlanRef(brief.plan, expectedPlan) ||
+          !architectureSourceRefsEqual(currentPlan.source, brief.source)
         )
           throw new BuildPlanStoreConflictError("version_conflict");
         histories[brief.briefId] = [...history, brief];
@@ -334,7 +465,9 @@ export class BuildPlanStore {
     const submission = parseBuilderPlanningSubmission(input);
     if (
       computePlanningSubmissionSemanticDigest(submission) !==
-      submission.semanticDigest
+        submission.semanticDigest ||
+      computePlanningSubmissionRecordDigest(submission) !==
+        submission.recordDigest
     )
       throw new Error("invalid planning submission digest");
     await this.store.transact(submission.projectId, async (aggregate) => {
@@ -349,6 +482,11 @@ export class BuildPlanStore {
         ];
       const history =
         planning.submissionsByAssignmentId[submission.assignmentId] ?? [];
+      if (history.length >= this.historyLimits.planningSubmissions)
+        throw new BuildPlanStoreLimitError(
+          "planning-submissions",
+          this.historyLimits.planningSubmissions,
+        );
       const plan = planning.planVersions.find(
         (entry) =>
           entry.planId === submission.plan.planId &&
@@ -361,7 +499,7 @@ export class BuildPlanStore {
         !assignment ||
         !plan ||
         plan.semanticDigest !== submission.plan.semanticDigest ||
-        !sameSource(plan.source, submission.source) ||
+        !architectureSourceRefsEqual(plan.source, submission.source) ||
         !brief ||
         brief.semanticDigest !== submission.brief.semanticDigest ||
         brief.assignmentId !== submission.assignmentId ||

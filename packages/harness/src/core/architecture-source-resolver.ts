@@ -57,7 +57,11 @@ export class ArchitectureSourceResolver {
     let graph: AgentMapGraph;
     if (source.kind === "revision") {
       const revision = await this.readRevision(source.revisionId);
-      if (!revision || revision.revisionNumber !== source.revisionNumber)
+      if (
+        !revision ||
+        revision.revisionId !== source.revisionId ||
+        revision.revisionNumber !== source.revisionNumber
+      )
         throw new ArchitectureSourceResolutionError("source_not_found");
       if (revision.projectId !== projectId)
         throw new ArchitectureSourceResolutionError("cross_project");
@@ -76,7 +80,7 @@ export class ArchitectureSourceResolver {
         const revision = await this.readRevision(
           proposal.baseRevisionId as AgentMapRevisionId,
         );
-        if (!revision)
+        if (!revision || revision.revisionId !== proposal.baseRevisionId)
           throw new ArchitectureSourceResolutionError("source_not_found");
         if (revision.projectId !== projectId)
           throw new ArchitectureSourceResolutionError("cross_project");

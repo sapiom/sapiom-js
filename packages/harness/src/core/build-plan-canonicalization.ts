@@ -8,6 +8,7 @@ import type {
   BuilderPlanningSubmission,
   GraphDigest,
   PlanningSubmissionDigest,
+  PlanningAssignmentRecord,
   ProjectBuildPlanVersion,
   RecordDigest,
 } from "../shared/build-plan.js";
@@ -196,6 +197,7 @@ export const computePlanningSubmissionSemanticDigest = (
     "submittedAt",
     "supersedesSubmissionId",
     "semanticDigest",
+    "recordDigest",
     "source",
   ]);
   return hash("sapiom.planning-submission.semantic.v1", {
@@ -216,6 +218,22 @@ export const computePlanningSubmissionSemanticDigest = (
     ),
   }) as PlanningSubmissionDigest;
 };
+
+export const computePlanningSubmissionRecordDigest = (
+  submission: BuilderPlanningSubmission,
+): RecordDigest =>
+  hash(
+    "sapiom.planning-submission.record.v1",
+    omit(submission, ["recordDigest"]),
+  ) as RecordDigest;
+
+export const computePlanningAssignmentRecordDigest = (
+  assignment: PlanningAssignmentRecord,
+): RecordDigest =>
+  hash(
+    "sapiom.planning-assignment.record.v1",
+    omit(assignment, ["recordDigest"]),
+  ) as RecordDigest;
 
 export const computeArchitectureGraphDigest = (
   graph: AgentMapGraph,

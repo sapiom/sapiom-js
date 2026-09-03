@@ -29,10 +29,16 @@ export type {
 } from "./shared/agent-map.js";
 export {
   BUILD_PLAN_SCHEMA_VERSION,
-  BUILD_PLANNING_AGGREGATE_SCHEMA_VERSION,
-  emptyBuildPlanningAggregate,
+  architectureSourceRefsEqual,
 } from "./shared/build-plan.js";
-export type * from "./shared/build-plan.js";
+export type {
+  AgentBriefRef,
+  ArchitectureSourceRef,
+  BuilderPlanningContextRef,
+  BuilderPlanningSubmission,
+  BuildPlanRef,
+  PlanningAssignmentRef,
+} from "./shared/build-plan.js";
 export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {

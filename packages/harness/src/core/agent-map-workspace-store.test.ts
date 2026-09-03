@@ -3,8 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DraftRef, PlanningSessionIdentity } from "../shared/agent-map.js";
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { emptyBuildPlanningAggregate } from "../shared/build-plan.js";
+import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 
@@ -147,21 +149,49 @@ describe("AgentMapWorkspaceStore", () => {
       projectId,
       "workspace.json",
     );
-    const workspace = {
+    const store = new AgentMapWorkspaceStore(root, {
+      now: () => new Date("2026-09-01T12:00:00.000Z"),
+    });
+    const service = new AgentMapProposalService(store, {
+      now: () => new Date("2026-09-01T12:01:00.000Z"),
+    });
+    const identity: PlanningSessionIdentity = {
       projectId,
-      schemaVersion: 1,
-      recordVersion: 3,
-      confirmedRevisionId: null,
-      activeProposalId: null,
-      projectBuildPlanId: null,
-      createdAt: "2026-09-01T12:00:00.000Z",
-      updatedAt: "2026-09-01T12:01:00.000Z",
+      userId: "user-1",
+      sessionId: "session-1",
+      role: "map-planner",
     };
-    await fs.mkdir(path.dirname(workspacePath), { recursive: true });
-    await fs.writeFile(
-      workspacePath,
-      `${JSON.stringify({ storageSchemaVersion: 1, workspace, proposal: null, receipts: [] })}\n`,
-    );
+    await service.propose(identity, {
+      schemaVersion: 1,
+      proposalId: null,
+      expectedVersion: 0,
+      requestId: "request-1",
+      operations: [
+        {
+          kind: "add-node",
+          draftRef: "draft-1" as DraftRef,
+          node: {
+            kind: "agent",
+            name: "Builder",
+            purpose: "Build the system",
+            ownerAgent: null,
+            contractRefs: ["contract-1"],
+          },
+        },
+      ],
+    });
+    const current = JSON.parse(await fs.readFile(workspacePath, "utf8")) as {
+      workspace: unknown;
+      proposal: { history: unknown[] };
+      receipts: unknown[];
+    };
+    const legacy = {
+      storageSchemaVersion: 1,
+      workspace: current.workspace,
+      proposal: current.proposal,
+      receipts: current.receipts,
+    };
+    await fs.writeFile(workspacePath, `${JSON.stringify(legacy)}\n`);
 
     const aggregate = await new AgentMapWorkspaceStore(root).readAggregate(
       projectId,
@@ -169,11 +199,13 @@ describe("AgentMapWorkspaceStore", () => {
 
     expect(aggregate).toEqual({
       storageSchemaVersion: 2,
-      workspace,
-      proposal: null,
-      receipts: [],
+      workspace: current.workspace,
+      proposal: current.proposal,
+      receipts: current.receipts,
       buildPlanning: emptyBuildPlanningAggregate(),
     });
+    expect(current.proposal.history).toHaveLength(1);
+    expect(current.receipts).toHaveLength(1);
     expect(JSON.parse(await fs.readFile(workspacePath, "utf8"))).toEqual(
       aggregate,
     );
