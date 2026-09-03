@@ -731,7 +731,17 @@ export class BuildPlanService {
     const digest = requestDigest({ ...input, requestId: undefined });
     const replay = await this.findReplay(identity, input.requestId, digest);
     if (replay) return replay;
-    const prepared = await this.prepare(identity, input);
+    let prepared: Awaited<ReturnType<BuildPlanService["prepare"]>>;
+    try {
+      prepared = await this.prepare(identity, input);
+    } catch (error) {
+      return await this.replayPreflightConflict(
+        identity,
+        input.requestId,
+        digest,
+        error,
+      );
+    }
     try {
       const committed = await this.dependencies.store.commitPlanVersion(
         prepared.plan,
@@ -784,19 +794,32 @@ export class BuildPlanService {
     const digest = requestDigest({ ...input, requestId: undefined });
     const replay = await this.findReplay(identity, input.requestId, digest);
     if (replay) return replay;
-    const planning = await this.dependencies.store.read(identity.projectId);
-    const current = planning.planVersions.at(-1);
     const fromSource = input.fromSource as unknown as ArchitectureSourceRef;
     const toSource = input.toSource as unknown as ArchitectureSourceRef;
-    this.assertCurrent(
-      current,
-      input.planId,
-      input.expectedPlanVersion,
-      fromSource,
-    );
-    const from = await this.resolve(identity.projectId, fromSource);
-    const to = await this.resolve(identity.projectId, toSource);
-    await this.assertCurrentProposalSource(identity.projectId, to.source);
+    let planning: Awaited<ReturnType<BuildPlanStore["read"]>>;
+    let current: ProjectBuildPlanVersion | undefined;
+    let from: ResolvedArchitectureSource;
+    let to: ResolvedArchitectureSource;
+    try {
+      planning = await this.dependencies.store.read(identity.projectId);
+      current = planning.planVersions.at(-1);
+      this.assertCurrent(
+        current,
+        input.planId,
+        input.expectedPlanVersion,
+        fromSource,
+      );
+      from = await this.resolve(identity.projectId, fromSource);
+      to = await this.resolve(identity.projectId, toSource);
+      await this.assertCurrentProposalSource(identity.projectId, to.source);
+    } catch (error) {
+      return await this.replayPreflightConflict(
+        identity,
+        input.requestId,
+        digest,
+        error,
+      );
+    }
     let assignments = structuredClone(current!.assignments);
     let repositoryIntents: RepositoryIntent[] = [
       ...structuredClone(current!.repositoryIntents),
@@ -1389,6 +1412,24 @@ export class BuildPlanService {
     if (receipt.requestDigest !== digest)
       throw new BuildPlanServiceError("idempotency_key_reused");
     return this.replayResult(identity, receipt);
+  }
+
+  private async replayPreflightConflict(
+    identity: PlanningSessionIdentity,
+    requestId: string,
+    digest: string,
+    error: unknown,
+  ) {
+    if (
+      error instanceof BuildPlanServiceError &&
+      (error.code === "plan_version_conflict" ||
+        error.code === "source_mismatch" ||
+        error.code === "source_digest_mismatch")
+    ) {
+      const replay = await this.findReplay(identity, requestId, digest);
+      if (replay) return replay;
+    }
+    throw error;
   }
 
   private async replayResult(
