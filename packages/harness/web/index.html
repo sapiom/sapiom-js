@@ -9,13 +9,10 @@
     <script>
       // Set the theme before first paint to avoid a flash of the wrong one.
       // Storage key + resolution must match web/src/lib/theme.ts (this can't
-      // import it): a stored choice wins, otherwise follow the OS preference.
+      // import it): a stored choice wins, otherwise default to light.
       (function () {
         var stored = localStorage.getItem("sapiom-harness-theme");
-        var prefersDark =
-          window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-        var theme =
-          stored === "light" || stored === "dark" ? stored : prefersDark ? "dark" : "light";
+        var theme = stored === "light" || stored === "dark" ? stored : "light";
         document.documentElement.dataset.theme = theme;
       })();
     </script>

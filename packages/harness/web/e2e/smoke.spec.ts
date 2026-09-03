@@ -70,44 +70,42 @@ async function toggleTheme(page: Page): Promise<void> {
   await page.getByTestId("theme-toggle").click();
 }
 
-test.describe("theme — a manual choice overrides system and persists", () => {
-  // Pin the OS to dark so the default resolves to dark; the toggle then flips
-  // to light and the STORED choice must survive a reload even though the OS
-  // still prefers dark (persistence beats system).
+test.describe("theme — a manual choice overrides the light default and persists", () => {
+  // Pin the OS to dark to prove it does not choose the initial theme. The toggle
+  // then stores dark, which must survive a reload (persistence beats default).
   test.use({ colorScheme: "dark" });
 
-  test("toggles to light and the choice persists across reload", async ({
+  test("defaults to light, toggles to dark, and persists across reload", async ({
     page,
   }) => {
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    await page.screenshot({
-      path: "web/e2e/screenshots/theme-dark.png",
-      fullPage: true,
-    });
-
-    await toggleTheme(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await page.screenshot({
       path: "web/e2e/screenshots/theme-light.png",
       fullPage: true,
     });
 
-    await page.reload();
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-
     await toggleTheme(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.screenshot({
+      path: "web/e2e/screenshots/theme-dark.png",
+      fullPage: true,
+    });
+
+    await page.reload();
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    await toggleTheme(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
 });
 
-test.describe("theme — follows the system preference until the user chooses", () => {
-  // No stored choice → the app mirrors the OS color scheme in both directions
-  // (boot never persists, so it keeps tracking the system across launches).
+test.describe("theme — defaults to light until the user chooses", () => {
+  // No stored choice → light, independent of the OS color scheme.
   test.describe("system prefers dark", () => {
     test.use({ colorScheme: "dark" });
-    test("defaults to dark", async ({ page }) => {
-      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    test("defaults to light", async ({ page }) => {
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     });
   });
 
@@ -2765,8 +2763,8 @@ test.describe("resizable panes", () => {
 });
 
 test.describe("canvas iframe theme", () => {
-  // Pin the OS to dark so the default theme is deterministic (it now follows
-  // the system); the test then proves the iframe carries it and flips on toggle.
+  // Pin the OS to dark to prove the light product default still reaches the
+  // iframe; the test then proves that a manual toggle reaches it too.
   test.use({ colorScheme: "dark" });
 
   test("the canvas iframe carries the app's theme and flips on toggle", async ({
@@ -2784,10 +2782,10 @@ test.describe("canvas iframe theme", () => {
     });
 
     const iframe = page.locator(".canvas-iframe");
-    await expect(iframe).toHaveAttribute("src", /theme=dark/);
+    await expect(iframe).toHaveAttribute("src", /theme=light/);
 
     await toggleTheme(page);
-    await expect(iframe).toHaveAttribute("src", /theme=light/);
+    await expect(iframe).toHaveAttribute("src", /theme=dark/);
   });
 });
 

@@ -10,18 +10,14 @@ const STORAGE_KEY = "sapiom-harness-theme";
 type Listener = (theme: Theme) => void;
 const listeners = new Set<Listener>();
 
-function systemPrefersDark(): boolean {
-  return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
-}
-
-/** No stored preference → follow the OS (prefers-color-scheme). Boot never
- *  persists, so with no stored choice the app tracks the system theme across
- *  launches; the toggle and any stored choice still win. Must match the inline
- *  script in index.html, which resolves the same way before first paint. */
+/** No stored preference → light, the Studio's product default. Boot never
+ *  persists the fallback, so the toggle and any stored choice still win. Must
+ *  match the inline script in index.html, which resolves the same way before
+ *  first paint. */
 export function getInitialTheme(): Theme {
   const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
   if (stored === "light" || stored === "dark") return stored;
-  return systemPrefersDark() ? "dark" : "light";
+  return "light";
 }
 
 let current: Theme = getInitialTheme();

@@ -1,4 +1,4 @@
-import { BrowserWindow, app, nativeTheme, shell } from "electron";
+import { BrowserWindow, app, shell } from "electron";
 import { APP_VERSION_ARG } from "./ipc.js";
 import { desktopPreloadPath, setupHtmlPath, setupPreloadPath } from "./paths.js";
 
@@ -22,13 +22,11 @@ export function createSetupWindow(): BrowserWindow {
     // keep their native frame.
     ...(isMac ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 16, y: 16 } } : {}),
     // Pre-paint in the card surface (--s1) so there's no flash before the
-    // stylesheet loads. The renderer resolves the theme from stored-pref ??
-    // system before first paint; the main process can't read that storage, so it
-    // approximates with the system theme (nativeTheme) — exact on a first run and
-    // a single pre-paint frame at worst if a user stored the non-system theme.
-    // The hexes are ds-neutral --s1 (dark #12161d, light #ffffff);
-    // window-background.test.ts pins them to that token so this can't drift.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? "#12161d" : "#ffffff",
+    // stylesheet loads. The renderer preserves a stored preference but defaults
+    // to light; the main process can't read that storage yet, so its pre-paint
+    // frame uses the same light default. #ffffff is ds-neutral's light --s1;
+    // window-background.test.ts pins the literal to that token so it can't drift.
+    backgroundColor: "#ffffff",
     webPreferences: {
       preload: setupPreloadPath(),
       contextIsolation: true,

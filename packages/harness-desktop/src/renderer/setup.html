@@ -17,19 +17,14 @@
       // Set the theme before first paint (mirrors the SPA's inline script in
       // web/index.html). The design-system tokens key dark on
       // [data-theme="dark"], so this window must set the attribute too. This
-      // origin has its own storage, so a fresh window follows the system —
+      // origin has its own storage, so a fresh window defaults to light —
       // matching the SPA's default for a first-time user.
       (function () {
         var stored = null;
         try {
           stored = localStorage.getItem("sapiom-harness-theme");
         } catch (_) {}
-        var theme =
-          stored === "light" || stored === "dark"
-            ? stored
-            : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-              ? "dark"
-              : "light";
+        var theme = stored === "light" || stored === "dark" ? stored : "light";
         document.documentElement.dataset.theme = theme;
       })();
     </script>
