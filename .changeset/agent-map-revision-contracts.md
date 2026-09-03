@@ -2,4 +2,4 @@
 "@sapiom/harness": minor
 ---
 
-Add immutable Agent Map revision, architecture approval, trusted human-message receipt, and confirmation contracts. Architecture snapshots now have a versioned, domain-separated canonical SHA-256 identity that preserves stable graph IDs and can be consumed by later confirmation and build-planning slices.
+Add public contracts for immutable Agent Map revisions, branded architecture digests, architecture approval evidence, trusted human-message receipts, and confirmations. Establish the harness's internal V1 domain-separated SHA-256 canonicalization for later confirmation and build-planning slices.

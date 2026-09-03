@@ -10,6 +10,7 @@ import {
   type ConfirmArchitectureFailure,
   type ConfirmArchitectureRequest,
   type MapChangeProposal,
+  type MapProposalId,
   type PlannerUserMessageReceipt,
   type PlanningSessionIdentity,
   type StudioProjectId,
@@ -43,6 +44,30 @@ export interface MaterializeAgentMapRevisionInput {
   parentRevisionId: AgentMapRevisionId | null;
   createdAt: string;
 }
+
+export type AgentMapConfirmationBoundaryInput =
+  | { committedFirst: "proposal-operation" }
+  | {
+      committedFirst: "confirmation";
+      confirmedSource: { proposalId: MapProposalId; version: number };
+      operationSource: { proposalId: MapProposalId; version: number };
+    };
+
+export type AgentMapConfirmationBoundaryDecision =
+  | {
+      confirmation: {
+        outcome: "failed";
+        failure: Extract<
+          ConfirmArchitectureFailure,
+          { code: "stale_proposal" }
+        >;
+      };
+      proposalOperation: "committed";
+    }
+  | {
+      confirmation: { outcome: "confirmed" };
+      proposalOperation: "rebase-eligible" | "stale";
+    };
 
 /** A bounded failure whose message never includes caller-controlled values. */
 export class AgentMapRevisionContractError extends Error {
@@ -112,6 +137,32 @@ export function digestConfirmArchitectureRequest(
     .digest("hex");
 }
 
+/**
+ * Pure description of the confirmation transaction's linearization boundary.
+ * SAP-3063 owns the transaction and must still validate a rebase-eligible
+ * operation; this helper keeps only the source-ordering outcomes fixed.
+ */
+export function classifyAgentMapConfirmationBoundary(
+  input: AgentMapConfirmationBoundaryInput,
+): AgentMapConfirmationBoundaryDecision {
+  if (input.committedFirst === "proposal-operation")
+    return {
+      confirmation: {
+        outcome: "failed",
+        failure: { code: "stale_proposal", recovery: "reread" },
+      },
+      proposalOperation: "committed",
+    };
+  return {
+    confirmation: { outcome: "confirmed" },
+    proposalOperation:
+      input.operationSource.proposalId === input.confirmedSource.proposalId &&
+      input.operationSource.version === input.confirmedSource.version
+        ? "rebase-eligible"
+        : "stale",
+  };
+}
+
 /** Validate syntax, graph semantics, and the stored architecture digest. */
 export function validateAgentMapRevision(
   value: unknown,
@@ -121,16 +172,16 @@ export function validateAgentMapRevision(
   try {
     revision = parseAgentMapRevision(value, expectedProjectId);
   } catch {
-    return reject({ code: "invalid_revision_chain", recovery: "retry" });
+    return reject({ code: "invalid_revision_chain", recovery: "reread" });
   }
   let digest: AgentMapGraphDigest;
   try {
     digest = digestAgentMapArchitecture(revision.projectId, revision);
   } catch {
-    return reject({ code: "invalid_revision_chain", recovery: "retry" });
+    return reject({ code: "invalid_revision_chain", recovery: "reread" });
   }
   if (digest !== revision.digest)
-    return reject({ code: "invalid_revision_chain", recovery: "retry" });
+    return reject({ code: "invalid_revision_chain", recovery: "reread" });
   return revision;
 }
 
@@ -165,7 +216,7 @@ export function validateAgentMapRevisionChain(
         ? revision.parentRevisionId !== null
         : revision.parentRevisionId !== previous?.id)
     )
-      return reject({ code: "invalid_revision_chain", recovery: "retry" });
+      return reject({ code: "invalid_revision_chain", recovery: "reread" });
     ids.add(revision.id);
     approvingMessageKeys.add(approvingMessageKey);
     approvedProposalSources.add(approvedProposalSource);
@@ -251,9 +302,14 @@ export function materializeAgentMapRevision(
       createdAt: input.createdAt,
     });
   } catch {
-    return reject({ code: "invalid_revision_chain", recovery: "retry" });
+    return reject({ code: "invalid_revision_chain", recovery: "reread" });
   }
-  if (receipt.acceptedAt > revisionRef.createdAt)
+  // This is the enforceable temporal lower bound at the pure contract layer.
+  // SAP-3065 must additionally prove a trusted read of this exact source.
+  if (
+    receipt.acceptedAt < proposal.updatedAt ||
+    receipt.acceptedAt > revisionRef.createdAt
+  )
     return reject({ code: "approval_message_invalid", recovery: "ask_again" });
 
   return validateAgentMapRevision(

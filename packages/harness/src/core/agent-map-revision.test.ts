@@ -15,6 +15,7 @@ import type {
 } from "../shared/agent-map.js";
 import {
   AgentMapRevisionContractError,
+  classifyAgentMapConfirmationBoundary,
   digestAgentMapArchitecture,
   digestConfirmArchitectureRequest,
   materializeAgentMapRevision,
@@ -439,6 +440,16 @@ describe("Agent Map revision materialization", () => {
       "approval_message_invalid",
     ],
     [
+      "approval before the proposal source",
+      (input: MaterializeAgentMapRevisionInput) => {
+        input.receipt = {
+          ...input.receipt,
+          acceptedAt: "2026-09-03T11:59:59.000Z",
+        };
+      },
+      "approval_message_invalid",
+    ],
+    [
       "non-human approval",
       (input: MaterializeAgentMapRevisionInput) => {
         input.receipt = { ...input.receipt, origin: "assistant" as "human" };
@@ -545,9 +556,16 @@ describe("Agent Map revision chain", () => {
   ])("rejects a chain with %s", (_name, mutate) => {
     const revisions = twoRevisions();
     mutate(revisions);
-    expect(() => validateAgentMapRevisionChain(revisions, projectId)).toThrow(
-      AgentMapRevisionContractError,
-    );
+    try {
+      validateAgentMapRevisionChain(revisions, projectId);
+      expect.fail("expected chain validation to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AgentMapRevisionContractError);
+      expect(error).toMatchObject({
+        code: "invalid_revision_chain",
+        recovery: "reread",
+      });
+    }
   });
 });
 
@@ -579,60 +597,46 @@ describe("Agent Map confirmation retry boundary", () => {
   });
 
   it.each([
-    ["same request ID and body", "replayed", "original revision"],
-    ["same request ID with changed body", "request_id_reused", "new_request"],
     [
-      "same proposal and message after a lost response",
-      "replayed",
-      "original revision",
+      "proposal operation commits first",
+      { committedFirst: "proposal-operation" } as const,
+      {
+        confirmation: {
+          outcome: "failed",
+          failure: { code: "stale_proposal", recovery: "reread" },
+        },
+        proposalOperation: "committed",
+      },
     ],
     [
-      "same message against another source",
-      "approval_message_reused",
-      "ask_again",
+      "confirmation commits before an exact-source operation",
+      {
+        committedFirst: "confirmation",
+        confirmedSource: { proposalId, version: 1 },
+        operationSource: { proposalId, version: 1 },
+      } as const,
+      {
+        confirmation: { outcome: "confirmed" },
+        proposalOperation: "rebase-eligible",
+      },
     ],
-    ["same proposal with different approval", "stale_proposal", "reread"],
-  ])("pins %s as %s", (attempt, outcome, recoveryOrIdentity) => {
-    const expected = new Map([
-      ["same request ID and body", ["replayed", "original revision"]],
-      [
-        "same request ID with changed body",
-        ["request_id_reused", "new_request"],
-      ],
-      [
-        "same proposal and message after a lost response",
-        ["replayed", "original revision"],
-      ],
-      [
-        "same message against another source",
-        ["approval_message_reused", "ask_again"],
-      ],
-      ["same proposal with different approval", ["stale_proposal", "reread"]],
-    ]);
-    expect([outcome, recoveryOrIdentity]).toEqual(expected.get(attempt));
+    [
+      "confirmation commits before an older-source operation",
+      {
+        committedFirst: "confirmation",
+        confirmedSource: { proposalId, version: 1 },
+        operationSource: {
+          proposalId:
+            "proposal_018f0000-0000-7000-8000-000000000099" as MapProposalId,
+          version: 1,
+        },
+      } as const,
+      {
+        confirmation: { outcome: "confirmed" },
+        proposalOperation: "stale",
+      },
+    ],
+  ])("classifies when %s", (_name, input, expected) => {
+    expect(classifyAgentMapConfirmationBoundary(input)).toEqual(expected);
   });
-
-  it.each([
-    ["proposal operation", "stale_proposal", "reread exact new source"],
-    [
-      "confirmation",
-      "confirmed exact approved version",
-      "rebase exact-version write",
-    ],
-  ])(
-    "pins the %s-first linearization outcome",
-    (committedFirst, confirmationOutcome, followingWrite) => {
-      if (committedFirst === "proposal operation") {
-        expect([confirmationOutcome, followingWrite]).toEqual([
-          "stale_proposal",
-          "reread exact new source",
-        ]);
-      } else {
-        expect([confirmationOutcome, followingWrite]).toEqual([
-          "confirmed exact approved version",
-          "rebase exact-version write",
-        ]);
-      }
-    },
-  );
 });

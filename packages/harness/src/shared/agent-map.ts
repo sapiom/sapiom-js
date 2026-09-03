@@ -430,7 +430,7 @@ export type ConfirmArchitectureFailure =
   | { code: "approval_message_reused"; recovery: "ask_again" }
   | { code: "request_id_reused"; recovery: "new_request" }
   | { code: "cross_project"; recovery: "reread" }
-  | { code: "invalid_revision_chain"; recovery: "retry" }
+  | { code: "invalid_revision_chain"; recovery: "reread" }
   | { code: "storage_unavailable"; recovery: "retry" };
 
 export type ConfirmArchitectureErrorCode = ConfirmArchitectureFailure["code"];
