@@ -153,6 +153,7 @@ import {
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
+import { createVersionsRouter } from "./versions.js";
 import { createTemplatesRouter } from "./templates.js";
 import { createAccountRouter } from "./account.js";
 import { createActionsRouter } from "./actions.js";
@@ -1619,6 +1620,14 @@ export const startServer = async (
   // baseUrl omitted: the router self-defaults via resolveCoreBaseUrl().
   app.use(
     createTemplatesRouter({
+      apiKey: apiKeyProvider,
+    }),
+  );
+  // Release history + the writes that change what runs. Core-relayed for the
+  // same reason as the gallery, and because the gateway's agents/v1 surface has
+  // no version projection at all.
+  app.use(
+    createVersionsRouter({
       apiKey: apiKeyProvider,
     }),
   );

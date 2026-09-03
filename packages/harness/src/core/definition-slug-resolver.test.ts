@@ -205,14 +205,18 @@ describe("createDefinitionSlugResolver", () => {
   });
 
   it("does not cache a null resolution (allows retry after transient failure)", async () => {
-    let calls = 0;
-    const fetchImpl = vi.fn().mockImplementation(async () => {
-      calls++;
-      if (calls === 1) throw new Error("transient");
-      return {
-        ok: true,
-        json: async () => ({ slug: "recovered" }),
-      } as Response;
+    // A lookup now tries the gateway and then falls back to Core, so the mock
+    // has to fail BOTH for the first attempt to be a genuine null — otherwise
+    // the fallback rescues it and this stops testing what it is named for.
+    let gatewayCalls = 0;
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("/agents/v1/")) {
+        gatewayCalls++;
+        if (gatewayCalls === 1) throw new Error("transient");
+        return { ok: true, json: async () => ({ slug: "recovered" }) } as Response;
+      }
+      // Core: unavailable for this test, so the first attempt has no rescue.
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
     });
 
     const resolver = createDefinitionSlugResolver({
@@ -225,7 +229,9 @@ describe("createDefinitionSlugResolver", () => {
 
     expect(first).toBeNull();
     expect(second).toBe("recovered");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // gateway(throw) → core(404) → gateway(200). The retry short-circuits on
+    // the gateway, so no second Core call.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it("returns null when slug field is not a string (wrong type in body)", async () => {
@@ -253,7 +259,10 @@ describe("createDefinitionSlugResolver", () => {
     await resolver.resolve("777");
     await resolver.resolve("777");
 
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    // Two requests per lookup: the gateway, then the Core fallback. The point
+    // of this test is the LOG count, which must stay at one however many
+    // requests a lookup costs.
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0][0])).toContain("definitionId=777");
     expect(String(errorSpy.mock.calls[0][0])).toContain("HTTP 404");
@@ -268,5 +277,103 @@ describe("createDefinitionSlugResolver", () => {
     await resolver.resolve("188");
 
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Core fallback when the gateway surface is absent
+// ---------------------------------------------------------------------------
+
+describe("resolveMetadata — Core fallback", () => {
+  const CORE = "http://localhost:3000";
+  const AGENTS = "http://tools.localhost:3100";
+
+  beforeEach(() => {
+    process.env.SAPIOM_CORE_URL = CORE;
+  });
+  afterEach(() => {
+    delete process.env.SAPIOM_CORE_URL;
+  });
+
+  /**
+   * A local stack runs Core without the gateway, so every `agents/v1` route
+   * 404s. Before the fallback that left `activeBuildRunStatus` null and an
+   * agent that IS deployed read as "no runnable build" in Studio.
+   */
+  it("falls back to Core when the gateway 404s, and uses x-api-key there", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      if (url.startsWith(AGENTS)) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response(
+        JSON.stringify({
+          slug: "fresh-demo",
+          activeBuildRunId: "57",
+          activeBuildRunStatus: "ready",
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const resolver = createDefinitionSlugResolver({
+      apiKey: "sk-key",
+      baseUrl: AGENTS,
+      fetchImpl,
+    });
+
+    expect(await resolver.resolveMetadata("46")).toEqual({
+      slug: "fresh-demo",
+      activeBuildRunId: "57",
+      activeBuildRunStatus: "ready",
+    });
+
+    expect(calls).toHaveLength(2);
+    // Gateway first — it stays the primary surface.
+    expect(calls[0].url).toBe(`${AGENTS}/agents/v1/definitions/46`);
+    expect(calls[0].headers["x-sapiom-api-key"]).toBe("sk-key");
+    // Then Core, whose auth header is different. Sending the gateway's header
+    // here returns 401, which is how this was silently failing.
+    expect(calls[1].url).toBe(`${CORE}/v1/workflows/definitions/46`);
+    expect(calls[1].headers["x-api-key"]).toBe("sk-key");
+    expect(calls[1].headers["x-sapiom-api-key"]).toBeUndefined();
+  });
+
+  it("does not call Core when the gateway answers", async () => {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      urls.push(url);
+      return new Response(
+        JSON.stringify({ slug: "from-gateway", activeBuildRunStatus: "ready" }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const resolver = createDefinitionSlugResolver({
+      apiKey: "sk-key",
+      baseUrl: AGENTS,
+      fetchImpl,
+    });
+
+    expect((await resolver.resolveMetadata("46"))?.slug).toBe("from-gateway");
+    expect(urls).toEqual([`${AGENTS}/agents/v1/definitions/46`]);
+  });
+
+  it("returns null when neither surface has it", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response("nope", { status: 404 }),
+    ) as unknown as typeof fetch;
+
+    const resolver = createDefinitionSlugResolver({
+      apiKey: "sk-key",
+      baseUrl: AGENTS,
+      fetchImpl,
+    });
+
+    expect(await resolver.resolveMetadata("46")).toBeNull();
   });
 });

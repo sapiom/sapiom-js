@@ -1640,3 +1640,58 @@ export interface StudioRailLaunchEdge {
 export interface StudioRailLaunchEdgesResponse {
   edges: StudioRailLaunchEdge[];
 }
+
+// ---------------------------------------------------------------------------
+// Version history (the Versions tab + the picker beside the agent name)
+// ---------------------------------------------------------------------------
+
+/** One row of an agent's release history, as Core projects it. */
+export interface AgentVersionView {
+  readonly sha: string;
+  readonly subject: string;
+  readonly author: string;
+  readonly committedAt: string;
+  readonly buildStatus: string;
+  readonly deployedAt: string | null;
+  /**
+   * Movable labels pointing at this version. `latest` appears here and is
+   * COMPUTED from the newest ready build — Core refuses to store it, so it can
+   * never be moved by hand and cannot go stale.
+   */
+  readonly tags: readonly string[];
+  readonly isActive: boolean;
+  /** `"pinned"` when the live version is an explicit pin, not just latest. */
+  readonly source?: string;
+}
+
+/**
+ * What the local working copy would deploy as.
+ *
+ * `matchesSha` is how Studio can say "your local copy IS 0.0.2" as a fact: the
+ * digest is content-addressed and packing is reproducible, so a local pack
+ * hashes to the same value a deploy would upload. Null means the working copy
+ * is not deployed AS AN ARCHIVE — which includes the case where the deployed
+ * version came from git (its sha is a commit, not a digest), so the UI must not
+ * report it as "you have changes".
+ */
+export interface LocalSourceStateView {
+  readonly digest: string;
+  readonly matchesSha: string | null;
+}
+
+/** `GET /api/versions/:definitionId`. */
+export interface AgentVersionsView {
+  /** Labelled releases first, then recent unlabelled builds. Capped at 10. */
+  readonly versions: readonly AgentVersionView[];
+  readonly activeSha: string | null;
+  /**
+   * True when the live version is pinned — later deploys will NOT go live until
+   * the pin is released. The panel has to say so, or a pinned agent reads as
+   * merely up to date.
+   */
+  readonly pinned: boolean;
+  /** Total versions upstream, so the panel can say "10 of 23". */
+  readonly total: number;
+  /** Null when no project directory was supplied, or it has no `index.ts`. */
+  readonly local: LocalSourceStateView | null;
+}

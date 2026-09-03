@@ -97,6 +97,60 @@ export function createDefinitionSlugResolver(opts: {
     );
   };
 
+  /** Shape the two surfaces agree on, so either response reads the same. */
+  const readMetadata = (
+    definitionId: string,
+    body: Record<string, unknown>,
+    warnOnMissingSlug: boolean,
+  ): DefinitionMetadata => {
+    const slug = typeof body.slug === "string" ? body.slug : null;
+    const activeBuildRunId =
+      typeof body.activeBuildRunId === "string" ? body.activeBuildRunId : null;
+    const activeBuildRunStatus =
+      typeof body.activeBuildRunStatus === "string"
+        ? body.activeBuildRunStatus
+        : null;
+    if (slug !== null) {
+      cache.set(definitionId, slug);
+    } else if (warnOnMissingSlug) {
+      warnOnce(definitionId, "response had no string `slug` field");
+    }
+    return { slug, activeBuildRunId, activeBuildRunStatus };
+  };
+
+  /**
+   * Core serves the same definition projection at a different path, with a
+   * different auth header.
+   *
+   * The gateway's `agents/v1` surface is the primary and stays so: in prod it is
+   * what answers. But it is a SEPARATE service from Core, and a local stack runs
+   * Core without it — every `agents/v1` route 404s there while
+   * `tools.localhost/health` is happily 200. The visible symptom was ugly and
+   * misleading: an agent that is genuinely deployed (`activeBuildRunStatus:
+   * "ready"` in Core) shows no runnable build in Studio, so Run stays dark and
+   * the agent reads as "never deployed".
+   *
+   * Returns null (not a throw) on anything unexpected: this is a fallback, and a
+   * fallback that throws is worse than no fallback.
+   */
+  const resolveViaCore = async (
+    definitionId: string,
+    currentApiKey: string,
+  ): Promise<DefinitionMetadata | null> => {
+    try {
+      const url = `${resolveCoreBaseUrl()}/v1/workflows/definitions/${encodeURIComponent(definitionId)}`;
+      // Core authenticates `x-api-key`; it rejects `x-sapiom-api-key` with 401.
+      const response = await fetchImpl(url, {
+        headers: { "x-api-key": currentApiKey },
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as Record<string, unknown>;
+      return readMetadata(definitionId, body, false);
+    } catch {
+      return null;
+    }
+  };
+
   const resolveMetadata = async (
     definitionId: string,
   ): Promise<DefinitionMetadata | null> => {
@@ -112,27 +166,19 @@ export function createDefinitionSlugResolver(opts: {
       });
 
       if (!response.ok) {
+        // The gateway may simply not be part of this deployment (local stacks
+        // run Core alone). Ask Core before giving up.
+        const viaCore = await resolveViaCore(definitionId, currentApiKey);
+        if (viaCore) return viaCore;
         warnOnce(definitionId, `HTTP ${response.status}`);
         return null;
       }
 
       const body = (await response.json()) as Record<string, unknown>;
-      const slug = typeof body.slug === "string" ? body.slug : null;
-      const activeBuildRunId =
-        typeof body.activeBuildRunId === "string"
-          ? body.activeBuildRunId
-          : null;
-      const activeBuildRunStatus =
-        typeof body.activeBuildRunStatus === "string"
-          ? body.activeBuildRunStatus
-          : null;
-      if (slug !== null) {
-        cache.set(definitionId, slug);
-      } else {
-        warnOnce(definitionId, "response had no string `slug` field");
-      }
-      return { slug, activeBuildRunId, activeBuildRunStatus };
+      return readMetadata(definitionId, body, true);
     } catch (err) {
+      const viaCore = await resolveViaCore(definitionId, currentApiKey);
+      if (viaCore) return viaCore;
       warnOnce(definitionId, err instanceof Error ? err.message : String(err));
       return null;
     }
