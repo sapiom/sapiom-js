@@ -457,7 +457,8 @@ describe("BuildPlanService", () => {
       versionId: "briefv_018f0000-0000-7000-8000-000000000061" as AgentBriefVersionId,
       version: 1, parentVersionId: null, changeKind: "created" as const,
       createdAt: "2026-01-02T03:08:05.000Z" };
-    const nested = { ...nestedBase, recordDigest: computeAgentBriefRecordDigest(nestedBase) };
+    const nestedWithSemantic = { ...nestedBase, semanticDigest: computeAgentBriefSemanticDigest(nestedBase) };
+    const nested = { ...nestedWithSemantic, recordDigest: computeAgentBriefRecordDigest(nestedWithSemantic) };
     await briefStore.appendBriefVersions(projectId, { actor: nested.authoredBy, requestId: "brief-nested",
       requestDigest: `sha256:${"c".repeat(64)}`, expectedMap: refs.map, expectedPlan: applied.plan,
       entries: [{ version: nested, status: "active" }], createdAt: nested.createdAt });
