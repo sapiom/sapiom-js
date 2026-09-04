@@ -65,6 +65,8 @@ export {
 } from "./shared/agent-brief.js";
 export type {
   AgentBriefFocusSelection,
+  AgentBriefRefreshRequest,
+  AgentBriefRefreshResult,
   CompileAgentBriefsRequest,
   CompileAgentBriefsResult,
   CompiledAgentBriefCandidate,
@@ -150,6 +152,14 @@ export {
   AGENT_BRIEF_IMPACT_EVIDENCE_LIMIT,
   evaluateAgentBriefImpact,
 } from "./core/build-plan-impact-evaluator.js";
+export {
+  AgentBriefService,
+  AgentBriefServiceError,
+} from "./core/agent-brief-service.js";
+export type {
+  AgentBriefServiceErrorCode,
+  AgentBriefServiceOptions,
+} from "./core/agent-brief-service.js";
 export {
   FOCUSED_SESSION_CONTEXT_MAX_BYTES,
   FOCUSED_SESSION_CONTEXT_MAX_LIST_LENGTH,

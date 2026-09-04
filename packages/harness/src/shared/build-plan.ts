@@ -289,6 +289,8 @@ export interface BuildPlanDiagnostic {
     | "source-lineage-mismatch"
     | "ambiguous-focus-owner"
     | "missing-focus-node"
+    | "brief-limit-exceeded"
+    | "brief-compilation-failed"
     | "context-truncated";
   severity: "error" | "warning";
   path: string;

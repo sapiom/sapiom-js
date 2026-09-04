@@ -14,6 +14,7 @@ import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
+import { AgentBriefService } from "../core/agent-brief-service.js";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouterOptions,
@@ -40,14 +41,16 @@ async function fixture(
       AgentMapMcpRouterOptions,
       "createToolServer" | "createTransport" | "onEvent" | "readSnapshotFor"
     >
-  > = {},
+  > & { createAgentBriefService?: (store: BuildPlanStore) => AgentBriefService } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-mcp-"));
   const capabilities = new AgentMapCapabilityRegistry();
   const workspaceStore = new AgentMapWorkspaceStore(root);
   const service = new AgentMapProposalService(workspaceStore);
   const buildPlanService = new BuildPlanService(new BuildPlanStore(workspaceStore));
-  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService, ...options });
+  const briefStore = new BuildPlanStore(workspaceStore);
+  const agentBriefService = options.createAgentBriefService?.(briefStore) ?? new AgentBriefService(briefStore);
+  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService, agentBriefService, ...options });
   const app = express();
   app.use(express.json());
   app.use(mcp.router);
@@ -90,6 +93,7 @@ describe("Agent Map Streamable HTTP MCP", () => {
       "agent_map_read",
       "agent_map_validate",
       "build_plan_apply",
+      "build_plan_brief_refresh",
       "build_plan_read",
       "build_plan_rebase",
       "build_plan_validate",
@@ -255,6 +259,9 @@ describe("Agent Map Streamable HTTP MCP", () => {
       name: "agent_map_propose",
       arguments: mapRequest,
     });
+    const researchNodeId = (proposed.structuredContent as {
+      allocatedNodeIds: { research: string };
+    }).allocatedNodeIds.research;
     const firstAggregate = await workspaceStore.readAggregate(projectId);
     const firstMap = firstAggregate.current.map!;
     const planRequest = {
@@ -277,7 +284,15 @@ describe("Agent Map Streamable HTTP MCP", () => {
           integrationCriteria: [],
           acceptanceCriteria: [],
           decisions: [],
-          assignments: [],
+          assignments: [{
+            id: { clientRef: "research-work" },
+            plannedAgentId: researchNodeId,
+            briefId: null,
+            mission: "Deliver the report",
+            scope: ["Research sources"],
+            nonGoals: ["Publishing"],
+            dependencies: [],
+          }],
           unresolvedDecisions: [],
           risks: [],
         },
@@ -298,9 +313,41 @@ describe("Agent Map Streamable HTTP MCP", () => {
       arguments: planRequest,
     });
     expect(applied).toMatchObject({
-      structuredContent: { plan: { semanticDigest: expect.any(String) }, created: true },
+      structuredContent: {
+        plan: { semanticDigest: expect.any(String) },
+        created: true,
+        briefRefresh: {
+          persisted: true,
+          briefs: [{ disposition: "created", status: "active" }],
+        },
+      },
+    });
+    const appliedReplay = await client.callTool({ name: "build_plan_apply", arguments: planRequest });
+    expect(appliedReplay).toMatchObject({
+      structuredContent: { replayed: true, briefRefresh: { replayed: true, persisted: true } },
     });
     const firstPlan = (await workspaceStore.readAggregate(projectId)).current.buildPlan!;
+    expect(Object.values((await workspaceStore.readAggregate(projectId)).briefVersionsById)[0])
+      .toEqual([expect.objectContaining({ version: 1 })]);
+    const firstPlanRecord = (await workspaceStore.readAggregate(projectId)).buildPlanVersions.at(-1)!;
+    const focused = await client.callTool({ name: "build_plan_brief_refresh", arguments: {
+      schemaVersion: 1,
+      requestId: "nested-report-review",
+      expectedMap: { versionId: firstMap.versionId, contentDigest: firstMap.contentDigest },
+      expectedPlan: { planId: firstPlan.planId, versionId: firstPlan.versionId,
+        semanticDigest: firstPlan.semanticDigest },
+      focus: { mode: "focused", selections: [{
+        focusScope: { family: "ad-hoc-delegation", delegationKey: "report-review", parentScopeKey: null },
+        nodeIds: [researchNodeId],
+        assignmentId: firstPlanRecord.content.assignments[0]!.id,
+        mission: "Review the report contract",
+      }] },
+    } });
+    expect(focused).toMatchObject({ structuredContent: { persisted: true,
+      briefs: [{ disposition: "created", status: "active" }] } });
+    const focusedVersionId = (focused.structuredContent as {
+      briefs: Array<{ versionId: string }>;
+    }).briefs[0]!.versionId;
     await expect(client.callTool({
       name: "build_plan_read",
       arguments: {
@@ -361,6 +408,42 @@ describe("Agent Map Streamable HTTP MCP", () => {
     });
     expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions.at(-1))
       .toMatchObject({ version: 2, map: secondMap });
+    const afterRebase = await workspaceStore.readAggregate(projectId);
+    expect(Object.values(afterRebase.current.briefsByScope)
+      .find(({ focusScope }) => focusScope.family === "ad-hoc-delegation"))
+      .toMatchObject({ status: "active", version: { versionId: focusedVersionId } });
+  });
+
+  it("commits a plan when the separately retryable brief compiler fails", async () => {
+    const { capabilities, url, workspaceStore } = await fixture({
+      createAgentBriefService: (store) => new AgentBriefService(store, {
+        compileCanonical: () => { throw new Error("raw compiler failure that must not escape"); },
+      }),
+    });
+    const identity: ProjectAgentSession = { projectId, sessionId: "compiler-failure", userId: "user" };
+    const client = await connect(url, capabilities.issue(identity).token);
+    await client.callTool({ name: "agent_map_propose", arguments: {
+      schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "failure-map",
+      operations: [{ kind: "add-node", draftRef: "failure-agent", node: {
+        kind: "agent", name: "Failure fixture", purpose: "Exercise refresh isolation",
+        ownerAgent: null, contractRefs: [],
+      } }],
+    } });
+    const map = (await workspaceStore.readAggregate(projectId)).current.map!;
+    const result = await client.callTool({ name: "build_plan_apply", arguments: {
+      schemaVersion: 1, requestId: "failure-plan",
+      expectedMap: { versionId: map.versionId, contentDigest: map.contentDigest }, expectedPlan: null,
+      operations: [{ op: "replace-content", content: {
+        outcome: "Keep the plan", nonGoals: [], milestones: [], sequenceGates: [], sharedConstraints: [],
+        repositoryIntents: [], integrationCriteria: [], acceptanceCriteria: [], decisions: [], assignments: [],
+        unresolvedDecisions: [], risks: [],
+      } }],
+    } });
+    expect(result).toMatchObject({ structuredContent: { created: true, briefRefresh: {
+      persisted: false,
+      diagnostics: [{ code: "brief-compilation-failed" }],
+    } } });
+    expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions).toHaveLength(1);
   });
 
   it("returns a bounded terminal recovery when the capability project is unavailable", async () => {

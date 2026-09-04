@@ -37,6 +37,33 @@ export const toolPlanVersionRefSchema = z.object({
   semanticDigest: digest,
 }).strict();
 
+const focusedBriefSelectionSchema = z.object({
+  focusScope: z.object({
+    family: z.literal("ad-hoc-delegation"),
+    delegationKey: opaque,
+    parentScopeKey: digest.nullable(),
+  }).strict(),
+  nodeIds: unique(generatedId("node"), (value) => value),
+  assignmentId: generatedId("work").optional(),
+  mission: text(4_096).optional(),
+  scope: strings(2_000).optional(),
+  nonGoals: strings(2_000).optional(),
+}).strict();
+
+export const agentBriefRefreshRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+  requestId: opaque,
+  expectedMap: toolMapVersionRefSchema,
+  expectedPlan: toolPlanVersionRefSchema,
+  focus: z.discriminatedUnion("mode", [
+    z.object({ mode: z.literal("canonical") }).strict(),
+    z.object({ mode: z.literal("focused"),
+      selections: unique(focusedBriefSelectionSchema,
+        (selection) => `${selection.focusScope.delegationKey}\0${selection.focusScope.parentScopeKey ?? ""}`),
+    }).strict(),
+  ]),
+}).strict();
+
 const milestone = z.object({
   id: idInput("milestone"),
   ordinal: z.number().int().safe().positive(),
@@ -152,7 +179,10 @@ export type BuildPlanApplyRequest = z.infer<typeof buildPlanApplyRequestSchema>;
 export type BuildPlanRebaseRequest = z.infer<typeof buildPlanRebaseRequestSchema>;
 export type BuildPlanRebaseResolution = z.infer<typeof rebaseResolution>;
 export type BuildPlanReadRequest = z.infer<typeof buildPlanReadRequestSchema>;
+export type AgentBriefRefreshRequestInput = z.infer<typeof agentBriefRefreshRequestSchema>;
 
 export const parseBuildPlanApplyRequest = (value: unknown): BuildPlanApplyRequest => buildPlanApplyRequestSchema.parse(value);
 export const parseBuildPlanRebaseRequest = (value: unknown): BuildPlanRebaseRequest => buildPlanRebaseRequestSchema.parse(value);
 export const parseBuildPlanReadRequest = (value: unknown): BuildPlanReadRequest => buildPlanReadRequestSchema.parse(value);
+export const parseAgentBriefRefreshRequest = (value: unknown): AgentBriefRefreshRequestInput =>
+  agentBriefRefreshRequestSchema.parse(value);

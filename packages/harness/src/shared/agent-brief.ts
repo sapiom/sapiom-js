@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type {
+  AgentMapVersionRef,
   AgentMapVersion,
   PlanNodeId,
   StudioProjectId,
@@ -18,6 +19,7 @@ import type {
   BuildPlanDiagnostic,
   PlanningAssignmentId,
   ProjectBuildPlanVersion,
+  ProjectBuildPlanVersionRef,
 } from "./build-plan.js";
 
 const deterministicId = (prefix: "brief", seed: string): string => {
@@ -116,6 +118,33 @@ export type CompileAgentBriefsResult = Readonly<{
   map: AgentMapVersion["contentDigest"];
   plan: ProjectBuildPlanVersion["semanticDigest"];
   briefs: readonly CompiledAgentBriefCandidate[];
+  impact: AgentBriefImpact;
+  diagnostics: readonly BuildPlanDiagnostic[];
+}>;
+
+export type AgentBriefRefreshRequest = Readonly<{
+  schemaVersion: 1;
+  requestId: string;
+  expectedMap: Omit<AgentMapVersionRef, "projectId">;
+  expectedPlan: Omit<ProjectBuildPlanVersionRef, "projectId">;
+  focus:
+    | Readonly<{ mode: "canonical" }>
+    | Readonly<{ mode: "focused"; selections: readonly AgentBriefFocusSelection[] }>;
+}>;
+
+export type AgentBriefRefreshResult = Readonly<{
+  replayed: boolean;
+  persisted: boolean;
+  map: AgentMapVersionRef;
+  plan: ProjectBuildPlanVersionRef;
+  briefs: readonly Readonly<{
+    scopeKey: AgentBriefScopeKey;
+    briefId: AgentBriefId;
+    versionId: AgentBriefVersion["versionId"];
+    version: number;
+    disposition: AgentBriefDisposition;
+    status: AgentBriefHistoryPointer["status"];
+  }>[];
   impact: AgentBriefImpact;
   diagnostics: readonly BuildPlanDiagnostic[];
 }>;
