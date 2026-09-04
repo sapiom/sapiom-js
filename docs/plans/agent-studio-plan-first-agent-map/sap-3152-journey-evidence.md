@@ -72,3 +72,10 @@ Before final closure or stable rollout, attach:
 4. the beta-first rollout drill described in `rollout-rollback.md`.
 
 Until those items exist, the legacy-PR closure gate remains closed.
+
+At the initial #811 checkpoint, GitHub refused the autonomous reviewer because
+the default branch changed its review workflow after the replacement stack was
+frozen. The action requires the checked-out workflow to be byte-identical to
+the default-branch copy, so it produced no review. SAP-3152 does not copy that
+unrelated default-branch change into a stacked audit PR merely to manufacture a
+green check.

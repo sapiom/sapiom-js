@@ -20,15 +20,15 @@ recorded exception, not an approval claim; SAP-3152 does not modify that PR.
 
 ## Frozen legacy disposition
 
-| PR | Frozen head | Relationship | Retained in replacement | Removed behavior | Final action |
-| ---: | --- | --- | --- | --- | --- |
-| #773 | `0f9e86bd386b8c1bcffa2ab105b7c0c0707fb46b` | independent draft | PR-body design history only | browser-only simulated concept surface | Close superseded after SAP-3152 gate |
-| #783 | `044c2664a8ac8bc94433f684fa85030671e75e10` | sibling of #784 | canonical graph ordering, ancestry, integrity tests → SAP-3149 | approval materialization and user-message evidence | Close superseded after SAP-3152 gate |
-| #784 | `48dc1c5cdf5507e14f74e5b9bccdb0a863c2c16d` | root of #785–#787 | plan/brief records, exact sources, CAS, store integrity → SAP-3149/SAP-3150 | role-bearing authorship, submissions, eligibility permission | Close superseded after SAP-3152 gate |
-| #785 | `9cf604dc26172310e393dd05fc9b8ee2c63f0243` | child of #784 | read/validate/apply/rebase, atomic IDs and replay → SAP-3149 | role-only assertions and conditional tool registration | Close superseded after SAP-3152 gate |
-| #786 | `2de609c6c0da7435ff35bf7d046f3b3a5aed3658` | child of #785 | compiler, impact fingerprints, bounded projection → SAP-3150 | restricted-session naming and implementation gate | Close superseded after SAP-3152 gate |
-| #787 | `e0ca5cc9fefe0b03893e1d6bfe95d61d07bc0210` | child of #786 | spawn claims, reuse, kickoff delivery/recovery → SAP-3151 | consent ceremony, read-only sessions, fixed fan-out and authority hierarchy | Close superseded after SAP-3152 gate |
-| #791 | `b7384928a97f128d1bbcf62187550bbef3c874ca` | independent | readiness, retry, preemption and evidence discipline → SAP-3148 | special-session bootstrap and one-shot maintenance | Close superseded after SAP-3152 gate |
+| PR | Frozen head | Relationship | Replacement | Retained in replacement | Removed behavior | Closure |
+| ---: | --- | --- | --- | --- | --- | --- |
+| #773 | `0f9e86bd386b8c1bcffa2ab105b7c0c0707fb46b` | independent draft | SAP-3148 / #804 | PR-body design history only | browser-only simulated concept surface | Pending gate; date unset |
+| #783 | `044c2664a8ac8bc94433f684fa85030671e75e10` | sibling of #784 | SAP-3149 / #806 | canonical graph ordering, ancestry, integrity tests | approval materialization and user-message evidence | Pending gate; date unset |
+| #784 | `48dc1c5cdf5507e14f74e5b9bccdb0a863c2c16d` | root of #785–#787 | SAP-3149 / #806 and SAP-3150 / #807 | plan/brief records, exact sources, CAS, store integrity | role-bearing authorship, submissions, eligibility permission | Pending gate; date unset |
+| #785 | `9cf604dc26172310e393dd05fc9b8ee2c63f0243` | child of #784 | SAP-3149 / #806 | read/validate/apply/rebase, atomic IDs and replay | role-only assertions and conditional tool registration | Pending gate; date unset |
+| #786 | `2de609c6c0da7435ff35bf7d046f3b3a5aed3658` | child of #785 | SAP-3150 / #807 | compiler, impact fingerprints, bounded projection | restricted-session naming and implementation gate | Pending gate; date unset |
+| #787 | `e0ca5cc9fefe0b03893e1d6bfe95d61d07bc0210` | child of #786 | SAP-3151 / #808 | spawn claims, reuse, kickoff delivery/recovery | consent ceremony, read-only sessions, fixed fan-out and authority hierarchy | Pending gate; date unset |
+| #791 | `b7384928a97f128d1bbcf62187550bbef3c874ca` | independent | SAP-3148 / #804 | readiness, retry, preemption and evidence discipline | special-session bootstrap and one-shot maintenance | Pending gate; date unset |
 
 #783 and #784 share an old base but are not stacked. They exported conflicting
 revision/digest concepts and computed different digest preimages. SAP-3149
@@ -40,6 +40,34 @@ permitted only after the SAP-3152 exact head has complete local evidence,
 hosted checks, and exact-head autonomous review. Ownership-excluded pull
 requests are outside this ledger, all API operations, and every completion
 gate.
+
+## Traceability commands
+
+The following replacement tests passed together at the SAP-3152 checkpoint:
+
+- #783: `agent-map-version.test.ts`, `agent-map-canonical.test.ts`, and
+  `agent-map-codec.test.ts`;
+- #784 and #785: `build-plan-service.test.ts`,
+  `build-plan-canonicalization.test.ts`, `build-plan-codec.test.ts`, and the
+  build-plan MCP cases in `agent-map.test.ts`;
+- #786: `agent-brief-compiler.test.ts`, `agent-brief.test.ts`, and the focused
+  context cases in `session-manager.test.ts`;
+- #787: `subsession-coordinator.test.ts`,
+  `subsession-coordinator-store.test.ts`, and
+  `subsession-delegation.spec.ts`;
+- #791: `project-bootstrap.test.ts`, `project-bootstrap-outbox.test.ts`,
+  `project-bootstrap-outbox.test.ts` under the server suite, and the bootstrap
+  cases in `agent-map-mcp-wiring.test.ts`.
+
+The aggregate absence gate is `pnpm terminology:check`. It scans live code,
+tests, browser journeys, docs, and changesets and fails when a retired literal
+appears outside the exact migration allowlist or an allowlisted occurrence
+count changes.
+
+The closure comment for each row must link SAP-3147, SAP-3152, this PR (#811),
+and the row's replacement PR; quote the frozen head; state that the branch and
+review history remain available; summarize the retained and removed columns;
+and set the actual UTC closure date here immediately after the remote action.
 
 ## Retained legacy strings
 
