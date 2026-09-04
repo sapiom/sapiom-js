@@ -1718,6 +1718,10 @@ export const App = (): JSX.Element => {
     label: string,
   ): void => {
     studioRestoreGenerationRef.current += 1;
+    // Selecting a project is a different question from creating in one, and
+    // the create scope outranks the map — so it has to be dropped here or
+    // selecting would land back on the screen you just left.
+    setComposingProject(null);
     const studioProjectId = workspaceScopes.find(
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
@@ -2051,6 +2055,12 @@ export const App = (): JSX.Element => {
         projectId: project.projectId,
       };
       setStudioSelection(selection);
+      // BOTH ENTRANCES LAND ON THE NEW AGENT SCREEN, scoped to this project.
+      // A folder you just picked and a project you already have differ only in
+      // how the project was resolved, and by here they have both resolved to
+      // one, so from this line the two flows are the same flow. The map
+      // selection above rides along so the rail reads right underneath it.
+      setComposingProject({ projectId: project.projectId, label: name });
       setSelectedProject(null);
       setFocusedAgentPath(scope.cwd);
       setComposing(false);
@@ -2495,6 +2505,7 @@ export const App = (): JSX.Element => {
   const reviewPastSession = (summary: SessionSummary): void => {
     studioRestoreGenerationRef.current += 1;
     setStudioSelection(null);
+    setComposingProject(null);
     setComposing(false);
     setReviewSummary(summary);
     setTemplatesOpen(false);
@@ -2590,6 +2601,7 @@ export const App = (): JSX.Element => {
     preferredStudioBinding?: { projectId: string; agentId: string },
   ): void => {
     studioRestoreGenerationRef.current += 1;
+    setComposingProject(null);
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
@@ -2926,6 +2938,10 @@ export const App = (): JSX.Element => {
             selectedWorkspaceKey={selectedProject?.workspaceKey ?? null}
             onSelectWorkspace={handleSelectWorkspace}
             onSelectAgentMap={(projectId, root, label) => {
+              // The map row opens the MAP, never the create screen — the two
+              // are different questions about the same project and the create
+              // scope has to be dropped or it would win over the map.
+              setComposingProject(null);
               const scope = workspaceScopes.find(
                 (candidate) => candidate.projectId === projectId,
               );
@@ -2949,6 +2965,7 @@ export const App = (): JSX.Element => {
             onSelectOverview={() => {
               studioRestoreGenerationRef.current += 1;
               setStudioSelection(null);
+              setComposingProject(null);
               setSelectedProject(null);
               setOverviewOpen(true);
               setComposing(false);
@@ -3357,7 +3374,14 @@ export const App = (): JSX.Element => {
                     </button>
                   }
                 />
-              ) : planningWorkspace ? (
+              ) : /* THE CREATE SCREEN COMES FIRST when it is scoped to this
+                     project. Both are "about" the same project and both are
+                     driven by `planningWorkspace`, so without this the map's
+                     chat pane wins the chain and the create entrance renders
+                     nothing — the state was right and the JSX never reached it.
+                     `showComposer` already encodes the precedence; this is the
+                     same rule, said where the branch is taken. */
+              planningWorkspace && !showComposer ? (
                 agentMapEntry.state.planner.status === "error" ? (
                   <EmptyState
                     className="terminal-empty"
@@ -3505,6 +3529,7 @@ export const App = (): JSX.Element => {
                   onBrowseTemplates={() => {
                     studioRestoreGenerationRef.current += 1;
                     setStudioSelection(null);
+                    setComposingProject(null);
                     setSelectedProject(null);
                     setTemplatesOpen(true);
                   }}
