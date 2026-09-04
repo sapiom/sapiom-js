@@ -945,3 +945,41 @@ describe("runLocal", () => {
     expect(result.output).toEqual({ trimmed: "(none)" });
   });
 });
+
+describe("runLocal — issue #155 memory/database/email/domains stubs", () => {
+  it("runs a step that calls memory, database, email, and domains without TypeError", async () => {
+    const persist = defineStep({
+      name: "persist",
+      next: [],
+      terminal: true,
+      async run(_input, ctx: AgentExecutionContext) {
+        await ctx.sapiom.memory.append({ content: "hello", namespace: "demo" });
+        await ctx.sapiom.database.create({ duration: "1h" });
+        await ctx.sapiom.email.inboxes.create();
+        await ctx.sapiom.domains.check({ domainNames: ["example.com"] });
+        return terminate({ ok: true });
+      },
+    });
+    const def = defineAgent({
+      name: "capability-stubs",
+      entry: "persist",
+      steps: { persist },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.output).toEqual({ ok: true });
+    expect(result.steps[0]?.calls?.map((c) => c.capability)).toEqual(
+      expect.arrayContaining([
+        "memory.append",
+        "database.create",
+        "email.inboxes.create",
+        "domains.check",
+      ]),
+    );
+  });
+});
