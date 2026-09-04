@@ -17,6 +17,29 @@ import { CachedAgentInvocationProvider } from "../core/system-graph-relationship
 import type { RegistryWorkflowInfo } from "../core/workflow-registry.js";
 import { startServer, type HarnessServer } from "./index.js";
 
+/**
+ * The workspaceKey for the project that OWNS `workspaceRoot`.
+ *
+ * Exact match where the root is a project in its own right, and the containing
+ * scope where it is not. A fixture that writes `index.ts` straight into
+ * `workspaceRoot` makes that root an AGENT directory, and an agent's own folder
+ * is not a project — the rail and the server both replace it with the folder
+ * that holds it (`shared/project-roots.ts`, rule 1). So there is no scope at
+ * that exact path to find, and these specs are about graph freshness rather
+ * than about which folder is a project.
+ */
+function projectScopeKey(
+  state: AppState,
+  workspaceRoot: string,
+): string | undefined {
+  const scopes = state.workspaceScopes ?? [];
+  return (
+    scopes.find((scope) => scope.cwd === workspaceRoot)?.workspaceKey ??
+    scopes.find((scope) => workspaceRoot.startsWith(`${scope.cwd}${path.sep}`))
+      ?.workspaceKey
+  );
+}
+
 async function scaffoldAgent(
   workspaceRoot: string,
   name: string,
@@ -528,9 +551,7 @@ export const agent = defineAgent({ name: "budget-v1" });`,
     const state = (await (
       await fetch(`${baseUrl}/api/state`, { headers })
     ).json()) as AppState;
-    const workspaceKey = state.workspaceScopes?.find(
-      (scope) => scope.cwd === workspaceRoot,
-    )?.workspaceKey;
+    const workspaceKey = projectScopeKey(state, workspaceRoot);
     expect(workspaceKey).toBeTruthy();
     const graphUrl = `${baseUrl}/api/workspaces/${workspaceKey}/system-graph`;
     await fetch(graphUrl, { headers });
@@ -677,9 +698,7 @@ export const agent = defineAgent({ name: "shared-v0" });`,
       const state = (await (
         await fetch(`${baseUrl}/api/state`, { headers })
       ).json()) as AppState;
-      const workspaceKey = state.workspaceScopes?.find(
-        (scope) => scope.cwd === workspaceRoot,
-      )?.workspaceKey;
+      const workspaceKey = projectScopeKey(state, workspaceRoot);
       expect(workspaceKey).toBeTruthy();
       await fetch(`${baseUrl}/api/workspaces/${workspaceKey}/system-graph`, {
         headers,
