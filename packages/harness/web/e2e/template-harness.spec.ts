@@ -1,0 +1,178 @@
+/** SAP-3121: every template launch keeps the user's selected coding agent.
+ * Mock sessions record the actual create request; telemetry alone would not
+ * prove which adapter the server is asked to launch. */
+import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
+
+type LaunchSurface =
+  | "composer"
+  | "gallery-detail"
+  | "starter-detail"
+  | "gallery-card";
+
+async function chooseCodex(page: Page): Promise<void> {
+  await page.getByTestId("composer-harness-select").click();
+  await page.getByTestId("composer-harness-option-codex").click();
+  await expect(page.getByTestId("composer-harness-select")).toContainText(
+    "Codex",
+  );
+}
+
+async function launchTemplate(
+  page: Page,
+  surface: LaunchSurface,
+): Promise<void> {
+  if (surface === "composer") {
+    await page.getByTestId("composer-template-hello-agent").click();
+    return;
+  }
+  await page.getByTestId("composer-browse-templates").click();
+  const id = surface.startsWith("starter") ? "coding-pause" : "hello-agent";
+  await confirmTemplate(page, id, surface.endsWith("card"));
+}
+
+async function confirmTemplate(
+  page: Page,
+  id: string,
+  fromCard = false,
+): Promise<void> {
+  if (fromCard) {
+    await page.getByTestId(`template-card-info-${id}`).click();
+    await page.getByTestId(`template-facts-use-${id}`).click();
+  } else {
+    await page.getByTestId(`template-card-open-${id}`).click();
+    await page.getByTestId("template-use-btn").click();
+  }
+  await page.getByTestId("template-use-confirm").click();
+}
+
+async function expectTemplateSession(
+  page: Page,
+  harness: "claude-code" | "codex",
+  starter = false,
+): Promise<void> {
+  const root = "/Users/demo/acme-app/projects";
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: {
+                createSessionCalls?: Array<{
+                  req: { cwd: string; harness: string };
+                }>;
+              };
+            }
+          ).__HARNESS_TEST__?.createSessionCalls ?? [],
+      ),
+    )
+    .toEqual([
+      { req: { cwd: starter ? root : `${root}/hello-agent`, harness } },
+    ]);
+  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+  await expect(page.getByTestId("templates-panel")).toHaveCount(0);
+  if (starter) {
+    await expect(page.getByTestId("workflow-coding-pause")).toBeVisible();
+  } else {
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  lastInjectInput?: { req?: { text?: string } };
+                };
+              }
+            ).__HARNESS_TEST__?.lastInjectInput?.req?.text ?? "",
+        ),
+      )
+      .toContain('templateId "hello-agent"');
+  }
+}
+
+for (const surface of [
+  "composer",
+  "gallery-detail",
+  "starter-detail",
+  "gallery-card",
+] as const) {
+  test(`selected Codex is preserved from ${surface} on a fresh install`, async ({
+    page,
+  }) => {
+    await page.goto("/?mockState=fresh");
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await chooseCodex(page);
+    await launchTemplate(page, surface);
+    await expectTemplateSession(page, "codex", surface.startsWith("starter"));
+  });
+}
+
+for (const surface of [
+  "composer",
+  "gallery-detail",
+  "starter-detail",
+] as const) {
+  test(`no harness preference keeps the Claude default from ${surface}`, async ({
+    page,
+  }) => {
+    await page.goto("/?mockState=fresh");
+    await expect(page.getByTestId("composer-harness-select")).toContainText(
+      "Claude",
+    );
+    await launchTemplate(page, surface);
+    await expectTemplateSession(
+      page,
+      "claude-code",
+      surface.startsWith("starter"),
+    );
+  });
+}
+
+test("the composer passes its selected harness even when preferences cannot be saved", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value): void {
+      if (key === "sapiom-harness-ui-prefs") {
+        throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+      }
+      setItem.call(this, key, value);
+    };
+  });
+  await page.goto("/?mockState=fresh");
+  await chooseCodex(page);
+  await launchTemplate(page, "composer");
+  await expectTemplateSession(page, "codex");
+});
+
+for (const entry of ["rail", "palette", "deep-link"] as const) {
+  test(`saved Codex preference is preserved when entering templates from ${entry}`, async ({
+    page,
+  }) => {
+    await page.goto("/?mockState=fresh");
+    await chooseCodex(page);
+    if (entry === "deep-link") {
+      await page.goto("/?mockState=fresh&template=hello-agent");
+      await page.getByTestId("template-use-btn").click();
+      await page.getByTestId("template-use-confirm").click();
+    } else {
+      // Reload to verify the saved preference, independent of composer state.
+      await page.reload();
+      if (entry === "rail") {
+        await page.getByTestId("rail-templates").click();
+      } else {
+        await page.getByTestId("palette-trigger").click();
+        await page.getByTestId("command-palette-input").fill("templates");
+        await page
+          .getByTestId("command-palette-list")
+          .getByText("Browse templates")
+          .click();
+      }
+      await confirmTemplate(page, "hello-agent");
+    }
+    await expectTemplateSession(page, "codex");
+  });
+}

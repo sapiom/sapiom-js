@@ -92,7 +92,7 @@ interface NewSessionComposerProps {
   /** Surface a file-resolution or submit failure in the app's existing toast. */
   onAttachmentError: (message: string) => void;
   /** Start a session from a catalog template (clone + first run). */
-  onUseTemplate: (template: GalleryTemplate) => void;
+  onUseTemplate: (template: GalleryTemplate, harness: HarnessKind) => void;
   /** Navigate to the full templates catalog. */
   onBrowseTemplates: () => void;
   /** Adapter registry + template catalog fetches. */
@@ -558,7 +558,7 @@ export function NewSessionComposer({
                 type="button"
                 className="composer-template-card"
                 data-testid={`composer-template-${template.id}`}
-                onClick={() => leaveThen(() => onUseTemplate(template))}
+                onClick={() => leaveThen(() => onUseTemplate(template, harness))}
               >
                 <span className="composer-template-cardhead">
                   <span className="composer-template-name">{template.name}</span>
