@@ -58,6 +58,46 @@ export {
   projectBuildPlanVersionRefsEqual,
 } from "./shared/build-plan.js";
 export {
+  PROJECT_SUBSESSION_CLAIM_TTL_MS,
+  PROJECT_SUBSESSION_DELEGATION_LIMIT,
+  PROJECT_SUBSESSION_KEY_BYTES,
+  PROJECT_SUBSESSION_KICKOFF_CONTEXT_BYTES,
+  PROJECT_SUBSESSION_OUTCOME_BYTES,
+  PROJECT_SUBSESSION_REQUEST_BYTES,
+  PROJECT_SUBSESSION_SCHEMA_VERSION,
+  SUBSESSION_COORDINATOR_STORAGE_SCHEMA_VERSION,
+} from "./shared/subsession-delegation.js";
+export type {
+  CanonicalDelegationBindingDigest,
+  CanonicalDelegationRequestDigest,
+  DelegatedContextState,
+  DelegatedKickoffState,
+  DelegatedSessionState,
+  DelegationError,
+  DelegationErrorCode,
+  DelegationFocusRef,
+  DelegationItemOutcome,
+  DelegationItemResult,
+  DelegationRecovery,
+  ProjectSubsessionDelegation,
+  ProjectSubsessionRequest,
+  ProjectSubsessionResult,
+  SubsessionBindingId,
+  SubsessionBindingRecord,
+  SubsessionClaim,
+  SubsessionContextDigest,
+  SubsessionKickoffDelivery,
+  SubsessionProjectionDigest,
+  SubsessionRuntimeBinding,
+} from "./shared/subsession-delegation.js";
+export {
+  computeCanonicalDelegationBindingDigest,
+  computeCanonicalDelegationRequestDigest,
+  computeSubsessionContextDigest,
+  parseProjectSubsessionRequest,
+  SubsessionDelegationValidationError,
+} from "./shared/subsession-delegation-codec.js";
+export {
   canonicalWorkstreamScopes,
   canonicalizeAgentBriefFocusScope,
   computeAgentBriefId,
