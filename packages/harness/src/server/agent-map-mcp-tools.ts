@@ -14,6 +14,10 @@ import { AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.j
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
 import { BuildPlanService, BuildPlanServiceError } from "../core/build-plan-service.js";
 import {
+  SubsessionCoordinator,
+  SubsessionCoordinatorError,
+} from "../core/subsession-coordinator.js";
+import {
   agentBriefRefreshRequestSchema,
   buildPlanApplyRequestSchema,
   buildPlanReadToolInputSchema,
@@ -55,10 +59,63 @@ const batchSchema = z
   })
   .strict();
 
+const versionId = z.string().min(1).max(128);
+const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
+const mapVersionRefSchema = z.object({
+  projectId: versionId,
+  versionId,
+  contentDigest: digest,
+}).strict();
+const planVersionRefSchema = z.object({
+  projectId: versionId,
+  planId: versionId,
+  versionId,
+  semanticDigest: digest,
+}).strict();
+const briefVersionRefSchema = z.object({
+  projectId: versionId,
+  briefId: versionId,
+  versionId,
+  semanticDigest: digest,
+}).strict();
+const delegationFocusSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("assignment"), map: mapVersionRefSchema,
+    plan: planVersionRefSchema, assignmentId: versionId }).strict(),
+  z.object({ kind: z.literal("map-node"), map: mapVersionRefSchema,
+    plan: planVersionRefSchema.nullable(), nodeId: versionId }).strict(),
+  z.object({ kind: z.literal("brief"), brief: briefVersionRefSchema }).strict(),
+]);
+const delegationKey = z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/u);
+const projectSubsessionRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+  requestKey: delegationKey,
+  operation: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("delegate"),
+      delegations: z.array(z.object({
+        delegationKey,
+        outcome: z.string().min(1).max(4_096),
+        kickoffContext: z.string().min(1).max(16_384).optional(),
+        focus: delegationFocusSchema.optional(),
+      }).strict()).min(1).max(16),
+    }).strict(),
+    z.object({
+      kind: z.literal("refresh-focused-context"),
+      target: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("self") }).strict(),
+        z.object({ kind: z.literal("child"), delegationKey }).strict(),
+      ]),
+      expectedContextEpoch: z.number().int().positive(),
+      expectedContextDigest: digest,
+      focus: delegationFocusSchema.nullable(),
+    }).strict(),
+  ]),
+}).strict();
+
 export interface AgentMapToolEvent {
   tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose" |
     "build_plan_read" | "build_plan_validate" | "build_plan_apply" | "build_plan_rebase" |
-    "build_plan_brief_refresh";
+    "build_plan_brief_refresh" | "project_subsession_delegate";
   outcome: "ok" | "error";
   errorCode?: string;
   latencyMs: number;
@@ -107,6 +164,8 @@ function errorResult(error: unknown) {
                     recovery: error.code === "request_id_reused" || error.code === "request_id_expired"
                       ? "new_request" : error.code === "source_mismatch" ? "reread"
                         : error.code === "malformed_input" ? "correct" : "retry" }
+              : error instanceof SubsessionCoordinatorError
+                ? error.detail
               : error instanceof AgentMapWorkspaceStoreError
                 ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "reread" }
               : { code: "internal_error", recovery: "retry" };
@@ -130,6 +189,7 @@ export function createAgentMapToolServer(
   service: AgentMapProposalService,
   buildPlanService: BuildPlanService,
   agentBriefService: AgentBriefService,
+  subsessionCoordinator: SubsessionCoordinator,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
   const server = new McpServer({
@@ -312,6 +372,19 @@ export function createAgentMapToolServer(
     async (request) => instrument("build_plan_brief_refresh", async () => {
       const result = await agentBriefService.refresh(identity, request);
       return toolResult(result, result.persisted ? "Focused brief history refreshed." : "Focused briefs are unchanged.");
+    }),
+  );
+
+  server.registerTool(
+    "project_subsession_delegate",
+    {
+      description: "Create or reuse one or a bounded batch of ordinary writable project subsessions, or refresh exact focused context, using caller-owned idempotency keys.",
+      inputSchema: projectSubsessionRequestSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (request) => instrument("project_subsession_delegate", async () => {
+      const result = await subsessionCoordinator.execute(identity, request);
+      return toolResult(result, `Delegation reconciled ${result.results.length} project subsession${result.results.length === 1 ? "" : "s"}.`);
     }),
   );
 

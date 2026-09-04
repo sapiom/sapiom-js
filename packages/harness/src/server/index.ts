@@ -178,6 +178,14 @@ import { BuildPlanService } from "../core/build-plan-service.js";
 import { AgentBriefService } from "../core/agent-brief-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import {
+  SubsessionCoordinator,
+  type SubsessionCoordinatorEvent,
+} from "../core/subsession-coordinator.js";
+import {
+  SubsessionCoordinatorStore,
+  type SubsessionCoordinatorStoreEvent,
+} from "../core/subsession-coordinator-store.js";
+import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
 } from "../core/agent-map-capability-registry.js";
@@ -3064,8 +3072,9 @@ export const startServer = async (
         bus.publish({ type: "agent-map.proposal.changed", delta }),
     },
   );
+  const buildPlanStore = new BuildPlanStore(agentMapWorkspaceStore);
   const buildPlanService = new BuildPlanService(
-    new BuildPlanStore(agentMapWorkspaceStore),
+    buildPlanStore,
     {
       onOutcome: (event) => {
         const analyticsEvent: AnalyticsEvent = {
@@ -3094,7 +3103,7 @@ export const startServer = async (
     },
   );
   const agentBriefService = new AgentBriefService(
-    new BuildPlanStore(agentMapWorkspaceStore),
+    buildPlanStore,
     {
       onOutcome: (event) => {
         const analyticsEvent: AnalyticsEvent = {
@@ -3127,6 +3136,46 @@ export const startServer = async (
       },
     },
   );
+  const emitSubsessionEvent = (
+    event: SubsessionCoordinatorEvent | SubsessionCoordinatorStoreEvent,
+  ): void => {
+    const eventSessionId =
+      "sessionId" in event && event.sessionId
+        ? event.sessionId
+        : `subsession-${event.projectId}`;
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: seqCounter.next(eventSessionId),
+      ts: new Date().toISOString(),
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      harnessSessionId: eventSessionId,
+      agentSessionId: null,
+      harness: sessionManager.get(eventSessionId)?.harness ?? "claude-code",
+      type: event.name,
+      payload: {
+        project_id: event.projectId,
+        ...("count" in event && event.count !== undefined
+          ? { count: Math.max(0, Math.min(16, event.count)) }
+          : {}),
+        ...("code" in event && event.code ? { error_code: event.code } : {}),
+      },
+    };
+    void eventStore.append(analyticsEvent).catch(() => {});
+    batcher.enqueue(analyticsEvent);
+  };
+  const subsessionCoordinatorStore = new SubsessionCoordinatorStore(
+    statePaths.agentMap,
+    { onEvent: emitSubsessionEvent },
+  );
+  const subsessionCoordinator = new SubsessionCoordinator({
+    store: subsessionCoordinatorStore,
+    sessionManager,
+    planningStore: buildPlanStore,
+    eventReader: eventStore,
+    onEvent: emitSubsessionEvent,
+  });
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -3152,6 +3201,7 @@ export const startServer = async (
     service: agentMapProposalService,
     buildPlanService,
     agentBriefService,
+    subsessionCoordinator,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
@@ -4105,6 +4155,9 @@ export const startServer = async (
     onEventPersisted: (event: AnalyticsEvent, runtimeEpoch) => {
       void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
         console.error("[harness] project bootstrap completion failed");
+      });
+      void subsessionCoordinator.onEventPersisted(event, runtimeEpoch).catch(() => {
+        console.error("[harness] subsession acknowledgement failed");
       });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);

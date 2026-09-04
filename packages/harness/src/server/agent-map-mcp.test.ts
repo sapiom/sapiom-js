@@ -15,6 +15,7 @@ import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import { AgentBriefService } from "../core/agent-brief-service.js";
+import type { SubsessionCoordinator } from "../core/subsession-coordinator.js";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouterOptions,
@@ -56,7 +57,17 @@ async function fixture(
   const buildPlanService = new BuildPlanService(new BuildPlanStore(workspaceStore));
   const briefStore = new BuildPlanStore(workspaceStore);
   const agentBriefService = createAgentBriefService?.(briefStore) ?? new AgentBriefService(briefStore);
-  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService, agentBriefService, ...routerOptions });
+  const subsessionCoordinator = {
+    execute: vi.fn(async (_identity, request: { requestKey: string }) => ({
+      schemaVersion: 1 as const,
+      requestKey: request.requestKey,
+      requestDigest: `sha256:${"0".repeat(64)}`,
+      replayed: false,
+      results: [],
+    })),
+  } as unknown as SubsessionCoordinator;
+  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService,
+    agentBriefService, subsessionCoordinator, ...routerOptions });
   const app = express();
   app.use(express.json());
   app.use(mcp.router);
@@ -103,6 +114,7 @@ describe("Agent Map Streamable HTTP MCP", () => {
       "build_plan_read",
       "build_plan_rebase",
       "build_plan_validate",
+      "project_subsession_delegate",
     ]);
     const nonStrict = tools.tools.filter((tool) => !(tool.inputSchema.additionalProperties === false ||
       (Array.isArray(tool.inputSchema.anyOf) && tool.inputSchema.anyOf.every((variant) =>
@@ -116,6 +128,26 @@ describe("Agent Map Streamable HTTP MCP", () => {
         isError: true,
         structuredContent: { code: "malformed_input", recovery: "correct" },
       });
+    await expect(client.callTool({
+      name: "project_subsession_delegate",
+      arguments: {
+        schemaVersion: 1,
+        requestKey: "delegate-one",
+        operation: {
+          kind: "delegate",
+          delegations: [{
+            delegationKey: "focused-task",
+            outcome: "Implement the focused task",
+          }],
+        },
+      },
+    })).resolves.toMatchObject({
+      structuredContent: {
+        schemaVersion: 1,
+        requestKey: "delegate-one",
+        replayed: false,
+      },
+    });
     const validate = tools.tools.find(
       ({ name }) => name === "agent_map_validate",
     )!;
