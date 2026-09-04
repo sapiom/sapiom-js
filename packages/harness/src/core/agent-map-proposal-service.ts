@@ -71,6 +71,14 @@ export class AgentMapProposalProjectError extends Error {
   constructor() { super("Proposal identity does not belong to this project"); this.name = "AgentMapProposalProjectError"; }
 }
 
+export class AgentMapProposalQuotaError extends Error {
+  readonly code = "quota_exceeded" as const;
+  constructor(readonly resource: "map_versions" | "request_receipts" | "request_tombstones") {
+    super(`${resource.replace(/_/gu, " ")} quota exceeded`);
+    this.name = "AgentMapProposalQuotaError";
+  }
+}
+
 export interface AgentMapPermanentIdAllocator extends AgentMapIdAllocator {
   allocateProposalId(): MapProposalId;
   allocateOperationId(): ProposalOperationId;
@@ -93,13 +101,15 @@ export interface AgentMapProposalServiceOptions {
   onAccepted?: (delta: AcceptedProposalDelta) => void | Promise<void>;
   onOutcome?: (event: {
     name: "agent_map.proposal.accepted" | "agent_map.proposal.replayed" |
-      "agent_map.proposal.validation_failed" | "agent_map.proposal.conflict" | "agent_map.proposal.storage_failed";
+      "agent_map.proposal.validation_failed" | "agent_map.proposal.conflict" |
+      "agent_map.proposal.quota_exceeded" | "agent_map.proposal.storage_failed";
     projectId: StudioProjectId;
     sessionId: string;
     operationCount: number;
     latencyMs: number;
   }) => void | Promise<void>;
   receiptRetentionLimit?: number;
+  versionHistoryLimit?: number;
 }
 
 const actorFor = (identity: ProjectAgentSession): ProjectAgentActorRef => {
@@ -185,6 +195,7 @@ export class AgentMapProposalService {
   private readonly allocator: AgentMapPermanentIdAllocator;
   private readonly now: () => Date;
   private readonly receiptRetentionLimit: number;
+  private readonly versionHistoryLimit: number;
 
   constructor(private readonly store: AgentMapWorkspaceStore, private readonly options: AgentMapProposalServiceOptions = {}) {
     this.allocator = options.allocator ?? new UuidV7AgentMapIdAllocator();
@@ -192,6 +203,10 @@ export class AgentMapProposalService {
     const limit = options.receiptRetentionLimit ?? AGENT_MAP_PROPOSAL_RECEIPT_RETENTION_LIMIT;
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("receiptRetentionLimit must be a positive integer");
     this.receiptRetentionLimit = Math.min(limit, AGENT_MAP_PROPOSAL_RECEIPT_RETENTION_LIMIT);
+    const historyLimit = options.versionHistoryLimit ?? BUILD_PLAN_VERSION_HISTORY_LIMIT;
+    if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > BUILD_PLAN_VERSION_HISTORY_LIMIT)
+      throw new RangeError(`versionHistoryLimit must be between 1 and ${BUILD_PLAN_VERSION_HISTORY_LIMIT}`);
+    this.versionHistoryLimit = historyLimit;
   }
 
   read(projectId: StudioProjectId) { return this.store.readSnapshot(projectId); }
@@ -291,8 +306,8 @@ export class AgentMapProposalService {
         })));
         const previousGraph = currentGraph(aggregate);
         if (computeGraphContentDigest(previousGraph) !== computeGraphContentDigest(materialized.graph)) {
-          if (next.mapVersions.length >= BUILD_PLAN_VERSION_HISTORY_LIMIT)
-            throw new AgentMapWorkspaceStoreError("storage_unavailable");
+          if (next.mapVersions.length >= this.versionHistoryLimit)
+            throw new AgentMapProposalQuotaError("map_versions");
           const mapVersion = createAgentMapVersion({ projectId: identity.projectId,
             versionId: this.allocator.allocateMapVersionId?.() ?? `mapv_${uuidv7()}` as AgentMapVersionId,
             version: next.mapVersions.length + 1, parentVersionId: next.mapVersions.at(-1)?.versionId ?? null,
@@ -313,13 +328,13 @@ export class AgentMapProposalService {
           const [expired] = next.requestReceipts.splice(expiredIndex, 1);
           if (expired) {
             if (next.requestTombstones.length >= PROJECT_MUTATION_TOMBSTONE_LIMIT)
-              throw new AgentMapWorkspaceStoreError("storage_unavailable");
+              throw new AgentMapProposalQuotaError("request_tombstones");
             next.requestTombstones.push({ projectId: expired.projectId, userId: expired.userId,
             sessionId: expired.sessionId, requestId: expired.requestId, operation: "map", createdAt: expired.createdAt });
           }
         }
         if (next.requestReceipts.length > PROJECT_MUTATION_RECEIPT_LIMIT)
-          throw new AgentMapWorkspaceStoreError("storage_unavailable");
+          throw new AgentMapProposalQuotaError("request_receipts");
         next.recordVersion += 1;
         next.updatedAt = acceptedAt;
         acceptedDelta = delta;
@@ -327,6 +342,7 @@ export class AgentMapProposalService {
       });
     } catch (error) {
       this.emitOutcome(identity, error instanceof AgentMapProposalConflictError ? "agent_map.proposal.conflict" :
+        error instanceof AgentMapProposalQuotaError ? "agent_map.proposal.quota_exceeded" :
         error instanceof AgentMapWorkspaceStoreError ? "agent_map.proposal.storage_failed" :
           "agent_map.proposal.validation_failed", request.operations.length, startedAt);
       throw error;

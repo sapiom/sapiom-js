@@ -14,6 +14,7 @@ import type {
   ProposalOperationId,
 } from "../shared/agent-map.js";
 import {
+  AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
   type AgentMapPermanentIdAllocator,
@@ -74,7 +75,7 @@ describe("AgentMapProposalService", () => {
     ),
   );
 
-  async function fixture(receiptRetentionLimit?: number) {
+  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number) {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-proposal-"),
     );
@@ -93,6 +94,9 @@ describe("AgentMapProposalService", () => {
         ...(receiptRetentionLimit === undefined
           ? {}
           : { receiptRetentionLimit }),
+        ...(versionHistoryLimit === undefined
+          ? {}
+          : { versionHistoryLimit }),
       }),
     };
   }
@@ -175,6 +179,21 @@ describe("AgentMapProposalService", () => {
       operations: [{ kind: "update-node", nodeId, changes: { name: "request-1" } }],
     })).resolves.toEqual(noOp);
     expect(accepted).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails map history quota before mutation with a bounded terminal error", async () => {
+    const { root, service, accepted, outcomes } = await fixture(undefined, 1);
+    const first = await service.propose(identity("session-1"), addNode("request-1", 0, null));
+    const before = await new AgentMapWorkspaceStore(root).readAggregate(projectId);
+
+    await expect(service.propose(identity("session-1"), addNode("request-2", 1, first.proposalId)))
+      .rejects.toBeInstanceOf(AgentMapProposalQuotaError);
+    expect(await new AgentMapWorkspaceStore(root).readAggregate(projectId)).toEqual(before);
+    expect(accepted).toHaveBeenCalledOnce();
+    expect(outcomes.mock.calls.at(-1)?.[0]).toMatchObject({
+      name: "agent_map.proposal.quota_exceeded",
+      operationCount: 1,
+    });
   });
 
   it("bounds compact receipts and fails closed after exact replay retention", async () => {

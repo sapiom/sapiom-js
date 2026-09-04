@@ -40,14 +40,17 @@ async function fixture(
       AgentMapMcpRouterOptions,
       "createToolServer" | "createTransport" | "onEvent" | "readSnapshotFor"
     >
-  > = {},
+  > & { mapVersionHistoryLimit?: number } = {},
 ) {
+  const { mapVersionHistoryLimit, ...routerOptions } = options;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-mcp-"));
   const capabilities = new AgentMapCapabilityRegistry();
   const workspaceStore = new AgentMapWorkspaceStore(root);
-  const service = new AgentMapProposalService(workspaceStore);
+  const service = new AgentMapProposalService(workspaceStore, {
+    ...(mapVersionHistoryLimit === undefined ? {} : { versionHistoryLimit: mapVersionHistoryLimit }),
+  });
   const buildPlanService = new BuildPlanService(new BuildPlanStore(workspaceStore));
-  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService, ...options });
+  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService, ...routerOptions });
   const app = express();
   app.use(express.json());
   app.use(mcp.router);
@@ -361,6 +364,68 @@ describe("Agent Map Streamable HTTP MCP", () => {
     });
     expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions.at(-1))
       .toMatchObject({ version: 2, map: secondMap });
+  });
+
+  it("returns bounded recovery for request-local and durable map quotas", async () => {
+    const { capabilities, url, workspaceStore } = await fixture({ mapVersionHistoryLimit: 1 });
+    const identity: ProjectAgentSession = { projectId, sessionId: "quota-session", userId: "user" };
+    const client = await connect(url, capabilities.issue(identity).token);
+    const firstMap = await client.callTool({
+      name: "agent_map_propose",
+      arguments: {
+        schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "first-map",
+        operations: [{
+          kind: "add-node", draftRef: "research",
+          node: { kind: "agent", name: "Research", purpose: "Research", ownerAgent: null, contractRefs: [] },
+        }],
+      },
+    });
+    const aggregate = await workspaceStore.readAggregate(projectId);
+    const currentMap = aggregate.current.map!;
+    const oversizedPlan = await client.callTool({
+      name: "build_plan_validate",
+      arguments: {
+        schemaVersion: 1, requestId: "oversized-plan",
+        expectedMap: { versionId: currentMap.versionId, contentDigest: currentMap.contentDigest },
+        expectedPlan: null,
+        operations: [{
+          op: "replace-content",
+          content: {
+            outcome: "Plan", nonGoals: [],
+            milestones: Array.from({ length: 128 }, (_, index) => ({
+              id: { clientRef: `milestone-${index}` }, ordinal: index + 1,
+              title: `Milestone ${index + 1}`, outcome: "Complete", dependsOn: [],
+            })),
+            sequenceGates: [], sharedConstraints: [], repositoryIntents: [],
+            integrationCriteria: [], acceptanceCriteria: [], decisions: [], assignments: [],
+            unresolvedDecisions: [],
+            risks: [{ id: { clientRef: "risk-over-limit" }, description: "Capacity", mitigation: "Split request" }],
+          },
+        }],
+      },
+    });
+    expect(oversizedPlan).toMatchObject({
+      isError: true,
+      structuredContent: { code: "request_too_large", recovery: "correct" },
+    });
+
+    const mapQuota = await client.callTool({
+      name: "agent_map_propose",
+      arguments: {
+        schemaVersion: 1,
+        proposalId: (firstMap.structuredContent as { proposalId: string }).proposalId,
+        expectedVersion: 1, requestId: "second-map",
+        operations: [{
+          kind: "add-node", draftRef: "publisher",
+          node: { kind: "agent", name: "Publisher", purpose: "Publish", ownerAgent: null, contractRefs: [] },
+        }],
+      },
+    });
+    expect(mapQuota).toMatchObject({
+      isError: true,
+      structuredContent: { code: "quota_exceeded", recovery: "manual_intervention" },
+    });
+    expect(await workspaceStore.readAggregate(projectId)).toEqual(aggregate);
   });
 
   it("returns a bounded terminal recovery when the capability project is unavailable", async () => {

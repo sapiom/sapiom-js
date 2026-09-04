@@ -150,6 +150,33 @@ describe("BuildPlanService", () => {
     expect(aggregate.briefVersionsById).toEqual({});
   });
 
+  it("classifies an oversized deterministic-ID mapping request as correctable", async () => {
+    const { aggregateStore, service, refs } = await fixture();
+    const before = await aggregateStore.readAggregate(projectId);
+    const oversized = {
+      ...content(refs),
+      milestones: Array.from({ length: 128 }, (_, index) => ({
+        id: { clientRef: `milestone-${index}` }, ordinal: index + 1,
+        title: `Milestone ${index + 1}`, outcome: "Complete", dependsOn: [],
+      })),
+      sequenceGates: [],
+      repositoryIntents: [],
+      assignments: [],
+      unresolvedDecisions: [],
+      risks: [{ id: { clientRef: "risk-over-limit" }, description: "Capacity", mitigation: "Split request" }],
+    };
+
+    await expect(service.validate(identity(), {
+      schemaVersion: 1, requestId: "oversized-mappings",
+      expectedMap: toolMapRef(refs.map), expectedPlan: null,
+      operations: [{ op: "replace-content", content: oversized }],
+    })).rejects.toMatchObject({
+      code: "request_too_large",
+      details: { affectedPaths: ["operations.0.content"] },
+    });
+    expect(await aggregateStore.readAggregate(projectId)).toEqual(before);
+  });
+
   it("returns exact current and historical versions and rejects ambiguous reads", async () => {
     const { service, refs } = await fixture();
     await expect(service.read(identity(), {})).rejects.toMatchObject({ code: "malformed_input" });
