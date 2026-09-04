@@ -2360,11 +2360,71 @@ export const App = (): JSX.Element => {
     );
   };
 
+  /**
+   * SUBMITTING THE NEW AGENT SCREEN, in a project, through the real path.
+   *
+   * This is the swap the whole PR exists for. The other branch below still
+   * invents a folder and injects `composerScaffoldPrompt` — English typed at the
+   * coding agent, hoping it calls the scaffold tool — because with no project
+   * there is nothing to dispatch to. With one, there is: the map planner, which
+   * is the same conversation this screen opens, held by something that can
+   * actually build.
+   *
+   * `resume-or-create` rather than `fresh`, matching the map row, because a
+   * project may already have a planning conversation in progress and dropping
+   * the user into an empty planner would strand it.
+   *
+   * The idea itself rides in as the first message. Not as a prompt asking for a
+   * tool call — as the answer to the question the planner's opening turn asks.
+   */
+  const handleComposerSubmitInProject = async (
+    project: { projectId: StudioProjectId; label: string },
+    idea: string,
+    agentHarness: HarnessKind,
+  ): Promise<void> => {
+    setRightCollapsed(true);
+    // TWO CALLS, ONE SESSION, and that is what the mode is for. This dispatch
+    // is the deterministic one — it has the session id the first message needs
+    // — and `useAgentMapEntry`'s own effect fires a second time once
+    // `studioSelection` becomes this project's map. `resume-or-create` makes
+    // the second one resume rather than open a rival planner: measured against
+    // the mock rail, two open calls and one created session.
+    const opened = await harness.openPlannerSession(project.projectId, {
+      mode: "resume-or-create",
+      harness: agentHarness,
+      theme: getTheme(),
+    });
+    harness.setActiveSessionId(opened.session.id);
+    // The screen has done its job; the planner owns the conversation now.
+    setComposingProject(null);
+    setStudioSelection({ kind: "agent-map", projectId: project.projectId });
+    const text = idea.trim();
+    if (!text) return;
+    try {
+      await harness.api.sendPlannerMessage(
+        project.projectId,
+        opened.session.id,
+        { text },
+      );
+    } catch {
+      // The planner is open and the user can retype. Reporting a failed first
+      // message as a failed CREATE would be the same lie the injected prompt
+      // told, in the other direction.
+      harness.showToast(
+        "Couldn't send that to the planner — it's open, try sending again.",
+      );
+    }
+  };
+
   const handleComposerSubmitIdea = async (
     idea: string,
     agentHarness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ): Promise<void> => {
+    if (composingProject) {
+      await handleComposerSubmitInProject(composingProject, idea, agentHarness);
+      return;
+    }
     const cwd = uniqueProjectDir(
       idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
     );
