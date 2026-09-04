@@ -364,31 +364,6 @@ export function parseProposalActor(value: unknown): ProposalActor {
   return { userId: value.userId, sessionId: value.sessionId };
 }
 
-export interface LegacyE2ProposalActor {
-  userId: string;
-  sessionId: string;
-  role: "map-planner" | "agent-builder";
-  assignment:
-    | { kind: "planned"; agentId: string }
-    | { kind: "unplanned" }
-    | null;
-}
-
-/** Frozen decoder used only by the direct deployed-E2 migration. */
-export function parseLegacyE2ProposalActor(value: unknown): LegacyE2ProposalActor {
-  if (!isRecord(value) || !hasExactKeys(value, ["userId", "sessionId", "role", "assignment"]) ||
-    !isAgentMapBoundedText(value.userId, 256) || !isAgentMapBoundedText(value.sessionId, 256))
-    throw new Error("invalid legacy Agent Map actor");
-  if (value.role === "map-planner" && value.assignment === null)
-    return structuredClone(value) as unknown as LegacyE2ProposalActor;
-  if (value.role !== "agent-builder" || !isRecord(value.assignment) ||
-    (value.assignment.kind === "planned"
-      ? !hasExactKeys(value.assignment, ["kind", "agentId"]) || !isAgentMapBoundedText(value.assignment.agentId, 256)
-      : value.assignment.kind !== "unplanned" || !hasExactKeys(value.assignment, ["kind"])))
-    throw new Error("invalid legacy Agent Map actor");
-  return structuredClone(value) as unknown as LegacyE2ProposalActor;
-}
-
 export function parseMapChangeProposal(
   value: unknown,
   projectId?: string,

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { createEventStore } from "../core/collector/store.js";
-import { ProjectBootstrapCoordinator } from "../core/planner-greeting.js";
+import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { createSessionRecordReader } from "../core/session-record.js";
 import type { SessionManager } from "../core/session-manager.js";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
@@ -807,11 +807,11 @@ describe("createIngestRouter", () => {
     start({
       decorateEvent: (event) => ({
         ...event,
-        payload: { ...event.payload, plannerOrigin: "infrastructure" },
+        payload: { ...event.payload, projectBootstrapOrigin: "infrastructure" },
       }),
       projectTelemetryEvent: (event) => ({
         ...event,
-        payload: { planner: true, origin: event.payload.plannerOrigin },
+        payload: { bootstrap: true, origin: event.payload.projectBootstrapOrigin },
       }),
     });
 
@@ -824,10 +824,10 @@ describe("createIngestRouter", () => {
     await vi.waitFor(() => expect(stored).toHaveLength(1));
     expect(stored[0].payload).toMatchObject({
       prompt: "private control prompt",
-      plannerOrigin: "infrastructure",
+      projectBootstrapOrigin: "infrastructure",
     });
     expect(enqueued[0].payload).toEqual({
-      planner: true,
+      bootstrap: true,
       origin: "infrastructure",
     });
     expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");

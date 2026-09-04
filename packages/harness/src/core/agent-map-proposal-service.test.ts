@@ -8,7 +8,6 @@ import type {
   MapProposalId,
   PlanNodeId,
   PlanRelationshipId,
-  PlanningSessionIdentity,
   ProjectAgentSession,
   ProposalBatchRequest,
   ProposalOperationId,
@@ -369,29 +368,11 @@ describe("AgentMapProposalService", () => {
     });
   });
 
-  it("ignores former origin metadata and uses one neutral write authority", async () => {
+  it("uses one neutral write authority for every ordinary project session", async () => {
     const { service } = await fixture();
-    const planner: PlanningSessionIdentity = {
-      ...identity("planner"),
-      role: "map-planner",
-    };
-    const first = await service.propose(planner, addNode("planner", 0, null));
-    const assigned: PlanningSessionIdentity = {
-      projectId,
-      userId: "user-1",
-      sessionId: "assigned",
-      role: "agent-builder",
-      assignment: { kind: "planned", agentId: "planned-agent" },
-    };
-    await service.propose(assigned, addNode("assigned", 1, first.proposalId));
-    const unplanned: PlanningSessionIdentity = {
-      projectId,
-      userId: "user-1",
-      sessionId: "unplanned",
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
-    };
-    await service.propose(unplanned, addNode("unplanned", 2, first.proposalId));
+    const first = await service.propose(identity("session-one"), addNode("one", 0, null));
+    await service.propose(identity("session-two"), addNode("two", 1, first.proposalId));
+    await service.propose(identity("session-three"), addNode("three", 2, first.proposalId));
     expect(
       (await service.read(projectId)).proposal?.history.map(
         ({ actor }) => actor,
@@ -399,15 +380,15 @@ describe("AgentMapProposalService", () => {
     ).toEqual([
       {
         userId: "user-1",
-        sessionId: "planner",
+        sessionId: "session-one",
       },
       {
         userId: "user-1",
-        sessionId: "assigned",
+        sessionId: "session-two",
       },
       {
         userId: "user-1",
-        sessionId: "unplanned",
+        sessionId: "session-three",
       },
     ]);
   });

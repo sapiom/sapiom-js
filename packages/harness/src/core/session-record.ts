@@ -171,15 +171,13 @@ export function foldSessionRecord(
           // projected as an assistant-initiated turn: its private instruction
           // must never appear as a user message or inflate the human turn count.
           prompt:
-            payload.projectBootstrapOrigin === "infrastructure" ||
-            payload.plannerOrigin === "infrastructure"
+            payload.projectBootstrapOrigin === "infrastructure"
               ? null
               : typeof payload.prompt === "string"
                 ? payload.prompt
                 : "",
           promptAt:
-            payload.projectBootstrapOrigin === "infrastructure" ||
-            payload.plannerOrigin === "infrastructure"
+            payload.projectBootstrapOrigin === "infrastructure"
               ? null
               : event.ts,
           toolCalls: [],

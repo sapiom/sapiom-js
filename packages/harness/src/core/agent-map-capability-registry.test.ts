@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  PlanningSessionIdentity,
-  ProjectAgentSession,
-} from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
 import {
   AgentMapCapabilityError,
   AgentMapCapabilityRegistry,
@@ -30,21 +27,19 @@ describe("AgentMapCapabilityRegistry", () => {
     );
   });
 
-  it("strips legacy origin metadata before it enters live capability authority", () => {
-    const legacy: PlanningSessionIdentity = {
+  it("copies only the neutral identity fields into live capability authority", () => {
+    const identityWithUntrustedExtras = {
       ...identity(),
-      role: "agent-builder",
-      assignment: { kind: "planned", agentId: "agent-1" },
+      untrustedContext: { assignmentId: "assignment-1" },
     };
     const registry = new AgentMapCapabilityRegistry({
       randomToken: () => "legacy-session-token",
     });
 
-    const issued = registry.issue(legacy);
+    const issued = registry.issue(identityWithUntrustedExtras);
 
     expect(issued.identity).toEqual(identity());
-    expect(issued.identity).not.toHaveProperty("role");
-    expect(issued.identity).not.toHaveProperty("assignment");
+    expect(issued.identity).not.toHaveProperty("untrustedContext");
   });
 
   it("fails closed for expired, revoked and unknown tokens without emitting material", () => {

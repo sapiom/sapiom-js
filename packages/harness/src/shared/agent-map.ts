@@ -333,22 +333,6 @@ export type RoleNeutralMapOperationRecord = Readonly<{
   acceptedAt: string;
 }>;
 
-/**
- * @deprecated Persisted rolling-compatibility metadata only. Live Agent Map
- * authority uses {@link ProjectAgentSession}; role and assignment must never
- * participate in authorization or capability composition.
- */
-export type PlanningSessionIdentity =
-  | (SessionPrincipal & { role: "map-planner" })
-  | (SessionPrincipal & {
-      role: "agent-builder";
-      assignment: { kind: "planned"; agentId: string };
-    })
-  | (SessionPrincipal & {
-      role: "agent-builder";
-      assignment: { kind: "unplanned" };
-    });
-
 /** Live proposal attribution is the same role-neutral project actor vocabulary. */
 export type ProposalActor = ProjectAgentActorRef;
 
@@ -425,20 +409,6 @@ export type ProjectBootstrapState =
       status: "skipped";
       reason: "user-proceeded" | "map-not-empty";
     };
-
-/** @deprecated Persisted planner-era bootstrap error vocabulary. */
-export type PlannerGreetingErrorCode = ProjectBootstrapErrorCode;
-
-/** @deprecated Persisted planner-era bootstrap state. */
-export type PlannerGreetingState =
-  | Exclude<ProjectBootstrapState, { status: "skipped" }>
-  | { status: "skipped"; reason: "user-proceeded" };
-
-export interface PlannerSessionMetadata {
-  identity: Extract<PlanningSessionIdentity, { role: "map-planner" }>;
-  greeting: PlannerGreetingState;
-  queuedInputIds: string[];
-}
 
 /**
  * Lifecycle context for the one automatic map seed owned by a newly created
@@ -518,91 +488,6 @@ export type ProjectBootstrapLifecycleEvent =
     }
   | {
       name: "project_bootstrap.input_delivery_uncertain";
-      projectId: StudioProjectId;
-      sessionId: string;
-      inputId: string;
-      errorCode: "delivery_uncertain";
-      queueDepth: number;
-    };
-
-export interface PlannerQueuedInput {
-  id: string;
-  sessionId: string;
-  text: string;
-  acceptedAt: string;
-}
-
-export interface PlannerSessionRequest {
-  mode: "resume-or-create" | "fresh";
-  harness?: import("./types.js").HarnessKind;
-  theme?: import("./types.js").UiTheme;
-}
-
-export interface PlannerSessionResponse {
-  session: import("./types.js").HarnessSession;
-  resolution: "created" | "live" | "resumed" | "rehydrated";
-}
-
-export interface PlannerMessageRequest {
-  text: string;
-  /** Optional idempotency key while the durable bootstrap FIFO owns input. */
-  requestId?: string;
-}
-
-/**
- * @deprecated Rolling planner-route response. The route now delegates to the
- * neutral project-bootstrap coordinator and never recreates planner identity.
- */
-export interface PlannerSessionMetadataResponse {
-  metadata: ProjectBootstrapMetadata | null;
-  /** Present only when the durable bootstrap FIFO handled this request. */
-  receipt?: ProjectBootstrapInputReceipt;
-}
-
-/**
- * Content-free planner lifecycle telemetry. Callers may persist these fields,
- * but must never add prompts, assistant text, local paths, or provider errors.
- */
-export type PlannerLifecycleEvent =
-  | {
-      name: "planner_session.created" | "planner_session.resumed";
-      projectId: StudioProjectId;
-      sessionId: string;
-      resolution: PlannerSessionResponse["resolution"];
-    }
-  | {
-      name: "planner_greeting.attempted" | "planner_greeting.retried";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId: string;
-      queueDepth: number;
-    }
-  | {
-      name: "planner_greeting.delivered";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId: string;
-      queueDepth: number;
-    }
-  | {
-      name: "planner_greeting.failed";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId?: string;
-      errorCode: PlannerGreetingErrorCode;
-      retryable: boolean;
-      queueDepth: number;
-    }
-  | {
-      name: "planner_greeting.skipped";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId?: string;
-      reason: "user-proceeded";
-      queueDepth: number;
-    }
-  | {
-      name: "planner_session.input_delivery_uncertain";
       projectId: StudioProjectId;
       sessionId: string;
       inputId: string;

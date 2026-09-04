@@ -29,8 +29,6 @@ export interface HarnessStatePaths {
   pendingSecrets: string;
   agentMap: string;
   projectBootstrap: string;
-  /** @deprecated Read-only migration source; remove in SAP-3152. */
-  plannerSessions: string;
   generated: string;
   records: string;
   sampleProject: string;
@@ -63,7 +61,6 @@ export function resolveStatePaths(stateRoot?: string): HarnessStatePaths {
     pendingSecrets: join(root, relativeToHome(HARNESS_PATHS.pendingSecrets)),
     agentMap: join(root, relativeToHome(HARNESS_PATHS.agentMap)),
     projectBootstrap: join(root, "agent-map", "project-bootstrap"),
-    plannerSessions: join(root, "agent-map", "planner-sessions"),
     generated: join(root, relativeToHome(HARNESS_PATHS.generated)),
     records: join(root, relativeToHome(HARNESS_PATHS.records)),
     sampleProject: join(root, relativeToHome(HARNESS_PATHS.sampleProject)),

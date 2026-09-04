@@ -39,7 +39,6 @@ const sessionEvidence = (
   injectInputCalls: number;
   injectedSessionId: string | null;
   injectedText: string;
-  openPlannerSessionCalls: number;
 }> =>
   page.evaluate(() => {
     const testState = (
@@ -48,7 +47,6 @@ const sessionEvidence = (
           createSessionCalls?: unknown[];
           injectInputCalls?: unknown[];
           lastInjectInput?: { id?: string; req?: { text?: string } };
-          openPlannerSessionCalls?: unknown[];
         };
       }
     ).__HARNESS_TEST__;
@@ -61,7 +59,6 @@ const sessionEvidence = (
       injectInputCalls: testState?.injectInputCalls?.length ?? 0,
       injectedSessionId: testState?.lastInjectInput?.id ?? null,
       injectedText: testState?.lastInjectInput?.req?.text ?? "",
-      openPlannerSessionCalls: testState?.openPlannerSessionCalls?.length ?? 0,
     };
   });
 
@@ -119,7 +116,6 @@ test("Enter keeps a new-agent prompt in its exact session while the project map 
   const before = await sessionEvidence(page);
   expect(before.activeSessionId).toBeNull();
   expect(before.createSessionCalls).toBe(0);
-  expect(before.openPlannerSessionCalls).toBe(0);
 
   await page.getByTestId("rail-create-new").click();
   const idea = "Build a sales outreach agent.";
@@ -173,7 +169,6 @@ test("Enter keeps a new-agent prompt in its exact session while the project map 
 
   const evidence = await sessionEvidence(page);
   expect(evidence.createSessionCalls).toBe(before.createSessionCalls + 1);
-  expect(evidence.openPlannerSessionCalls).toBe(before.openPlannerSessionCalls);
   expect(evidence.injectedSessionId).not.toBeNull();
   expect(evidence.injectedSessionId).not.toBe("sess-competing-plan-agents");
   expect(evidence.activeSessionId).toBe(evidence.injectedSessionId);
@@ -225,7 +220,6 @@ test("returning to an in-progress standalone session does not restore the projec
   await expect(page.locator(".rail-workflows")).toBeVisible();
   const before = await sessionEvidence(page);
   expect(before.createSessionCalls).toBe(0);
-  expect(before.openPlannerSessionCalls).toBe(0);
 
   await page.getByTestId("rail-create-new").click();
   const idea = "Build a revisit guard agent.";
@@ -264,9 +258,6 @@ test("returning to an in-progress standalone session does not restore the projec
   expect((await sessionEvidence(page)).activeSessionId).not.toBe(awaySessionId);
   await page.waitForTimeout(500);
   const afterReturn = await sessionEvidence(page);
-  expect(afterReturn.openPlannerSessionCalls).toBe(
-    beforeReturn.openPlannerSessionCalls,
-  );
   await expect(
     page
       .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")

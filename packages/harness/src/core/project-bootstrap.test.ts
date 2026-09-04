@@ -29,7 +29,7 @@ import {
   ProjectBootstrapRetryUnavailableError,
   projectBootstrapPrompt,
   type ProjectBootstrapCoordinatorOptions,
-} from "./planner-greeting.js";
+} from "./project-bootstrap.js";
 
 const activeCoordinators = new Set<ProjectBootstrapCoordinatorImpl>();
 const TEST_RUNTIME_EPOCH = "runtime-epoch-test";
@@ -1180,7 +1180,7 @@ describe("ProjectBootstrapCoordinator", () => {
 
     const coordinator = new ProjectBootstrapCoordinator({
       root,
-      legacyRoot,
+      legacyStateRoot: legacyRoot,
       sessionManager: manager,
     });
     await coordinator.register(session, { emptyProject: true, mode: "boot" });
@@ -4266,6 +4266,8 @@ describe("ProjectBootstrapCoordinator", () => {
         prompt: submitted[0]!.text,
         path: "/private/source.ts",
         connectorPayload: "secret connector body",
+        credential: "sk-cutover-secret",
+        compiledBrief: "private focused brief body",
       }),
     );
     expect(local.payload.prompt).toBe(submitted[0]!.text);
@@ -4280,6 +4282,8 @@ describe("ProjectBootstrapCoordinator", () => {
     });
     expect(JSON.stringify(remotePrompt)).not.toContain("private/source");
     expect(JSON.stringify(remotePrompt)).not.toContain("connector body");
+    expect(JSON.stringify(remotePrompt)).not.toContain("sk-cutover-secret");
+    expect(JSON.stringify(remotePrompt)).not.toContain("focused brief body");
 
     const remoteTurn = redactor.redactForTelemetry(
       analyticsEvent(session.id, "turn.completed", {

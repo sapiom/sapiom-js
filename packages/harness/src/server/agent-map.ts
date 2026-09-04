@@ -1,17 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
-
 import {
   type AgentMapErrorCode,
   type AgentMapErrorResponse,
   type AgentMapWorkspaceResponse,
-  type PlannerMessageRequest,
-  type PlannerSessionRequest,
   type StudioProjectSummary,
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
-import { SPAWNABLE_HARNESS_KINDS, type WorkflowInfo } from "../shared/types.js";
-import type { SessionInputSubmissionResult } from "../shared/types.js";
+import type { WorkflowInfo } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import { samePath } from "../shared/paths.js";
 import {
@@ -27,24 +23,6 @@ import {
   StudioWorkspacePreferenceStore,
   StudioWorkspacePreferenceStoreError,
 } from "../core/studio-workspace-preferences.js";
-import { ExternalHarnessError } from "../core/errors.js";
-import {
-  ProjectSessionError,
-  type ProjectSessionService,
-} from "../core/planning-session.js";
-import {
-  ProjectSessionScopeUnavailableError,
-  SessionBackgroundInputPreemptedError,
-  SessionInputIsolationError,
-  SessionNotReadyError,
-} from "../core/session-manager.js";
-import {
-  ProjectBootstrapDispatchForbiddenError,
-  ProjectBootstrapInputCapacityError,
-  ProjectBootstrapRequestIdConflictError,
-  ProjectBootstrapRetryUnavailableError,
-  type ProjectBootstrapCoordinator,
-} from "../core/planner-greeting.js";
 
 export interface AgentMapRouterOptions {
   catalog: StudioProjectCatalog;
@@ -62,75 +40,12 @@ export interface AgentMapRouterOptions {
   listWorkspaceScopes: () =>
     | readonly WorkspaceScopeSummary[]
     | Promise<readonly WorkspaceScopeSummary[]>;
-  projectSessions?: ProjectSessionService;
-  projectBootstrap?: ProjectBootstrapCoordinator;
   /** New-project lifecycle hooks; never called by Agent Map reads. */
   onProjectCreated?: (project: StudioProjectSummary) => Promise<void> | void;
   onRootBound?: (
     project: StudioProjectSummary,
     root: string,
   ) => Promise<void> | void;
-  /** Neutral ordinary-session input boundary used by rolling aliases. */
-  submitSessionInput?: (
-    sessionId: string,
-    text: string,
-    submit: boolean,
-    requestId?: string,
-  ) => Promise<boolean | SessionInputSubmissionResult>;
-}
-
-const plannerSessionSchema = z
-  .object({
-    mode: z.enum(["resume-or-create", "fresh"]),
-    harness: z.enum(SPAWNABLE_HARNESS_KINDS).optional(),
-    theme: z.enum(["light", "dark"]).optional(),
-  })
-  .strict() satisfies z.ZodType<PlannerSessionRequest>;
-
-const plannerMessageSchema = z
-  .object({
-    text: z.string().min(1).max(100_000),
-    requestId: z.string().min(1).max(200).optional(),
-  })
-  .strict() satisfies z.ZodType<PlannerMessageRequest>;
-
-function sendProjectSessionError(
-  res: import("express").Response,
-  error: unknown,
-): boolean {
-  if (
-    error instanceof SessionNotReadyError ||
-    error instanceof ExternalHarnessError ||
-    error instanceof SessionBackgroundInputPreemptedError ||
-    error instanceof SessionInputIsolationError
-  ) {
-    res.status(409).json({ code: error.code, error: error.message });
-    return true;
-  }
-  if (error instanceof ProjectBootstrapDispatchForbiddenError) {
-    res.status(403).json({ code: error.code, error: error.message });
-    return true;
-  }
-  if (
-    error instanceof ProjectBootstrapRequestIdConflictError ||
-    error instanceof ProjectBootstrapInputCapacityError
-  ) {
-    res.status(409).json({ code: error.code, error: error.message });
-    return true;
-  }
-  if (error instanceof ProjectSessionScopeUnavailableError) {
-    res.status(409).json({ code: error.code, error: error.message });
-    return true;
-  }
-  if (!(error instanceof ProjectSessionError)) return false;
-  const status =
-    error.code === "project_not_found" || error.code === "session_not_found"
-      ? 404
-      : error.code === "forbidden"
-        ? 403
-        : 409;
-  res.status(status).json({ code: error.code, error: error.message });
-  return true;
 }
 
 const ERROR_MESSAGES: Record<AgentMapErrorCode, string> = {
@@ -446,107 +361,5 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     }
   });
 
-  /** @deprecated Rolling alias to ordinary project-session open; remove in SAP-3152. */
-  router.post(
-    "/projects/:projectId/planner-sessions",
-    async (req, res, next) => {
-      if (!options.projectSessions) {
-        res.status(501).json({ error: "Project sessions are unavailable" });
-        return;
-      }
-      const parsed = plannerSessionSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ error: "Invalid planner session request" });
-        return;
-      }
-      try {
-        const result = await options.projectSessions.open(
-          req.params.projectId,
-          parsed.data,
-        );
-        res.status(result.resolution === "created" ? 201 : 200).json(result);
-      } catch (error) {
-        if (!sendProjectSessionError(res, error)) next(error);
-      }
-    },
-  );
-
-  /** @deprecated Rolling alias to ordinary project-session input; remove in SAP-3152. */
-  router.post(
-    "/projects/:projectId/planner-sessions/:sessionId/messages",
-    async (req, res, next) => {
-      if (!options.projectSessions || !options.submitSessionInput) {
-        res.status(501).json({ error: "Project sessions are unavailable" });
-        return;
-      }
-      const parsed = plannerMessageSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ error: "Invalid planner message" });
-        return;
-      }
-      try {
-        const session = await options.projectSessions.requireOwned(
-          req.params.projectId,
-          req.params.sessionId,
-        );
-        const submitted = await options.submitSessionInput(
-          req.params.sessionId,
-          parsed.data.text,
-          true,
-          parsed.data.requestId,
-        );
-        const result =
-          typeof submitted === "boolean" ? { ok: submitted } : submitted;
-        if (!result.ok) {
-          res
-            .status(404)
-            .json({ error: "Project session has no live process" });
-          return;
-        }
-        res.status(202).json({
-          metadata: session.projectBootstrap ?? null,
-          ...(typeof submitted !== "boolean" &&
-          submitted.ok &&
-          submitted.receipt
-            ? { receipt: submitted.receipt }
-            : {}),
-        });
-      } catch (error) {
-        if (!sendProjectSessionError(res, error)) next(error);
-      }
-    },
-  );
-
-  /** @deprecated Rolling alias; remove after persisted clients migrate in SAP-3152. */
-  router.post(
-    "/projects/:projectId/planner-sessions/:sessionId/greeting/retry",
-    async (req, res, next) => {
-      if (!options.projectSessions || !options.projectBootstrap) {
-        res.status(501).json({ error: "Project bootstrap is unavailable" });
-        return;
-      }
-      if (Object.keys((req.body ?? {}) as object).length > 0) {
-        res.status(400).json({ error: "Invalid greeting retry request" });
-        return;
-      }
-      try {
-        const session = await options.projectSessions.requireOwned(
-          req.params.projectId,
-          req.params.sessionId,
-        );
-        if (!session.projectBootstrap) {
-          throw new ProjectBootstrapRetryUnavailableError();
-        }
-        await options.projectBootstrap.retry(req.params.sessionId);
-        res.status(202).json({
-          metadata: session.projectBootstrap,
-        });
-      } catch (error) {
-        if (error instanceof ProjectBootstrapRetryUnavailableError) {
-          res.status(409).json({ code: error.code, error: error.message });
-        } else if (!sendProjectSessionError(res, error)) next(error);
-      }
-    },
-  );
   return router;
 }

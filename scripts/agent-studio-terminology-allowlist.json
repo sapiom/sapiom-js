@@ -544,5 +544,45 @@
     "pattern": "^/api/workflows/:id/secrets(?:/(?:import|flush|:key))?$",
     "occurrences": 5,
     "reason": "Studio localhost API routes remain stable for existing clients, and these sit beside the existing /api/workflows/:id/deploy family."
+  },
+  {
+    "id": "legacy-proposal-actor-decoder",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/shared/agent-map-legacy-migration.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 2,
+    "reason": "Read-only E2 proposal-history decoder; live writes use ProjectAgentActorRef and the migration module is reachability-tested."
+  },
+  {
+    "id": "legacy-proposal-actor-decoder-tests",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/shared/agent-map-legacy-migration.test.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 2,
+    "reason": "Exact fixtures prove both retired E2 actor shapes migrate and cannot reach live proposal services."
+  },
+  {
+    "id": "legacy-agent-map-aggregate-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/agent-map-aggregate-migration.test.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 2,
+    "reason": "Migration fixture proves deployed E2 history becomes role-neutral without data loss."
+  },
+  {
+    "id": "legacy-project-bootstrap-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/project-bootstrap.test.ts",
+    "pattern": "map-planner",
+    "occurrences": 1,
+    "reason": "Migration fixture proves a durable pre-upgrade input FIFO is normalized without losing input or replaying bootstrap."
+  },
+  {
+    "id": "legacy-session-migration-fixtures",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/session-manager.test.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 3,
+    "reason": "Persisted-session fixtures prove valid metadata migrates and malformed or conflicting authority remains safely preserved."
   }
 ]

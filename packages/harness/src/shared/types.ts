@@ -214,11 +214,6 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
-  /**
-   * @deprecated Legacy planner bootstrap metadata accepted only for rolling
-   * migration. It is never consulted for prompt, tool, sandbox, or authority.
-   */
-  planning?: import("./agent-map.js").PlannerSessionMetadata;
   /** Durable lifecycle state for a new project's one automatic map seed. */
   projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
@@ -863,20 +858,7 @@ export type AnalyticsEventType =
   | "project_bootstrap.failed"
   | "project_bootstrap.preempted"
   | "project_bootstrap.skipped"
-  | "project_bootstrap.input_delivery_uncertain"
-  | "planner_session.created"
-  | "planner_session.resumed"
-  | "planner_session.input_delivery_uncertain"
-  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
-  | "planner_greeting.attempted"
-  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
-  | "planner_greeting.delivered"
-  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
-  | "planner_greeting.failed"
-  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
-  | "planner_greeting.skipped"
-  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
-  | "planner_greeting.retried";
+  | "project_bootstrap.input_delivery_uncertain";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the

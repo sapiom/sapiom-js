@@ -31,10 +31,13 @@ import {
 } from "../shared/types.js";
 import type {
   ProjectAgentSession,
-  ProjectBootstrapErrorCode,
   ProjectBootstrapMetadata,
 } from "../shared/agent-map.js";
 import type { FocusedSessionContextProjection } from "./focused-session-context.js";
+import {
+  migratePersistedProjectIdentity,
+  removeLegacyProjectSessionMetadata,
+} from "./project-session-legacy-migration.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -171,35 +174,8 @@ export class ProjectBootstrapClaimUnavailableError extends Error {
   }
 }
 
-type PersistedIdentityMigration = {
-  identity?: ProjectAgentSession;
-  bootstrap?: ProjectBootstrapMetadata;
-  outcome: "unchanged" | "migrated" | "rejected";
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseProjectAgentSession(
-  value: unknown,
-  expectedSessionId: string,
-): ProjectAgentSession | null {
-  if (
-    !isRecord(value) ||
-    typeof value.projectId !== "string" ||
-    value.projectId === "" ||
-    typeof value.userId !== "string" ||
-    value.userId === "" ||
-    value.sessionId !== expectedSessionId
-  ) {
-    return null;
-  }
-  return {
-    projectId: value.projectId,
-    userId: value.userId,
-    sessionId: expectedSessionId,
-  };
 }
 
 function sameProjectAgent(
@@ -254,144 +230,6 @@ function sameSubsessionBinding(
     left.incarnation === right.incarnation &&
     left.spawnEpoch === right.spawnEpoch
   );
-}
-
-function parseBootstrapState(
-  value: unknown,
-): ProjectBootstrapMetadata["bootstrap"] | null {
-  if (!isRecord(value) || typeof value.status !== "string") return null;
-  switch (value.status) {
-    case "pending":
-      return { status: "pending" };
-    case "generating":
-      return typeof value.attemptId === "string" && value.attemptId !== ""
-        ? { status: "generating", attemptId: value.attemptId }
-        : null;
-    case "delivered":
-      return typeof value.messageId === "string" && value.messageId !== ""
-        ? { status: "delivered", messageId: value.messageId }
-        : null;
-    case "failed":
-      return typeof value.retryable === "boolean" &&
-        typeof value.errorCode === "string" &&
-        [
-          "session_not_ready",
-          "session_exited",
-          "injection_failed",
-          "model_turn_failed",
-          "delivery_timeout",
-          "persistence_failed",
-        ].includes(value.errorCode)
-        ? {
-            status: "failed",
-            retryable: value.retryable,
-            errorCode: value.errorCode as ProjectBootstrapErrorCode,
-          }
-        : null;
-    case "skipped":
-      return value.reason === "user-proceeded" ||
-        value.reason === "map-not-empty"
-        ? { status: "skipped", reason: value.reason }
-        : null;
-    default:
-      return null;
-  }
-}
-
-/**
- * Accept both the final neutral shape and persisted planner-era metadata. Extra
- * role/assignment keys are dropped; conflicting principals are never trusted.
- */
-function migratePersistedProjectIdentity(
-  session: HarnessSession,
-): PersistedIdentityMigration {
-  const raw = session as HarnessSession & {
-    agentMapIdentity?: unknown;
-    planning?: unknown;
-    projectBootstrap?: unknown;
-  };
-  const direct = parseProjectAgentSession(raw.agentMapIdentity, session.id);
-  const planning = isRecord(raw.planning) ? raw.planning : null;
-  const planned =
-    planning && isRecord(planning.identity)
-      ? parseProjectAgentSession(planning.identity, session.id)
-      : null;
-  // A present-but-invalid authority record is ambiguous. Never repair it from
-  // a second field and silently choose one principal: retain the complete
-  // persisted session for operator recovery and fail scope revalidation when
-  // somebody later tries to resume it.
-  if (raw.agentMapIdentity !== undefined && !direct) {
-    return { outcome: "rejected" };
-  }
-  if (raw.planning !== undefined && (!planning || !planned)) {
-    return { identity: direct ?? undefined, outcome: "rejected" };
-  }
-  if (direct && planned && !sameProjectAgent(direct, planned)) {
-    return { outcome: "rejected" };
-  }
-  let identity = direct ?? planned ?? undefined;
-
-  let bootstrap: ProjectBootstrapMetadata | undefined;
-  const current = isRecord(raw.projectBootstrap) ? raw.projectBootstrap : null;
-  if (raw.projectBootstrap !== undefined && !current) {
-    return { identity, outcome: "rejected" };
-  }
-  if (current) {
-    const currentIdentity = parseProjectAgentSession(
-      {
-        projectId: current.projectId,
-        userId: current.userId,
-        sessionId: current.targetSessionId,
-      },
-      session.id,
-    );
-    const state = parseBootstrapState(current.bootstrap);
-    if (
-      !currentIdentity ||
-      !state ||
-      !Array.isArray(current.queuedInputIds) ||
-      !current.queuedInputIds.every((id) => typeof id === "string") ||
-      (identity && !sameProjectAgent(identity, currentIdentity))
-    ) {
-      return { identity, outcome: "rejected" };
-    }
-    identity ??= currentIdentity;
-    bootstrap = {
-      projectId: currentIdentity.projectId,
-      userId: currentIdentity.userId,
-      targetSessionId: currentIdentity.sessionId,
-      bootstrap: state,
-      queuedInputIds: [...current.queuedInputIds],
-    };
-  } else if (planning && planned) {
-    const state = parseBootstrapState(planning.greeting);
-    if (
-      !state ||
-      !Array.isArray(planning.queuedInputIds) ||
-      !planning.queuedInputIds.every((id) => typeof id === "string")
-    ) {
-      return { identity, outcome: "rejected" };
-    }
-    bootstrap = {
-      projectId: planned.projectId,
-      userId: planned.userId,
-      targetSessionId: planned.sessionId,
-      bootstrap: state,
-      queuedInputIds: [...planning.queuedInputIds],
-    };
-  }
-
-  const hadLegacyIdentity =
-    isRecord(raw.agentMapIdentity) &&
-    ("role" in raw.agentMapIdentity || "assignment" in raw.agentMapIdentity);
-  return {
-    ...(identity ? { identity } : {}),
-    ...(bootstrap ? { bootstrap } : {}),
-    outcome:
-      hadLegacyIdentity || raw.planning !== undefined || (!!current && !direct)
-        ? "migrated"
-        : "unchanged",
-  };
 }
 
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
@@ -1097,7 +935,7 @@ export class SessionManager {
         }
         // Planner-era metadata is never live authority after normalization.
         // Its on-disk input queue is migrated by ProjectBootstrapCoordinator.
-        delete session.planning;
+        removeLegacyProjectSessionMetadata(session);
         dirty = true;
       }
       if (migration.outcome !== "unchanged") {

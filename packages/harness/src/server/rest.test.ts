@@ -540,7 +540,7 @@ describe("createRestRouter", () => {
       expect(onSessionCreated).not.toHaveBeenCalled();
     });
 
-    it("rejects role and project spoofing on generic session creation", async () => {
+    it("rejects project-authority spoofing on generic session creation", async () => {
       const sessionManager = fakeSessionManager();
       start({ sessionManager });
 
@@ -550,7 +550,7 @@ describe("createRestRouter", () => {
         body: JSON.stringify({
           cwd: "/tmp/proj",
           harness: "codex",
-          role: "map-planner",
+          authority: "forged",
           projectId: "forged-project",
         }),
       });
@@ -1000,29 +1000,19 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
-    it("accepts ordinary input for a former planner session without a role-specific 409", async () => {
-      const planner = exitedSession({
-        id: "planner-1",
+    it("accepts ordinary input for a project session without a role-specific 409", async () => {
+      const projectSession = exitedSession({
+        id: "project-session-1",
         agentMapIdentity: {
           projectId: "project-1",
-          sessionId: "planner-1",
+          sessionId: "project-session-1",
           userId: "user-1",
         },
-        planning: {
-          identity: {
-            projectId: "project-1",
-            sessionId: "planner-1",
-            userId: "user-1",
-            role: "map-planner",
-          },
-          greeting: { status: "pending" },
-          queuedInputIds: [],
-        },
       });
-      const sessionManager = fakeSessionManager([planner]);
+      const sessionManager = fakeSessionManager([projectSession]);
       start({ sessionManager });
 
-      const res = await fetch(`${baseUrl}/sessions/planner-1/input`, {
+      const res = await fetch(`${baseUrl}/sessions/project-session-1/input`, {
         method: "POST",
         headers: { ...TOKEN_HEADER, "content-type": "application/json" },
         body: JSON.stringify({ text: "bypass" }),
@@ -1030,7 +1020,7 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true });
       expect(sessionManager.submitInput).toHaveBeenCalledWith(
-        planner.id,
+        projectSession.id,
         "bypass",
         true,
       );
@@ -1245,42 +1235,32 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
-    it("resumes a former planner through the ordinary endpoint without a role-specific 409", async () => {
-      const planner = exitedSession({
-        id: "planner-1",
+    it("resumes a project session through the ordinary endpoint without a role-specific 409", async () => {
+      const projectSession = exitedSession({
+        id: "project-session-1",
         agentMapIdentity: {
           projectId: "project-1",
-          sessionId: "planner-1",
+          sessionId: "project-session-1",
           userId: "user-1",
         },
-        planning: {
-          identity: {
-            projectId: "project-1",
-            sessionId: "planner-1",
-            userId: "user-1",
-            role: "map-planner",
-          },
-          greeting: { status: "delivered", messageId: "message-1" },
-          queuedInputIds: [],
-        },
       });
-      const sessionManager = fakeSessionManager([planner]);
+      const sessionManager = fakeSessionManager([projectSession]);
       (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ...planner,
+        ...projectSession,
         status: "running",
       });
       start({ sessionManager });
 
-      const res = await fetch(`${baseUrl}/sessions/planner-1/resume`, {
+      const res = await fetch(`${baseUrl}/sessions/project-session-1/resume`, {
         method: "POST",
         headers: TOKEN_HEADER,
       });
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        id: planner.id,
+        id: projectSession.id,
         status: "running",
       });
-      expect(sessionManager.resume).toHaveBeenCalledWith(planner.id);
+      expect(sessionManager.resume).toHaveBeenCalledWith(projectSession.id);
     });
 
     it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
@@ -1736,30 +1716,19 @@ describe("createRestRouter", () => {
       expect(sessionManager.resume).toHaveBeenCalledWith(existing.id);
     });
 
-    it("reuses a former planner owner through ordinary adopt without duplicating its record", async () => {
-      const planner = exitedSession({
-        id: "planner-existing",
+    it("reuses an existing owner through ordinary adopt without duplicating its record", async () => {
+      const existingOwner = exitedSession({
+        id: "project-session-existing",
         agentSessionId: body.agentSessionId,
         agentMapIdentity: {
           projectId: "foreign-project",
-          sessionId: "planner-existing",
+          sessionId: "project-session-existing",
           userId: "foreign-user",
         },
-        planning: {
-          identity: {
-            projectId: "foreign-project",
-            sessionId: "planner-existing",
-            userId: "foreign-user",
-            role: "map-planner",
-          },
-          greeting: { status: "delivered", messageId: "message-1" },
-          queuedInputIds: [],
-        },
       });
-      const original = structuredClone(planner.planning);
-      const sessionManager = fakeSessionManager([planner]);
+      const sessionManager = fakeSessionManager([existingOwner]);
       (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ...planner,
+        ...existingOwner,
         status: "running",
       });
       const canResume = vi.fn(async () => true);
@@ -1774,39 +1743,26 @@ describe("createRestRouter", () => {
 
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        id: planner.id,
+        id: existingOwner.id,
         status: "running",
       });
       expect(canResume).toHaveBeenCalledWith(body.agentSessionId, body.cwd);
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
-      expect(sessionManager.resume).toHaveBeenCalledWith(planner.id);
-      expect(sessionManager.get("planner-existing")?.planning).toEqual(
-        original,
-      );
+      expect(sessionManager.resume).toHaveBeenCalledWith(existingOwner.id);
     });
 
-    it("rejects a durable rotated provider alias independently of its former role", async () => {
-      const planner = exitedSession({
-        id: "planner-rotated",
+    it("rejects a durable rotated provider alias independently of project context", async () => {
+      const projectSession = exitedSession({
+        id: "project-session-rotated",
         agentSessionId: "vendor-new",
-        planning: {
-          identity: {
-            projectId: "project-1",
-            sessionId: "planner-rotated",
-            userId: "user-1",
-            role: "map-planner",
-          },
-          greeting: { status: "delivered", messageId: "message-1" },
-          queuedInputIds: [],
-        },
       });
-      const sessionManager = fakeSessionManager([planner]);
+      const sessionManager = fakeSessionManager([projectSession]);
       (
         sessionManager.getAgentSessionOwner as unknown as ReturnType<
           typeof vi.fn
         >
       ).mockImplementation((agentSessionId: string) =>
-        agentSessionId === body.agentSessionId ? planner : undefined,
+        agentSessionId === body.agentSessionId ? projectSession : undefined,
       );
       (
         sessionManager.isAgentSessionIdentityReserved as unknown as ReturnType<

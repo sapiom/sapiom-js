@@ -739,7 +739,7 @@ describe("SessionManager", () => {
         queuedInputIds: ["input-1"],
       },
     });
-    expect(manager.get(planner.id)?.planning).toBeUndefined();
+    expect(manager.get(planner.id)).not.toHaveProperty("planning");
     expect(manager.get(manual.id)).toMatchObject({
       id: manual.id,
       agentSessionId: manual.agentSessionId,

@@ -113,29 +113,21 @@ proves that turn cannot overlap; prompts are never concatenated or blindly
 interleaved. Opening the map never schedules bootstrap.
 
 Bootstrap state lives under
-`<state-root>/agent-map/project-bootstrap/`. Valid pre-upgrade planner metadata
+`<state-root>/agent-map/project-bootstrap/`. Valid pre-upgrade session metadata
 and queue files are read and normalized without changing the session ID,
 provider binding, working directory, title, transcript, or Canvas. Malformed or
 ambiguous legacy identity is retained and rejected safely rather than deleting
-or duplicating the session. The older
-`/api/projects/:projectId/planner-sessions...` endpoints remain bounded rolling
-compatibility aliases into the ordinary session/bootstrap services; new clients
-use the generic session routes. The aliases are scheduled for removal in
-SAP-3152.
+or duplicating the session. Retired record strings live only in dedicated,
+tested migration decoders. Live clients use the generic session routes.
 
 #### Embedder migration
 
 The public `HarnessSession.agentMapIdentity` is now the exported
 `ProjectAgentSession { projectId, userId, sessionId }`. Embedders must stop
-reading `role` or `assignment`; those legacy fields no longer describe live
-authority. Persisted `planning` data is migration input only. Read the optional
-`projectBootstrap` field when displaying bootstrap lifecycle state.
-
-The deprecated planner-message alias can return `metadata: null` for an
-ordinary project session. When metadata is present, read its top-level
-`projectId`, `userId`, and `targetSessionId` plus `bootstrap` instead of the old
-nested `identity` and `greeting` fields. New clients should use the generic
-session routes. If an embedder already owns the first prompt for a session, set
+reading legacy authority fields; those fields no longer describe live
+authority. Persisted pre-upgrade project-session data is migration input only.
+Read the optional `projectBootstrap` field when displaying bootstrap lifecycle
+state. If an embedder already owns the first prompt for a session, set
 `initialUserInputPending: true` in that session's `CreateSessionRequest`; this
 content-free flag makes project bootstrap yield before launch and never changes
 the session's authority or tools.

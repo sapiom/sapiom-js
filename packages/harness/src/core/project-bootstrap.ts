@@ -143,7 +143,7 @@ export interface ProjectBootstrapRegistrationContext {
 export interface ProjectBootstrapCoordinatorOptions {
   root: string;
   /** @deprecated Read-only migration source for pre-SAP-3148 queue files. */
-  legacyRoot?: string;
+  legacyStateRoot?: string;
   sessionManager: SessionManager;
   now?: () => string;
   generateId?: () => string;
@@ -760,7 +760,7 @@ function telemetryPayload(event: AnalyticsEvent): Record<string, unknown> {
 
 export class ProjectBootstrapCoordinator {
   private readonly root: string;
-  private readonly legacyRoot: string | null;
+  private readonly legacyStateRoot: string | null;
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly readinessTimeoutMs: number;
@@ -848,8 +848,8 @@ export class ProjectBootstrapCoordinator {
 
   constructor(private readonly options: ProjectBootstrapCoordinatorOptions) {
     this.root = path.resolve(options.root);
-    this.legacyRoot = options.legacyRoot
-      ? path.resolve(options.legacyRoot)
+    this.legacyStateRoot = options.legacyStateRoot
+      ? path.resolve(options.legacyStateRoot)
       : null;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
@@ -872,9 +872,9 @@ export class ProjectBootstrapCoordinator {
   }
 
   private legacyFile(sessionId: string, name: string): string | null {
-    if (!this.legacyRoot) return null;
-    const directory = path.resolve(this.legacyRoot, sessionId);
-    if (!directory.startsWith(`${this.legacyRoot}${path.sep}`)) {
+    if (!this.legacyStateRoot) return null;
+    const directory = path.resolve(this.legacyStateRoot, sessionId);
+    if (!directory.startsWith(`${this.legacyStateRoot}${path.sep}`)) {
       throw new Error("invalid legacy project bootstrap storage identity");
     }
     return path.join(directory, name);
@@ -4535,25 +4535,4 @@ export class ProjectBootstrapCoordinator {
       }
     });
   }
-}
-
-/**
- * @deprecated Rolling compatibility aliases for persisted clients and tests.
- * Remove with the bounded planner HTTP aliases in SAP-3152.
- */
-export {
-  ProjectBootstrapCoordinator as PlannerGreetingCoordinator,
-  ProjectBootstrapDispatchForbiddenError as PlannerDispatchForbiddenError,
-  ProjectBootstrapRetryUnavailableError as PlannerGreetingRetryUnavailableError,
-};
-export type PlannerRegistrationMode = ProjectBootstrapRegistrationMode;
-
-/** @deprecated SAP-3152 removes the planner-named compatibility export. */
-export function plannerGreetingPrompt(
-  _emptyProject?: boolean,
-  retryOrdinal: number | string = 0,
-): string {
-  return typeof retryOrdinal === "string"
-    ? projectBootstrapPrompt(0, retryOrdinal)
-    : projectBootstrapPrompt(retryOrdinal);
 }

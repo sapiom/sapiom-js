@@ -66,11 +66,7 @@ describe("Agent Map persisted/public codecs", () => {
       "unknown operation",
       (value: any) => (value.history[0].operation.kind = "execute"),
     ],
-    [
-      "spoofed role",
-      (value: any) =>
-        (value.history[0].actor.role = "map-planner"),
-    ],
+    ["spoofed authority", (value: any) => (value.history[0].actor.scope = "foreign")],
     [
       "nested extra field",
       (value: any) => (value.history[0].operation.node.privatePath = "/secret"),

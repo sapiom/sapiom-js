@@ -24,11 +24,7 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
-import type {
-  PlannerSessionRequest,
-  PlannerSessionResponse,
-  StudioProjectId,
-} from "@shared/agent-map";
+import type { StudioProjectId } from "@shared/agent-map";
 
 import {
   ApiError,
@@ -190,12 +186,6 @@ export interface HarnessStateHook {
   /** A past session's reconstructed transcript (null when nothing was
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
-  /** @deprecated Rolling client alias that opens an ordinary project session
-   * through the bounded planner-named HTTP route. */
-  openPlannerSession: (
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ) => Promise<PlannerSessionResponse>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
@@ -1209,45 +1199,6 @@ export function useHarnessState(): HarnessStateHook {
     // could baseline or emit rows that the UI correctly refused to render.
     return [...(workflowProjectionOrder.current() ?? workflowsRef.current)];
   }, [workflowProjectionOrder]);
-
-  /** One session projection for REST mutations and bus updates alike. */
-  const upsertSession = useCallback((next: HarnessSession): void => {
-    setState((prev) => {
-      if (!prev) return prev;
-      const sessions = prev.sessions.some((session) => session.id === next.id)
-        ? prev.sessions.map((session) =>
-            session.id === next.id ? next : session,
-          )
-        : [...prev.sessions, next];
-      return { ...prev, sessions };
-    });
-  }, []);
-
-  const openPlannerSession = useCallback(
-    async (
-      projectId: StudioProjectId,
-      request: PlannerSessionRequest,
-    ): Promise<PlannerSessionResponse> => {
-      const response = await api.openPlannerSession(projectId, request);
-      // A launch can emit session.status before its HTTP response crosses the
-      // wire. Preserve that newer full-session projection when it is already
-      // present; still insert the response if no bus-backed row exists.
-      if (!sessionStatusRevisions.current.has(response.session.id)) {
-        upsertSession(response.session);
-      } else {
-        setState((prev) => {
-          if (!prev) return prev;
-          return prev.sessions.some(
-            (session) => session.id === response.session.id,
-          )
-            ? prev
-            : { ...prev, sessions: [...prev.sessions, response.session] };
-        });
-      }
-      return response;
-    },
-    [upsertSession],
-  );
 
   useEffect(() => {
     return subscribeEvents(
@@ -2394,7 +2345,6 @@ export function useHarnessState(): HarnessStateHook {
     getTemplate,
     getWorkflowInputContract,
     sessionRecord,
-    openPlannerSession,
     resumeSession,
     rehydrateSession,
     resumeFromHistory,

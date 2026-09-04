@@ -48,11 +48,6 @@ import type {
   AcceptedProposalDelta,
   AgentMapWorkspaceResponse,
   MapOperation,
-  PlannerMessageRequest,
-  PlannerSessionMetadataResponse,
-  PlannerSessionRequest,
-  PlannerSessionResponse,
-  ProjectBootstrapMetadata,
   PutStudioCurrentWorkspaceRequest,
   StudioCurrentWorkspaceResponse,
   StudioProjectId,
@@ -380,21 +375,6 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     selection: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse>;
-  openPlannerSession(
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ): Promise<PlannerSessionResponse>;
-  /** @deprecated Rolling alias into ordinary project-session input. */
-  sendPlannerMessage(
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ): Promise<PlannerSessionMetadataResponse>;
-  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap. */
-  retryPlannerGreeting(
-    projectId: StudioProjectId,
-    sessionId: string,
-  ): Promise<PlannerSessionMetadataResponse>;
   /** Revisioned local dependency projection for one server-issued workspace key. */
   getSystemGraph(
     workspaceKey: WorkspaceKey,
@@ -687,37 +667,6 @@ class RealApi implements HarnessApi {
       },
     );
     return parseStudioCurrentWorkspaceResponse(value, projectId);
-  }
-
-  openPlannerSession(
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ): Promise<PlannerSessionResponse> {
-    return this.request<PlannerSessionResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  async sendPlannerMessage(
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ): Promise<PlannerSessionMetadataResponse> {
-    return this.request<PlannerSessionMetadataResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/messages`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  async retryPlannerGreeting(
-    projectId: StudioProjectId,
-    sessionId: string,
-  ): Promise<PlannerSessionMetadataResponse> {
-    return this.request<PlannerSessionMetadataResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/greeting/retry`,
-      { method: "POST", body: "{}" },
-    );
   }
 
   async getSystemGraph(
@@ -1926,8 +1875,6 @@ function goldenAgentMapFixture(
   const actor = {
     userId,
     sessionId,
-    role: "map-planner" as const,
-    assignment: null,
   };
   const delta: AcceptedProposalDelta = {
     schemaVersion: 1,
@@ -2076,7 +2023,6 @@ export class MockApi implements HarnessApi {
       : MOCK_SESSIONS.map((session) => ({ ...session }));
   /** Live planner records are mutable mock state, unlike the fixed history
    * fixtures. They exercise the same record-refetch path as the real server. */
-  private plannerSessionRecords = new Map<string, SessionRecord>();
   private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
@@ -2572,338 +2518,6 @@ export class MockApi implements HarnessApi {
     return { ...current, selection, repaired: !valid };
   }
 
-  async openPlannerSession(
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ): Promise<PlannerSessionResponse> {
-    if (typeof window !== "undefined") {
-      const win = window as unknown as {
-        __HARNESS_TEST__?: Record<string, unknown>;
-      };
-      const previous =
-        (win.__HARNESS_TEST__?.openPlannerSessionCalls as
-          | unknown[]
-          | undefined) ?? [];
-      win.__HARNESS_TEST__ = {
-        ...(win.__HARNESS_TEST__ ?? {}),
-        openPlannerSessionCalls: [...previous, { projectId, request }],
-      };
-    }
-    const failure =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("mockPlanner");
-    if (failure === "error") {
-      throw new ApiError(
-        503,
-        "Project session service is unavailable",
-        "Project session service is unavailable",
-      );
-    }
-    if (failure === "unauthorized") {
-      throw new ApiError(
-        403,
-        "Project session is not available",
-        "Project session is not available",
-      );
-    }
-    const existing = this.sessions
-      .filter(
-        (session) =>
-          session.status !== "exited" &&
-          session.agentMapIdentity?.projectId === projectId &&
-          session.agentMapIdentity.userId === "user_mock",
-      )
-      .sort((left, right) =>
-        right.lastActiveAt.localeCompare(left.lastActiveAt),
-      )[0];
-    if (request.mode === "resume-or-create" && existing) {
-      return { session: existing, resolution: "live" };
-    }
-    const root = [...this.studioProjectIds.entries()].find(
-      ([, id]) => id === projectId,
-    )?.[0];
-    if (!root) {
-      throw new ApiError(
-        404,
-        "Studio project not found",
-        "Studio project not found",
-      );
-    }
-    const session = await this.createSession({
-      cwd: root,
-      harness: request.harness ?? "claude-code",
-      ...(request.theme ? { theme: request.theme } : {}),
-    });
-    const greetingFixture =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("mockGreeting");
-    session.agentMapIdentity = {
-      projectId,
-      sessionId: session.id,
-      userId: "user_mock",
-    };
-    session.projectBootstrap = {
-      projectId,
-      targetSessionId: session.id,
-      userId: "user_mock",
-      bootstrap:
-        greetingFixture === "generating"
-          ? { status: "generating", attemptId: "attempt_mock" }
-          : greetingFixture === "failed"
-            ? {
-                status: "failed",
-                retryable: true,
-                errorCode: "model_turn_failed",
-              }
-            : {
-                status: "delivered",
-                messageId: "message_mock_greeting",
-              },
-      queuedInputIds: [],
-    };
-    const now = new Date().toISOString();
-    this.plannerSessionRecords.set(session.id, {
-      harnessSessionId: session.id,
-      mergedSessionIds: [session.id],
-      agentSessionId: session.agentSessionId,
-      harness: session.harness,
-      cwd: session.cwd,
-      startedAt: now,
-      endedAt: null,
-      turns:
-        session.projectBootstrap.bootstrap.status === "delivered"
-          ? [
-              {
-                index: 1,
-                prompt: null,
-                promptAt: null,
-                toolCalls: [],
-                assistantText:
-                  "I inspected the available project context and kept the shared Agent Map honest. What would you like to build?",
-                model: "mock-project-agent",
-                usage: null,
-                completedAt: now,
-                incomplete: false,
-              },
-            ]
-          : [],
-      turnCount: 0,
-      eventCount:
-        session.projectBootstrap.bootstrap.status === "delivered" ? 2 : 0,
-      reconstructed: true,
-      archivedAt: null,
-      limitations: [],
-    });
-    return { session, resolution: "created" };
-  }
-
-  async sendPlannerMessage(
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ): Promise<PlannerSessionMetadataResponse> {
-    const session = this.sessions.find(
-      (candidate) => candidate.id === sessionId,
-    );
-    const identity = session?.agentMapIdentity;
-    if (
-      !session ||
-      identity?.projectId !== projectId ||
-      identity.sessionId !== sessionId ||
-      identity.userId !== "user_mock"
-    ) {
-      throw new ApiError(
-        403,
-        "Forbidden project session",
-        "Forbidden project session",
-      );
-    }
-    const inputId = `input_mock_${Date.now()}`;
-    const bootstrap = session.projectBootstrap;
-    const shouldQueue = Boolean(
-      bootstrap &&
-      bootstrap.bootstrap.status !== "delivered" &&
-      bootstrap.bootstrap.status !== "skipped",
-    );
-    if (bootstrap && shouldQueue) {
-      session.projectBootstrap = {
-        ...bootstrap,
-        bootstrap: { status: "skipped", reason: "user-proceeded" },
-        queuedInputIds: [...bootstrap.queuedInputIds, inputId],
-      };
-    }
-    await this.injectInput(sessionId, { text: request.text });
-    const accepted = session.projectBootstrap
-      ? structuredClone(session.projectBootstrap)
-      : null;
-    const project = this.studioProjects()?.find(
-      (candidate) => candidate.projectId === projectId,
-    );
-    const goldenFixtureEnabled =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockAgentMapGolden") ===
-        "1";
-    setTimeout(
-      () => {
-        const current = this.sessions.find(
-          (candidate) => candidate.id === sessionId,
-        );
-        const record = this.plannerSessionRecords.get(sessionId);
-        if (!current || !record) return;
-        const completedAt = new Date().toISOString();
-        const turns = [
-          ...record.turns,
-          {
-            index: record.turns.length + 1,
-            prompt: request.text,
-            promptAt: completedAt,
-            toolCalls: [],
-            assistantText:
-              "I’ll keep the shared Agent Map current where this work changes project architecture, and proceed directly where the request is already build-ready.",
-            model: "mock-project-agent",
-            usage: null,
-            completedAt,
-            incomplete: false,
-          },
-        ];
-        this.plannerSessionRecords.set(sessionId, {
-          ...record,
-          turns,
-          turnCount: record.turnCount + 1,
-          eventCount: record.eventCount + 2,
-        });
-        if (shouldQueue && current.projectBootstrap) {
-          current.projectBootstrap = {
-            ...current.projectBootstrap,
-            queuedInputIds: current.projectBootstrap.queuedInputIds.filter(
-              (candidate) => candidate !== inputId,
-            ),
-          };
-        }
-        void import("./events").then(({ publishMockBusMessage }) => {
-          if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
-            if (!project) return;
-            const fixture = goldenAgentMapFixture(
-              project,
-              new Date().toISOString(),
-              identity.userId,
-              sessionId,
-            );
-            this.agentMapSnapshots.set(projectId, fixture.snapshot);
-            publishMockBusMessage({
-              type: "agent-map.proposal.changed",
-              delta: fixture.delta,
-            });
-          }
-          publishMockBusMessage({ type: "session.status", session: current });
-          publishMockBusMessage({
-            type: "session.record.changed",
-            harnessSessionId: sessionId,
-          });
-        });
-      },
-      goldenFixtureEnabled ? 0 : 250,
-    );
-    return { metadata: accepted };
-  }
-
-  async retryPlannerGreeting(
-    projectId: StudioProjectId,
-    sessionId: string,
-  ): Promise<PlannerSessionMetadataResponse> {
-    const session = this.sessions.find(
-      (candidate) => candidate.id === sessionId,
-    );
-    const identity = session?.agentMapIdentity;
-    if (
-      !session ||
-      identity?.projectId !== projectId ||
-      identity.sessionId !== sessionId ||
-      identity.userId !== "user_mock"
-    ) {
-      throw new ApiError(
-        403,
-        "Forbidden project session",
-        "Forbidden project session",
-      );
-    }
-    const retryFailure =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("mockGreetingRetry");
-    if (retryFailure === "error") {
-      throw new ApiError(
-        503,
-        "Greeting retry is temporarily unavailable",
-        "Greeting retry is temporarily unavailable",
-      );
-    }
-    const metadata = session.projectBootstrap;
-    if (
-      !metadata ||
-      metadata.bootstrap.status !== "failed" ||
-      !metadata.bootstrap.retryable ||
-      metadata.queuedInputIds.length > 0
-    ) {
-      throw new ApiError(
-        409,
-        "Project bootstrap retry is not available",
-        "Project bootstrap retry is not available",
-      );
-    }
-    session.projectBootstrap = {
-      ...metadata,
-      bootstrap: { status: "generating", attemptId: "attempt_mock_retry" },
-    };
-    const retrying: ProjectBootstrapMetadata = structuredClone(
-      session.projectBootstrap,
-    );
-    setTimeout(() => {
-      const current = this.sessions.find(
-        (candidate) => candidate.id === sessionId,
-      );
-      const record = this.plannerSessionRecords.get(sessionId);
-      if (!current?.projectBootstrap || !record) return;
-      const completedAt = new Date().toISOString();
-      current.projectBootstrap = {
-        ...current.projectBootstrap,
-        bootstrap: {
-          status: "delivered",
-          messageId: "message_mock_greeting_retry",
-        },
-      };
-      this.plannerSessionRecords.set(sessionId, {
-        ...record,
-        turns: [
-          ...record.turns,
-          {
-            index: record.turns.length + 1,
-            prompt: null,
-            promptAt: null,
-            toolCalls: [],
-            assistantText:
-              "I inspected the available project context and kept the shared Agent Map honest. What would you like to build?",
-            model: "mock-project-agent",
-            usage: null,
-            completedAt,
-            incomplete: false,
-          },
-        ],
-        eventCount: record.eventCount + 2,
-      });
-      void import("./events").then(({ publishMockBusMessage }) => {
-        publishMockBusMessage({ type: "session.status", session: current });
-        publishMockBusMessage({
-          type: "session.record.changed",
-          harnessSessionId: sessionId,
-        });
-      });
-    }, 250);
-    return { metadata: retrying };
-  }
-
   async getSystemGraph(
     workspaceKey: WorkspaceKey,
     options: { refresh?: boolean } = {},
@@ -3263,9 +2877,7 @@ export class MockApi implements HarnessApi {
     await delay();
     // Null for an id with no fixture — the same "nothing recorded" answer the
     // real client returns for a 404, so the empty state is exercised too.
-    return (
-      this.plannerSessionRecords.get(id) ?? MOCK_SESSION_RECORDS[id] ?? null
-    );
+    return MOCK_SESSION_RECORDS[id] ?? null;
   }
 
   async resumeSession(id: string): Promise<HarnessSession> {

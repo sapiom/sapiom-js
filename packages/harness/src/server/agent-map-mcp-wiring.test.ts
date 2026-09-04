@@ -408,37 +408,16 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
     loadSystemPrompt,
   });
 
-  const response = await fetch(
-    `http://127.0.0.1:${server.port}/api/projects/${projectId}/planner-sessions`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-harness-token": "boot-token",
-      },
-      body: JSON.stringify({ mode: "fresh", harness: "claude-code" }),
-    },
-  );
-  expect(response.status).toBe(201);
-  const created = (await response.json()) as {
-    session: {
-      id: string;
-      projectBootstrap?: unknown;
-      planning?: unknown;
-      agentMapIdentity?: {
-        projectId: string;
-        sessionId: string;
-        userId: string;
-      };
-    };
-  };
-  expect(created.session.agentMapIdentity).toEqual({
+  const created = await server.sessionManager.create({
+    cwd: projectRoot,
+    harness: "claude-code",
+  });
+  expect(created.agentMapIdentity).toEqual({
     projectId,
-    sessionId: created.session.id,
+    sessionId: created.id,
     userId: "local:machine-1",
   });
-  expect(created.session.planning).toBeUndefined();
-  expect(created.session.projectBootstrap).toBeUndefined();
+  expect(created.projectBootstrap).toBeUndefined();
 
   const launchOpts = launches[0]!;
   const metadata = launchOpts.agentMapMcp;
@@ -455,7 +434,7 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
   expect(systemPrompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
   expect(systemPrompt).toContain("plan and implement in the same session");
   expect(systemPrompt).toContain("Proceed directly");
-  expect(systemPrompt).not.toContain("map-planner");
+  expect(systemPrompt).not.toMatch(/map[-]planner/u);
   expect(systemPrompt).not.toContain("not to implement it yet");
   expect(systemPrompt).not.toContain("stop before implementation");
   expect(systemPrompt).not.toContain(
@@ -554,7 +533,6 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
     sessionId: ordinary.id,
     userId: "local:machine-1",
   });
-  expect(ordinary.planning).toBeUndefined();
   const ordinaryLaunch = launches[1]!;
   expect(ordinaryLaunch.agentMapMcp).toBeDefined();
   const ordinaryPrompt = await fs.readFile(
@@ -644,7 +622,7 @@ it("creates one ordinary Plan Agents session for a newly opened project and neve
       userId: "local:machine-1",
     },
   });
-  expect(firstSession?.planning).toBeUndefined();
+  expect(firstSession).not.toHaveProperty("planning");
 
   const queuedUserInput = await request(`/sessions/${firstSession!.id}/input`, {
     method: "POST",
@@ -673,153 +651,6 @@ it("creates one ordinary Plan Agents session for a newly opened project and neve
   expect(mapRead.status).toBe(200);
   expect(server.sessionManager.list()).toHaveLength(1);
   expect(launches).toHaveLength(1);
-});
-
-it("serializes generic and compatibility input through one durable bootstrap authority", async () => {
-  const adapter: HarnessAdapter = {
-    id: "claude-code",
-    eventSource: "hooks",
-    doctor: async () => [],
-    launch: (opts) => ({ command: "bash", args: [], env: {}, cwd: opts.cwd }),
-    resume: (_id, opts) => ({
-      command: "bash",
-      args: [],
-      env: {},
-      cwd: opts.cwd,
-    }),
-    listPastSessions: async () => [],
-    canResume: async () => true,
-  };
-  const webDir = path.join(root, "web");
-  const freshRoot = path.join(root, "shared-input-project");
-  await Promise.all([fs.mkdir(webDir), fs.mkdir(freshRoot)]);
-  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
-  server = await startServer({
-    port: 0,
-    bootToken: "boot-token",
-    telemetryOptIn: false,
-    identity: null,
-    machineId: "machine-1",
-    adapters: { "claude-code": adapter },
-    stateRoot: root,
-    launchDir: projectRoot,
-    webDir,
-    autoCreateSession: false,
-    loadSystemPrompt: async () => "ordinary coding prompt",
-  });
-  const request = (pathname: string, init?: RequestInit) =>
-    fetch(`http://127.0.0.1:${server!.port}/api${pathname}`, {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        "x-harness-token": "boot-token",
-        ...init?.headers,
-      },
-    });
-
-  expect(
-    (
-      await request("/settings", {
-        method: "PATCH",
-        body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
-      })
-    ).status,
-  ).toBe(200);
-  const [session] = server.sessionManager.list();
-  expect(session).toMatchObject({
-    cwd: freshRoot,
-    projectBootstrap: { bootstrap: { status: "pending" } },
-  });
-  const projectId = session!.agentMapIdentity!.projectId;
-
-  const [compatibility, generic] = await Promise.all([
-    request(`/projects/${projectId}/planner-sessions/${session!.id}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ text: "compatibility transport input" }),
-    }),
-    request(`/sessions/${session!.id}/input`, {
-      method: "POST",
-      body: JSON.stringify({ text: "generic transport input", submit: true }),
-    }),
-  ]);
-
-  expect(compatibility.status).toBe(202);
-  expect(generic.status).toBe(200);
-  expect(
-    server.sessionManager.get(session!.id)?.projectBootstrap,
-  ).toMatchObject({
-    bootstrap: { status: "skipped", reason: "user-proceeded" },
-    queuedInputIds: [expect.any(String), expect.any(String)],
-  });
-  const queue = JSON.parse(
-    await fs.readFile(
-      path.join(
-        root,
-        "agent-map",
-        "project-bootstrap",
-        session!.id,
-        "input-queue.json",
-      ),
-      "utf8",
-    ),
-  ) as {
-    metadata: { queuedInputIds: string[]; bootstrap: { status: string } };
-    inputs: Array<{ id: string; text: string }>;
-    dispatchingInputId: string | null;
-  };
-  expect(queue.metadata).toMatchObject({
-    bootstrap: { status: "skipped" },
-    queuedInputIds: [expect.any(String), expect.any(String)],
-  });
-  expect(queue.inputs.map(({ text }) => text).sort()).toEqual([
-    "compatibility transport input",
-    "generic transport input",
-  ]);
-  expect(new Set(queue.inputs.map(({ id }) => id)).size).toBe(2);
-  expect(queue.dispatchingInputId).toBeNull();
-
-  const keyedPayload = {
-    text: "one logical input across both transports",
-    requestId: "bootstrap-input-request-1",
-  };
-  const [keyedCompatibility, keyedGeneric] = await Promise.all([
-    request(`/projects/${projectId}/planner-sessions/${session!.id}/messages`, {
-      method: "POST",
-      body: JSON.stringify(keyedPayload),
-    }),
-    request(`/sessions/${session!.id}/input`, {
-      method: "POST",
-      body: JSON.stringify({ ...keyedPayload, submit: true }),
-    }),
-  ]);
-  expect(keyedCompatibility.status).toBe(202);
-  expect(keyedGeneric.status).toBe(200);
-  const compatibilityBody = (await keyedCompatibility.json()) as {
-    receipt: unknown;
-  };
-  const genericBody = (await keyedGeneric.json()) as { receipt: unknown };
-  expect(genericBody.receipt).toEqual(compatibilityBody.receipt);
-  expect(compatibilityBody.receipt).toMatchObject({
-    requestId: "bootstrap-input-request-1",
-    status: "queued",
-  });
-  const keyedQueue = JSON.parse(
-    await fs.readFile(
-      path.join(
-        root,
-        "agent-map",
-        "project-bootstrap",
-        session!.id,
-        "input-queue.json",
-      ),
-      "utf8",
-    ),
-  ) as { inputs: Array<{ text: string }> };
-  expect(
-    keyedQueue.inputs.filter(
-      ({ text }) => text === "one logical input across both transports",
-    ),
-  ).toHaveLength(1);
 });
 
 it("does not spawn an automatic duplicate when an explicit first session wins the bootstrap claim", async () => {

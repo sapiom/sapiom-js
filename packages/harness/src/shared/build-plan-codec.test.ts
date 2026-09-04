@@ -66,7 +66,7 @@ describe("neutral build plan codecs", () => {
     const parsed = parseProjectBuildPlanVersion(input, projectId);
     expect(parsed).toEqual(input);
     expect(parsed).not.toBe(input);
-    expect(() => parseProjectBuildPlanVersion({ ...input, role: "map-planner" }, projectId)).toThrow(/invalid/u);
+    expect(() => parseProjectBuildPlanVersion({ ...input, authority: "forged" }, projectId)).toThrow(/invalid/u);
     expect(() => parseProjectBuildPlanVersion(input, "project_foreign")).toThrow(/cross-project/u);
   });
 
@@ -100,7 +100,7 @@ describe("neutral build plan codecs", () => {
     const withSemantic = { ...base, semanticDigest: computeAgentBriefSemanticDigest(base) };
     const brief = { ...withSemantic, recordDigest: computeAgentBriefRecordDigest(withSemantic) } as AgentBriefVersion;
     expect(parseAgentBriefVersion(brief, projectId)).toEqual(brief);
-    const roleActor = { ...brief, authoredBy: { ...actor, role: "agent-builder" } };
-    expect(() => parseAgentBriefVersion(roleActor, projectId)).toThrow(/actor/u);
+    const authorityActor = { ...brief, authoredBy: { ...actor, authority: "forged" } };
+    expect(() => parseAgentBriefVersion(authorityActor, projectId)).toThrow(/actor/u);
   });
 });

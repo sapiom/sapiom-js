@@ -19,7 +19,6 @@ interface NavigationEvidence {
   activeSessionId: string | null;
   createSessionCalls: number;
   injectInputCalls: number;
-  openPlannerSessionCalls: number;
 }
 
 async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
@@ -30,7 +29,6 @@ async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
         __HARNESS_TEST__?: {
           createSessionCalls?: unknown[];
           injectInputCalls?: unknown[];
-          openPlannerSessionCalls?: unknown[];
         };
       }
     ).__HARNESS_TEST__;
@@ -38,7 +36,6 @@ async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
       activeSessionId: activeSession,
       createSessionCalls: state?.createSessionCalls?.length ?? 0,
       injectInputCalls: state?.injectInputCalls?.length ?? 0,
-      openPlannerSessionCalls: state?.openPlannerSessionCalls?.length ?? 0,
     };
   }, active);
 }
@@ -109,7 +106,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     expect(after).toMatchObject({
       createSessionCalls: before.createSessionCalls,
       injectInputCalls: before.injectInputCalls,
-      openPlannerSessionCalls: before.openPlannerSessionCalls,
     });
     await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(0);
     expect(
@@ -141,7 +137,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     expect(after).toMatchObject({
       createSessionCalls: before.createSessionCalls,
       injectInputCalls: before.injectInputCalls,
-      openPlannerSessionCalls: before.openPlannerSessionCalls,
     });
   });
 
@@ -167,7 +162,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       activeSessionId: "sess-boot",
       createSessionCalls: 0,
       injectInputCalls: 0,
-      openPlannerSessionCalls: 0,
     });
   });
 
@@ -346,13 +340,9 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
               changes: { name: "Campaign Marketing" },
             },
           ],
-          // E2's persisted attribution codec remains unchanged in SAP-3148;
-          // the UI deliberately projects it as one neutral project agent.
           actor: {
             userId: "user_mock",
             sessionId: "builder_mock",
-            role: "agent-builder",
-            assignment: { kind: "unplanned" },
           },
           acceptedAt: new Date().toISOString(),
         },

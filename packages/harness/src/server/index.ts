@@ -200,12 +200,12 @@ import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-prefere
 import {
   isProjectSessionDispatchAuthorized,
   localProjectPrincipal,
-  ProjectSessionService,
-} from "../core/planning-session.js";
+} from "../core/project-session.js";
+import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-migration.js";
 import {
   ProjectBootstrapCoordinator,
   ProjectBootstrapCoordinatorClosedError,
-} from "../core/planner-greeting.js";
+} from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -3322,7 +3322,7 @@ export const startServer = async (
   };
   projectBootstrap = new ProjectBootstrapCoordinator({
     root: statePaths.projectBootstrap,
-    legacyRoot: statePaths.plannerSessions,
+    legacyStateRoot: legacyProjectSessionStateRoot(statePaths.root),
     sessionManager,
     canDispatch: (session) =>
       isProjectSessionDispatchAuthorized({
@@ -3389,14 +3389,6 @@ export const startServer = async (
         console.error("[harness] project bootstrap registration failed");
       });
   }
-  const projectSessions = new ProjectSessionService({
-    catalog: studioProjectCatalog,
-    sessionManager,
-    userId: identity?.userId ?? null,
-    currentUserId: () => projectUserId,
-    machineId,
-    defaultHarness: options.defaultHarnessKind ?? "claude-code",
-  });
   sessionManager.onStatusChange((session, { runtimeEpoch }) => {
     void projectBootstrap!.onSessionStatus(session, runtimeEpoch).catch(() => {
       console.error("[harness] project bootstrap status transition failed");
@@ -3687,8 +3679,6 @@ export const startServer = async (
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
-      projectSessions,
-      projectBootstrap,
       onProjectCreated: async (project) => {
         const userId = localProjectPrincipal(projectUserId, machineId);
         await scheduleBootstrapProjects(
@@ -3721,7 +3711,6 @@ export const startServer = async (
           : null;
         await ensureProjectFirstSession(project.projectId, launchRoot ?? root);
       },
-      submitSessionInput,
     }),
   );
   app.use(
