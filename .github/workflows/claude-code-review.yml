@@ -284,9 +284,14 @@ jobs:
             components and the sibling you want usually exists. Report **at most 3**, highest signal
             first, from:
 
-            1. **A re-implemented shared primitive.** A hand-rolled modal, popover, menu, confirm, empty
-              state, or icon when the repo already ships one (`SecretDialogShell`, `AnchoredPopover`,
-              `MenuChoice`, `EmptyState`, `Icon`, and neighbours). Name the existing one and its path.
+            1. **A re-implemented shared primitive.** A hand-rolled popover, menu, empty state, or icon
+              when the repo already ships one (`AnchoredPopover`, `MenuChoice`, `EmptyState`, `Icon`,
+              and neighbours). Name the existing one and its path. **Dialogs are the exception and you
+              must know it before flagging one:** the harness has no generic modal component and no
+              Radix. The shared thing is the idiom, a `modal-backdrop` > `modal` wrapper with
+              `useDismissable`, used across roughly a dozen files. `SecretDialogShell` is the secrets
+              dialogs' own shell, not a general one. So the finding on a new dialog is "it dismisses
+              differently from its siblings", never "import the shared Dialog", which does not exist.
             2. **A second recipe for a concept that already has one.** Two ways to render the same
               status, two ways to load the same resource, a new hook beside an existing hook doing that
               job. The cost is that every later change has to be made in both places.
@@ -306,7 +311,10 @@ jobs:
 
             **Do not flag**: naming, file placement, prop ordering, unmeasured memoisation, "consider
             extracting" on a component nobody has had to change twice, a missing test for a purely
-            visual change, or any divergence from a design mock. Hygiene findings never outrank the
+            visual change, or any divergence from a design mock. Do not ask a PR to extract a shared
+            primitive that does not exist yet: introducing one is a design decision with its own
+            ticket, and demanding it in review is how an unrelated change gets blocked on somebody
+            else's refactor. Hygiene findings never outrank the
             confidentiality and published-package findings above; a section that floods the PR with
             nitpicks gets the whole review ignored, which is worse than not writing it.
 
