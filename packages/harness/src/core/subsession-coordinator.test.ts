@@ -176,6 +176,10 @@ describe("SubsessionCoordinator", () => {
   async function fixture(
     resumable = false,
     childIdentityState?: "ready" | "ambiguous",
+    managerOptions: Pick<
+      ConstructorParameters<typeof SessionManager>[0],
+      "writeSubsessionBindingRegistry"
+    > = {},
   ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
@@ -206,6 +210,7 @@ describe("SubsessionCoordinator", () => {
         await closeStore.current?.closeOwnedBinding(marker);
       },
       resolveAgentMapIdentity: async (_sessionId, _cwd, persisted) => persisted,
+      ...managerOptions,
     });
     managers.push(manager);
     await manager.init();
@@ -394,6 +399,7 @@ describe("SubsessionCoordinator", () => {
       results: [{ sessionId: childId, outcome: "released" }],
     });
     expect(manager.get(childId)).toMatchObject({ status: "exited" });
+    expect(manager.getSubsessionBinding(childId)).toBeNull();
     expect(aggregate.bindings[0]).toMatchObject({
       sessionId: childId,
       sessionState: "closed",
@@ -405,6 +411,89 @@ describe("SubsessionCoordinator", () => {
         sessionId: childId,
       }),
     );
+  });
+
+  it("finishes private binding cleanup when a release is retried after a partial failure", async () => {
+    let writeCount = 0;
+    let failCleanup = true;
+    const writeSubsessionBindingRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        writeCount += 1;
+        if (failCleanup && writeCount === 3)
+          throw new Error("injected cleanup persistence failure");
+        await fs.writeFile(file, serialized, "utf8");
+      },
+    );
+    const { coordinator, caller, manager, spawned, unsubscribe } = await fixture(
+      false,
+      undefined,
+      { writeSubsessionBindingRegistry },
+    );
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+
+    const releasing = coordinator.execute(caller, releaseRequest);
+    await vi.waitFor(() => expect(spawned[1]!.pty.kill).toHaveBeenCalledTimes(1));
+    spawned[1]!.emitExit(0);
+    const partial = await releasing;
+    expect(partial.results[0]).toMatchObject({
+      sessionId: childId,
+      outcome: "failed",
+    });
+    expect(manager.getSubsessionBinding(childId)).not.toBeNull();
+
+    failCleanup = false;
+    const retried = await coordinator.execute(caller, releaseRequest);
+    unsubscribe();
+
+    expect(retried).toMatchObject({
+      replayed: true,
+      results: [{ sessionId: childId, outcome: "released" }],
+    });
+    expect(manager.getSubsessionBinding(childId)).toBeNull();
+    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(5);
+  });
+
+  it("releases known children in a mixed batch and treats unknown keys as already released", async () => {
+    const { coordinator, caller, spawned, unsubscribe } = await fixture();
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+    const mixed = {
+      schemaVersion: 1,
+      requestKey: "release-mixed",
+      operation: {
+        kind: "release",
+        delegationKeys: ["missing", "research"],
+      },
+    } as const;
+
+    const releasing = coordinator.execute(caller, mixed);
+    await vi.waitFor(() => expect(spawned[1]!.pty.kill).toHaveBeenCalledTimes(1));
+    spawned[1]!.emitExit(0);
+    const released = await releasing;
+    const replay = await coordinator.execute(caller, mixed);
+    unsubscribe();
+
+    expect(released.results).toEqual([
+      expect.objectContaining({
+        delegationKey: "missing",
+        bindingId: null,
+        sessionId: null,
+        outcome: "released",
+      }),
+      expect.objectContaining({
+        delegationKey: "research",
+        sessionId: childId,
+        outcome: "released",
+      }),
+    ]);
+    expect(replay).toMatchObject({
+      replayed: true,
+      results: [
+        { delegationKey: "missing", outcome: "released" },
+        { delegationKey: "research", sessionId: childId, outcome: "released" },
+      ],
+    });
   });
 
   it.each(["exited", "failed"] as const)(
@@ -453,6 +542,7 @@ describe("SubsessionCoordinator", () => {
     const reserved = await store.reserveDelegations(caller, request, {
       harness: "claude-code",
       projectRoot: "/tmp/delegated-project-session",
+      ownerId: "coordinator-test",
     });
     const release = await store.reserveReleases(caller, releaseRequest);
     vi.spyOn(store, "reserveReleases").mockResolvedValueOnce({

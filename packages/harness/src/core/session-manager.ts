@@ -1901,6 +1901,7 @@ export class SessionManager {
     // in-memory tombstone on failure and let a later close retry persistence.
     const termination = this.kill(id);
     let persistenceError: unknown;
+    let coordinatorCloseRecorded = false;
     if (binding) {
       try {
         await this.persistSubsessionBindings();
@@ -1908,12 +1909,29 @@ export class SessionManager {
         persistenceError = error;
       }
       try {
-        await this.onSubsessionUserClosed?.(binding);
+        if (this.onSubsessionUserClosed) {
+          await this.onSubsessionUserClosed(binding);
+          coordinatorCloseRecorded = true;
+        }
       } catch (error) {
         persistenceError ??= error;
       }
     }
     const killed = await termination;
+    if (binding && persistenceError === undefined && coordinatorCloseRecorded) {
+      const current = this.subsessionBindings.get(id);
+      if (current && sameSubsessionBinding(current, binding)) {
+        this.subsessionBindings.delete(id);
+        this.userClosedSubsessions.delete(id);
+        try {
+          await this.persistSubsessionBindings();
+        } catch (error) {
+          this.subsessionBindings.set(id, binding);
+          this.userClosedSubsessions.add(id);
+          persistenceError = error;
+        }
+      }
+    }
     if (persistenceError !== undefined) throw persistenceError;
     return killed;
   }

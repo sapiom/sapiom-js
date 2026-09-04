@@ -215,6 +215,10 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     (delegated.structuredContent as { results: Array<{ sessionId: string }> })
       .results[0]!.sessionId,
   )).toBe(false);
+  expect(server.sessionManager.getSubsessionBinding(
+    (delegated.structuredContent as { results: Array<{ sessionId: string }> })
+      .results[0]!.sessionId,
+  )).toBeNull();
   expect(server.sessionManager.list().filter(({ id }) =>
     id === (nested.structuredContent as { results: Array<{ sessionId: string }> })
       .results[0]!.sessionId,

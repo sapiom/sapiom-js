@@ -233,6 +233,7 @@ export class SubsessionCoordinator {
       reserved = await this.options.store.reserveDelegations(identity, request, {
         harness: caller.harness,
         projectRoot: caller.cwd,
+        ownerId: this.ownerId,
       });
     } catch (cause) {
       throw this.wholeCallError(cause);
@@ -288,8 +289,56 @@ export class SubsessionCoordinator {
     }
     const results: DelegationItemResult[] = [];
     for (const target of reserved.bindings) {
+      if (target.state === "absent") {
+        results.push({
+          delegationKey: target.delegationKey,
+          bindingId: null,
+          sessionId: null,
+          outcome: "released",
+          sessionState: "closed",
+          contextState: "none",
+          kickoffState: "pending",
+        });
+        continue;
+      }
       if (target.state === "released") {
-        results.push(this.releasedResult(target.binding));
+        const binding = target.binding;
+        try {
+          const privateMarker =
+            this.options.sessionManager.getSubsessionBinding(binding.sessionId);
+          if (privateMarker) {
+            if (
+              privateMarker.projectId !== identity.projectId ||
+              privateMarker.parentSessionId !== binding.parentSessionId ||
+              privateMarker.bindingId !== binding.bindingId ||
+              privateMarker.sessionId !== binding.sessionId
+            ) {
+              throw error(
+                "binding_session_mismatch",
+                false,
+                "inspect_session",
+              );
+            }
+            await this.options.sessionManager.closeBound(privateMarker);
+          }
+          results.push(this.releasedResult(binding));
+        } catch (cause) {
+          const detail = this.itemError(cause);
+          this.emit({
+            name:
+              detail.code === "binding_session_mismatch"
+                ? "subsession.manual_session_protected"
+                : "subsession.failed",
+            projectId: identity.projectId,
+            sessionId: binding.sessionId,
+            code: detail.code,
+          });
+          results.push({
+            ...this.releasedResult(binding),
+            outcome: "failed",
+            error: detail,
+          });
+        }
         continue;
       }
       const binding = target.binding;
@@ -311,6 +360,8 @@ export class SubsessionCoordinator {
               "inspect_session",
             );
           await this.options.sessionManager.closeBound(expected);
+        } else if (binding.sessionState === "closed") {
+          // The durable coordinator close won before private marker cleanup.
         } else if (
           session ||
           binding.runtime !== null ||
@@ -674,15 +725,19 @@ export class SubsessionCoordinator {
       throw error("session_unreachable", true, "inspect_session");
     }
 
-    let claim = await this.options.store.claimSpawn(
-      identity,
-      binding.bindingId,
-      {
-        ownerId: this.ownerId,
-        expectedLifecycleEpoch: binding.lifecycleEpoch,
-        expectedSpawnEpoch: binding.spawnEpoch,
-      },
-    );
+    let claim =
+      binding.sessionState === "spawn-claimed" &&
+      binding.spawnClaim?.ownerId === this.ownerId
+        ? { claimed: true as const, binding }
+        : await this.options.store.claimSpawn(
+            identity,
+            binding.bindingId,
+            {
+              ownerId: this.ownerId,
+              expectedLifecycleEpoch: binding.lifecycleEpoch,
+              expectedSpawnEpoch: binding.spawnEpoch,
+            },
+          );
     if (!claim.claimed) {
       if (claim.reason !== "expired-requires-inspection")
         return { binding: claim.binding, created: false, reused: true };
@@ -786,17 +841,21 @@ export class SubsessionCoordinator {
     }
     let claim;
     if (binding.sessionState === "spawn-claimed" && binding.spawnClaim) {
-      if (binding.spawnClaim.expiresAt > new Date().toISOString()) return binding;
-      claim = await this.options.store.takeoverExpiredSpawnClaim(
-        identity,
-        binding.bindingId,
-        {
-          ownerId: this.ownerId,
-          expiredClaimId: binding.spawnClaim.claimId,
-          expectedLifecycleEpoch: binding.lifecycleEpoch,
-          expectedSpawnEpoch: binding.spawnEpoch,
-        },
-      );
+      if (binding.spawnClaim.ownerId === this.ownerId) {
+        claim = { claimed: true as const, binding };
+      } else {
+        if (binding.spawnClaim.expiresAt > new Date().toISOString()) return binding;
+        claim = await this.options.store.takeoverExpiredSpawnClaim(
+          identity,
+          binding.bindingId,
+          {
+            ownerId: this.ownerId,
+            expiredClaimId: binding.spawnClaim.claimId,
+            expectedLifecycleEpoch: binding.lifecycleEpoch,
+            expectedSpawnEpoch: binding.spawnEpoch,
+          },
+        );
+      }
     } else {
       claim = await this.options.store.claimSpawn(
         identity,

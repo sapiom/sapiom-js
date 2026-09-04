@@ -19,11 +19,14 @@ Manual sessions remain outside coordinator ownership. Consumers should treat
 `uncertain` kickoff delivery as terminal until an exact persisted
 acknowledgement arrives, and should use a new request/delegation key when the
 corresponding canonical content changes. Nested delegation is bounded to four
-levels and 64 live or resumable coordinator-owned sessions per project. A
-parent can idempotently release its own child bindings by delegation key,
-closing the exact coordinator-owned Harness session and recovering capacity
-without granting access to manual or foreign sessions. Request, binding, and
-acknowledged-delivery history use bounded retention so long-lived projects do
-not dead-end on routine delegation, release, or context refreshes. Exited and
-failed bindings remain durable for resume or recovery until explicitly
+levels and 64 active or explicitly re-referenced coordinator-owned sessions per
+project. A parent can idempotently release its own child bindings by delegation
+key, closing the exact coordinator-owned Harness session and recovering
+capacity without granting access to manual or foreign sessions; unknown keys
+converge as already released. After the coordinator close is durable, private
+SessionManager ownership proof is pruned so release churn remains bounded
+across restart. Request, binding, and acknowledged-delivery history use bounded
+retention so long-lived projects do not dead-end on routine delegation, release,
+or context refreshes. Exited and failed bindings remain durable for resume or
+recovery without holding an active slot until re-referenced, or until explicitly
 released.

@@ -16,7 +16,11 @@ const identity: ProjectAgentSession = {
   userId: "user-1",
   sessionId: "parent-session-1",
 };
-const target = { harness: "codex" as const, projectRoot: "/project/root" };
+const target = {
+  harness: "codex" as const,
+  projectRoot: "/project/root",
+  ownerId: "coordinator-1",
+};
 
 const delegate = (
   requestKey = "request-1",
@@ -144,8 +148,33 @@ describe("SubsessionCoordinatorStore", () => {
     const foreign = { ...identity, sessionId: "manual-session" };
     await expect(
       store.reserveReleases(foreign, release("foreign-release")),
-    ).rejects.toMatchObject({ code: "binding_not_found" });
-    expect((await store.read(projectId)).requestReceipts).toHaveLength(2);
+    ).resolves.toMatchObject({
+      replayed: false,
+      bindings: [{ state: "absent", delegationKey: "research" }],
+    });
+    expect((await store.read(projectId)).requestReceipts).toHaveLength(3);
+  });
+
+  it("reserves known and unknown release keys independently and replays both", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root);
+    const binding = (
+      await store.reserveDelegations(identity, delegate(), target)
+    ).bindings[0]!;
+    const request = release("mixed-release", ["missing", "research"]);
+
+    const first = await store.reserveReleases(identity, request);
+    const replay = await store.reserveReleases(identity, request);
+
+    expect(first.bindings).toEqual([
+      { state: "absent", delegationKey: "missing" },
+      { state: "bound", binding },
+    ]);
+    expect(replay).toEqual({ ...first, replayed: true });
+    expect((await store.read(projectId)).requestReceipts.at(-1)).toMatchObject({
+      operation: "release",
+      bindingIds: [binding.bindingId],
+    });
   });
 
   it("retains a released binding tombstone while an active release receipt references it", async () => {
@@ -663,6 +692,22 @@ describe("SubsessionCoordinatorStore", () => {
       }),
     );
     await expect(
+      store.closeOwnedBinding({
+        projectId,
+        parentSessionId: identity.sessionId,
+        bindingId: first.bindingId,
+        sessionId: first.sessionId,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.closeOwnedBinding({
+        projectId,
+        parentSessionId: identity.sessionId,
+        bindingId: first.bindingId,
+        sessionId: "foreign-session",
+      }),
+    ).rejects.toMatchObject({ code: "binding_not_found" });
+    await expect(
       store.reserveDelegations(identity, delegate(), target),
     ).rejects.toMatchObject({ code: "request_key_expired" });
     await expect(
@@ -715,7 +760,7 @@ describe("SubsessionCoordinatorStore", () => {
   });
 
   it.each(["exited", "failed"] as const)(
-    "keeps a %s binding resumable and counted toward live capacity after receipt churn",
+    "keeps a %s binding resumable and charges capacity only when it is re-referenced",
     async (sessionState) => {
       const root = await fixture();
       const store = new SubsessionCoordinatorStore(root, {
@@ -766,7 +811,7 @@ describe("SubsessionCoordinatorStore", () => {
       expect(replay.bindings[0]).toMatchObject({
         bindingId: first.bindingId,
         sessionId: first.sessionId,
-        sessionState,
+        sessionState: "spawn-claimed",
       });
       expect(aggregate.bindings).toContainEqual(replay.bindings[0]);
       expect(aggregate.bindingTombstones).not.toContainEqual(
@@ -794,6 +839,141 @@ describe("SubsessionCoordinatorStore", () => {
       expect(closed.sessionState).toBe("closed");
     },
   );
+
+  it("lets a new parent delegate after an old parent's descendants become dormant", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, { liveSessionLimit: 2 });
+    const dormant = (
+      await store.reserveDelegations(identity, delegate("old-request"), target)
+    ).bindings[0]!;
+    const claim = await store.claimSpawn(identity, dormant.bindingId, {
+      ownerId: "coordinator-1",
+      expectedLifecycleEpoch: dormant.lifecycleEpoch,
+      expectedSpawnEpoch: dormant.spawnEpoch,
+    });
+    if (!claim.claimed || !claim.binding.spawnClaim)
+      throw new Error("spawn claim was not acquired");
+    const starting = await store.attachSpawnedRuntime(
+      identity,
+      dormant.bindingId,
+      {
+        claimId: claim.binding.spawnClaim.claimId,
+        spawnEpoch: claim.binding.spawnEpoch,
+        runtimeToken: "runtime-dormant",
+        incarnation: 1,
+      },
+    );
+    await store.transitionSession(identity, dormant.bindingId, {
+      expectedLifecycleEpoch: starting.lifecycleEpoch,
+      expectedSpawnEpoch: starting.spawnEpoch,
+      expectedRuntimeToken: "runtime-dormant",
+      state: "exited",
+    });
+
+    const newParent = { ...identity, sessionId: "parent-session-2" };
+    const active = await store.reserveDelegations(
+      newParent,
+      delegate("new-request", [
+        { delegationKey: "publisher", outcome: "Publish evidence" },
+        { delegationKey: "writer", outcome: "Write evidence" },
+      ]),
+      target,
+    );
+
+    expect(active.bindings).toHaveLength(2);
+    expect((await store.read(projectId)).bindings).toContainEqual(
+      expect.objectContaining({
+        bindingId: dormant.bindingId,
+        sessionState: "exited",
+      }),
+    );
+    await expect(
+      store.reserveDelegations(
+        newParent,
+        delegate("new-request-2", [
+          { delegationKey: "editor", outcome: "Edit evidence" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "live_session_limit_reached" });
+  });
+
+  it("fences a dormant resume racing a new parent's active reservation", async () => {
+    const root = await fixture();
+    const firstStore = new SubsessionCoordinatorStore(root, {
+      liveSessionLimit: 1,
+    });
+    const secondStore = new SubsessionCoordinatorStore(root, {
+      liveSessionLimit: 1,
+    });
+    const dormant = (
+      await firstStore.reserveDelegations(
+        identity,
+        delegate("old-request"),
+        target,
+      )
+    ).bindings[0]!;
+    const claim = await firstStore.claimSpawn(identity, dormant.bindingId, {
+      ownerId: "coordinator-1",
+      expectedLifecycleEpoch: dormant.lifecycleEpoch,
+      expectedSpawnEpoch: dormant.spawnEpoch,
+    });
+    if (!claim.claimed || !claim.binding.spawnClaim)
+      throw new Error("spawn claim was not acquired");
+    const starting = await firstStore.attachSpawnedRuntime(
+      identity,
+      dormant.bindingId,
+      {
+        claimId: claim.binding.spawnClaim.claimId,
+        spawnEpoch: claim.binding.spawnEpoch,
+        runtimeToken: "runtime-dormant-race",
+        incarnation: 1,
+      },
+    );
+    await firstStore.transitionSession(identity, dormant.bindingId, {
+      expectedLifecycleEpoch: starting.lifecycleEpoch,
+      expectedSpawnEpoch: starting.spawnEpoch,
+      expectedRuntimeToken: "runtime-dormant-race",
+      state: "exited",
+    });
+
+    const newParent = { ...identity, sessionId: "parent-session-2" };
+    const results = await Promise.allSettled([
+      firstStore.reserveDelegations(
+        identity,
+        delegate("resume-request"),
+        target,
+      ),
+      secondStore.reserveDelegations(
+        newParent,
+        delegate("new-request", [
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        { ...target, ownerId: "coordinator-2" },
+      ),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+    expect(results.find(({ status }) => status === "rejected")).toMatchObject({
+      reason: { code: "live_session_limit_reached" },
+    });
+    const aggregate = await firstStore.read(projectId);
+    expect(
+      aggregate.bindings.filter(({ sessionState }) =>
+        [
+          "reserved",
+          "spawn-claimed",
+          "starting",
+          "awaiting-ready",
+          "ready",
+        ].includes(sessionState),
+      ),
+    ).toHaveLength(1);
+    expect(aggregate.bindings).toContainEqual(
+      expect.objectContaining({ bindingId: dormant.bindingId }),
+    );
+  });
 
   it("reclaims released capacity so a sixty-fifth delegation can be reserved", async () => {
     const root = await fixture();

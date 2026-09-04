@@ -114,7 +114,6 @@ export interface SubsessionCoordinatorStoreEvent {
     | "subsession.binding_reserved"
     | "subsession.duplicate_prevented"
     | "subsession.spawn_claimed"
-    | "subsession.released"
     | "subsession.kickoff_claimed"
     | "subsession.kickoff_uncertain";
   projectId: StudioProjectId;
@@ -135,6 +134,10 @@ export type ReleasableSubsessionBinding =
   | Readonly<{
       state: "released";
       binding: SubsessionCoordinatorBindingTombstone;
+    }>
+  | Readonly<{
+      state: "absent";
+      delegationKey: string;
     }>;
 
 export interface ReservedReleases {
@@ -1074,11 +1077,19 @@ export class SubsessionCoordinatorStore {
         ) {
           throw new SubsessionCoordinatorStoreError("request_key_reused");
         }
+        const resolved = previous.bindingIds.map(resolve);
         return {
           value: {
             replayed: true,
             requestDigest,
-            bindings: previous.bindingIds.map(resolve),
+            bindings: operation.delegationKeys.map(
+              (delegationKey) =>
+                resolved.find(
+                  (entry) =>
+                    entry.state !== "absent" &&
+                    entry.binding.delegationKey === delegationKey,
+                ) ?? { state: "absent", delegationKey },
+            ),
           },
         };
       }
@@ -1098,7 +1109,7 @@ export class SubsessionCoordinatorStore {
               entry.delegationKey === delegationKey,
           );
           if (released) return { state: "released", binding: released };
-          throw new SubsessionCoordinatorStoreError("binding_not_found");
+          return { state: "absent", delegationKey };
         },
       );
       const now = this.now();
@@ -1107,7 +1118,9 @@ export class SubsessionCoordinatorStore {
         requestKey: request.requestKey,
         requestDigest,
         operation: "release",
-        bindingIds: bindings.map(({ binding }) => binding.bindingId),
+        bindingIds: bindings.flatMap((entry) =>
+          entry.state === "absent" ? [] : [entry.binding.bindingId],
+        ),
         createdAt: now,
       });
       this.compactTerminalHistory(aggregate);
@@ -1126,16 +1139,41 @@ export class SubsessionCoordinatorStore {
     parentSessionId: string;
     bindingId: string;
     sessionId: string;
-  }>): Promise<SubsessionBindingRecord> {
-    return this.closeBinding(
-      {
-        projectId: marker.projectId,
-        userId: "studio-subsession-coordinator",
-        sessionId: marker.parentSessionId,
-      },
-      marker.bindingId as SubsessionBindingId,
-      marker.sessionId,
-    );
+  }>): Promise<void> {
+    return this.transact<void>(marker.projectId, async (aggregate) => {
+      const binding = aggregate.bindings.find(
+        ({ bindingId }) => bindingId === marker.bindingId,
+      );
+      if (!binding) {
+        const tombstone = aggregate.bindingTombstones.find(
+          ({ bindingId }) => bindingId === marker.bindingId,
+        );
+        if (
+          tombstone?.parentSessionId === marker.parentSessionId &&
+          tombstone.sessionId === marker.sessionId
+        ) {
+          return { value: undefined };
+        }
+        throw new SubsessionCoordinatorStoreError("binding_not_found");
+      }
+      if (
+        binding.parentSessionId !== marker.parentSessionId ||
+        binding.sessionId !== marker.sessionId
+      ) {
+        throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+      }
+      if (binding.sessionState === "closed") return { value: undefined };
+      const now = this.now();
+      binding.sessionState = "closed";
+      binding.lifecycleEpoch += 1;
+      binding.spawnClaim = null;
+      binding.runtime = null;
+      binding.updatedAt = now;
+      this.compactTerminalHistory(aggregate);
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = now;
+      return { value: undefined, next: aggregate };
+    });
   }
 
   refreshFocusedContext(
@@ -1248,7 +1286,11 @@ export class SubsessionCoordinatorStore {
   async reserveDelegations(
     identity: ProjectAgentSession,
     rawRequest: unknown,
-    target: Readonly<{ harness: HarnessKind; projectRoot: string }>,
+    target: Readonly<{
+      harness: HarnessKind;
+      projectRoot: string;
+      ownerId: string;
+    }>,
   ): Promise<ReservedDelegations> {
     parseProjectAgentActorRef({
       userId: identity.userId,
@@ -1260,13 +1302,32 @@ export class SubsessionCoordinatorStore {
     if (
       !["claude-code", "codex"].includes(target.harness) ||
       !path.isAbsolute(target.projectRoot) ||
-      target.projectRoot.includes("\0")
+      target.projectRoot.includes("\0") ||
+      !identifier(target.ownerId)
     ) {
       throw new SubsessionCoordinatorStoreError("malformed_state");
     }
     const requestDigest = computeCanonicalDelegationRequestDigest(request);
     const operation = request.operation;
     return this.transact<ReservedDelegations>(identity.projectId, async (aggregate) => {
+      const now = this.now();
+      const activeCount = () =>
+        aggregate.bindings.filter(({ sessionState }) =>
+          [
+            "reserved",
+            "spawn-claimed",
+            "starting",
+            "awaiting-ready",
+            "ready",
+          ].includes(sessionState),
+        ).length;
+      const activateDormant = (binding: MutableBinding): void => {
+        binding.spawnEpoch += 1;
+        binding.lifecycleEpoch += 1;
+        binding.spawnClaim = this.claim(now, target.ownerId) as MutableClaim;
+        binding.sessionState = "spawn-claimed";
+        binding.updatedAt = now;
+      };
       const sameRequest = (
         receipt: Pick<SubsessionCoordinatorRequestReceipt, "parentSessionId" | "requestKey">,
       ): boolean =>
@@ -1293,32 +1354,39 @@ export class SubsessionCoordinatorStore {
             throw new SubsessionCoordinatorStoreError("malformed_state");
           return binding;
         });
+        const dormant = bindings.filter(({ sessionState }) =>
+          ["exited", "failed"].includes(sessionState),
+        );
+        if (
+          activeCount() + dormant.length >
+          (this.options.liveSessionLimit ??
+            PROJECT_SUBSESSION_LIVE_SESSION_LIMIT)
+        ) {
+          throw new SubsessionCoordinatorStoreError(
+            "live_session_limit_reached",
+          );
+        }
+        for (const binding of dormant) activateDormant(binding);
         this.emit({
           name: "subsession.duplicate_prevented",
           projectId: identity.projectId,
           count: bindings.length,
         });
+        if (dormant.length === 0)
+          return { value: { replayed: true, requestDigest, bindings } };
+        aggregate.recordVersion += 1;
+        aggregate.updatedAt = now;
         return {
           value: { replayed: true, requestDigest, bindings },
+          next: aggregate,
         };
       }
       if (aggregate.requestTombstones.some(sameRequest))
         throw new SubsessionCoordinatorStoreError("request_key_expired");
       this.compactTerminalHistory(aggregate);
-      const now = this.now();
       const bindings: SubsessionBindingRecord[] = [];
       let created = 0;
-      const live = aggregate.bindings.filter(({ sessionState }) =>
-        [
-          "reserved",
-          "spawn-claimed",
-          "starting",
-          "awaiting-ready",
-          "ready",
-          "exited",
-          "failed",
-        ].includes(sessionState),
-      ).length;
+      const live = activeCount();
       const parentBinding = aggregate.bindings.find(
         ({ sessionId }) => sessionId === identity.sessionId,
       );
@@ -1348,6 +1416,10 @@ export class SubsessionCoordinatorStore {
             );
           if (existing.sessionState === "closed")
             throw new SubsessionCoordinatorStoreError("session_closed");
+          if (["exited", "failed"].includes(existing.sessionState)) {
+            additionalLive += 1;
+            activateDormant(existing);
+          }
           bindings.push(existing);
           continue;
         }

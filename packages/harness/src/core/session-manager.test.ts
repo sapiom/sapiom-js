@@ -455,8 +455,84 @@ describe("SessionManager", () => {
 
     failCloseWrite = false;
     await expect(manager.close(sessionId)).resolves.toBe(false);
+    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(4);
+    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
+  });
+
+  it("prunes durably closed binding proof across release churn and restart", async () => {
+    const onSubsessionUserClosed = vi.fn(async () => {});
+    const { manager, spawns } = makeManager({ onSubsessionUserClosed });
+
+    for (let index = 0; index < 70; index += 1) {
+      const sessionId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+      const input = delegatedCreate(sessionId);
+      await manager.createReserved(
+        sessionId,
+        { cwd: input.cwd, harness: input.harness },
+        marker(sessionId),
+        input.trusted,
+      );
+      const closing = manager.closeBound(marker(sessionId));
+      spawns[index]!.emitExit(0);
+      await closing;
+      expect(manager.getSubsessionBinding(sessionId)).toBeNull();
+    }
+
+    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(70);
+    expect(
+      JSON.parse(
+        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
+      ),
+    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
+    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
+    await restarted.init();
+    expect(restarted.getSubsessionBinding(
+      "00000000-0000-4000-8000-000000000000",
+    )).toBeNull();
+  });
+
+  it("retains exact binding proof when final cleanup fails and prunes it after restart", async () => {
+    let writeCount = 0;
+    const writeSubsessionBindingRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        writeCount += 1;
+        if (writeCount === 3)
+          throw new Error("injected cleanup persistence failure");
+        await writeFile(file, serialized, "utf8");
+      },
+    );
+    const onSubsessionUserClosed = vi.fn(async () => {});
+    const { manager, spawns } = makeManager({
+      writeSubsessionBindingRegistry,
+      onSubsessionUserClosed,
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000117";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+
+    const closing = manager.closeBound(marker(sessionId));
+    spawns[0]!.emitExit(0);
+    await expect(closing).rejects.toThrow("injected cleanup persistence failure");
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+
+    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
+    await restarted.init();
+    expect(restarted.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
+    await expect(restarted.closeBound(marker(sessionId))).resolves.toBe(false);
+    expect(restarted.getSubsessionBinding(sessionId)).toBeNull();
     expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(3);
     expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(
+        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
+      ),
+    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
   });
 
   it("closes only an exact coordinator-owned binding through the trusted path", async () => {

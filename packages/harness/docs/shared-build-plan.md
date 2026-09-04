@@ -100,11 +100,14 @@ releases one to sixteen ordinary writable sessions. Each child receives the same
 project-agent prompt, coding capabilities, project tools, and delegation tool,
 so nested delegation follows the same path. An exact assignment, map node, or
 brief may focus the child, but focus never changes its tools or authority.
-Delegation is bounded to four levels and 64 live or resumable
-coordinator-owned sessions per project. A parent can idempotently release its
-own child bindings by delegation key to close their real Harness sessions and
-recover capacity; it cannot name arbitrary session IDs or release another
-parent's or a manual session.
+Delegation is bounded to four levels and 64 active or explicitly re-referenced
+coordinator-owned sessions per project. Dormant exited or failed bindings retain
+their exact resume identity without holding an active slot until they are
+re-referenced. A parent can idempotently release its own child bindings by
+delegation key to close their real Harness sessions and recover capacity; it
+cannot name arbitrary session IDs or release another parent's or a manual
+session. Unknown or expired keys converge as already released without exposing
+a session identity.
 
 Callers provide both a request key and a delegation key. Identity is scoped by
 the private session capability to the trusted project and parent session.
@@ -117,9 +120,11 @@ closed bindings compact into bounded ownership tombstones once no retained
 receipt references them. Exited and failed bindings remain available for the
 coordinator's ordinary resume and recovery paths until explicitly released.
 Release receipts make partial retries converge before the closed binding is
-compacted. The oldest tombstones expire as the retention window advances, so
-routine delegation, release, and focused-context refreshes cannot permanently
-exhaust a project.
+compacted. Once the durable coordinator close succeeds, SessionManager prunes
+the exact private ownership marker and close tombstone; a failed final cleanup
+retains that proof for the next idempotent retry. The oldest tombstones expire
+as the retention window advances, so routine delegation, release, and
+focused-context refreshes cannot permanently exhaust a project.
 Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
 focused-context delivery replaces them; ambiguous delivery evidence is retained.
 
