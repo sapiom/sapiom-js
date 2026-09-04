@@ -66,6 +66,12 @@ Plan apply and rebase commit before their best-effort canonical refresh, so a
 bounded compiler diagnostic never rolls back accepted plan intent; the refresh
 tool can be retried independently and idempotently.
 
+Each logical brief retains at most 1,024 immutable versions; exhausting that
+history returns terminal `quota_exceeded` with `manual_intervention` recovery.
+The newest 256 brief-refresh receipts remain replayable, while older receipts
+expire into tombstones and return `request_id_expired`, requiring a new request
+ID instead of replaying the original result.
+
 Brief fingerprints separate owned nodes, relevant nodes, input/output
 contracts, relationships, resources, milestones, shared plan content, and
 assignment content. Impact and freshness are diagnostic only. They never
