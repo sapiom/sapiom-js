@@ -9,6 +9,7 @@ import type {
   PlanNodeId,
   PlanRelationshipId,
   PlanningSessionIdentity,
+  ProjectAgentSession,
   ProposalBatchRequest,
   ProposalOperationId,
 } from "../shared/agent-map.js";
@@ -32,11 +33,10 @@ class Ids implements AgentMapPermanentIdAllocator {
   allocateOperationId = () => this.next("operation") as ProposalOperationId;
 }
 
-const identity = (sessionId: string): PlanningSessionIdentity => ({
+const identity = (sessionId: string): ProjectAgentSession => ({
   projectId,
   userId: "user-1",
   sessionId,
-  role: "map-planner",
 });
 
 const addNode = (
@@ -119,8 +119,8 @@ describe("AgentMapProposalService", () => {
     expect(snapshot.proposal?.history[0]?.actor).toEqual({
       userId: "user-1",
       sessionId: "session-1",
-      role: "map-planner",
-      assignment: null,
+      role: "agent-builder",
+      assignment: { kind: "unplanned" },
     });
     expect(accepted).toHaveBeenCalledOnce();
   });
@@ -148,7 +148,6 @@ describe("AgentMapProposalService", () => {
       "name",
       "operationCount",
       "projectId",
-      "role",
       "sessionId",
     ]);
   });
@@ -323,12 +322,13 @@ describe("AgentMapProposalService", () => {
     });
   });
 
-  it("uses the same write path for planner, assigned, and unplanned builders", async () => {
+  it("ignores former origin metadata and uses one neutral write authority", async () => {
     const { service } = await fixture();
-    const first = await service.propose(
-      identity("planner"),
-      addNode("planner", 0, null),
-    );
+    const planner: PlanningSessionIdentity = {
+      ...identity("planner"),
+      role: "map-planner",
+    };
+    const first = await service.propose(planner, addNode("planner", 0, null));
     const assigned: PlanningSessionIdentity = {
       projectId,
       userId: "user-1",
@@ -353,14 +353,14 @@ describe("AgentMapProposalService", () => {
       {
         userId: "user-1",
         sessionId: "planner",
-        role: "map-planner",
-        assignment: null,
+        role: "agent-builder",
+        assignment: { kind: "unplanned" },
       },
       {
         userId: "user-1",
         sessionId: "assigned",
         role: "agent-builder",
-        assignment: { kind: "planned", agentId: "planned-agent" },
+        assignment: { kind: "unplanned" },
       },
       {
         userId: "user-1",

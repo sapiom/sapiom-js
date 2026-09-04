@@ -7,6 +7,7 @@ import {
   type AgentMapWorkspaceResponse,
   type PlannerMessageRequest,
   type PlannerSessionRequest,
+  type StudioProjectSummary,
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
 import { SPAWNABLE_HARNESS_KINDS, type WorkflowInfo } from "../shared/types.js";
@@ -25,13 +26,15 @@ import {
   StudioWorkspacePreferenceStoreError,
 } from "../core/studio-workspace-preferences.js";
 import {
-  PlanningSessionError,
-  type PlanningSessionService,
+  ProjectSessionError,
+  type ProjectSessionService,
 } from "../core/planning-session.js";
+import { ProjectSessionScopeUnavailableError } from "../core/session-manager.js";
 import {
-  PlannerDispatchForbiddenError,
-  PlannerGreetingRetryUnavailableError,
-  type PlannerGreetingCoordinator,
+  ProjectBootstrapDispatchForbiddenError,
+  ProjectBootstrapRetryUnavailableError,
+  projectBootstrapOwnsInput,
+  type ProjectBootstrapCoordinator,
 } from "../core/planner-greeting.js";
 
 export interface AgentMapRouterOptions {
@@ -50,8 +53,16 @@ export interface AgentMapRouterOptions {
   listWorkspaceScopes: () =>
     | readonly WorkspaceScopeSummary[]
     | Promise<readonly WorkspaceScopeSummary[]>;
-  planningSessions?: PlanningSessionService;
-  plannerGreeting?: PlannerGreetingCoordinator;
+  projectSessions?: ProjectSessionService;
+  projectBootstrap?: ProjectBootstrapCoordinator;
+  /** New-project lifecycle hooks; never called by Agent Map reads. */
+  onProjectCreated?: (project: StudioProjectSummary) => Promise<void> | void;
+  onRootBound?: (
+    project: StudioProjectSummary,
+    root: string,
+  ) => Promise<void> | void;
+  /** Neutral ordinary-session input boundary used by rolling aliases. */
+  submitSessionInput?: (sessionId: string, text: string) => Promise<boolean>;
 }
 
 const plannerSessionSchema = z
@@ -66,15 +77,19 @@ const plannerMessageSchema = z
   .object({ text: z.string().min(1).max(100_000) })
   .strict() satisfies z.ZodType<PlannerMessageRequest>;
 
-function sendPlanningError(
+function sendProjectSessionError(
   res: import("express").Response,
   error: unknown,
 ): boolean {
-  if (error instanceof PlannerDispatchForbiddenError) {
+  if (error instanceof ProjectBootstrapDispatchForbiddenError) {
     res.status(403).json({ code: error.code, error: error.message });
     return true;
   }
-  if (!(error instanceof PlanningSessionError)) return false;
+  if (error instanceof ProjectSessionScopeUnavailableError) {
+    res.status(409).json({ code: error.code, error: error.message });
+    return true;
+  }
+  if (!(error instanceof ProjectSessionError)) return false;
   const status =
     error.code === "project_not_found" || error.code === "session_not_found"
       ? 404
@@ -160,9 +175,9 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       res.status(400).json(errorBody("malformed_state"));
       return;
     }
+    let project: StudioProjectSummary;
     try {
-      const project = await options.catalog.create(parsed.data.displayName);
-      res.status(201).setHeader("Cache-Control", "no-store").json(project);
+      project = await options.catalog.create(parsed.data.displayName);
     } catch (error) {
       const bounded =
         error instanceof StudioProjectCatalogError
@@ -171,6 +186,21 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       res
         .status(bounded === "storage_unavailable" ? 503 : 400)
         .json(errorBody(bounded));
+      return;
+    }
+    try {
+      await options.onProjectCreated?.(project);
+      res.status(201).setHeader("Cache-Control", "no-store").json(project);
+    } catch {
+      // The catalog commit already won. Report that stable identity instead of
+      // a 503 that invites a non-idempotent retry and creates a second project;
+      // lifecycle scheduling is project-keyed and may converge on root bind or
+      // startup recovery.
+      res
+        .status(202)
+        .setHeader("Cache-Control", "no-store")
+        .setHeader("X-Sapiom-Project-Initialization", "pending")
+        .json(project);
     }
   });
 
@@ -184,6 +214,8 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       res.status(400).json(errorBody("malformed_state"));
       return;
     }
+    let updated: StudioProjectSummary;
+    let root: string;
     try {
       const project = await options.catalog.resolve(req.params.projectId);
       if (!project) {
@@ -195,12 +227,10 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         res.status(404).json(errorBody("project_not_found"));
         return;
       }
-      const updated = await options.catalog.addRootBinding(
-        project.projectId,
-        scope.cwd,
-        { legacyWorkspaceKey: scope.workspaceKey },
-      );
-      res.status(201).setHeader("Cache-Control", "no-store").json(updated);
+      root = scope.cwd;
+      updated = await options.catalog.addRootBinding(project.projectId, root, {
+        legacyWorkspaceKey: scope.workspaceKey,
+      });
     } catch (error) {
       const bounded =
         error instanceof StudioProjectCatalogError
@@ -209,6 +239,20 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
       res
         .status(bounded === "storage_unavailable" ? 503 : 400)
         .json(errorBody(bounded));
+      return;
+    }
+    try {
+      await options.onRootBound?.(updated, root);
+      res.status(201).setHeader("Cache-Control", "no-store").json(updated);
+    } catch {
+      // The binding commit is already durable and idempotent. Preserve its
+      // stable identity while telling the client only that lifecycle work is
+      // pending; retrying this same association cannot append another binding.
+      res
+        .status(202)
+        .setHeader("Cache-Control", "no-store")
+        .setHeader("X-Sapiom-Project-Initialization", "pending")
+        .json(updated);
     }
   });
 
@@ -220,6 +264,8 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         res.status(400).json(errorBody("malformed_state"));
         return;
       }
+      let updated: StudioProjectSummary;
+      let root: string;
       try {
         const project = await options.catalog.resolve(req.params.projectId);
         if (!project) {
@@ -231,13 +277,13 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
           res.status(404).json(errorBody("project_not_found"));
           return;
         }
-        const updated = await options.catalog.moveRootBinding(
+        root = scope.cwd;
+        updated = await options.catalog.moveRootBinding(
           project.projectId,
           req.params.bindingId,
-          scope.cwd,
+          root,
           scope.workspaceKey,
         );
-        res.status(200).setHeader("Cache-Control", "no-store").json(updated);
       } catch (error) {
         const bounded =
           error instanceof StudioProjectCatalogError
@@ -246,25 +292,34 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         res
           .status(bounded === "storage_unavailable" ? 503 : 400)
           .json(errorBody(bounded));
+        return;
+      }
+      try {
+        await options.onRootBound?.(updated, root);
+        res.status(200).setHeader("Cache-Control", "no-store").json(updated);
+      } catch {
+        res
+          .status(202)
+          .setHeader("Cache-Control", "no-store")
+          .setHeader("X-Sapiom-Project-Initialization", "pending")
+          .json(updated);
       }
     },
   );
   const projectContext = async (projectId: string) => {
-    const reconciled = await options.catalog.reconcile(
-      await options.listWorkspaceScopes(),
-    );
     const project = await options.catalog.resolve(projectId);
     if (!project) return null;
+    const identity = await options.catalog.resolveIdentity(project.projectId);
+    if (!identity) return null;
     return {
       project,
-      roots: reconciled.workspaceScopes
-        .filter((scope) => scope.projectId === project.projectId)
-        .map((scope) => scope.cwd),
+      roots: identity.rootBindings
+        .filter((binding) => binding.status === "active")
+        .map((binding) => binding.localRootRef),
     };
   };
   router.get("/projects/:projectId/agent-map/workspace", async (req, res) => {
     try {
-      await options.catalog.reconcile(await options.listWorkspaceScopes());
       const project = await options.catalog.resolve(req.params.projectId);
       if (!project) {
         res.status(404).json(errorBody("project_not_found"));
@@ -358,11 +413,12 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
     }
   });
 
+  /** @deprecated Rolling alias to ordinary project-session open; remove in SAP-3152. */
   router.post(
     "/projects/:projectId/planner-sessions",
     async (req, res, next) => {
-      if (!options.planningSessions || !options.plannerGreeting) {
-        res.status(501).json({ error: "Planner sessions are unavailable" });
+      if (!options.projectSessions) {
+        res.status(501).json({ error: "Project sessions are unavailable" });
         return;
       }
       const parsed = plannerSessionSchema.safeParse(req.body);
@@ -371,23 +427,23 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         return;
       }
       try {
-        await options.catalog.reconcile(await options.listWorkspaceScopes());
-        const result = await options.planningSessions.open(
+        const result = await options.projectSessions.open(
           req.params.projectId,
           parsed.data,
         );
         res.status(result.resolution === "created" ? 201 : 200).json(result);
       } catch (error) {
-        if (!sendPlanningError(res, error)) next(error);
+        if (!sendProjectSessionError(res, error)) next(error);
       }
     },
   );
 
+  /** @deprecated Rolling alias to ordinary project-session input; remove in SAP-3152. */
   router.post(
     "/projects/:projectId/planner-sessions/:sessionId/messages",
     async (req, res, next) => {
-      if (!options.planningSessions || !options.plannerGreeting) {
-        res.status(501).json({ error: "Planner sessions are unavailable" });
+      if (!options.projectSessions || !options.submitSessionInput) {
+        res.status(501).json({ error: "Project sessions are unavailable" });
         return;
       }
       const parsed = plannerMessageSchema.safeParse(req.body);
@@ -396,27 +452,42 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         return;
       }
       try {
-        await options.planningSessions.requireOwned(
+        const session = await options.projectSessions.requireOwned(
           req.params.projectId,
           req.params.sessionId,
         );
-        const metadata = await options.plannerGreeting.enqueue(
-          req.params.sessionId,
-          parsed.data.text,
-        );
-        res.status(202).json({ metadata });
+        if (
+          options.projectBootstrap &&
+          projectBootstrapOwnsInput(session.projectBootstrap)
+        ) {
+          await options.projectBootstrap.enqueue(
+            req.params.sessionId,
+            parsed.data.text,
+          );
+        } else if (
+          !(await options.submitSessionInput(
+            req.params.sessionId,
+            parsed.data.text,
+          ))
+        ) {
+          res
+            .status(404)
+            .json({ error: "Project session has no live process" });
+          return;
+        }
+        res.status(202).json({ metadata: session.projectBootstrap ?? null });
       } catch (error) {
-        if (!sendPlanningError(res, error)) next(error);
+        if (!sendProjectSessionError(res, error)) next(error);
       }
     },
   );
 
-  /** @deprecated Compatibility-only for sessions created before synthetic greeting removal. */
+  /** @deprecated Rolling alias; remove after persisted clients migrate in SAP-3152. */
   router.post(
     "/projects/:projectId/planner-sessions/:sessionId/greeting/retry",
     async (req, res, next) => {
-      if (!options.planningSessions || !options.plannerGreeting) {
-        res.status(501).json({ error: "Planner sessions are unavailable" });
+      if (!options.projectSessions || !options.projectBootstrap) {
+        res.status(501).json({ error: "Project bootstrap is unavailable" });
         return;
       }
       if (Object.keys((req.body ?? {}) as object).length > 0) {
@@ -424,18 +495,21 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         return;
       }
       try {
-        const session = await options.planningSessions.requireOwned(
+        const session = await options.projectSessions.requireOwned(
           req.params.projectId,
           req.params.sessionId,
         );
-        await options.plannerGreeting.retry(req.params.sessionId);
+        if (!session.projectBootstrap) {
+          throw new ProjectBootstrapRetryUnavailableError();
+        }
+        await options.projectBootstrap.retry(req.params.sessionId);
         res.status(202).json({
-          metadata: session.planning,
+          metadata: session.projectBootstrap,
         });
       } catch (error) {
-        if (error instanceof PlannerGreetingRetryUnavailableError) {
+        if (error instanceof ProjectBootstrapRetryUnavailableError) {
           res.status(409).json({ code: error.code, error: error.message });
-        } else if (!sendPlanningError(res, error)) next(error);
+        } else if (!sendProjectSessionError(res, error)) next(error);
       }
     },
   );

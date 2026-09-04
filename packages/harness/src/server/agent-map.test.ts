@@ -9,14 +9,18 @@ import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
-  PlannerGreetingRetryUnavailableError,
-  type PlannerGreetingCoordinator,
+  ProjectBootstrapRetryUnavailableError,
+  type ProjectBootstrapCoordinator,
 } from "../core/planner-greeting.js";
+import { ProjectSessionScopeUnavailableError } from "../core/session-manager.js";
 import {
-  PlanningSessionError,
-  type PlanningSessionService,
+  ProjectSessionError,
+  type ProjectSessionService,
 } from "../core/planning-session.js";
-import type { AgentMapWorkspaceResponse } from "../shared/agent-map.js";
+import type {
+  AgentMapWorkspaceResponse,
+  StudioProjectSummary,
+} from "../shared/agent-map.js";
 import type { HarnessSession } from "../shared/types.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
@@ -36,9 +40,15 @@ describe("createAgentMapRouter", () => {
     );
   });
 
-  async function start(planner?: {
-    planningSessions: PlanningSessionService;
-    plannerGreeting: PlannerGreetingCoordinator;
+  async function start(projectLifecycle?: {
+    projectSessions?: ProjectSessionService;
+    projectBootstrap?: ProjectBootstrapCoordinator;
+    submitSessionInput?: (sessionId: string, text: string) => Promise<boolean>;
+    onProjectCreated?: (project: StudioProjectSummary) => Promise<void> | void;
+    onRootBound?: (
+      project: StudioProjectSummary,
+      root: string,
+    ) => Promise<void> | void;
   }) {
     const stateRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-router-"),
@@ -83,7 +93,10 @@ describe("createAgentMapRouter", () => {
         ],
         isWorkflowScanComplete: () => true,
         listWorkspaceScopes,
-        ...planner,
+        ...projectLifecycle,
+        ...(projectLifecycle && !projectLifecycle.submitSessionInput
+          ? { submitSessionInput: async () => true }
+          : {}),
       }),
     );
     server = app.listen(0);
@@ -142,7 +155,9 @@ describe("createAgentMapRouter", () => {
     expect(publicJson).not.toContain(fixture.privateRoot);
     expect(publicJson).not.toContain("workspace-private-alias");
     expect(fixture.onEvent).toHaveBeenCalledTimes(1);
-    expect(fixture.listWorkspaceScopes).toHaveBeenCalledTimes(2);
+    // Rendering durable map state is not a project-discovery boundary and
+    // therefore cannot create/schedule another project lifecycle.
+    expect(fixture.listWorkspaceScopes).not.toHaveBeenCalled();
   });
 
   it("creates a zero-binding project without eagerly creating map state", async () => {
@@ -172,6 +187,35 @@ describe("createAgentMapRouter", () => {
         ),
       ),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("acknowledges a committed project identity when lifecycle scheduling must retry", async () => {
+    const onProjectCreated = vi.fn(async () => {
+      throw new Error("transient coordinator failure");
+    });
+    const fixture = await start({ onProjectCreated });
+
+    const response = await fetch(`${fixture.baseUrl}/api/projects`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ displayName: "Durably created" }),
+    });
+    const created = (await response.json()) as StudioProjectSummary;
+
+    expect(response.status).toBe(202);
+    expect(response.headers.get("X-Sapiom-Project-Initialization")).toBe(
+      "pending",
+    );
+    expect(created.displayName).toBe("Durably created");
+    expect(onProjectCreated).toHaveBeenCalledOnce();
+    expect(
+      (await fixture.catalog.list()).filter(
+        (project) => project.projectId === created.projectId,
+      ),
+    ).toHaveLength(1);
   });
 
   it("preserves identity when the authenticated boundary moves and adds root bindings", async () => {
@@ -235,6 +279,63 @@ describe("createAgentMapRouter", () => {
     expect(restarted.projects).toHaveLength(1);
     expect(restarted.projects[0]?.projectId).toBe(fixture.project.projectId);
     expect(restarted.projects[0]?.bindings).toHaveLength(2);
+  });
+
+  it("acknowledges durable root mutations and converges lifecycle retries without duplicate bindings", async () => {
+    const onRootBound = vi
+      .fn<(project: StudioProjectSummary, root: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("transient add failure"))
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error("transient move failure"))
+      .mockResolvedValueOnce();
+    const fixture = await start({ onRootBound });
+    const addedRoot = path.join(fixture.stateRoot, "publisher-repository");
+    const movedRoot = path.join(fixture.stateRoot, "moved-market-research");
+    await Promise.all([fs.mkdir(addedRoot), fs.mkdir(movedRoot)]);
+    fixture.scopes.splice(
+      0,
+      fixture.scopes.length,
+      { workspaceKey: "workspace-publisher", cwd: addedRoot },
+      { workspaceKey: "workspace-moved", cwd: movedRoot },
+    );
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Harness-Token": "test-token",
+    };
+    const addRoute = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings`;
+    const add = () =>
+      fetch(addRoute, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ root: addedRoot }),
+      });
+
+    const pendingAdd = await add();
+    expect(pendingAdd.status).toBe(202);
+    expect(pendingAdd.headers.get("X-Sapiom-Project-Initialization")).toBe(
+      "pending",
+    );
+    expect((await add()).status).toBe(201);
+
+    const moveRoute = `${addRoute}/${fixture.project.bindings[0]!.id}`;
+    const move = () =>
+      fetch(moveRoute, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ root: movedRoot }),
+      });
+    const pendingMove = await move();
+    expect(pendingMove.status).toBe(202);
+    expect(pendingMove.headers.get("X-Sapiom-Project-Initialization")).toBe(
+      "pending",
+    );
+    expect((await move()).status).toBe(200);
+
+    expect(onRootBound).toHaveBeenCalledTimes(4);
+    const persisted = await fixture.catalog.resolve(fixture.project.projectId);
+    expect(persisted?.bindings).toHaveLength(2);
+    expect(JSON.stringify(persisted)).not.toContain(addedRoot);
+    expect(JSON.stringify(persisted)).not.toContain(movedRoot);
   });
 
   it("does not expose root association without the boot token or allow list", async () => {
@@ -442,7 +543,7 @@ describe("createAgentMapRouter", () => {
     expect(await fs.readFile(workspacePath, "utf8")).toBe("{bad-json");
   });
 
-  it("protects planner routes and accepts only project-scoped intent", async () => {
+  it("keeps legacy planner routes as project-scoped aliases to neutral services", async () => {
     let fixtureProjectId = "";
     const plannerSession = {
       id: "planner-session-1",
@@ -462,42 +563,52 @@ describe("createAgentMapRouter", () => {
       resolution: "created" as const,
     }));
     const requireOwned = vi.fn(() => plannerSession);
-    const enqueue = vi.fn(async () => ({
-      identity: {
+    const enqueue = vi.fn(async () => {
+      const metadata = {
         projectId: fixtureProjectId,
-        sessionId: plannerSession.id,
         userId: "user-1",
-        role: "map-planner" as const,
-      },
-      greeting: { status: "pending" as const },
-      queuedInputIds: ["input-1"],
-    }));
+        targetSessionId: plannerSession.id,
+        bootstrap: {
+          status: "skipped" as const,
+          reason: "user-proceeded" as const,
+        },
+        queuedInputIds: ["input-1"],
+      };
+      plannerSession.projectBootstrap = metadata;
+      return metadata;
+    });
     const retry = vi.fn(async () => {
-      if (!plannerSession.planning) throw new Error("missing planner metadata");
-      plannerSession.planning = {
-        ...plannerSession.planning,
-        greeting: { status: "generating", attemptId: "attempt-2" },
+      if (!plannerSession.projectBootstrap) {
+        throw new Error("missing project bootstrap metadata");
+      }
+      plannerSession.projectBootstrap = {
+        ...plannerSession.projectBootstrap,
+        bootstrap: { status: "generating", attemptId: "attempt-2" },
       };
     });
+    const submitSessionInput = vi.fn(async () => true);
     const fixture = await start({
-      planningSessions: {
+      projectSessions: {
         open,
         requireOwned,
-      } as unknown as PlanningSessionService,
-      plannerGreeting: {
+      } as unknown as ProjectSessionService,
+      projectBootstrap: {
         enqueue,
         retry,
-      } as unknown as PlannerGreetingCoordinator,
+      } as unknown as ProjectBootstrapCoordinator,
+      submitSessionInput,
     });
     fixtureProjectId = fixture.project.projectId;
-    plannerSession.planning = {
-      identity: {
-        projectId: fixtureProjectId,
-        sessionId: plannerSession.id,
-        userId: "user-1",
-        role: "map-planner",
-      },
-      greeting: {
+    plannerSession.agentMapIdentity = {
+      projectId: fixtureProjectId,
+      sessionId: plannerSession.id,
+      userId: "user-1",
+    };
+    plannerSession.projectBootstrap = {
+      projectId: fixtureProjectId,
+      targetSessionId: plannerSession.id,
+      userId: "user-1",
+      bootstrap: {
         status: "failed",
         retryable: true,
         errorCode: "model_turn_failed",
@@ -555,13 +666,10 @@ describe("createAgentMapRouter", () => {
     expect(message.status).toBe(202);
     expect(await message.json()).toEqual({
       metadata: {
-        identity: {
-          projectId: fixture.project.projectId,
-          sessionId: plannerSession.id,
-          userId: "user-1",
-          role: "map-planner",
-        },
-        greeting: { status: "pending" },
+        projectId: fixture.project.projectId,
+        targetSessionId: plannerSession.id,
+        userId: "user-1",
+        bootstrap: { status: "skipped", reason: "user-proceeded" },
         queuedInputIds: ["input-1"],
       },
     });
@@ -573,6 +681,32 @@ describe("createAgentMapRouter", () => {
       plannerSession.id,
       "Build a support triage system",
     );
+
+    const followUp = await fetch(`${route}/${plannerSession.id}/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ text: "Keep this behind the durable FIFO" }),
+    });
+    expect(followUp.status).toBe(202);
+    expect(enqueue).toHaveBeenLastCalledWith(
+      plannerSession.id,
+      "Keep this behind the durable FIFO",
+    );
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(submitSessionInput).not.toHaveBeenCalled();
+
+    plannerSession.projectBootstrap = {
+      ...plannerSession.projectBootstrap!,
+      bootstrap: {
+        status: "failed",
+        retryable: true,
+        errorCode: "model_turn_failed",
+      },
+      queuedInputIds: [],
+    };
 
     const retryResponse = await fetch(
       `${route}/${plannerSession.id}/greeting/retry`,
@@ -588,8 +722,8 @@ describe("createAgentMapRouter", () => {
     expect(retryResponse.status).toBe(202);
     expect(await retryResponse.json()).toEqual({
       metadata: {
-        ...plannerSession.planning,
-        greeting: { status: "generating", attemptId: "attempt-2" },
+        ...plannerSession.projectBootstrap,
+        bootstrap: { status: "generating", attemptId: "attempt-2" },
       },
     });
     expect(retry).toHaveBeenCalledWith(plannerSession.id);
@@ -597,21 +731,21 @@ describe("createAgentMapRouter", () => {
 
   it("rejects foreign planner messages and bounds unavailable retries", async () => {
     const requireOwned = vi.fn<() => Promise<HarnessSession>>(async () => {
-      throw new PlanningSessionError("forbidden");
+      throw new ProjectSessionError("forbidden");
     });
     const enqueue = vi.fn(async () => ({}) as never);
     const retry = vi.fn(async () => {
-      throw new PlannerGreetingRetryUnavailableError();
+      throw new ProjectBootstrapRetryUnavailableError();
     });
     const fixture = await start({
-      planningSessions: {
+      projectSessions: {
         open: vi.fn(),
         requireOwned,
-      } as unknown as PlanningSessionService,
-      plannerGreeting: {
+      } as unknown as ProjectSessionService,
+      projectBootstrap: {
         enqueue,
         retry,
-      } as unknown as PlannerGreetingCoordinator,
+      } as unknown as ProjectBootstrapCoordinator,
     });
     const headers = {
       "content-type": "application/json",
@@ -640,8 +774,41 @@ describe("createAgentMapRouter", () => {
     );
     expect(retryResponse.status).toBe(409);
     expect(await retryResponse.json()).toEqual({
-      code: "greeting_retry_unavailable",
-      error: "greeting retry is not available",
+      code: "project_bootstrap_retry_unavailable",
+      error: "project bootstrap retry is not available",
+    });
+  });
+
+  it("returns a bounded compatibility error when project scope cannot be revalidated", async () => {
+    const requireOwned = vi.fn(async () => {
+      throw new ProjectSessionScopeUnavailableError("ordinary-session");
+    });
+    const fixture = await start({
+      projectSessions: {
+        open: vi.fn(),
+        requireOwned,
+      } as unknown as ProjectSessionService,
+      projectBootstrap: {
+        enqueue: vi.fn(),
+        retry: vi.fn(),
+      } as unknown as ProjectBootstrapCoordinator,
+    });
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/ordinary-session/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({ text: "continue" }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: "PROJECT_SESSION_SCOPE_UNAVAILABLE",
+      error: "the session's Studio project scope could not be revalidated",
     });
   });
 });

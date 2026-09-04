@@ -1,56 +1,78 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-async function openDashboardMap(page: Page): Promise<void> {
-  const group = page.getByTestId("workspace-group-dashboard-keeper");
-  await expect(group.getByTestId("agent-map-row")).toBeVisible();
-  await group.getByTestId("agent-map-select").click();
-}
+import { selectMockSessionFromPalette } from "./mock-navigation";
 
-async function activeSessionId(page: Page): Promise<string | null> {
-  return page.getByTestId("session-context").getAttribute("data-session-id");
-}
-
-async function openPlannerSessionCallCount(page: Page): Promise<number> {
-  return page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __HARNESS_TEST__?: { openPlannerSessionCalls?: unknown[] };
-        }
-      ).__HARNESS_TEST__?.openPlannerSessionCalls?.length ?? 0,
+async function openProjectMap(page: Page, label: string): Promise<void> {
+  const group = page.getByTestId(`workspace-group-${label}`);
+  await group.getByTestId(`project-select-${label}`).click();
+  await expect(group.getByTestId(`project-select-${label}`)).toHaveAttribute(
+    "aria-pressed",
+    "true",
   );
 }
 
-test.describe("SAP-3058 Agent Map planning workspace", () => {
+const activeSessionId = (page: Page): Promise<string | null> =>
+  page.getByTestId("session-context").getAttribute("data-session-id");
+
+interface NavigationEvidence {
+  activeSessionId: string | null;
+  createSessionCalls: number;
+  injectInputCalls: number;
+  openPlannerSessionCalls: number;
+}
+
+async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
+  const active = await activeSessionId(page);
+  return page.evaluate((activeSession) => {
+    const state = (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          createSessionCalls?: unknown[];
+          injectInputCalls?: unknown[];
+          openPlannerSessionCalls?: unknown[];
+        };
+      }
+    ).__HARNESS_TEST__;
+    return {
+      activeSessionId: activeSession,
+      createSessionCalls: state?.createSessionCalls?.length ?? 0,
+      injectInputCalls: state?.injectInputCalls?.length ?? 0,
+      openPlannerSessionCalls: state?.openPlannerSessionCalls?.length ?? 0,
+    };
+  }, active);
+}
+
+test.describe("SAP-3148 project Agent Map navigation", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("first open starts the raw planner CLI beside the honest empty map", async ({
+  test("the project name opens the durable map without touching its active conversation", async ({
     page,
   }) => {
-    await openDashboardMap(page);
+    const before = await navigationEvidence(page);
+    expect(before.activeSessionId).toBeTruthy();
 
-    const terminal = page.locator(".harness-terminal");
-    await expect(terminal).toBeVisible();
-    await expect(terminal.locator(".xterm")).toBeVisible();
+    await openProjectMap(page, "acme-app");
+
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
     await expect(page.getByTestId("agent-map-empty")).toHaveText(
       "Nothing generated yet",
     );
+    await expect(page.getByTestId("agent-map-row")).toHaveCount(0);
+    await expect(page.getByTestId("agent-map-select")).toHaveCount(0);
+    expect(await navigationEvidence(page)).toEqual(before);
 
     const [cli, map] = await Promise.all([
-      terminal.boundingBox(),
+      page.locator(".harness-terminal").boundingBox(),
       page.getByTestId("agent-map-empty").boundingBox(),
     ]);
     expect(cli?.width ?? 0).toBeGreaterThan(200);
     expect(map?.width ?? 0).toBeGreaterThan(200);
     expect(map?.x ?? 0).toBeGreaterThan((cli?.x ?? 0) + (cli?.width ?? 0) - 2);
-    await page.screenshot({
-      path: "web/e2e/screenshots/agent-map-planning.png",
-      fullPage: true,
-    });
 
     await expect
       .poll(() =>
@@ -67,31 +89,184 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .toContain("agent_map.entered");
   });
 
-  test("renders the stock-research proposal and a coding-agent follow-up live", async ({
+  test("a project map never renders another project's active conversation", async ({
+    page,
+  }) => {
+    const before = await navigationEvidence(page);
+    expect(before.activeSessionId).toBe("sess-boot");
+
+    await openProjectMap(page, "dashboard-keeper");
+
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toHaveCount(0);
+    await expect(page.getByTestId("project-session-empty")).toContainText(
+      "No active session in this project",
+    );
+    // Project-name navigation does not solve containment by selecting a
+    // different session. The foreign active ID stays untouched but its CLI is
+    // not mounted beside this project's map.
+    const after = await navigationEvidence(page);
+    expect(after).toMatchObject({
+      createSessionCalls: before.createSessionCalls,
+      injectInputCalls: before.injectInputCalls,
+      openPlannerSessionCalls: before.openPlannerSessionCalls,
+    });
+    await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        (
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: { trackEvents?: Array<{ event: string }> };
+            }
+          ).__HARNESS_TEST__?.trackEvents ?? []
+        ).filter((event) => event.event === "session.switched"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("the project name remains the map action on the Group axis", async ({
+    page,
+  }) => {
+    const before = await navigationEvidence(page);
+    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("filing-group-by").selectOption("group");
+    await page.keyboard.press("Escape");
+
+    await openProjectMap(page, "polsia");
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+    await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
+    await expect(page.getByTestId("agent-map-row")).toHaveCount(0);
+    const after = await navigationEvidence(page);
+    expect(after).toMatchObject({
+      createSessionCalls: before.createSessionCalls,
+      injectInputCalls: before.injectInputCalls,
+      openPlannerSessionCalls: before.openPlannerSessionCalls,
+    });
+  });
+
+  test("neutral project identity owns restoration instead of a foreign bound Canvas path", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockRestoreBindingConflict=1",
+    );
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    const acme = page
+      .getByTestId("workspace-group-acme-app")
+      .getByTestId("project-select-acme-app");
+    await expect(acme).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-boot",
+    );
+    const evidence = await navigationEvidence(page);
+    expect(evidence).toMatchObject({
+      activeSessionId: "sess-boot",
+      createSessionCalls: 0,
+      injectInputCalls: 0,
+      openPlannerSessionCalls: 0,
+    });
+  });
+
+  test("neutral project identity hands an overlapping nested-project agent to its own session", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+    );
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    await openProjectMap(page, "polsia");
+    const outerProjectId = await page
+      .getByTestId("agent-map-live")
+      .getAttribute("data-project-id");
+    await openProjectMap(page, "polsia/services/workers");
+    const nestedProjectId = await page
+      .getByTestId("agent-map-live")
+      .getAttribute("data-project-id");
+    expect(outerProjectId).toBeTruthy();
+    expect(nestedProjectId).toBeTruthy();
+    expect(nestedProjectId).not.toBe(outerProjectId);
+
+    await page.evaluate(
+      ({ outerId, nestedId }) => {
+        const publish = (
+          window as unknown as {
+            __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+          }
+        ).__HARNESS_TEST__?.publish;
+        const base = {
+          agentSessionId: null,
+          boundWorkflowPath: null,
+          harness: "claude-code" as const,
+          status: "running" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastActiveAt: "2026-01-01T00:00:00.000Z",
+          ready: true,
+        };
+        publish?.({
+          type: "session.status",
+          session: {
+            ...base,
+            id: "sess-overlap-outer",
+            cwd: "/Users/demo/polsia",
+            title: "Outer project session",
+            agentMapIdentity: {
+              projectId: outerId,
+              userId: "user_mock",
+              sessionId: "sess-overlap-outer",
+            },
+          },
+        });
+        publish?.({
+          type: "session.status",
+          session: {
+            ...base,
+            id: "sess-overlap-nested",
+            cwd: "/Users/demo/polsia/services/workers",
+            title: "Nested project session",
+            agentMapIdentity: {
+              projectId: nestedId,
+              userId: "user_mock",
+              sessionId: "sess-overlap-nested",
+            },
+          },
+        });
+      },
+      { outerId: outerProjectId!, nestedId: nestedProjectId! },
+    );
+
+    await selectMockSessionFromPalette(page, "Outer project session");
+    await expect.poll(() => activeSessionId(page)).toBe("sess-overlap-outer");
+
+    const nestedProject = page.getByTestId(
+      "workspace-group-polsia/services/workers",
+    );
+    await nestedProject
+      .getByTestId("workflow-queue")
+      .locator(".workflow-item-trigger")
+      .click();
+
+    await expect.poll(() => activeSessionId(page)).toBe("sess-overlap-nested");
+    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+    await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
+    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
+  });
+
+  test("renders E2 structured state and applies attributed deltas without resetting the viewport", async ({
     page,
   }) => {
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await openProjectMap(page, "dashboard-keeper");
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          (
-            (
-              window as unknown as {
-                __HARNESS_TEST__?: { trackEvents?: Array<{ event: string }> };
-              }
-            ).__HARNESS_TEST__?.trackEvents ?? []
-          ).map((event) => event.event),
-        ),
-      )
-      .toContain("agent_map.proposal_visible");
 
     const nodes = page.locator("[data-proposal-state='proposed']");
     await expect(nodes).toHaveCount(6);
@@ -129,7 +304,7 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     const inspector = page.getByTestId("agent-map-inspector");
     await expect(inspector).toContainText("Purpose");
     await expect(inspector).toContainText("Contracts");
-    await expect(inspector).toContainText("Map planner");
+    await expect(inspector).toContainText("Project agent");
     await page.getByRole("button", { name: "Close node details" }).click();
     await expect(inspector).toHaveCount(0);
     await expect(researchReport).toBeFocused();
@@ -150,12 +325,12 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
       .getAttribute("data-project-id");
     expect(projectId).toBeTruthy();
     await page.evaluate((activeProjectId) => {
-      const test = (
+      const publish = (
         window as unknown as {
           __HARNESS_TEST__?: { publish?: (message: unknown) => void };
         }
-      ).__HARNESS_TEST__;
-      test?.publish?.({
+      ).__HARNESS_TEST__?.publish;
+      publish?.({
         type: "agent-map.proposal.changed",
         delta: {
           schemaVersion: 1,
@@ -171,6 +346,8 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
               changes: { name: "Campaign Marketing" },
             },
           ],
+          // E2's persisted attribution codec remains unchanged in SAP-3148;
+          // the UI deliberately projects it as one neutral project agent.
           actor: {
             userId: "user_mock",
             sessionId: "builder_mock",
@@ -194,59 +371,18 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await page.getByText("Campaign Marketing", { exact: true }).click();
     await expect(
       page.getByTestId("agent-map-latest-attribution"),
-    ).toContainText("Agent builder · unplanned");
-    await expect(page.locator("[data-proposal-state='proposed']")).toHaveCount(
-      6,
-    );
-
-    await page.evaluate((activeProjectId) => {
-      const test = (
-        window as unknown as {
-          __HARNESS_TEST__?: { publish?: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__;
-      test?.publish?.({
-        type: "agent-map.proposal.changed",
-        delta: {
-          schemaVersion: 1,
-          projectId: activeProjectId,
-          proposalId: "proposal_00000000-0000-7000-8000-000000000101",
-          fromVersion: 2,
-          version: 3,
-          operationIds: ["operation_00000000-0000-7000-8000-000000000402"],
-          operations: [
-            {
-              kind: "update-node",
-              nodeId: "node_00000000-0000-7000-8000-000000000101",
-              changes: { name: "Equity Research" },
-            },
-          ],
-          actor: {
-            userId: "user_mock",
-            sessionId: "planner_mock",
-            role: "map-planner",
-            assignment: null,
-          },
-          acceptedAt: new Date().toISOString(),
-        },
-      });
-    }, projectId);
-    await expect(
-      page.getByText("Equity Research", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId("agent-map-latest-attribution"),
-    ).toContainText("Agent builder · unplanned");
+    ).toContainText("Project agent");
+    await expect(nodes).toHaveCount(6);
   });
 
-  test("expands the Agent Map in place and unwinds its inspector before full view", async ({
+  test("expands the production Agent Map and unwinds its inspector before full view", async ({
     page,
   }) => {
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
+    await openProjectMap(page, "dashboard-keeper");
 
     const map = page.getByTestId("agent-map-live");
     await expect(map).toBeVisible();
@@ -283,312 +419,226 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(frame).not.toHaveClass(/is-expanded/);
     await expect(page.getByTestId("resize-handle-rail")).toBeVisible();
     await expect(page.getByTestId("resize-handle-canvas")).toBeVisible();
-
-    await expand.click();
-    await page.getByTestId("canvas-expand-exit").click();
-    await expect(frame).not.toHaveClass(/is-expanded/);
   });
 
-  test("a generating greeting still renders the raw planner CLI", async ({
+  test("Plan Agents and every sibling are ordinary exact-session tabs", async ({
     page,
   }) => {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockGreeting=generating",
+      "/?seed=0&mockStudioProjects=present&mockPlanAgentsSession=1",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
+    await openProjectMap(page, "acme-app");
 
-    const terminal = page.locator(".harness-terminal");
-    await expect(terminal).toBeVisible();
-    await expect(terminal.locator(".xterm")).toBeVisible();
-  });
+    const planAgents = page.getByTestId("session-tab-main-sess-boot");
+    const sibling = page.getByTestId("session-tab-main-sess-leasing-2");
+    await expect(planAgents).toHaveText(/Plan Agents/);
+    await expect(page.getByText("Plan Agents", { exact: true })).toHaveCount(1);
+    await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(1);
+    await expect(page.getByTestId("session-tab-sess-leasing-2")).toHaveCount(1);
+    await expect(page.getByTestId("session-tab-sess-bg")).toHaveCount(0);
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
 
-  test("return resumes the same planner and plus creates a fresh planner tab", async ({
-    page,
-  }) => {
-    await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    const first = await activeSessionId(page);
-    expect(first).toBeTruthy();
+    const mapTabIds = await page
+      .locator(".session-tabs-list > .session-tab")
+      .evaluateAll((tabs) =>
+        tabs.map((tab) => tab.getAttribute("data-testid")).filter(Boolean),
+      );
 
-    await page
-      .getByTestId("workflow-dashboard-keeper")
-      .locator("button")
-      .click();
-    // Moving down from the project map to an agent changes only the right-hand
-    // subject. The coding-agent CLI stays mounted in the centre and the
-    // selected agent's canvas/step graph becomes available beside it.
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    // A repeated status projection for the same durable session replaces its
+    // row; it cannot manufacture a second user-visible tab.
+    await page.evaluate(() => {
+      const publish = (
+        window as unknown as {
+          __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+        }
+      ).__HARNESS_TEST__?.publish;
+      publish?.({
+        type: "session.status",
+        session: {
+          id: "sess-boot",
+          agentSessionId: null,
+          boundWorkflowPath: "/Users/demo/acme-app/leasing",
+          harness: "claude-code",
+          cwd: "/Users/demo/acme-app",
+          title: "Plan Agents",
+          status: "running",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastActiveAt: new Date().toISOString(),
+          ready: true,
+          agentMapIdentity: {
+            projectId: "project_00000000-0000-4000-8000-000000000001",
+            userId: "user_mock",
+            sessionId: "sess-boot",
+          },
+        },
+      });
+    });
+    await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(1);
+
+    await planAgents.click();
+    await expect.poll(() => activeSessionId(page)).toBe("sess-boot");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: {
+                  trackEvents?: Array<{
+                    event: string;
+                    data?: { navigation_kind?: string };
+                    harnessSessionId?: string;
+                  }>;
+                };
+              }
+            ).__HARNESS_TEST__?.trackEvents ?? []
+          ).some(
+            (event) =>
+              event.event === "session.switched" &&
+              event.data?.navigation_kind === "session_tab" &&
+              event.harnessSessionId === "sess-boot",
+          ),
+        ),
+      )
+      .toBe(true);
+    await expect(page.getByTestId("agent-view")).toBeVisible();
+    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
     await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
     await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
     await expect(page.locator(".canvas-iframe")).toBeVisible();
-    await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("right-tab-canvas")).toContainText(
-      "Agent Map",
-    );
-    await expect(page.getByTestId("right-tab-steps")).toBeDisabled();
-    expect(await activeSessionId(page)).toBe(first);
-
-    await page.getByTestId("session-tab-new").click();
-    await expect.poll(() => activeSessionId(page)).not.toBe(first);
-    const second = await activeSessionId(page);
-    await expect(
-      page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
-    ).toHaveCount(2);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-end-btn").click();
-    await page.getByTestId("end-session-confirm-btn").click();
-    expect(second).not.toBe(first);
-    await expect.poll(() => activeSessionId(page)).toBe(first);
-    await expect(
-      page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
-    ).toHaveCount(1);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-  });
-
-  test("an explicitly selected planner tab wins over project resume ordering", async ({
-    page,
-  }) => {
-    await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    const first = await activeSessionId(page);
-    expect(first).toBeTruthy();
-
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-rename").click();
-    const rename = page.getByTestId("session-rename-input");
-    await rename.fill("Planner A");
-    await rename.press("Enter");
-
-    await page.getByTestId("session-tab-new").click();
-    await expect.poll(() => activeSessionId(page)).not.toBe(first);
-    const callsBeforeExplicitSelection =
-      await openPlannerSessionCallCount(page);
-
-    await page
-      .getByTestId("workflow-dashboard-keeper")
-      .locator("button")
-      .click();
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
-    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
-
-    await page.getByTestId("palette-trigger").click();
-    await page.getByTestId("command-palette-input").fill("Planner A");
-    await page
-      .getByTestId("command-palette-list")
-      .getByText("Planner A", { exact: true })
-      .click();
-
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    expect(await activeSessionId(page)).toBe(first);
-    await expect(page.getByTestId("planner-loading")).toHaveCount(0);
-    expect(await openPlannerSessionCallCount(page)).toBe(
-      callsBeforeExplicitSelection,
-    );
-  });
-
-  test("planner session chrome retains rename/end and omits path/editor actions", async ({
-    page,
-  }) => {
-    await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    expect(
+      await page
+        .locator(".session-tabs-list > .session-tab")
+        .evaluateAll((tabs) =>
+          tabs.map((tab) => tab.getAttribute("data-testid")).filter(Boolean),
+        ),
+    ).toEqual(mapTabIds);
 
     await page.getByTestId("session-menu").click();
     const menu = page.getByTestId("session-menu-popover");
+    await expect(menu.getByText("Copy path", { exact: true })).toBeVisible();
     await expect(menu.getByTestId("session-rename")).toBeVisible();
+    await expect(menu.getByTestId("session-open-editor")).toBeVisible();
     await expect(menu.getByTestId("session-end-btn")).toBeVisible();
-    await expect(menu.getByText("Copy path", { exact: true })).toHaveCount(0);
-    await expect(menu.getByTestId("session-open-editor")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await sibling.click();
+    await expect.poll(() => activeSessionId(page)).toBe("sess-leasing-2");
+    await expect(page.getByTestId("agent-view")).toBeVisible();
+    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+
+    await openProjectMap(page, "acme-app");
+    await expect.poll(() => activeSessionId(page)).toBe("sess-leasing-2");
+    await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(1);
+    await expect(page.getByTestId("session-tab-sess-leasing-2")).toHaveCount(1);
   });
 
-  test("ending the planner exposes an immediate fresh-session path", async ({
-    page,
-  }) => {
-    await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    const ended = await activeSessionId(page);
-
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-end-btn").click();
-    await expect(page.getByTestId("end-session-confirm")).toContainText(
-      "stops the planning conversation",
-    );
-    await expect(page.getByTestId("end-session-confirm")).toContainText(
-      "fresh planning session from Plan Agents",
-    );
-    await expect(page.getByTestId("end-session-confirm")).not.toContainText(
-      "live terminal",
-    );
-    await page.getByTestId("end-session-confirm-btn").click();
-
-    await expect(page.getByTestId("planner-session-ended")).toBeVisible();
-    const startFresh = page.getByTestId("session-tab-new");
-    await expect(startFresh).toHaveAttribute(
-      "aria-label",
-      "New planning session",
-    );
-    await startFresh.click();
-
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect.poll(() => activeSessionId(page)).not.toBe(ended);
-  });
-
-  test("a failed greeting still leaves the raw planner CLI visible", async ({
+  test("an exited active session never mounts dead-session chrome over the map", async ({
     page,
   }) => {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockGreeting=failed",
+      "/?seed=0&mockStudioProjects=present&mockPlanAgentsSession=1",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
+    await openProjectMap(page, "acme-app");
 
-    const terminal = page.locator(".harness-terminal");
-    await expect(terminal).toBeVisible();
-    await expect(terminal.locator(".xterm")).toBeVisible();
+    await page.evaluate(() => {
+      const publish = (
+        window as unknown as {
+          __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+        }
+      ).__HARNESS_TEST__?.publish;
+      publish?.({
+        type: "session.status",
+        session: {
+          id: "sess-boot",
+          agentSessionId: null,
+          boundWorkflowPath: "/Users/demo/acme-app/leasing",
+          harness: "claude-code",
+          cwd: "/Users/demo/acme-app",
+          title: "Plan Agents",
+          status: "exited",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastActiveAt: new Date().toISOString(),
+          exitCode: 0,
+          ready: false,
+          agentMapIdentity: {
+            projectId: "project_00000000-0000-4000-8000-000000000001",
+            userId: "user_mock",
+            sessionId: "sess-boot",
+          },
+        },
+      });
+    });
+
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+    await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(0);
+    await expect(page.getByTestId("session-tab-sess-leasing-2")).toHaveCount(1);
+    await expect(page.getByTestId("session-tab-new")).toHaveCount(1);
+    await expect(page.getByTestId("planner-session-ended")).toHaveCount(0);
+    await expect(
+      page.getByText("New planning session", { exact: true }),
+    ).toHaveCount(0);
+
+    await page.getByTestId("session-tab-main-sess-leasing-2").click();
+    await expect.poll(() => activeSessionId(page)).toBe("sess-leasing-2");
+    await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
+    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+    await expect(page.getByTestId("agent-view")).toBeVisible();
   });
 
-  test("workspace and planner failures stay local, while unauthorized is whole-workspace", async ({
+  test("map failures stay in the map pane and never replace the conversation", async ({
     page,
   }) => {
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapWorkspace=error",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
+    const before = await navigationEvidence(page);
+    await openProjectMap(page, "acme-app");
     await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("agent-map-load-error")).toBeVisible();
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          (
-            (
-              window as unknown as {
-                __HARNESS_TEST__?: {
-                  trackEvents?: Array<{
-                    event: string;
-                    data?: Record<string, unknown>;
-                  }>;
-                };
-              }
-            ).__HARNESS_TEST__?.trackEvents ?? []
-          ).some(
-            (event) =>
-              event.event === "agent_map.workspace_load_failed" &&
-              event.data?.pane === "map",
-          ),
-        ),
-      )
-      .toBe(true);
-
-    await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockPlanner=error",
-    );
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
-    await expect(page.getByTestId("planner-load-error")).toBeVisible();
-    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          (
-            (
-              window as unknown as {
-                __HARNESS_TEST__?: {
-                  trackEvents?: Array<{
-                    event: string;
-                    data?: Record<string, unknown>;
-                  }>;
-                };
-              }
-            ).__HARNESS_TEST__?.trackEvents ?? []
-          ).some(
-            (event) =>
-              event.event === "agent_map.workspace_load_failed" &&
-              event.data?.pane === "planner",
-          ),
-        ),
-      )
-      .toBe(true);
+    expect(await navigationEvidence(page)).toEqual(before);
 
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapWorkspace=unauthorized",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
-    await expect(page.getByTestId("agent-map-unavailable")).toBeVisible();
-    await expect(page.locator(".right-pane")).toBeHidden();
-    await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
+    await openProjectMap(page, "acme-app");
+    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("agent-map-load-error")).toBeVisible();
   });
 });
 
-test.describe("SAP-3058 mobile Agent Map", () => {
+test.describe("SAP-3148 mobile Agent Map", () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test("the raw CLI stays primary and the explicit sheet restores focus on close", async ({
+  test("the project name opens the map sheet without replacing the CLI", async ({
     page,
   }) => {
     await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
     await expect(page.getByTestId("rail-expand")).toBeVisible();
+    const before = await navigationEvidence(page);
     await page.getByTestId("rail-expand").click();
-    await openDashboardMap(page);
+    // Selecting a mobile rail destination closes the drawer, so its pressed
+    // state is intentionally no longer mounted after this click.
+    await page
+      .getByTestId("workspace-group-acme-app")
+      .getByTestId("project-select-acme-app")
+      .click();
 
     await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.locator(".right-pane")).toBeHidden();
-    await expect(page.getByTestId("session-menu")).toBeVisible();
-    const openMap = page.getByTestId("right-expand");
-    await expect(openMap).toHaveText("Agent Map");
-
-    await openMap.click();
     await expect(page.locator(".right-pane")).toBeVisible();
     await expect(page.getByTestId("agent-map-empty")).toBeVisible();
     await expect(page.getByTestId("right-sheet-scrim")).toBeVisible();
-
-    await page.keyboard.press("Control+K");
-    await expect(page.getByTestId("command-palette-input")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
-    await expect(page.locator(".right-pane")).toBeVisible();
+    expect(await navigationEvidence(page)).toEqual(before);
 
     await page.getByTestId("right-collapse").click();
     await expect(page.locator(".right-pane")).toBeHidden();
     await expect(page.getByTestId("right-expand")).toBeFocused();
-    await page.screenshot({
-      path: "web/e2e/screenshots/agent-map-planning-mobile.png",
-      fullPage: true,
-    });
-  });
-
-  test("a failed preference restore cannot repeatedly close the map sheet", async ({
-    page,
-  }) => {
-    await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockStudioPreference=error",
-    );
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.locator(".right-pane")).toBeHidden();
-
-    // The mock preference read has one 180 ms round trip. Let its one-shot
-    // failure settle before the user explicitly opens the sheet; the assertion
-    // below then guards against later session updates closing it again.
-    await page.waitForTimeout(250);
-    const first = await activeSessionId(page);
-    const newSession = page.getByTestId("session-tab-new");
-    await expect(newSession).toBeEnabled();
-    await newSession.click();
-    await expect.poll(() => activeSessionId(page)).not.toBe(first);
-
-    // Open the sheet while the new planner is still launching. Its automatic
-    // ready/status event arrives later and must not replay the failed preference
-    // restore or collapse the user-opened Agent Map.
-    await page.getByTestId("right-expand").click();
-    await expect(page.locator(".right-pane")).toBeVisible();
-    await expect(
-      page.locator(".session-dot[data-status='running']"),
-    ).toBeVisible();
-    await expect(page.locator(".right-pane")).toBeVisible();
+    await expect(page.getByTestId("right-expand")).toHaveText("Agent Map");
   });
 });

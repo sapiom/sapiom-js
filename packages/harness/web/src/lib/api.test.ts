@@ -505,18 +505,15 @@ describe("RealApi planner mutations", () => {
       location: { search: "" },
     });
     const accepted = {
-      identity: {
-        projectId: "project-1",
-        sessionId: "planner-1",
-        userId: "user-1",
-        role: "map-planner" as const,
-      },
-      greeting: { status: "skipped" as const, reason: "user-proceeded" },
+      projectId: "project-1",
+      targetSessionId: "planner-1",
+      userId: "user-1",
+      bootstrap: { status: "skipped" as const, reason: "user-proceeded" },
       queuedInputIds: ["input-1"],
     };
     const retrying = {
       ...accepted,
-      greeting: {
+      bootstrap: {
         status: "generating" as const,
         attemptId: "attempt-2",
       },

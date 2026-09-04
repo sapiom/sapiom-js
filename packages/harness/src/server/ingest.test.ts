@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { createEventStore } from "../core/collector/store.js";
-import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import { ProjectBootstrapCoordinator } from "../core/planner-greeting.js";
 import { createSessionRecordReader } from "../core/session-record.js";
 import type { SessionManager } from "../core/session-manager.js";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
@@ -124,7 +124,11 @@ describe("createIngestRouter", () => {
   });
 
   it("rejects requests without a valid bearer token", async () => {
-    const res = await postIngest(baseUrl, { hookEvent: "SessionStart" }, "wrong-token");
+    const res = await postIngest(
+      baseUrl,
+      { hookEvent: "SessionStart" },
+      "wrong-token",
+    );
     expect(res.status).toBe(401);
     expect(stored).toHaveLength(0);
   });
@@ -388,7 +392,9 @@ describe("createIngestRouter", () => {
     expect(decorated).toEqual([]);
 
     identityCommit.reject(new Error("sessions registry unavailable"));
-    await expect(startProcessing).rejects.toThrow("sessions registry unavailable");
+    await expect(startProcessing).rejects.toThrow(
+      "sessions registry unavailable",
+    );
     await followerProcessing;
 
     expect(context.agentSessionId).toBe("agent-prior");
@@ -477,7 +483,9 @@ describe("createIngestRouter", () => {
 
   it("ignores a SessionStart whose vendor identity conflicts with the pinned session", async () => {
     const ready: string[] = [];
-    start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
+    start({
+      onSessionReady: (harnessSessionId) => ready.push(harnessSessionId),
+    });
     sessions.get("session-1")!.agentSessionId = "agent-pinned";
 
     const res = await postIngest(baseUrl, {
@@ -524,7 +532,9 @@ describe("createIngestRouter", () => {
 
   it("calls onSessionReady on session.start — the readiness signal SessionManager gates programmatic input on", async () => {
     const ready: string[] = [];
-    start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
+    start({
+      onSessionReady: (harnessSessionId) => ready.push(harnessSessionId),
+    });
 
     const res = await postIngest(baseUrl, {
       hookEvent: "SessionStart",
@@ -538,7 +548,9 @@ describe("createIngestRouter", () => {
 
   it("does not call onSessionReady for events other than SessionStart", async () => {
     const ready: string[] = [];
-    start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
+    start({
+      onSessionReady: (harnessSessionId) => ready.push(harnessSessionId),
+    });
 
     await postIngest(baseUrl, {
       hookEvent: "UserPromptSubmit",
@@ -646,22 +658,21 @@ describe("createIngestRouter", () => {
     expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");
   });
 
-  it("bounds hostile planner source, model, and usage before batching", async () => {
-    const planningSession = {
+  it("bounds hostile bootstrap source, model, and usage before batching", async () => {
+    const bootstrapSession = {
       agentSessionId: "agent-1",
-      planning: {
-        identity: {
-          projectId: "project-1",
-          sessionId: "session-1",
-          userId: "user-1",
-          role: "map-planner",
-        },
+      projectBootstrap: {
+        projectId: "project-1",
+        userId: "user-1",
+        targetSessionId: "session-1",
+        bootstrap: { status: "generating", attemptId: "attempt-1" },
+        queuedInputIds: [],
       },
     } as unknown as HarnessSession;
-    const privacy = new PlannerGreetingCoordinator({
+    const privacy = new ProjectBootstrapCoordinator({
       root: "/unused",
       sessionManager: {
-        get: () => planningSession,
+        get: () => bootstrapSession,
       } as unknown as SessionManager,
     });
     start({
@@ -708,10 +719,10 @@ describe("createIngestRouter", () => {
 
     await vi.waitFor(() => expect(enqueued).toHaveLength(3));
     expect(enqueued.map((event) => event.payload)).toEqual([
-      { planner: true, source: "unknown" },
-      { planner: true, origin: "user" },
+      { projectBootstrap: true, source: "unknown" },
+      { projectBootstrap: true, origin: "user" },
       {
-        planner: true,
+        projectBootstrap: true,
         hasAssistantText: true,
         modelReported: true,
         usage: { inputTokens: 1_000_000_000_000, outputTokens: null },

@@ -78,7 +78,9 @@ function readUsage(value: unknown): SessionRecordTurn["usage"] {
  * same millisecond. See the module header for why `seq` alone is wrong.
  * Array.prototype.sort is stable, so events matching on both keep file order.
  */
-export function sortEventsForFold(events: readonly AnalyticsEvent[]): AnalyticsEvent[] {
+export function sortEventsForFold(
+  events: readonly AnalyticsEvent[],
+): AnalyticsEvent[] {
   return [...events].sort((a, b) => {
     if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
     const seqA = typeof a.seq === "number" ? a.seq : 0;
@@ -145,10 +147,13 @@ export function foldSessionRecord(
   }
 
   for (const event of ordered) {
-    if (!seenSessionIds.includes(event.harnessSessionId)) seenSessionIds.push(event.harnessSessionId);
+    if (!seenSessionIds.includes(event.harnessSessionId))
+      seenSessionIds.push(event.harnessSessionId);
     if (startedAt === null) startedAt = event.ts;
-    if (harness === null && typeof event.harness === "string") harness = event.harness;
-    if (agentSessionId === null) agentSessionId = stringOrNull(event.agentSessionId);
+    if (harness === null && typeof event.harness === "string")
+      harness = event.harness;
+    if (agentSessionId === null)
+      agentSessionId = stringOrNull(event.agentSessionId);
     const payload = event.payload ?? {};
 
     switch (event.type) {
@@ -162,17 +167,21 @@ export function foldSessionRecord(
         // Keep it, marked incomplete — dropping it would lose real tool calls.
         close(null);
         open = {
-          // Planner greeting control is retained locally for diagnostics but
+          // Project bootstrap control is retained locally for diagnostics but
           // projected as an assistant-initiated turn: its private instruction
           // must never appear as a user message or inflate the human turn count.
           prompt:
+            payload.projectBootstrapOrigin === "infrastructure" ||
             payload.plannerOrigin === "infrastructure"
               ? null
               : typeof payload.prompt === "string"
                 ? payload.prompt
                 : "",
           promptAt:
-            payload.plannerOrigin === "infrastructure" ? null : event.ts,
+            payload.projectBootstrapOrigin === "infrastructure" ||
+            payload.plannerOrigin === "infrastructure"
+              ? null
+              : event.ts,
           toolCalls: [],
         };
         break;
@@ -187,7 +196,9 @@ export function foldSessionRecord(
           name: stringOrNull(payload.toolName),
           input: stringOrNull(payload.toolInput),
           responseSummary,
-          responseTruncated: responseSummary !== null && PAYLOAD_TRUNCATION_MARKER.test(responseSummary),
+          responseTruncated:
+            responseSummary !== null &&
+            PAYLOAD_TRUNCATION_MARKER.test(responseSummary),
           at: event.ts,
         });
         break;
@@ -216,7 +227,9 @@ export function foldSessionRecord(
 
   close(null);
 
-  const merged = options.mergedSessionIds ? [...options.mergedSessionIds] : seenSessionIds;
+  const merged = options.mergedSessionIds
+    ? [...options.mergedSessionIds]
+    : seenSessionIds;
   return {
     harnessSessionId: options.harnessSessionId ?? merged[0] ?? "",
     mergedSessionIds: merged,
@@ -247,15 +260,27 @@ export function foldSessionRecord(
  * recorded). Patching individual codes after the fact got that wrong and
  * under-reported a real gap.
  */
-function computeLimitations(turns: readonly SessionRecordTurn[]): SessionRecordLimitation[] {
+function computeLimitations(
+  turns: readonly SessionRecordTurn[],
+): SessionRecordLimitation[] {
   const limitations: SessionRecordLimitation[] = [];
-  if (turns.some((turn) => turn.toolCalls.some((call) => call.responseTruncated))) {
+  if (
+    turns.some((turn) => turn.toolCalls.some((call) => call.responseTruncated))
+  ) {
     limitations.push("truncated-tool-output");
   }
-  if (turns.some((turn) => turn.toolCalls.length > 0 && turn.assistantText !== null)) {
+  if (
+    turns.some(
+      (turn) => turn.toolCalls.length > 0 && turn.assistantText !== null,
+    )
+  ) {
     limitations.push("assistant-narration-gap");
   }
-  if (turns.some((turn) => turn.completedAt !== null && turn.assistantText === null)) {
+  if (
+    turns.some(
+      (turn) => turn.completedAt !== null && turn.assistantText === null,
+    )
+  ) {
     limitations.push("missing-assistant-text");
   }
   if (turns.length > 0 && turns[turns.length - 1].incomplete) {
@@ -332,14 +357,16 @@ export interface SessionRecordReader {
 function resolveSessionIds(index: EventIndex, id: string): string[] {
   const ids: string[] = [];
   const add = (candidate: string): void => {
-    if (!ids.includes(candidate) && index.bySession.has(candidate)) ids.push(candidate);
+    if (!ids.includes(candidate) && index.bySession.has(candidate))
+      ids.push(candidate);
   };
 
   const direct = index.bySession.get(id);
   if (direct) {
     add(id);
     for (const agentSessionId of direct.agentSessionIds) {
-      for (const sibling of index.byAgentSession.get(agentSessionId) ?? []) add(sibling);
+      for (const sibling of index.byAgentSession.get(agentSessionId) ?? [])
+        add(sibling);
     }
   } else {
     // Not a harnessSessionId we know — try it as an agent session id.
@@ -379,7 +406,10 @@ function resolveSessionIds(index: EventIndex, id: string): string[] {
  */
 export function createSessionRecordReader(
   store: EventReader,
-  options: { enrichFinalTurn?: FinalTurnEnricher; archive?: ArchivedRecordSource } = {},
+  options: {
+    enrichFinalTurn?: FinalTurnEnricher;
+    archive?: ArchivedRecordSource;
+  } = {},
 ): SessionRecordReader {
   const archive = options.archive;
 
@@ -412,19 +442,26 @@ export function createSessionRecordReader(
      * reach that state.
      */
     async read(id: string): Promise<SessionRecord | null> {
-      const archived = archive ? await archive.read(id).catch(() => null) : null;
+      const archived = archive
+        ? await archive.read(id).catch(() => null)
+        : null;
       if (!archived) return reader.readFromEvents(id);
 
       const index = await store.index();
       const sessionIds = resolveSessionIds(index, id);
-      const entries = sessionIds.map((sessionId) => index.bySession.get(sessionId)).filter(isPresent);
+      const entries = sessionIds
+        .map((sessionId) => index.bySession.get(sessionId))
+        .filter(isPresent);
       const firstTs = earliest(entries.map((entry) => entry.firstTs));
       const lastTs = latest(entries.map((entry) => entry.lastTs));
 
       const logHoldsTheBeginning =
-        firstTs !== null && (archived.startedAt === null || firstTs <= archived.startedAt);
+        firstTs !== null &&
+        (archived.startedAt === null || firstTs <= archived.startedAt);
       const logHasNewerEvents =
-        lastTs !== null && archived.archivedAt !== null && lastTs > archived.archivedAt;
+        lastTs !== null &&
+        archived.archivedAt !== null &&
+        lastTs > archived.archivedAt;
       if (!logHoldsTheBeginning && !logHasNewerEvents) return archived;
       return (await reader.readFromEvents(id)) ?? archived;
     },
@@ -435,7 +472,8 @@ export function createSessionRecordReader(
       if (sessionIds.length === 0) return null;
 
       const events: AnalyticsEvent[] = [];
-      for await (const event of store.read({ harnessSessionId: sessionIds })) events.push(event);
+      for await (const event of store.read({ harnessSessionId: sessionIds }))
+        events.push(event);
       if (events.length === 0) return null;
 
       const record = foldSessionRecord(events, {
@@ -452,8 +490,15 @@ export function createSessionRecordReader(
       // here would be a fabrication dressed as an enhancement. Nothing our own
       // events recorded is ever overwritten.
       if (!final || final.completedAt === null) return record;
-      if (final.assistantText !== null && final.model !== null && final.usage !== null) return record;
-      const enrichment = await options.enrichFinalTurn(record).catch(() => null);
+      if (
+        final.assistantText !== null &&
+        final.model !== null &&
+        final.usage !== null
+      )
+        return record;
+      const enrichment = await options
+        .enrichFinalTurn(record)
+        .catch(() => null);
       if (!enrichment) return record;
       const enriched: SessionRecordTurn = {
         ...final,
@@ -523,7 +568,9 @@ export function createSessionRecordReader(
         primaries.set(
           primary,
           latest(
-            resolveSessionIds(index, primary).map((id) => index.bySession.get(id)?.lastTs ?? null),
+            resolveSessionIds(index, primary).map(
+              (id) => index.bySession.get(id)?.lastTs ?? null,
+            ),
           ),
         );
       }
@@ -585,7 +632,9 @@ export function createClaudeTranscriptEnricher(
     // returns the resolved candidate first and the raw one as a fallback, so
     // this tries both rather than betting on either.
     for (const projectDir of await projectDirsFor(homeDir, record.cwd)) {
-      const turn = await readLastAssistantTurn(path.join(projectDir, `${record.agentSessionId}.jsonl`));
+      const turn = await readLastAssistantTurn(
+        path.join(projectDir, `${record.agentSessionId}.jsonl`),
+      );
       if (turn) return turn;
     }
     return null;

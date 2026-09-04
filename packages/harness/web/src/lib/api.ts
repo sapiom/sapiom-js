@@ -52,6 +52,7 @@ import type {
   PlannerSessionMetadataResponse,
   PlannerSessionRequest,
   PlannerSessionResponse,
+  ProjectBootstrapMetadata,
   PutStudioCurrentWorkspaceRequest,
   StudioCurrentWorkspaceResponse,
   StudioProjectId,
@@ -383,15 +384,13 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse>;
-  /** Compatibility surface for coordinator-driven clients. The Studio renders
-   * the planner's raw CLI and does not project this protocol into a second
-   * transcript/composer UI. */
+  /** @deprecated Rolling alias into ordinary project-session input. */
   sendPlannerMessage(
     projectId: StudioProjectId,
     sessionId: string,
     request: PlannerMessageRequest,
   ): Promise<PlannerSessionMetadataResponse>;
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap. */
   retryPlannerGreeting(
     projectId: StudioProjectId,
     sessionId: string,
@@ -2262,6 +2261,60 @@ export class MockApi implements HarnessApi {
     }));
   }
 
+  /** Mirror the server's neutral project principal in opt-in Studio fixtures. */
+  private studioSession(
+    session: HarnessSession,
+    projects: readonly StudioProjectSummary[] | undefined,
+  ): HarnessSession {
+    if (!projects) return session;
+    const projectIds = new Set(projects.map((project) => project.projectId));
+    const matches = this.workspaceScopes()
+      .filter(
+        (scope) =>
+          scope.projectId &&
+          projectIds.has(scope.projectId) &&
+          isWithinDir(scope.cwd, session.cwd),
+      )
+      .sort(
+        (left, right) =>
+          right.cwd.length - left.cwd.length ||
+          left.cwd.localeCompare(right.cwd),
+      );
+    const nearestDepth = matches[0]?.cwd.length;
+    const nearestProjectIds = new Set(
+      matches
+        .filter((scope) => scope.cwd.length === nearestDepth)
+        .map((scope) => scope.projectId),
+    );
+    const projectId =
+      nearestProjectIds.size === 1 ? matches[0]?.projectId : undefined;
+    if (!projectId || !projectIds.has(projectId)) return session;
+    const usePlanAgentsFixture =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get(
+        "mockPlanAgentsSession",
+      ) === "1" &&
+      session.id === "sess-boot";
+    const useRestoreBindingConflictFixture =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get(
+        "mockRestoreBindingConflict",
+      ) === "1" &&
+      session.id === "sess-boot";
+    return {
+      ...session,
+      ...(usePlanAgentsFixture ? { title: "Plan Agents" } : {}),
+      ...(useRestoreBindingConflictFixture
+        ? { boundWorkflowPath: "/Users/demo/polsia/services/workers" }
+        : {}),
+      agentMapIdentity: {
+        projectId,
+        userId: "user_mock",
+        sessionId: session.id,
+      },
+    };
+  }
+
   private studioWorkflows(): WorkflowInfo[] {
     const scopes = this.workspaceScopes();
     return this.workflows.map((workflow, index) => {
@@ -2353,7 +2406,9 @@ export class MockApi implements HarnessApi {
         ) === "off"
           ? false
           : true,
-      sessions: this.sessions,
+      sessions: this.sessions.map((session) =>
+        this.studioSession(session, studioProjects),
+      ),
       workflows: this.studioWorkflows(),
       workspaceScopes: this.workspaceScopes(),
       ...(studioProjects ? { studioProjects } : {}),
@@ -2541,23 +2596,23 @@ export class MockApi implements HarnessApi {
     if (failure === "error") {
       throw new ApiError(
         503,
-        "Planner service is unavailable",
-        "Planner service is unavailable",
+        "Project session service is unavailable",
+        "Project session service is unavailable",
       );
     }
     if (failure === "unauthorized") {
       throw new ApiError(
         403,
-        "Planner project is not available",
-        "Planner project is not available",
+        "Project session is not available",
+        "Project session is not available",
       );
     }
     const existing = this.sessions
       .filter(
         (session) =>
           session.status !== "exited" &&
-          session.planning?.identity.projectId === projectId &&
-          session.planning.identity.userId === "user_mock",
+          session.agentMapIdentity?.projectId === projectId &&
+          session.agentMapIdentity.userId === "user_mock",
       )
       .sort((left, right) =>
         right.lastActiveAt.localeCompare(left.lastActiveAt),
@@ -2584,14 +2639,16 @@ export class MockApi implements HarnessApi {
       typeof window === "undefined"
         ? null
         : new URLSearchParams(window.location.search).get("mockGreeting");
-    session.planning = {
-      identity: {
-        projectId,
-        sessionId: session.id,
-        userId: "user_mock",
-        role: "map-planner",
-      },
-      greeting:
+    session.agentMapIdentity = {
+      projectId,
+      sessionId: session.id,
+      userId: "user_mock",
+    };
+    session.projectBootstrap = {
+      projectId,
+      targetSessionId: session.id,
+      userId: "user_mock",
+      bootstrap:
         greetingFixture === "generating"
           ? { status: "generating", attemptId: "attempt_mock" }
           : greetingFixture === "failed"
@@ -2616,7 +2673,7 @@ export class MockApi implements HarnessApi {
       startedAt: now,
       endedAt: null,
       turns:
-        session.planning.greeting.status === "delivered"
+        session.projectBootstrap.bootstrap.status === "delivered"
           ? [
               {
                 index: 1,
@@ -2624,8 +2681,8 @@ export class MockApi implements HarnessApi {
                 promptAt: null,
                 toolCalls: [],
                 assistantText:
-                  "I’m your project planning agent. We’ll plan the agents, responsibilities, data flow, resources, and connectors together. What kind of agent architecture do you want to build?",
-                model: "mock-planner",
+                  "I inspected the available project context and kept the shared Agent Map honest. What would you like to build?",
+                model: "mock-project-agent",
                 usage: null,
                 completedAt: now,
                 incomplete: false,
@@ -2633,7 +2690,8 @@ export class MockApi implements HarnessApi {
             ]
           : [],
       turnCount: 0,
-      eventCount: session.planning.greeting.status === "delivered" ? 2 : 0,
+      eventCount:
+        session.projectBootstrap.bootstrap.status === "delivered" ? 2 : 0,
       reconstructed: true,
       archivedAt: null,
       limitations: [],
@@ -2649,25 +2707,37 @@ export class MockApi implements HarnessApi {
     const session = this.sessions.find(
       (candidate) => candidate.id === sessionId,
     );
-    if (session?.planning?.identity.projectId !== projectId) {
+    const identity = session?.agentMapIdentity;
+    if (
+      !session ||
+      identity?.projectId !== projectId ||
+      identity.sessionId !== sessionId ||
+      identity.userId !== "user_mock"
+    ) {
       throw new ApiError(
         403,
-        "Forbidden planner session",
-        "Forbidden planner session",
+        "Forbidden project session",
+        "Forbidden project session",
       );
     }
     const inputId = `input_mock_${Date.now()}`;
-    session.planning = {
-      ...session.planning,
-      greeting:
-        session.planning.greeting.status === "delivered" ||
-        session.planning.greeting.status === "skipped"
-          ? session.planning.greeting
-          : { status: "skipped", reason: "user-proceeded" },
-      queuedInputIds: [...session.planning.queuedInputIds, inputId],
-    };
+    const bootstrap = session.projectBootstrap;
+    const shouldQueue = Boolean(
+      bootstrap &&
+      bootstrap.bootstrap.status !== "delivered" &&
+      bootstrap.bootstrap.status !== "skipped",
+    );
+    if (bootstrap && shouldQueue) {
+      session.projectBootstrap = {
+        ...bootstrap,
+        bootstrap: { status: "skipped", reason: "user-proceeded" },
+        queuedInputIds: [...bootstrap.queuedInputIds, inputId],
+      };
+    }
     await this.injectInput(sessionId, { text: request.text });
-    const accepted = structuredClone(session.planning);
+    const accepted = session.projectBootstrap
+      ? structuredClone(session.projectBootstrap)
+      : null;
     const project = this.studioProjects()?.find(
       (candidate) => candidate.projectId === projectId,
     );
@@ -2681,7 +2751,7 @@ export class MockApi implements HarnessApi {
           (candidate) => candidate.id === sessionId,
         );
         const record = this.plannerSessionRecords.get(sessionId);
-        if (!current?.planning || !record) return;
+        if (!current || !record) return;
         const completedAt = new Date().toISOString();
         const turns = [
           ...record.turns,
@@ -2691,8 +2761,8 @@ export class MockApi implements HarnessApi {
             promptAt: completedAt,
             toolCalls: [],
             assistantText:
-              "Let’s start by clarifying the outcome, the actors involved, and the information they need to exchange.",
-            model: "mock-planner",
+              "I’ll keep the shared Agent Map current where this work changes project architecture, and proceed directly where the request is already build-ready.",
+            model: "mock-project-agent",
             usage: null,
             completedAt,
             incomplete: false,
@@ -2704,19 +2774,21 @@ export class MockApi implements HarnessApi {
           turnCount: record.turnCount + 1,
           eventCount: record.eventCount + 2,
         });
-        current.planning = {
-          ...current.planning,
-          queuedInputIds: current.planning.queuedInputIds.filter(
-            (candidate) => candidate !== inputId,
-          ),
-        };
+        if (shouldQueue && current.projectBootstrap) {
+          current.projectBootstrap = {
+            ...current.projectBootstrap,
+            queuedInputIds: current.projectBootstrap.queuedInputIds.filter(
+              (candidate) => candidate !== inputId,
+            ),
+          };
+        }
         void import("./events").then(({ publishMockBusMessage }) => {
           if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
             if (!project) return;
             const fixture = goldenAgentMapFixture(
               project,
               new Date().toISOString(),
-              accepted.identity.userId,
+              identity.userId,
               sessionId,
             );
             this.agentMapSnapshots.set(projectId, fixture.snapshot);
@@ -2744,11 +2816,17 @@ export class MockApi implements HarnessApi {
     const session = this.sessions.find(
       (candidate) => candidate.id === sessionId,
     );
-    if (session?.planning?.identity.projectId !== projectId) {
+    const identity = session?.agentMapIdentity;
+    if (
+      !session ||
+      identity?.projectId !== projectId ||
+      identity.sessionId !== sessionId ||
+      identity.userId !== "user_mock"
+    ) {
       throw new ApiError(
         403,
-        "Forbidden planner session",
-        "Forbidden planner session",
+        "Forbidden project session",
+        "Forbidden project session",
       );
     }
     const retryFailure =
@@ -2762,32 +2840,36 @@ export class MockApi implements HarnessApi {
         "Greeting retry is temporarily unavailable",
       );
     }
+    const metadata = session.projectBootstrap;
     if (
-      session.planning.greeting.status !== "failed" ||
-      !session.planning.greeting.retryable ||
-      session.planning.queuedInputIds.length > 0
+      !metadata ||
+      metadata.bootstrap.status !== "failed" ||
+      !metadata.bootstrap.retryable ||
+      metadata.queuedInputIds.length > 0
     ) {
       throw new ApiError(
         409,
-        "Greeting retry is not available",
-        "Greeting retry is not available",
+        "Project bootstrap retry is not available",
+        "Project bootstrap retry is not available",
       );
     }
-    session.planning = {
-      ...session.planning,
-      greeting: { status: "generating", attemptId: "attempt_mock_retry" },
+    session.projectBootstrap = {
+      ...metadata,
+      bootstrap: { status: "generating", attemptId: "attempt_mock_retry" },
     };
-    const retrying = structuredClone(session.planning);
+    const retrying: ProjectBootstrapMetadata = structuredClone(
+      session.projectBootstrap,
+    );
     setTimeout(() => {
       const current = this.sessions.find(
         (candidate) => candidate.id === sessionId,
       );
       const record = this.plannerSessionRecords.get(sessionId);
-      if (!current?.planning || !record) return;
+      if (!current?.projectBootstrap || !record) return;
       const completedAt = new Date().toISOString();
-      current.planning = {
-        ...current.planning,
-        greeting: {
+      current.projectBootstrap = {
+        ...current.projectBootstrap,
+        bootstrap: {
           status: "delivered",
           messageId: "message_mock_greeting_retry",
         },
@@ -2802,8 +2884,8 @@ export class MockApi implements HarnessApi {
             promptAt: null,
             toolCalls: [],
             assistantText:
-              "I’m your project planning agent. What kind of agent architecture do you want to build?",
-            model: "mock-planner",
+              "I inspected the available project context and kept the shared Agent Map honest. What would you like to build?",
+            model: "mock-project-agent",
             usage: null,
             completedAt,
             incomplete: false,
@@ -3020,7 +3102,16 @@ export class MockApi implements HarnessApi {
   }
 
   async createSession(req: CreateSessionRequest): Promise<HarnessSession> {
-    await delay(300);
+    const requestedDelay =
+      typeof window === "undefined"
+        ? null
+        : (window as unknown as { __MOCK_CREATE_SESSION_DELAY_MS__?: number })
+            .__MOCK_CREATE_SESSION_DELAY_MS__;
+    await delay(
+      typeof requestedDelay === "number" && requestedDelay >= 0
+        ? requestedDelay
+        : 300,
+    );
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __HARNESS_TEST__?: Record<string, unknown>;
@@ -3040,7 +3131,7 @@ export class MockApi implements HarnessApi {
         throw new Error("mock: couldn't create session");
       }
     }
-    const session: HarnessSession = {
+    let session: HarnessSession = {
       id: `sess-mock-${this.sessions.length + 1}`,
       agentSessionId: null,
       boundWorkflowPath: null,
@@ -3060,6 +3151,10 @@ export class MockApi implements HarnessApi {
       ready: false,
     };
     this.sessions = [...this.sessions, session];
+    session = this.studioSession(session, this.studioProjects());
+    this.sessions = this.sessions.map((candidate) =>
+      candidate.id === session.id ? session : candidate,
+    );
     // Mirror the real server: create answers "starting", and the event bus
     // promotes the session to running/ready moments later. Without this, a
     // mock-created session would stay unready forever and gate the action
@@ -3667,8 +3762,51 @@ export class MockApi implements HarnessApi {
     // reload can (and in the spec does) start before this delay resolves. A
     // write behind the delay would lose the dismiss to its own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
+    const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
     this.settings = { ...this.settings, ...patch };
+    // Opt-in parity fixture for the production project-open lifecycle: a newly
+    // durable project gets one ordinary first session titled Plan Agents. This
+    // is intentionally not routed through the mock create-session endpoint;
+    // the server owns it, so a project-name click still makes zero client
+    // session requests.
+    const autoPlanAgents =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockAutoPlanAgents") ===
+        "1";
+    const addedRoots = (patch.recentDirs ?? []).filter(
+      (root) => !previousRecentDirs.has(root),
+    );
+    if (autoPlanAgents && addedRoots.length > 0) {
+      const { publishMockBusMessage } = await import("./events");
+      for (const root of addedRoots) {
+        if (this.sessions.some((session) => samePath(session.cwd, root))) {
+          continue;
+        }
+        const projectId = this.studioProjectId(root);
+        const id = `sess-plan-agents-${this.sessions.length + 1}`;
+        const now = new Date().toISOString();
+        const session: HarnessSession = {
+          id,
+          agentSessionId: null,
+          boundWorkflowPath: null,
+          harness: "claude-code",
+          cwd: root,
+          title: "Plan Agents",
+          status: "running",
+          createdAt: now,
+          lastActiveAt: now,
+          ready: true,
+          agentMapIdentity: {
+            projectId,
+            userId: "user_mock",
+            sessionId: id,
+          },
+        };
+        this.sessions = [...this.sessions, session];
+        publishMockBusMessage({ type: "session.status", session });
+      }
+    }
     return this.settings;
   }
 

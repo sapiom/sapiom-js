@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
@@ -26,7 +26,9 @@ const clients: Client[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
-  await Promise.all(clients.splice(0).map((client) => client.close().catch(() => {})));
+  await Promise.all(
+    clients.splice(0).map((client) => client.close().catch(() => {})),
+  );
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
@@ -34,7 +36,7 @@ async function fixture(
   options: Partial<
     Pick<
       AgentMapMcpRouterOptions,
-      "createToolServer" | "createTransport" | "readSnapshotFor"
+      "createToolServer" | "createTransport" | "onEvent" | "readSnapshotFor"
     >
   > = {},
 ) {
@@ -70,23 +72,11 @@ async function connect(url: URL, token: string) {
 }
 
 describe("Agent Map Streamable HTTP MCP", () => {
-  it.each<PlanningSessionIdentity>([
-    { projectId, sessionId: "planner", userId: "user", role: "map-planner" },
-    {
-      projectId,
-      sessionId: "planned",
-      userId: "user",
-      role: "agent-builder",
-      assignment: { kind: "planned", agentId: "agent-1" },
-    },
-    {
-      projectId,
-      sessionId: "manual",
-      userId: "user",
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
-    },
-  ])("exposes the same strict tools to $role/$sessionId", async (identity) => {
+  it.each<ProjectAgentSession>([
+    { projectId, sessionId: "first", userId: "user" },
+    { projectId, sessionId: "created", userId: "user" },
+    { projectId, sessionId: "resumed", userId: "user" },
+  ])("exposes the same strict tools to $sessionId", async (identity) => {
     const { capabilities, url } = await fixture();
     const issued = capabilities.issue(identity);
     const client = await connect(url, issued.token);
@@ -96,9 +86,17 @@ describe("Agent Map Streamable HTTP MCP", () => {
       "agent_map_read",
       "agent_map_validate",
     ]);
-    expect(tools.tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
-    const validate = tools.tools.find(({ name }) => name === "agent_map_validate")!;
-    const propose = tools.tools.find(({ name }) => name === "agent_map_propose")!;
+    expect(
+      tools.tools.every(
+        (tool) => tool.inputSchema.additionalProperties === false,
+      ),
+    ).toBe(true);
+    const validate = tools.tools.find(
+      ({ name }) => name === "agent_map_validate",
+    )!;
+    const propose = tools.tools.find(
+      ({ name }) => name === "agent_map_propose",
+    )!;
     const operationItems = (
       validate.inputSchema as {
         properties?: {
@@ -128,12 +126,12 @@ describe("Agent Map Streamable HTTP MCP", () => {
   });
 
   it("reads, validates without mutation, proposes once, and rejects a rotated token", async () => {
-    const { capabilities, url } = await fixture();
-    const identity: PlanningSessionIdentity = {
+    const onEvent = vi.fn();
+    const { capabilities, url } = await fixture({ onEvent });
+    const identity: ProjectAgentSession = {
       projectId,
-      sessionId: "planner",
+      sessionId: "session-1",
       userId: "user",
-      role: "map-planner",
     };
     const first = capabilities.issue(identity);
     const client = await connect(url, first.token);
@@ -181,17 +179,36 @@ describe("Agent Map Streamable HTTP MCP", () => {
         },
       ],
     };
-    const validated = await client.callTool({ name: "agent_map_validate", arguments: request });
+    const validated = await client.callTool({
+      name: "agent_map_validate",
+      arguments: request,
+    });
     expect(validated.isError).not.toBe(true);
-    const before = await client.callTool({ name: "agent_map_read", arguments: {} });
+    const before = await client.callTool({
+      name: "agent_map_read",
+      arguments: {},
+    });
     expect(before.structuredContent).toMatchObject({ proposal: null });
-    const proposed = await client.callTool({ name: "agent_map_propose", arguments: request });
+    const proposed = await client.callTool({
+      name: "agent_map_propose",
+      arguments: request,
+    });
     expect(proposed.structuredContent).toMatchObject({ version: 1 });
-    const replayed = await client.callTool({ name: "agent_map_propose", arguments: request });
+    const replayed = await client.callTool({
+      name: "agent_map_propose",
+      arguments: request,
+    });
     expect(replayed.structuredContent).toEqual(proposed.structuredContent);
+    expect(onEvent).toHaveBeenCalled();
+    expect(JSON.stringify(onEvent.mock.calls)).not.toContain("role");
+    expect(JSON.stringify(onEvent.mock.calls)).not.toContain(
+      "Research sources",
+    );
 
     capabilities.rotate(identity);
-    await expect(client.callTool({ name: "agent_map_read", arguments: {} })).rejects.toThrow();
+    await expect(
+      client.callTool({ name: "agent_map_read", arguments: {} }),
+    ).rejects.toThrow();
   });
 
   it("returns a bounded terminal recovery when the capability project is unavailable", async () => {
@@ -204,7 +221,6 @@ describe("Agent Map Streamable HTTP MCP", () => {
       projectId,
       sessionId: "missing-project",
       userId: "user",
-      role: "map-planner",
     });
     const client = await connect(url, issued.token);
 
@@ -251,7 +267,6 @@ describe("Agent Map Streamable HTTP MCP", () => {
       projectId,
       sessionId: "failed-initialize",
       userId: "user",
-      role: "map-planner",
     });
 
     const response = await fetch(url, {

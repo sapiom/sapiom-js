@@ -31,11 +31,25 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
-import type { PlannerLifecycleEvent } from "../shared/agent-map.js";
+import type {
+  ProjectBootstrapLifecycleEvent,
+  ProjectAgentSession,
+  StudioProjectSummary,
+} from "../shared/agent-map.js";
+import {
+  preferredProjectRoot,
+  projectRoots,
+  projectSessionRoot,
+} from "../shared/project-roots.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
+  AdapterNotFoundError,
+  ExternalHarnessError,
+  ProjectBootstrapClaimUnavailableError,
+  ProjectSessionScopeUnavailableError,
   SessionManager,
+  SessionManagerClosingError,
   type LaunchOptsBuilder,
 } from "../core/session-manager.js";
 import { TaskManager } from "../core/task-manager.js";
@@ -98,7 +112,7 @@ import {
   sweepGeneratedDirs,
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
-import { AGENT_MAP_PLANNER_SYSTEM_PROMPT } from "../profiles/agent-map-planner.js";
+import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -162,7 +176,11 @@ import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
 } from "../core/agent-map-capability-registry.js";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import {
+  StudioProjectCatalog,
+  type ReconciledStudioProjects,
+} from "../core/studio-project-catalog.js";
+import { ProjectBootstrapOutbox } from "../core/project-bootstrap-outbox.js";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouter,
@@ -170,11 +188,15 @@ import {
 import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
-  isPlannerDispatchAuthorized,
-  localPlanningPrincipal,
-  PlanningSessionService,
+  isProjectSessionDispatchAuthorized,
+  localProjectPrincipal,
+  ProjectSessionService,
 } from "../core/planning-session.js";
-import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import {
+  ProjectBootstrapCoordinator,
+  ProjectBootstrapCoordinatorClosedError,
+  projectBootstrapOwnsInput,
+} from "../core/planner-greeting.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -360,6 +382,12 @@ export interface HarnessServerOptions {
     beforeAutomaticCanvasLaunch?: (
       workflowPath: string,
     ) => void | Promise<void>;
+  };
+  /** Internal deterministic seam for project/bootstrap crash-window tests. */
+  projectBootstrapTestHooks?: {
+    beforeSchedule?: (projectId: string) => void | Promise<void>;
+    afterProjectSessionNeeded?: (projectId: string) => void | Promise<void>;
+    afterListenBeforeRecovery?: (port: number) => void | Promise<void>;
   };
 }
 
@@ -571,13 +599,10 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
-    const promptPromise =
-      context?.agentMapIdentity?.role === "map-planner"
-        ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
-        : loadSystemPrompt().catch((err: unknown) => {
-            console.error("[harness] system-prompt load failed:", err);
-            return DEFAULT_SYSTEM_PROMPT;
-          });
+    const promptPromise = loadSystemPrompt().catch((err: unknown) => {
+      console.error("[harness] system-prompt load failed:", err);
+      return DEFAULT_SYSTEM_PROMPT;
+    });
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -600,7 +625,11 @@ function createDefaultBuildLaunchOpts(
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
-    const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
+    const appendices = [
+      viaSystemPrompt ? brief : null,
+      context?.agentMapIdentity ? PROJECT_AGENT_PROMPT_APPENDIX : null,
+      context?.promptAppendix,
+    ]
       .filter(
         (value): value is string =>
           typeof value === "string" && value.trim() !== "",
@@ -661,10 +690,29 @@ export const startServer = async (
     organizationName: identity?.organizationName ?? null,
   });
   const statePaths = resolveStatePaths(options.stateRoot);
+  const projectBootstrapOutbox = new ProjectBootstrapOutbox(
+    join(statePaths.projectBootstrap, "project-outbox"),
+  );
+  let afterStudioProjectsCreatedCommit = async (
+    _projects: readonly StudioProjectSummary[],
+  ): Promise<void> => {};
+  let convergeReconciledProjectLifecycle = async (
+    _reconciled: ReconciledStudioProjects,
+  ): Promise<void> => {};
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
+    undefined,
+    undefined,
+    {
+      beforeProjectsCreatedCommit: (projects) =>
+        projectBootstrapOutbox.stage(projects),
+      afterProjectsCreatedCommit: (projects) =>
+        afterStudioProjectsCreatedCommit(projects),
+    },
   );
-  let emitAgentMapCapabilityEvent = (_event: AgentMapCapabilityEvent): void => {};
+  let emitAgentMapCapabilityEvent = (
+    _event: AgentMapCapabilityEvent,
+  ): void => {};
   const agentMapCapabilities = new AgentMapCapabilityRegistry({
     onEvent: (event) => emitAgentMapCapabilityEvent(event),
   });
@@ -675,7 +723,7 @@ export const startServer = async (
   // Authentication may change in-app without restarting Studio. Keep the
   // planning principal live and server-private; browser auth DTOs expose only
   // their existing boolean/organization fields.
-  let planningUserId = identity?.userId ?? null;
+  let projectUserId = identity?.userId ?? null;
 
   // One-way identity migration: seed ~/.sapiom/analytics.json from the
   // legacy harness machine-id so existing installs keep the same anonymous_id
@@ -820,6 +868,131 @@ export const startServer = async (
     console.error("[harness] recent-dirs prune failed:", err);
   }
   let workflowsCache: RegistryWorkflowInfo[] = await workflowRegistry.list();
+  // Assigned once after callback construction; those callbacks need the live
+  // binding before SessionManager itself can be instantiated.
+  // eslint-disable-next-line prefer-const
+  let sessionManager!: SessionManager;
+  let projectBootstrap: ProjectBootstrapCoordinator | null = null;
+  const pendingProjectCwds = new Set<string>();
+  const rawProjectRoots = async (): Promise<string[]> => {
+    const settings = await loadSettings(statePaths.settings);
+    return [
+      ...pendingProjectCwds,
+      ...settings.recentDirs,
+      ...(sessionManager
+        ? sessionManager.list().map((session) => session.cwd)
+        : []),
+    ];
+  };
+  // Legacy System Graph routes retain every explicitly known root. Studio's
+  // durable project catalog uses the canonical derivation below; keeping the
+  // two catalogs separate avoids changing the existing graph authority while
+  // project/session identity converges on one server/client contract.
+  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(rawProjectRoots);
+  const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
+    async () => {
+      const settings = await loadSettings(statePaths.settings);
+      const durableProjects = await studioProjectCatalog.list();
+      const durableIdentities = (
+        await Promise.all(
+          durableProjects.map((project) =>
+            studioProjectCatalog.resolveIdentity(project.projectId),
+          ),
+        )
+      ).filter((project) => project !== null);
+      const durableRoots = durableIdentities.flatMap((project) =>
+        project.rootBindings.map((binding) => binding.localRootRef),
+      );
+      const durableRootCandidates = durableIdentities.flatMap((project) =>
+        project.rootBindings
+          .filter((binding) => binding.status === "active")
+          .map((binding) => ({
+            projectId: project.projectId,
+            cwd: binding.localRootRef,
+          })),
+      );
+      const retainedProjectSessionRoots = new Set<string>();
+      const sessions = sessionManager
+        ? sessionManager.list().flatMap((session) => {
+            if (!session.agentMapIdentity) {
+              return [
+                {
+                  cwd: session.cwd,
+                  createdAt: session.lastActiveAt,
+                  status: session.status,
+                },
+              ];
+            }
+            const root = projectSessionRoot(
+              {
+                cwd: session.cwd,
+                projectId: session.agentMapIdentity.projectId,
+              },
+              durableRootCandidates,
+            );
+            // A neutral project session contributes its trusted project root,
+            // never its descendant cwd. If its binding is stale, omit it from
+            // discovery rather than minting a replacement authority from the
+            // untrusted path.
+            if (root) {
+              retainedProjectSessionRoots.add(root);
+              return [
+                {
+                  cwd: root,
+                  createdAt: session.lastActiveAt,
+                  status: session.status,
+                },
+              ];
+            }
+            return [];
+          })
+        : [];
+      const candidates = [
+        ...pendingProjectCwds,
+        ...settings.recentDirs,
+        ...sessions.map((session) => session.cwd),
+      ];
+      // Root identity must be final before launch, even when the asynchronous
+      // workflow scan has not populated its cache yet. Probe only the candidate
+      // roots themselves; deeper discovery remains the registry's job.
+      const directlyMarked = (
+        await Promise.all(
+          candidates.map(async (candidate) => ({
+            candidate,
+            marker: await inspectAgentProjectMarker(candidate),
+          })),
+        )
+      )
+        .filter(({ marker }) => marker.status === "valid")
+        .map(({ candidate }) => candidate);
+      const visibleRoots = projectRoots({
+        recentDirs: settings.recentDirs,
+        sessions,
+        pendingCwds: [...pendingProjectCwds],
+        pinnedRoots: durableRoots,
+        agentPaths: [
+          ...workflowsCache.map((workflow) => workflow.path),
+          ...directlyMarked,
+        ],
+        sort: "recent",
+      });
+      // MRU/rail visibility is not an authority revocation mechanism. An
+      // existing project session must remain resumable after its recent-dir
+      // entry is evicted, including an otherwise empty project whose session
+      // cwd is below the durable root. The browser may still hide an explicitly
+      // removed project through its local closed-project projection.
+      return [
+        ...visibleRoots,
+        ...[...retainedProjectSessionRoots].filter(
+          (root) =>
+            !visibleRoots.some(
+              (visible) =>
+                canonicalGraphPath(visible) === canonicalGraphPath(root),
+            ),
+        ),
+      ];
+    },
+  );
   const initialInventorySnapshot =
     await workflowRegistry.inventorySnapshot(launchDir);
   type AcceptedCanonicalWorkflowRoot = {
@@ -1003,6 +1176,7 @@ export const startServer = async (
   // manager, because the "exited" handler archives through it.
   const recordsRoot = options.recordsRoot ?? statePaths.records;
   const recordArchive = createRecordArchive({ root: recordsRoot });
+  const pendingRecordArchives = new Set<Promise<void>>();
 
   // Past-session transcripts, rebuilt from the events above rather than from
   // any vendor's history file — the same code path for claude-code and codex.
@@ -1038,9 +1212,14 @@ export const startServer = async (
     await recordArchive.sweep();
   };
   const archiveSessionRecordDetached = (harnessSessionId: string): void => {
-    void archiveSessionRecord(harnessSessionId).catch((err: unknown) => {
-      console.error("[harness] session record archive failed:", err);
-    });
+    const operation = archiveSessionRecord(harnessSessionId)
+      .catch((err: unknown) => {
+        console.error("[harness] session record archive failed:", err);
+      })
+      .finally(() => {
+        pendingRecordArchives.delete(operation);
+      });
+    pendingRecordArchives.add(operation);
   };
 
   // Exit-time deletion of generated/<id> (see the onStatusChange handler
@@ -1161,7 +1340,52 @@ export const startServer = async (
     }
   };
 
-  const sessionManager = new SessionManager({
+  const projectIdentityMigrationEvents: Array<{
+    sessionId: string;
+    outcome: "migrated" | "rejected";
+  }> = [];
+  let projectScopeResolutionQueue: Promise<void> = Promise.resolve();
+  const serializeProjectScopeResolution = <T>(
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const result = projectScopeResolutionQueue.catch(() => {}).then(operation);
+    projectScopeResolutionQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
+  // A catalog mutation is durable before its lifecycle callback runs. Retain
+  // any not-yet-scheduled project IDs in memory so a retry can converge on the
+  // same project instead of creating another one after a transient failure.
+  const projectsAwaitingBootstrapSchedule = new Set<string>();
+  const scheduleBootstrapProjects = async (
+    projectIds: Iterable<string>,
+    userId: string,
+    scopeSessionId: string,
+  ): Promise<void> => {
+    const ids = [...new Set(projectIds)].sort();
+    for (const projectId of ids) {
+      projectsAwaitingBootstrapSchedule.add(projectId);
+    }
+    for (const projectId of ids) {
+      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+        throw new ProjectSessionScopeUnavailableError(scopeSessionId);
+      }
+      if (!projectBootstrap) {
+        throw new Error("project bootstrap coordinator is unavailable");
+      }
+      await options.projectBootstrapTestHooks?.beforeSchedule?.(projectId);
+      await projectBootstrap.scheduleProject(projectId, userId);
+      await projectBootstrapOutbox.complete(projectId);
+      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+        throw new ProjectSessionScopeUnavailableError(scopeSessionId);
+      }
+      projectsAwaitingBootstrapSchedule.delete(projectId);
+    }
+  };
+
+  sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
     ingestCredentials,
@@ -1169,34 +1393,113 @@ export const startServer = async (
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
-      // Planner ownership already uses a stable machine-local principal when
-      // Studio runs with --no-auth. Capability issuance must use that same
-      // identity; requiring an authenticated user here silently removed the
-      // Agent Map server from every signed-out planner's MCP config.
-      const userId = localPlanningPrincipal(planningUserId, machineId);
-      const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-      if (!project) return undefined;
-      if (
-        persisted?.sessionId === sessionId &&
-        persisted.projectId === project.projectId &&
-        persisted.userId === userId &&
-        (persisted.role === "map-planner" ||
-          (persisted.role === "agent-builder" &&
-            persisted.assignment.kind === "planned"))
-      ) {
-        return structuredClone(persisted);
+      const userId = localProjectPrincipal(projectUserId, machineId);
+      return serializeProjectScopeResolution(async () => {
+        const assertPrincipal = (): void => {
+          if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+            throw new ProjectSessionScopeUnavailableError(sessionId);
+          }
+        };
+        const identityFor = (projectId: string): ProjectAgentSession => ({
+          projectId,
+          sessionId,
+          userId,
+        });
+        assertPrincipal();
+        if (
+          persisted &&
+          (persisted.sessionId !== sessionId || persisted.userId !== userId)
+        ) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+
+        // Resume/final-spawn validation is read-only. In particular, never add
+        // a descendant cwd as a candidate root before proving that the current
+        // durable project still owns it.
+        let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+        assertPrincipal();
+        if (persisted) {
+          if (!project || project.projectId !== persisted.projectId) {
+            throw new ProjectSessionScopeUnavailableError(sessionId);
+          }
+          return identityFor(project.projectId);
+        }
+
+        if (project) {
+          if (projectsAwaitingBootstrapSchedule.has(project.projectId)) {
+            await scheduleBootstrapProjects(
+              [project.projectId],
+              userId,
+              sessionId,
+            );
+          }
+          return identityFor(project.projectId);
+        }
+
+        const before = new Set(
+          (await studioProjectCatalog.list()).map(
+            (candidate) => candidate.projectId,
+          ),
+        );
+        assertPrincipal();
+        let reconciled = await studioProjectCatalog.reconcile(
+          await studioWorkspaceScopeCatalog.list(),
+        );
+        assertPrincipal();
+        project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+
+        if (!project) {
+          pendingProjectCwds.add(cwd);
+          try {
+            reconciled = await studioProjectCatalog.reconcile(
+              await studioWorkspaceScopeCatalog.list(),
+            );
+            assertPrincipal();
+            project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+          } finally {
+            pendingProjectCwds.delete(cwd);
+          }
+        }
+        assertPrincipal();
+        const createdProjectIds = reconciled.projects
+          .map((candidate) => candidate.projectId)
+          .filter((projectId) => !before.has(projectId));
+        await scheduleBootstrapProjects(createdProjectIds, userId, sessionId);
+        if (!project) return undefined;
+        return identityFor(project.projectId);
+      });
+    },
+    prepareProjectSession: async (identity, request) => {
+      if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
+        throw new ProjectSessionScopeUnavailableError(identity.sessionId);
       }
-      return {
-        projectId: project.projectId,
-        sessionId,
-        userId,
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
-      };
+      const metadata = await projectBootstrap?.claimProject(
+        identity,
+        request.initialUserInputPending === true ||
+          Boolean(request.rehydrateFrom),
+      );
+      if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
+        throw new ProjectSessionScopeUnavailableError(identity.sessionId);
+      }
+      return metadata
+        ? { initialTitle: "Plan Agents", projectBootstrap: metadata }
+        : {};
+    },
+    onTerminalInput: (sessionId) =>
+      projectBootstrap?.onTerminalInput(sessionId),
+    onProjectAgentIdentityMigration: (event) => {
+      projectIdentityMigrationEvents.push(event);
+    },
+    onProjectBootstrapSession: async (session, mode) => {
+      await projectBootstrap?.register(session, {
+        emptyProject: true,
+        mode,
+      });
     },
     onAgentMapSessionExit: async (sessionId) => {
       agentMapCapabilities.revokeSession(sessionId);
       await agentMapMcp?.revokeSession(sessionId);
+      await projectBootstrap?.releaseSessionClaim(sessionId);
     },
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
@@ -1205,11 +1508,6 @@ export const startServer = async (
     ensureCanvasTemplate,
   });
   await sessionManager.init();
-
-  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () => [
-    ...(await loadSettings(statePaths.settings)).recentDirs,
-    ...sessionManager.list().map((session) => session.cwd),
-  ]);
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
@@ -2394,7 +2692,21 @@ export const startServer = async (
       }
     }
     try {
-      return (await studioProjectCatalog.reconcile(scopes)).workspaceScopes;
+      const studioScopes = await studioWorkspaceScopeCatalog.list();
+      const reconciliation = await studioProjectCatalog.reconcile(studioScopes);
+      await convergeReconciledProjectLifecycle(reconciliation);
+      const reconciled = reconciliation.workspaceScopes;
+      const byRoot = new Map(
+        reconciled.map((scope) => [resolve(scope.cwd), scope]),
+      );
+      for (const scope of scopes) {
+        if (!byRoot.has(resolve(scope.cwd))) {
+          byRoot.set(resolve(scope.cwd), scope);
+        }
+      }
+      return [...byRoot.values()].sort((left, right) =>
+        left.cwd.localeCompare(right.cwd),
+      );
     } catch {
       // Agent Map is additive in E1. A bad/unavailable new catalog cannot
       // strand the legacy rail or System Graph during coexistence.
@@ -2566,7 +2878,7 @@ export const startServer = async (
   // Fire-and-forget: boot must not wait on it. The cost is one full index build
   // (~130 ms against a 50 MB log), which the first history open would have paid
   // anyway.
-  void backfillSessionRecords({
+  const recordBackfill = backfillSessionRecords({
     conversationIds: () => sessionRecordReader.conversationIds(),
     readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
     archive: recordArchive,
@@ -2621,7 +2933,9 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
-  const emitPlannerLifecycle = (event: PlannerLifecycleEvent): void => {
+  const emitProjectBootstrapLifecycle = (
+    event: ProjectBootstrapLifecycleEvent,
+  ): void => {
     const session = sessionManager.get(event.sessionId);
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -2631,41 +2945,64 @@ export const startServer = async (
       tenantId: identity?.tenantId ?? null,
       machineId,
       harnessSessionId: event.sessionId,
-      // Planner lifecycle correlation uses the server-owned harness session.
+      // Bootstrap lifecycle correlation uses the server-owned harness session.
       // Provider session identity is unnecessary and may originate in a hook.
       agentSessionId: null,
       harness: session?.harness ?? "claude-code",
       type: event.name,
       payload: {
         project_id: event.projectId,
-        ...("resolution" in event
-          ? { resolution: event.resolution }
-          : {
+        ...("queueDepth" in event
+          ? {
               queue_depth: Math.max(0, Math.min(10_000, event.queueDepth)),
-              ...("attemptId" in event && event.attemptId
-                ? { attempt_id: event.attemptId }
-                : {}),
-              ...(event.name === "planner_greeting.failed"
-                ? {
-                    error_code: event.errorCode,
-                    retryable: event.retryable,
-                  }
-                : {}),
-              ...(event.name === "planner_greeting.skipped"
-                ? { reason: event.reason }
-                : {}),
-              ...(event.name === "planner_session.input_delivery_uncertain"
-                ? {
-                    input_id: event.inputId,
-                    error_code: event.errorCode,
-                  }
-                : {}),
-            }),
+            }
+          : {}),
+        ...("attemptId" in event && event.attemptId
+          ? { attempt_id: event.attemptId }
+          : {}),
+        ...("retryOrdinal" in event
+          ? { retry_ordinal: event.retryOrdinal }
+          : {}),
+        ...("retryable" in event
+          ? {
+              error_code: event.errorCode,
+              retryable: event.retryable,
+            }
+          : {}),
+        ...("reason" in event ? { reason: event.reason } : {}),
+        ...("inputId" in event
+          ? {
+              input_id: event.inputId,
+              error_code: event.errorCode,
+            }
+          : {}),
       },
     };
     void eventStore.append(analyticsEvent).catch(() => {});
     batcher.enqueue(analyticsEvent);
   };
+
+  for (const migration of projectIdentityMigrationEvents.splice(0)) {
+    const migrationEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: seqCounter.next(migration.sessionId),
+      ts: new Date().toISOString(),
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      harnessSessionId: migration.sessionId,
+      agentSessionId: null,
+      harness:
+        sessionManager.get(migration.sessionId)?.harness ?? "claude-code",
+      type:
+        migration.outcome === "migrated"
+          ? "project_agent.identity_migrated"
+          : "project_agent.identity_rejected",
+      payload: { outcome: migration.outcome },
+    };
+    void eventStore.append(migrationEvent).catch(() => {});
+    batcher.enqueue(migrationEvent);
+  }
 
   const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
     statePaths.agentMap,
@@ -2727,7 +3064,6 @@ export const startServer = async (
       type: "agent_map.capability",
       payload: {
         name: event.name,
-        ...(event.role ? { role: event.role } : {}),
         ...(event.reason ? { reason: event.reason } : {}),
       },
     };
@@ -2758,7 +3094,6 @@ export const startServer = async (
         payload: {
           tool: event.tool,
           outcome: event.outcome,
-          role: event.role,
           latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
           ...(event.errorCode ? { error_code: event.errorCode } : {}),
         },
@@ -2780,8 +3115,9 @@ export const startServer = async (
   const annotateStudioSelections = async (
     workflows: readonly RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
-    const scopes = await workspaceScopeCatalog.list();
+    const scopes = await studioWorkspaceScopeCatalog.list();
     const reconciled = await studioProjectCatalog.reconcile(scopes);
+    await convergeReconciledProjectLifecycle(reconciled);
     const projects = reconciled.projects;
     const annotations = new Map<
       string,
@@ -2817,84 +3153,251 @@ export const startServer = async (
     });
   };
 
-  const plannerGreeting = new PlannerGreetingCoordinator({
-    root: statePaths.plannerSessions,
+  const isMeaningfullyEmptyProject = async (
+    projectId: string,
+  ): Promise<boolean> => {
+    const snapshot = await agentMapProposalService.read(projectId);
+    return (
+      snapshot.workspace.confirmedRevisionId === null &&
+      snapshot.workspace.projectBuildPlanId === null &&
+      (snapshot.proposal === null ||
+        (snapshot.proposal.nodes.length === 0 &&
+          snapshot.proposal.relationships.length === 0))
+    );
+  };
+  projectBootstrap = new ProjectBootstrapCoordinator({
+    root: statePaths.projectBootstrap,
+    legacyRoot: statePaths.plannerSessions,
     sessionManager,
     canDispatch: (session) =>
-      isPlannerDispatchAuthorized({
+      isProjectSessionDispatchAuthorized({
         session,
-        currentPrincipal: () =>
-          localPlanningPrincipal(planningUserId, machineId),
+        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
         resolveProject: (projectId) =>
           studioProjectCatalog.resolveIdentity(projectId),
       }),
-    onEvent: emitPlannerLifecycle,
+    isMeaningfullyEmpty: isMeaningfullyEmptyProject,
+    onEvent: emitProjectBootstrapLifecycle,
   });
+  afterStudioProjectsCreatedCommit = async (projects) => {
+    try {
+      await scheduleBootstrapProjects(
+        projects.map((project) => project.projectId),
+        localProjectPrincipal(projectUserId, machineId),
+        "unclaimed",
+      );
+    } catch {
+      // The catalog and its write-ahead markers are already durable. Do not
+      // turn a successfully allocated project into an apparent create failure;
+      // every reconciliation boundary retries the project-keyed schedule.
+      console.error("[harness] project bootstrap scheduling deferred");
+    }
+  };
+  try {
+    const pending = await projectBootstrapOutbox.pending();
+    const recoverableProjectIds: string[] = [];
+    for (const entry of pending) {
+      if (await studioProjectCatalog.resolve(entry.projectId)) {
+        recoverableProjectIds.push(entry.projectId);
+      } else {
+        // A write-ahead marker whose catalog transaction never committed is
+        // an expected crash artifact, not a project to recreate implicitly.
+        await projectBootstrapOutbox.complete(entry.projectId);
+      }
+    }
+    await scheduleBootstrapProjects(
+      recoverableProjectIds,
+      localProjectPrincipal(projectUserId, machineId),
+      "unclaimed",
+    );
+  } catch {
+    // Leave every unresolved marker durable for the next boot. Logging uses a
+    // fixed classification because entries and storage paths are private.
+    console.error("[harness] project bootstrap outbox recovery failed");
+  }
   for (const session of sessionManager.list()) {
-    if (!session.planning) continue;
+    if (!session.projectBootstrap) continue;
     let emptyProject = true;
     try {
-      const workspace = await agentMapWorkspaceStore.readOrCreate(
-        session.planning.identity.projectId,
+      emptyProject = await isMeaningfullyEmptyProject(
+        session.projectBootstrap.projectId,
       );
-      emptyProject =
-        workspace.confirmedRevisionId === null &&
-        workspace.activeProposalId === null &&
-        workspace.projectBuildPlanId === null;
     } catch {
       // Registration still recovers generating state and preserves its FIFO;
       // the project route will surface any unavailable workspace later.
     }
-    await plannerGreeting
+    await projectBootstrap
       .register(session, { emptyProject, mode: "boot" })
-      .catch((error: unknown) => {
-        console.error(
-          `[harness] planner registration failed for ${session.id}:`,
-          error instanceof Error ? error.message : "unknown error",
-        );
+      .catch(() => {
+        // Session IDs and storage/provider errors stay out of logs. The
+        // coordinator emits its bounded lifecycle classification separately.
+        console.error("[harness] project bootstrap registration failed");
       });
   }
-  const planningSessions = new PlanningSessionService({
+  const projectSessions = new ProjectSessionService({
     catalog: studioProjectCatalog,
-    workspaceStore: agentMapWorkspaceStore,
     sessionManager,
-    readRecord: (id) => sessionRecordReader.read(id),
     userId: identity?.userId ?? null,
-    currentUserId: () => planningUserId,
+    currentUserId: () => projectUserId,
     machineId,
     defaultHarness: options.defaultHarnessKind ?? "claude-code",
-    // E1 owns the durable workspace pointers, but not the later revision,
-    // proposal, or build-plan detail records. Wire that shipped source
-    // explicitly so the focused-context contract emits honest null/empty
-    // detail slots today and has one allowlisted adapter boundary when those
-    // stores land; it must never fall back to scanning project files.
-    readFocusedContext: async (_projectId, workspace) => ({
-      confirmedRevision:
-        workspace.confirmedRevisionId === null
-          ? null
-          : { digest: null, summaries: [] },
-      activeProposal:
-        workspace.activeProposalId === null
-          ? null
-          : { status: null, summary: null },
-      projectBuildPlan:
-        workspace.projectBuildPlanId === null
-          ? null
-          : { status: null, summary: null },
-      warnings: [],
-    }),
-    onPlannerSession: (session, context) =>
-      plannerGreeting.register(session, context),
-    onEvent: emitPlannerLifecycle,
   });
   sessionManager.onStatusChange((session) => {
-    void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
-      console.error(
-        "[harness] planner greeting status transition failed:",
-        error,
-      );
+    void projectBootstrap!.onSessionStatus(session).catch(() => {
+      console.error("[harness] project bootstrap status transition failed");
     });
   });
+  const projectFirstSessionStarts = new Map<string, Promise<void>>();
+  const ensureProjectFirstSession = (
+    projectId: string,
+    root: string,
+  ): Promise<void> => {
+    const existing = projectFirstSessionStarts.get(projectId);
+    if (existing) return existing;
+    const operation = (async () => {
+      const userId = localProjectPrincipal(projectUserId, machineId);
+      if (!(await projectBootstrap!.needsProjectSession(projectId, userId))) {
+        return;
+      }
+      await options.projectBootstrapTestHooks?.afterProjectSessionNeeded?.(
+        projectId,
+      );
+      try {
+        await sessionManager.create(
+          {
+            cwd: root,
+            harness: options.defaultHarnessKind ?? "claude-code",
+          },
+          { requireProjectBootstrapClaim: true },
+        );
+      } catch (error) {
+        // An explicit ordinary create may have claimed and published the first
+        // session after needsProjectSession() returned. That is successful
+        // convergence, not a reason to spawn an unrequested second session.
+        if (error instanceof ProjectBootstrapClaimUnavailableError) return;
+        // Embedded/test hosts may intentionally register no local adapter, and
+        // an external-only adapter cannot own a Studio PTY. Keep the durable
+        // project bootstrap intent unclaimed so a later boot with an available
+        // ordinary adapter can converge it. Generic user-created sessions still
+        // surface these errors through their existing request path.
+        if (
+          error instanceof AdapterNotFoundError ||
+          error instanceof ExternalHarnessError
+        ) {
+          console.error(
+            "[harness] project bootstrap session start deferred: adapter_unavailable",
+          );
+          return;
+        }
+        // Shutdown can race a queued reconciliation callback. The coordinator
+        // and outbox are already durable, so there is no work to resurrect in
+        // a server that is closing.
+        if (error instanceof SessionManagerClosingError) return;
+        throw error;
+      }
+      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+        throw new ProjectSessionScopeUnavailableError("unclaimed");
+      }
+    })();
+    projectFirstSessionStarts.set(projectId, operation);
+    void operation.then(
+      () => {
+        if (projectFirstSessionStarts.get(projectId) === operation) {
+          projectFirstSessionStarts.delete(projectId);
+        }
+      },
+      () => {
+        if (projectFirstSessionStarts.get(projectId) === operation) {
+          projectFirstSessionStarts.delete(projectId);
+        }
+      },
+    );
+    return operation;
+  };
+
+  convergeReconciledProjectLifecycle = async (reconciled) => {
+    const userId = localProjectPrincipal(projectUserId, machineId);
+    // A prior post-commit attempt may have failed after its marker was
+    // durable. Reconciliation is an idempotent opportunity to finish those
+    // exact new-project lifecycles; projects without an intent remain inert.
+    await scheduleBootstrapProjects(
+      projectsAwaitingBootstrapSchedule,
+      userId,
+      "unclaimed",
+    );
+    if (!agentMapMcpUrl) return;
+    for (const project of reconciled.projects) {
+      const launchRoot = preferredProjectRoot(
+        reconciled.workspaceScopes
+          .filter((scope) => scope.projectId === project.projectId)
+          .map((scope) => scope.cwd),
+      );
+      if (launchRoot) {
+        await ensureProjectFirstSession(project.projectId, launchRoot);
+      }
+    }
+  };
+
+  const initializeOpenedProject = async (
+    requestedRoot: string,
+  ): Promise<void> => {
+    const userId = localProjectPrincipal(projectUserId, machineId);
+    pendingProjectCwds.add(requestedRoot);
+    let starts: Array<{ projectId: string; launchRoot: string }> = [];
+    try {
+      starts = await serializeProjectScopeResolution(async () => {
+        const before = new Set(
+          (await studioProjectCatalog.list()).map(
+            (project) => project.projectId,
+          ),
+        );
+        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+          throw new ProjectSessionScopeUnavailableError("unclaimed");
+        }
+        const reconciled = await studioProjectCatalog.reconcile(
+          await studioWorkspaceScopeCatalog.list(),
+        );
+        const requestedProject =
+          await studioProjectCatalog.resolveIdentityForPath(requestedRoot);
+        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+          throw new ProjectSessionScopeUnavailableError("unclaimed");
+        }
+        const createdProjectIds = reconciled.projects
+          .map((project) => project.projectId)
+          .filter((projectId) => !before.has(projectId));
+        const scheduledProjectIds = [
+          ...new Set([
+            ...createdProjectIds,
+            ...projectsAwaitingBootstrapSchedule,
+          ]),
+        ];
+        await scheduleBootstrapProjects(
+          scheduledProjectIds,
+          userId,
+          "unclaimed",
+        );
+
+        const projectsToStart = new Set(createdProjectIds);
+        if (requestedProject) projectsToStart.add(requestedProject.projectId);
+        for (const projectId of scheduledProjectIds) {
+          projectsToStart.add(projectId);
+        }
+        return [...projectsToStart].sort().flatMap((projectId) => {
+          const launchRoot = preferredProjectRoot(
+            reconciled.workspaceScopes
+              .filter((scope) => scope.projectId === projectId)
+              .map((scope) => scope.cwd),
+          );
+          return launchRoot ? [{ projectId, launchRoot }] : [];
+        });
+      });
+    } finally {
+      pendingProjectCwds.delete(requestedRoot);
+    }
+    for (const start of starts) {
+      await ensureProjectFirstSession(start.projectId, start.launchRoot);
+    }
+  };
 
   const app: Express = express();
   app.disable("x-powered-by");
@@ -2943,6 +3446,7 @@ export const startServer = async (
       writeWorkspaceContext: writeSessionContext,
       renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
+      onRecentDirAdded: initializeOpenedProject,
       onSessionCreated: (cwd, harnessSessionId) => {
         scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true })
           .then(({ found }) => {
@@ -2960,6 +3464,22 @@ export const startServer = async (
               err,
             );
           });
+      },
+      submitSessionInput: async (sessionId, text, submit) => {
+        const bootstrap = sessionManager.get(sessionId)?.projectBootstrap;
+        if (projectBootstrapOwnsInput(bootstrap)) {
+          if (submit) {
+            await projectBootstrap!.enqueue(sessionId, text);
+            return true;
+          }
+          // A user-owned draft must also win over automatic bootstrap, but it
+          // must remain editable rather than entering the durable submit FIFO.
+          // Retire lifecycle ownership and clear any background text staged
+          // before Enter, then preserve ordinary submit:false semantics.
+          projectBootstrap!.onTerminalInput(sessionId);
+          sessionManager.preemptBackgroundInput(sessionId);
+        }
+        return sessionManager.submitInput(sessionId, text, submit);
       },
       launchDir,
       defaultProjectRoot,
@@ -2987,12 +3507,46 @@ export const startServer = async (
       catalog: studioProjectCatalog,
       store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
-      currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
+      currentUserId: () => localProjectPrincipal(projectUserId, machineId),
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
-      listWorkspaceScopes: () => workspaceScopeCatalog.list(),
-      planningSessions,
-      plannerGreeting,
+      listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
+      projectSessions,
+      projectBootstrap,
+      onProjectCreated: async (project) => {
+        const userId = localProjectPrincipal(projectUserId, machineId);
+        await scheduleBootstrapProjects(
+          [project.projectId],
+          userId,
+          "unclaimed",
+        );
+      },
+      onRootBound: async (project, root) => {
+        const userId = localProjectPrincipal(projectUserId, machineId);
+        // Recover a project whose durable create committed just before its
+        // lifecycle callback failed, without enrolling an older project merely
+        // because one of its bindings changed.
+        if (projectsAwaitingBootstrapSchedule.has(project.projectId)) {
+          await scheduleBootstrapProjects(
+            [project.projectId],
+            userId,
+            "unclaimed",
+          );
+        }
+        const identity = await studioProjectCatalog.resolveIdentity(
+          project.projectId,
+        );
+        const launchRoot = identity
+          ? preferredProjectRoot(
+              identity.rootBindings
+                .filter((binding) => binding.status === "active")
+                .map((binding) => binding.localRootRef),
+            )
+          : null;
+        await ensureProjectFirstSession(project.projectId, launchRoot ?? root);
+      },
+      submitSessionInput: (sessionId, text) =>
+        sessionManager.submitInput(sessionId, text, true),
     }),
   );
   app.use(
@@ -3378,8 +3932,8 @@ export const startServer = async (
       bus,
       authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
-      onPlanningUserChanged: (userId) => {
-        planningUserId = userId;
+      onProjectUserChanged: (userId) => {
+        projectUserId = userId;
         for (const session of sessionManager.list()) {
           agentMapCapabilities.revokeSession(session.id);
           void agentMapMcp?.revokeSession(session.id);
@@ -3411,8 +3965,9 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
-    decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
-    projectTelemetryEvent: (event) => plannerGreeting.redactForTelemetry(event),
+    decorateEvent: (event) => projectBootstrap!.decorateLocalEvent(event),
+    projectTelemetryEvent: (event) =>
+      projectBootstrap!.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
@@ -3440,8 +3995,8 @@ export const startServer = async (
       }
     },
     onEventPersisted: (event: AnalyticsEvent) => {
-      void plannerGreeting.onEventPersisted(event).catch((error: unknown) => {
-        console.error("[harness] planner greeting completion failed:", error);
+      void projectBootstrap!.onEventPersisted(event).catch(() => {
+        console.error("[harness] project bootstrap completion failed");
       });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);
@@ -3609,104 +4164,84 @@ export const startServer = async (
     },
   ]);
 
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(options.port, host, () => {
-      httpServer.removeListener("error", reject);
-      resolve();
-    });
-  });
+  let serverClose: Promise<void> | null = null;
+  const closeServer = (): Promise<void> => {
+    if (serverClose) return serverClose;
+    serverClose = (async () => {
+      const settle = async (
+        operation: () => void | Promise<void>,
+      ): Promise<void> => {
+        try {
+          await operation();
+        } catch {
+          // Shutdown is best-effort across independent resources. Keep this
+          // content-free so provider errors and private paths never leak.
+          console.error("[harness] server shutdown step failed");
+        }
+      };
 
-  const address = httpServer.address();
-  const actualPort =
-    typeof address === "object" && address ? address.port : options.port;
-  agentMapMcpUrl = `http://${host}:${actualPort}/mcp/agent-map`;
-  // Covers the ephemeral `port: 0` case where only the bound address is real.
-  portDetector.addExcludedPort(actualPort);
-
-  // The app otherwise opens to an empty terminal pane — not fire-and-forget
-  // because a spawn failure here (e.g. claude not on PATH) is worth
-  // surfacing loudly, but also not awaited before returning: startServer()
-  // resolving shouldn't wait on a real pty spawn.
-  if (options.autoCreateSession ?? true) {
-    const harness = options.defaultHarnessKind ?? "claude-code";
-    sessionManager
-      .create({ cwd: launchDir, harness })
-      .then(async (session) => {
-        // Reuses the scan already kicked off above rather than scanning
-        // launchDir twice — only renders when it actually found something,
-        // same "discoverable" gate as the REST onSessionCreated path.
-        const { found } = await initialWorkflowScan;
-        if (found.length > 0) await autoRenderCanvas(session);
-      })
-      .catch((err: unknown) => {
-        console.error("[harness] auto-create boot session failed:", err);
-      });
-  }
-
-  return {
-    port: actualPort,
-    uiToken,
-    sessionManager,
-    close: async () => {
+      await settle(() => sessionManager.beginShutdown());
+      const bootstrapClosing = settle(() => projectBootstrap?.close());
       coordinatorActive = false;
       coordinatorEpoch += 1;
-      await workflowRegistry.retirePendingDiscovery();
-      rejectPublication(new Error("Agent discovery coordinator is closed"));
       clearInterval(sessionSweepTimer);
       clearInterval(ndjsonRetentionTimer);
-      canvasWatcher.stopAll();
-      workspaceWatcher.stopAll();
-      systemGraphWatcher.stopAll();
+      await settle(() => workflowRegistry.retirePendingDiscovery());
+      await settle(() =>
+        rejectPublication(new Error("Agent discovery coordinator is closed")),
+      );
+      await settle(() => canvasWatcher.stopAll());
+      await settle(() => workspaceWatcher.stopAll());
+      await settle(() => systemGraphWatcher.stopAll());
       activeSystemGraphScopes.clear();
-      systemGraphInvocations.clear();
-      systemGraphInventory.clear();
-      systemGraphStore.clear();
-      installWatcher.stopAll();
-      for (const tailer of codexTailers.values()) tailer.stop();
+      await settle(() => systemGraphInvocations.clear());
+      await settle(() => systemGraphInventory.clear());
+      await settle(() => systemGraphStore.clear());
+      await settle(() => installWatcher.stopAll());
+      for (const tailer of codexTailers.values()) {
+        await settle(() => tailer.stop());
+      }
       codexTailers.clear();
-      // Closing the HTTP/WS server doesn't touch unrelated child processes
-      // on its own — without this, every live claude/codex pty outlives
-      // the harness server itself (e.g. after Ctrl+C or in a script that
-      // expects the process to actually exit once close() resolves).
-      // Await kills with a bounded timeout so shutdown never hangs: if a
-      // process somehow survives both SIGTERM and SIGKILL within the
-      // escalation window (shouldn't happen), we still resolve and let the
-      // HTTP server close proceed. The SIGKILL escalation inside each kill()
-      // itself is bounded (KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS
-      // = 2500ms); the outer timeout here is a final safety net above that.
+
+      // Closing the HTTP/WS server doesn't touch unrelated child processes.
+      // Bound the process cleanup so shutdown cannot strand the listening
+      // socket if an adapter misses its own exit acknowledgement.
       const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
       const killsSettled = Promise.all([
-        sessionManager.killAll(),
-        taskManager.killAll(),
-      ]);
+        settle(() => sessionManager.killAll()),
+        settle(() => taskManager.killAll()),
+      ]).then(() => {});
       let shutdownTimerHandle: ReturnType<typeof setTimeout> | undefined;
       const shutdownTimeout = new Promise<void>((resolve) => {
         shutdownTimerHandle = setTimeout(resolve, SHUTDOWN_KILL_TIMEOUT_MS);
-        // Unref so the timer never keeps the event loop alive when the kill
-        // path wins — mirrors SessionManager.kill()'s escalation timer pattern.
         shutdownTimerHandle.unref();
       });
       await Promise.race([killsSettled, shutdownTimeout]);
-      await agentMapMcp?.close();
-      // Clear the timer when the kill path wins (common case) so it doesn't
-      // linger ref'd in the background after shutdown completes.
       if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);
-      void batcher.close();
-      // wss.close() stops NEW upgrades but never terminates the connections
-      // already open — and httpServer.close() then waits indefinitely for those
-      // sockets to drain. The main window's live /ws/events and /ws/terminal
-      // connections (plus any keep-alive HTTP socket) would therefore hang
-      // close() forever, so Electron's before-quit never reaches app.quit() and
-      // the process lingers as a zombie still holding the single-instance lock —
-      // which blocks the next launch (it hangs on "Starting Sapiom…"). Force
-      // each client shut, drop keep-alive HTTP conns, and bound the final wait
-      // so shutdown always completes.
-      for (const client of terminalWss.clients) client.terminate();
-      for (const client of eventsWss.clients) client.terminate();
-      terminalWss.close();
-      eventsWss.close();
-      httpServer.closeAllConnections?.();
+      await bootstrapClosing;
+      await settle(() => sessionManager.flush());
+      await settle(async () => {
+        await recordBackfill;
+        while (pendingRecordArchives.size > 0) {
+          await Promise.all([...pendingRecordArchives]);
+        }
+      });
+      await settle(() => agentMapMcp?.close());
+      await settle(() => batcher.close());
+
+      // Existing clients and keep-alive sockets otherwise make close() wait
+      // forever. Terminate them before releasing the listener, and make the
+      // final wait bounded just like child-process cleanup above.
+      for (const client of terminalWss.clients) {
+        await settle(() => client.terminate());
+      }
+      for (const client of eventsWss.clients) {
+        await settle(() => client.terminate());
+      }
+      await settle(() => terminalWss.close());
+      await settle(() => eventsWss.close());
+      await settle(() => httpServer.closeAllConnections?.());
+      if (!httpServer.listening) return;
       const HTTP_CLOSE_TIMEOUT_MS = 3_000;
       await new Promise<void>((resolve) => {
         let httpCloseTimer: ReturnType<typeof setTimeout> | undefined =
@@ -3715,12 +4250,107 @@ export const startServer = async (
             resolve();
           }, HTTP_CLOSE_TIMEOUT_MS);
         httpCloseTimer.unref?.();
-        httpServer.close((err) => {
-          if (err) console.error("[harness] httpServer.close error:", err);
+        httpServer.close((error) => {
+          if (error) console.error("[harness] http server shutdown failed");
           if (httpCloseTimer !== undefined) clearTimeout(httpCloseTimer);
           resolve();
         });
       });
-    },
+    })();
+    return serverClose;
+  };
+
+  let actualPort = options.port;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(options.port, host, () => {
+        httpServer.removeListener("error", reject);
+        resolve();
+      });
+    });
+
+    const address = httpServer.address();
+    actualPort =
+      typeof address === "object" && address ? address.port : options.port;
+    agentMapMcpUrl = `http://${host}:${actualPort}/mcp/agent-map`;
+    // Covers the ephemeral `port: 0` case where only the bound address is real.
+    portDetector.addExcludedPort(actualPort);
+    await options.projectBootstrapTestHooks?.afterListenBeforeRecovery?.(
+      actualPort,
+    );
+
+    // A project intent is persisted before its first PTY is created. Reconcile
+    // that crash window only after the MCP endpoint is bound: every ordinary
+    // project session receives its capability during launch preparation, so an
+    // earlier recovery attempt would fail before spawning and leave a tombstone.
+    for (const summary of await studioProjectCatalog.list()) {
+      const project = await studioProjectCatalog.resolveIdentity(
+        summary.projectId,
+      );
+      const root = project
+        ? preferredProjectRoot(
+            project.rootBindings
+              .filter((binding) => binding.status === "active")
+              .map((binding) => binding.localRootRef),
+          )
+        : null;
+      if (!project || !root) continue;
+      await ensureProjectFirstSession(summary.projectId, root).catch(
+        (error: unknown) => {
+          console.error(
+            `[harness] project bootstrap session recovery failed: ${
+              error instanceof ProjectBootstrapCoordinatorClosedError
+                ? "coordinator_closed"
+                : error instanceof ProjectSessionScopeUnavailableError
+                  ? "scope_unavailable"
+                  : "session_start_failed"
+            }`,
+          );
+        },
+      );
+    }
+
+    // The app otherwise opens to an empty terminal pane — not fire-and-forget
+    // because a spawn failure here (e.g. claude not on PATH) is worth
+    // surfacing loudly, but also not awaited before returning: startServer()
+    // resolving shouldn't wait on a real pty spawn.
+    const launchProject =
+      await studioProjectCatalog.resolveIdentityForPath(launchDir);
+    const recoveredLaunchProjectSession = Boolean(
+      launchProject &&
+      sessionManager
+        .list()
+        .some(
+          (session) =>
+            session.status !== "exited" &&
+            session.agentMapIdentity?.projectId === launchProject.projectId,
+        ),
+    );
+    if ((options.autoCreateSession ?? true) && !recoveredLaunchProjectSession) {
+      const harness = options.defaultHarnessKind ?? "claude-code";
+      sessionManager
+        .create({ cwd: launchDir, harness })
+        .then(async (session) => {
+          // Reuses the scan already kicked off above rather than scanning
+          // launchDir twice — only renders when it actually found something,
+          // same "discoverable" gate as the REST onSessionCreated path.
+          const { found } = await initialWorkflowScan;
+          if (found.length > 0) await autoRenderCanvas(session);
+        })
+        .catch((err: unknown) => {
+          console.error("[harness] auto-create boot session failed:", err);
+        });
+    }
+  } catch (error) {
+    await closeServer();
+    throw error;
+  }
+
+  return {
+    port: actualPort,
+    uiToken,
+    sessionManager,
+    close: closeServer,
   };
 };

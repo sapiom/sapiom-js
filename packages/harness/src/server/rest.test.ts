@@ -23,7 +23,9 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import {
+  ProjectSessionScopeUnavailableError,
   SessionManager,
+  SessionManagerClosingError,
   SessionNotReadyError,
   UnknownSessionError,
 } from "../core/session-manager.js";
@@ -48,11 +50,13 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     getAgentSessionOwner: vi.fn((agentSessionId: string) =>
       Array.from(sessions.values()).find(
         (session) => session.agentSessionId === agentSessionId,
-      )),
+      ),
+    ),
     isAgentSessionIdentityReserved: vi.fn((agentSessionId: string) =>
       Array.from(sessions.values()).some(
         (session) => session.agentSessionId === agentSessionId,
-      )),
+      ),
+    ),
     create: vi.fn(),
     resume: vi.fn(),
     kill: vi.fn(() => true),
@@ -368,6 +372,27 @@ describe("createRestRouter", () => {
       expect(await reread.json()).toMatchObject({ rollingSummary: true });
     });
 
+    it("replays idempotent project initialization for every submitted root", async () => {
+      const onRecentDirAdded = vi.fn(async () => {});
+      start({ onRecentDirAdded });
+      const update = () =>
+        fetch(`${baseUrl}/settings`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ recentDirs: ["/tmp/a", "/tmp/b"] }),
+        });
+
+      expect((await update()).status).toBe(200);
+      expect((await update()).status).toBe(200);
+
+      expect(onRecentDirAdded.mock.calls).toEqual([
+        ["/tmp/a"],
+        ["/tmp/b"],
+        ["/tmp/a"],
+        ["/tmp/b"],
+      ]);
+    });
+
     it("calls onTelemetryOptInChange only when telemetryOptIn actually changes", async () => {
       start();
       await fetch(`${baseUrl}/settings`, {
@@ -407,7 +432,10 @@ describe("createRestRouter", () => {
       const res = await fetch(`${baseUrl}/settings`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ helpSeen: true, telemetryNoticeDismissed: true }),
+        body: JSON.stringify({
+          helpSeen: true,
+          telemetryNoticeDismissed: true,
+        }),
       });
       expect(await res.json()).toMatchObject({
         helpSeen: true,
@@ -593,6 +621,36 @@ describe("createRestRouter", () => {
         "HARNESS_EXTERNAL",
       );
     });
+
+    it.each([
+      {
+        error: new ProjectSessionScopeUnavailableError("secret-session-id"),
+        code: "PROJECT_SESSION_SCOPE_UNAVAILABLE",
+        message: "the session's Studio project scope could not be revalidated",
+      },
+      {
+        error: new SessionManagerClosingError(),
+        code: "SESSION_MANAGER_CLOSING",
+        message: "session manager is shutting down",
+      },
+    ])("maps $code to a bounded 409", async ({ error, code, message }) => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockRejectedValue(
+        error,
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body).toEqual({ code, error: message });
+      expect(JSON.stringify(body)).not.toContain("secret-session-id");
+    });
   });
 
   describe("POST /sessions/:id/attachments", () => {
@@ -767,9 +825,14 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
-    it("requires planner input to use the project-scoped FIFO", async () => {
+    it("accepts ordinary input for a former planner session without a role-specific 409", async () => {
       const planner = exitedSession({
         id: "planner-1",
+        agentMapIdentity: {
+          projectId: "project-1",
+          sessionId: "planner-1",
+          userId: "user-1",
+        },
         planning: {
           identity: {
             projectId: "project-1",
@@ -789,11 +852,13 @@ describe("createRestRouter", () => {
         headers: { ...TOKEN_HEADER, "content-type": "application/json" },
         body: JSON.stringify({ text: "bypass" }),
       });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
-      });
-      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(sessionManager.submitInput).toHaveBeenCalledWith(
+        planner.id,
+        "bypass",
+        true,
+      );
     });
 
     it("404s when submitInput reports no live pty for the session", async () => {
@@ -965,9 +1030,14 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
-    it("requires planner resume to use the trusted project resolver", async () => {
+    it("resumes a former planner through the ordinary endpoint without a role-specific 409", async () => {
       const planner = exitedSession({
         id: "planner-1",
+        agentMapIdentity: {
+          projectId: "project-1",
+          sessionId: "planner-1",
+          userId: "user-1",
+        },
         planning: {
           identity: {
             projectId: "project-1",
@@ -980,17 +1050,22 @@ describe("createRestRouter", () => {
         },
       });
       const sessionManager = fakeSessionManager([planner]);
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...planner,
+        status: "running",
+      });
       start({ sessionManager });
 
       const res = await fetch(`${baseUrl}/sessions/planner-1/resume`, {
         method: "POST",
         headers: TOKEN_HEADER,
       });
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
+        id: planner.id,
+        status: "running",
       });
-      expect(sessionManager.resume).not.toHaveBeenCalled();
+      expect(sessionManager.resume).toHaveBeenCalledWith(planner.id);
     });
 
     it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
@@ -1060,6 +1135,25 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("SESSION_NOT_RESUMEABLE");
+    });
+
+    it("409s with a bounded code when project scope cannot be revalidated", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new ProjectSessionScopeUnavailableError("private-session-id"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/private-session-id/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "the session's Studio project scope could not be revalidated",
+        code: "PROJECT_SESSION_SCOPE_UNAVAILABLE",
+      });
     });
 
     it("400s when resume() throws AdapterNotFoundError (persisted session with unknown harness kind — C2)", async () => {
@@ -1400,10 +1494,42 @@ describe("createRestRouter", () => {
       expect(sessionManager.resume).toHaveBeenCalledWith("sess-existing");
     });
 
-    it("requires an existing foreign-owned planner to use its scoped route without mutation", async () => {
+    it("bounds a scope-revalidation failure on the ordinary adopt path", async () => {
+      const existing = exitedSession({
+        id: "sess-existing",
+        agentSessionId: body.agentSessionId,
+      });
+      const sessionManager = fakeSessionManager([existing]);
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new ProjectSessionScopeUnavailableError(existing.id),
+      );
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => true }),
+        },
+      });
+
+      const res = await adopt(body);
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "the session's Studio project scope could not be revalidated",
+        code: "PROJECT_SESSION_SCOPE_UNAVAILABLE",
+      });
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).toHaveBeenCalledWith(existing.id);
+    });
+
+    it("reuses a former planner owner through ordinary adopt without duplicating its record", async () => {
       const planner = exitedSession({
         id: "planner-existing",
         agentSessionId: body.agentSessionId,
+        agentMapIdentity: {
+          projectId: "foreign-project",
+          sessionId: "planner-existing",
+          userId: "foreign-user",
+        },
         planning: {
           identity: {
             projectId: "foreign-project",
@@ -1417,6 +1543,10 @@ describe("createRestRouter", () => {
       });
       const original = structuredClone(planner.planning);
       const sessionManager = fakeSessionManager([planner]);
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...planner,
+        status: "running",
+      });
       const canResume = vi.fn(async () => true);
       start({
         sessionManager,
@@ -1425,19 +1555,22 @@ describe("createRestRouter", () => {
         },
       });
 
-      const res = await adopt({ ...body, cwd: "/tmp/client-supplied-alias" });
+      const res = await adopt(body);
 
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
+        id: planner.id,
+        status: "running",
       });
-      expect(canResume).not.toHaveBeenCalled();
+      expect(canResume).toHaveBeenCalledWith(body.agentSessionId, body.cwd);
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
-      expect(sessionManager.resume).not.toHaveBeenCalled();
-      expect(sessionManager.get("planner-existing")?.planning).toEqual(original);
+      expect(sessionManager.resume).toHaveBeenCalledWith(planner.id);
+      expect(sessionManager.get("planner-existing")?.planning).toEqual(
+        original,
+      );
     });
 
-    it("rejects a rotated planner's durable old alias even though its current pointer changed", async () => {
+    it("rejects a durable rotated provider alias independently of its former role", async () => {
       const planner = exitedSession({
         id: "planner-rotated",
         agentSessionId: "vendor-new",
@@ -1454,10 +1587,17 @@ describe("createRestRouter", () => {
       });
       const sessionManager = fakeSessionManager([planner]);
       (
-        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<
+          typeof vi.fn
+        >
       ).mockImplementation((agentSessionId: string) =>
         agentSessionId === body.agentSessionId ? planner : undefined,
       );
+      (
+        sessionManager.isAgentSessionIdentityReserved as unknown as ReturnType<
+          typeof vi.fn
+        >
+      ).mockReturnValue(true);
       const canResume = vi.fn(async () => true);
       start({
         sessionManager,
@@ -1468,7 +1608,7 @@ describe("createRestRouter", () => {
 
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
+        code: "AGENT_SESSION_IDENTITY_RESERVED",
       });
       expect(canResume).not.toHaveBeenCalled();
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
@@ -1483,7 +1623,9 @@ describe("createRestRouter", () => {
       const original = structuredClone(owner);
       const sessionManager = fakeSessionManager([owner]);
       (
-        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
+        sessionManager.getAgentSessionOwner as unknown as ReturnType<
+          typeof vi.fn
+        >
       ).mockImplementation((agentSessionId: string) =>
         agentSessionId === body.agentSessionId ? owner : undefined,
       );

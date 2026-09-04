@@ -10,7 +10,7 @@ import {
   type MapProposalId,
   type PlanNodeId,
   type PlanRelationshipId,
-  type PlanningSessionIdentity,
+  type ProjectAgentSession,
   type ProposalActor,
   type ProposalBatchRequest,
   type ProposalBatchResult,
@@ -103,7 +103,6 @@ export interface AgentMapProposalServiceOptions {
       | "agent_map.proposal.storage_failed";
     projectId: StudioProjectId;
     sessionId: string;
-    role: PlanningSessionIdentity["role"];
     operationCount: number;
     latencyMs: number;
   }) => void | Promise<void>;
@@ -111,16 +110,16 @@ export interface AgentMapProposalServiceOptions {
   receiptRetentionLimit?: number;
 }
 
-const actorFor = (identity: PlanningSessionIdentity): ProposalActor => {
+const actorFor = (identity: ProjectAgentSession): ProposalActor => {
   try {
+    // ProposalActor is an E2 persistence compatibility boundary until
+    // SAP-3149 migrates the aggregate. These fixed legacy discriminator values
+    // are never consulted for authority; the server-derived principal above is.
     return parseProposalActor({
       userId: identity.userId,
       sessionId: identity.sessionId,
-      role: identity.role,
-      assignment:
-        identity.role === "agent-builder"
-          ? structuredClone(identity.assignment)
-          : null,
+      role: "agent-builder",
+      assignment: { kind: "unplanned" },
     });
   } catch {
     throw new AgentMapProposalValidationError(
@@ -378,7 +377,7 @@ export class AgentMapProposalService {
     };
   }
 
-  async validate(identity: PlanningSessionIdentity, input: unknown) {
+  async validate(identity: ProjectAgentSession, input: unknown) {
     actorFor(identity);
     const parsed = parseProposalBatchRequest(input);
     if (!parsed.ok) throw new AgentMapProposalValidationError(parsed.issues, 0);
@@ -434,7 +433,7 @@ export class AgentMapProposalService {
   }
 
   async propose(
-    identity: PlanningSessionIdentity,
+    identity: ProjectAgentSession,
     input: unknown,
   ): Promise<ProposalBatchResult> {
     const startedAt = Date.now();
@@ -678,7 +677,7 @@ export class AgentMapProposalService {
   }
 
   private emitOutcome(
-    identity: PlanningSessionIdentity,
+    identity: ProjectAgentSession,
     name: Parameters<
       NonNullable<AgentMapProposalServiceOptions["onOutcome"]>
     >[0]["name"],
@@ -691,7 +690,6 @@ export class AgentMapProposalService {
           name,
           projectId: identity.projectId,
           sessionId: identity.sessionId,
-          role: identity.role,
           operationCount,
           latencyMs: Math.max(0, Date.now() - startedAt),
         }),

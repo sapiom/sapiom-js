@@ -330,23 +330,25 @@ export function mostSpecificStudioScope(
   projects: readonly StudioProjectSummary[],
 ): (WorkspaceScopeSummary & { projectId: string }) | null {
   const projectIds = new Set(projects.map((project) => project.projectId));
-  return (
-    scopes
-      .filter((scope): scope is WorkspaceScopeSummary & { projectId: string } =>
-        Boolean(
-          scope.projectId &&
-          projectIds.has(scope.projectId) &&
-          isWithinDir(scope.cwd, targetPath),
-        ),
-      )
-      .map((scope) => ({
-        scope,
-        depth: stripTrailingSep(scope.cwd).length,
-      }))
-      .sort(
-        (left, right) =>
-          right.depth - left.depth ||
-          left.scope.projectId.localeCompare(right.scope.projectId),
-      )[0]?.scope ?? null
-  );
+  const matches = scopes
+    .filter((scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+      Boolean(
+        scope.projectId &&
+        projectIds.has(scope.projectId) &&
+        isWithinDir(scope.cwd, targetPath),
+      ),
+    )
+    .map((scope) => ({
+      scope,
+      depth: stripTrailingSep(scope.cwd).length,
+    }));
+  if (matches.length === 0) return null;
+  const depth = Math.max(...matches.map((match) => match.depth));
+  const nearest = matches.filter((match) => match.depth === depth);
+  if (new Set(nearest.map(({ scope }) => scope.projectId)).size !== 1) {
+    return null;
+  }
+  return nearest.sort((left, right) =>
+    left.scope.workspaceKey.localeCompare(right.scope.workspaceKey),
+  )[0]!.scope;
 }

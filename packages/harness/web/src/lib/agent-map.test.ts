@@ -264,6 +264,25 @@ describe("mostSpecificStudioScope", () => {
       )?.projectId,
     ).toBe(nestedProjectId);
   });
+
+  it("fails closed when two durable projects claim the same nearest root", () => {
+    const otherProjectId = "project_00000000-0000-4000-8000-000000000002";
+
+    expect(
+      mostSpecificStudioScope(
+        "/work/services/agent",
+        [
+          { workspaceKey: "scope-a", cwd: "/work/services", projectId },
+          {
+            workspaceKey: "scope-b",
+            cwd: "/work/services",
+            projectId: otherProjectId,
+          },
+        ],
+        [validResponseProject(projectId), validResponseProject(otherProjectId)],
+      ),
+    ).toBeNull();
+  });
 });
 
 function validResponseProject(id: string): StudioProjectSummary {

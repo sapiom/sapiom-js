@@ -1,10 +1,11 @@
+import * as path from "node:path";
+
 import type {
   AgentMapWorkspaceState,
   PlannerLifecycleEvent,
-  PlannerGreetingState,
   PlannerSessionRequest,
   PlannerSessionResponse,
-  PlannerSessionMetadata,
+  ProjectAgentSession,
   StudioProjectId,
 } from "../shared/agent-map.js";
 import type {
@@ -13,16 +14,16 @@ import type {
   SessionRecord,
 } from "../shared/types.js";
 import type { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+import { preferredProjectRoot } from "../shared/project-roots.js";
+import { canonicalGraphPath } from "./canonical-graph-path.js";
+import type { PlannerRegistrationMode } from "./planner-greeting.js";
 import type { SessionManager } from "./session-manager.js";
 import type {
   StudioProjectCatalog,
   StudioProjectIdentity,
 } from "./studio-project-catalog.js";
-import type { PlannerRegistrationMode } from "./planner-greeting.js";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
-import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
 
-export interface PlannerFocusedContextDetails {
+export interface FocusedProjectContextDetails {
   confirmedRevision?: {
     digest?: string | null;
     summaries?: readonly string[];
@@ -38,29 +39,60 @@ export interface PlannerFocusedContextDetails {
   warnings?: readonly string[];
 }
 
-export interface PlanningSessionServiceOptions {
+/**
+ * @deprecated Compatibility name for callers compiled against the E1 planner
+ * service. Focused data is context only and never selects a role or authority.
+ */
+export type PlannerFocusedContextDetails = FocusedProjectContextDetails;
+
+export interface ProjectSessionLifecycleEvent {
+  name: "project_session.created" | "project_session.resumed";
+  projectId: StudioProjectId;
+  sessionId: string;
+  resolution: Exclude<PlannerSessionResponse["resolution"], "rehydrated">;
+}
+
+export interface ProjectSessionServiceOptions {
   catalog: StudioProjectCatalog;
-  workspaceStore: AgentMapWorkspaceStore;
+  /** @deprecated Retained for the bounded planner-route compatibility API. */
+  workspaceStore?: AgentMapWorkspaceStore;
   sessionManager: SessionManager;
-  readRecord: (id: string) => Promise<SessionRecord | null>;
+  /** @deprecated Rehydration is intentionally unsupported by this service. */
+  readRecord?: (id: string) => Promise<SessionRecord | null>;
   userId: string | null;
   /** Live authenticated identity. When omitted, `userId` remains the static
    * principal for tests/embedded callers. */
   currentUserId?: () => string | null;
   machineId: string;
   defaultHarness: CreateSessionRequest["harness"];
+  /** @deprecated Focused context is composed by the ordinary session path. */
   readFocusedContext?: (
     projectId: StudioProjectId,
     workspace: AgentMapWorkspaceState,
-  ) => Promise<PlannerFocusedContextDetails>;
+  ) => Promise<FocusedProjectContextDetails>;
+  /**
+   * @deprecated Project bootstrap registration is owned by SessionManager's
+   * ordinary create/resume preparation path. This callback is retained only
+   * so rolling server code remains source-compatible.
+   */
   onPlannerSession?: (
     session: HarnessSession,
     context: { emptyProject: boolean; mode: PlannerRegistrationMode },
   ) => Promise<void> | void;
+  onProjectSessionEvent?: (
+    event: ProjectSessionLifecycleEvent,
+  ) => Promise<void> | void;
+  /**
+   * @deprecated Planner-named telemetry is no longer emitted. Remove this
+   * rolling-compatibility option with the planner HTTP aliases in SAP-3152.
+   */
   onEvent?: (event: PlannerLifecycleEvent) => Promise<void> | void;
 }
 
-export class PlanningSessionError extends Error {
+/** @deprecated Use ProjectSessionServiceOptions. */
+export type PlanningSessionServiceOptions = ProjectSessionServiceOptions;
+
+export class ProjectSessionError extends Error {
   constructor(
     readonly code:
       | "project_not_found"
@@ -69,78 +101,137 @@ export class PlanningSessionError extends Error {
       | "forbidden",
   ) {
     super(code.replace(/_/g, " "));
-    this.name = "PlanningSessionError";
+    this.name = "ProjectSessionError";
   }
 }
 
-export function localPlanningPrincipal(
+export function localProjectPrincipal(
   userId: string | null,
   machineId: string,
 ): string {
   return userId ?? `local:${machineId}`;
 }
 
+/** @deprecated Use localProjectPrincipal. */
+export const localPlanningPrincipal = localProjectPrincipal;
+
 function launchRoot(project: StudioProjectIdentity): string {
-  const binding = project.rootBindings.find((entry) => entry.status === "active");
-  if (!binding) throw new PlanningSessionError("project_launch_unavailable");
-  return binding.localRootRef;
+  const root = preferredProjectRoot(
+    project.rootBindings
+      .filter((entry) => entry.status === "active")
+      .map((entry) => entry.localRootRef),
+  );
+  if (!root) throw new ProjectSessionError("project_launch_unavailable");
+  return root;
 }
 
-export function isCurrentProjectRoot(
-  project: StudioProjectIdentity,
-  cwd: string,
-): boolean {
-  const candidate = canonicalGraphPath(cwd);
-  return project.rootBindings.some(
-    (binding) =>
-      binding.status === "active" &&
-      canonicalGraphPath(binding.localRootRef) === candidate,
+function isWindowsPath(value: string): boolean {
+  return (
+    /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value)
   );
 }
 
-export async function isPlannerDispatchAuthorized(input: {
+function isWithinRoot(root: string, candidate: string): boolean {
+  if (root.trim() === "" || candidate.trim() === "") return false;
+  try {
+    const canonicalRoot = canonicalGraphPath(root);
+    const canonicalCandidate = canonicalGraphPath(candidate);
+    const windows = isWindowsPath(canonicalRoot);
+    if (windows !== isWindowsPath(canonicalCandidate)) return false;
+    const api = windows ? path.win32 : path.posix;
+    const relative = api.relative(canonicalRoot, canonicalCandidate);
+    return (
+      relative === "" ||
+      (relative !== ".." &&
+        !relative.startsWith(`..${api.sep}`) &&
+        !api.isAbsolute(relative))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a session cwd is equal to or descends from a current active project
+ * root. Durable project identity remains the authority boundary; containment
+ * is an additional server-side launch/resume safety check.
+ */
+export function isWithinCurrentProject(
+  project: StudioProjectIdentity,
+  cwd: string,
+): boolean {
+  return project.rootBindings.some(
+    (binding) =>
+      binding.status === "active" && isWithinRoot(binding.localRootRef, cwd),
+  );
+}
+
+/** @deprecated Use isWithinCurrentProject. */
+export const isCurrentProjectRoot = isWithinCurrentProject;
+
+function samePrincipal(
+  identity: ProjectAgentSession | null | undefined,
+  expected: ProjectAgentSession,
+): boolean {
+  return Boolean(
+    identity &&
+    identity.projectId === expected.projectId &&
+    identity.userId === expected.userId &&
+    identity.sessionId === expected.sessionId,
+  );
+}
+
+export async function isProjectSessionDispatchAuthorized(input: {
   session: HarnessSession;
   currentPrincipal: () => string;
   resolveProject: (
     projectId: StudioProjectId,
   ) => Promise<StudioProjectIdentity | null>;
 }): Promise<boolean> {
-  const identity = input.session.planning?.identity;
-  const expectedPrincipal = input.currentPrincipal();
-  if (!identity || identity.userId !== expectedPrincipal) return false;
-  const project = await input.resolveProject(identity.projectId);
+  const identity = input.session.agentMapIdentity;
+  if (!identity || identity.sessionId !== input.session.id) return false;
+  const expected: ProjectAgentSession = {
+    projectId: identity.projectId,
+    sessionId: identity.sessionId,
+    userId: identity.userId,
+  };
+  if (input.currentPrincipal() !== expected.userId) return false;
+  let project: StudioProjectIdentity | null;
+  try {
+    project = await input.resolveProject(expected.projectId);
+  } catch {
+    return false;
+  }
   return Boolean(
     project &&
-      input.currentPrincipal() === expectedPrincipal &&
-      isCurrentProjectRoot(project, input.session.cwd),
+    input.currentPrincipal() === expected.userId &&
+    input.session.id === expected.sessionId &&
+    samePrincipal(input.session.agentMapIdentity, expected) &&
+    isWithinCurrentProject(project, input.session.cwd),
   );
 }
 
-function isTerminalGreeting(value: PlannerGreetingState): boolean {
-  return value.status === "delivered" || value.status === "skipped";
-}
+/** @deprecated Use isProjectSessionDispatchAuthorized. */
+export const isPlannerDispatchAuthorized = isProjectSessionDispatchAuthorized;
 
-function planningFor(
-  projectId: StudioProjectId,
-  sessionId: string,
-  userId: string,
-  greeting: PlannerGreetingState,
-): PlannerSessionMetadata {
-  return {
-    identity: { projectId, sessionId, userId, role: "map-planner" },
-    greeting,
-    queuedInputIds: [],
-  };
-}
-
-export function buildFocusedPlannerContext(input: {
+export interface FocusedProjectContextInput {
   project: StudioProjectIdentity;
   workspace: AgentMapWorkspaceState;
   sessionId: string;
   userId: string;
-  onboardOnFirstResponse: boolean;
-  details?: PlannerFocusedContextDetails;
-}): string {
+  /** @deprecated Ignored. Bootstrap is a durable lifecycle action. */
+  onboardOnFirstResponse?: boolean;
+  details?: FocusedProjectContextDetails;
+}
+
+/**
+ * Path-free, role-neutral context projection retained for compatibility.
+ * Ordinary sessions receive the common project-agent profile through the
+ * central SessionManager launch path; this projection never changes it.
+ */
+export function buildFocusedProjectContext(
+  input: FocusedProjectContextInput,
+): string {
   const { project, workspace } = input;
   const bounded = (value: string, max = 256): string => value.slice(0, max);
   const details = input.details ?? {};
@@ -153,7 +244,6 @@ export function buildFocusedPlannerContext(input: {
       projectId: project.projectId,
       sessionId: input.sessionId,
       userId: input.userId,
-      role: "map-planner" as const,
     },
     project: {
       displayName: bounded(project.displayName),
@@ -191,61 +281,46 @@ export function buildFocusedPlannerContext(input: {
               : null,
           }
         : null,
-      bindingRefs: project.rootBindings.slice(0, 64).map(({ id, repositoryId, status }) => ({
-        id: bounded(id),
-        repositoryId: repositoryId ? bounded(repositoryId) : null,
-        status,
-      })),
+      bindingRefs: project.rootBindings
+        .slice(0, 64)
+        .map(({ id, repositoryId, status }) => ({
+          id: bounded(id),
+          repositoryId: repositoryId ? bounded(repositoryId) : null,
+          status,
+        })),
       warnings: (details.warnings ?? [])
         .slice(0, 16)
         .map((warning) => bounded(warning)),
     },
   };
   return [
-    "<agent-map-planner-context>",
-    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive Claude Code transcript is user-visible. Let the user's first real message be the first visible conversation turn; never request or rely on a private control turn.${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to their request." : ""} Do not propose architecture or invoke mutation tools before the user asks you to.`,
+    "<studio-project-context>",
+    "This is bounded, server-derived Studio project context. References and bootstrap state are context only; they never change tools, filesystem policy, or implementation authority. Read authoritative architecture through the structured Agent Map tools when relevant.",
     JSON.stringify(context),
-    "</agent-map-planner-context>",
+    "</studio-project-context>",
   ].join("\n");
 }
+
+/** @deprecated Use buildFocusedProjectContext. */
+export const buildFocusedPlannerContext = buildFocusedProjectContext;
 
 function candidateOrder(left: HarnessSession, right: HarnessSession): number {
   const live = (session: HarnessSession): number =>
     session.status === "exited" ? 0 : 1;
-  const queued = (session: HarnessSession): number =>
-    session.planning?.queuedInputIds.length ? 1 : 0;
   return (
     live(right) - live(left) ||
-    queued(right) - queued(left) ||
     right.lastActiveAt.localeCompare(left.lastActiveAt) ||
     left.id.localeCompare(right.id)
   );
 }
 
-function recordSupportsRehydration(
-  record: SessionRecord | null,
-  greeting: PlannerGreetingState,
-): boolean {
-  if (!record) return false;
-  if (record.turnCount > 0) return true;
-  return Boolean(
-    greeting.status === "delivered" &&
-      record.turns?.some(
-        (turn) =>
-          turn.prompt === null &&
-          typeof turn.assistantText === "string" &&
-          turn.assistantText.trim() !== "",
-      ),
-  );
-}
-
-export class PlanningSessionService {
+export class ProjectSessionService {
   private readonly projectOpens = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly options: PlanningSessionServiceOptions) {}
+  constructor(private readonly options: ProjectSessionServiceOptions) {}
 
   private currentPrincipal(): string {
-    return localPlanningPrincipal(
+    return localProjectPrincipal(
       this.options.currentUserId
         ? this.options.currentUserId()
         : this.options.userId,
@@ -255,29 +330,32 @@ export class PlanningSessionService {
 
   private assertPrincipal(expected: string): void {
     if (this.currentPrincipal() !== expected) {
-      throw new PlanningSessionError("forbidden");
+      throw new ProjectSessionError("forbidden");
     }
   }
 
-  private emit(event: PlannerLifecycleEvent): void {
+  private async guarded<T>(
+    principal: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    this.assertPrincipal(principal);
     try {
-      void Promise.resolve(this.options.onEvent?.(event)).catch(() => {});
-    } catch {
-      // Lifecycle telemetry is best effort and content-free.
+      const result = await operation();
+      this.assertPrincipal(principal);
+      return result;
+    } catch (error) {
+      this.assertPrincipal(principal);
+      throw error;
     }
   }
 
-  private async focusedDetails(
-    project: StudioProjectIdentity,
-    workspace: AgentMapWorkspaceState,
-  ): Promise<PlannerFocusedContextDetails | undefined> {
+  private emit(event: ProjectSessionLifecycleEvent): void {
     try {
-      return await this.options.readFocusedContext?.(
-        project.projectId,
-        workspace,
+      void Promise.resolve(this.options.onProjectSessionEvent?.(event)).catch(
+        () => {},
       );
     } catch {
-      return { warnings: ["focused_context_unavailable"] };
+      // Lifecycle telemetry is best effort and content-free.
     }
   }
 
@@ -286,109 +364,79 @@ export class PlanningSessionService {
     projectId: StudioProjectId,
     principal = this.currentPrincipal(),
   ): boolean {
-    const identity = session.planning?.identity;
+    const identity = session.agentMapIdentity;
     return Boolean(
       identity &&
-        identity.role === "map-planner" &&
-        identity.sessionId === session.id &&
-        identity.projectId === projectId &&
-        identity.userId === principal,
+      identity.sessionId === session.id &&
+      identity.projectId === projectId &&
+      identity.userId === principal,
     );
   }
 
-  private async project(projectId: StudioProjectId): Promise<StudioProjectIdentity> {
-    const project = await this.options.catalog.resolveIdentity(projectId);
-    if (!project) throw new PlanningSessionError("project_not_found");
+  private async project(
+    projectId: StudioProjectId,
+    principal: string,
+  ): Promise<StudioProjectIdentity> {
+    const project = await this.guarded(principal, () =>
+      this.options.catalog.resolveIdentity(projectId),
+    );
+    if (!project) throw new ProjectSessionError("project_not_found");
     return project;
   }
 
   private async assertRunnable(
     projectId: StudioProjectId,
-    cwd: string,
+    session: HarnessSession,
     principal: string,
   ): Promise<void> {
     this.assertPrincipal(principal);
-    const current = await this.project(projectId);
+    if (!this.owns(session, projectId, principal)) {
+      throw new ProjectSessionError("forbidden");
+    }
+    const current = await this.project(projectId, principal);
     this.assertPrincipal(principal);
-    if (!isCurrentProjectRoot(current, cwd)) {
-      throw new PlanningSessionError("forbidden");
+    if (
+      !this.owns(session, projectId, principal) ||
+      !isWithinCurrentProject(current, session.cwd)
+    ) {
+      throw new ProjectSessionError("forbidden");
     }
   }
 
   private async create(
-    project: StudioProjectIdentity,
+    projectId: StudioProjectId,
     request: PlannerSessionRequest,
-    greeting: PlannerGreetingState,
-    rehydrateFrom?: string,
-    mode: "created" | "rehydrated" = "created",
-    principal = this.currentPrincipal(),
-    handoffFromSessionId = rehydrateFrom,
+    principal: string,
   ): Promise<HarnessSession> {
-    const workspace = await this.options.workspaceStore.readOrCreate(
-      project.projectId,
-    );
-    const emptyProject =
-      workspace.confirmedRevisionId === null &&
-      workspace.activeProposalId === null &&
-      workspace.projectBuildPlanId === null;
-    const harness = request.harness ?? this.options.defaultHarness;
-    const cwd = launchRoot(project);
-    const details = await this.focusedDetails(project, workspace);
-    const session = await this.options.sessionManager.create(
-      {
-        cwd,
-        harness,
-        ...(request.theme ? { theme: request.theme } : {}),
-        ...(rehydrateFrom ? { rehydrateFrom } : {}),
-      },
-      {
-        planning: (sessionId) =>
-          planningFor(project.projectId, sessionId, principal, greeting),
-        promptAppendix: (sessionId) =>
-          buildFocusedPlannerContext({
-            project,
-            workspace,
-            sessionId,
-            userId: principal,
-            // Claude gets native SessionStart orientation before turn one.
-            // Other CLIs retain the hidden first-response instruction until
-            // they expose an equivalent display-only startup channel.
-            onboardOnFirstResponse:
-              mode === "created" && emptyProject && harness !== "claude-code",
-            ...(details ? { details } : {}),
-          }),
-        ...(mode === "created" && harness === "claude-code"
-          ? {
-              sessionStartSystemMessage: () =>
-                AGENT_MAP_PLANNER_SESSION_START_MESSAGE,
-            }
-          : {}),
-        ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
-      },
-    );
-    if (this.currentPrincipal() !== principal) {
-      // Authentication changed while the process was being spawned. Do not
-      // return a planner minted for the old principal into the new caller's
-      // request; terminate the just-created PTY before failing closed.
-      await this.options.sessionManager.kill(session.id).catch(() => false);
-      throw new PlanningSessionError("forbidden");
-    }
-    this.emit({
-      name: mode === "created" ? "planner_session.created" : "planner_session.resumed",
-      projectId: project.projectId,
-      sessionId: session.id,
-      resolution: mode,
-    });
+    const project = await this.project(projectId, principal);
+    let session: HarnessSession | undefined;
     try {
-      await this.options.onPlannerSession?.(session, {
-        emptyProject,
-        mode,
+      this.assertPrincipal(principal);
+      session = await this.options.sessionManager.create({
+        cwd: launchRoot(project),
+        harness: request.harness ?? this.options.defaultHarness,
+        ...(request.theme ? { theme: request.theme } : {}),
       });
-      await this.assertRunnable(project.projectId, session.cwd, principal);
+      this.assertPrincipal(principal);
+      // The central ordinary-session path derives the neutral identity. This
+      // compatibility service never stamps a missing identity after the fact.
+      await this.assertRunnable(projectId, session, principal);
     } catch (error) {
-      await this.options.sessionManager.kill(session.id).catch(() => false);
+      // This route owns only the session it just created. If authorization
+      // changes during the awaited launch, stop that exact process without
+      // touching pre-existing/manual project sessions.
+      if (session && this.options.sessionManager.isLive(session.id)) {
+        await this.options.sessionManager.kill(session.id).catch(() => false);
+      }
+      this.assertPrincipal(principal);
       throw error;
     }
+    this.emit({
+      name: "project_session.created",
+      projectId,
+      sessionId: session.id,
+      resolution: "created",
+    });
     return session;
   }
 
@@ -408,30 +456,6 @@ export class PlanningSessionService {
     return next;
   }
 
-  private async rehydrationHistorySource(
-    candidate: HarnessSession,
-    projectId: StudioProjectId,
-    principal: string,
-  ): Promise<string | undefined> {
-    const visited = new Set<string>();
-    let current: HarnessSession | undefined = candidate;
-    while (current && !visited.has(current.id) && visited.size < 32) {
-      visited.add(current.id);
-      const record = await this.options.readRecord(current.id).catch(() => null);
-      if (recordSupportsRehydration(record, current.planning!.greeting)) {
-        return current.id;
-      }
-      const predecessorId = current.rehydratedFrom;
-      if (!predecessorId) return undefined;
-      const predecessor = this.options.sessionManager.get(predecessorId);
-      if (!predecessor || !this.owns(predecessor, projectId, principal)) {
-        return undefined;
-      }
-      current = predecessor;
-    }
-    return undefined;
-  }
-
   open(
     projectId: StudioProjectId,
     request: PlannerSessionRequest,
@@ -446,152 +470,97 @@ export class PlanningSessionService {
     request: PlannerSessionRequest,
   ): Promise<PlannerSessionResponse> {
     const principal = this.currentPrincipal();
-    const project = await this.project(projectId);
-    this.assertPrincipal(principal);
-    // Validate that a launch target exists even when an existing candidate is
-    // reused. Candidate eligibility itself spans every active project root.
+    const project = await this.project(projectId, principal);
+    // Preserve the bounded compatibility endpoint's launch error while all
+    // actual creation remains on SessionManager's ordinary path.
     launchRoot(project);
     if (request.mode === "fresh") {
       return {
-        session: await this.create(
-          project,
-          request,
-          // Claude Code has no hidden assistant-first turn. A pending greeting
-          // is dispatched as ordinary PTY input and therefore appears as a
-          // synthetic user message in the raw CLI. Keep onboarding in the
-          // hidden prompt appendix above and let the user's real input lead.
-          { status: "skipped", reason: "user-proceeded" },
-          undefined,
-          "created",
-          principal,
-        ),
+        session: await this.create(projectId, request, principal),
         resolution: "created",
       };
     }
 
+    this.assertPrincipal(principal);
+    const seen = new Set<string>();
     const candidates = this.options.sessionManager
       .list()
-      .filter((session) => this.owns(session, projectId, principal))
+      .filter((session) => {
+        if (!this.owns(session, projectId, principal) || seen.has(session.id)) {
+          return false;
+        }
+        seen.add(session.id);
+        return true;
+      })
       .sort(candidateOrder);
+    let resumeFailure: unknown;
+    let inCurrentScope = 0;
     for (const candidate of candidates) {
-      const atCurrentLaunchRoot = isCurrentProjectRoot(project, candidate.cwd);
-      if (
-        atCurrentLaunchRoot &&
-        this.options.sessionManager.isLive(candidate.id)
-      ) {
-        const workspace = await this.options.workspaceStore.readOrCreate(
-          project.projectId,
-        );
-        this.assertPrincipal(principal);
+      try {
+        await this.assertRunnable(projectId, candidate, principal);
+      } catch (error) {
+        if (
+          error instanceof ProjectSessionError &&
+          error.code === "forbidden" &&
+          this.currentPrincipal() === principal
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      inCurrentScope += 1;
+      if (this.options.sessionManager.isLive(candidate.id)) {
         this.emit({
-          name: "planner_session.resumed",
+          name: "project_session.resumed",
           projectId,
           sessionId: candidate.id,
           resolution: "live",
         });
-        await this.options.onPlannerSession?.(candidate, {
-          emptyProject:
-            workspace.confirmedRevisionId === null &&
-            workspace.activeProposalId === null &&
-            workspace.projectBuildPlanId === null,
-          mode: "live",
-        });
-        await this.assertRunnable(projectId, candidate.cwd, principal);
         return { session: candidate, resolution: "live" };
       }
-      if (atCurrentLaunchRoot && candidate.agentSessionId) {
-        const workspace = await this.options.workspaceStore.readOrCreate(
-          project.projectId,
-        );
+
+      let resumed: HarnessSession;
+      try {
         this.assertPrincipal(principal);
-        const prior = candidate.planning!.greeting;
-        const planning = {
-          ...candidate.planning!,
-          greeting: isTerminalGreeting(prior)
-            ? prior
-            : ({ status: "skipped", reason: "user-proceeded" } as const),
-        };
-        const details = await this.focusedDetails(project, workspace);
+        resumed = await this.options.sessionManager.resume(candidate.id);
+      } catch (error) {
         this.assertPrincipal(principal);
-        const resumed = await this.options.sessionManager
-          .resume(candidate.id, {
-            planning,
-            promptAppendix: buildFocusedPlannerContext({
-              project,
-              workspace,
-              sessionId: candidate.id,
-              userId: principal,
-              onboardOnFirstResponse: false,
-              ...(details ? { details } : {}),
-            }),
-          })
-          .catch(() => null);
-        if (resumed) {
-          if (this.currentPrincipal() !== principal) {
-            await this.options.sessionManager.kill(resumed.id).catch(() => false);
-            throw new PlanningSessionError("forbidden");
-          }
-          this.emit({
-            name: "planner_session.resumed",
-            projectId,
-            sessionId: resumed.id,
-            resolution: "resumed",
-          });
-          try {
-            await this.options.onPlannerSession?.(resumed, {
-              emptyProject:
-                workspace.confirmedRevisionId === null &&
-                workspace.activeProposalId === null &&
-                workspace.projectBuildPlanId === null,
-              mode: "resumed",
-            });
-            await this.assertRunnable(projectId, resumed.cwd, principal);
-          } catch (error) {
-            await this.options.sessionManager.kill(resumed.id).catch(() => false);
-            throw error;
-          }
-          return { session: resumed, resolution: "resumed" };
-        }
-        // A stale vendor record may still be safely rehydrated below.
+        resumeFailure ??= error;
+        continue;
       }
-      const prior = candidate.planning!.greeting;
-      // A durable planner FIFO is itself rehydration-worthy even before the
-      // vendor emits history. This keeps a replacement that exits before
-      // readiness as the exact predecessor for the next launch instead of
-      // skipping back to an older record and orphaning its moved queue.
-      const hasQueuedInput = candidate.planning!.queuedInputIds.length > 0;
-      const historySource = await this.rehydrationHistorySource(
-        candidate,
+      // Once resume succeeds, never try another record: doing so could leave
+      // two live processes if this post-await authorization check fails.
+      try {
+        this.assertPrincipal(principal);
+        if (resumed.id !== candidate.id) {
+          throw new ProjectSessionError("forbidden");
+        }
+        await this.assertRunnable(projectId, resumed, principal);
+      } catch (error) {
+        if (this.options.sessionManager.isLive(resumed.id)) {
+          await this.options.sessionManager.kill(resumed.id).catch(() => false);
+        }
+        this.assertPrincipal(principal);
+        throw error;
+      }
+      this.emit({
+        name: "project_session.resumed",
         projectId,
-        principal,
-      );
-      if (!historySource && !hasQueuedInput) continue;
-      const greeting = isTerminalGreeting(prior)
-        ? prior
-        : ({ status: "skipped", reason: "user-proceeded" } as const);
-      return {
-        session: await this.create(
-          project,
-          { ...request, harness: candidate.harness },
-          greeting,
-          historySource,
-          "rehydrated",
-          principal,
-          candidate.id,
-        ),
-        resolution: "rehydrated",
-      };
+        sessionId: resumed.id,
+        resolution: "resumed",
+      });
+      return { session: resumed, resolution: "resumed" };
+    }
+
+    // An existing project-owned record is never copied into a new ID. Surface
+    // its exact resume/scope failure and leave the record untouched.
+    if (resumeFailure !== undefined) throw resumeFailure;
+    if (candidates.length > 0 && inCurrentScope === 0) {
+      throw new ProjectSessionError("forbidden");
     }
 
     return {
-      session: await this.create(
-        project,
-        request,
-        { status: "skipped", reason: "user-proceeded" },
-        undefined,
-        "created",
-        principal,
-      ),
+      session: await this.create(projectId, request, principal),
       resolution: "created",
     };
   }
@@ -600,15 +569,20 @@ export class PlanningSessionService {
     projectId: StudioProjectId,
     sessionId: string,
   ): Promise<HarnessSession> {
-    const session = this.options.sessionManager.get(sessionId);
     const principal = this.currentPrincipal();
-    if (!session) throw new PlanningSessionError("session_not_found");
-    if (!this.owns(session, projectId, principal)) {
-      throw new PlanningSessionError("forbidden");
-    }
-    // Ownership metadata alone is insufficient after a project root moves or
-    // the old root is rebound to another project. Resolve on every operation.
-    await this.assertRunnable(projectId, session.cwd, principal);
+    const session = this.options.sessionManager.get(sessionId);
+    if (!session) throw new ProjectSessionError("session_not_found");
+    await this.assertRunnable(projectId, session, principal);
     return session;
   }
 }
+
+/**
+ * @deprecated Rolling compatibility alias for the bounded planner HTTP routes.
+ * Remove the alias and those routes together in SAP-3152.
+ */
+export const PlanningSessionService = ProjectSessionService;
+/** @deprecated Use ProjectSessionService. */
+export type PlanningSessionService = ProjectSessionService;
+/** @deprecated Use ProjectSessionError. */
+export const PlanningSessionError = ProjectSessionError;

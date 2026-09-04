@@ -261,6 +261,20 @@ export interface SessionPrincipal {
   userId: string;
 }
 
+/**
+ * Server-derived authority for an ordinary session inside a Studio project.
+ *
+ * Optional assignment, bootstrap, and focused-context metadata deliberately
+ * live outside this principal: they may describe why a session exists, but
+ * they cannot change which project tools or execution policy it receives.
+ */
+export type ProjectAgentSession = Readonly<SessionPrincipal>;
+
+/**
+ * @deprecated Persisted rolling-compatibility metadata only. Live Agent Map
+ * authority uses {@link ProjectAgentSession}; role and assignment must never
+ * participate in authorization or capability composition.
+ */
 export type PlanningSessionIdentity =
   | (SessionPrincipal & { role: "map-planner" })
   | (SessionPrincipal & {
@@ -272,6 +286,11 @@ export type PlanningSessionIdentity =
       assignment: { kind: "unplanned" };
     });
 
+/**
+ * Legacy E2 persisted attribution shape. SAP-3148 keeps the codec stable while
+ * live authority moves to ProjectAgentSession; SAP-3149 owns its durable
+ * role-neutral replacement.
+ */
 export interface ProposalActor {
   userId: string;
   sessionId: string;
@@ -333,7 +352,7 @@ export interface AgentMapReadSnapshot {
   proposal: MapChangeProposal | null;
 }
 
-export type PlannerGreetingErrorCode =
+export type ProjectBootstrapErrorCode =
   | "session_not_ready"
   | "session_exited"
   | "injection_failed"
@@ -341,15 +360,26 @@ export type PlannerGreetingErrorCode =
   | "delivery_timeout"
   | "persistence_failed";
 
-export type PlannerGreetingState =
+export type ProjectBootstrapState =
   | { status: "pending" }
   | { status: "generating"; attemptId: string }
   | { status: "delivered"; messageId: string }
   | {
       status: "failed";
       retryable: boolean;
-      errorCode: PlannerGreetingErrorCode;
+      errorCode: ProjectBootstrapErrorCode;
     }
+  | {
+      status: "skipped";
+      reason: "user-proceeded" | "map-not-empty";
+    };
+
+/** @deprecated Persisted planner-era bootstrap error vocabulary. */
+export type PlannerGreetingErrorCode = ProjectBootstrapErrorCode;
+
+/** @deprecated Persisted planner-era bootstrap state. */
+export type PlannerGreetingState =
+  | Exclude<ProjectBootstrapState, { status: "skipped" }>
   | { status: "skipped"; reason: "user-proceeded" };
 
 export interface PlannerSessionMetadata {
@@ -357,6 +387,79 @@ export interface PlannerSessionMetadata {
   greeting: PlannerGreetingState;
   queuedInputIds: string[];
 }
+
+/**
+ * Lifecycle context for the one automatic map seed owned by a newly created
+ * project. It is deliberately separate from ProjectAgentSession authority.
+ */
+export interface ProjectBootstrapMetadata {
+  projectId: StudioProjectId;
+  userId: string;
+  targetSessionId: string;
+  bootstrap: ProjectBootstrapState;
+  queuedInputIds: string[];
+}
+
+export interface ProjectBootstrapQueuedInput {
+  id: string;
+  sessionId: string;
+  text: string;
+  acceptedAt: string;
+}
+
+export type ProjectBootstrapRegistrationMode =
+  | "boot"
+  | "created"
+  | "live"
+  | "resumed";
+
+/** Content-free lifecycle telemetry for project bootstrap reliability. */
+export type ProjectBootstrapLifecycleEvent =
+  | {
+      name: "project_bootstrap.scheduled" | "project_bootstrap.recovered";
+      projectId: StudioProjectId;
+      sessionId: string;
+    }
+  | {
+      name: "project_bootstrap.attempted" | "project_bootstrap.retried";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      retryOrdinal: number;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.delivered";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.failed";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId?: string;
+      errorCode: ProjectBootstrapErrorCode;
+      retryable: boolean;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.preempted" | "project_bootstrap.skipped";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId?: string;
+      reason: "user-proceeded" | "map-not-empty";
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.input_delivery_uncertain";
+      projectId: StudioProjectId;
+      sessionId: string;
+      inputId: string;
+      errorCode: "delivery_uncertain";
+      queueDepth: number;
+    };
 
 export interface PlannerQueuedInput {
   id: string;
@@ -380,9 +483,12 @@ export interface PlannerMessageRequest {
   text: string;
 }
 
-/** Authoritative coordinator state returned after a planner mutation. */
+/**
+ * @deprecated Rolling planner-route response. The route now delegates to the
+ * neutral project-bootstrap coordinator and never recreates planner identity.
+ */
 export interface PlannerSessionMetadataResponse {
-  metadata: PlannerSessionMetadata;
+  metadata: ProjectBootstrapMetadata | null;
 }
 
 /**

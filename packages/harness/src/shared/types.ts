@@ -214,10 +214,15 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
-  /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
+  /**
+   * @deprecated Legacy planner bootstrap metadata accepted only for rolling
+   * migration. It is never consulted for prompt, tool, sandbox, or authority.
+   */
   planning?: import("./agent-map.js").PlannerSessionMetadata;
+  /** Durable lifecycle state for a new project's one automatic map seed. */
+  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("./agent-map.js").PlanningSessionIdentity;
+  agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
 }
 
 /**
@@ -829,18 +834,29 @@ export type AnalyticsEventType =
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
   | "agent_map.capability"
+  | "project_agent.identity_migrated"
+  | "project_agent.identity_rejected"
+  | "project_bootstrap.scheduled"
+  | "project_bootstrap.recovered"
+  | "project_bootstrap.attempted"
+  | "project_bootstrap.retried"
+  | "project_bootstrap.delivered"
+  | "project_bootstrap.failed"
+  | "project_bootstrap.preempted"
+  | "project_bootstrap.skipped"
+  | "project_bootstrap.input_delivery_uncertain"
   | "planner_session.created"
   | "planner_session.resumed"
   | "planner_session.input_delivery_uncertain"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
   | "planner_greeting.attempted"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
   | "planner_greeting.delivered"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
   | "planner_greeting.failed"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
   | "planner_greeting.skipped"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
+  /** @deprecated Compatibility-only; ordinary project sessions use project bootstrap events. */
   | "planner_greeting.retried";
 
 /**
@@ -1089,6 +1105,12 @@ export interface CreateSessionRequest {
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+  /**
+   * Content-free lifecycle hint: the UI already owns a real first input that
+   * will be delivered after readiness/attachments. A new-project bootstrap
+   * yields to that input instead of racing it. This never affects authority.
+   */
+  initialUserInputPending?: boolean;
   /**
    * Portable continue: seed this fresh session with a reconstruction of a
    * prior one instead of asking the vendor to reattach. Accepts either a

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalProjectError,
@@ -19,11 +19,11 @@ import { AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.j
  * zod-to-json-schema renders each ZodCatch from its inner schema; the final
  * refinement keeps every envelope field required in the advertised contract.
  */
-const preserveInvalidForService = <Schema extends z.ZodTypeAny>(schema: Schema) =>
+const preserveInvalidForService = <Schema extends z.ZodTypeAny>(
+  schema: Schema,
+) =>
   schema
-    .catch(
-      (context: { input: unknown }) => context.input as z.output<Schema>,
-    )
+    .catch((context: { input: unknown }) => context.input as z.output<Schema>)
     .refine((value) => value !== undefined);
 
 const batchSchema = z
@@ -50,7 +50,6 @@ export interface AgentMapToolEvent {
   tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose";
   outcome: "ok" | "error";
   errorCode?: string;
-  role: PlanningSessionIdentity["role"];
   latencyMs: number;
 }
 
@@ -81,9 +80,9 @@ function errorResult(error: unknown) {
           ? { code: "forbidden", recovery: "reread" }
           : error instanceof AgentMapMcpProjectUnavailableError
             ? { code: "project_unavailable", recovery: "reread" }
-          : error instanceof AgentMapWorkspaceStoreError
-            ? { code: "storage_unavailable", recovery: "retry" }
-            : { code: "internal_error", recovery: "retry" };
+            : error instanceof AgentMapWorkspaceStoreError
+              ? { code: "storage_unavailable", recovery: "retry" }
+              : { code: "internal_error", recovery: "retry" };
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify(details) }],
@@ -98,13 +97,16 @@ function toolResult(value: object, message: string) {
   };
 }
 
-/** Registers the identical project-wide surface for every trusted role. */
+/** Registers the identical project-wide surface for every trusted session. */
 export function createAgentMapToolServer(
-  identity: PlanningSessionIdentity,
+  identity: ProjectAgentSession,
   service: AgentMapProposalService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
-  const server = new McpServer({ name: "sapiom-studio-agent-map", version: "1" });
+  const server = new McpServer({
+    name: "sapiom-studio-agent-map",
+    version: "1",
+  });
   const emit = (event: AgentMapToolEvent): void => {
     try {
       options.onEvent?.(event);
@@ -123,7 +125,6 @@ export function createAgentMapToolServer(
       emit({
         tool,
         outcome: "ok",
-        role: identity.role,
         latencyMs: Math.max(0, Date.now() - startedAt),
       });
       return value;
@@ -133,7 +134,6 @@ export function createAgentMapToolServer(
         tool,
         outcome: "error",
         errorCode: String(result.structuredContent.code),
-        role: identity.role,
         latencyMs: Math.max(0, Date.now() - startedAt),
       });
       return result;
@@ -143,7 +143,8 @@ export function createAgentMapToolServer(
   server.registerTool(
     "agent_map_read",
     {
-      description: "Read the current confirmed workspace and shared Agent Map proposal.",
+      description:
+        "Read the current confirmed workspace and shared Agent Map proposal.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -152,36 +153,53 @@ export function createAgentMapToolServer(
         const snapshot = options.readSnapshot
           ? await options.readSnapshot()
           : await service.read(identity.projectId);
-        const proposal = (snapshot as { proposal?: { version?: number } | null }).proposal;
-        return toolResult(snapshot, `Agent Map proposal version ${proposal?.version ?? 0}.`);
+        const proposal = (
+          snapshot as { proposal?: { version?: number } | null }
+        ).proposal;
+        return toolResult(
+          snapshot,
+          `Agent Map proposal version ${proposal?.version ?? 0}.`,
+        );
       }),
   );
 
   server.registerTool(
     "agent_map_validate",
     {
-      description: "Validate a complete proposal batch without mutating shared state or allocating IDs.",
+      description:
+        "Validate a complete proposal batch without mutating shared state or allocating IDs.",
       inputSchema: batchSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (request) =>
       instrument("agent_map_validate", async () => {
         const result = await service.validate(identity, request);
-        return toolResult(result, `Proposal batch is valid at version ${result.currentVersion}.`);
+        return toolResult(
+          result,
+          `Proposal batch is valid at version ${result.currentVersion}.`,
+        );
       }),
   );
 
   server.registerTool(
     "agent_map_propose",
     {
-      description: "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
+      description:
+        "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
       inputSchema: batchSchema,
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (request) =>
       instrument("agent_map_propose", async () => {
         const result = await service.propose(identity, request);
-        return toolResult(result, `Accepted Agent Map proposal version ${result.version}.`);
+        return toolResult(
+          result,
+          `Accepted Agent Map proposal version ${result.version}.`,
+        );
       }),
   );
 
