@@ -9,6 +9,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { selectMockSessionFromPalette } from "./mock-navigation";
+
 const lastInjectText = (page: Page): Promise<string> =>
   page.evaluate(
     () =>
@@ -108,9 +110,7 @@ test("describing an outcome starts a session and hands the agent that outcome", 
 test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents is explicitly selected", async ({
   page,
 }) => {
-  await page.goto(
-    "/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present",
-  );
+  await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   // The parent project exists, but with no live session it has never restored
   // its default Plan Agents workspace. Creating beneath it must not give that
@@ -150,6 +150,68 @@ test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents
     .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
     .toBe(before.openPlannerSessionCalls + 1);
   await expect(planAgents).toHaveAttribute("aria-pressed", "true");
+});
+
+test("returning to an in-progress standalone builder does not restore Plan Agents", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+  await expect
+    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => {
+      const evidence = await sessionEvidence(page);
+      return evidence.createSessionCalls - evidence.openPlannerSessionCalls;
+    })
+    .toBe(0);
+  const before = await sessionEvidence(page);
+
+  await page.getByTestId("rail-create-new").click();
+  const idea = "Build a revisit guard agent.";
+  await page.getByTestId("composer-input").fill(idea);
+  await page.getByTestId("composer-input").press("Enter");
+
+  const pendingBuilder = page.locator('[data-testid^="workspace-pending-"]');
+  await expect(pendingBuilder).toBeVisible();
+  await expect
+    .poll(async () => (await sessionEvidence(page)).createSessionCalls)
+    .toBe(before.createSessionCalls + 1);
+  await expect(pendingBuilder).toHaveCount(0);
+  // createSession() has selected the builder but has not finished the catalog
+  // refresh yet, so moving now exercises the intent's bounded lifetime.
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await selectMockSessionFromPalette(page, "scratch");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    /.+/,
+  );
+  const awaySessionId = (await sessionEvidence(page)).activeSessionId!;
+  await expect
+    .poll(async () => (await sessionEvidence(page)).injectedText)
+    .toContain(idea);
+  // Let the session we deliberately visited finish its own normal restore;
+  // only planner work caused by returning to the builder is under test.
+  await page.waitForTimeout(500);
+  const beforeReturn = await sessionEvidence(page);
+
+  await selectMockSessionFromPalette(page, "build-revisit-guard");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    /.+/,
+  );
+  expect((await sessionEvidence(page)).activeSessionId).not.toBe(awaySessionId);
+  await page.waitForTimeout(500);
+  const afterReturn = await sessionEvidence(page);
+  expect(afterReturn.openPlannerSessionCalls).toBe(
+    beforeReturn.openPlannerSessionCalls,
+  );
+  await expect(
+    page
+      .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")
+      .getByTestId("agent-map-select"),
+  ).toHaveAttribute("aria-pressed", "false");
 });
 
 test("a picked file reaches the first request without naming the project", async ({

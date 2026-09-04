@@ -366,7 +366,8 @@ export const App = (): JSX.Element => {
 
     // Bind the intent as soon as createSession() selects its session — before
     // that call's slower recent-directory/catalog refresh finishes. Once
-    // bound, leaving or exiting that session expires the one-shot intent.
+    // bound, the session id makes the intent safe to retain across focus
+    // changes; only that session disappearing or exiting expires it.
     for (const [
       root,
       sessionId,
@@ -384,11 +385,7 @@ export const App = (): JSX.Element => {
       const builder = state?.sessions.find(
         (session) => session.id === sessionId,
       );
-      if (
-        !builder ||
-        builder.status === "exited" ||
-        harness.activeSessionId !== sessionId
-      ) {
+      if (!builder || builder.status === "exited") {
         pendingStandaloneBuilderSessionsRef.current.delete(root);
       }
     }
