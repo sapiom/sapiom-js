@@ -307,6 +307,19 @@ export const App = (): JSX.Element => {
   // Create-new intent; the workbench tab + starts a sibling directly instead.
   // The home also shows whenever nothing else claims the centre pane.
   const [composing, setComposing] = useState(false);
+  /**
+   * THE PROJECT THE NEW AGENT SCREEN IS SCOPED TO, or null for the home screen.
+   *
+   * Creating an agent leads to one screen whichever entrance you came through —
+   * a folder you just picked, or a project you already have — and this is what
+   * makes the second entrance possible. It is deliberately NOT `studioSelection`:
+   * the Agent Map row still opens the map, and only the create verb lands here,
+   * so the two must be able to differ.
+   */
+  const [composingProject, setComposingProject] = useState<{
+    projectId: StudioProjectId;
+    label: string;
+  } | null>(null);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
   // pending affordance; the ref closes React's same-frame double-click window.
   const [siblingSessionPending, setSiblingSessionPending] = useState(false);
@@ -1544,9 +1557,14 @@ export const App = (): JSX.Element => {
   const showComposer =
     !showReview &&
     !showDead &&
-    !planningWorkspace &&
+    // A SCOPED COMPOSER OUTRANKS THE MAP. Landing on a project's map is what
+    // selecting the project does; landing on this screen is what CREATING in it
+    // does, and the create verb sets both (the map so the rail reads right, the
+    // scope so the screen knows where it is building). Without this the map's
+    // chat pane would win and the entrance would go nowhere.
+    (composingProject !== null || !planningWorkspace) &&
     !showProjectStarting &&
-    (composing || (!showAgentEmpty && !showWorkbench));
+    (composing || composingProject !== null || (!showAgentEmpty && !showWorkbench));
   /** The project a board can cut UP to — derived, so the way back is the same
    *  door whether the agent was reached from the rail or from the map. */
   const upToProject = atMapAltitude
@@ -3479,7 +3497,8 @@ export const App = (): JSX.Element => {
                    screen gives way to the terminal (createSessionAt clears
                    `composing`), and the canvas reveals itself once populated. */
                 <NewSessionComposer
-                  firstRun={state.firstRun === true}
+                  project={composingProject}
+                  firstRun={composingProject === null && state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
                   onUseTemplate={handleComposerUseTemplate}
