@@ -42,7 +42,7 @@ export type FocusedSessionContextResult =
       diagnostics: readonly BuildPlanDiagnostic[];
     }>;
 
-const sensitivePath = /(?:^|[\s"'])(?:[a-zA-Z]:\\|\/(?:home|Users|tmp|private|var\/folders)\/|~\/|file:\/\/)/u;
+const sensitivePath = /(?:^|[^A-Za-z0-9])(?:[a-zA-Z]:\\|\/(?:home|Users|tmp|private|var\/folders)\/|~\/|file:\/\/)/u;
 const secretLike = /(?:sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._~-]{12,}|(?:api[-_ ]?key|password|secret|token|credential)\s*[:=]\s*\S+)/iu;
 const unsafeFormat = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/gu;
 
@@ -59,10 +59,9 @@ function graphemes(value: string): string[] {
 
 function boundedString(value: string, limit: number, truncated: { value: boolean }): string {
   let safe = value;
-  if (sensitivePath.test(safe)) { safe = "[redacted-local-path]"; truncated.value = true; }
-  else if (secretLike.test(safe)) { safe = "[redacted-sensitive-value]"; truncated.value = true; }
+  if (sensitivePath.test(safe)) safe = "[redacted-local-path]";
+  else if (secretLike.test(safe)) safe = "[redacted-sensitive-value]";
   safe = safe.replace(unsafeFormat, (character) => {
-    truncated.value = true;
     return `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`;
   });
   const parts = graphemes(safe);

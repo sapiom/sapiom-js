@@ -16,6 +16,7 @@ Focused assignments, map-node references, bootstrap context, and future briefs a
 </studio-project-agent>`;
 
 /** Preserve the common project prompt byte-for-byte when no focus is attached. */
+/** Compose the common project-agent prompt with an optional already-safe focused projection. */
 export function projectAgentPromptAppendix(
   focusedContext?: FocusedSessionContextProjection | null,
 ): string {

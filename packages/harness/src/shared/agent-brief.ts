@@ -148,3 +148,9 @@ export type AgentBriefRefreshResult = Readonly<{
   impact: AgentBriefImpact;
   diagnostics: readonly BuildPlanDiagnostic[];
 }>;
+
+/** Content-free result retained with an append receipt for exact idempotent replay. */
+export type AgentBriefRefreshReceipt = Pick<
+  AgentBriefRefreshResult,
+  "map" | "plan" | "briefs" | "impact" | "diagnostics"
+>;

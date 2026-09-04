@@ -702,7 +702,7 @@ export interface TrustedSessionCreateOptions {
   initialTitle?: string;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
-  /** Optional, bounded brief overlay; context only and never authority. */
+  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
   focusedContext?: (sessionId: string) => FocusedSessionContextProjection;
   /** Server-authored native CLI orientation for a newly created session. */
   sessionStartSystemMessage?: (sessionId: string) => string;
@@ -718,6 +718,7 @@ export interface TrustedSessionCreateOptions {
 export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
+  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
   focusedContext?: FocusedSessionContextProjection;
 }
 
@@ -1137,6 +1138,8 @@ export class SessionManager {
         }
         const promptAppendix = trusted.promptAppendix?.(id);
         const focusedContext = trusted.focusedContext?.(id);
+        if (focusedContext && !agentMapIdentity)
+          throw new TypeError("Focused project context requires a project-agent identity");
         const sessionStartSystemMessage =
           trusted.sessionStartSystemMessage?.(id);
         const launchContext =
@@ -1338,6 +1341,8 @@ export class SessionManager {
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else if (trustedIdentity) throw new ProjectSessionScopeUnavailableError(id);
+    if (trusted.focusedContext && !agentMapIdentity)
+      throw new TypeError("Focused project context requires a project-agent identity");
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against

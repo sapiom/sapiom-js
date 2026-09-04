@@ -48,14 +48,13 @@ session creation.
 
 ## Reserved focused-brief seam
 
-SAP-3149 reserves append-only brief histories for later focused-context work
-without running a compiler. A brief has a stable logical ID and a neutral focus
+SAP-3149 established append-only brief histories for focused-context work. A
+brief has a stable logical ID and a neutral focus
 scope: either a canonical workstream or an ad-hoc delegation whose parent scope
 may identify nested delegation. Each scope has an explicit active or retired
 pointer. Retirement preserves history, and reactivation appends the next
 version against that retained history. New and migrated aggregates start with
-empty brief histories; plan apply and rebase never invoke a compiler or mutate
-brief pointers.
+empty brief histories.
 
 ## Focused brief compilation and refresh
 
@@ -78,3 +77,11 @@ delimiter-shaped and Unicode format characters are escaped, sensitive/path-like
 values are redacted, and oversized collections are truncated with a diagnostic.
 A project session without an overlay receives the common project-agent prompt
 byte-for-byte unchanged and keeps the same tool surface.
+
+Trusted hosts attach an overlay by calling `serializeFocusedSessionContext`
+with the exact map, plan, and brief versions, checking its discriminated result,
+and passing the branded `projection` through `TrustedSessionCreateOptions` or
+`TrustedSessionResumeOptions`. Focused context is rejected outside a trusted
+project-agent identity. Ordinary callers cannot construct the branded value,
+and authored data must never be appended to a prompt by another serialization
+path.

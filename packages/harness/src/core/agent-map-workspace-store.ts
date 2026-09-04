@@ -20,6 +20,7 @@ import type {
   AgentBriefVersionRef,
   ProjectMutationReceipt,
 } from "../shared/build-plan.js";
+import type { AgentBriefRefreshReceipt } from "../shared/agent-brief.js";
 import {
   AGENT_BRIEF_VERSION_HISTORY_LIMIT,
   PROJECT_MUTATION_RECEIPT_LIMIT,
@@ -138,12 +139,14 @@ export interface AppendBriefVersionsRequest {
     version: AgentBriefVersion;
     status: AgentBriefHistoryPointer["status"];
   }>[];
+  receipt: AgentBriefRefreshReceipt;
   createdAt: string;
 }
 
 export interface AppendBriefVersionsResult {
   replayed: boolean;
   versions: readonly AgentBriefVersionRef[];
+  receipt: AgentBriefRefreshReceipt;
 }
 
 /** Crash-atomic owner of the one final project planning aggregate. */
@@ -290,6 +293,8 @@ export class AgentMapWorkspaceStore {
       parseProjectBuildPlanVersionRef(request.expectedPlan, projectId);
       if (!/^sha256:[0-9a-f]{64}$/u.test(request.requestDigest) || request.requestId.length === 0 ||
         request.requestId.length > 128 || request.entries.length === 0 || request.entries.length > 128 ||
+        canonicalJson(request.receipt.map) !== canonicalJson(request.expectedMap) ||
+        canonicalJson(request.receipt.plan) !== canonicalJson(request.expectedPlan) ||
         new Date(request.createdAt).toISOString() !== request.createdAt) throw new Error("invalid brief append request");
     } catch {
       throw new AgentMapWorkspaceStoreError("malformed_state");
@@ -310,7 +315,9 @@ export class AgentMapWorkspaceStore {
       const next = structuredClone(aggregate);
       const versions: AgentBriefVersionRef[] = [];
       for (const entry of request.entries) {
-        const parsed = parseAgentBriefVersion(entry.version, projectId);
+        let parsed: AgentBriefVersion;
+        try { parsed = parseAgentBriefVersion(entry.version, projectId); }
+        catch { throw new AgentMapWorkspaceStoreError("malformed_state"); }
         if (JSON.stringify(parsed.map) !== JSON.stringify(request.expectedMap) ||
           JSON.stringify(parsed.plan) !== JSON.stringify(request.expectedPlan))
           throw new AgentMapWorkspaceStoreError("malformed_state");
@@ -326,7 +333,8 @@ export class AgentMapWorkspaceStore {
           briefId: parsed.briefId, status: entry.status, version: ref };
         versions.push(ref);
       }
-      const result: AppendBriefVersionsResult = { replayed: false, versions };
+      const result: AppendBriefVersionsResult = { replayed: false, versions,
+        receipt: structuredClone(request.receipt) };
       if (next.requestReceipts.length >= PROJECT_MUTATION_RECEIPT_LIMIT)
         throw new AgentMapWorkspaceStoreError("storage_unavailable");
       const receiptRecord: ProjectMutationReceipt<AppendBriefVersionsResult> = { projectId, ...actor,

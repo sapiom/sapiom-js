@@ -2,6 +2,7 @@ import type { AgentMapVersion, AgentMapVersionRef, ProjectAgentSession, StudioPr
 import { canonicalDigest, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
 import type {
   AgentBriefRefreshRequest,
+  AgentBriefRefreshReceipt,
   AgentBriefRefreshResult,
   PreviousAgentBrief,
 } from "../shared/agent-brief.js";
@@ -17,6 +18,7 @@ import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration
 import { AgentMapWorkspaceStoreError } from "./agent-map-workspace-store.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import { parseAgentBriefRefreshRequest } from "./build-plan-schema.js";
+import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
 import { evaluateAgentBriefImpact } from "./build-plan-impact-evaluator.js";
 import {
   serializeFocusedSessionContext,
@@ -174,12 +176,23 @@ export class AgentBriefService {
       this.emit(identity, result, "diagnostic", projectionOutcomes);
       return result;
     }
+    try { entries.forEach(({ version }) => parseAgentBriefVersion(version, identity.projectId)); }
+    catch {
+      const result = this.diagnosticResult(map, plan, boundedDiagnostics([...compiled.diagnostics, {
+        code: "brief-compilation-failed", severity: "error", path: "briefCompiler.output", relatedIds: [],
+      }]));
+      this.emit(identity, result, "diagnostic", projectionOutcomes);
+      return result;
+    }
     if (entries.length === 0) {
       const result = this.result(map, plan, compiled, false, false);
       this.emit(identity, result, compiled.diagnostics.length > 0 ? "diagnostic" : "unchanged", projectionOutcomes);
       return result;
     }
     try {
+      const intended = this.result(map, plan, compiled, false, true);
+      const receipt: AgentBriefRefreshReceipt = { map: intended.map, plan: intended.plan,
+        briefs: intended.briefs, impact: intended.impact, diagnostics: intended.diagnostics };
       const append = await this.store.appendBriefVersions(identity.projectId, {
         actor: { userId: identity.userId, sessionId: identity.sessionId },
         requestId: request.requestId,
@@ -187,9 +200,12 @@ export class AgentBriefService {
         expectedMap: mapRef(map),
         expectedPlan: planRef(plan),
         entries,
+        receipt,
         createdAt: plan.createdAt,
       });
-      const result = this.result(map, plan, compiled, append.replayed, true);
+      const result = append.replayed
+        ? this.receiptResult(append.receipt, true)
+        : intended;
       this.emit(identity, result, append.replayed ? "replayed" : "succeeded", projectionOutcomes);
       return result;
     } catch (error) {
@@ -214,21 +230,21 @@ export class AgentBriefService {
     if (receipt) {
       if (receipt.operation !== "brief_append" || receipt.requestDigest !== requestDigest)
         throw new AgentBriefServiceError("request_id_reused");
-      const { map, plan } = currentSources(aggregate, request);
-      const refs = (receipt.result as { versions?: readonly { versionId: string }[] }).versions ?? [];
-      const briefs = refs.flatMap((ref) => {
-        const version = Object.values(aggregate.briefVersionsById).flat()
-          .find((entry) => entry.versionId === ref.versionId);
-        const pointer = version ? aggregate.current.briefsByScope[version.scopeKey] : undefined;
-        return version && pointer ? [{ scopeKey: version.scopeKey, briefId: version.briefId,
-          versionId: version.versionId, version: version.version, disposition: "unchanged" as const,
-          status: pointer.status }] : [];
-      });
-      return { replayed: true, persisted: true, map: mapRef(map), plan: planRef(plan), briefs,
-        impact: emptyImpact(), diagnostics: [] };
+      const stored = receipt.result as { receipt?: AgentBriefRefreshReceipt };
+      const expectedMap = { projectId: aggregate.projectId, ...request.expectedMap } as AgentMapVersionRef;
+      const expectedPlan = { projectId: aggregate.projectId, ...request.expectedPlan } as ProjectBuildPlanVersionRef;
+      if (!stored.receipt || !agentMapVersionRefsEqual(stored.receipt.map, expectedMap) ||
+        !projectBuildPlanVersionRefsEqual(stored.receipt.plan, expectedPlan))
+        throw new AgentBriefServiceError("source_mismatch");
+      return this.receiptResult(stored.receipt, true);
     }
     if (aggregate.requestTombstones.some(matches)) throw new AgentBriefServiceError("request_id_expired");
     return null;
+  }
+
+  private receiptResult(receipt: AgentBriefRefreshReceipt, replayed: boolean): AgentBriefRefreshResult {
+    return { replayed, persisted: true, map: receipt.map, plan: receipt.plan,
+      briefs: receipt.briefs, impact: receipt.impact, diagnostics: receipt.diagnostics };
   }
 
   private result(

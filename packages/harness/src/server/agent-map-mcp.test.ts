@@ -330,8 +330,12 @@ describe("Agent Map Streamable HTTP MCP", () => {
     });
     const appliedReplay = await client.callTool({ name: "build_plan_apply", arguments: planRequest });
     expect(appliedReplay).toMatchObject({
-      structuredContent: { replayed: true, briefRefresh: { replayed: true, persisted: true } },
+      structuredContent: { replayed: true, briefRefresh: {
+        replayed: true, persisted: true, briefs: [{ disposition: "created" }],
+      } },
     });
+    expect((appliedReplay.structuredContent as { briefRefresh: { impact: unknown } }).briefRefresh.impact)
+      .toEqual((applied.structuredContent as { briefRefresh: { impact: unknown } }).briefRefresh.impact);
     const firstPlan = (await workspaceStore.readAggregate(projectId)).current.buildPlan!;
     expect(Object.values((await workspaceStore.readAggregate(projectId)).briefVersionsById)[0])
       .toEqual([expect.objectContaining({ version: 1 })]);

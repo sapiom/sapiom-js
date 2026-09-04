@@ -25,6 +25,7 @@ import {
   type SessionManagerOptions,
 } from "./session-manager.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -3104,6 +3105,19 @@ describe("SessionManager", () => {
       expect(spawns).toEqual([]);
     },
   );
+
+  it("rejects a focused overlay when no project-agent identity resolves", async () => {
+    const adapter = createFakeAdapter();
+    const { manager, spawns } = makeManager({ adapter });
+
+    await expect(manager.create(
+      { cwd: "/tmp/proj", harness: "claude-code" },
+      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
+    )).rejects.toThrow("Focused project context requires a project-agent identity");
+    expect(adapter.launch).not.toHaveBeenCalled();
+    expect(spawns).toEqual([]);
+    expect(manager.list()).toEqual([]);
+  });
 
   it.each(["buildLaunchOpts", "adapter.resume"] as const)(
     "releases project launch authority when resume setup fails in $stage",

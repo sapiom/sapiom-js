@@ -66,6 +66,7 @@ export {
 export type {
   AgentBriefFocusSelection,
   AgentBriefRefreshRequest,
+  AgentBriefRefreshReceipt,
   AgentBriefRefreshResult,
   CompileAgentBriefsRequest,
   CompileAgentBriefsResult,
