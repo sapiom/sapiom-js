@@ -24,10 +24,12 @@
  * control opens focused) live in `dialog-focus.ts` where the Node test runner
  * can reach them without a DOM.
  */
-import { useEffect, useLayoutEffect, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 import {
+  claimsTab,
   DIALOG_FOCUSABLE_SELECTOR,
+  DIALOG_LAYER_SELECTOR,
   initialFocusIndex,
   wrapFocusIndex,
 } from "./dialog-focus";
@@ -106,6 +108,10 @@ export function useDialogBehavior({
   triggerRef,
   initialFocusRef,
 }: DialogBehaviorOptions): void {
+  // The control that had focus when this dialog opened, captured in the inert
+  // sweep below — see why there rather than here.
+  const openedFromRef = useRef<HTMLElement | null>(null);
+
   useDismissable(dismissable, { onDismiss, containerRef, triggerRef });
 
   // DECLARED FIRST, AND A LAYOUT EFFECT, both on purpose. React runs effect
@@ -117,6 +123,15 @@ export function useDialogBehavior({
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    // Read the opener BEFORE the sweep, and only here. Making a subtree inert
+    // blurs whatever inside it holds focus, so by the time any later effect
+    // looks, `document.activeElement` is already `<body>` and the identity of
+    // the control that opened this dialog is gone.
+    openedFromRef.current =
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement !== document.body
+        ? document.activeElement
+        : null;
     return inertBackground(container);
   }, [containerRef]);
 
@@ -126,8 +141,6 @@ export function useDialogBehavior({
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const openedFrom =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     // A consumer's own `autoFocus` (the confirm dialogs' safe action) has
     // already run by now and is the more specific answer — leave it alone.
@@ -148,7 +161,7 @@ export function useDialogBehavior({
     }
 
     return () => {
-      const restoreTo = triggerRef?.current ?? openedFrom;
+      const restoreTo = triggerRef?.current ?? openedFromRef.current;
       if (!restoreTo?.isConnected) return;
       // Don't yank focus from wherever it has legitimately gone: restore only
       // when the closing dialog is what still holds it.
@@ -165,8 +178,27 @@ export function useDialogBehavior({
       if (event.key !== "Tab" || event.defaultPrevented) return;
       const container = containerRef.current;
       if (!container) return;
+      const active = document.activeElement;
+      const inside = active instanceof Node && container.contains(active);
+      // A layer that mounted AFTER this one is not inert — the sweep above ran
+      // when it did not exist — so the trap has to decline Tab itself rather
+      // than rely on the background being unreachable.
+      const ownLayer = container.closest(DIALOG_LAYER_SELECTOR) ?? container;
+      const inAnotherLayer =
+        !inside &&
+        active instanceof Element &&
+        active.closest(DIALOG_LAYER_SELECTOR) != null;
+      // An ancestor layer is one this dialog opened INSIDE (the overview modal
+      // hosts the add-agents dialog); that one is below, not above.
+      const anotherLayerOpen = Array.from(
+        document.querySelectorAll(DIALOG_LAYER_SELECTOR),
+      ).some(
+        (layer) =>
+          layer !== ownLayer && !layer.contains(ownLayer) && !ownLayer.contains(layer),
+      );
+      if (!claimsTab(inside, inAnotherLayer, anotherLayerOpen)) return;
       const focusables = focusablesIn(container);
-      const activeIndex = focusables.indexOf(document.activeElement as HTMLElement);
+      const activeIndex = focusables.indexOf(active as HTMLElement);
       const next = wrapFocusIndex(focusables.length, activeIndex, event.shiftKey);
       if (next == null) return;
       event.preventDefault();

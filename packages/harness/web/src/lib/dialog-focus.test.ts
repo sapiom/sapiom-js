@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { initialFocusIndex, wrapFocusIndex } from "./dialog-focus";
+import { claimsTab, initialFocusIndex, wrapFocusIndex } from "./dialog-focus";
 
 /**
  * The trap's rule, tested where it is a rule rather than a DOM.
@@ -64,5 +64,33 @@ describe("initialFocusIndex", () => {
 
   it("does not skip a header that holds no focusable control", () => {
     expect(initialFocusIndex(3, 0)).toBe(0);
+  });
+});
+
+describe("claimsTab", () => {
+  it("acts when the dialog holds focus", () => {
+    expect(claimsTab(true, false, false)).toBe(true);
+  });
+
+  it("acts when focus is loose and this is the only layer, pulling the escape back", () => {
+    expect(claimsTab(false, false, false)).toBe(true);
+  });
+
+  it("declines when another layer holds focus", () => {
+    // The measured case: the command palette opens OVER an open dialog and is
+    // not inert (the dialog's background sweep ran before the palette existed).
+    // A trap without this rule pulls focus into a dialog hidden behind the
+    // palette's scrim, and the next keystroke lands where nobody can see it.
+    expect(claimsTab(false, true, true)).toBe(false);
+  });
+
+  it("declines loose focus while another layer is open, rather than guessing", () => {
+    // Focus has fallen out of everything. This dialog can say the Tab is not
+    // its business; it cannot say whose it is, so it hands it to the browser.
+    expect(claimsTab(false, false, true)).toBe(false);
+  });
+
+  it("still acts on its own focus even while another layer is open", () => {
+    expect(claimsTab(true, true, true)).toBe(true);
   });
 });

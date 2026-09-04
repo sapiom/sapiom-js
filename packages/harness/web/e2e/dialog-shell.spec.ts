@@ -259,6 +259,42 @@ for (const dialog of CASES) {
       expect((await heading.textContent())?.trim()).toBeTruthy();
     });
 
+    test("Tab belongs to whatever opened OVER it, not to this dialog", async ({
+      page,
+    }) => {
+      // A layer that mounts AFTER this dialog is not inert — the background
+      // sweep ran before it existed — and the trap is a document listener, so
+      // every open dialog sees every Tab. Without a topmost-layer guard, this
+      // dialog's trap preventDefaults and pulls focus onto its own first
+      // control, which is behind the newer scrim: the next keystroke lands in a
+      // field nobody can see.
+      //
+      // The command palette is the real case: App.tsx's Cmd-K handler opens it
+      // over an open dialog, and it carries no `role`, so only its
+      // `.modal-backdrop` identifies it as a layer at all.
+      //
+      // TWO presses, not ten, and the number is the claim. The guard makes this
+      // dialog decline the Tab; it cannot make the palette contain focus,
+      // because the palette has no trap and neither surface inerts the other.
+      // Native order therefore does walk out of the palette eventually — see
+      // the PR's note on App.tsx's missing dialog guard. What is asserted here
+      // is the part this shell owns: it does not SEIZE the Tab.
+      const surface = dialog.surface(page);
+      await page.keyboard.press("ControlOrMeta+k");
+      const palette = page.getByTestId("command-palette-input");
+      await expect(palette).toBeVisible();
+      // A path-shaped query is the branch where the palette does NOT handle Tab
+      // itself, so nothing but the guard keeps focus out of the dialog.
+      await palette.fill("/Users/demo");
+      for (let press = 0; press < 2; press += 1) {
+        await page.keyboard.press("Tab");
+        expect(
+          await focusIsInside(surface),
+          `the dialog's trap seized Tab from the palette after ${press + 1} presses, onto ${await focusedDescription(page)}`,
+        ).toBe(false);
+      }
+    });
+
     test("the background goes back to normal when it closes", async ({
       page,
     }) => {

@@ -69,3 +69,50 @@ export function initialFocusIndex(count: number, headerCount: number): number {
   if (count <= 0) return -1;
   return headerCount < count ? headerCount : 0;
 }
+
+/**
+ * What counts as a separate overlay LAYER.
+ *
+ * `.modal-backdrop` leads because it is the one thing every overlay in this app
+ * actually has: `CommandPalette` carries no `role` at all, so a role-only
+ * selector (the shape `App.tsx`'s pane-collapse hotkey uses) does not see it.
+ * The roles and `aria-modal` follow for surfaces that do not wear the class —
+ * `OverviewModal` and `HelpOverlay` build their own scrim.
+ */
+export const DIALOG_LAYER_SELECTOR = [
+  ".modal-backdrop",
+  ".overview-modal",
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[aria-modal="true"]',
+].join(",");
+
+/**
+ * Whether THIS dialog's trap should act on a Tab press.
+ *
+ * A dialog's trap is a document listener, so every mounted dialog sees every
+ * Tab, and the pull-focus-back-in case (`activeIndex === -1`) makes an
+ * unguarded trap take Tab from whatever is genuinely on top. The real sequence:
+ * open the create-agent dialog, press Cmd-K, and the palette mounts as a
+ * SIBLING — not inert, because the background sweep ran at mount and the palette
+ * did not exist yet. Without this rule the create-agent dialog's trap pulls
+ * focus into a surface hidden behind the palette's scrim, and the next keystroke
+ * lands in a field nobody can see.
+ *
+ * So a dialog claims Tab only when it holds focus, or when it is the ONLY layer
+ * on screen. Both other cases hand Tab back to the browser rather than to a
+ * different guess: this shell can say which Tabs are not its business, and it
+ * cannot say which are somebody else's.
+ *
+ * @param focusInThisDialog  focus is inside this dialog's own surface
+ * @param focusInAnotherLayer focus is inside some other overlay
+ * @param anotherLayerOpen   some other overlay is mounted, wherever focus is
+ */
+export function claimsTab(
+  focusInThisDialog: boolean,
+  focusInAnotherLayer: boolean,
+  anotherLayerOpen: boolean,
+): boolean {
+  if (focusInThisDialog) return true;
+  return !focusInAnotherLayer && !anotherLayerOpen;
+}
