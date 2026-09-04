@@ -2146,6 +2146,8 @@ export const App = (): JSX.Element => {
       | "welcome"
       | "template_gallery"
       | "template_detail" = "template_gallery",
+    // The gallery has no picker; the composer passes its current selection.
+    agentHarness: HarnessKind = preferredHarness(),
   ): Promise<void> => {
     // Product metric — "templates used". Fires at the choke point every
     // template surface funnels through; `agent.created` fires later when the
@@ -2175,12 +2177,12 @@ export const App = (): JSX.Element => {
       trackUse();
       setTemplatesOpen(false);
       setFocusedAgentPath(created.path);
-      const session = await createSessionAt(parent, "claude-code");
+      const session = await createSessionAt(parent, agentHarness);
       await harness.bindWorkflow(session.id, created.path);
       setFocusedAgentPath(created.path);
       return;
     }
-    const session = await createSessionAt(cwd, "claude-code", {
+    const session = await createSessionAt(cwd, agentHarness, {
       initialUserInputPending: true,
     });
     trackUse();
@@ -2240,14 +2242,17 @@ export const App = (): JSX.Element => {
     setComposing(false);
   };
 
-  const handleComposerUseTemplate = (template: GalleryTemplate): void => {
+  const handleComposerUseTemplate = (
+    template: GalleryTemplate,
+    agentHarness: HarnessKind,
+  ): void => {
     const cwd = uniqueProjectDir(template.id);
     if (!cwd) {
       harness.showToast("Set a project folder first — use the + to open one.");
       return;
     }
     setRightCollapsed(true);
-    void handleUseTemplate(cwd, template, "welcome");
+    void handleUseTemplate(cwd, template, "welcome", agentHarness);
   };
 
   // Bulk discovery from the add dialog.
