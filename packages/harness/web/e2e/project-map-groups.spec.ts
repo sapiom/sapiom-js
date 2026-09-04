@@ -1,4 +1,17 @@
 /**
+ * RUNS ON THE COMPATIBILITY PAYLOAD (`mockStudioProjects=absent`).
+ *
+ * The subject here is the workspace System Graph a project row opens. On a
+ * current server every project carries a durable Studio project and the row
+ * opens that project's Agent Map instead, so this surface is reachable only on
+ * the legacy payload, which is what `mockStudioProjects=absent` names. These
+ * specs were already running on that payload before it had a name: mock mode
+ * returned no Studio projects by default, so the whole suite did. Pinning takes
+ * nothing away, it only stops the choice being an accident. The plan-first
+ * equivalents of these behaviours are NOT covered here; see
+ * `project-axis.spec.ts` and `agent-map-planning.spec.ts`.
+ */
+/**
  * SAP-2983 — the project map draws the groups the rail already has.
  *
  * The unit tests pin the two pure halves: `lib/system-graph-groups.test.ts`
@@ -50,7 +63,7 @@ async function openGroupAxis(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?mockFixtures=deep");
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await page.getByTestId("project-select-polsia").click();
   await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
@@ -259,7 +272,7 @@ test("a project whose arrangement cannot be READ still draws its groups", async 
      at. Gating the map on the write gate instead would leave it flat and
      unlabelled on a read-only checkout while the rail six inches away named
      every system, which is the divergence this whole feature removes. */
-  await page.goto("/?mockFixtures=deep");
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await page.evaluate(() => {
     (window as unknown as { __MOCK_RAIL_STATE_FAIL__?: boolean }).__MOCK_RAIL_STATE_FAIL__ =
@@ -290,7 +303,7 @@ test("a read that failed is tried again when the map is reopened", async ({
      module-level request latch would mean one bad response is permanent, and
      that this committable file is never re-read after a branch switch or a hand
      edit either. So the latch stays per surface, and a remount re-reads. */
-  await page.goto("/?mockFixtures=deep");
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await page.evaluate(() => {
     // A stored arrangement, so a successful read is distinguishable from a
@@ -350,7 +363,7 @@ test("opening the map cannot undo an edit the rail just made", async ({
 
      The write is held open here so the race is deterministic rather than a
      matter of who happens to win. */
-  await page.goto("/?mockFixtures=deep");
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await openGroupAxis(page);
 

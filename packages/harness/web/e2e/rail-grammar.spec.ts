@@ -25,7 +25,10 @@ import { openProjectMenu } from "./mock-navigation";
 const ROW = (page: Page, label: string) =>
   page
     .getByTestId(`workspace-group-${label}`)
-    .locator(":scope > .workspace-row");
+    // `:not(.is-nested)` because a plan-first group has a SECOND direct
+    // `.workspace-row` child, the pinned Agent Map row. Unqualified, this is a
+    // strict-mode violation there rather than the project header.
+    .locator(":scope > .workspace-row:not(.is-nested)");
 
 test.describe("legacy-server project row grammar", () => {
   test.beforeEach(async ({ page }) => {
@@ -120,7 +123,11 @@ test.describe("legacy-server project row grammar", () => {
 
 test.describe("double-click toggles disclosure", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/?seed=0");
+    // Compatibility payload: a plan-first project label is `disclosureOnly`, so
+    // one click already folds it and a double-click folds then unfolds. The
+    // select-and-fold grammar asserted below belongs to the row whose single
+    // click SELECTS the project, which is the row a legacy payload renders.
+    await page.goto("/?seed=0&mockStudioProjects=absent");
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
@@ -162,7 +169,7 @@ test.describe("double-click on a folder row", () => {
   // happens. `?mockFixtures=deep` is the same fixture `project-axis.spec.ts`
   // uses, and it carries `polsia/services` as a real branch point.
   test.beforeEach(async ({ page }) => {
-    await page.goto("/?mockFixtures=deep");
+    await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
     await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
   });
 

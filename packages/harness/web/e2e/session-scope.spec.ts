@@ -1,6 +1,16 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 /**
  * SAP-2927 / criterion 18 — a new session's cwd is the PROJECT ROOT.
  *
@@ -40,7 +50,7 @@ const endActiveSession = async (page: Page): Promise<void> => {
 /** Leave `leasing` focused with no live session of its own, so the workbench
  *  shows the "Start session" empty state. */
 const emptyLeasingWorkbench = async (page: Page): Promise<void> => {
-  await page.goto("/?seed=0");
+  await page.goto("/?seed=0&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   const context = page.getByTestId("session-context");
   await expect(context).toHaveAttribute("data-session-id", "sess-boot");
@@ -97,7 +107,7 @@ test("an agent under no known root still starts a session, in its own folder", a
   // `daily-activity-analyst` sits at /Users/demo/social-marketing/analytics-stack/…,
   // which no recentDirs entry and no launchDir contains. Honest degradation:
   // the old behaviour, not a failure to start.
-  await page.goto("/?seed=0&mockFixtures=search");
+  await page.goto("/?seed=0&mockFixtures=search&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
   /* RE-POINTED IN ROUND 2. This addressed the row as

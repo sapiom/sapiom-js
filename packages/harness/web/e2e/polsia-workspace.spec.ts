@@ -1,3 +1,16 @@
+/**
+ * RUNS ON THE COMPATIBILITY PAYLOAD (`mockStudioProjects=absent`).
+ *
+ * The subject here is the workspace System Graph a project row opens. On a
+ * current server every project carries a durable Studio project and the row
+ * opens that project's Agent Map instead, so this surface is reachable only on
+ * the legacy payload, which is what `mockStudioProjects=absent` names. These
+ * specs were already running on that payload before it had a name: mock mode
+ * returned no Studio projects by default, so the whole suite did. Pinning takes
+ * nothing away, it only stops the choice being an accident. The plan-first
+ * equivalents of these behaviours are NOT covered here; see
+ * `project-axis.spec.ts` and `agent-map-planning.spec.ts`.
+ */
 import { expect, test, type Page } from "@playwright/test";
 
 const POLSIA = "/Users/demo/polsia";
@@ -15,7 +28,7 @@ const graphRequestCount = (page: Page): Promise<number> =>
   );
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });

@@ -7,6 +7,16 @@
 import { expect, test } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 test.use({ viewport: { width: 375, height: 812 } });
 
 /** Geometry assertions must not race the 300ms drawer/sheet entrance —
@@ -18,7 +28,7 @@ async function settled(el: Locator): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0");
+  await page.goto("/?seed=0&mockStudioProjects=absent");
   await expect(page.locator(".session-bar")).toBeVisible();
 });
 

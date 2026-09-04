@@ -17,11 +17,21 @@ import {
   selectMockSessionFromPalette,
 } from "./mock-navigation";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
 // they opt out with ?seed=0 — the seeded end-state has its own coverage.
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0");
+  await page.goto("/?seed=0&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
@@ -823,7 +833,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
        selecting one that has nothing running opens its first session at the
        project root; a project you can select but not talk to is the failure
        this criterion names. */
-    await page.goto("/?seed=0&mockNoLiveSessions=1");
+    await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=absent");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await expect(page.getByTestId("open-agent-empty")).toContainText(
       "No running session for leasing",

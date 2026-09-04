@@ -7,6 +7,16 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { focusRfqAgent } from "./mock-navigation";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 type HarnessHook = {
   lastDirectAction?: { action: string; req: Record<string, unknown> };
   directActions?: Array<{ action: string; req: Record<string, unknown> }>;
@@ -34,7 +44,7 @@ async function openCloudSheet(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0");
+  await page.goto("/?seed=0&mockStudioProjects=absent");
   await expect(page.getByTestId("session-steps")).toBeVisible();
 });
 

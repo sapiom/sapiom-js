@@ -17,7 +17,13 @@ import { expect, type Page } from "@playwright/test";
 export async function focusRfqAgent(page: Page): Promise<void> {
   const row = page.getByTestId("workflow-rfq");
   await expect(row).toBeVisible();
-  await row.locator(".workspace-row-main").click();
+  // `.workflow-item-trigger` is on the agent's button in BOTH shapes: the merged
+  // project row a compatibility payload produces (where it sits beside
+  // `.workspace-row-main`) and the separate child row a plan-first project renders
+  // below its pinned Agent Map. Naming `.workspace-row-main` matched only the
+  // first, so every spec routed through here lost the agent as soon as mock mode
+  // started rendering the shipped path.
+  await row.locator(".workflow-item-trigger").click();
   await expect(row).toHaveClass(/is-focused/);
 }
 

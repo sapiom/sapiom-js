@@ -19,6 +19,16 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 const POLSIA = "workspace-group-polsia";
 /** `polsia/services/workers` opened as its own project — a second scope. */
 const WORKERS = "workspace-group-polsia/services/workers";
@@ -38,7 +48,7 @@ async function openGroupAxis(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?mockFixtures=deep");
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId(POLSIA)).toBeVisible();
   await openGroupAxis(page);

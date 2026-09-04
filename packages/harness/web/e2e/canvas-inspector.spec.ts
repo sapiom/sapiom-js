@@ -17,6 +17,16 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 const loadBoard = async (page: Page): Promise<void> => {
   await page.evaluate(() => {
     (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
@@ -46,7 +56,7 @@ const postFromCanvas = (page: Page, message: unknown): Promise<void> =>
   }, message);
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0");
+  await page.goto("/?seed=0&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await loadBoard(page);
 });

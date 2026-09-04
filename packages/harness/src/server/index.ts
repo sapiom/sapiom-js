@@ -129,6 +129,9 @@ import {
   StaticSystemGraphBuilder,
   type WorkspaceScope,
 } from "../core/system-graph.js";
+// One definition of what a project is, shared with the SPA's rail — see the
+// comment on `workspaceScopeCatalog` below.
+import { projectRoots } from "../shared/project-roots.js";
 import {
   canonicalGraphPath,
   dirtyGraphSourceRoots,
@@ -1206,10 +1209,39 @@ export const startServer = async (
   });
   await sessionManager.init();
 
-  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () => [
-    ...(await loadSettings(statePaths.settings)).recentDirs,
-    ...sessionManager.list().map((session) => session.cwd),
-  ]);
+  // THE SAME ANSWER THE RAIL DRAWS, because this catalog is what mints a
+  // durable Studio project per scope and the rail joins its row root to a
+  // scope cwd. Handing it the raw candidates instead — every recentDir plus
+  // every session cwd — was a SECOND definition of "project", and the two
+  // disagreed on the commonest shape there is. `projectRoots`' rule 1 replaces
+  // an agent's OWN directory with the folder that HOLDS it, and that folder
+  // was never a recentDir and never a session cwd. Launch Studio at
+  // `…/property-ops/tenant-screening` and the rail drew `…/property-ops` while
+  // the only registered scope was the agent folder one level down: the join
+  // found nothing, `mapOwnsCreation` went false, and a real install rendered
+  // the RETIRED direct-creation UI instead of the Agent Map that replaced it.
+  //
+  // Deriving here rather than widening the join keeps one source of truth:
+  // `shared/project-roots.ts` decides what a project is, and both hosts read
+  // it. A tolerant join would have been a second, weaker rule that also bound
+  // a row to a project whose root is not that row's root.
+  //
+  // `pendingCwds` is empty on purpose — a folder mid-creation is a browser-only
+  // fact with nothing on disk yet — and `sort` only orders the result, which
+  // `LocalWorkspaceScopeCatalog` re-sorts by canonical path anyway.
+  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () =>
+    projectRoots({
+      recentDirs: (await loadSettings(statePaths.settings)).recentDirs,
+      sessions: sessionManager.list().map((session) => ({
+        cwd: session.cwd,
+        createdAt: session.createdAt,
+        status: session.status,
+      })),
+      pendingCwds: [],
+      agentPaths: workflowsCache.map((workflow) => workflow.path),
+      sort: "recent",
+    }),
+  );
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
