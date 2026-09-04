@@ -32,12 +32,14 @@ check into a pass.
 | `pnpm build` | Pass |
 | `pnpm typecheck` | Pass, including the Harness web TypeScript project |
 | `pnpm lint` | Pass under the repository's existing lint boundary; SAP-3152 does not widen or change it |
-| `pnpm --filter @sapiom/harness test` | Pass: 223 files, 3,577 tests; performance tier 3 files, 10 tests |
+| `pnpm --filter @sapiom/harness test` | Pass: 223 files, 3,579 tests; performance tier 3 files, 10 tests |
+| Review-fix transcript/migration/containment regressions | Pass: 3 files, 220 tests |
+| Review-fix bootstrap/server/privacy regressions | Pass: 5 files, 123 tests |
 | Focused map/plan/brief/bootstrap/delegation Vitest command | Pass: 9 files, 117 tests |
 | Explicit E1/E2-to-neutral migration Vitest command | Pass: 2 files, 20 tests |
 | `pnpm --filter @sapiom/harness test:ui` | Pass: 501 Chromium tests |
 | `pnpm --filter @sapiom/harness test:canvas` | Pass: 11 Chromium tests |
-| examples, terminology, and provider-copy gates | Pass: terminology audited 913 files with no stale allowlist entries |
+| examples, terminology, and provider-copy gates | Pass: terminology audited 914 files with no stale allowlist entries |
 | Harness production build | Pass |
 | Desktop distribution | AppImage created; `.deb` packaging then failed because this VM lacks `libcrypt.so.1` |
 | Packaged AppImage smoke | Not runnable here: this VM has neither FUSE nor an X server/`xvfb-run`. The AppImage exists and extracts successfully. |
@@ -73,9 +75,13 @@ Before final closure or stable rollout, attach:
 
 Until those items exist, the legacy-PR closure gate remains closed.
 
-At the initial #811 checkpoint, GitHub refused the autonomous reviewer because
-the default branch changed its review workflow after the replacement stack was
-frozen. The action requires the checked-out workflow to be byte-identical to
-the default-branch copy, so it produced no review. SAP-3152 does not copy that
-unrelated default-branch change into a stacked audit PR merely to manufacture a
-green check.
+The default branch changed its autonomous-review workflow after the replacement
+stack was frozen. SAP-3152 copied that workflow byte-for-byte in a dedicated CI
+commit, then used a temporary review-base branch rooted at the exact SAP-3151
+head with the same workflow blob. A no-content feature-branch merge made the
+shim commit an ancestor of SAP-3152 without changing its tree. This removed the
+workflow from the PR file list and allowed an exact-head review of the unchanged
+product/docs diff. The first usable review found the released-event transcript
+compatibility and containment-test gaps now covered by the focused regressions
+above. The PR returns to its real SAP-3151 base after a clean exact-head review;
+the temporary branch is retained and never merged as a pull request.

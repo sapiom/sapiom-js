@@ -239,6 +239,31 @@ describe("foldSessionRecord", () => {
     );
   });
 
+  it("keeps released pre-unification bootstrap events out of the human transcript", () => {
+    const record = foldSessionRecord([
+      event({
+        type: "prompt.submitted",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: {
+          prompt: "private released bootstrap instruction",
+          ["plannerOrigin"]: "infrastructure",
+        },
+      }),
+      completed("2026-07-01T10:00:01.000Z", "What would you like to build?"),
+    ]);
+
+    expect(record.turnCount).toBe(0);
+    expect(record.turns).toHaveLength(1);
+    expect(record.turns[0]).toMatchObject({
+      prompt: null,
+      promptAt: null,
+      assistantText: "What would you like to build?",
+    });
+    expect(JSON.stringify(record)).not.toContain(
+      "private released bootstrap instruction",
+    );
+  });
+
   it("a second prompt closes the open turn as incomplete rather than dropping it", () => {
     const record = foldSessionRecord([
       prompt("2026-07-01T10:00:00.000Z", "first"),

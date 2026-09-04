@@ -584,5 +584,29 @@
     "pattern": "map-planner|agent-builder",
     "occurrences": 3,
     "reason": "Persisted-session fixtures prove valid metadata migrates and malformed or conflicting authority remains safely preserved."
+  },
+  {
+    "id": "legacy-bootstrap-event-decoder",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/project-session-legacy-migration.ts",
+    "pattern": "plannerOrigin",
+    "occurrences": 1,
+    "reason": "Read-only decoder for the infrastructure bootstrap marker written into durable prompt events by released pre-unification builds."
+  },
+  {
+    "id": "legacy-bootstrap-event-folding-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/session-record.test.ts",
+    "pattern": "plannerOrigin",
+    "occurrences": 1,
+    "reason": "Released-event fixture proves the private infrastructure bootstrap prompt never becomes a human transcript turn after upgrade."
+  },
+  {
+    "id": "legacy-bootstrap-event-ledger",
+    "rule": "unified-agent-model",
+    "path": "docs/plans/agent-studio-plan-first-agent-map/sap-3152-cutover-ledger.md",
+    "pattern": "plannerOrigin",
+    "occurrences": 1,
+    "reason": "The cutover register names the exact retained persisted-event key and documents its decoder-only compatibility boundary."
   }
 ]

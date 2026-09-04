@@ -21,5 +21,7 @@ embedder that already owns a new session's first prompt should send
 bootstrap yields before launch. New telemetry consumers should recognize the
 neutral `project_agent.*` and `project_bootstrap.*` events. Valid legacy state
 keeps its session/provider IDs, cwd, title, transcript, and Canvas; malformed or
-conflicting authority is retained and fails closed. Downgrading does not restore
-the superseded session authority model.
+conflicting authority is retained and fails closed. Released infrastructure
+bootstrap event markers remain read-compatible so their private control prompt
+never becomes a human transcript turn after upgrade. Downgrading does not
+restore the superseded session authority model.

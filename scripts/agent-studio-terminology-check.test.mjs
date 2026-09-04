@@ -216,6 +216,7 @@ describe("Agent Studio terminology guard", () => {
         source('export const authority = "map-planner";'),
         source('it("never becomes planning-readonly", () => {});', "code", "packages/harness/src/example.test.ts"),
         source("A BuilderPlanningSubmission authorizes coding.", "text", "docs/example.md"),
+        source('export const retiredEventKey = "plannerOrigin";', "code", "packages/harness/src/legacy-event.ts"),
       ],
     });
 
@@ -225,6 +226,7 @@ describe("Agent Studio terminology guard", () => {
         ["unified-agent-model", "map-planner"],
         ["unified-agent-model", "planning-readonly"],
         ["unified-agent-model", "BuilderPlanningSubmission"],
+        ["unified-agent-model", "plannerOrigin"],
       ],
     );
   });

@@ -2021,8 +2021,6 @@ export class MockApi implements HarnessApi {
     this.fresh || this.noLiveSessions
       ? []
       : MOCK_SESSIONS.map((session) => ({ ...session }));
-  /** Live planner records are mutable mock state, unlike the fixed history
-   * fixtures. They exercise the same record-refetch path as the real server. */
   private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [

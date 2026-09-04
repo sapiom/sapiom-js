@@ -70,7 +70,7 @@ const TERMINOLOGY_RULES = [
     id: "unified-agent-model",
     label: "Retired project-agent authority terminology",
     regex:
-      /map-planner|agent-builder|PlanningSessionIdentity|planning-readonly|BuilderPlanningSubmission|planning_result_submit|implementationEligible|source-not-confirmed|BUILDER_BOOTSTRAP_|assertPlanner|forbidden_role/giu,
+      /map-planner|agent-builder|PlanningSessionIdentity|planning-readonly|BuilderPlanningSubmission|planning_result_submit|implementationEligible|source-not-confirmed|BUILDER_BOOTSTRAP_|assertPlanner|forbidden_role|plannerOrigin/giu,
     appliesTo: () => true,
   },
 ];

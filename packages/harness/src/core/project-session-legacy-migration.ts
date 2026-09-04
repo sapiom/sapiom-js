@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import type {
   ProjectAgentSession,
   ProjectBootstrapErrorCode,
@@ -12,6 +14,17 @@ export type PersistedIdentityMigration = {
 };
 
 const LEGACY_METADATA_KEY = "planning";
+
+/**
+ * Recognizes the infrastructure marker written into durable prompt events by
+ * released pre-unification builds. Keep the retired record key isolated here:
+ * it is decoder-only compatibility and never participates in live authority.
+ */
+export function isPreUnifiedInfrastructureBootstrapPayload(
+  payload: Record<string, unknown>,
+): boolean {
+  return payload["plannerOrigin"] === "infrastructure";
+}
 
 /** The sole filesystem location for the retired project-session bootstrap store. */
 export function legacyProjectSessionStateRoot(stateRoot: string): string {
@@ -193,4 +206,3 @@ export function removeLegacyProjectSessionMetadata(
 ): void {
   delete (session as unknown as Record<string, unknown>)[LEGACY_METADATA_KEY];
 }
-import { join } from "node:path";

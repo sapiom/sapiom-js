@@ -77,7 +77,13 @@ limited to:
 - the read-only E2 proposal-actor decoder and its exact migration tests;
 - deployed E2 aggregate migration fixtures;
 - pre-upgrade project-bootstrap and session-metadata migration fixtures;
-- the isolated legacy bootstrap-state path resolver.
+- the isolated legacy bootstrap-state path resolver;
+- the released `plannerOrigin` prompt-event key, decoded only to keep private
+  bootstrap instructions out of upgraded session transcripts.
+
+That prompt-event key is intentionally retained rather than included in the
+dead-model deletion set. It affects transcript compatibility only and cannot
+select identity, tools, prompts, sandbox policy, or implementation authority.
 
 Each entry has an exact path, pattern, occurrence count, rationale, and stale
 entry failure. `agent-map-legacy-migration.test.ts` also proves the decoder is

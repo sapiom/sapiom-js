@@ -55,6 +55,7 @@ import { projectDirsFor } from "./adapters/claude-code.js";
 import { PAYLOAD_TRUNCATION_MARKER } from "./collector/normalizer.js";
 import { readLastAssistantTurn } from "./collector/transcript.js";
 import type { EventIndex, EventReader } from "./collector/store.js";
+import { isPreUnifiedInfrastructureBootstrapPayload } from "./project-session-legacy-migration.js";
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -161,28 +162,28 @@ export function foldSessionRecord(
         if (cwd === null) cwd = stringOrNull(payload.cwd);
         break;
 
-      case "prompt.submitted":
+      case "prompt.submitted": {
         // A prompt arriving while a turn is open means that turn never
         // completed (killed mid-turn, or the user queued another prompt).
         // Keep it, marked incomplete — dropping it would lose real tool calls.
         close(null);
+        const infrastructureBootstrap =
+          payload.projectBootstrapOrigin === "infrastructure" ||
+          isPreUnifiedInfrastructureBootstrapPayload(payload);
         open = {
           // Project bootstrap control is retained locally for diagnostics but
           // projected as an assistant-initiated turn: its private instruction
           // must never appear as a user message or inflate the human turn count.
-          prompt:
-            payload.projectBootstrapOrigin === "infrastructure"
-              ? null
-              : typeof payload.prompt === "string"
-                ? payload.prompt
-                : "",
-          promptAt:
-            payload.projectBootstrapOrigin === "infrastructure"
-              ? null
-              : event.ts,
+          prompt: infrastructureBootstrap
+            ? null
+            : typeof payload.prompt === "string"
+              ? payload.prompt
+              : "",
+          promptAt: infrastructureBootstrap ? null : event.ts,
           toolCalls: [],
         };
         break;
+      }
 
       case "tool.call": {
         // No enclosing turn: the recording started mid-turn (a resume attaches

@@ -61,10 +61,53 @@ describe("role-neutral project session", () => {
   });
 
   it("accepts only active project roots and their descendants", () => {
+    const withMissingBinding: StudioProjectIdentity = {
+      ...project,
+      rootBindings: [
+        ...project.rootBindings,
+        {
+          id: "root_00000000-0000-4000-8000-000000000002",
+          repositoryId: null,
+          localRootRef: "/Users/private/inactive",
+          status: "missing",
+        },
+      ],
+    };
     expect(isWithinCurrentProject(project, projectRoot)).toBe(true);
     expect(isWithinCurrentProject(project, `${projectRoot}/agents/research`)).toBe(true);
     expect(isWithinCurrentProject(project, `${projectRoot}-old`)).toBe(false);
     expect(isWithinCurrentProject(project, "/Users/private")).toBe(false);
+    expect(
+      isWithinCurrentProject(
+        withMissingBinding,
+        "/Users/private/inactive/agent",
+      ),
+    ).toBe(false);
+  });
+
+  it("normalizes Windows separators without mixing path families", () => {
+    const windowsProject: StudioProjectIdentity = {
+      ...project,
+      rootBindings: [
+        {
+          ...project.rootBindings[0]!,
+          localRootRef: "C:\\Users\\private\\project",
+        },
+      ],
+    };
+
+    expect(
+      isWithinCurrentProject(
+        windowsProject,
+        "C:/Users/private/project/agents/research",
+      ),
+    ).toBe(true);
+    expect(
+      isWithinCurrentProject(
+        windowsProject,
+        "/Users/private/project/agents/research",
+      ),
+    ).toBe(false);
   });
 
   it("authorizes only the exact neutral principal inside its project", async () => {
