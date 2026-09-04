@@ -77,8 +77,23 @@ export SAPIOM_SMOKE_OUT="$(native "$report_file")"
 # silently on Windows and dropped every held first prompt.
 cat > "$smoke_home/stub-agent.js" <<'STUBJS'
 const fs = require("fs");
+// Doctor / detect call this binary with `--version`. That must NOT clobber the
+// session-create env dump: a concurrent probe was overwriting agent-env.txt
+// without SAPIOM_HARNESS_SESSION_ID and flaking desktop-smoke session-create.
+if (process.argv.includes("--version")) {
+  process.stdout.write("2.1.83 (Claude Code smoke stub)\n");
+  process.exit(0);
+}
 const envFile = process.env.SAPIOM_SMOKE_AGENT_ENV;
-if (envFile) fs.writeFileSync(envFile, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\n") + "\n");
+// Only dump when SessionManager injected a session id — never on bare probes.
+if (envFile && process.env.SAPIOM_HARNESS_SESSION_ID) {
+  fs.writeFileSync(
+    envFile,
+    Object.entries(process.env)
+      .map(([k, v]) => k + "=" + v)
+      .join("\n") + "\n",
+  );
+}
 try {
   const i = process.argv.indexOf("--settings");
   const settingsPath = i > -1 ? process.argv[i + 1] : null;
