@@ -596,9 +596,18 @@ export const App = (): JSX.Element => {
   const [reviewSummary, setReviewSummary] = useState<SessionSummary | null>(
     null,
   );
-  // Template gallery opened from the command palette (browse is reachable
-  // from anywhere, not only the add dialog / welcome panel entries).
-  const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Keep the composer's selection with this gallery visit. Other entry points
+  // use the saved preference; closing or reopening the gallery clears the override.
+  const [templatesView, setTemplatesView] = useState<{
+    harness?: HarnessKind;
+  } | null>(null);
+  const templatesOpen = templatesView !== null;
+  const setTemplatesOpen = useCallback(
+    (open: boolean, agentHarness?: HarnessKind) => {
+      setTemplatesView(open ? { harness: agentHarness } : null);
+    },
+    [],
+  );
   // The Overview: an introduction to the app, opened from the account menu's
   // "Overview" item. A full-width destination like Templates (never the
   // composer it used to alias), cleared by any navigation the same way.
@@ -1208,7 +1217,7 @@ export const App = (): JSX.Element => {
         );
       }
     },
-    [harness.state, isMobile, setActiveSessionId],
+    [harness.state, isMobile, setActiveSessionId, setTemplatesOpen],
   );
 
   // The dead pane's Resume button has to be as honest as a history row's tag,
@@ -2997,7 +3006,14 @@ export const App = (): JSX.Element => {
               recentDirs={harness.settings?.recentDirs ?? []}
               listDir={harness.listDir}
               onExit={() => setTemplatesOpen(false)}
-              onUse={handleUseTemplate}
+              onUse={(cwd, template) =>
+                handleUseTemplate(
+                  cwd,
+                  template,
+                  "template_gallery",
+                  templatesView?.harness,
+                )
+              }
               listTemplates={harness.listTemplates}
               getTemplate={harness.getTemplate}
               openTemplateId={deepLinkTemplateId}
@@ -3311,11 +3327,11 @@ export const App = (): JSX.Element => {
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
                   onUseTemplate={handleComposerUseTemplate}
-                  onBrowseTemplates={() => {
+                  onBrowseTemplates={(agentHarness) => {
                     studioRestoreGenerationRef.current += 1;
                     setStudioSelection(null);
                     setSelectedProject(null);
-                    setTemplatesOpen(true);
+                    setTemplatesOpen(true, agentHarness);
                   }}
                   listHarnesses={harness.listHarnesses}
                   listTemplates={harness.listTemplates}

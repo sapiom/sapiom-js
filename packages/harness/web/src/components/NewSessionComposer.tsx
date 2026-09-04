@@ -94,7 +94,7 @@ interface NewSessionComposerProps {
   /** Start a session from a catalog template (clone + first run). */
   onUseTemplate: (template: GalleryTemplate, harness: HarnessKind) => void;
   /** Navigate to the full templates catalog. */
-  onBrowseTemplates: () => void;
+  onBrowseTemplates: (harness: HarnessKind) => void;
   /** Adapter registry + template catalog fetches. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   listTemplates: () => Promise<TemplateListResponse>;
@@ -546,7 +546,7 @@ export function NewSessionComposer({
               type="button"
               className="composer-templates-all"
               data-testid="composer-browse-templates"
-              onClick={onBrowseTemplates}
+              onClick={() => onBrowseTemplates(harness)}
             >
               Browse all templates <Icon name="ChevronRight" size={13} />
             </button>

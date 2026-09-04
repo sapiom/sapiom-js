@@ -130,23 +130,48 @@ for (const surface of [
   });
 }
 
-test("the composer passes its selected harness even when preferences cannot be saved", async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
-    const setItem = Storage.prototype.setItem;
-    Storage.prototype.setItem = function (key, value): void {
-      if (key === "sapiom-harness-ui-prefs") {
-        throw new DOMException("Storage quota exceeded", "QuotaExceededError");
-      }
-      setItem.call(this, key, value);
-    };
+for (const surface of [
+  "composer",
+  "gallery-detail",
+  "starter-detail",
+] as const) {
+  test(`automatically selected Codex is preserved from ${surface}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      (
+        window as unknown as { __MOCK_UNINSTALLED_HARNESSES__: string[] }
+      ).__MOCK_UNINSTALLED_HARNESSES__ = ["claude-code"];
+    });
+    await page.goto("/?mockState=fresh");
+    await expect(page.getByTestId("composer-harness-select")).toContainText(
+      "Codex",
+    );
+    await launchTemplate(page, surface);
+    await expectTemplateSession(page, "codex", surface === "starter-detail");
   });
-  await page.goto("/?mockState=fresh");
-  await chooseCodex(page);
-  await launchTemplate(page, "composer");
-  await expectTemplateSession(page, "codex");
-});
+
+  test(`selected Codex is preserved from ${surface} when preferences cannot be saved`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value): void {
+        if (key === "sapiom-harness-ui-prefs") {
+          throw new DOMException(
+            "Storage quota exceeded",
+            "QuotaExceededError",
+          );
+        }
+        setItem.call(this, key, value);
+      };
+    });
+    await page.goto("/?mockState=fresh");
+    await chooseCodex(page);
+    await launchTemplate(page, surface);
+    await expectTemplateSession(page, "codex", surface === "starter-detail");
+  });
+}
 
 for (const entry of ["rail", "palette", "deep-link"] as const) {
   test(`saved Codex preference is preserved when entering templates from ${entry}`, async ({
@@ -176,3 +201,17 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
     await expectTemplateSession(page, "codex");
   });
 }
+
+test("a direct gallery visit uses the saved preference after leaving a composer visit", async ({
+  page,
+}) => {
+  await page.goto("/?mockState=fresh");
+  await chooseCodex(page);
+  await page.getByTestId("composer-browse-templates").click();
+  await page.getByTestId("templates-exit").click();
+  await page.getByTestId("composer-harness-select").click();
+  await page.getByTestId("composer-harness-option-claude-code").click();
+  await page.getByTestId("rail-templates").click();
+  await confirmTemplate(page, "hello-agent");
+  await expectTemplateSession(page, "claude-code");
+});
