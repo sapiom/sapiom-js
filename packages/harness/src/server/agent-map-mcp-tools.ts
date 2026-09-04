@@ -5,6 +5,7 @@ import type { ProjectAgentSession } from "../shared/agent-map.js";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalProjectError,
+  AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
 } from "../core/agent-map-proposal-service.js";
@@ -88,15 +89,17 @@ function errorResult(error: unknown) {
         ? { ...error.conflict }
         : error instanceof AgentMapProposalProjectError
           ? { code: "forbidden", recovery: "reread" }
-          : error instanceof AgentMapMcpProjectUnavailableError
-            ? { code: "project_unavailable", recovery: "reread" }
-            : error instanceof BuildPlanServiceError
+          : error instanceof AgentMapProposalQuotaError
+            ? { code: error.code, recovery: "manual_intervention" }
+            : error instanceof AgentMapMcpProjectUnavailableError
+              ? { code: "project_unavailable", recovery: "reread" }
+              : error instanceof BuildPlanServiceError
               ? { code: error.code, ...error.details,
                   recovery: error.code === "request_id_reused" || error.code === "request_id_expired"
                     ? "new_request" : error.code.includes("conflict") || error.code.includes("source") ||
                         error.code === "plan_not_found"
                       ? "reread" : error.code.includes("validation") || error.code.includes("resolution")
-                          || error.code === "malformed_input"
+                          || error.code === "malformed_input" || error.code === "request_too_large"
                         ? "correct" : error.code === "quota_exceeded"
                           ? "manual_intervention" : "retry" }
               : error instanceof AgentBriefServiceError

@@ -36,8 +36,8 @@ paths. A map-version change always requires `build_plan_rebase`, including
 explicit resolutions for every invalidated assignment, repository intent, or
 dependency; intent is never silently dropped.
 
-Immutable plan history is bounded at 1,024 versions and is never silently
-trimmed. Exhaustion returns terminal `quota_exceeded` with
+Immutable map and plan histories are each bounded at 1,024 versions and are
+never silently trimmed. Exhaustion returns terminal `quota_exceeded` with
 `manual_intervention` recovery so callers do not retry forever; an operator
 must preserve/archive the project history before a future storage migration can
 raise or replace the bound.

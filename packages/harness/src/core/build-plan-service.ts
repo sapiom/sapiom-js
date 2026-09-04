@@ -57,6 +57,7 @@ export type BuildPlanServiceErrorCode =
   | "validation_failed"
   | "rebase_resolution_required"
   | "invalid_rebase_resolution"
+  | "request_too_large"
   | "quota_exceeded";
 
 export class BuildPlanServiceError extends Error {
@@ -194,7 +195,9 @@ function materializeContent(
     assignment.dependencies.forEach(({ id }) => register(id, "dependency", "dependency"));
   });
   source.risks.forEach(({ id }) => register(id, "risk", "risk"));
-  if (registrations.size > BUILD_PLAN_ID_MAPPING_LIMIT) throw new BuildPlanServiceError("quota_exceeded");
+  if (registrations.size > BUILD_PLAN_ID_MAPPING_LIMIT)
+    throw new BuildPlanServiceError("request_too_large", { currentPlan: null, affectedIds: [],
+      affectedPaths: ["operations.0.content"], diagnostics: [] });
   const resolved = new Map<string, string>();
   for (const [clientRef, registration] of [...registrations].sort(([left], [right]) => compare(left, right))) {
     const id = deterministicId(registration.prefix, { identity, requestId: request.requestId, requestDigest: digest,
