@@ -17,29 +17,6 @@ import { CachedAgentInvocationProvider } from "../core/system-graph-relationship
 import type { RegistryWorkflowInfo } from "../core/workflow-registry.js";
 import { startServer, type HarnessServer } from "./index.js";
 
-/**
- * The workspaceKey for the project that OWNS `workspaceRoot`.
- *
- * Exact match where the root is a project in its own right, and the containing
- * scope where it is not. A fixture that writes `index.ts` straight into
- * `workspaceRoot` makes that root an AGENT directory, and an agent's own folder
- * is not a project — the rail and the server both replace it with the folder
- * that holds it (`shared/project-roots.ts`, rule 1). So there is no scope at
- * that exact path to find, and these specs are about graph freshness rather
- * than about which folder is a project.
- */
-function projectScopeKey(
-  state: AppState,
-  workspaceRoot: string,
-): string | undefined {
-  const scopes = state.workspaceScopes ?? [];
-  return (
-    scopes.find((scope) => scope.cwd === workspaceRoot)?.workspaceKey ??
-    scopes.find((scope) => workspaceRoot.startsWith(`${scope.cwd}${path.sep}`))
-      ?.workspaceKey
-  );
-}
-
 async function scaffoldAgent(
   workspaceRoot: string,
   name: string,
@@ -511,8 +488,20 @@ describe("workspace graph freshness wiring", () => {
   });
 
   it("uses fresh source and project budgets for a generation superseded after scanning", async () => {
+  // THE AGENT LIVES ONE LEVEL DOWN, as `scaffoldAgent` puts every other agent in
+  // this file. Written straight into `workspaceRoot` it made that root an AGENT
+  // directory, and an agent's own folder is not a project — both the rail and
+  // the server replace it with the folder that holds it — so there was no scope
+  // at that path and the graph this spec measures belonged to the parent
+  // instead, with the parent's discovery budget and the parent's pass count.
+  // The subject here is graph freshness, not which folder is a project.
+  const agentRoot = path.join(workspaceRoot, "budget");
+  await fs.mkdir(agentRoot, { recursive: true });
+    // NO `sapiom.json`: this spec reads the agent's name off the SOURCE, and a
+    // manifest name would pin it so the `budget-v1` → `budget-v2-final` edit
+    // the spec measures could never show up in the graph.
     await fs.writeFile(
-      path.join(workspaceRoot, "index.ts"),
+      path.join(agentRoot, "index.ts"),
       `import { defineAgent } from "@sapiom/agent";
 export const agent = defineAgent({ name: "budget-v1" });`,
     );
@@ -551,7 +540,9 @@ export const agent = defineAgent({ name: "budget-v1" });`,
     const state = (await (
       await fetch(`${baseUrl}/api/state`, { headers })
     ).json()) as AppState;
-    const workspaceKey = projectScopeKey(state, workspaceRoot);
+    const workspaceKey = state.workspaceScopes?.find(
+      (scope) => scope.cwd === workspaceRoot,
+    )?.workspaceKey;
     expect(workspaceKey).toBeTruthy();
     const graphUrl = `${baseUrl}/api/workspaces/${workspaceKey}/system-graph`;
     await fetch(graphUrl, { headers });
@@ -564,7 +555,7 @@ export const agent = defineAgent({ name: "budget-v1" });`,
     });
     await scanReturned.promise;
     await fs.writeFile(
-      path.join(workspaceRoot, "index.ts"),
+      path.join(agentRoot, "index.ts"),
       `import { defineAgent } from "@sapiom/agent";
 export const agent = defineAgent({ name: "budget-v2-final" });`,
     );
@@ -658,8 +649,19 @@ export const agent = defineAgent({ name: "budget-v2-final" });`,
     "coalesces two sessions and a graph subscriber into one pass plus one held-edit trailing pass",
     { timeout: 25_000 },
     async () => {
+      // ONE LEVEL DOWN, for the reason spelled out on the budgets spec above:
+      // an agent written straight into `workspaceRoot` makes that root an agent
+      // directory, which is not a project, so the graph under test would be the
+      // parent's — and the pass count this spec exists to measure would be the
+      // parent's too.
+      const agentRoot = path.join(workspaceRoot, "shared");
+      await fs.mkdir(agentRoot, { recursive: true });
       await fs.writeFile(
-        path.join(workspaceRoot, "index.ts"),
+        path.join(agentRoot, "sapiom.json"),
+        JSON.stringify({ name: "shared", definitionId: null }),
+      );
+      await fs.writeFile(
+        path.join(agentRoot, "index.ts"),
         `import { defineAgent } from "@sapiom/agent";
 export const agent = defineAgent({ name: "shared-v0" });`,
       );
@@ -698,7 +700,9 @@ export const agent = defineAgent({ name: "shared-v0" });`,
       const state = (await (
         await fetch(`${baseUrl}/api/state`, { headers })
       ).json()) as AppState;
-      const workspaceKey = projectScopeKey(state, workspaceRoot);
+      const workspaceKey = state.workspaceScopes?.find(
+        (scope) => scope.cwd === workspaceRoot,
+      )?.workspaceKey;
       expect(workspaceKey).toBeTruthy();
       await fetch(`${baseUrl}/api/workspaces/${workspaceKey}/system-graph`, {
         headers,
@@ -709,7 +713,7 @@ export const agent = defineAgent({ name: "shared-v0" });`,
       await new Promise((resolve) => setTimeout(resolve, 2_500));
       observePasses = true;
       await fs.writeFile(
-        path.join(workspaceRoot, "index.ts"),
+        path.join(agentRoot, "index.ts"),
         `import { defineAgent } from "@sapiom/agent";
 export const agent = defineAgent({ name: "shared-v1" });`,
       );
@@ -719,7 +723,7 @@ export const agent = defineAgent({ name: "shared-v1" });`,
       // immediately. The overlapping source callback reaches the coordinator
       // without waiting behind the older subscriber fanout.
       await fs.writeFile(
-        path.join(workspaceRoot, "index.ts"),
+        path.join(agentRoot, "index.ts"),
         `import { defineAgent } from "@sapiom/agent";
 export const agent = defineAgent({ name: "shared-v2-final" });`,
       );
