@@ -20,9 +20,12 @@ import {
   SessionInputIsolationError,
   SessionManager,
   SessionManagerClosingError,
+  SubsessionBindingMismatchError,
+  SubsessionFreshRestartForbiddenError,
   sanitizeExitTail,
   type PtySpawnFn,
   type SessionManagerOptions,
+  type TrustedSubsessionBindingMarker,
 } from "./session-manager.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
 
@@ -139,6 +142,7 @@ describe("SessionManager", () => {
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
       writeAgentSessionOwnerRegistry?: SessionManagerOptions["writeAgentSessionOwnerRegistry"];
+      writeSubsessionBindingRegistry?: SessionManagerOptions["writeSubsessionBindingRegistry"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -179,6 +183,7 @@ describe("SessionManager", () => {
       platform: opts.platform,
       writeSessionRegistry: opts.writeSessionRegistry,
       writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
+      writeSubsessionBindingRegistry: opts.writeSubsessionBindingRegistry,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -202,6 +207,214 @@ describe("SessionManager", () => {
     expect(session.title).toBe("proj");
     expect(manager.get(session.id)).toEqual(session);
     expect(manager.list()).toHaveLength(1);
+  });
+
+  const marker = (
+    sessionId: string,
+    incarnation = 1,
+    spawnEpoch = 1,
+  ): TrustedSubsessionBindingMarker => ({
+    projectId: "project_00000000-0000-4000-8000-000000000001",
+    parentSessionId: "parent-session-1",
+    bindingId: "binding-1",
+    sessionId,
+    incarnation,
+    spawnEpoch,
+  });
+
+  const delegatedCreate = (sessionId: string) => ({
+    cwd: "/tmp/proj",
+    harness: "claude-code" as const,
+    trusted: {
+      agentMapIdentity: () => ({
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-1",
+        sessionId,
+      }),
+      initialTitle: "Collect evidence",
+    },
+  });
+
+  it("creates a reserved writable session only with its exact private binding", async () => {
+    const { manager, adapter } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000111";
+    const input = delegatedCreate(sessionId);
+    const session = await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+
+    expect(session).toMatchObject({
+      id: sessionId,
+      status: "running",
+      title: "Collect evidence",
+      ready: false,
+      agentMapIdentity: {
+        projectId: marker(sessionId).projectId,
+        sessionId,
+      },
+    });
+    expect(adapter.launch).toHaveBeenCalledTimes(1);
+    expect(manager.matchesSubsessionBinding(marker(sessionId))).toBe(true);
+    expect(await readFile(sessionsPath, "utf8")).not.toContain("binding-1");
+    const sidecar = `${sessionsPath}.subsession-bindings.json`;
+    expect(JSON.parse(await readFile(sidecar, "utf8"))).toMatchObject({
+      version: 1,
+      markers: { [sessionId]: marker(sessionId) },
+      closedSessionIds: [],
+    });
+    expect((await stat(sidecar)).mode & 0o777).toBe(0o600);
+
+    const { manager: restartedManager } = makeManager();
+    await restartedManager.init();
+    expect(restartedManager.getSubsessionBinding(sessionId)).toEqual(
+      marker(sessionId),
+    );
+
+    await expect(
+      manager.createReserved(
+        sessionId,
+        { cwd: input.cwd, harness: input.harness },
+        { ...marker(sessionId), bindingId: "foreign-binding" },
+        input.trusted,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(adapter.launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never adopts a manual row merely because its reserved id matches", async () => {
+    const { manager } = makeManager();
+    const manual = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const input = delegatedCreate(manual.id);
+    await expect(
+      manager.createReserved(
+        manual.id,
+        { cwd: input.cwd, harness: input.harness },
+        marker(manual.id),
+        input.trusted,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(manager.getSubsessionBinding(manual.id)).toBeNull();
+  });
+
+  it("fresh-restarts an exact zero-turn bound row under the same Harness id", async () => {
+    const { manager, adapter, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000112";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    spawns[0]!.emitExit(1);
+    await manager.flush();
+
+    const restarted = await manager.restartFreshBound(
+      sessionId,
+      marker(sessionId),
+      marker(sessionId, 2, 2),
+      input.trusted,
+      async () => false,
+    );
+    expect(restarted).toMatchObject({ id: sessionId, status: "running" });
+    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(
+      marker(sessionId, 2, 2),
+    );
+    expect(adapter.launch).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a fresh bound restart when any recorded turn exists", async () => {
+    const { manager, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000113";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    spawns[0]!.emitExit(1);
+    await manager.flush();
+    await expect(
+      manager.restartFreshBound(
+        sessionId,
+        marker(sessionId),
+        marker(sessionId, 2, 2),
+        input.trusted,
+        async () => true,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
+  });
+
+  it("persists an explicit delegated-session close and forbids automatic resurrection", async () => {
+    const { manager, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000114";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    await manager.close(sessionId);
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    await expect(
+      manager.restartFreshBound(
+        sessionId,
+        marker(sessionId),
+        marker(sessionId, 2, 2),
+        input.trusted,
+        async () => false,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
+    expect(
+      JSON.parse(
+        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
+      ),
+    ).toMatchObject({ closedSessionIds: [sessionId] });
+  });
+
+  it("reports exact input write phases and kills only an exact runtime", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const runtime = manager.getRuntimeEpoch(session.id)!;
+    manager.setReady(session.id, runtime);
+
+    const submitted = await manager.submitInputTracked(
+      session.id,
+      "Implement the scoped task",
+    );
+    expect(submitted).toEqual({ accepted: true, phase: "enter-written" });
+    expect(await manager.killIfRuntime(session.id, "foreign-runtime")).toBe(
+      false,
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    spawns[0]!.pty.write.mockImplementationOnce(() => {
+      throw new Error("ambiguous write");
+    });
+    const ambiguous = await manager.submitInputTracked(
+      session.id,
+      "Retry-sensitive task",
+    );
+    expect(ambiguous).toMatchObject({
+      accepted: false,
+      phase: "text-staged",
+      error: expect.any(Error),
+    });
   });
 
   it("closes PTY admission before shutdown and rejects creates and resumes", async () => {

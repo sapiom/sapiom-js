@@ -97,6 +97,30 @@ export class AgentSessionIdentityReservedError extends HarnessError {
 }
 
 /**
+ * A server-owned reserved session ID did not carry the exact private
+ * coordinator marker. Manual sessions can never satisfy this check by
+ * matching cwd, title, assignment, or any other public field.
+ */
+export class SubsessionBindingMismatchError extends HarnessError {
+  constructor() {
+    super(
+      "SUBSESSION_BINDING_MISMATCH",
+      "The reserved subsession is not owned by this coordinator binding",
+    );
+  }
+}
+
+/** A same-ID fresh start lacked one of its required zero-turn proofs. */
+export class SubsessionFreshRestartForbiddenError extends HarnessError {
+  constructor() {
+    super(
+      "SUBSESSION_FRESH_RESTART_FORBIDDEN",
+      "The reserved subsession cannot be restarted as a fresh conversation",
+    );
+  }
+}
+
+/**
  * Thrown when an operation requires a harness adapter that has not been
  * registered. Maps to HTTP 400.
  */

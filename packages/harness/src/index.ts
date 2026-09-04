@@ -222,6 +222,8 @@ export {
   SessionNotReadyError,
   SessionNotResumeableError,
   SessionAlreadyLiveError,
+  SubsessionBindingMismatchError,
+  SubsessionFreshRestartForbiddenError,
   AdapterNotFoundError,
   ExternalHarnessError,
   SpawnTargetError,
