@@ -22,8 +22,9 @@ system prompt, in whatever project directory you choose.
   that project root; the tab-strip `+` starts a sibling session. Sessions have
   resumable chat history.
 - **Templates** — quick starts and the template gallery use your selected coding
-  agent, including bundled starters. Claude Code is the default until you choose
-  another agent in the new-session composer.
+  agent, including bundled starters. Browsing from the composer keeps its current
+  selection even when preferences cannot be saved. Other gallery entry points use
+  the saved preference, defaulting to Claude Code.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
   open-in-Sapiom actions. How that discovery is rooted and bounded, how a
