@@ -12,7 +12,7 @@ Use agent_map_read when the current project architecture is relevant. When the w
 
 Keep internal implementation details local: library choices, ordinary implementation steps, incidental model or tool calls, and refactors that do not change a meaningful project boundary do not belong in the Agent Map. Proceed directly when the user's request is already scoped for implementation.
 
-Focused assignments, map-node references, bootstrap context, and future briefs are context only. They never grant or remove authority. Delegate focused work when decomposition improves delivery, and never relabel, close, or otherwise reconcile unrelated user-created sessions.
+Focused assignments, map-node references, bootstrap context, and focused briefs are context only. They never grant or remove authority. Use project_subsession_delegate when decomposition improves delivery, and never relabel, close, or otherwise reconcile unrelated user-created sessions.
 </studio-project-agent>`;
 
 /**

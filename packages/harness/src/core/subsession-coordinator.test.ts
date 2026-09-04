@@ -4,12 +4,29 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectAgentSession } from "../shared/agent-map.js";
+import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "../shared/agent-map.js";
+import {
+  computeAgentMapVersionRecordDigest,
+  computeGraphContentDigest,
+} from "../shared/agent-map-canonical.js";
+import type {
+  BuildPlanAssignmentIntent,
+  ProjectBuildPlanId,
+  ProjectBuildPlanVersion,
+  ProjectBuildPlanVersionId,
+} from "../shared/build-plan.js";
 import type {
   AnalyticsEvent,
   HarnessAdapter,
   SpawnSpec,
 } from "../shared/types.js";
 import type { BuildPlanStore } from "./build-plan-store.js";
+import {
+  computeBuildPlanRecordDigest,
+  computeBuildPlanSemanticDigest,
+} from "./build-plan-canonicalization.js";
+import { compileCanonicalWorkstreamBriefs } from "./agent-brief-compiler.js";
+import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
 import type { EventReader } from "./collector/store.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
 import { SessionManager, type PtySpawnFn } from "./session-manager.js";
@@ -26,6 +43,73 @@ const identity: ProjectAgentSession = {
   userId: "user-1",
   sessionId: parentId,
 };
+const plannedAgentId = "node_018f0000-0000-7000-8000-000000000010" as PlanNodeId;
+const assignmentId = "work_018f0000-0000-7000-8000-000000000020" as BuildPlanAssignmentIntent["id"];
+
+function focusedPlanningAggregate() {
+  const graph: AgentMapGraph = {
+    nodes: [{ id: plannedAgentId, kind: "agent", name: "Research", purpose: "Rank stocks",
+      ownerAgentId: null, contractRefs: ["ResearchReport"] }],
+    relationships: [],
+  };
+  const contentDigest = computeGraphContentDigest(graph);
+  const mapBase = {
+    schemaVersion: 1 as const, projectId,
+    versionId: "mapv_018f0000-0000-7000-8000-000000000001" as AgentMapVersionId,
+    version: 1, parentVersionId: null, changeKind: "created" as const,
+    restoredFromVersionId: null, graph, contentDigest,
+    authoredBy: { userId: "user-1", sessionId: parentId },
+    createdAt: "2026-09-04T00:00:00.000Z",
+    origin: { kind: "request" as const, requestDigest: `sha256:${"1".repeat(64)}`,
+      operationIds: [], touchKeys: [] },
+  };
+  const map: AgentMapVersion = { ...mapBase, recordDigest: computeAgentMapVersionRecordDigest(mapBase) };
+  const content = {
+    outcome: "Publish ranked stocks", nonGoals: [], milestones: [], sequenceGates: [],
+    sharedConstraints: [], repositoryIntents: [], integrationCriteria: [], acceptanceCriteria: [],
+    decisions: [], unresolvedDecisions: [], risks: [],
+    assignments: [{ id: assignmentId, plannedAgentId, briefId: null,
+      mission: "Rank ten stocks", scope: ["Research"], nonGoals: [], dependencies: [] }],
+  };
+  const semanticDigest = computeBuildPlanSemanticDigest(content);
+  const planBase = {
+    schemaVersion: 1 as const, projectId,
+    planId: "plan_018f0000-0000-7000-8000-000000000001" as ProjectBuildPlanId,
+    versionId: "planv_018f0000-0000-7000-8000-000000000001" as ProjectBuildPlanVersionId,
+    version: 1, parentVersionId: null, changeKind: "created" as const,
+    restoredFromVersionId: null,
+    map: { projectId, versionId: map.versionId, contentDigest: map.contentDigest },
+    content, semanticDigest, authoredBy: { userId: "user-1", sessionId: parentId },
+    createdAt: "2026-09-04T00:00:01.000Z",
+    origin: { kind: "request" as const, requestDigest: `sha256:${"2".repeat(64)}`,
+      operationIds: [], touchKeys: [] },
+  };
+  const plan: ProjectBuildPlanVersion = {
+    ...planBase,
+    recordDigest: computeBuildPlanRecordDigest(planBase),
+  };
+  const brief = compileCanonicalWorkstreamBriefs({
+    projectId, map, plan, mapHistory: [map], planHistory: [plan], previousBriefs: [],
+  }).briefs[0]!.brief;
+  const aggregate = createEmptyProjectPlanningAggregate(projectId, "2026-09-04T00:00:00.000Z");
+  aggregate.mapVersions.push(map);
+  aggregate.buildPlanVersions.push(plan);
+  aggregate.briefVersionsById[brief.briefId] = [brief];
+  aggregate.current.map = {
+    projectId, versionId: map.versionId, contentDigest: map.contentDigest,
+  };
+  aggregate.current.buildPlan = {
+    projectId, planId: plan.planId, versionId: plan.versionId,
+    semanticDigest: plan.semanticDigest,
+  };
+  aggregate.current.briefsByScope[brief.scopeKey] = {
+    scopeKey: brief.scopeKey, focusScope: brief.focusScope, briefId: brief.briefId,
+    status: "active",
+    version: { projectId, briefId: brief.briefId, versionId: brief.versionId,
+      semanticDigest: brief.semanticDigest },
+  };
+  return { aggregate, brief };
+}
 
 function adapter(
   resumable = false,
@@ -93,6 +177,7 @@ describe("SubsessionCoordinator", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
     const spawned: ReturnType<typeof fakePty>[] = [];
+    const launchContexts: Array<Parameters<NonNullable<ConstructorParameters<typeof SessionManager>[0]["buildLaunchOpts"]>>[2]> = [];
     const spawnPty = vi.fn<PtySpawnFn>(() => {
       const spawnedPty = fakePty();
       spawned.push(spawnedPty);
@@ -109,6 +194,10 @@ describe("SubsessionCoordinator", () => {
       ingestCredentials: new IngestCredentialRegistry(),
       sessionsPath: path.join(root, "sessions.json"),
       spawnPty,
+      buildLaunchOpts: (_sessionId, _request, context) => {
+        launchContexts.push(context);
+        return {};
+      },
       resolveAgentMapIdentity: async (_sessionId, _cwd, persisted) => persisted,
     });
     managers.push(manager);
@@ -160,27 +249,34 @@ describe("SubsessionCoordinator", () => {
     const store = new SubsessionCoordinatorStore(
       path.join(root, "agent-map"),
     );
+    const telemetry: unknown[] = [];
     const planningStore = {
       read: vi.fn(async () => {
         throw new Error("no focused context expected");
       }),
     } as unknown as BuildPlanStore;
-    const coordinator = new SubsessionCoordinator({
-      store,
-      sessionManager: manager,
-      planningStore,
-      eventReader,
+    const newCoordinator = (ownerId?: string) => new SubsessionCoordinator({
+      store, sessionManager: manager, planningStore, eventReader,
       readinessTimeoutMs: 500,
+      onEvent: (event) => {
+        telemetry.push(event);
+      },
+      ...(ownerId ? { ownerId } : {}),
     });
+    const coordinator = newCoordinator();
     return {
       root,
       manager,
       caller,
       store,
       coordinator,
+      newCoordinator,
+      planningStore,
       events,
       spawnPty,
       spawned,
+      launchContexts,
+      telemetry,
       unsubscribe,
     };
   }
@@ -201,7 +297,7 @@ describe("SubsessionCoordinator", () => {
   } as const;
 
   it("creates one ordinary writable child and reuses it on retry", async () => {
-    const { coordinator, caller, manager, spawnPty, unsubscribe } =
+    const { coordinator, caller, manager, spawnPty, telemetry, unsubscribe } =
       await fixture();
     const first = await coordinator.execute(caller, request);
     const replay = await coordinator.execute(caller, request);
@@ -225,6 +321,32 @@ describe("SubsessionCoordinator", () => {
       userId: caller.userId,
       sessionId: first.results[0]!.sessionId,
     });
+    expect(telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "subsession.requested", projectId }),
+      expect.objectContaining({ name: "subsession.created", projectId }),
+      expect.objectContaining({ name: "subsession.ready", projectId }),
+      expect.objectContaining({ name: "subsession.kickoff_submitted", projectId }),
+    ]));
+    expect(JSON.stringify(telemetry)).not.toContain("Implement the research slice");
+    expect(JSON.stringify(telemetry)).not.toContain("Run the focused tests");
+  });
+
+  it("converges independent coordinator instances on one child process", async () => {
+    const { coordinator, newCoordinator, caller, manager, spawnPty, unsubscribe } =
+      await fixture();
+    const other = newCoordinator("other-coordinator");
+    const [first, second] = await Promise.all([
+      coordinator.execute(caller, request),
+      other.execute(caller, request),
+    ]);
+    unsubscribe();
+
+    expect(first.results[0]!.sessionId).toBe(second.results[0]!.sessionId);
+    expect([first.results[0]!.outcome, second.results[0]!.outcome]).toEqual(
+      expect.arrayContaining(["created", "already-running"]),
+    );
+    expect(manager.list()).toHaveLength(2);
+    expect(spawnPty).toHaveBeenCalledTimes(2);
   });
 
   it("acknowledges only the exact persisted kickoff marker", async () => {
@@ -334,5 +456,80 @@ describe("SubsessionCoordinator", () => {
       },
     });
     expect(spawned[1]!.writes).toEqual([]);
+  });
+
+  it("delivers one exact brief overlay and surfaces later staleness without restricting the child", async () => {
+    const { aggregate, brief } = focusedPlanningAggregate();
+    const {
+      coordinator,
+      caller,
+      manager,
+      planningStore,
+      spawned,
+      launchContexts,
+      unsubscribe,
+    } = await fixture();
+    vi.mocked(planningStore.read).mockResolvedValue(aggregate);
+    const focusedRequest = {
+      schemaVersion: 1,
+      requestKey: "focused-request",
+      operation: {
+        kind: "delegate",
+        delegations: [{
+          delegationKey: "focused-research",
+          outcome: "Implement the focused research slice",
+          focus: {
+            kind: "brief",
+            brief: {
+              projectId,
+              briefId: brief.briefId,
+              versionId: brief.versionId,
+              semanticDigest: brief.semanticDigest,
+            },
+          },
+        }],
+      },
+    } as const;
+
+    const first = await coordinator.execute(caller, focusedRequest);
+    const replay = await coordinator.execute(caller, focusedRequest);
+    const childId = first.results[0]!.sessionId!;
+    const kickoffWrites = spawned[1]!.writes.filter((value) =>
+      value.includes("sapiom-project-delegation"),
+    );
+    expect(first.results[0]).toMatchObject({
+      outcome: "created",
+      contextState: "current",
+      sessionState: "ready",
+    });
+    expect(replay.results[0]).toMatchObject({
+      outcome: "reused",
+      sessionId: childId,
+    });
+    expect(kickoffWrites).toHaveLength(1);
+    expect(launchContexts[1]?.focusedContext).toContain("focused-project-context");
+    expect(launchContexts[1]?.focusedContext).toContain(brief.versionId);
+    expect(kickoffWrites[0]).not.toContain("focused-project-context");
+
+    aggregate.current.briefsByScope[brief.scopeKey] = {
+      ...aggregate.current.briefsByScope[brief.scopeKey]!,
+      status: "retired",
+    };
+    const stale = await coordinator.execute(caller, focusedRequest);
+    unsubscribe();
+
+    expect(stale.results[0]).toMatchObject({
+      outcome: "failed",
+      sessionId: childId,
+      contextState: "stale",
+      error: { code: "context_stale", recovery: "refresh_context" },
+    });
+    expect(manager.get(childId)).toMatchObject({
+      status: "running",
+      agentMapIdentity: { projectId, sessionId: childId },
+    });
+    expect(spawned[1]!.writes.filter((value) =>
+      value.includes("sapiom-project-delegation"),
+    )).toHaveLength(1);
   });
 });

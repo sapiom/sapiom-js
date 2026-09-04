@@ -91,3 +91,36 @@ and passing the branded `projection` through `TrustedSessionCreateOptions` or
 project-agent identity. Ordinary callers cannot construct the branded value,
 and authored data must never be appended to a prompt by another serialization
 path.
+
+## Writable project subsessions
+
+Every ordinary project session discovers `project_subsession_delegate` beside
+the shared map, plan, and brief tools. The operation creates or reuses one to
+sixteen ordinary writable sessions. Each child receives the same common
+project-agent prompt, coding capabilities, project tools, and delegation tool,
+so nested delegation follows the same path. An exact assignment, map node, or
+brief may focus the child, but focus never changes its tools or authority.
+
+Callers provide both a request key and a delegation key. Identity is scoped by
+the private session capability to the trusted project and parent session.
+Identical retries converge on the same durable binding and real Harness session
+ID; changing canonical request or binding content under an existing key fails
+explicitly. All binding IDs and session IDs for a bounded batch are reserved in
+one durable transaction before the first process is spawned.
+
+The coordinator waits for canonical adapter readiness and exact transcript
+identity, then uses fenced spawn and delivery epochs to submit one kickoff.
+Delivery states distinguish pending, claimed, submitted without acknowledgement,
+acknowledged, and uncertain. An uncertain delivery is never resent blindly.
+Exact focused references are checked before delivery, and stale context returns
+an explicit refresh path without closing the session or changing writability.
+
+Coordinator recovery starts from its own two-sided private binding marker. It
+does not infer ownership from cwd, title, assignment, map membership, or process
+similarity, and it never adopts, renames, resumes, closes, or removes an
+unrelated manual session. Tabs remain projections of ordinary live sessions,
+deduplicated by the real session ID and exact server-derived project identity.
+
+Delegation telemetry contains only event names, project/session identifiers,
+and bounded error codes. Task text, kickoff context, focused prose, source,
+paths, secrets, credentials, and raw adapter output are excluded.
