@@ -35,7 +35,7 @@ describe("BuildPlanService", () => {
   const roots: string[] = [];
   afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))));
 
-  async function fixture(receiptRetentionLimit?: number) {
+  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "build-plan-service-"));
     roots.push(root);
     const aggregateStore = new AgentMapWorkspaceStore(root, {
@@ -79,6 +79,7 @@ describe("BuildPlanService", () => {
       now: () => new Date("2026-01-02T03:05:05.000Z"),
       onOutcome: outcomes,
       ...(receiptRetentionLimit === undefined ? {} : { receiptRetentionLimit }),
+      ...(versionHistoryLimit === undefined ? {} : { versionHistoryLimit }),
     });
     return { root, aggregateStore, mapService, service, refs, outcomes };
   }
@@ -246,11 +247,22 @@ describe("BuildPlanService", () => {
 
   it("never silently drops map-invalidated assignments during rebase", async () => {
     const { aggregateStore, mapService, service, refs } = await fixture();
+    const initialContent = content(refs);
+    initialContent.repositoryIntents = [
+      { id: { clientRef: "repository-publisher-a" }, plannedAgentId: refs.publisher,
+        repository: "publisher-a", packages: [], ownershipBoundaries: ["Publishing A"] },
+      ...initialContent.repositoryIntents,
+      { id: { clientRef: "repository-publisher-b" }, plannedAgentId: refs.publisher,
+        repository: "publisher-b", packages: [], ownershipBoundaries: ["Publishing B"] },
+    ];
     const created = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
       expectedMap: toolMapRef(refs.map), expectedPlan: null,
-      operations: [{ op: "replace-content", content: content(refs) }] });
+      operations: [{ op: "replace-content", content: initialContent }] });
     const plan = (await service.read(identity(), { kind: "current" })).plan!;
     const publisherAssignment = plan.content.assignments.find(({ plannedAgentId }) => plannedAgentId === refs.publisher)!;
+    const publisherRepositories = plan.content.repositoryIntents
+      .filter(({ plannedAgentId }) => plannedAgentId === refs.publisher);
+    expect(publisherRepositories).toHaveLength(2);
     await mapService.propose(identity("map-session"), { schemaVersion: 1, proposalId: refs.proposalId,
       expectedVersion: 1, requestId: "map-remove-publisher",
       operations: [
@@ -264,10 +276,19 @@ describe("BuildPlanService", () => {
         details: { affectedIds: expect.arrayContaining([refs.publisher]) } });
     const rebased = await service.rebase(identity(), { schemaVersion: 1, requestId: "explicit-removal",
       expectedPlan: toolPlanRef(created.plan), fromMap: toolMapRef(refs.map), toMap: toolMapRef(toMap),
-      resolutions: [{ kind: "remove-assignment", assignmentId: publisherAssignment.id }] });
+      resolutions: [
+        { kind: "remove-assignment", assignmentId: publisherAssignment.id },
+        ...publisherRepositories.map(({ id }) => ({
+          kind: "remove-repository-intent" as const,
+          repositoryIntentId: id,
+        })),
+      ] });
     expect(rebased.created).toBe(true);
-    expect((await service.read(identity(), { kind: "current" })).plan!.content.assignments)
+    const rebasedContent = (await service.read(identity(), { kind: "current" })).plan!.content;
+    expect(rebasedContent.assignments)
       .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: publisherAssignment.id })]));
+    expect(rebasedContent.repositoryIntents).toHaveLength(1);
+    expect(rebasedContent.repositoryIntents[0]).toMatchObject({ plannedAgentId: refs.research });
   });
 
   it("rejects dependency claims without relationship-aware contract evidence", async () => {
@@ -296,6 +317,20 @@ describe("BuildPlanService", () => {
     await expect(service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
       expectedMap: toolMapRef(refs.map), expectedPlan: null,
       operations: [{ op: "replace-content", content: content(refs) }] })).rejects.toMatchObject({ code: "request_id_expired" });
+  });
+
+  it("fails history quota before mutation with a bounded terminal error", async () => {
+    const { aggregateStore, service, refs } = await fixture(undefined, 1);
+    const created = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
+      expectedMap: toolMapRef(refs.map), expectedPlan: null,
+      operations: [{ op: "replace-content", content: content(refs) }] });
+    const before = await aggregateStore.readAggregate(projectId);
+    const persisted = (await service.read(identity(), { kind: "current" })).plan!.content;
+    await expect(service.apply(identity(), { schemaVersion: 1, requestId: "plan-over-quota",
+      expectedMap: toolMapRef(refs.map), expectedPlan: toolPlanRef(created.plan),
+      operations: [{ op: "replace-content", content: { ...persisted, outcome: "Changed outcome" } }] }))
+      .rejects.toMatchObject({ code: "quota_exceeded" });
+    expect(await aggregateStore.readAggregate(projectId)).toEqual(before);
   });
 
   it("deduplicates concurrent same-request writers across independent service instances", async () => {
