@@ -26,7 +26,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
+import { openAddExistingAgents, openProjectMenu } from "./mock-navigation";
 
 const ROOT = "/Users/demo/acme-app";
 
@@ -202,7 +202,11 @@ test.describe("legacy-server agent creation compatibility", () => {
   test("the empty-project row opens the same dialog", async ({ page }) => {
     // One create flow, not one per door: the empty project's CTA is the same
     // subject and must not be a second mechanism that drifts.
-    await page.getByTestId("rail-add-project").click();
+    // Through the ⋮, not the create verb: the verb's folder step CONTINUES
+    // into creation once the folder is named, which is the whole point of it
+    // asking where first. This test needs the folder registered and nothing
+    // else, so it asks the other question.
+    await openAddExistingAgents(page);
     await page
       .getByTestId("folder-field-input")
       .fill("/Users/demo/blank-slate");

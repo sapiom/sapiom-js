@@ -933,70 +933,21 @@ input {
   font-weight: 550;
 }
 
-/* "Create new": the primary affirmative action, promoted out of the header and
-   ABOVE Search. It's the app's primary CTA — a solid ink button (the same
-   --btn/--btn-ink treatment as Deploy / .btn-primary) — so it stays visually
-   distinct from the ghost Search/Templates rows while keeping their inset and
-   --sp2 rhythm. */
-.rail-nav-cta {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp2);
-  align-self: stretch;
-  margin: 0 calc(var(--pane-pad-x) - var(--row-bleed)) var(--sp2);
-  min-height: var(--control-h);
-  padding: 0 var(--row-bleed);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--btn);
-  box-shadow: var(--shadow-xs);
-  text-align: center;
-  font-size: var(--type-ui);
-  font-weight: 550;
-  color: var(--btn-ink);
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
-}
-
-/* The plus is the create signal — the one reserved brand accent, riding the ink
-   button. Mixed toward the button's ink so the green stays legible whichever way
-   the ink button flips with the theme (dark-in-light, light-in-dark). */
-.rail-nav-cta svg {
-  color: color-mix(in srgb, var(--brand) 65%, var(--btn-ink));
-}
-
-.rail-nav-cta:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-soft);
-}
-
-.rail-nav-cta:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.rail-nav-cta:active {
-  transform: translateY(0);
-}
-
-/* Empty rail: keep the ink button but ring it in a soft brand halo, so the one
-   action a first-run user needs is the loudest thing on an otherwise empty rail
-   — without spending the reserved green as a full fill. */
-.rail-nav-cta.is-empty {
+/* THE CREATE VERB'S EMPTY-RAIL EMPHASIS.
+   `.rail-nav-cta` lived here: a solid ink button, first row of the nav, reading
+   "Create new agent". The verb moved to the rail header's `+` (IA-REVIEW: "Not
+   a row among places"), so the button and its brand halo went with it. What
+   survives is the halo's job — on a rail with nothing in it, the one action a
+   first-run user needs has to be the loudest thing on screen — now carried by
+   the header glyph, which is small enough that a ring is the whole treatment. */
+.rail-header-btn.is-empty {
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--brand) 24%, transparent),
     var(--shadow-xs);
 }
 
-.rail-nav-cta.is-empty:hover {
-  transform: translateY(-1px);
-  box-shadow:
-    0 0 0 4px color-mix(in srgb, var(--brand) 34%, transparent),
-    var(--shadow-soft);
+.rail-header-btn.is-empty svg {
+  color: color-mix(in srgb, var(--brand) 70%, var(--text));
 }
 
 .rail-header {

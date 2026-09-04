@@ -1808,6 +1808,76 @@ export const App = (): JSX.Element => {
     setCreatingAgent({ root, label });
   };
 
+  /**
+   * THE ONE CREATE VERB'S SECOND STEP — and it never types English at anyone.
+   *
+   * The rail's create control used to call `onNewSession`, which set
+   * `composing` and ended at `sendScaffoldPrompt`: a session at a folder
+   * invented from a slug of the user's sentence, then an English request that
+   * the coding agent please call `sapiom_dev_agents_scaffold`. That is the
+   * mechanism SAP-2981 set out to remove, still wired to the most prominent
+   * control in the product, and it failed the way a prompt fails — a create
+   * that did not happen arrived as a confused model rather than an error.
+   *
+   * `aaf721bb` (#790) had already fixed the project-row doors, and the fix is
+   * the same one: WHEN A PROJECT HAS A DURABLE STUDIO PROJECT, ITS AGENT MAP
+   * OWNS CREATION. So this resolves the folder to a project and hands over to
+   * the map, exactly as selecting the project does — `handleSelectWorkspace`'s
+   * map branch, run against the state that comes back from opening the folder
+   * rather than the render's own copy of it, which is one refresh stale here.
+   *
+   * The folder does not have to be a project yet. `openProject` is what makes
+   * it one (and resolves an agent's own folder to the folder that HOLDS it),
+   * and after PR "one definition of what a project is" the server issues a
+   * durable Studio project for exactly that root, so the map is there when we
+   * ask for it.
+   *
+   * A payload with no Studio project catalog is the one case the map cannot
+   * serve. That is not a reason to keep the injection: it falls through to
+   * `handleCreateAgentInProject`, the dialog whose endpoint creates the agent
+   * on disk and rescans before any session starts. Still the harness creating
+   * the agent; still no sentence sent to a model.
+   */
+  const handleNewAgentIn = async (
+    root: string,
+    label?: string,
+  ): Promise<void> => {
+    const openedRoot = await harness.openProject(root);
+    const refreshed = await harness.api.getState();
+    const scope = refreshed.workspaceScopes?.find((candidate) =>
+      samePath(candidate.cwd, openedRoot),
+    );
+    const project = refreshed.studioProjects?.find(
+      (candidate) => candidate.projectId === scope?.projectId,
+    );
+    const name = label ?? basenameOf(openedRoot);
+    if (!scope || !project) {
+      handleCreateAgentInProject(openedRoot, name);
+      return;
+    }
+    studioRestoreGenerationRef.current += 1;
+    restoredStudioProjectsRef.current.add(project.projectId);
+    const selection: StudioWorkspaceSelection = {
+      kind: "agent-map",
+      projectId: project.projectId,
+    };
+    setStudioSelection(selection);
+    setSelectedProject(null);
+    setFocusedAgentPath(scope.cwd);
+    setComposing(false);
+    setReviewSummary(null);
+    setTemplatesOpen(false);
+    setOverviewOpen(false);
+    closeMobileDrawer();
+    if (isMobile) setRightCollapsed(true);
+    await harness.api
+      .putStudioCurrentWorkspace(project.projectId, selection)
+      .catch(() => {
+        // The map is already selected. Remembering it is best effort and must
+        // not turn a completed navigation into a failure.
+      });
+  };
+
   const createAgentInProject = async (input: {
     name: string;
     template: string;
@@ -2092,6 +2162,14 @@ export const App = (): JSX.Element => {
     if (!cwd) {
       throw new Error("Set a project folder first — use the + to open one.");
     }
+    // SAY IT, don't infer it. `composing` used to be set by the rail control
+    // that opened this, and holding it true is what keeps the composer MOUNTED
+    // across the session that is about to be created and, on a failed upload,
+    // closed again. The composer is now the home screen — shown because
+    // nothing else is — so without this the workbench appears for the life of
+    // that provisional session, the composer unmounts, and the attachment queue
+    // a rollback is supposed to retain goes with it.
+    setComposing(true);
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
     const session = await createSessionAt(cwd, agentHarness, {
@@ -2677,14 +2755,7 @@ export const App = (): JSX.Element => {
               setTemplatesOpen(false);
               closeMobileDrawer();
             }}
-            onNewSession={() => {
-              studioRestoreGenerationRef.current += 1;
-              setStudioSelection(null);
-              setSelectedProject(null);
-              setComposing(true);
-              setTemplatesOpen(false);
-              setOverviewOpen(false);
-            }}
+            onNewAgentIn={handleNewAgentIn}
             onReviewSummary={reviewPastSession}
             history={harness.history}
             historyLoading={harness.historyLoading}

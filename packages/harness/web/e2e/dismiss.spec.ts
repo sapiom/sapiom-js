@@ -5,6 +5,7 @@
  * smoke.spec.ts.
  */
 import { expect, test } from "@playwright/test";
+import { openAddExistingAgents } from "./mock-navigation";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -81,18 +82,22 @@ test.describe("Start dialog", () => {
   test("closes on Escape and returns focus to the button that spawned it", async ({
     page,
   }) => {
-    await page.getByTestId("add-existing-agents").click();
+    await openAddExistingAgents(page);
     await expect(page.locator(".modal-start")).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(page.locator(".modal-start")).toBeHidden();
-    await expect(page.getByTestId("add-existing-agents")).toBeFocused();
+    // The ⋮, because that is the control still on screen. "Add existing agents"
+    // is an item INSIDE that menu now, and the menu closed when the item was
+    // chosen — a `triggerRef` pointing at a detached node restores focus to
+    // <body>, which is the bug this spec exists to catch.
+    await expect(page.getByTestId("history-trigger")).toBeFocused();
   });
 
   test("still closes on a backdrop click, but not on clicks inside the panel", async ({
     page,
   }) => {
-    await page.getByTestId("add-existing-agents").click();
+    await openAddExistingAgents(page);
     await expect(page.locator(".modal-start")).toBeVisible();
 
     await page.getByTestId("folder-field-input").click();

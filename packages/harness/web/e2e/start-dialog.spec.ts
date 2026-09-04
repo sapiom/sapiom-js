@@ -12,11 +12,12 @@
  * `scratch` is a plain folder.
  */
 import { expect, test } from "@playwright/test";
+import { openAddExistingAgents } from "./mock-navigation";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   await expect(page.locator(".modal-start")).toBeVisible();
 });
 
@@ -30,12 +31,19 @@ test.describe("opening", () => {
     await expect(page.locator(".folder-field")).toBeVisible();
   });
 
-  test("Create new opens the composer, not this dialog", async ({ page }) => {
-    // Adding what exists and creating something new are different surfaces now.
+  test("the create verb asks WHERE first, and it is not this dialog", async ({
+    page,
+  }) => {
+    // Adding what exists and creating something new are still different
+    // surfaces. What changed is the second one: "Create new agent" used to open
+    // a composer that invented a folder from whatever you typed. The verb's
+    // first step now names the place — the projects that exist, plus a way out
+    // to a folder that does not — and this detection dialog is not it.
     await page.keyboard.press("Escape");
     await expect(page.locator(".modal-start")).toHaveCount(0);
     await page.getByTestId("rail-create-new").click();
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("new-agent-menu")).toBeVisible();
+    await expect(page.getByTestId("new-agent-choose-folder")).toBeVisible();
     await expect(page.locator(".modal-start")).toHaveCount(0);
   });
 });

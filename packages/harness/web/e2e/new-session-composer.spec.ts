@@ -39,15 +39,29 @@ const injectCallCount = (page: Page): Promise<number> =>
       ).__HARNESS_TEST__?.injectInputCalls?.length ?? 0,
   );
 
+/**
+ * THE COMPOSER IS THE HOME SCREEN, not a create door.
+ *
+ * These specs used to open it by clicking the rail's "Create new agent" CTA.
+ * That control is gone: the rail now has ONE create verb, its first step names
+ * the project, and creation goes to that project's Agent Map — the real path —
+ * rather than to a composer that invents a folder from a slug and then asks the
+ * coding agent, in English, to please scaffold something in it.
+ *
+ * What the composer still is: what the app shows when there is no session, no
+ * agent and nothing selected. `mockState=fresh` is that state, so it is how
+ * these specs reach it now. Every assertion below is unchanged — the subject
+ * was always the composer's own behaviour (attachments, prompt ordering, the
+ * agent picker), never the control that opened it.
+ */
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0&mockStudioProjects=absent");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
+  await page.goto("/?mockState=fresh&mockStudioProjects=absent");
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
 });
 
 test("Create new opens the composer with no terminal or canvas, and a chip prefills the box", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
   // No terminal, no canvas while composing.
@@ -65,7 +79,6 @@ test("Create new opens the composer with no terminal or canvas, and a chip prefi
 test("describing an outcome starts a session and hands the agent that outcome", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page
     .getByTestId("composer-input")
     .fill("Diff our competitors' pricing pages every morning.");
@@ -84,7 +97,6 @@ test("describing an outcome starts a session and hands the agent that outcome", 
 test("a picked file reaches the first request without naming the project", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -123,7 +135,6 @@ test("a picked file reaches the first request without naming the project", async
 test("picker, drop, and pathless clipboard files reach one ordered first request", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -237,7 +248,6 @@ test("ordinary clipboard text pastes natively without creating an attachment", a
   page,
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => navigator.clipboard.writeText("pasted plain text"));
 
   const input = page.getByTestId("composer-input");
@@ -251,7 +261,6 @@ test("ordinary clipboard text pastes natively without creating an attachment", a
 test("attachment controls expose names, live status, and keyboard removal", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -289,7 +298,6 @@ test("attachment controls expose names, live status, and keyboard removal", asyn
 test("attachment rows stay contained with touch-sized removal at a narrow viewport", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.setViewportSize({ width: 360, height: 800 });
   await page.evaluate(() => {
     window.sapiomDesktop = {
@@ -337,7 +345,6 @@ test("attachment rows stay contained with touch-sized removal at a narrow viewpo
 test("re-adding and removing files keeps only the intended first-request paths", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -377,7 +384,6 @@ test("re-adding and removing files keeps only the intended first-request paths",
 test("an attachment-only start uses the fallback project and sends the file", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -409,7 +415,6 @@ test("an attachment-only start uses the fallback project and sends the file", as
 test("an upload failure rolls back, retains the queue, sends nothing, and retries once", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -506,11 +511,10 @@ for (const agent of [
     await page.addInitScript(() => {
       (window as unknown as { __MOCK_WITHHOLD_READY__?: boolean }).__MOCK_WITHHOLD_READY__ = true;
     });
-    await page.goto("/?seed=0&mockStudioProjects=absent");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.goto("/?mockState=fresh&mockStudioProjects=absent");
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
-    await page.getByTestId("rail-create-new").click();
-    if (agent.id === "codex") {
+      if (agent.id === "codex") {
       await page.getByTestId("composer-harness-select").click();
       await page.getByTestId("composer-harness-option-codex").click();
       await expect(page.getByTestId("composer-harness-select")).toContainText("Codex");
@@ -565,7 +569,6 @@ for (const agent of [
 test("a new session opens terminal-only; the canvas stays hidden until it has content", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.getByTestId("composer-input").fill("Build a small thing.");
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("agent-view")).toBeVisible();
@@ -600,7 +603,6 @@ test("the new agent's folder appears in the rail at once and is never lost mid-c
   const groups = page.locator(".rail-list .workspace-group");
   const before = await groups.count();
 
-  await page.getByTestId("rail-create-new").click();
   await page
     .getByTestId("composer-input")
     .fill("Diff competitor pricing pages every morning.");
@@ -619,26 +621,18 @@ test("the new agent's folder appears in the rail at once and is never lost mid-c
   await expect(groups).toHaveCount(before + 1);
 });
 
-test("Back returns to the session the composer was opened over", async ({
-  page,
-}) => {
-  await expect(page.getByTestId("session-context")).toHaveAttribute(
-    "data-session-id",
-    "sess-boot",
-  );
-  await page.getByTestId("rail-create-new").click();
+test("the home screen has nothing to go Back to", async ({ page }) => {
+  // This asserted the inverse: the composer was something you OPENED over a
+  // running session, and Back put that session back. It is not opened over
+  // anything any more — the rail's create verb goes to a project's Agent Map,
+  // and the composer is what the app shows when there is no session, no agent
+  // and nothing selected. With nothing underneath, a Back control would be a
+  // door onto an empty room, so there isn't one.
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-
-  await page.getByTestId("composer-back").click();
-  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
-  await expect(page.getByTestId("session-context")).toHaveAttribute(
-    "data-session-id",
-    "sess-boot",
-  );
+  await expect(page.getByTestId("composer-back")).toHaveCount(0);
 });
 
 test("the agent selector lists the coding agents", async ({ page }) => {
-  await page.getByTestId("rail-create-new").click();
   const select = page.getByTestId("composer-harness-select");
   await expect(select).toContainText("Claude Code");
 
