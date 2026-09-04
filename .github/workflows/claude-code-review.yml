@@ -11,6 +11,12 @@ name: Claude Code Review
 # tarballs, so customer names and internal business context must be caught
 # at review time — a static blocklist committed here would itself publish
 # the names it protects.
+#
+# The prompt also carries a frontend component-hygiene section, which is
+# ADVISORY by design. We do not gate a build on design parity, so those
+# findings inform and never block. It exists because `lint` in the harness
+# package is `eslint src`, which does not cover `web/src`, where nearly all
+# Studio UI lives: this review is the only automated read of that code.
 
 on:
   pull_request:
@@ -258,6 +264,52 @@ jobs:
             a released version — beyond what fixing it inherently reveals — flag that the details
             belong in private reporting per SECURITY.md, not in a public PR.
 
+            ## Frontend component hygiene
+
+            **Applies only when the diff touches frontend component code**: `.tsx`/`.css` under
+            `packages/harness/web/src`, `packages/harness-desktop/src/renderer`, or any other `web/` or
+            `renderer/` tree. If the diff has none, skip this section and say nothing about it.
+
+            **You are the only automated eye on this code.** The harness `lint` script is
+            `eslint src --ext .ts`, which does not cover `web/src`, where nearly all Studio UI lives. Do
+            not assume a linter already caught duplication, dead state, or a hand-written token value.
+
+            **This is advisory, not a gate.** We do not fail a build because the UI differs from a
+            design, and nothing in this section is grounds for blocking. Label these findings
+            `HYGIENE (advisory)` and word each one as the concrete next step the author can take: name
+            the existing component, hook, token, or class and give its path. If you cannot point at
+            something that already exists in the repo, it is an opinion, so drop it.
+
+            Grep before claiming something is new: `packages/harness/web/src/components` holds 70+
+            components and the sibling you want usually exists. Report **at most 3**, highest signal
+            first, from:
+
+            1. **A re-implemented shared primitive.** A hand-rolled modal, popover, menu, confirm, empty
+              state, or icon when the repo already ships one (`SecretDialogShell`, `AnchoredPopover`,
+              `MenuChoice`, `EmptyState`, `Icon`, and neighbours). Name the existing one and its path.
+            2. **A second recipe for a concept that already has one.** Two ways to render the same
+              status, two ways to load the same resource, a new hook beside an existing hook doing that
+              job. The cost is that every later change has to be made in both places.
+            3. **Presentation and logic tangled in one component.** Fetching, polling, or business rules
+              inside a component that also owns layout, where a sibling in the same directory keeps them
+              apart. Say which half should move and where it goes.
+            4. **State that should be derived.** A `useState` paired with a `useEffect` that only
+              recomputes a value from props or other state: it can go out of sync, so compute it during
+              render instead.
+            5. **An effect doing an event handler's job.** Work belonging in the click, submit, or change
+              handler placed in a `useEffect` keyed on the value it just wrote. Those also fire on mount
+              and on unrelated re-renders.
+            6. **A redefined token or a one-off style.** A literal colour, radius, font size, or spacing
+              where a `var(--...)` token exists, or a new class where an existing one fits.
+              `packages/harness/CLAUDE.md` rule 6 is the standard: read tokens with `var()`, never
+              snapshot their values, because a local copy drifts the moment the design system moves.
+
+            **Do not flag**: naming, file placement, prop ordering, unmeasured memoisation, "consider
+            extracting" on a component nobody has had to change twice, a missing test for a purely
+            visual change, or any divergence from a design mock. Hygiene findings never outrank the
+            confidentiality and published-package findings above; a section that floods the PR with
+            nitpicks gets the whole review ignored, which is worse than not writing it.
+
             ## General review
 
             Code quality, potential bugs, security concerns, test coverage. Use the repository's
@@ -280,7 +332,10 @@ jobs:
             Length budget: 6,000 characters for a first review, 2,000 for a follow-up — a budget to
             come in under, not a target. Do not add the `claude-review-sha` marker yourself.
 
-          claude_args: '--allowed-tools "Write,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+          # Read/Glob/Grep are read-only on the PR checkout. The component-hygiene
+          # section requires naming the existing component or token a change
+          # bypasses, which is a claim about the repo, not about the diff.
+          claude_args: '--allowed-tools "Write,Read,Glob,Grep,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
 
       - name: Post review comment
         if: steps.pr.outputs.should_run == 'true'
