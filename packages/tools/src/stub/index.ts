@@ -6,6 +6,12 @@
  * locally with zero setup) plus optional per-capability overrides (when a step's
  * logic branches on a result). No network, no credentials.
  *
+ * Stubbed namespaces include the full client surface: sandboxes, repositories,
+ * models, agents, llm, fileStorage, contentGeneration, search, database, email,
+ * domains, memory, vault, keys, speech, and browserAutomation. A missing
+ * top-level capability (typo or future gap) throws `CapabilityNotAvailableError`
+ * instead of an opaque `TypeError` on `undefined`.
+ *
  * It is shape-faithful: namespace methods return the real handle types
  * (`Repository`, `Sandbox`, `RunHandle`), and a handle's instance methods
  * (`repo.pushFromSandbox(...)`, `sandbox.exec(...)`) work too — so a step never
@@ -823,6 +829,43 @@ function stubMemoryFilterMatches(
     }
   }
   return true;
+}
+
+/**
+ * Thrown when author code reads a top-level `ctx.sapiom.<capability>` that the
+ * stub client does not implement. Prefer this over an opaque
+ * `TypeError: Cannot read properties of undefined` under `run_local`.
+ */
+export class CapabilityNotAvailableError extends Error {
+  readonly capability: string;
+
+  constructor(capability: string) {
+    super(
+      `Capability '${capability}' is not available under run_local ` +
+        `(not stubbed by createStubClient)`,
+    );
+    this.name = "CapabilityNotAvailableError";
+    this.capability = capability;
+  }
+}
+
+/**
+ * Replace missing top-level capability reads with a legible error. Existing
+ * namespaces (including memory / database / email / domains) are returned as-is.
+ */
+function guardMissingCapabilities(client: Sapiom): Sapiom {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (typeof prop === "symbol") {
+        return Reflect.get(target, prop, receiver);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (value !== undefined || prop in target) {
+        return value;
+      }
+      throw new CapabilityNotAvailableError(String(prop));
+    },
+  });
 }
 
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
@@ -2013,11 +2056,13 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
       },
     },
-    withAttribution: () => client,
+    withAttribution: () => guarded.value!,
     // The stub makes no HTTP calls and creates no analytics emitter — nothing
     // to release, so shutdown matches the real client's "resolve immediately".
     shutdown: () => Promise.resolve(),
   };
 
-  return client;
+  const guarded: { value?: Sapiom } = {};
+  guarded.value = guardMissingCapabilities(client);
+  return guarded.value;
 }
