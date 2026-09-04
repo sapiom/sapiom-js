@@ -33,7 +33,7 @@ import {
   type BracketedPasteState,
 } from "./bracketed-paste.js";
 import { HOST_ESBUILD_PIN } from "./asar-path.js";
-import { resolveSpawnTarget } from "./spawn-target.js";
+import { resolveSpawnTarget, type SpawnTargetDeps } from "./spawn-target.js";
 import { stripAnsi } from "./strip-ansi.js";
 import {
   AdapterNotFoundError,
@@ -398,6 +398,12 @@ export interface SessionManagerOptions {
    * (see `submitInput`) is provable from POSIX CI. Defaults to the real one.
    */
   platform?: NodeJS.Platform;
+  /**
+   * Overrides for Windows spawn resolution (PATH / shim lookup). Tests that
+   * set `platform: "win32"` on POSIX CI pass a `fileExists` that accepts the
+   * fake CLI name so `resolveSpawnTarget` does not require a real PATH entry.
+   */
+  spawnTargetDeps?: SpawnTargetDeps;
 }
 
 export interface TrustedSessionCreateOptions {
@@ -532,6 +538,7 @@ export class SessionManager {
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly platform: NodeJS.Platform;
+  private readonly spawnTargetDeps: SpawnTargetDeps;
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
@@ -577,6 +584,7 @@ export class SessionManager {
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     this.platform = options.platform ?? process.platform;
+    this.spawnTargetDeps = options.spawnTargetDeps ?? {};
     // Many WS clients (terminal + events) can subscribe over a long-running process.
     this.statusEmitter.setMaxListeners(0);
     this.activityEmitter.setMaxListeners(0);
@@ -1849,6 +1857,7 @@ export class SessionManager {
     // non-Windows spawn semantics on a Windows runner.
     const target = resolveSpawnTarget(spec.command, spec.args, {
       platform: this.platform,
+      ...this.spawnTargetDeps,
     });
 
     // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken

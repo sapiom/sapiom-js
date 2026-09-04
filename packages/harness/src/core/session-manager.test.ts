@@ -110,6 +110,7 @@ describe("SessionManager", () => {
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
       platform?: SessionManagerOptions["platform"];
+      spawnTargetDeps?: SessionManagerOptions["spawnTargetDeps"];
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
       writeAgentSessionOwnerRegistry?:
@@ -147,8 +148,20 @@ describe("SessionManager", () => {
       // Default off process.platform so Windows runners can exercise the
       // non-Windows spawn path without installing fake CLI shims for every
       // unit test. Tests that need ConPTY / win32 paste semantics pass
-      // `platform: "win32"` explicitly.
+      // `platform: "win32"` explicitly. When they do, accept the fake CLI on
+      // PATH so resolveSpawnTarget does not require a real Windows install.
       platform: opts.platform ?? "linux",
+      spawnTargetDeps:
+        opts.spawnTargetDeps ??
+        (opts.platform === "win32"
+          ? {
+              // win32 PATH lookup splits on `;`, so a POSIX `:` PATH would be
+              // treated as one non-existent directory. Give a synthetic entry.
+              env: { PATH: "C:\\fake-bin" },
+              fileExists: (candidate) =>
+                /(?:^|[\\/])fake-claude(?:\.[^.\\/]+)?$/i.test(candidate),
+            }
+          : undefined),
       writeSessionRegistry: opts.writeSessionRegistry,
       writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
     });
