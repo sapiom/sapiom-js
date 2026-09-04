@@ -569,6 +569,21 @@ export class StudioProjectCatalog {
 
       const activeRoots = new Set(dedupedScopes.keys());
       let changed = false;
+      /**
+       * Bindings THIS pass just took away, and only those.
+       *
+       * The adoption below re-points one of these when its root moved up. The
+       * pool has to be this narrow: "any project whose bindings are all
+       * missing" is unbounded in time, because nothing ever deletes a project
+       * and every folder that aged out of the capped `recentDirs` leaves one
+       * behind. A new root appearing months later would then adopt a stranger's
+       * identity — the same durable, silent, un-undoable write this migration
+       * exists to prevent, arriving by the migration itself.
+       */
+      const newlyMissing: Array<{
+        project: StudioProjectIdentity;
+        binding: ProjectRootBinding;
+      }> = [];
       for (const project of next) {
         let projectChanged = false;
         for (const binding of project.rootBindings) {
@@ -576,6 +591,7 @@ export class StudioProjectCatalog {
             ? "active"
             : "missing";
           if (binding.status !== status) {
+            if (status === "missing") newlyMissing.push({ project, binding });
             binding.status = status;
             projectChanged = true;
           }
@@ -618,31 +634,43 @@ export class StudioProjectCatalog {
         // identities into one, which is worse than the split it fixes and is not
         // reversible. Ambiguity mints fresh.
         if (!project) {
-          const orphans = next.filter(
-            (candidate) =>
-              candidate.rootBindings.length > 0 &&
+          // THE NEAREST ROOT ADOPTS, not the first one that contains it.
+          // Scopes arrive sorted by canonical path, so `/w` reaches an orphan
+          // under `/w/team/a2` before `/w/team` does; letting it claim would
+          // land the identity on the wrong folder and leave the right one
+          // minting fresh. A root may only adopt what no deeper new root also
+          // contains.
+          const deeperRootExists = (oldRoot: string): boolean =>
+            [...dedupedScopes.keys()].some(
+              (other) =>
+                other !== canonical &&
+                isStrictlyUnder(oldRoot, other) &&
+                // Both contain `oldRoot`, so one is an ancestor of the other
+                // and the longer path is the nearer one.
+                other.length > canonical.length,
+            );
+          const orphans = newlyMissing.filter(
+            ({ project: candidate, binding }) =>
+              isStrictlyUnder(binding.localRootRef, canonical) &&
+              !deeperRootExists(binding.localRootRef) &&
               candidate.rootBindings.every(
-                (binding) => binding.status === "missing",
-              ) &&
-              candidate.rootBindings.some((binding) =>
-                isStrictlyUnder(binding.localRootRef, canonical),
+                (entry) => entry.status === "missing",
               ),
           );
           const moved = orphans.length === 1 ? orphans[0] : undefined;
           if (moved) {
-            const binding = moved.rootBindings.find((candidate) =>
-              isStrictlyUnder(candidate.localRootRef, canonical),
-            )!;
-            binding.localRootRef = canonical;
-            binding.status = "active";
-            if (!moved.legacyWorkspaceKeys.includes(scope.workspaceKey)) {
-              moved.legacyWorkspaceKeys.push(scope.workspaceKey);
+            moved.binding.localRootRef = canonical;
+            moved.binding.status = "active";
+            if (!moved.project.legacyWorkspaceKeys.includes(scope.workspaceKey)) {
+              moved.project.legacyWorkspaceKeys.push(scope.workspaceKey);
             }
-            moved.displayName = path.basename(canonical).trim() || "Project";
-            moved.identityVersion += 1;
-            moved.updatedAt = this.timestamp();
+            // `displayName` is NOT rewritten, matching `moveRootBinding`, which
+            // deliberately leaves it alone: the folder moved, the project the
+            // user named did not.
+            moved.project.identityVersion += 1;
+            moved.project.updatedAt = this.timestamp();
             changed = true;
-            reconciledScopes.push({ ...scope, projectId: moved.projectId });
+            reconciledScopes.push({ ...scope, projectId: moved.project.projectId });
             continue;
           }
         }

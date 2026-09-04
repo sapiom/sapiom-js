@@ -85,12 +85,77 @@ describe("StudioProjectCatalog", () => {
 
     expect(after.projects).toHaveLength(1);
     expect(after.projects[0]!.projectId).toBe(original);
-    expect(after.projects[0]!.displayName).toBe("property-ops");
     expect(after.workspaceScopes[0]?.projectId).toBe(original);
+    // THE NAME IS NOT REWRITTEN. `moveRootBinding` deliberately leaves it
+    // alone and so does this: the folder the project points at moved, the
+    // project the user named did not, and silently renaming durable state is
+    // the class of write this whole migration exists to avoid.
+    expect(after.projects[0]!.displayName).toBe("tenant-screening");
     // And a session anywhere under the new root still resolves to it.
     expect(
       (await catalog.resolveIdentityForPath(agentDir))?.projectId,
     ).toBe(original);
+  });
+
+  it("only a root that moved in THIS pass can be adopted", async () => {
+    // The pool must be bindings this reconcile just took away. "Any project
+    // whose bindings are all missing" is unbounded in time — nothing deletes a
+    // project, and every folder that ages out of the capped `recentDirs` leaves
+    // one behind — so a new root appearing later would adopt a stranger's
+    // identity, durably and silently.
+    const { root, catalogPath } = await fixture();
+    const stale = path.join(root, "workspace", "proj-a");
+    await fs.mkdir(stale, { recursive: true });
+    const catalog = new StudioProjectCatalog(catalogPath);
+
+    const first = await catalog.reconcile([
+      { workspaceKey: "workspace-stale", cwd: stale },
+    ]);
+    const staleId = first.projects[0]!.projectId;
+
+    // It ages out: reconciled away in its own pass, long before the new root.
+    await catalog.reconcile([]);
+
+    // Much later, a new root above it appears.
+    const holding = path.join(root, "workspace");
+    const after = await catalog.reconcile([
+      { workspaceKey: "workspace-holding", cwd: holding },
+    ]);
+
+    const minted = after.workspaceScopes[0]?.projectId;
+    expect(minted).not.toBe(staleId);
+    expect(after.projects).toHaveLength(2);
+    // And the stranger is untouched: same name, still missing, not re-pointed.
+    const strangerAfter = after.projects.find((p) => p.projectId === staleId)!;
+    expect(strangerAfter.displayName).toBe("proj-a");
+  });
+
+  it("the NEAREST new root adopts, not the first one that contains it", async () => {
+    // Scopes arrive sorted by canonical path, so `/w` reaches an orphan under
+    // `/w/team/a2` before `/w/team` does. Letting it claim would land the
+    // identity on the wrong folder and leave the right one minting fresh.
+    const { root, catalogPath } = await fixture();
+    const outer = path.join(root, "w");
+    const inner = path.join(outer, "team");
+    const agent = path.join(inner, "a2");
+    await fs.mkdir(agent, { recursive: true });
+    const catalog = new StudioProjectCatalog(catalogPath);
+
+    const before = await catalog.reconcile([
+      { workspaceKey: "workspace-agent", cwd: agent },
+    ]);
+    const original = before.projects[0]!.projectId;
+
+    const after = await catalog.reconcile([
+      { workspaceKey: "workspace-outer", cwd: outer },
+      { workspaceKey: "workspace-inner", cwd: inner },
+    ]);
+
+    const byCwd = new Map(
+      after.workspaceScopes.map((scope) => [scope.cwd, scope.projectId]),
+    );
+    expect(byCwd.get(inner)).toBe(original);
+    expect(byCwd.get(outer)).not.toBe(original);
   });
 
   it("refuses to merge two orphans into one root, and mints instead", async () => {
