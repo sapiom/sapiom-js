@@ -134,6 +134,19 @@ export const buildPlanReadRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exact"), planId: generatedId("plan"), versionId: generatedId("planv"), semanticDigest: digest }).strict(),
 ]);
 
+/**
+ * The MCP SDK accepts object schemas for tool discovery but currently renders a
+ * top-level discriminated union as an empty object. Keep this strict transport
+ * envelope separate from the exact domain union above; execution always parses
+ * the request through `buildPlanReadRequestSchema` again.
+ */
+export const buildPlanReadToolInputSchema = z.object({
+  kind: z.enum(["current", "exact"]),
+  planId: generatedId("plan").optional(),
+  versionId: generatedId("planv").optional(),
+  semanticDigest: digest.optional(),
+}).strict();
+
 export type BuildPlanContentInput = z.infer<typeof buildPlanContentInputSchema>;
 export type BuildPlanApplyRequest = z.infer<typeof buildPlanApplyRequestSchema>;
 export type BuildPlanRebaseRequest = z.infer<typeof buildPlanRebaseRequestSchema>;

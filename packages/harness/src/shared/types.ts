@@ -835,6 +835,7 @@ export type AnalyticsEventType =
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
   | "agent_map.capability"
+  | "build_plan.operation"
   | "project_agent.identity_migrated"
   | "project_agent.identity_rejected"
   | "project_bootstrap.scheduled"

@@ -10,6 +10,13 @@ import {
 } from "../core/agent-map-proposal-service.js";
 import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
 import { AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
+import { BuildPlanService, BuildPlanServiceError } from "../core/build-plan-service.js";
+import {
+  buildPlanApplyRequestSchema,
+  buildPlanReadToolInputSchema,
+  buildPlanRebaseRequestSchema,
+  parseBuildPlanReadRequest,
+} from "../core/build-plan-schema.js";
 
 /**
  * MCP discovery sees the complete SAP-3061 input contract. Field-level `catch`
@@ -47,7 +54,8 @@ const batchSchema = z
   .strict();
 
 export interface AgentMapToolEvent {
-  tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose";
+  tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose" |
+    "build_plan_read" | "build_plan_validate" | "build_plan_apply" | "build_plan_rebase";
   outcome: "ok" | "error";
   errorCode?: string;
   latencyMs: number;
@@ -80,8 +88,14 @@ function errorResult(error: unknown) {
           ? { code: "forbidden", recovery: "reread" }
           : error instanceof AgentMapMcpProjectUnavailableError
             ? { code: "project_unavailable", recovery: "reread" }
-            : error instanceof AgentMapWorkspaceStoreError
-              ? { code: "storage_unavailable", recovery: "retry" }
+            : error instanceof BuildPlanServiceError
+              ? { code: error.code, ...error.details,
+                  recovery: error.code === "request_id_reused" || error.code === "request_id_expired"
+                    ? "new_request" : error.code.includes("conflict") || error.code.includes("source")
+                      ? "reread" : error.code.includes("validation") || error.code.includes("resolution")
+                        ? "correct" : "retry" }
+              : error instanceof AgentMapWorkspaceStoreError
+                ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "reread" }
               : { code: "internal_error", recovery: "retry" };
   return {
     isError: true,
@@ -101,6 +115,7 @@ function toolResult(value: object, message: string) {
 export function createAgentMapToolServer(
   identity: ProjectAgentSession,
   service: AgentMapProposalService,
+  buildPlanService: BuildPlanService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
   const server = new McpServer({
@@ -201,6 +216,58 @@ export function createAgentMapToolServer(
           `Accepted Agent Map proposal version ${result.version}.`,
         );
       }),
+  );
+
+  server.registerTool(
+    "build_plan_read",
+    {
+      description: "Read the current shared build plan or one exact immutable historical version.",
+      inputSchema: buildPlanReadToolInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (request) => instrument("build_plan_read", async () => {
+      const result = await buildPlanService.read(identity, parseBuildPlanReadRequest(request));
+      return toolResult(result, result.plan ? `Build plan version ${result.plan.version}.` : "No build plan exists.");
+    }),
+  );
+
+  server.registerTool(
+    "build_plan_validate",
+    {
+      description: "Preview and validate an exact-source build plan replacement without changing durable state.",
+      inputSchema: buildPlanApplyRequestSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (request) => instrument("build_plan_validate", async () => {
+      const result = await buildPlanService.validate(identity, request);
+      return toolResult(result, `Build plan preview is valid for version ${result.preview.version}.`);
+    }),
+  );
+
+  server.registerTool(
+    "build_plan_apply",
+    {
+      description: "Atomically append an idempotent shared build plan version using exact map and plan expectations.",
+      inputSchema: buildPlanApplyRequestSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (request) => instrument("build_plan_apply", async () => {
+      const result = await buildPlanService.apply(identity, request);
+      return toolResult(result, result.created ? "Build plan version created." : "Build plan is unchanged.");
+    }),
+  );
+
+  server.registerTool(
+    "build_plan_rebase",
+    {
+      description: "Rebase the exact current build plan to the exact current map with explicit remap or removal resolutions.",
+      inputSchema: buildPlanRebaseRequestSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (request) => instrument("build_plan_rebase", async () => {
+      const result = await buildPlanService.rebase(identity, request);
+      return toolResult(result, result.created ? "Build plan rebased." : "Build plan rebase is unchanged.");
+    }),
   );
 
   return server;

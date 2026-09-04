@@ -163,7 +163,7 @@ describe("BuildPlanService", () => {
   });
 
   it("replays the original result, rejects changed request bodies, and records semantic no-ops without new versions", async () => {
-    const { aggregateStore, service, refs } = await fixture();
+    const { aggregateStore, service, refs, outcomes } = await fixture();
     const create = { schemaVersion: 1, requestId: "plan-create", expectedMap: toolMapRef(refs.map), expectedPlan: null,
       operations: [{ op: "replace-content", content: content(refs) }] };
     const first = await service.apply(identity(), create);
@@ -172,6 +172,11 @@ describe("BuildPlanService", () => {
     reordered.operations[0]!.content.nonGoals.reverse();
     const replay = await service.apply(identity(), reordered);
     expect(replay).toEqual({ ...first, replayed: true });
+    expect(outcomes).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "apply",
+      outcome: "replayed",
+      version: 1,
+    }));
     await expect(service.apply(identity(), { ...create, operations: [{ op: "replace-content",
       content: { ...content(refs), outcome: "Changed" } }] })).rejects.toMatchObject({ code: "request_id_reused" });
 

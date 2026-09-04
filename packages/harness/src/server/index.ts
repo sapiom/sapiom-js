@@ -174,6 +174,8 @@ import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import { BuildPlanService } from "../core/build-plan-service.js";
+import { BuildPlanStore } from "../core/build-plan-store.js";
 import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
@@ -3036,7 +3038,9 @@ export const startServer = async (
                     ? { schema_version: event.schemaVersion }
                     : {}),
                 }
-              : {}),
+              : event.name === "agent_map.workspace_migrated"
+                ? { from_schema_version: event.fromSchemaVersion }
+                : {}),
           },
         };
         void eventStore.append(analyticsEvent).catch(() => {});
@@ -3055,6 +3059,35 @@ export const startServer = async (
       // disconnected browser recovers from the durable snapshot on reconnect.
       onAccepted: (delta) =>
         bus.publish({ type: "agent-map.proposal.changed", delta }),
+    },
+  );
+  const buildPlanService = new BuildPlanService(
+    new BuildPlanStore(agentMapWorkspaceStore),
+    {
+      onOutcome: (event) => {
+        const analyticsEvent: AnalyticsEvent = {
+          eventId: randomUUID(),
+          seq: seqCounter.next(event.sessionId),
+          ts: new Date().toISOString(),
+          userId: identity?.userId ?? null,
+          tenantId: identity?.tenantId ?? null,
+          machineId,
+          harnessSessionId: event.sessionId,
+          agentSessionId: null,
+          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
+          type: "build_plan.operation",
+          payload: {
+            project_id: event.projectId,
+            operation: event.operation,
+            outcome: event.outcome,
+            plan_version: event.version,
+            diagnostic_count: Math.max(0, Math.min(64, event.diagnosticCount)),
+            affected_count: Math.max(0, Math.min(256, event.affectedCount)),
+          },
+        };
+        void eventStore.append(analyticsEvent).catch(() => {});
+        batcher.enqueue(analyticsEvent);
+      },
     },
   );
   emitAgentMapCapabilityEvent = (event) => {
@@ -3080,6 +3113,7 @@ export const startServer = async (
   agentMapMcp = createAgentMapMcpRouter({
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
+    buildPlanService,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();

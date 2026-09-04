@@ -343,7 +343,10 @@ export class BuildPlanService {
     const digest = requestDigest(request);
     const preflight = await this.store.read(identity.projectId);
     const replay = this.replay(preflight, identity, request.requestId, digest, "build_plan_apply");
-    if (replay) return replay;
+    if (replay) {
+      this.emit(identity, "apply", "replayed", this.versionOf(replay, preflight), replay.diagnostics.length, 0);
+      return replay;
+    }
     // Preparation outside the project lock is side-effect free. The complete
     // preparation is repeated after the receipt check under the file lock.
     this.prepareApply(identity, preflight, request, digest, this.now().toISOString());
@@ -368,7 +371,10 @@ export class BuildPlanService {
     const digest = requestDigest(request);
     const preflight = await this.store.read(identity.projectId);
     const replay = this.replay(preflight, identity, request.requestId, digest, "build_plan_rebase");
-    if (replay) return replay;
+    if (replay) {
+      this.emit(identity, "rebase", "replayed", this.versionOf(replay, preflight), replay.diagnostics.length, 0);
+      return replay;
+    }
     this.prepareRebase(identity, preflight, request, digest, this.now().toISOString());
     let noOp = false;
     let diagnostics = 0;

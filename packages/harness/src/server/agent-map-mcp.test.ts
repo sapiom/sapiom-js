@@ -12,6 +12,8 @@ import type { ProjectAgentSession } from "../shared/agent-map.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { BuildPlanService } from "../core/build-plan-service.js";
+import { BuildPlanStore } from "../core/build-plan-store.js";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouterOptions,
@@ -42,8 +44,10 @@ async function fixture(
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-mcp-"));
   const capabilities = new AgentMapCapabilityRegistry();
-  const service = new AgentMapProposalService(new AgentMapWorkspaceStore(root));
-  const mcp = createAgentMapMcpRouter({ capabilities, service, ...options });
+  const workspaceStore = new AgentMapWorkspaceStore(root);
+  const service = new AgentMapProposalService(workspaceStore);
+  const buildPlanService = new BuildPlanService(new BuildPlanStore(workspaceStore));
+  const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService, ...options });
   const app = express();
   app.use(express.json());
   app.use(mcp.router);
@@ -58,7 +62,7 @@ async function fixture(
     await new Promise<void>((resolve) => http.close(() => resolve()));
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { capabilities, url };
+  return { capabilities, url, workspaceStore };
 }
 
 async function connect(url: URL, token: string) {
@@ -85,12 +89,18 @@ describe("Agent Map Streamable HTTP MCP", () => {
       "agent_map_propose",
       "agent_map_read",
       "agent_map_validate",
+      "build_plan_apply",
+      "build_plan_read",
+      "build_plan_rebase",
+      "build_plan_validate",
     ]);
-    expect(
-      tools.tools.every(
-        (tool) => tool.inputSchema.additionalProperties === false,
-      ),
-    ).toBe(true);
+    const nonStrict = tools.tools.filter((tool) => !(tool.inputSchema.additionalProperties === false ||
+      (Array.isArray(tool.inputSchema.anyOf) && tool.inputSchema.anyOf.every((variant) =>
+        typeof variant === "object" && variant !== null && "additionalProperties" in variant &&
+        variant.additionalProperties === false)))).map(({ name, inputSchema }) => ({ name, inputSchema }));
+    expect(nonStrict).toEqual([]);
+    await expect(client.callTool({ name: "build_plan_read", arguments: { kind: "current" } }))
+      .resolves.toMatchObject({ structuredContent: { plan: null, history: [] } });
     const validate = tools.tools.find(
       ({ name }) => name === "agent_map_validate",
     )!;
@@ -209,6 +219,143 @@ describe("Agent Map Streamable HTTP MCP", () => {
     await expect(
       client.callTool({ name: "agent_map_read", arguments: {} }),
     ).rejects.toThrow();
+  });
+
+  it("validates, applies, reads, and explicitly rebases a shared plan through the universal tools", async () => {
+    const { capabilities, url, workspaceStore } = await fixture();
+    const identity: ProjectAgentSession = {
+      projectId,
+      sessionId: "plan-author",
+      userId: "user",
+    };
+    const client = await connect(url, capabilities.issue(identity).token);
+    const mapRequest = {
+      schemaVersion: 1,
+      proposalId: null,
+      expectedVersion: 0,
+      requestId: "map-for-plan",
+      operations: [{
+        kind: "add-node",
+        draftRef: "research",
+        node: {
+          kind: "agent",
+          name: "Research",
+          purpose: "Research sources",
+          ownerAgent: null,
+          contractRefs: [],
+        },
+      }],
+    };
+    const proposed = await client.callTool({
+      name: "agent_map_propose",
+      arguments: mapRequest,
+    });
+    const firstAggregate = await workspaceStore.readAggregate(projectId);
+    const firstMap = firstAggregate.current.map!;
+    const planRequest = {
+      schemaVersion: 1,
+      requestId: "plan-create",
+      expectedMap: {
+        versionId: firstMap.versionId,
+        contentDigest: firstMap.contentDigest,
+      },
+      expectedPlan: null,
+      operations: [{
+        op: "replace-content",
+        content: {
+          outcome: "Deliver a daily research report.",
+          nonGoals: [],
+          milestones: [],
+          sequenceGates: [],
+          sharedConstraints: [],
+          repositoryIntents: [],
+          integrationCriteria: [],
+          acceptanceCriteria: [],
+          decisions: [],
+          assignments: [],
+          unresolvedDecisions: [],
+          risks: [],
+        },
+      }],
+    };
+
+    const validated = await client.callTool({
+      name: "build_plan_validate",
+      arguments: planRequest,
+    });
+    expect(validated).toMatchObject({
+      structuredContent: { preview: { version: 1 }, created: true },
+    });
+    expect((await workspaceStore.readAggregate(projectId)).current.buildPlan).toBeNull();
+
+    const applied = await client.callTool({
+      name: "build_plan_apply",
+      arguments: planRequest,
+    });
+    expect(applied).toMatchObject({
+      structuredContent: { plan: { semanticDigest: expect.any(String) }, created: true },
+    });
+    const firstPlan = (await workspaceStore.readAggregate(projectId)).current.buildPlan!;
+    await expect(client.callTool({
+      name: "build_plan_read",
+      arguments: {
+        kind: "exact",
+        planId: firstPlan.planId,
+        versionId: firstPlan.versionId,
+        semanticDigest: firstPlan.semanticDigest,
+      },
+    })).resolves.toMatchObject({ structuredContent: { plan: { version: 1 } } });
+
+    await client.callTool({
+      name: "agent_map_propose",
+      arguments: {
+        ...mapRequest,
+        proposalId: (proposed.structuredContent as { proposalId: string }).proposalId,
+        expectedVersion: 1,
+        requestId: "map-for-rebase",
+        operations: [{
+          kind: "add-node",
+          draftRef: "market-data",
+          node: {
+            kind: "resource",
+            name: "Market data",
+            purpose: "Supply current prices",
+            ownerAgent: null,
+            contractRefs: [],
+          },
+        }],
+      },
+    });
+    const secondMap = (await workspaceStore.readAggregate(projectId)).current.map!;
+    const rebased = await client.callTool({
+      name: "build_plan_rebase",
+      arguments: {
+        schemaVersion: 1,
+        requestId: "plan-rebase",
+        expectedPlan: {
+          planId: firstPlan.planId,
+          versionId: firstPlan.versionId,
+          semanticDigest: firstPlan.semanticDigest,
+        },
+        fromMap: {
+          versionId: firstMap.versionId,
+          contentDigest: firstMap.contentDigest,
+        },
+        toMap: {
+          versionId: secondMap.versionId,
+          contentDigest: secondMap.contentDigest,
+        },
+        resolutions: [],
+      },
+    });
+    expect(rebased).toMatchObject({
+      structuredContent: {
+        plan: { semanticDigest: firstPlan.semanticDigest },
+        created: true,
+      },
+    });
+    expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions.at(-1))
+      .toMatchObject({ version: 2, map: secondMap });
   });
 
   it("returns a bounded terminal recovery when the capability project is unavailable", async () => {

@@ -160,13 +160,27 @@ renews its inactivity lease, while session exit, resume rotation, signed-in
 principal changes, and server shutdown revoke it. Consumers should not copy,
 persist, log, or reuse the capability outside the launched session.
 
-Every project session receives the same three project-wide tools:
+Every project session receives the same project-wide tools:
 
 - `agent_map_read` reads the current confirmed workspace and shared proposal.
 - `agent_map_validate` validates one complete operation batch without mutating
   shared state or allocating permanent IDs.
 - `agent_map_propose` atomically and idempotently applies one validated batch
   to the shared Proposed map.
+- `build_plan_read` reads the current plan or one exact immutable historical
+  version.
+- `build_plan_validate` previews the same strict request accepted by apply
+  without writing state or consuming IDs.
+- `build_plan_apply` atomically appends an idempotent plan version using exact
+  expected map and plan references.
+- `build_plan_rebase` moves the current plan between exact map versions using
+  explicit remap or removal resolutions.
+
+The map and plan use append-only immutable histories with optimistic
+concurrency. Roles, assignment completeness, proposal state, and focused brief
+availability never determine whether a session may use these tools or write
+code. See [`docs/shared-build-plan.md`](docs/shared-build-plan.md) for the
+version, replay, rebase, and reserved brief-storage contracts.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 
