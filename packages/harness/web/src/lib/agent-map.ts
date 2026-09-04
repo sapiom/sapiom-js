@@ -12,8 +12,9 @@ import {
   parseMapChangeProposal,
 } from "@shared/agent-map-codec";
 import type { WorkspaceScopeSummary } from "@shared/system-graph";
+import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
 
-import { isWithinDir, stripTrailingSep } from "./paths";
+import { samePath } from "./paths";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -330,25 +331,19 @@ export function mostSpecificStudioScope(
   projects: readonly StudioProjectSummary[],
 ): (WorkspaceScopeSummary & { projectId: string }) | null {
   const projectIds = new Set(projects.map((project) => project.projectId));
-  const matches = scopes
-    .filter((scope): scope is WorkspaceScopeSummary & { projectId: string } =>
-      Boolean(
-        scope.projectId &&
-        projectIds.has(scope.projectId) &&
-        isWithinDir(scope.cwd, targetPath),
-      ),
+  const candidates = scopes.filter(
+    (scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+      Boolean(scope.projectId && projectIds.has(scope.projectId)),
+  );
+  const resolved = resolveProjectRootForPath(targetPath, candidates);
+  if (!resolved) return null;
+  return candidates
+    .filter(
+      (scope) =>
+        scope.projectId === resolved.projectId &&
+        samePath(scope.cwd, resolved.cwd),
     )
-    .map((scope) => ({
-      scope,
-      depth: stripTrailingSep(scope.cwd).length,
-    }));
-  if (matches.length === 0) return null;
-  const depth = Math.max(...matches.map((match) => match.depth));
-  const nearest = matches.filter((match) => match.depth === depth);
-  if (new Set(nearest.map(({ scope }) => scope.projectId)).size !== 1) {
-    return null;
-  }
-  return nearest.sort((left, right) =>
-    left.scope.workspaceKey.localeCompare(right.scope.workspaceKey),
-  )[0]!.scope;
+    .sort((left, right) =>
+      left.workspaceKey.localeCompare(right.workspaceKey),
+    )[0]!;
 }

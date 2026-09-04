@@ -62,13 +62,16 @@ describe("codex tailer lifecycle wiring", () => {
   let server: HarnessServer | undefined;
   let fakeHandle: FakeTailerHandle;
   let lastTailerOnEvent: CodexEventListener | undefined;
+  let tailerEvents: CodexEventListener[];
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "harness-codex-wiring-"));
 
     fakeHandle = { stop: vi.fn(), emitSessionEnd: vi.fn() };
+    tailerEvents = [];
     vi.mocked(tailCodexRollout).mockReset().mockImplementation((opts) => {
       lastTailerOnEvent = opts.onEvent;
+      tailerEvents.push(opts.onEvent);
       return fakeHandle;
     });
     vi.mocked(findRolloutFile).mockReset().mockResolvedValue("/fake/rollout/path.jsonl");
@@ -174,6 +177,60 @@ describe("codex tailer lifecycle wiring", () => {
       expect(server!.sessionManager.get(resumed.id)?.status).toBe("exited");
     }, PTY_EXIT_WAIT_OPTIONS);
     // See the first test's comment: the outer test timeout needs the same bump.
+  }, 15_000);
+
+  it("rejects a late event from the stopped tailer after the same session resumes", async () => {
+    const cwd = join(dir, "project");
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      autoCreateSession: false,
+      adapters: { codex: fakeCodexAdapter() },
+      stateRoot: dir,
+    });
+
+    const session = await server.sessionManager.create({ cwd, harness: "codex" });
+    await vi.waitFor(() => expect(tailerEvents).toHaveLength(1));
+    const firstRuntimeEvent = tailerEvents[0]!;
+    firstRuntimeEvent("SessionStart", {
+      source: "codex",
+      cwd,
+      session_id: "provider-shared",
+    });
+    await vi.waitFor(() => {
+      expect(server!.sessionManager.get(session.id)?.agentSessionId).toBe(
+        "provider-shared",
+      );
+      expect(server!.sessionManager.get(session.id)?.ready).toBe(true);
+    });
+
+    await server.sessionManager.kill(session.id);
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
+    );
+    await server.sessionManager.resume(session.id);
+    await vi.waitFor(() => expect(tailerEvents).toHaveLength(2));
+    expect(server.sessionManager.get(session.id)?.ready).toBe(false);
+
+    firstRuntimeEvent("SessionStart", {
+      source: "codex",
+      cwd,
+      session_id: "provider-shared",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.sessionManager.get(session.id)?.ready).toBe(false);
+
+    tailerEvents[1]!("SessionStart", {
+      source: "codex",
+      cwd,
+      session_id: "provider-shared",
+    });
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)?.ready).toBe(true),
+    );
+
+    await server.sessionManager.kill(session.id);
   }, 15_000);
 
   it("stops the tailer and does not start a new one for a non-codex session", async () => {

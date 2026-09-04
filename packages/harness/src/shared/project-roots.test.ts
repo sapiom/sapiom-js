@@ -5,6 +5,7 @@ import {
   projectRoots,
   projectSessionRoot,
   projectToOpen,
+  resolveProjectRootForPath,
   type ProjectRootSources,
 } from "./project-roots.js";
 
@@ -33,6 +34,12 @@ describe("shared project-root resolution", () => {
     expect(
       preferredProjectRoot(["/workspace/project-b", "/workspace/project-a"]),
     ).toBe("/workspace/project-a");
+    expect(
+      preferredProjectRoot([
+        "D:\\x\\y",
+        "C:\\a-very-long-project-directory-name",
+      ]),
+    ).toBe("C:\\a-very-long-project-directory-name");
   });
 
   it("maps a descendant project session to its nearest durable root", () => {
@@ -46,6 +53,49 @@ describe("shared project-root resolution", () => {
         ],
       ),
     ).toBe("/workspace/project/packages");
+  });
+
+  it("maps Windows sessions to the most-specific binding across case variants", () => {
+    expect(
+      projectSessionRoot(
+        {
+          cwd: "c:/users/alice/project/PACKAGES/app/src",
+          projectId: "project-1",
+        },
+        [
+          { projectId: "project-1", cwd: "C:\\Users\\Alice\\Project" },
+          {
+            projectId: "project-1",
+            cwd: "C:\\Users\\Alice\\Project\\packages",
+          },
+          {
+            projectId: "project-2",
+            cwd: "C:\\Users\\Alice\\Project\\packages\\app",
+          },
+          { projectId: "project-1", cwd: "D:\\Users\\Alice\\Project" },
+        ],
+      ),
+    ).toBe("C:\\Users\\Alice\\Project\\packages");
+  });
+
+  it("resolves same-project aliases deterministically and fails closed across projects", () => {
+    const aliases = [
+      { projectId: "project-1", cwd: "c:/work/project" },
+      { projectId: "project-1", cwd: "C:\\WORK\\PROJECT" },
+    ];
+    expect(resolveProjectRootForPath("C:/work/project/src", aliases)?.cwd).toBe(
+      "C:\\WORK\\PROJECT",
+    );
+    expect(
+      resolveProjectRootForPath("C:/work/project/src", [...aliases].reverse())
+        ?.cwd,
+    ).toBe("C:\\WORK\\PROJECT");
+    expect(
+      resolveProjectRootForPath("C:/work/project/src", [
+        aliases[0]!,
+        { projectId: "project-2", cwd: "C:\\work\\project" },
+      ]),
+    ).toBeNull();
   });
 
   it("keeps an evicted durable root instead of promoting its session cwd", () => {
@@ -82,6 +132,26 @@ describe("shared project-root resolution", () => {
           sessions: [
             {
               cwd: "C:\\work\\property-ops",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              status: "running",
+            },
+          ],
+        }),
+      ),
+    ).toEqual([pending]);
+  });
+
+  it("deduplicates case-equivalent Windows roots and keeps the first trusted spelling", () => {
+    const pending = "C:\\Users\\Alice\\Project";
+
+    expect(
+      projectRoots(
+        sources({
+          pendingCwds: [pending],
+          recentDirs: ["c:/users/alice/project/"],
+          sessions: [
+            {
+              cwd: "C:/USERS/ALICE/PROJECT",
               createdAt: "2026-01-01T00:00:00.000Z",
               status: "running",
             },

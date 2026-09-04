@@ -24,6 +24,7 @@ import type {
 } from "../shared/types.js";
 import {
   ProjectSessionScopeUnavailableError,
+  SessionBackgroundInputPreemptedError,
   SessionManager,
   SessionManagerClosingError,
   SessionNotReadyError,
@@ -372,25 +373,60 @@ describe("createRestRouter", () => {
       expect(await reread.json()).toMatchObject({ rollingSummary: true });
     });
 
-    it("replays idempotent project initialization for every submitted root", async () => {
+    it("initializes only genuinely added committed recent directories", async () => {
       const onRecentDirAdded = vi.fn(async () => {});
       start({ onRecentDirAdded });
-      const update = () =>
+      const existing = path.join(tmpHome, "existing");
+      const first = path.join(tmpHome, "first");
+      const second = path.join(tmpHome, "second");
+      await Promise.all([existing, first, second].map((dir) => fs.mkdir(dir)));
+      const update = (recentDirs: string[]) =>
         fetch(`${baseUrl}/settings`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ recentDirs: ["/tmp/a", "/tmp/b"] }),
+          body: JSON.stringify({ recentDirs }),
         });
 
-      expect((await update()).status).toBe(200);
-      expect((await update()).status).toBe(200);
+      expect((await update([existing])).status).toBe(200);
+      onRecentDirAdded.mockClear();
+      expect((await update([first, existing, second])).status).toBe(200);
+      expect((await update([first, existing, second])).status).toBe(200);
+      expect((await update([second, existing, first])).status).toBe(200);
 
-      expect(onRecentDirAdded.mock.calls).toEqual([
-        ["/tmp/a"],
-        ["/tmp/b"],
-        ["/tmp/a"],
-        ["/tmp/b"],
-      ]);
+      expect(onRecentDirAdded.mock.calls).toEqual([[first], [second]]);
+    });
+
+    it("keeps a committed settings PATCH successful when project initialization is deferred", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const first = path.join(tmpHome, "first");
+      const second = path.join(tmpHome, "second");
+      await Promise.all([first, second].map((dir) => fs.mkdir(dir)));
+      const onRecentDirAdded = vi.fn(async (root: string) => {
+        if (root === first) throw new Error(`private failure at ${root}`);
+      });
+      start({ onRecentDirAdded });
+
+      const response = await fetch(`${baseUrl}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ recentDirs: [first, second] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        recentDirs: [first, second],
+      });
+      expect(onRecentDirAdded.mock.calls).toEqual([[first], [second]]);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith(
+        "[harness] project initialization deferred after settings commit",
+      );
+      expect(JSON.stringify(error.mock.calls)).not.toContain(tmpHome);
+
+      const reread = await fetch(`${baseUrl}/settings`);
+      expect(await reread.json()).toMatchObject({
+        recentDirs: [first, second],
+      });
     });
 
     it("calls onTelemetryOptInChange only when telemetryOptIn actually changes", async () => {
@@ -815,6 +851,144 @@ describe("createRestRouter", () => {
       );
     });
 
+    it("forwards submitted and editable input through the injected canonical authority exactly once", async () => {
+      const submitSessionInput = vi.fn(
+        async (
+          _sessionId: string,
+          _text: string,
+          _submit: boolean,
+          requestId?: string,
+        ) =>
+          requestId
+            ? {
+                ok: true as const,
+                receipt: {
+                  requestId,
+                  inputId: "input-1",
+                  status: "queued" as const,
+                  acceptedAt: "2026-09-04T00:00:00.000Z",
+                },
+              }
+            : true,
+      );
+      start({ submitSessionInput });
+
+      const [submitted, editable] = await Promise.all([
+        fetch(`${baseUrl}/sessions/bootstrap-owned/input`, {
+          method: "POST",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({
+            text: "build now",
+            requestId: "request-build-now",
+          }),
+        }),
+        fetch(`${baseUrl}/sessions/bootstrap-owned/input`, {
+          method: "POST",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({ text: "draft", submit: false }),
+        }),
+      ]);
+
+      expect(submitted.status).toBe(200);
+      expect(editable.status).toBe(200);
+      expect(await submitted.json()).toEqual({
+        ok: true,
+        receipt: {
+          requestId: "request-build-now",
+          inputId: "input-1",
+          status: "queued",
+          acceptedAt: "2026-09-04T00:00:00.000Z",
+        },
+      });
+      expect(submitSessionInput).toHaveBeenCalledTimes(2);
+      expect(submitSessionInput).toHaveBeenCalledWith(
+        "bootstrap-owned",
+        "build now",
+        true,
+        "request-build-now",
+      );
+      expect(submitSessionInput).toHaveBeenCalledWith(
+        "bootstrap-owned",
+        "draft",
+        false,
+        undefined,
+      );
+    });
+
+    it("returns the durable request-id conflict from the canonical input authority", async () => {
+      const conflict = Object.assign(
+        new Error(
+          "project bootstrap request id was reused with different input",
+        ),
+        { code: "project_bootstrap_request_id_reused" },
+      );
+      const submitSessionInput = vi.fn(async () => {
+        throw conflict;
+      });
+      start({ submitSessionInput });
+
+      const response = await fetch(
+        `${baseUrl}/sessions/bootstrap-owned/input`,
+        {
+          method: "POST",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({
+            text: "changed payload",
+            requestId: "request-reused",
+          }),
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: conflict.message,
+        code: conflict.code,
+      });
+      expect(submitSessionInput).toHaveBeenCalledWith(
+        "bootstrap-owned",
+        "changed payload",
+        true,
+        "request-reused",
+      );
+    });
+
+    it("returns bounded durable-input capacity from the canonical input authority", async () => {
+      const capacity = Object.assign(
+        new Error(
+          "project bootstrap input receipt capacity is temporarily full",
+        ),
+        { code: "project_bootstrap_input_capacity" },
+      );
+      const submitSessionInput = vi.fn(async () => {
+        throw capacity;
+      });
+      start({ submitSessionInput });
+
+      const response = await fetch(
+        `${baseUrl}/sessions/bootstrap-owned/input`,
+        {
+          method: "POST",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({
+            text: "new logical request",
+            requestId: "request-at-capacity",
+          }),
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: capacity.message,
+        code: capacity.code,
+      });
+      expect(submitSessionInput).toHaveBeenCalledWith(
+        "bootstrap-owned",
+        "new logical request",
+        true,
+        "request-at-capacity",
+      );
+    });
+
     it("400s a malformed body (missing text)", async () => {
       start();
       const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
@@ -893,6 +1067,26 @@ describe("createRestRouter", () => {
       const body = (await res.json()) as { error: string };
       expect(body.error).toMatch(/not ready yet/i);
       expect(body.error).toMatch(/trust the folder/i);
+    });
+
+    it("409s a concurrent staged submission without adding another dispatch", async () => {
+      const submitSessionInput = vi.fn(async () => {
+        throw new SessionBackgroundInputPreemptedError(false);
+      });
+      start({ submitSessionInput });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "overlapping input" }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
+        error: "background session input was preempted by user input",
+      });
+      expect(submitSessionInput).toHaveBeenCalledOnce();
     });
   });
 

@@ -92,14 +92,17 @@ describe("new-project bootstrap outbox recovery", () => {
     };
   }
 
-  async function boot(failBeforeSchedule = false): Promise<HarnessServer> {
+  async function boot(
+    failBeforeSchedule = false,
+    selectedAdapter: HarnessAdapter = adapter(),
+  ): Promise<HarnessServer> {
     return startServer({
       port: 0,
       bootToken: "boot-token",
       telemetryOptIn: false,
       identity: null,
       machineId: "machine-1",
-      adapters: { "claude-code": adapter() },
+      adapters: { "claude-code": selectedAdapter },
       stateRoot,
       launchDir: existingRoot,
       webDir,
@@ -182,10 +185,11 @@ describe("new-project bootstrap outbox recovery", () => {
 
   it("recovers a reconcile-created project without enrolling an older project", async () => {
     server = await boot(true);
-    await request(server, "/settings", {
+    const committed = await request(server, "/settings", {
       method: "PATCH",
       body: JSON.stringify({ recentDirs: [newRoot, existingRoot] }),
     });
+    expect(committed.status).toBe(200);
     const catalog = new StudioProjectCatalog(
       path.join(stateRoot, "studio-projects.json"),
     );
@@ -221,6 +225,13 @@ describe("new-project bootstrap outbox recovery", () => {
     ).toBe(false);
     expect(await exists(markerFile(created!.projectId))).toBe(false);
     expect(await exists(intentFile(created!.projectId))).toBe(true);
+
+    const repeated = await request(server, "/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ recentDirs: [newRoot, existingRoot] }),
+    });
+    expect(repeated.status).toBe(200);
+    expect(launches).toHaveLength(1);
   });
 
   it("converges a project created by an unowned reconciliation without a restart", async () => {
@@ -316,6 +327,85 @@ describe("new-project bootstrap outbox recovery", () => {
         }),
       }),
     ]);
+  });
+
+  it("does not replace a published first-session tombstone during repeated state reads", async () => {
+    const crashBeforeHook = (): HarnessAdapter => ({
+      id: "claude-code",
+      eventSource: "hooks",
+      doctor: async () => [],
+      launch: (options) => {
+        launches.push(options);
+        return {
+          command: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          env: {},
+          cwd: options.cwd,
+        };
+      },
+      resume: (_agentSessionId, options) => ({
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        env: {},
+        cwd: options.cwd,
+      }),
+      listPastSessions: async () => [],
+      canResume: async () => false,
+    });
+    server = await boot(false, crashBeforeHook());
+
+    const opened = await request(server, "/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ recentDirs: [newRoot, existingRoot] }),
+    });
+    expect(opened.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(server!.sessionManager.list()).toEqual([
+        expect.objectContaining({
+          title: "Plan Agents",
+          status: "exited",
+          agentSessionId: null,
+        }),
+      ]);
+    });
+    const firstSessionId = server.sessionManager.list()[0]!.id;
+
+    for (let read = 0; read < 8; read += 1) {
+      const pathname = read % 2 === 0 ? "/state" : "/workflows";
+      expect((await request(server, pathname, { method: "GET" })).status).toBe(
+        200,
+      );
+    }
+    expect(launches).toHaveLength(1);
+    expect(server.sessionManager.list().map((session) => session.id)).toEqual([
+      firstSessionId,
+    ]);
+
+    await server.close();
+    server = undefined;
+    server = await boot(false, crashBeforeHook());
+    for (const pathname of ["/state", "/workflows", "/state"]) {
+      expect((await request(server, pathname, { method: "GET" })).status).toBe(
+        200,
+      );
+    }
+    expect(launches).toHaveLength(1);
+    expect(server.sessionManager.list().map((session) => session.id)).toEqual([
+      firstSessionId,
+    ]);
+    await expect(
+      fs.readFile(intentFile(existingProjectId), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    const created = await new StudioProjectCatalog(
+      path.join(stateRoot, "studio-projects.json"),
+    ).resolveIdentityForPath(newRoot);
+    expect(created).not.toBeNull();
+    await expect(
+      fs.readFile(intentFile(created!.projectId), "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({
+      status: "claimed",
+      targetSessionId: firstSessionId,
+    });
   });
 
   it("fully closes a post-listen startup failure before rejecting", async () => {

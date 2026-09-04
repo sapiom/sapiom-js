@@ -10,6 +10,8 @@ import {
   type StudioProjectSummary,
 } from "../shared/agent-map.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
+import { resolveProjectRootForPath } from "../shared/project-roots.js";
+import { pathComparisonKey } from "../shared/paths.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
 import {
   DurableFileLock,
@@ -199,8 +201,8 @@ function parseProject(value: unknown): StudioProjectIdentity | null {
   const keys = value.legacyWorkspaceKeys as string[];
   if (
     new Set(bindings.map((binding) => binding.id)).size !== bindings.length ||
-    new Set(bindings.map((binding) => binding.localRootRef)).size !==
-      bindings.length ||
+    new Set(bindings.map((binding) => pathComparisonKey(binding.localRootRef)))
+      .size !== bindings.length ||
     new Set(keys).size !== keys.length
   ) {
     return null;
@@ -248,7 +250,9 @@ function parseCatalog(value: unknown): PersistedStudioProjectCatalog {
     project.rootBindings.map((binding) => binding.id),
   );
   const roots = parsed.flatMap((project) =>
-    project.rootBindings.map((binding) => binding.localRootRef),
+    project.rootBindings.map((binding) =>
+      pathComparisonKey(binding.localRootRef),
+    ),
   );
   const legacyKeys = parsed.flatMap((project) => project.legacyWorkspaceKeys);
   if (
@@ -454,31 +458,23 @@ export class StudioProjectCatalog {
     } catch {
       return null;
     }
-    const matches = this.projects!.flatMap((project) =>
-      project.rootBindings
-        .filter(({ status }) => status === "active")
-        .flatMap((binding) => {
-          try {
-            const root = canonicalGraphPath(binding.localRootRef);
-            const relative = path.relative(root, canonical);
-            return relative === "" ||
-              (!relative.startsWith("..") && !path.isAbsolute(relative))
-              ? [{ project, specificity: root.length }]
-              : [];
-          } catch {
-            return [];
-          }
-        }),
+    const match = resolveProjectRootForPath(
+      canonical,
+      this.projects!.flatMap((project) =>
+        project.rootBindings
+          .filter(({ status }) => status === "active")
+          .flatMap((binding) => {
+            try {
+              const root = canonicalGraphPath(binding.localRootRef);
+              return [{ projectId: project.projectId, cwd: root, project }];
+            } catch {
+              return [];
+            }
+          }),
+      ),
     );
-    if (matches.length === 0) return null;
-    const specificity = Math.max(...matches.map((match) => match.specificity));
-    const winners = new Map(
-      matches
-        .filter((match) => match.specificity === specificity)
-        .map(({ project }) => [project.projectId, project]),
-    );
-    if (winners.size !== 1) return null;
-    const project = [...winners.values()][0]!;
+    if (!match) return null;
+    const project = match.project;
     return {
       projectId: project.projectId,
       identityVersion: project.identityVersion,
@@ -524,7 +520,10 @@ export class StudioProjectCatalog {
     return this.enqueue(async () => {
       await this.load();
       const next = cloneProjects(this.projects!);
-      const dedupedScopes = new Map<string, WorkspaceScopeSummary>();
+      const dedupedScopes = new Map<
+        string,
+        { scope: WorkspaceScopeSummary; canonical: string }
+      >();
       const unassignedScopes: WorkspaceScopeSummary[] = [];
       const canonicalScopes: Array<{
         scope: WorkspaceScopeSummary;
@@ -554,7 +553,7 @@ export class StudioProjectCatalog {
         }
         canonicalScopes.push({ scope, canonical });
         const roots = rootsByLegacyKey.get(scope.workspaceKey) ?? new Set();
-        roots.add(canonical);
+        roots.add(pathComparisonKey(canonical));
         rootsByLegacyKey.set(scope.workspaceKey, roots);
       }
 
@@ -574,11 +573,15 @@ export class StudioProjectCatalog {
           });
           continue;
         }
-        if (!dedupedScopes.has(canonical)) {
+        const comparisonKey = pathComparisonKey(canonical);
+        if (!dedupedScopes.has(comparisonKey)) {
           // Canonical form is private matching evidence only. Preserve the
           // existing lexical cwd in AppState so this additive join cannot
           // perturb legacy rail/session path equality.
-          dedupedScopes.set(canonical, { ...scope });
+          dedupedScopes.set(comparisonKey, {
+            scope: { ...scope },
+            canonical,
+          });
         }
       }
 
@@ -587,7 +590,9 @@ export class StudioProjectCatalog {
       for (const project of next) {
         let projectChanged = false;
         for (const binding of project.rootBindings) {
-          const status = activeRoots.has(binding.localRootRef)
+          const status = activeRoots.has(
+            pathComparisonKey(binding.localRootRef),
+          )
             ? "active"
             : "missing";
           if (binding.status !== status) {
@@ -604,12 +609,14 @@ export class StudioProjectCatalog {
 
       const reconciledScopes: WorkspaceScopeSummary[] = [];
       const createdProjects: StudioProjectIdentity[] = [];
-      for (const [canonical, scope] of dedupedScopes) {
+      for (const { canonical, scope } of dedupedScopes.values()) {
         const matchingProjects = next.filter(
           (candidate) =>
             candidate.legacyWorkspaceKeys.includes(scope.workspaceKey) ||
             candidate.rootBindings.some(
-              (binding) => binding.localRootRef === canonical,
+              (binding) =>
+                pathComparisonKey(binding.localRootRef) ===
+                pathComparisonKey(canonical),
             ),
         );
         if (matchingProjects.length > 1) {
@@ -644,7 +651,9 @@ export class StudioProjectCatalog {
             projectChanged = true;
           }
           let binding = project.rootBindings.find(
-            (candidate) => candidate.localRootRef === canonical,
+            (candidate) =>
+              pathComparisonKey(candidate.localRootRef) ===
+              pathComparisonKey(canonical),
           );
           if (!binding) {
             binding = {
@@ -743,7 +752,9 @@ export class StudioProjectCatalog {
       if (
         project.rootBindings.some(
           (candidate) =>
-            candidate.id !== binding.id && candidate.localRootRef === canonical,
+            candidate.id !== binding.id &&
+            pathComparisonKey(candidate.localRootRef) ===
+              pathComparisonKey(canonical),
         )
       ) {
         // Reject instead of persisting two private bindings for the same root;
@@ -755,7 +766,9 @@ export class StudioProjectCatalog {
           (candidate) =>
             candidate.projectId !== projectId &&
             (candidate.rootBindings.some(
-              (candidateBinding) => candidateBinding.localRootRef === canonical,
+              (candidateBinding) =>
+                pathComparisonKey(candidateBinding.localRootRef) ===
+                pathComparisonKey(canonical),
             ) ||
               (legacyWorkspaceKey !== undefined &&
                 candidate.legacyWorkspaceKeys.includes(legacyWorkspaceKey))),
@@ -807,7 +820,9 @@ export class StudioProjectCatalog {
           (candidate) =>
             candidate.projectId !== projectId &&
             (candidate.rootBindings.some(
-              (binding) => binding.localRootRef === canonical,
+              (binding) =>
+                pathComparisonKey(binding.localRootRef) ===
+                pathComparisonKey(canonical),
             ) ||
               (options.legacyWorkspaceKey !== undefined &&
                 candidate.legacyWorkspaceKeys.includes(
@@ -818,7 +833,9 @@ export class StudioProjectCatalog {
         throw new StudioProjectCatalogError("malformed_state");
       }
       const existing = project.rootBindings.find(
-        (binding) => binding.localRootRef === canonical,
+        (binding) =>
+          pathComparisonKey(binding.localRootRef) ===
+          pathComparisonKey(canonical),
       );
       if (existing) {
         existing.status = "active";

@@ -71,15 +71,93 @@ describe("StudioProjectCatalog", () => {
       { workspaceKey: "parent", cwd: parent },
       { workspaceKey: "child", cwd: child },
     ]);
-    const parentProject = reconciled.workspaceScopes.find(({ cwd }) => cwd === parent)?.projectId;
-    const childProject = reconciled.workspaceScopes.find(({ cwd }) => cwd === child)?.projectId;
-    expect((await catalog.resolveIdentityForPath(path.join(child, "src")))?.projectId).toBe(
-      childProject,
+    const parentProject = reconciled.workspaceScopes.find(
+      ({ cwd }) => cwd === parent,
+    )?.projectId;
+    const childProject = reconciled.workspaceScopes.find(
+      ({ cwd }) => cwd === child,
+    )?.projectId;
+    expect(
+      (await catalog.resolveIdentityForPath(path.join(child, "src")))
+        ?.projectId,
+    ).toBe(childProject);
+    expect(
+      (await catalog.resolveIdentityForPath(path.join(parent, "other")))
+        ?.projectId,
+    ).toBe(parentProject);
+    expect(
+      JSON.stringify(await catalog.resolveIdentityForPath(child)),
+    ).not.toContain(root);
+  });
+
+  it("resolves Windows case variants through the most-specific active binding", async () => {
+    const { catalogPath } = await fixture();
+    const catalog = new StudioProjectCatalog(catalogPath);
+    const project = await catalog.create("Windows project");
+    await catalog.addRootBinding(
+      project.projectId,
+      "C:\\Users\\Alice\\Project",
     );
-    expect((await catalog.resolveIdentityForPath(path.join(parent, "other")))?.projectId).toBe(
-      parentProject,
+    await catalog.addRootBinding(
+      project.projectId,
+      "C:\\Users\\Alice\\Project\\packages",
     );
-    expect(JSON.stringify(await catalog.resolveIdentityForPath(child))).not.toContain(root);
+    const caseEquivalent = await catalog.addRootBinding(
+      project.projectId,
+      "c:/users/alice/project/",
+    );
+    const sibling = await catalog.create("Sibling");
+    await catalog.addRootBinding(
+      sibling.projectId,
+      "C:\\Users\\Alice\\Project-two",
+    );
+
+    expect(
+      (
+        await catalog.resolveIdentityForPath(
+          "c:/users/alice/project/PACKAGES/app/src",
+        )
+      )?.projectId,
+    ).toBe(project.projectId);
+    expect(
+      await catalog.resolveIdentityForPath(
+        "c:/users/alice/project-two-adjacent/src",
+      ),
+    ).toBeNull();
+    expect(
+      await catalog.resolveIdentityForPath("D:/users/alice/project/src"),
+    ).toBeNull();
+    expect(caseEquivalent.bindings).toHaveLength(2);
+  });
+
+  it("reconciles reordered case-varied scopes into one multi-root Windows project", async () => {
+    const { catalogPath } = await fixture();
+    const catalog = new StudioProjectCatalog(catalogPath);
+    const project = await catalog.create("Multi-root Windows project");
+    await catalog.addRootBinding(project.projectId, "C:\\Projects\\Research");
+    await catalog.addRootBinding(project.projectId, "D:\\Projects\\Publisher");
+
+    const first = await catalog.reconcile([
+      { workspaceKey: "research", cwd: "c:/projects/research/" },
+      { workspaceKey: "publisher", cwd: "d:/PROJECTS/PUBLISHER" },
+    ]);
+    const second = await new StudioProjectCatalog(catalogPath).reconcile([
+      { workspaceKey: "publisher", cwd: "D:\\projects\\publisher" },
+      { workspaceKey: "research", cwd: "C:\\PROJECTS\\RESEARCH" },
+    ]);
+
+    expect(first.projects).toHaveLength(1);
+    expect(second.projects).toHaveLength(1);
+    expect(second.projects[0]).toMatchObject({
+      projectId: project.projectId,
+      bindings: [
+        expect.objectContaining({ status: "active" }),
+        expect.objectContaining({ status: "active" }),
+      ],
+    });
+    expect(
+      new Set(second.workspaceScopes.map((scope) => scope.projectId)),
+    ).toEqual(new Set([project.projectId]));
   });
 
   it("keeps project identity across a root move and an additional repository binding", async () => {
@@ -209,17 +287,13 @@ describe("StudioProjectCatalog", () => {
       () => new Date(),
       delayedHooks,
     );
-    const winner = new StudioProjectCatalog(
-      catalogPath,
-      () => new Date(),
-      {
-        isPidAlive: (pid) => pid === process.pid,
-        afterLockAcquired: async () => {
-          winnerAcquired.resolve();
-          await releaseWinner.promise;
-        },
+    const winner = new StudioProjectCatalog(catalogPath, () => new Date(), {
+      isPidAlive: (pid) => pid === process.pid,
+      afterLockAcquired: async () => {
+        winnerAcquired.resolve();
+        await releaseWinner.promise;
       },
-    );
+    });
 
     const writeB = delayedB.create("Writer B");
     const writeC = delayedC.create("Writer C");
@@ -276,9 +350,9 @@ describe("StudioProjectCatalog", () => {
 
     await Promise.all([liveWrite, waiterWrite]);
     expect(
-      (await new StudioProjectCatalog(catalogPath).list()).map(
-        (project) => project.displayName,
-      ).sort(),
+      (await new StudioProjectCatalog(catalogPath).list())
+        .map((project) => project.displayName)
+        .sort(),
     ).toEqual(["Patient writer", "Slow live writer"]);
     expect(
       (await fs.readdir(path.dirname(catalogPath))).filter((entry) =>

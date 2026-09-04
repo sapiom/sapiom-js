@@ -123,6 +123,23 @@ compatibility aliases into the ordinary session/bootstrap services; new clients
 use the generic session routes. The aliases are scheduled for removal in
 SAP-3152.
 
+#### Embedder migration
+
+The public `HarnessSession.agentMapIdentity` is now the exported
+`ProjectAgentSession { projectId, userId, sessionId }`. Embedders must stop
+reading `role` or `assignment`; those legacy fields no longer describe live
+authority. Persisted `planning` data is migration input only. Read the optional
+`projectBootstrap` field when displaying bootstrap lifecycle state.
+
+The deprecated planner-message alias can return `metadata: null` for an
+ordinary project session. When metadata is present, read its top-level
+`projectId`, `userId`, and `targetSessionId` plus `bootstrap` instead of the old
+nested `identity` and `greeting` fields. New clients should use the generic
+session routes. If an embedder already owns the first prompt for a session, set
+`initialUserInputPending: true` in that session's `CreateSessionRequest`; this
+content-free flag makes project bootstrap yield before launch and never changes
+the session's authority or tools.
+
 The browser/host token gates `/api` routes and is never injected into a coding
 agent PTY. Each PTY instead receives session-bound ingest and Agent Map
 capabilities. Project scope is re-derived from trusted server state before every

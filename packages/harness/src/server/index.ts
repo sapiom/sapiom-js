@@ -26,6 +26,7 @@ import type {
   HarnessAdapter,
   HarnessKind,
   HarnessSession,
+  SessionInputSubmissionResult,
   SessionRecord,
   SystemPromptDelivery,
   WorkflowInfo,
@@ -41,6 +42,7 @@ import {
   projectRoots,
   projectSessionRoot,
 } from "../shared/project-roots.js";
+import { samePath } from "../shared/paths.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -195,7 +197,6 @@ import {
 import {
   ProjectBootstrapCoordinator,
   ProjectBootstrapCoordinatorClosedError,
-  projectBootstrapOwnsInput,
 } from "../core/planner-greeting.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
@@ -985,9 +986,8 @@ export const startServer = async (
         ...visibleRoots,
         ...[...retainedProjectSessionRoots].filter(
           (root) =>
-            !visibleRoots.some(
-              (visible) =>
-                canonicalGraphPath(visible) === canonicalGraphPath(root),
+            !visibleRoots.some((visible) =>
+              samePath(canonicalGraphPath(visible), canonicalGraphPath(root)),
             ),
         ),
       ];
@@ -1485,16 +1485,23 @@ export const startServer = async (
         ? { initialTitle: "Plan Agents", projectBootstrap: metadata }
         : {};
     },
-    onTerminalInput: (sessionId) =>
-      projectBootstrap?.onTerminalInput(sessionId),
+    onTerminalInput: (sessionId, context) =>
+      projectBootstrap?.onTerminalInput(sessionId, context),
+    onRuntimeEpochTransition: async (session, runtimeEpoch) => {
+      if (!session.projectBootstrap) return;
+      if (!projectBootstrap) {
+        throw new Error("project bootstrap coordinator unavailable");
+      }
+      await projectBootstrap.transitionRuntimeEpoch(session, runtimeEpoch);
+    },
     onProjectAgentIdentityMigration: (event) => {
       projectIdentityMigrationEvents.push(event);
     },
-    onProjectBootstrapSession: async (session, mode) => {
+    onProjectBootstrapSession: async (session, mode, runtimeEpoch) => {
       await projectBootstrap?.register(session, {
         emptyProject: true,
         mode,
-      });
+      }, runtimeEpoch);
     },
     onAgentMapSessionExit: async (sessionId) => {
       agentMapCapabilities.revokeSession(sessionId);
@@ -3227,7 +3234,7 @@ export const startServer = async (
       // the project route will surface any unavailable workspace later.
     }
     await projectBootstrap
-      .register(session, { emptyProject, mode: "boot" })
+      .register(session, { emptyProject, mode: "boot" }, null)
       .catch(() => {
         // Session IDs and storage/provider errors stay out of logs. The
         // coordinator emits its bounded lifecycle classification separately.
@@ -3242,8 +3249,8 @@ export const startServer = async (
     machineId,
     defaultHarness: options.defaultHarnessKind ?? "claude-code",
   });
-  sessionManager.onStatusChange((session) => {
-    void projectBootstrap!.onSessionStatus(session).catch(() => {
+  sessionManager.onStatusChange((session, { runtimeEpoch }) => {
+    void projectBootstrap!.onSessionStatus(session, runtimeEpoch).catch(() => {
       console.error("[harness] project bootstrap status transition failed");
     });
   });
@@ -3399,6 +3406,42 @@ export const startServer = async (
     }
   };
 
+  // One ordinary-session input authority serves the canonical REST endpoint
+  // and its bounded planner-era compatibility alias. Bootstrap FIFO ownership
+  // stays behind this boundary so neither transport can invent eligibility,
+  // preemption, or dispatch semantics of its own.
+  const submitSessionInput = async (
+    sessionId: string,
+    text: string,
+    submit: boolean,
+    requestId?: string,
+  ): Promise<SessionInputSubmissionResult> => {
+    const bootstrapCoordinator = projectBootstrap;
+    if (bootstrapCoordinator?.ownsInput(sessionId, requestId)) {
+      if (submit) {
+        const result = await bootstrapCoordinator.enqueueWithReceipt(
+          sessionId,
+          text,
+          requestId,
+        );
+        return { ok: true, receipt: result.receipt };
+      }
+      // A user-owned draft must also win over automatic bootstrap, but it
+      // must remain editable rather than entering the durable submit FIFO.
+      // Retire lifecycle ownership and clear any background text staged
+      // before Enter, then preserve ordinary submit:false semantics.
+      const runtimeEpoch = sessionManager.getRuntimeEpoch(sessionId);
+      if (runtimeEpoch !== null) {
+        bootstrapCoordinator.onTerminalInput(sessionId, {
+          runtimeEpoch,
+          blockingPrompt: false,
+        });
+      }
+      sessionManager.preemptBackgroundInput(sessionId);
+    }
+    return { ok: await sessionManager.submitInput(sessionId, text, submit) };
+  };
+
   const app: Express = express();
   app.disable("x-powered-by");
 
@@ -3465,22 +3508,7 @@ export const startServer = async (
             );
           });
       },
-      submitSessionInput: async (sessionId, text, submit) => {
-        const bootstrap = sessionManager.get(sessionId)?.projectBootstrap;
-        if (projectBootstrapOwnsInput(bootstrap)) {
-          if (submit) {
-            await projectBootstrap!.enqueue(sessionId, text);
-            return true;
-          }
-          // A user-owned draft must also win over automatic bootstrap, but it
-          // must remain editable rather than entering the durable submit FIFO.
-          // Retire lifecycle ownership and clear any background text staged
-          // before Enter, then preserve ordinary submit:false semantics.
-          projectBootstrap!.onTerminalInput(sessionId);
-          sessionManager.preemptBackgroundInput(sessionId);
-        }
-        return sessionManager.submitInput(sessionId, text, submit);
-      },
+      submitSessionInput,
       launchDir,
       defaultProjectRoot,
       agentsBaseUrl: resolveAgentsBaseUrl(),
@@ -3545,8 +3573,7 @@ export const startServer = async (
           : null;
         await ensureProjectFirstSession(project.projectId, launchRoot ?? root);
       },
-      submitSessionInput: (sessionId, text) =>
-        sessionManager.submitInput(sessionId, text, true),
+      submitSessionInput,
     }),
   );
   app.use(
@@ -3947,9 +3974,16 @@ export const startServer = async (
   const ingestDeps: IngestDeps = {
     authenticate: (sessionId, token) =>
       ingestCredentials.authenticate(sessionId, token),
+    isCurrentRuntime: (sessionId, runtimeEpoch) =>
+      sessionManager.acceptsIngestRuntimeEpoch(sessionId, runtimeEpoch),
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
-    onAgentSessionResolved: (harnessSessionId, agentSessionId, source) => {
+    onAgentSessionResolved: (
+      harnessSessionId,
+      agentSessionId,
+      source,
+      runtimeEpoch,
+    ) => {
       // Record the agent session id — used by session-manager for resume
       // (agentSessionId feeds the --resume flag) and by the codex tailer for
       // exact-match rollout discovery.
@@ -3957,15 +3991,17 @@ export const startServer = async (
         harnessSessionId,
         agentSessionId,
         source,
+        runtimeEpoch,
       );
     },
-    onSessionReady: (harnessSessionId) => {
-      sessionManager.setReady(harnessSessionId);
+    onSessionReady: (harnessSessionId, runtimeEpoch) => {
+      sessionManager.setReady(harnessSessionId, runtimeEpoch);
     },
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
-    decorateEvent: (event) => projectBootstrap!.decorateLocalEvent(event),
+    decorateEvent: (event, runtimeEpoch) =>
+      projectBootstrap!.decorateLocalEvent(event, runtimeEpoch),
     projectTelemetryEvent: (event) =>
       projectBootstrap!.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
@@ -3994,8 +4030,8 @@ export const startServer = async (
         executionDetector.flush(event.harnessSessionId);
       }
     },
-    onEventPersisted: (event: AnalyticsEvent) => {
-      void projectBootstrap!.onEventPersisted(event).catch(() => {
+    onEventPersisted: (event: AnalyticsEvent, runtimeEpoch) => {
+      void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
         console.error("[harness] project bootstrap completion failed");
       });
       const recordChanged = sessionRecordChangedMessage(event);
@@ -4054,7 +4090,8 @@ export const startServer = async (
   async function startCodexTailerFor(harnessSessionId: string): Promise<void> {
     if (codexTailers.has(harnessSessionId)) return;
     const session = sessionManager.get(harnessSessionId);
-    if (!session) return;
+    const runtimeEpoch = sessionManager.getRuntimeEpoch(harnessSessionId);
+    if (!session || runtimeEpoch === null) return;
 
     const rolloutPath = await discoverCodexRolloutPath(session);
     if (!rolloutPath) {
@@ -4066,7 +4103,11 @@ export const startServer = async (
     // The session may have exited (or already started another tailer via a
     // status-change re-entry) while discovery was polling.
     if (codexTailers.has(harnessSessionId)) return;
-    if (sessionManager.get(harnessSessionId)?.status !== "running") return;
+    if (
+      sessionManager.get(harnessSessionId)?.status !== "running" ||
+      !sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch)
+    )
+      return;
 
     const tailer = tailCodexRollout({
       rolloutPath,
@@ -4083,7 +4124,7 @@ export const startServer = async (
           harnessSessionId,
           payload,
         };
-        void processIngest(body, ingestDeps, seqCounter).catch(
+        void processIngest(body, ingestDeps, seqCounter, runtimeEpoch).catch(
           (err: unknown) => {
             console.error("[harness] codex tailer ingest error:", err);
           },

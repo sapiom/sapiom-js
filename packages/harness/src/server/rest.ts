@@ -31,6 +31,7 @@ import type {
   UiEventName,
   UiTrackRequest,
   WorkflowInfo,
+  SessionInputSubmissionResult,
 } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import type { StudioProjectSummary } from "../shared/agent-map.js";
@@ -51,6 +52,7 @@ import {
 } from "../core/errors.js";
 import {
   ProjectSessionScopeUnavailableError,
+  SessionBackgroundInputPreemptedError,
   SessionManagerClosingError,
   SessionNotReadyError,
   UnknownSessionError,
@@ -103,6 +105,7 @@ const createSessionSchema = z
 const injectInputSchema = z.object({
   text: z.string(),
   submit: z.boolean().optional(),
+  requestId: z.string().min(1).max(200).optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
 
 const attachFileSchema = z.object({
@@ -259,7 +262,8 @@ export interface RestRouterOptions {
     sessionId: string,
     text: string,
     submit: boolean,
-  ) => Promise<boolean>;
+    requestId?: string,
+  ) => Promise<boolean | SessionInputSubmissionResult>;
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
@@ -414,6 +418,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       const current = await loadSettings(options.settingsPath);
       const updated: HarnessSettings = { ...current, ...parsed.data };
       await saveSettings(updated, options.settingsPath);
+      // saveSettings owns path validation, de-duplication, and the eight-entry
+      // cap. Re-read the committed shape so lifecycle work and the response
+      // describe what actually reached disk, never raw submitted paths.
+      const committed = await loadSettings(options.settingsPath);
       if (
         parsed.data.telemetryOptIn !== undefined &&
         parsed.data.telemetryOptIn !== current.telemetryOptIn
@@ -421,15 +429,22 @@ export function createRestRouter(options: RestRouterOptions): Router {
         options.onTelemetryOptInChange?.(parsed.data.telemetryOptIn);
       }
       if (parsed.data.recentDirs) {
-        // The settings write commits before project initialization. Invoke the
-        // idempotent callback for every submitted root so retrying a request
-        // after an initialization failure can finish the already-durable
-        // project instead of being skipped as "not newly added".
-        for (const root of parsed.data.recentDirs) {
-          await options.onRecentDirAdded?.(root);
+        const existing = new Set(current.recentDirs);
+        for (const root of committed.recentDirs) {
+          if (existing.has(root)) continue;
+          try {
+            await options.onRecentDirAdded?.(root);
+          } catch {
+            // Settings are already durable. Report a bounded classification,
+            // continue other additions, and let normal state reconciliation
+            // recover this root without returning a false rollback to callers.
+            console.error(
+              "[harness] project initialization deferred after settings commit",
+            );
+          }
         }
       }
-      res.json(updated);
+      res.json(committed);
     } catch (err) {
       next(err);
     }
@@ -909,26 +924,30 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
     try {
       const submit = parsed.data.submit ?? true;
-      const ok = options.submitSessionInput
+      const submitted = options.submitSessionInput
         ? await options.submitSessionInput(
             req.params.id,
             parsed.data.text,
             submit,
+            parsed.data.requestId,
           )
         : await sessionManager.submitInput(
             req.params.id,
             parsed.data.text,
             submit,
           );
-      if (!ok) {
+      const result =
+        typeof submitted === "boolean" ? { ok: submitted } : submitted;
+      if (!result.ok) {
         res.status(404).json({ error: "session not found or has no live pty" });
         return;
       }
-      res.json({ ok: true });
+      res.json(result);
     } catch (err) {
       if (
         err instanceof SessionNotReadyError ||
-        err instanceof ExternalHarnessError
+        err instanceof ExternalHarnessError ||
+        err instanceof SessionBackgroundInputPreemptedError
       ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;
@@ -939,6 +958,15 @@ export function createRestRouter(options: RestRouterOptions): Router {
         err.code === "project_bootstrap_dispatch_forbidden"
       ) {
         res.status(403).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err.code === "project_bootstrap_request_id_reused" ||
+          err.code === "project_bootstrap_input_capacity")
+      ) {
+        res.status(409).json({ error: err.message, code: err.code });
         return;
       }
       next(err);

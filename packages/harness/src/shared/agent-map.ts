@@ -358,7 +358,8 @@ export type ProjectBootstrapErrorCode =
   | "injection_failed"
   | "model_turn_failed"
   | "delivery_timeout"
-  | "persistence_failed";
+  | "persistence_failed"
+  | "scope_unavailable";
 
 export type ProjectBootstrapState =
   | { status: "pending" }
@@ -404,6 +405,18 @@ export interface ProjectBootstrapQueuedInput {
   id: string;
   sessionId: string;
   text: string;
+  acceptedAt: string;
+}
+
+/**
+ * Content-free receipt for input accepted by the durable bootstrap FIFO.
+ * `uncertain` is terminal: Studio cannot prove whether that logical turn ran,
+ * so it will never replay it automatically.
+ */
+export interface ProjectBootstrapInputReceipt {
+  requestId: string | null;
+  inputId: string;
+  status: "queued" | "submitted" | "uncertain" | "completed";
   acceptedAt: string;
 }
 
@@ -481,6 +494,8 @@ export interface PlannerSessionResponse {
 
 export interface PlannerMessageRequest {
   text: string;
+  /** Optional idempotency key while the durable bootstrap FIFO owns input. */
+  requestId?: string;
 }
 
 /**
@@ -489,6 +504,8 @@ export interface PlannerMessageRequest {
  */
 export interface PlannerSessionMetadataResponse {
   metadata: ProjectBootstrapMetadata | null;
+  /** Present only when the durable bootstrap FIFO handled this request. */
+  receipt?: ProjectBootstrapInputReceipt;
 }
 
 /**

@@ -1,5 +1,3 @@
-import * as path from "node:path";
-
 import type {
   AgentMapWorkspaceState,
   PlannerLifecycleEvent,
@@ -15,6 +13,7 @@ import type {
 } from "../shared/types.js";
 import type { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { preferredProjectRoot } from "../shared/project-roots.js";
+import { isWithinDir } from "../shared/paths.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
 import type { PlannerRegistrationMode } from "./planner-greeting.js";
 import type { SessionManager } from "./session-manager.js";
@@ -125,27 +124,10 @@ function launchRoot(project: StudioProjectIdentity): string {
   return root;
 }
 
-function isWindowsPath(value: string): boolean {
-  return (
-    /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value)
-  );
-}
-
 function isWithinRoot(root: string, candidate: string): boolean {
   if (root.trim() === "" || candidate.trim() === "") return false;
   try {
-    const canonicalRoot = canonicalGraphPath(root);
-    const canonicalCandidate = canonicalGraphPath(candidate);
-    const windows = isWindowsPath(canonicalRoot);
-    if (windows !== isWindowsPath(canonicalCandidate)) return false;
-    const api = windows ? path.win32 : path.posix;
-    const relative = api.relative(canonicalRoot, canonicalCandidate);
-    return (
-      relative === "" ||
-      (relative !== ".." &&
-        !relative.startsWith(`..${api.sep}`) &&
-        !api.isAbsolute(relative))
-    );
+    return isWithinDir(canonicalGraphPath(root), canonicalGraphPath(candidate));
   } catch {
     return false;
   }

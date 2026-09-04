@@ -17,6 +17,7 @@ import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
   SessionInputGuardRejectedError,
+  SessionInputIsolationError,
   SessionManager,
   SessionManagerClosingError,
   sanitizeExitTail,
@@ -129,6 +130,7 @@ describe("SessionManager", () => {
       onTerminalInput?: SessionManagerOptions["onTerminalInput"];
       onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
       onProjectBootstrapSession?: SessionManagerOptions["onProjectBootstrapSession"];
+      onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -169,6 +171,7 @@ describe("SessionManager", () => {
       onTerminalInput: opts.onTerminalInput,
       onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
       onProjectBootstrapSession: opts.onProjectBootstrapSession,
+      onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -786,7 +789,10 @@ describe("SessionManager", () => {
       );
 
       expect(manager.write(session.id, "implement the API now\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id);
+      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
+        blockingPrompt: false,
+        runtimeEpoch: manager.getRuntimeEpoch(session.id),
+      });
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
         3,
@@ -868,6 +874,327 @@ describe("SessionManager", () => {
       expect(remainsAuthorized).toHaveBeenCalledTimes(2);
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("planner message");
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(2);
+      expect(spawns[0]?.pty.write).toHaveBeenLastCalledWith("\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+    });
+
+    it("waits for the durable pre-write hook before crossing the PTY boundary", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const phase = deferred<void>();
+      const beforeFirstWrite = vi.fn(() => phase.promise);
+
+      const submitting = manager.submitInput(
+        session.id,
+        "durable turn",
+        true,
+        undefined,
+        false,
+        { beforeFirstWrite, canWriteNow: () => true },
+      );
+      await Promise.resolve();
+      expect(beforeFirstWrite).toHaveBeenCalledOnce();
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+
+      phase.resolve();
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(submitting).resolves.toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+    });
+
+    it("records positive not-submitted evidence when the PTY rejects text before Enter", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const beforeFirstWrite = vi.fn(async () => {});
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("PTY rejected text");
+      });
+
+      await expect(
+        manager.submitInput(session.id, "durable turn", true, undefined, true, {
+          beforeFirstWrite,
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("PTY rejected text");
+
+      expect(beforeFirstWrite).toHaveBeenCalledOnce();
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+    });
+
+    it("withholds not-submitted evidence when a partial text line cannot be cleared", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {
+          throw new Error("PTY rejected text after a possible prefix");
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("PTY also rejected line cleanup");
+        });
+
+      await expect(
+        manager.submitInput(session.id, "durable turn", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("PTY rejected text after a possible prefix");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+    it("closes a partial bracketed paste before proving the composer line was cleared", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("partial bracketed paste");
+      });
+
+      await expect(
+        manager.submitInput(session.id, "line one\nline two", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("partial bracketed paste");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
+        1,
+        "\x1b[200~line one\nline two\x1b[201~",
+      );
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+    });
+
+    it("withholds retry proof when a partial bracketed paste cannot be closed", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {
+          throw new Error("partial bracketed paste");
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("paste closer rejected");
+        });
+
+      await expect(
+        manager.submitInput(session.id, "unsafe paste", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("partial bracketed paste");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+    it("withholds retry proof when line cleanup fails after closing a partial paste", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {
+          throw new Error("partial bracketed paste");
+        })
+        .mockImplementationOnce(() => {})
+        .mockImplementationOnce(() => {
+          throw new Error("line cleanup rejected");
+        });
+
+      await expect(
+        manager.submitInput(session.id, "unsafe paste", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("partial bracketed paste");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+    it("blocks later raw input on a poisoned composer until a reset succeeds", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      let call = 0;
+      spawns[0]?.pty.write.mockImplementation(() => {
+        call += 1;
+        if (call <= 3) throw new Error(`injected write failure ${call}`);
+      });
+
+      await expect(
+        manager.submitInput(session.id, "partial A", true, undefined, true),
+      ).rejects.toThrow("injected write failure 1");
+      expect(() => manager.write(session.id, "must not append to A")).toThrow(
+        SessionInputIsolationError,
+      );
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith(
+        "must not append to A",
+      );
+
+      expect(manager.write(session.id, "safe after reset")).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(4, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
+        5,
+        "safe after reset",
+      );
+    });
+
+    it("uses Ctrl-C only as a fallback after a complete staged paste", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      const background = manager.submitInput(
+        session.id,
+        "complete staged paste",
+        true,
+        undefined,
+        true,
+        { onNotSubmitted },
+      );
+      const rejected = expect(background).rejects.toBeInstanceOf(
+        SessionBackgroundInputPreemptedError,
+      );
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("Ctrl-U rejected");
+      });
+
+      expect(manager.preemptBackgroundInput(session.id)).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x03");
+      await vi.advanceTimersByTimeAsync(300);
+      await rejected;
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+    });
+
+    it("poisons arbitrary submit:false text after a partial write", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("partial draft");
+      });
+
+      await expect(
+        manager.submitInput(session.id, "multi-byte draft", false),
+      ).rejects.toThrow("partial draft");
+      expect(manager.write(session.id, "new raw input")).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "new raw input");
+    });
+
+    it("does not claim not-submitted proof when the Enter write is ambiguous", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {})
+        .mockImplementationOnce(() => {
+          throw new Error("PTY Enter outcome unknown");
+        });
+
+      const submission = manager.submitInput(
+        session.id,
+        "durable turn",
+        true,
+        undefined,
+        true,
+        { onNotSubmitted },
+      );
+      const rejected = expect(submission).rejects.toThrow(
+        "PTY Enter outcome unknown",
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      await rejected;
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+    it("clears staged text and never writes Enter when shutdown wins the final admission boundary", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const finalAuthorization = deferred<boolean>();
+      const canWrite = vi
+        .fn<() => boolean | Promise<boolean>>()
+        .mockReturnValueOnce(true)
+        .mockImplementationOnce(() => finalAuthorization.promise);
+
+      const submitting = manager.submitInput(
+        session.id,
+        "must not submit after shutdown",
+        true,
+        canWrite,
+        false,
+        { canWriteNow: () => true },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
+        "must not submit after shutdown",
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      manager.beginShutdown();
+      finalAuthorization.resolve(true);
+
+      await expect(submitting).rejects.toMatchObject({ staged: true });
       expect(spawns[0]?.pty.write).toHaveBeenLastCalledWith("\x15");
       expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
     });
@@ -998,7 +1325,32 @@ describe("SessionManager", () => {
       expect(manager.write(session.id, "1\r")).toBe(true);
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("1\r");
       expect(onTerminalInput).toHaveBeenCalledOnce();
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id);
+      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
+        blockingPrompt: false,
+        runtimeEpoch: manager.getRuntimeEpoch(session.id),
+      });
+    });
+
+    it("classifies raw input on a recognized trust screen without blocking the user's bytes", async () => {
+      const onTerminalInput = vi.fn();
+      const { manager, spawns } = makeManager({
+        onTerminalInput,
+        adapter: createFakeAdapter({
+          detectBlockingPrompt: (output) => output.includes("Do you trust"),
+        }),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      spawns[0]?.emitData("Do you trust the files in this folder?\r\n");
+
+      expect(manager.write(session.id, "y\r")).toBe(true);
+      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
+        blockingPrompt: true,
+        runtimeEpoch: manager.getRuntimeEpoch(session.id),
+      });
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("y\r");
     });
 
     it(
@@ -3070,6 +3422,7 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockResolvedValueOnce(undefined);
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
@@ -3169,14 +3522,14 @@ describe("SessionManager", () => {
 
     const resuming = manager.resume(session.id);
     await vi.waitFor(() => expect(loadSpawnPty).toHaveBeenCalledTimes(2));
-    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(3);
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
     inScope = false;
     resumeLoader.resolve(spawnPty);
 
     await expect(resuming).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
-    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(5);
     expect(adapter.resume).toHaveBeenCalledOnce();
     expect(spawnPty).toHaveBeenCalledOnce();
     expect(manager.get(session.id)).toMatchObject({
@@ -3199,6 +3552,7 @@ describe("SessionManager", () => {
     });
     const resolveAgentMapIdentity = vi
       .fn()
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockResolvedValueOnce(undefined);
@@ -3884,10 +4238,13 @@ describe("SessionManager", () => {
   });
 
   it("issues and revokes a capability for the exact spawned session", async () => {
-    const issue = vi.fn((id: string) => `token-for:${id}`);
+    const issue = vi.fn((id: string) => ({
+      token: `token-for:${id}`,
+      runtimeEpoch: `epoch-for:${id}`,
+    }));
     const revoke = vi.fn();
     const { manager, spawns } = makeManager({
-      ingestCredentials: { issue, revoke, authenticate: () => false },
+      ingestCredentials: { issue, revoke, authenticate: () => null },
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
@@ -3898,6 +4255,102 @@ describe("SessionManager", () => {
     spawns[0]!.emitExit(0);
     await manager.flush();
     expect(revoke).toHaveBeenCalledWith(session.id);
+  });
+
+  it("rotates the authoritative runtime epoch and rejects stale lifecycle signals after resume", async () => {
+    const tokens = ["token-a", "token-b"];
+    const epochs = ["epoch-a", "epoch-b"];
+    const { manager, spawns } = makeManager({
+      ingestCredentials: new IngestCredentialRegistry(
+        () => tokens.shift()!,
+        () => epochs.shift()!,
+      ),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const firstEpoch = manager.getRuntimeEpoch(session.id);
+    expect(firstEpoch).toBe("epoch-a");
+    expect(
+      await manager.setAgentSessionId(
+        session.id,
+        "provider-shared",
+        "startup",
+        firstEpoch!,
+      ),
+    ).toBe(true);
+
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(manager.isCurrentRuntimeEpoch(session.id, firstEpoch!)).toBe(false);
+    expect(manager.acceptsIngestRuntimeEpoch(session.id, firstEpoch!)).toBe(
+      true,
+    );
+    manager.setReady(session.id, firstEpoch!);
+    expect(manager.get(session.id)?.ready).toBe(false);
+
+    await manager.resume(session.id);
+    const secondEpoch = manager.getRuntimeEpoch(session.id);
+    expect(secondEpoch).toBe("epoch-b");
+    expect(secondEpoch).not.toBe(firstEpoch);
+    expect(manager.isCurrentRuntimeEpoch(session.id, firstEpoch!)).toBe(false);
+    expect(manager.acceptsIngestRuntimeEpoch(session.id, firstEpoch!)).toBe(
+      false,
+    );
+    expect(manager.isCurrentRuntimeEpoch(session.id, secondEpoch!)).toBe(true);
+    expect(manager.acceptsIngestRuntimeEpoch(session.id, secondEpoch!)).toBe(
+      true,
+    );
+
+    manager.setReady(session.id, firstEpoch!);
+    expect(manager.get(session.id)?.ready).toBe(false);
+    expect(
+      await manager.setAgentSessionId(
+        session.id,
+        "provider-shared",
+        "resume",
+        firstEpoch!,
+      ),
+    ).toBe(false);
+
+    manager.setReady(session.id, secondEpoch!);
+    expect(manager.get(session.id)?.ready).toBe(true);
+    expect(
+      await manager.setAgentSessionId(
+        session.id,
+        "provider-shared",
+        "resume",
+        secondEpoch!,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not publish a PTY when the runtime epoch transition fails", async () => {
+    const spawnPty = vi.fn<PtySpawnFn>(() => {
+      return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+    });
+    const transition = vi.fn(
+      async (_session: HarnessSession, _runtimeEpoch: string | null) => {
+        throw new Error("durable epoch retirement failed");
+      },
+    );
+    const { manager } = makeManager({
+      spawnPty,
+      onRuntimeEpochTransition: transition,
+    });
+
+    await expect(
+      manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+    ).rejects.toThrow("durable epoch retirement failed");
+
+    expect(transition).toHaveBeenCalledOnce();
+    expect(transition.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(manager.list()).toEqual([
+      expect.objectContaining({ status: "exited", ready: false }),
+    ]);
+    expect(manager.isLive(manager.list()[0]!.id)).toBe(false);
   });
 
   it("owns a colour-capable PTY environment instead of inheriting launcher suppression", async () => {

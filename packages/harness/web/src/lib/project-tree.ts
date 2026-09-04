@@ -6,7 +6,9 @@ import {
   basenameOf,
   isWithinDir,
   joinPath,
+  pathSegmentDepth,
   parentOf,
+  samePath,
   stripTrailingSep,
 } from "./paths";
 
@@ -162,7 +164,7 @@ const canonical = (p: string): string =>
 function segmentsBetween(root: string, target: string): string[] {
   const r = canonical(root);
   const t = canonical(target);
-  if (t === r) return [];
+  if (samePath(root, target)) return [];
   const rest = r.endsWith("/") ? t.slice(r.length) : t.slice(r.length + 1);
   return rest.split("/").filter(Boolean);
 }
@@ -557,9 +559,8 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
   const parentOf = (root: string): string | null => {
     let best: string | null = null;
     for (const other of roots) {
-      if (canonical(other) === canonical(root) || !isUnder(root, other))
-        continue;
-      if (best === null || canonical(other).length > canonical(best).length)
+      if (samePath(other, root) || !isUnder(root, other)) continue;
+      if (best === null || pathSegmentDepth(other) > pathSegmentDepth(best))
         best = other;
     }
     return best;
@@ -585,7 +586,7 @@ function projectLabeller(roots: readonly string[]): (root: string) => string {
     // The SAME grow-leftward rule the unrooted rows use — see `growLeftward`.
     // `min` is 2 because reaching here already proved one segment collides.
     const others = roots
-      .filter((other) => canonical(other) !== canonical(root))
+      .filter((other) => !samePath(other, root))
       .map(segmentsOf);
     const grown = growLeftward(segments, others, 2);
     // Exhausted without ever becoming unique (two roots spelled the same in

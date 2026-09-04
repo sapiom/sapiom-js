@@ -1056,7 +1056,7 @@ export interface SessionRecord {
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
-// POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
 // PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // POST   /api/agents/scaffold           { root, name, template? } → AgentScaffoldResponse (the harness creates the agent)
@@ -1178,7 +1178,27 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
+  /**
+   * Optional idempotency key used only when the new-project bootstrap FIFO
+   * owns this submitted turn. Ordinary post-bootstrap input remains one
+   * intentional message per request.
+   */
+  requestId?: string;
 }
+
+export interface InjectInputResponse {
+  ok: true;
+  /** Present only when the durable bootstrap FIFO handled this request. */
+  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+}
+
+/** Internal server boundary shared by the canonical route and rolling alias. */
+export type SessionInputSubmissionResult =
+  | { ok: false }
+  | {
+      ok: true;
+      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+    };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
  *  must be a path already known to the workflow registry (scan/connect). */

@@ -11,7 +11,9 @@ import {
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
 import { SPAWNABLE_HARNESS_KINDS, type WorkflowInfo } from "../shared/types.js";
+import type { SessionInputSubmissionResult } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
+import { samePath } from "../shared/paths.js";
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
@@ -25,15 +27,21 @@ import {
   StudioWorkspacePreferenceStore,
   StudioWorkspacePreferenceStoreError,
 } from "../core/studio-workspace-preferences.js";
+import { ExternalHarnessError } from "../core/errors.js";
 import {
   ProjectSessionError,
   type ProjectSessionService,
 } from "../core/planning-session.js";
-import { ProjectSessionScopeUnavailableError } from "../core/session-manager.js";
+import {
+  ProjectSessionScopeUnavailableError,
+  SessionBackgroundInputPreemptedError,
+  SessionNotReadyError,
+} from "../core/session-manager.js";
 import {
   ProjectBootstrapDispatchForbiddenError,
+  ProjectBootstrapInputCapacityError,
+  ProjectBootstrapRequestIdConflictError,
   ProjectBootstrapRetryUnavailableError,
-  projectBootstrapOwnsInput,
   type ProjectBootstrapCoordinator,
 } from "../core/planner-greeting.js";
 
@@ -62,7 +70,12 @@ export interface AgentMapRouterOptions {
     root: string,
   ) => Promise<void> | void;
   /** Neutral ordinary-session input boundary used by rolling aliases. */
-  submitSessionInput?: (sessionId: string, text: string) => Promise<boolean>;
+  submitSessionInput?: (
+    sessionId: string,
+    text: string,
+    submit: boolean,
+    requestId?: string,
+  ) => Promise<boolean | SessionInputSubmissionResult>;
 }
 
 const plannerSessionSchema = z
@@ -74,15 +87,33 @@ const plannerSessionSchema = z
   .strict() satisfies z.ZodType<PlannerSessionRequest>;
 
 const plannerMessageSchema = z
-  .object({ text: z.string().min(1).max(100_000) })
+  .object({
+    text: z.string().min(1).max(100_000),
+    requestId: z.string().min(1).max(200).optional(),
+  })
   .strict() satisfies z.ZodType<PlannerMessageRequest>;
 
 function sendProjectSessionError(
   res: import("express").Response,
   error: unknown,
 ): boolean {
+  if (
+    error instanceof SessionNotReadyError ||
+    error instanceof ExternalHarnessError ||
+    error instanceof SessionBackgroundInputPreemptedError
+  ) {
+    res.status(409).json({ code: error.code, error: error.message });
+    return true;
+  }
   if (error instanceof ProjectBootstrapDispatchForbiddenError) {
     res.status(403).json({ code: error.code, error: error.message });
+    return true;
+  }
+  if (
+    error instanceof ProjectBootstrapRequestIdConflictError ||
+    error instanceof ProjectBootstrapInputCapacityError
+  ) {
+    res.status(409).json({ code: error.code, error: error.message });
     return true;
   }
   if (error instanceof ProjectSessionScopeUnavailableError) {
@@ -157,7 +188,7 @@ async function allowlistedScope(
   }
   for (const scope of await options.listWorkspaceScopes()) {
     try {
-      if (canonicalGraphPath(scope.cwd) === requested) return scope;
+      if (samePath(canonicalGraphPath(scope.cwd), requested)) return scope;
     } catch {
       // One malformed live scope cannot authorize or poison another root.
     }
@@ -456,26 +487,28 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
           req.params.projectId,
           req.params.sessionId,
         );
-        if (
-          options.projectBootstrap &&
-          projectBootstrapOwnsInput(session.projectBootstrap)
-        ) {
-          await options.projectBootstrap.enqueue(
-            req.params.sessionId,
-            parsed.data.text,
-          );
-        } else if (
-          !(await options.submitSessionInput(
-            req.params.sessionId,
-            parsed.data.text,
-          ))
-        ) {
+        const submitted = await options.submitSessionInput(
+          req.params.sessionId,
+          parsed.data.text,
+          true,
+          parsed.data.requestId,
+        );
+        const result =
+          typeof submitted === "boolean" ? { ok: submitted } : submitted;
+        if (!result.ok) {
           res
             .status(404)
             .json({ error: "Project session has no live process" });
           return;
         }
-        res.status(202).json({ metadata: session.projectBootstrap ?? null });
+        res.status(202).json({
+          metadata: session.projectBootstrap ?? null,
+          ...(typeof submitted !== "boolean" &&
+          submitted.ok &&
+          submitted.receipt
+            ? { receipt: submitted.receipt }
+            : {}),
+        });
       } catch (error) {
         if (!sendProjectSessionError(res, error)) next(error);
       }

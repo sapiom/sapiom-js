@@ -10,8 +10,9 @@ import type { SessionStatus } from "./types.js";
 import {
   basenameOf,
   isWithinDir,
+  pathComparisonKey,
+  pathSegmentDepth,
   parentOf,
-  stripTrailingSep,
 } from "./paths.js";
 
 /**
@@ -26,8 +27,10 @@ const isUnder = (childPath: string, root: string): boolean =>
 
 /** Comparison form: forward slashes, no trailing separator. Never rendered and
  *  never POSTed — what the server sent keeps its native spelling. */
-const canonical = (p: string): string =>
-  stripTrailingSep(p.replace(/\\/g, "/"));
+const canonical = (p: string): string => pathComparisonKey(p);
+
+const lexicalCompare = (left: string, right: string): number =>
+  left === right ? 0 : left < right ? -1 : 1;
 
 /** Everything the rail knows about which folders are projects. */
 export interface ProjectRootSources {
@@ -66,6 +69,29 @@ export interface DurableProjectRoot {
 }
 
 /**
+ * Resolve the most-specific containing durable root with one deterministic
+ * browser/server rule. Equal-specificity claims by different projects fail
+ * closed; multiple bindings owned by one durable project remain valid.
+ */
+export function resolveProjectRootForPath<T extends DurableProjectRoot>(
+  targetPath: string,
+  roots: readonly T[],
+): T | null {
+  const matches = roots.filter((root) => isWithinDir(root.cwd, targetPath));
+  if (matches.length === 0) return null;
+  const depth = Math.max(...matches.map((root) => pathSegmentDepth(root.cwd)));
+  const nearest = matches.filter(
+    (root) => pathSegmentDepth(root.cwd) === depth,
+  );
+  if (new Set(nearest.map((root) => root.projectId)).size !== 1) return null;
+  return [...nearest].sort(
+    (left, right) =>
+      lexicalCompare(canonical(left.cwd), canonical(right.cwd)) ||
+      lexicalCompare(left.cwd, right.cwd),
+  )[0]!;
+}
+
+/**
  * Choose one deterministic launch root for a multi-root project.
  *
  * The outermost active binding wins so a project-wide session starts with the
@@ -80,9 +106,9 @@ export function preferredProjectRoot(roots: readonly string[]): string | null {
         const canonicalLeft = canonical(left);
         const canonicalRight = canonical(right);
         return (
-          canonicalLeft.length - canonicalRight.length ||
-          canonicalLeft.localeCompare(canonicalRight) ||
-          left.localeCompare(right)
+          pathSegmentDepth(left) - pathSegmentDepth(right) ||
+          lexicalCompare(canonicalLeft, canonicalRight) ||
+          lexicalCompare(left, right)
         );
       })[0] ?? null
   );
@@ -99,17 +125,12 @@ export function projectSessionRoot(
   session: { cwd: string; projectId: string },
   roots: readonly DurableProjectRoot[],
 ): string | null {
-  const matches = roots.filter(
-    (root) =>
-      root.projectId === session.projectId &&
-      isWithinDir(root.cwd, session.cwd),
+  return (
+    resolveProjectRootForPath(
+      session.cwd,
+      roots.filter((root) => root.projectId === session.projectId),
+    )?.cwd ?? null
   );
-  if (matches.length === 0) return null;
-  return matches.sort(
-    (left, right) =>
-      canonical(right.cwd).length - canonical(left.cwd).length ||
-      left.cwd.localeCompare(right.cwd),
-  )[0]!.cwd;
 }
 
 /**

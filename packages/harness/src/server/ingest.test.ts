@@ -22,6 +22,7 @@ import {
 } from "./ingest.js";
 
 const INGEST_TOKEN = "test-token";
+const RUNTIME_EPOCH = "runtime-epoch-1";
 
 function postIngest(baseUrl: string, body: unknown, token = INGEST_TOKEN) {
   return fetch(`${baseUrl}/ingest`, {
@@ -82,7 +83,11 @@ describe("createIngestRouter", () => {
 
     const deps: IngestDeps = {
       authenticate: (sessionId, token) =>
-        sessionId === "session-1" && token === INGEST_TOKEN,
+        sessionId === "session-1" && token === INGEST_TOKEN
+          ? RUNTIME_EPOCH
+          : null,
+      isCurrentRuntime: (_sessionId, runtimeEpoch) =>
+        runtimeEpoch === RUNTIME_EPOCH,
       normalize: normalizeHookEvent,
       resolveSession: (harnessSessionId) => sessions.get(harnessSessionId),
       onAgentSessionResolved: (harnessSessionId, agentSessionId, source) => {
@@ -159,8 +164,11 @@ describe("createIngestRouter", () => {
   it("binds a valid bearer token to the body session id", async () => {
     start({
       authenticate: (sessionId, token) =>
-        (sessionId === "session-1" && token === INGEST_TOKEN) ||
-        (sessionId === "session-2" && token === "token-2"),
+        sessionId === "session-1" && token === INGEST_TOKEN
+          ? RUNTIME_EPOCH
+          : sessionId === "session-2" && token === "token-2"
+            ? RUNTIME_EPOCH
+            : null,
     });
     sessions.set("session-2", {
       harness: "claude-code",
@@ -209,6 +217,63 @@ describe("createIngestRouter", () => {
     expect(stored[0].tenantId).toBe("tenant-1");
     expect(stored[0].seq).toBe(1);
     expect(enqueued).toHaveLength(1);
+  });
+
+  it("keeps the authenticated runtime epoch across asynchronous HTTP processing", async () => {
+    const enrichmentEntered = deferred();
+    const enrichmentCommit = deferred();
+    let activeEpoch = "epoch-a";
+    const persistedEpochs: string[] = [];
+    start({
+      authenticate: (_sessionId, token) =>
+        token === "token-a"
+          ? "epoch-a"
+          : token === "token-b"
+            ? "epoch-b"
+            : null,
+      isCurrentRuntime: (_sessionId, runtimeEpoch) =>
+        runtimeEpoch === activeEpoch,
+      enrichFromTranscript: async (event) => {
+        enrichmentEntered.resolve();
+        await enrichmentCommit.promise;
+        return event;
+      },
+      onEventPersisted: (_event, runtimeEpoch) =>
+        persistedEpochs.push(runtimeEpoch),
+    });
+
+    const acceptedOld = await postIngest(
+      baseUrl,
+      {
+        hookEvent: "Stop",
+        harnessSessionId: "session-1",
+        payload: { last_assistant_message: "old reply" },
+      },
+      "token-a",
+    );
+    expect(acceptedOld.status).toBe(200);
+    await enrichmentEntered.promise;
+
+    activeEpoch = "epoch-b";
+    enrichmentCommit.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(stored).toEqual([]);
+    expect(enqueued).toEqual([]);
+
+    const acceptedCurrent = await postIngest(
+      baseUrl,
+      {
+        hookEvent: "UserPromptSubmit",
+        harnessSessionId: "session-1",
+        // Payload/model input cannot select the trusted server-side epoch.
+        payload: { prompt: "current prompt", runtimeEpoch: "epoch-a" },
+      },
+      "token-b",
+    );
+    expect(acceptedCurrent.status).toBe(200);
+    await vi.waitFor(() => expect(stored).toHaveLength(1));
+    expect(stored[0]?.payload.prompt).toBe("current prompt");
+    expect(persistedEpochs).toEqual(["epoch-b"]);
   });
 
   it("notifies transcript consumers only after the event is durably appended", async () => {
@@ -278,7 +343,8 @@ describe("createIngestRouter", () => {
     const decorated: AnalyticsEvent[] = [];
     const batched: AnalyticsEvent[] = [];
     const deps: IngestDeps = {
-      authenticate: () => true,
+      authenticate: () => RUNTIME_EPOCH,
+      isCurrentRuntime: () => true,
       normalize: normalizeHookEvent,
       resolveSession: () => context,
       onAgentSessionResolved: async (_harnessId, agentSessionId) => {
@@ -303,6 +369,7 @@ describe("createIngestRouter", () => {
       },
       deps,
       seqCounter,
+      RUNTIME_EPOCH,
     );
     await identityEntered.promise;
 
@@ -316,6 +383,7 @@ describe("createIngestRouter", () => {
       },
       { ...deps },
       seqCounter,
+      RUNTIME_EPOCH,
     );
     await Promise.resolve();
     await Promise.resolve();
@@ -339,6 +407,108 @@ describe("createIngestRouter", () => {
     expect(batched).toHaveLength(2);
   });
 
+  it("does not let a stale SessionStart mark a replacement runtime ready", async () => {
+    const identityEntered = deferred();
+    const identityCommit = deferred();
+    let activeEpoch = "epoch-a";
+    const ready: Array<{ sessionId: string; runtimeEpoch: string }> = [];
+    const context: IngestSessionContext = {
+      harness: "claude-code",
+      userId: "user-1",
+      tenantId: "tenant-1",
+      machineId: "machine-1",
+      agentSessionId: "provider-shared",
+    };
+    const deps: IngestDeps = {
+      authenticate: () => activeEpoch,
+      isCurrentRuntime: (_sessionId, runtimeEpoch) =>
+        runtimeEpoch === activeEpoch,
+      normalize: normalizeHookEvent,
+      resolveSession: () => context,
+      onAgentSessionResolved: async () => {
+        identityEntered.resolve();
+        await identityCommit.promise;
+        return true;
+      },
+      onSessionReady: (sessionId, runtimeEpoch) =>
+        ready.push({ sessionId, runtimeEpoch }),
+      store: { append: async () => {} },
+      batcher: { enqueue: () => {} },
+    };
+    const processing = processIngest(
+      {
+        hookEvent: "SessionStart",
+        harnessSessionId: "session-replaced",
+        payload: { session_id: "provider-shared", source: "resume" },
+      },
+      deps,
+      createSeqCounter(),
+      "epoch-a",
+    );
+    await identityEntered.promise;
+
+    activeEpoch = "epoch-b";
+    identityCommit.resolve();
+    await processing;
+
+    expect(ready).toEqual([]);
+  });
+
+  it("does not let a SessionEnd from a retired runtime reset the replacement sequence", async () => {
+    const appendEntered = deferred();
+    const appendCommit = deferred();
+    const resets: string[] = [];
+    let activeEpoch = "epoch-a";
+    const context: IngestSessionContext = {
+      harness: "claude-code",
+      userId: "user-1",
+      tenantId: "tenant-1",
+      machineId: "machine-1",
+      agentSessionId: "provider-shared",
+    };
+    const deps: IngestDeps = {
+      authenticate: () => activeEpoch,
+      isCurrentRuntime: (_sessionId, runtimeEpoch) =>
+        runtimeEpoch === activeEpoch,
+      normalize: normalizeHookEvent,
+      resolveSession: () => context,
+      onAgentSessionResolved: () => true,
+      store: {
+        append: async () => {
+          appendEntered.resolve();
+          await appendCommit.promise;
+        },
+      },
+      batcher: { enqueue: () => {} },
+    };
+    let nextSeq = 0;
+    const seqCounter: ReturnType<typeof createSeqCounter> = {
+      next: () => ++nextSeq,
+      reset: (sessionId: string) => {
+        resets.push(sessionId);
+        nextSeq = 0;
+      },
+    };
+    const processing = processIngest(
+      {
+        hookEvent: "SessionEnd",
+        harnessSessionId: "session-replaced",
+        payload: { reason: "old process exited" },
+      },
+      deps,
+      seqCounter,
+      "epoch-a",
+    );
+    await appendEntered.promise;
+
+    activeEpoch = "epoch-b";
+    appendCommit.resolve();
+    await processing;
+
+    expect(resets).toEqual([]);
+    expect(seqCounter.next("session-replaced")).toBe(2);
+  });
+
   it("lets a follower re-resolve the prior pin after a SessionStart commit failure", async () => {
     const identityCommit = deferred();
     const identityEntered = deferred();
@@ -352,7 +522,8 @@ describe("createIngestRouter", () => {
     const appended: AnalyticsEvent[] = [];
     const decorated: AnalyticsEvent[] = [];
     const deps: IngestDeps = {
-      authenticate: () => true,
+      authenticate: () => RUNTIME_EPOCH,
+      isCurrentRuntime: () => true,
       normalize: normalizeHookEvent,
       resolveSession: () => context,
       onAgentSessionResolved: async () => {
@@ -376,6 +547,7 @@ describe("createIngestRouter", () => {
       },
       deps,
       seqCounter,
+      RUNTIME_EPOCH,
     );
     await identityEntered.promise;
     const followerProcessing = processIngest(
@@ -386,6 +558,7 @@ describe("createIngestRouter", () => {
       },
       deps,
       seqCounter,
+      RUNTIME_EPOCH,
     );
     await Promise.resolve();
     expect(appended).toEqual([]);
@@ -415,7 +588,9 @@ describe("createIngestRouter", () => {
       start({
         authenticate: (sessionId, token) =>
           (sessionId === "session-1" || sessionId === "session-2") &&
-          token === INGEST_TOKEN,
+          token === INGEST_TOKEN
+            ? RUNTIME_EPOCH
+            : null,
         store: eventStore,
       });
       sessions.get("session-1")!.agentSessionId = "agent-a";

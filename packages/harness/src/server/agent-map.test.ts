@@ -9,10 +9,16 @@ import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
+  ProjectBootstrapInputCapacityError,
+  ProjectBootstrapRequestIdConflictError,
   ProjectBootstrapRetryUnavailableError,
   type ProjectBootstrapCoordinator,
 } from "../core/planner-greeting.js";
-import { ProjectSessionScopeUnavailableError } from "../core/session-manager.js";
+import {
+  ProjectSessionScopeUnavailableError,
+  SessionBackgroundInputPreemptedError,
+  SessionNotReadyError,
+} from "../core/session-manager.js";
 import {
   ProjectSessionError,
   type ProjectSessionService,
@@ -43,7 +49,23 @@ describe("createAgentMapRouter", () => {
   async function start(projectLifecycle?: {
     projectSessions?: ProjectSessionService;
     projectBootstrap?: ProjectBootstrapCoordinator;
-    submitSessionInput?: (sessionId: string, text: string) => Promise<boolean>;
+    submitSessionInput?: (
+      sessionId: string,
+      text: string,
+      submit: boolean,
+      requestId?: string,
+    ) => Promise<
+      | boolean
+      | {
+          ok: boolean;
+          receipt?: {
+            requestId: string | null;
+            inputId: string;
+            status: "queued" | "submitted" | "uncertain" | "completed";
+            acceptedAt: string;
+          };
+        }
+    >;
     onProjectCreated?: (project: StudioProjectSummary) => Promise<void> | void;
     onRootBound?: (
       project: StudioProjectSummary,
@@ -279,6 +301,29 @@ describe("createAgentMapRouter", () => {
     expect(restarted.projects).toHaveLength(1);
     expect(restarted.projects[0]?.projectId).toBe(fixture.project.projectId);
     expect(restarted.projects[0]?.bindings).toHaveLength(2);
+  });
+
+  it("matches a Windows allowlisted root across drive, case, and separator variants", async () => {
+    const fixture = await start();
+    fixture.scopes.splice(0, fixture.scopes.length, {
+      workspaceKey: "workspace-windows-project",
+      cwd: "C:\\Users\\Alice\\Project",
+    });
+
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({ root: "c:/users/alice/project/" }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect((await response.json()).projectId).toBe(fixture.project.projectId);
   });
 
   it("acknowledges durable root mutations and converges lifecycle retries without duplicate bindings", async () => {
@@ -563,7 +608,7 @@ describe("createAgentMapRouter", () => {
       resolution: "created" as const,
     }));
     const requireOwned = vi.fn(() => plannerSession);
-    const enqueue = vi.fn(async () => {
+    const enqueue = vi.fn(async (_sessionId: string, _text: string) => {
       const metadata = {
         projectId: fixtureProjectId,
         userId: "user-1",
@@ -586,7 +631,30 @@ describe("createAgentMapRouter", () => {
         bootstrap: { status: "generating", attemptId: "attempt-2" },
       };
     });
-    const submitSessionInput = vi.fn(async () => true);
+    // This is the one canonical ordinary-session input authority shared with
+    // POST /sessions/:id/input. The compatibility route must call it even
+    // while bootstrap owns the durable FIFO; it may not enqueue independently.
+    const submitSessionInput = vi.fn(
+      async (
+        sessionId: string,
+        text: string,
+        _submit: boolean,
+        requestId?: string,
+      ) => {
+        await enqueue(sessionId, text);
+        return requestId
+          ? {
+              ok: true as const,
+              receipt: {
+                requestId,
+                inputId: "input-1",
+                status: "queued" as const,
+                acceptedAt: "2026-09-04T00:00:00.000Z",
+              },
+            }
+          : true;
+      },
+    );
     const fixture = await start({
       projectSessions: {
         open,
@@ -661,7 +729,10 @@ describe("createAgentMapRouter", () => {
         "content-type": "application/json",
         "X-Harness-Token": "test-token",
       },
-      body: JSON.stringify({ text: "Build a support triage system" }),
+      body: JSON.stringify({
+        text: "Build a support triage system",
+        requestId: "request-build-support",
+      }),
     });
     expect(message.status).toBe(202);
     expect(await message.json()).toEqual({
@@ -672,6 +743,12 @@ describe("createAgentMapRouter", () => {
         bootstrap: { status: "skipped", reason: "user-proceeded" },
         queuedInputIds: ["input-1"],
       },
+      receipt: {
+        requestId: "request-build-support",
+        inputId: "input-1",
+        status: "queued",
+        acceptedAt: "2026-09-04T00:00:00.000Z",
+      },
     });
     expect(requireOwned).toHaveBeenCalledWith(
       fixture.project.projectId,
@@ -680,6 +757,12 @@ describe("createAgentMapRouter", () => {
     expect(enqueue).toHaveBeenCalledWith(
       plannerSession.id,
       "Build a support triage system",
+    );
+    expect(submitSessionInput).toHaveBeenCalledWith(
+      plannerSession.id,
+      "Build a support triage system",
+      true,
+      "request-build-support",
     );
 
     const followUp = await fetch(`${route}/${plannerSession.id}/messages`, {
@@ -696,7 +779,7 @@ describe("createAgentMapRouter", () => {
       "Keep this behind the durable FIFO",
     );
     expect(enqueue).toHaveBeenCalledTimes(2);
-    expect(submitSessionInput).not.toHaveBeenCalled();
+    expect(submitSessionInput).toHaveBeenCalledTimes(2);
 
     plannerSession.projectBootstrap = {
       ...plannerSession.projectBootstrap!,
@@ -727,6 +810,242 @@ describe("createAgentMapRouter", () => {
       },
     });
     expect(retry).toHaveBeenCalledWith(plannerSession.id);
+  });
+
+  it("lets an ordinary project session use the legacy message alias without bootstrap metadata", async () => {
+    const ordinarySession = {
+      id: "ordinary-session-1",
+      agentSessionId: "provider-session-1",
+      harness: "codex",
+      cwd: "/server/private/project",
+      title: "Implementation",
+      status: "running",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      lastActiveAt: "2026-09-01T00:00:00.000Z",
+      exitCode: null,
+      boundWorkflowPath: null,
+      ready: true,
+    } as HarnessSession;
+    const requireOwned = vi.fn(async () => ordinarySession);
+    const submitSessionInput = vi.fn(async () => true);
+    const fixture = await start({
+      projectSessions: {
+        open: vi.fn(),
+        requireOwned,
+      } as unknown as ProjectSessionService,
+      submitSessionInput,
+    });
+    ordinarySession.agentMapIdentity = {
+      projectId: fixture.project.projectId,
+      sessionId: ordinarySession.id,
+      userId: "user-1",
+    };
+
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/${ordinarySession.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({ text: "Continue the implementation" }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ metadata: null });
+    expect(requireOwned).toHaveBeenCalledWith(
+      fixture.project.projectId,
+      ordinarySession.id,
+    );
+    expect(submitSessionInput).toHaveBeenCalledTimes(1);
+    expect(submitSessionInput).toHaveBeenCalledWith(
+      ordinarySession.id,
+      "Continue the implementation",
+      true,
+      undefined,
+    );
+  });
+
+  it("dispatches each compatibility request once through the canonical authority", async () => {
+    const ordinarySession = {
+      id: "ordinary-session-1",
+      agentSessionId: "provider-session-1",
+      harness: "codex",
+      cwd: "/server/private/project",
+      title: "Implementation",
+      status: "running",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      lastActiveAt: "2026-09-01T00:00:00.000Z",
+      exitCode: null,
+      boundWorkflowPath: null,
+      ready: true,
+    } as HarnessSession;
+    const submitSessionInput = vi.fn(async () => true);
+    const fixture = await start({
+      projectSessions: {
+        open: vi.fn(),
+        requireOwned: vi.fn(async () => ordinarySession),
+      } as unknown as ProjectSessionService,
+      submitSessionInput,
+    });
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/${ordinarySession.id}/messages`;
+    const request = () =>
+      fetch(route, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({ text: "same visible text" }),
+      });
+
+    const responses = await Promise.all([request(), request()]);
+
+    expect(responses.map((response) => response.status)).toEqual([202, 202]);
+    expect(submitSessionInput).toHaveBeenCalledTimes(2);
+    for (const call of submitSessionInput.mock.calls) {
+      expect(call).toEqual([
+        ordinarySession.id,
+        "same visible text",
+        true,
+        undefined,
+      ]);
+    }
+  });
+
+  it("forwards request IDs and returns the same durable conflict semantics through the compatibility alias", async () => {
+    const ordinarySession = {
+      id: "bootstrap-session-1",
+      status: "running",
+    } as HarnessSession;
+    const submitSessionInput = vi.fn(async () => {
+      throw new ProjectBootstrapRequestIdConflictError();
+    });
+    const fixture = await start({
+      projectSessions: {
+        open: vi.fn(),
+        requireOwned: vi.fn(async () => ordinarySession),
+      } as unknown as ProjectSessionService,
+      submitSessionInput,
+    });
+
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/${ordinarySession.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({
+          text: "changed payload",
+          requestId: "request-reused",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: "project_bootstrap_request_id_reused",
+      error: "project bootstrap request id was reused with different input",
+    });
+    expect(submitSessionInput).toHaveBeenCalledWith(
+      ordinarySession.id,
+      "changed payload",
+      true,
+      "request-reused",
+    );
+  });
+
+  it("returns bounded durable-input capacity through the compatibility alias", async () => {
+    const ordinarySession = {
+      id: "bootstrap-session-capacity",
+      status: "running",
+    } as HarnessSession;
+    const submitSessionInput = vi.fn(async () => {
+      throw new ProjectBootstrapInputCapacityError();
+    });
+    const fixture = await start({
+      projectSessions: {
+        open: vi.fn(),
+        requireOwned: vi.fn(async () => ordinarySession),
+      } as unknown as ProjectSessionService,
+      submitSessionInput,
+    });
+
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/${ordinarySession.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({
+          text: "new logical request",
+          requestId: "request-at-capacity",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: "project_bootstrap_input_capacity",
+      error: "project bootstrap input receipt capacity is temporarily full",
+    });
+    expect(submitSessionInput).toHaveBeenCalledWith(
+      ordinarySession.id,
+      "new logical request",
+      true,
+      "request-at-capacity",
+    );
+  });
+
+  it("maps canonical input rejection without retrying compatibility dispatch", async () => {
+    const ordinarySession = {
+      id: "ordinary-session-1",
+      status: "running",
+    } as HarnessSession;
+    const submitSessionInput = vi
+      .fn<
+        (sessionId: string, text: string, submit: boolean) => Promise<boolean>
+      >()
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new SessionNotReadyError(ordinarySession.id))
+      .mockRejectedValueOnce(new SessionBackgroundInputPreemptedError(false));
+    const fixture = await start({
+      projectSessions: {
+        open: vi.fn(),
+        requireOwned: vi.fn(async () => ordinarySession),
+      } as unknown as ProjectSessionService,
+      submitSessionInput,
+    });
+    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/${ordinarySession.id}/messages`;
+    const request = () =>
+      fetch(route, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({ text: "one dispatch" }),
+      });
+
+    const missing = await request();
+    const unready = await request();
+    const concurrent = await request();
+
+    expect(missing.status).toBe(404);
+    expect(unready.status).toBe(409);
+    expect(await unready.json()).toMatchObject({ code: "SESSION_NOT_READY" });
+    expect(concurrent.status).toBe(409);
+    expect(await concurrent.json()).toEqual({
+      code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
+      error: "background session input was preempted by user input",
+    });
+    expect(submitSessionInput).toHaveBeenCalledTimes(3);
   });
 
   it("rejects foreign planner messages and bounds unavailable retries", async () => {

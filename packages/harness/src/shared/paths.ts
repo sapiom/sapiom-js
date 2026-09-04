@@ -70,6 +70,25 @@ export function stripTrailingSep(p: string): string {
   return trimmed;
 }
 
+/**
+ * Comparison-only form for absolute paths shared by the browser and server.
+ * Windows drive and UNC paths use their platform's case-insensitive identity;
+ * POSIX paths deliberately retain case. The caller's spelling is never used
+ * for display or persisted output.
+ */
+export function pathComparisonKey(input: string): string {
+  const normalized = stripTrailingSep(input.replace(/\\/g, "/"));
+  const windows =
+    /^[A-Za-z]:\//.test(normalized) ||
+    /^\/\/[^/]+\/[^/]+(?:\/|$)/.test(normalized);
+  return windows ? normalized.toLowerCase() : normalized;
+}
+
+/** Segment depth, independent of path spelling length and separator style. */
+export function pathSegmentDepth(input: string): number {
+  return pathComparisonKey(input).split("/").filter(Boolean).length;
+}
+
 /** Whether `child` IS `parent` or sits beneath it — never a mere string
  *  prefix, so `/a/scratch-2` is not within `/a/scratch`. Separator-insensitive
  *  on both sides, so a mixed-form path still matches its native spelling. */
@@ -84,15 +103,12 @@ export function stripTrailingSep(p: string): string {
  * the very session it just created (empty tab strip, unhighlighted rail row).
  */
 export function samePath(a: string, b: string): boolean {
-  return (
-    stripTrailingSep(a.replace(/\\/g, "/")) ===
-    stripTrailingSep(b.replace(/\\/g, "/"))
-  );
+  return pathComparisonKey(a) === pathComparisonKey(b);
 }
 
 export function isWithinDir(parent: string, child: string): boolean {
-  const p = stripTrailingSep(parent.replace(/\\/g, "/"));
-  const c = stripTrailingSep(child.replace(/\\/g, "/"));
+  const p = pathComparisonKey(parent);
+  const c = pathComparisonKey(child);
   if (c === p) return true;
   // A filesystem root keeps its trailing separator (stripTrailingSep's
   // contract), so appending another would test "C://…" and never match —

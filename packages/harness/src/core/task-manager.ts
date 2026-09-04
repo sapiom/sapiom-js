@@ -183,7 +183,7 @@ export class TaskManager {
     this.adapters = options.adapters;
     this.ingestUrl = options.ingestUrl;
     this.issueIngestToken = (sessionId) =>
-      options.ingestCredentials.issue(sessionId);
+      options.ingestCredentials.issue(sessionId).token;
     this.revokeIngestToken = (sessionId) =>
       options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
