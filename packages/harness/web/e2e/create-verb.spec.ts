@@ -191,4 +191,54 @@ test.describe("⌘K over an open dialog", () => {
     await page.keyboard.press("ControlOrMeta+k");
     await expect(page.getByTestId("command-palette-input")).toBeVisible();
   });
+
+  test("⌘P over a dialog is swallowed, not handed to the browser", async ({
+    page,
+  }) => {
+    // THE SAME HANDLER OWNS ⌘P, and ⌘P is the browser's PRINT shortcut. A guard
+    // that returns early WITHOUT preventing the event stops the palette and
+    // hands ⌘P to the browser, which opens a native print preview over the
+    // dialog — worse than the stacking it was added to stop, and invisible to a
+    // spec that only presses ⌘K.
+    //
+    // `defaultPrevented` IS THE ASSERTION, not `beforeprint`. Headless Chromium
+    // never fires `beforeprint` for an unhandled Ctrl+P, so a spec written that
+    // way passes whether or not the event was prevented — measured: it survived
+    // its own mutation. This listener is registered after the app's (same
+    // target, `window`, so registration order decides), and reads what the app
+    // left behind.
+    await page.goto("/?seed=0&mockStudioProjects=absent");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.evaluate(() => {
+      const win = window as unknown as { __printKey?: boolean | null };
+      win.__printKey = null;
+      window.addEventListener("keydown", (event) => {
+        if (!(event.metaKey || event.ctrlKey)) return;
+        if (event.key.toLowerCase() !== "p") return;
+        // READ AFTER DISPATCH, not during. The app re-subscribes its handler on
+        // re-render, so a listener added from a spec is not reliably last and
+        // reading `defaultPrevented` inline can sample before the app has acted.
+        // The flag stays set on the event object once dispatch completes.
+        setTimeout(() => {
+          win.__printKey = event.defaultPrevented;
+        }, 0);
+      });
+    });
+
+    await page.getByTestId("rail-create-new").click();
+    await page.getByTestId("new-agent-in-acme-app").click();
+    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+
+    await page.keyboard.press("ControlOrMeta+p");
+    await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
+    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+    // Seen by the listener, and prevented by the app during dispatch.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __printKey?: boolean | null }).__printKey,
+        ),
+      )
+      .toBe(true);
+  });
 });

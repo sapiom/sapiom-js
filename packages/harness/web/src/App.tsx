@@ -212,13 +212,6 @@ const knownRootsOf = (
 ): string[] => [...(recentDirs ?? []), ...(launchDir ? [launchDir] : [])];
 
 /**
- * How long a held initial prompt waits for the coding agent to become ready
- * (i.e. the user to finish any sign-in, trust, or onboarding step) before we
- * give up and surface the failure. The normal end of a hold is the session
- * going ready (prompt sent) or exiting — this is only a leak-guard for setup
- * the user walks away from.
- */
-/**
  * A layer the COMMAND PALETTE must not open on top of.
  *
  * `.modal-backdrop` leads because it is the one thing every overlay in this app
@@ -245,6 +238,14 @@ const PALETTE_BLOCKING_LAYER_SELECTOR = [
   '[role="alertdialog"]:not(.overview-modal)',
   '[aria-modal="true"]:not(.overview-modal)',
 ].join(",");
+
+/**
+ * How long a held initial prompt waits for the coding agent to become ready
+ * (i.e. the user to finish any sign-in, trust, or onboarding step) before we
+ * give up and surface the failure. The normal end of a hold is the session
+ * going ready (prompt sent) or exiting — this is only a leak-guard for setup
+ * the user walks away from.
+ */
 
 const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
 
@@ -835,15 +836,23 @@ export const App = (): JSX.Element => {
           e.preventDefault();
           return;
         }
-        // A LAYER ON TOP KEEPS THE SHORTCUT — the rule the Escape handler above
-        // already follows, and this handler did not. Unguarded, ⌘K stacked the
+        // A LAYER ON TOP SWALLOWS THE SHORTCUT. Unguarded, ⌘K stacked the
         // palette over an open dialog and native Tab then walked out of the
         // palette into the dialog behind it. A surface cannot contain focus for
         // a surface it does not own, so the fix is here rather than in either.
         // Found by the dialog-shell work (#800), which stopped at this file
         // rather than reaching into it. See the selector for what it excludes
         // and why it is not that branch's list.
-        if (document.querySelector(PALETTE_BLOCKING_LAYER_SELECTOR)) return;
+        //
+        // PREVENTED, THEN DROPPED — never returned unhandled. This handler owns
+        // ⌘P as well as ⌘K, and ⌘P is the browser's PRINT shortcut: returning
+        // early without preventing it opened a native print preview over the
+        // dialog, which is worse than the stacking it was added to stop. The
+        // shortcut does nothing here, exactly as it did nothing before.
+        if (document.querySelector(PALETTE_BLOCKING_LAYER_SELECTOR)) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         setPaletteOpen(true);
         return;
