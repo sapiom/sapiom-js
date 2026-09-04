@@ -2,4 +2,6 @@
 "@sapiom/harness": patch
 ---
 
-Derive Studio workspace scopes from the same `projectRoots` rule the rail renders, so every project row on a real install has a durable Studio project and its Agent Map owns creation. Launching Studio inside an agent's own folder promoted the rail's row to the folder that holds it, while the server had registered only the agent folder, so the row's join failed and the retired direct-creation UI rendered instead.
+Fix Studio showing the retired agent-creation controls instead of the project's Agent Map. Launching the harness inside an agent's own folder made the sidebar draw a row for the folder that holds it, which the server had never registered, so the project's Agent Map could not be found and the older create menu came back. The sidebar and the server now decide what counts as a project the same way.
+
+Existing installs need no migration. A project whose folder moves up to the folder holding it keeps its identity, so its Agent Map, its agents and its planning sessions come with it; where that move is ambiguous, because one folder holds several projects that all moved, a new project is created and nothing existing is altered.

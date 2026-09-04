@@ -61,6 +61,73 @@ describe("StudioProjectCatalog", () => {
     expect(JSON.stringify(second.projects)).not.toContain("workspace-legacy");
   });
 
+  it("a root that moved UP keeps its project rather than orphaning it", async () => {
+    // The rail's rule replaces an agent's own directory with the folder that
+    // HOLDS it, so a scope legitimately turns into an ancestor of itself. If
+    // reconcile mints for the ancestor and leaves the old entry behind, the two
+    // halves of one project split: the Agent Map aggregate, `studioBindings` and
+    // persisted planner identities all stay keyed to the id that was abandoned.
+    const { root, catalogPath } = await fixture();
+    const holding = path.join(root, "property-ops");
+    const agentDir = path.join(holding, "tenant-screening");
+    await fs.mkdir(agentDir, { recursive: true });
+    const catalog = new StudioProjectCatalog(catalogPath);
+
+    const before = await catalog.reconcile([
+      { workspaceKey: "workspace-agent", cwd: agentDir },
+    ]);
+    const original = before.projects[0]!.projectId;
+
+    // The scan lands, rule 1 fires, and the scope is now the holding folder.
+    const after = await catalog.reconcile([
+      { workspaceKey: "workspace-holding", cwd: holding },
+    ]);
+
+    expect(after.projects).toHaveLength(1);
+    expect(after.projects[0]!.projectId).toBe(original);
+    expect(after.projects[0]!.displayName).toBe("property-ops");
+    expect(after.workspaceScopes[0]?.projectId).toBe(original);
+    // And a session anywhere under the new root still resolves to it.
+    expect(
+      (await catalog.resolveIdentityForPath(agentDir))?.projectId,
+    ).toBe(original);
+  });
+
+  it("refuses to merge two orphans into one root, and mints instead", async () => {
+    // TWO agent folders promoted to one holding root. Re-pointing either one
+    // would silently merge two identities into one, which is not reversible and
+    // is worse than the split it fixes. Ambiguity mints fresh and leaves both
+    // originals alone with their bindings marked missing.
+    const { root, catalogPath } = await fixture();
+    const holding = path.join(root, "team-bots");
+    const first = path.join(holding, "backlog-nudge");
+    const second = path.join(holding, "compliment-bot");
+    await fs.mkdir(first, { recursive: true });
+    await fs.mkdir(second, { recursive: true });
+    const catalog = new StudioProjectCatalog(catalogPath);
+
+    const before = await catalog.reconcile([
+      { workspaceKey: "workspace-first", cwd: first },
+      { workspaceKey: "workspace-second", cwd: second },
+    ]);
+    const originals = before.projects.map((project) => project.projectId).sort();
+
+    const after = await catalog.reconcile([
+      { workspaceKey: "workspace-holding", cwd: holding },
+    ]);
+
+    expect(after.projects).toHaveLength(3);
+    const minted = after.workspaceScopes[0]?.projectId;
+    expect(originals).not.toContain(minted);
+    // Both originals survive untouched rather than one being quietly adopted.
+    expect(
+      after.projects
+        .map((project) => project.projectId)
+        .filter((id) => originals.includes(id))
+        .sort(),
+    ).toEqual(originals);
+  });
+
   it("resolves cwd containment to the most-specific active project without paths", async () => {
     const { root, catalogPath } = await fixture();
     const parent = path.join(root, "workspace");
