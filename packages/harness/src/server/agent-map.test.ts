@@ -17,6 +17,7 @@ import {
 import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
+  SessionInputIsolationError,
   SessionNotReadyError,
 } from "../core/session-manager.js";
 import {
@@ -1014,7 +1015,8 @@ describe("createAgentMapRouter", () => {
       >()
       .mockResolvedValueOnce(false)
       .mockRejectedValueOnce(new SessionNotReadyError(ordinarySession.id))
-      .mockRejectedValueOnce(new SessionBackgroundInputPreemptedError(false));
+      .mockRejectedValueOnce(new SessionBackgroundInputPreemptedError(false))
+      .mockRejectedValueOnce(new SessionInputIsolationError());
     const fixture = await start({
       projectSessions: {
         open: vi.fn(),
@@ -1036,6 +1038,7 @@ describe("createAgentMapRouter", () => {
     const missing = await request();
     const unready = await request();
     const concurrent = await request();
+    const isolated = await request();
 
     expect(missing.status).toBe(404);
     expect(unready.status).toBe(409);
@@ -1045,7 +1048,12 @@ describe("createAgentMapRouter", () => {
       code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
       error: "background session input was preempted by user input",
     });
-    expect(submitSessionInput).toHaveBeenCalledTimes(3);
+    expect(isolated.status).toBe(409);
+    expect(await isolated.json()).toEqual({
+      code: "SESSION_INPUT_ISOLATION_REQUIRED",
+      error: "session input is blocked until the terminal composer is reset",
+    });
+    expect(submitSessionInput).toHaveBeenCalledTimes(4);
   });
 
   it("rejects foreign planner messages and bounds unavailable retries", async () => {

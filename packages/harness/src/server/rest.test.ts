@@ -25,6 +25,7 @@ import type {
 import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
+  SessionInputIsolationError,
   SessionManager,
   SessionManagerClosingError,
   SessionNotReadyError,
@@ -1085,6 +1086,26 @@ describe("createRestRouter", () => {
       expect(await res.json()).toEqual({
         code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
         error: "background session input was preempted by user input",
+      });
+      expect(submitSessionInput).toHaveBeenCalledOnce();
+    });
+
+    it("409s a fenced terminal composer so the caller can retry after reset", async () => {
+      const submitSessionInput = vi.fn(async () => {
+        throw new SessionInputIsolationError();
+      });
+      start({ submitSessionInput });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "retry after reset" }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        code: "SESSION_INPUT_ISOLATION_REQUIRED",
+        error: "session input is blocked until the terminal composer is reset",
       });
       expect(submitSessionInput).toHaveBeenCalledOnce();
     });

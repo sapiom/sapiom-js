@@ -35,6 +35,7 @@ import {
 import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
+  SessionInputIsolationError,
   SessionNotReadyError,
 } from "../core/session-manager.js";
 import {
@@ -100,7 +101,8 @@ function sendProjectSessionError(
   if (
     error instanceof SessionNotReadyError ||
     error instanceof ExternalHarnessError ||
-    error instanceof SessionBackgroundInputPreemptedError
+    error instanceof SessionBackgroundInputPreemptedError ||
+    error instanceof SessionInputIsolationError
   ) {
     res.status(409).json({ code: error.code, error: error.message });
     return true;

@@ -53,6 +53,7 @@ import {
 import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
+  SessionInputIsolationError,
   SessionManagerClosingError,
   SessionNotReadyError,
   UnknownSessionError,
@@ -947,7 +948,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
       if (
         err instanceof SessionNotReadyError ||
         err instanceof ExternalHarnessError ||
-        err instanceof SessionBackgroundInputPreemptedError
+        err instanceof SessionBackgroundInputPreemptedError ||
+        err instanceof SessionInputIsolationError
       ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;
