@@ -1041,7 +1041,7 @@ describe("SubsessionCoordinatorStore", () => {
     );
     expect(reserved.bindings).toEqual([
       {
-        state: "released",
+        state: "evicted",
         binding: expect.objectContaining({
           bindingId: dormant[0]!.bindingId,
           disposition: "dormant-evicted",

@@ -145,7 +145,10 @@ bounded expiry tombstones. Retrying one of those keys returns
 create one new binding/session for the same delegation key. Durable-history
 capacity errors expose the explicit `release_dormant` recovery code; an
 all-active live cap continues to require session inspection instead of suggesting
-an inapplicable dormant cleanup.
+an inapplicable dormant cleanup. A bounded private-marker cleanup error may
+accompany an already-`released` result because eviction is durable first. Exact
+cleanup proof remains available so the same sweep can finish after the indicated
+recovery or inspection without changing the release outcome.
 
 The coordinator waits for canonical adapter readiness and exact transcript
 identity, then uses fenced spawn and delivery epochs to submit one kickoff.

@@ -28,11 +28,13 @@ import {
 import { compileCanonicalWorkstreamBriefs } from "./agent-brief-compiler.js";
 import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
 import type { EventReader } from "./collector/store.js";
+import { SubsessionBindingMismatchError } from "./errors.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
 import { SessionManager, type PtySpawnFn } from "./session-manager.js";
 import {
   SubsessionCoordinator,
   SubsessionCoordinatorError,
+  type SubsessionCoordinatorEvent,
 } from "./subsession-coordinator.js";
 import {
   SubsessionCoordinatorStore,
@@ -284,7 +286,7 @@ describe("SubsessionCoordinator", () => {
       storeOptions,
     );
     closeStore.current = store;
-    const telemetry: unknown[] = [];
+    const telemetry: SubsessionCoordinatorEvent[] = [];
     const planningStore = {
       read: vi.fn(async () => {
         throw new Error("no focused context expected");
@@ -512,6 +514,7 @@ describe("SubsessionCoordinator", () => {
       store,
       spawned,
       spawnPty,
+      telemetry,
       unsubscribe,
     } =
       await fixture(false, undefined, {}, { bindingLimit: 1 });
@@ -586,6 +589,13 @@ describe("SubsessionCoordinator", () => {
     expect(manager.get(caller.sessionId)?.status).not.toBe("exited");
     expect(manager.get(manual.id)).toMatchObject({ status: "exited" });
     expect(manager.getSubsessionBinding(manual.id)).toBeNull();
+    expect(telemetry).toContainEqual(
+      expect.objectContaining({
+        name: "subsession.released",
+        projectId,
+        sessionId: childId,
+      }),
+    );
     await expect(
       coordinator.execute(
         { ...nextCaller, projectId: "project_foreign" },
@@ -633,6 +643,59 @@ describe("SubsessionCoordinator", () => {
     expect(manager.get(next.results[0]!.sessionId!)?.status).not.toBe("exited");
     expect(manager.get(manual.id)).toMatchObject({ status: "exited" });
     expect((await store.read(projectId)).bindings).toHaveLength(1);
+  });
+
+  it("reports a committed dormant eviction truthfully when private cleanup must retry", async () => {
+    const { coordinator, caller, manager, store, spawned, telemetry, unsubscribe } =
+      await fixture();
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+    spawned[1]!.emitExit(0);
+    await manager.flush();
+    const binding = (await store.read(projectId)).bindings[0]!;
+    await store.transitionSession(caller, binding.bindingId, {
+      expectedLifecycleEpoch: binding.lifecycleEpoch,
+      expectedSpawnEpoch: binding.spawnEpoch,
+      expectedRuntimeToken: binding.runtime?.runtimeToken ?? null,
+      state: "exited",
+    });
+    const closeBound = vi
+      .spyOn(manager, "closeBound")
+      .mockRejectedValueOnce(new SubsessionBindingMismatchError());
+
+    const released = await coordinator.execute(caller, dormantReleaseRequest);
+    expect(released.results[0]).toMatchObject({
+      delegationKey: "research",
+      sessionId: childId,
+      outcome: "released",
+      sessionState: "closed",
+      error: {
+        code: "binding_session_mismatch",
+        retryable: false,
+        recovery: "inspect_session",
+      },
+    });
+    expect((await store.read(projectId)).bindingTombstones[0]).toMatchObject({
+      sessionId: childId,
+      disposition: "dormant-evicted",
+    });
+    expect(manager.getSubsessionBinding(childId)).not.toBeNull();
+
+    closeBound.mockRestore();
+    const replay = await coordinator.execute(caller, dormantReleaseRequest);
+    unsubscribe();
+
+    expect(replay).toMatchObject({
+      replayed: true,
+      results: [{ sessionId: childId, outcome: "released" }],
+    });
+    expect(manager.getSubsessionBinding(childId)).toBeNull();
+    expect(
+      telemetry.filter(
+        (event) =>
+          event.name === "subsession.released" && event.sessionId === childId,
+      ),
+    ).toHaveLength(1);
   });
 
   it.each(["exited", "failed"] as const)(

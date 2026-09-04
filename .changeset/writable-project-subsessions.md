@@ -41,3 +41,7 @@ until this explicit project-wide eviction boundary. Eviction expires request
 receipts that referenced the released binding, so an old retry returns bounded
 `request_key_expired` / `new_request_key` recovery; a fresh request key may
 atomically create one new binding and real session for the same delegation key.
+Dormant eviction emits content-free release telemetry when it commits. If later
+private-marker cleanup fails, the result remains truthfully `released`, includes
+the bounded cleanup error, and retains exact proof for idempotent cleanup after
+the indicated recovery.

@@ -133,6 +133,11 @@ export type ReleasableSubsessionBinding =
       binding: SubsessionBindingRecord;
     }>
   | Readonly<{
+      /** This request atomically committed the dormant eviction. */
+      state: "evicted";
+      binding: SubsessionCoordinatorBindingTombstone;
+    }>
+  | Readonly<{
       state: "released";
       binding: SubsessionCoordinatorBindingTombstone;
     }>
@@ -1288,7 +1293,7 @@ export class SubsessionCoordinatorStore {
             };
             aggregate.bindingTombstones.push(tombstone);
             evictedBindingIds.add(binding.bindingId);
-            bindings.push({ state: "released", binding: tombstone });
+            bindings.push({ state: "evicted", binding: tombstone });
           }
           continue;
         }

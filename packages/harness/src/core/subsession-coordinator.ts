@@ -347,8 +347,16 @@ export class SubsessionCoordinator {
         });
         continue;
       }
-      if (target.state === "released") {
+      if (target.state === "released" || target.state === "evicted") {
         const binding = target.binding;
+        const newlyEvicted = target.state === "evicted";
+        if (newlyEvicted) {
+          this.emit({
+            name: "subsession.released",
+            projectId: identity.projectId,
+            sessionId: binding.sessionId,
+          });
+        }
         try {
           const privateMarker =
             this.options.sessionManager.getSubsessionBinding(binding.sessionId);
@@ -381,7 +389,6 @@ export class SubsessionCoordinator {
           });
           results.push({
             ...this.releasedResult(binding),
-            outcome: "failed",
             error: detail,
           });
         }
