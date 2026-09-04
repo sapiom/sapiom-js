@@ -65,6 +65,17 @@ export class StudioProjectCatalogError extends Error {
   }
 }
 
+/**
+ * Whether `inner` sits strictly BELOW `outer`. Both are already canonical
+ * (`canonicalGraphPath`), so this is a segment-boundary string test — never a
+ * bare prefix, or `/a/scratch-2` would read as inside `/a/scratch`.
+ */
+function isStrictlyUnder(inner: string, outer: string): boolean {
+  if (inner === outer) return false;
+  const parent = outer.endsWith(path.sep) ? outer : outer + path.sep;
+  return inner.startsWith(parent);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -589,6 +600,52 @@ export class StudioProjectCatalog {
           throw new StudioProjectCatalogError("malformed_state");
         }
         let project = matchingProjects[0];
+        // A ROOT THAT MOVED UP IS THE SAME PROJECT, not a new one.
+        //
+        // The rail's rule replaces an agent's own directory with the folder that
+        // HOLDS it, so a scope can legitimately be replaced by an ancestor.
+        // Minting for the ancestor and leaving the old entry with a "missing"
+        // binding splits one project in two, and everything durable is keyed to
+        // the projectId that got left behind: the Agent Map aggregate under
+        // `<state>/agent-map/`, `studioBindings` on every agent, and persisted
+        // planner identities (a resumed agent-builder session whose projectId no
+        // longer matches silently re-issues as unplanned). `moveRootBinding`
+        // exists for exactly this churn; this is the automatic case of it.
+        //
+        // ONLY WHEN IT IS UNAMBIGUOUS. The candidate must have no active binding
+        // left of its own, and exactly one candidate may claim this root — two
+        // agent folders promoted to one holding root would otherwise merge two
+        // identities into one, which is worse than the split it fixes and is not
+        // reversible. Ambiguity mints fresh.
+        if (!project) {
+          const orphans = next.filter(
+            (candidate) =>
+              candidate.rootBindings.length > 0 &&
+              candidate.rootBindings.every(
+                (binding) => binding.status === "missing",
+              ) &&
+              candidate.rootBindings.some((binding) =>
+                isStrictlyUnder(binding.localRootRef, canonical),
+              ),
+          );
+          const moved = orphans.length === 1 ? orphans[0] : undefined;
+          if (moved) {
+            const binding = moved.rootBindings.find((candidate) =>
+              isStrictlyUnder(candidate.localRootRef, canonical),
+            )!;
+            binding.localRootRef = canonical;
+            binding.status = "active";
+            if (!moved.legacyWorkspaceKeys.includes(scope.workspaceKey)) {
+              moved.legacyWorkspaceKeys.push(scope.workspaceKey);
+            }
+            moved.displayName = path.basename(canonical).trim() || "Project";
+            moved.identityVersion += 1;
+            moved.updatedAt = this.timestamp();
+            changed = true;
+            reconciledScopes.push({ ...scope, projectId: moved.projectId });
+            continue;
+          }
+        }
         if (!project) {
           const timestamp = this.timestamp();
           project = {

@@ -42,7 +42,26 @@ const isUnder = (childPath: string, root: string): boolean =>
 const canonical = (p: string): string =>
   stripTrailingSep(p.replace(/\\/g, "/"));
 
-/** Everything the rail knows about which folders are projects. */
+/**
+ * Everything a caller knows about which folders are projects.
+ *
+ * ONE RULE IS NOT ONE ANSWER, and both callers have to hold that in mind. This
+ * module guarantees that the server and the rail apply the same derivation; it
+ * cannot guarantee they feed it the same facts, and today they do not:
+ *
+ *  - `closedProjects` is a browser preference (`web/src/lib/ui-prefs.ts`), so
+ *    the rail passes only the agents it is showing and post-filters the result,
+ *    while the server passes every registered agent and cannot see the setting.
+ *    A project the user removed whose agents stay registered is therefore hidden
+ *    in the rail and still a root on the server, which mints a durable project
+ *    for it — so a session started there binds to a project the user removed.
+ *  - `pendingCwds` is browser-only by nature: a folder mid-creation exists in no
+ *    store yet.
+ *
+ * Any input that lives on ONE side is a place the two answers can diverge. If
+ * you add one, either give the other side a way to see it or say here why it
+ * cannot matter.
+ */
 export interface ProjectRootSources {
   /** Upstream's workspace list — most-recently-used project directories,
    *  newest first, already deduped and pruned of dead paths at every boot. */
@@ -175,10 +194,9 @@ export function holdingProjectFor(
  *
  *     A PROJECT IS A DIRECTORY YOU CHOSE THAT HOLDS AGENTS.
  *
- * Two clauses, and dropping either one is what filled a real rail. Measured
- * against a captured `~/.sapiom/harness` (`org-dogfood.json` in the design
- * prototype: 75 agents, 8 recentDirs, 41 distinct session cwds), the sources
- * below offer 41 candidate roots and this function returns 8.
+ * Two clauses, and dropping either one is what fills a rail with rows nobody
+ * chose. On a large workspace the sources below offer roughly five times as many
+ * candidate roots as this function returns.
  *
  * RULE 1, "you chose": an agent's OWN directory is not a project. The project
  * is the directory that HOLDS agents; the agent is the thing inside it. A root
@@ -187,10 +205,9 @@ export function holdingProjectFor(
  * one node, because nothing else is inside it. And it renders the agent TWICE
  * whenever some other open project also contains it, once correctly nested and
  * once again at top level under a different label, because `buildProjectTree`
- * deliberately files an agent under EVERY root that contains it. Three agents
- * were on screen twice this way on one real machine. So an agent-rooted entry
- * whose agent another project already shows is dropped, and one nothing shows
- * is replaced by its nearest non-agent ancestor.
+ * deliberately files an agent under EVERY root that contains it. So an
+ * agent-rooted entry whose agent another project already shows is dropped, and
+ * one nothing shows is replaced by its nearest non-agent ancestor.
  *
  * This is not a new rule. `project-membership.agentNeedsOwnProject` has
  * enforced it on every NEW registration since the accumulation was diagnosed:

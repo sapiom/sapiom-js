@@ -175,6 +175,94 @@ describe("every rendered project row owns a durable Studio project", () => {
   );
 
   it(
+    "mints no durable project for the agent folder before the scan lands",
+    { timeout: 30_000 },
+    async () => {
+      // THE RACE THIS FIX CAN CREATE IF IT IS NOT GATED.
+      //
+      // `projectRoots` decides what a project is by asking which candidates are
+      // registered agent directories, and on a first run against a fresh state
+      // root the registry is EMPTY until the boot scan lands. With no agents
+      // known, rule 1 cannot fire and the agent's own folder survives as a root.
+      // `reconcile` then mints and PERSISTS a durable project for it; when the
+      // scan lands the scope vanishes, the binding flips to "missing", and that
+      // project sits in `studio-projects.json` forever with nothing in the UI
+      // able to reach or remove it.
+      //
+      // So this reads the catalog on disk, which is where the damage would be,
+      // and it asks for state BEFORE the scan has landed, which is the only way
+      // the race reproduces. `boot()`'s helper waits for the scan first, and on
+      // a one-agent fixture the scan always wins that wait — the test passed
+      // against the unfixed code until this read was moved ahead of it.
+      const holding = path.join(workspaceRoot, "property-ops");
+      const agentDir = await scaffoldAgent(
+        path.join(holding, "tenant-screening"),
+        "tenant-screening",
+      );
+      await fs.writeFile(
+        path.join(stateRoot, "settings.json"),
+        JSON.stringify({ recentDirs: [agentDir] }),
+      );
+
+      // HOLD THE BOOT SCAN OPEN. `startServer` resolves before it settles, but
+      // on a one-agent fixture the walk finishes in single-digit milliseconds —
+      // faster than any fetch this test can issue — so the race is not
+      // reproducible by ordering alone. It passed against the unfixed code until
+      // the scan was held here. On a real tree the browser wins this by a mile.
+      let releaseScan: () => void = () => {};
+      const scanHeld = new Promise<void>((resolve) => {
+        releaseScan = resolve;
+      });
+      server = await startServer({
+        port: 0,
+        bootToken: "test-token",
+        telemetryOptIn: false,
+        adapters: {},
+        stateRoot,
+        launchDir: agentDir,
+        autoCreateSession: false,
+        workflowDiscoveryTestHooks: {
+          beforeScan: async ({ reason }) => {
+            if (reason === "boot") await scanHeld;
+          },
+        },
+      });
+      // The browser load, arriving while the walk is still out. This is what
+      // mints and persists.
+      await fetch(`http://127.0.0.1:${server.port}/api/state`, {
+        headers: { "X-Harness-Token": "test-token" },
+      });
+      releaseScan();
+      await vi.waitFor(
+        async () => {
+          const response = await fetch(
+            `http://127.0.0.1:${server!.port}/api/workflows`,
+            { headers: { "X-Harness-Token": "test-token" } },
+          );
+          expect(((await response.json()) as unknown[]).length).toBe(1);
+        },
+        { timeout: 10_000, interval: 100 },
+      );
+      await fetch(`http://127.0.0.1:${server.port}/api/state`, {
+        headers: { "X-Harness-Token": "test-token" },
+      });
+
+      const catalog = JSON.parse(
+        await fs.readFile(path.join(stateRoot, "studio-projects.json"), "utf8"),
+      ) as { projects: Array<{ displayName: string; rootBindings: unknown[] }> };
+
+      // ONE project, for the folder that holds the agent. A second entry named
+      // for the agent — even with every binding "missing" — is the stray.
+      expect(catalog.projects.map((entry) => entry.displayName)).toEqual([
+        "property-ops",
+      ]);
+      expect(
+        catalog.projects.some((entry) => entry.displayName === "tenant-screening"),
+      ).toBe(false);
+    },
+  );
+
+  it(
     "launching AT a folder that holds agents is unchanged",
     { timeout: 30_000 },
     async () => {

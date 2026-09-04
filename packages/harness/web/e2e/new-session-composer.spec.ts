@@ -9,6 +9,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { selectMockSessionFromPalette } from "./mock-navigation";
+
 // COMPATIBILITY PAYLOAD, said out loud.
 //
 // Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
@@ -54,6 +56,41 @@ const injectCallCount = (page: Page): Promise<number> =>
  * was always the composer's own behaviour (attachments, prompt ordering, the
  * agent picker), never the control that opened it.
  */
+
+const sessionEvidence = (
+  page: Page,
+): Promise<{
+  activeSessionId: string | null;
+  createSessionCalls: number;
+  injectInputCalls: number;
+  injectedSessionId: string | null;
+  injectedText: string;
+  openPlannerSessionCalls: number;
+}> =>
+  page.evaluate(() => {
+    const testState = (
+      window as unknown as {
+        __HARNESS_TEST__?: {
+          createSessionCalls?: unknown[];
+          injectInputCalls?: unknown[];
+          lastInjectInput?: { id?: string; req?: { text?: string } };
+          openPlannerSessionCalls?: unknown[];
+        };
+      }
+    ).__HARNESS_TEST__;
+    return {
+      activeSessionId:
+        document
+          .querySelector('[data-testid="session-context"]')
+          ?.getAttribute("data-session-id") || null,
+      createSessionCalls: testState?.createSessionCalls?.length ?? 0,
+      injectInputCalls: testState?.injectInputCalls?.length ?? 0,
+      injectedSessionId: testState?.lastInjectInput?.id ?? null,
+      injectedText: testState?.lastInjectInput?.req?.text ?? "",
+      openPlannerSessionCalls: testState?.openPlannerSessionCalls?.length ?? 0,
+    };
+  });
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/?mockState=fresh&mockStudioProjects=absent");
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
@@ -92,6 +129,131 @@ test("describing an outcome starts a session and hands the agent that outcome", 
   await expect
     .poll(() => lastInjectText(page))
     .toContain("Diff our competitors' pricing pages");
+});
+
+/* HELD: these two reach the composer through a door this branch removes.
+ *
+ * #802 shipped the standalone-builder intent — a create-new submit is a request
+ * to BUILD in a generic session, not a project visit whose saved workspace
+ * should be restored — and both specs open the composer with `rail-create-new`
+ * on a fixture that HAS projects (`seed=0`). On this branch that control is the
+ * create verb: it opens the "where does it live" step, and creation goes to the
+ * project's Agent Map. The composer survives only as the home screen, which by
+ * definition is the state with no session, no agent and nothing selected, so it
+ * is not reachable in a fixture whose whole point is that a parent project
+ * already exists. Measured: the composer renders 0 times at both of their URLs.
+ *
+ * The BEHAVIOUR they cover is untouched — #802's `App.tsx` changes merged
+ * cleanly and are still here. What is gone is the door, and choosing whether
+ * the composer keeps one is a product decision on top of two PRs that landed
+ * hours apart, not a test edit. Escalated; held rather than deleted so the
+ * question is visible in the run rather than absent from it.
+ */
+test.fixme("Enter keeps a new-agent prompt in its standalone builder until Plan Agents is explicitly selected", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+  // The parent project exists, but with no live session it has never restored
+  // its default Plan Agents workspace. Creating beneath it must not give that
+  // parent restore a head start over the explicit standalone builder intent.
+  await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
+  const before = await sessionEvidence(page);
+  expect(before.activeSessionId).toBeNull();
+  expect(before.createSessionCalls).toBe(0);
+  expect(before.openPlannerSessionCalls).toBe(0);
+
+  await page.getByTestId("rail-create-new").click();
+  const idea = "Build a sales outreach agent.";
+  await page.getByTestId("composer-input").fill(idea);
+  await page.getByTestId("composer-input").press("Enter");
+
+  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+  await expect
+    .poll(async () => (await sessionEvidence(page)).injectedText)
+    .toContain(idea);
+
+  const evidence = await sessionEvidence(page);
+  expect(evidence.createSessionCalls).toBe(before.createSessionCalls + 1);
+  expect(evidence.openPlannerSessionCalls).toBe(before.openPlannerSessionCalls);
+  expect(evidence.injectedSessionId).not.toBeNull();
+  expect(evidence.activeSessionId).toBe(evidence.injectedSessionId);
+  expect(evidence.activeSessionId).not.toBe(before.activeSessionId);
+  expect(evidence.injectInputCalls).toBe(before.injectInputCalls + 1);
+
+  const project = page.getByTestId(
+    "workspace-group-acme-app/projects/build-sales-outreach",
+  );
+  const planAgents = project.getByTestId("agent-map-select");
+  await expect(planAgents).toHaveAttribute("aria-pressed", "false");
+
+  await planAgents.click();
+  await expect
+    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
+    .toBe(before.openPlannerSessionCalls + 1);
+  await expect(planAgents).toHaveAttribute("aria-pressed", "true");
+});
+
+test.fixme("returning to an in-progress standalone builder does not restore Plan Agents", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+  await expect
+    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => {
+      const evidence = await sessionEvidence(page);
+      return evidence.createSessionCalls - evidence.openPlannerSessionCalls;
+    })
+    .toBe(0);
+  const before = await sessionEvidence(page);
+
+  await page.getByTestId("rail-create-new").click();
+  const idea = "Build a revisit guard agent.";
+  await page.getByTestId("composer-input").fill(idea);
+  await page.getByTestId("composer-input").press("Enter");
+
+  const pendingBuilder = page.locator('[data-testid^="workspace-pending-"]');
+  await expect(pendingBuilder).toBeVisible();
+  await expect
+    .poll(async () => (await sessionEvidence(page)).createSessionCalls)
+    .toBe(before.createSessionCalls + 1);
+  await expect(pendingBuilder).toHaveCount(0);
+  // createSession() has selected the builder but has not finished the catalog
+  // refresh yet, so moving now exercises the intent's bounded lifetime.
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await selectMockSessionFromPalette(page, "scratch");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    /.+/,
+  );
+  const awaySessionId = (await sessionEvidence(page)).activeSessionId!;
+  await expect
+    .poll(async () => (await sessionEvidence(page)).injectedText)
+    .toContain(idea);
+  // Let the session we deliberately visited finish its own normal restore;
+  // only planner work caused by returning to the builder is under test.
+  await page.waitForTimeout(500);
+  const beforeReturn = await sessionEvidence(page);
+
+  await selectMockSessionFromPalette(page, "build-revisit-guard");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    /.+/,
+  );
+  expect((await sessionEvidence(page)).activeSessionId).not.toBe(awaySessionId);
+  await page.waitForTimeout(500);
+  const afterReturn = await sessionEvidence(page);
+  expect(afterReturn.openPlannerSessionCalls).toBe(
+    beforeReturn.openPlannerSessionCalls,
+  );
+  await expect(
+    page
+      .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")
+      .getByTestId("agent-map-select"),
+  ).toHaveAttribute("aria-pressed", "false");
 });
 
 test("a picked file reaches the first request without naming the project", async ({
