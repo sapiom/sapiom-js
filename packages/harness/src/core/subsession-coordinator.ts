@@ -41,6 +41,7 @@ import {
 } from "./subsession-coordinator-store.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 30_000;
+const ADAPTER_IDENTITY_POLL_MS = 25;
 const KICKOFF_MARKER = /<sapiom-project-delegation\s+binding="([A-Za-z0-9._-]+)"\s+delivery="([A-Za-z0-9._-]+)"\s+input="([A-Za-z0-9._-]+)"\s+context="([1-9][0-9]*)"\s+spawn="([1-9][0-9]*)"\s*\/>/u;
 
 export interface SubsessionCoordinatorEvent {
@@ -293,6 +294,13 @@ export class SubsessionCoordinator {
       });
       return this.result(binding, outcome);
     } catch (cause) {
+      binding =
+        (await this.options.store
+          .readBinding(identity, {
+            kind: "binding-id",
+            bindingId: binding.bindingId,
+          })
+          .catch(() => null)) ?? binding;
       const detail = this.itemError(cause);
       this.emit({
         name:
@@ -745,15 +753,14 @@ export class SubsessionCoordinator {
           expectedLifecycleEpoch: binding.lifecycleEpoch,
           expectedSpawnEpoch: binding.spawnEpoch,
           expectedRuntimeToken: runtimeToken,
-          state: this.options.sessionManager.get(binding.sessionId)?.ready
-            ? "ready"
-            : "awaiting-ready",
+          state: "awaiting-ready",
         },
       );
     }
     if (binding.sessionState === "awaiting-ready") {
       const ready = await this.waitForReady(binding.sessionId, runtimeToken);
       if (!ready) throw new SessionNotReadyError(binding.sessionId);
+      await this.waitForAdapterIdentity(binding.sessionId, runtimeToken);
       binding = await this.options.store.transitionSession(
         identity,
         binding.bindingId,
@@ -772,6 +779,29 @@ export class SubsessionCoordinator {
         sessionId: binding.sessionId,
       });
     return binding;
+  }
+
+  private async waitForAdapterIdentity(
+    sessionId: string,
+    runtimeToken: string,
+  ): Promise<void> {
+    const deadline = Date.now() + this.readinessTimeoutMs;
+    for (;;) {
+      if (!this.options.sessionManager.isCurrentRuntimeEpoch(sessionId, runtimeToken))
+        throw error("session_unreachable", true, "inspect_session");
+      const state = this.options.sessionManager.getAdapterIdentityState(
+        sessionId,
+        runtimeToken,
+      );
+      if (state === "ready" || state === "not-required") return;
+      if (state === "ambiguous")
+        throw error("adapter_identity_ambiguous", false, "inspect_session");
+      if (state === "unavailable")
+        throw error("adapter_unavailable", true, "retry");
+      if (Date.now() >= deadline)
+        throw error("adapter_unavailable", true, "retry");
+      await new Promise((resolve) => setTimeout(resolve, ADAPTER_IDENTITY_POLL_MS));
+    }
   }
 
   private waitForReady(sessionId: string, runtimeToken: string): Promise<boolean> {

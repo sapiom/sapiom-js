@@ -4576,6 +4576,25 @@ describe("SessionManager", () => {
     ).toBe(true);
   });
 
+  it("fences transcript identity state to the exact live runtime epoch", async () => {
+    const { manager } = makeManager({
+      adapter: createFakeAdapter({ eventSource: "transcript-tail" }),
+      ingestCredentials: new IngestCredentialRegistry(
+        () => "token-a",
+        () => "epoch-a",
+      ),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(manager.getAdapterIdentityState(session.id, "epoch-a")).toBe("pending");
+    expect(manager.setAdapterIdentityState(session.id, "stale-epoch", "ready")).toBe(false);
+    expect(manager.setAdapterIdentityState(session.id, "epoch-a", "ready")).toBe(true);
+    expect(manager.getAdapterIdentityState(session.id, "epoch-a")).toBe("ready");
+  });
+
   it("does not publish a PTY when the runtime epoch transition fails", async () => {
     const spawnPty = vi.fn<PtySpawnFn>(() => {
       return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;

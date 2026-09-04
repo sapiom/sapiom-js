@@ -27,7 +27,10 @@ const identity: ProjectAgentSession = {
   sessionId: parentId,
 };
 
-function adapter(resumable = false): HarnessAdapter {
+function adapter(
+  resumable = false,
+  eventSource: HarnessAdapter["eventSource"] = "hooks",
+): HarnessAdapter {
   const spec = (cwd: string): SpawnSpec => ({
     command: "fake-claude",
     args: [],
@@ -36,7 +39,7 @@ function adapter(resumable = false): HarnessAdapter {
   });
   return {
     id: "claude-code",
-    eventSource: "hooks",
+    eventSource,
     launch: ({ cwd }) => spec(cwd),
     resume: (_id, { cwd }) => spec(cwd),
     doctor: async () => [],
@@ -71,9 +74,11 @@ function fakePty() {
 
 describe("SubsessionCoordinator", () => {
   const roots: string[] = [];
+  const managers: SessionManager[] = [];
 
   afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(managers.splice(0).map((manager) => manager.flush()));
     await Promise.all(
       roots.splice(0).map((root) =>
         fs.rm(root, { recursive: true, force: true }),
@@ -81,7 +86,10 @@ describe("SubsessionCoordinator", () => {
     );
   });
 
-  async function fixture(resumable = false) {
+  async function fixture(
+    resumable = false,
+    childIdentityState?: "ready" | "ambiguous",
+  ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
     const spawned: ReturnType<typeof fakePty>[] = [];
@@ -91,13 +99,19 @@ describe("SubsessionCoordinator", () => {
       return spawnedPty.pty;
     });
     const manager = new SessionManager({
-      adapters: { "claude-code": adapter(resumable) },
+      adapters: {
+        "claude-code": adapter(
+          resumable,
+          childIdentityState ? "transcript-tail" : "hooks",
+        ),
+      },
       ingestUrl: "http://127.0.0.1:4100/ingest",
       ingestCredentials: new IngestCredentialRegistry(),
       sessionsPath: path.join(root, "sessions.json"),
       spawnPty,
       resolveAgentMapIdentity: async (_sessionId, _cwd, persisted) => persisted,
     });
+    managers.push(manager);
     await manager.init();
     await manager.create(
       { cwd: root, harness: "claude-code" },
@@ -119,6 +133,12 @@ describe("SubsessionCoordinator", () => {
         context.runtimeEpoch
       ) {
         manager.setReady(session.id, context.runtimeEpoch);
+        if (childIdentityState)
+          manager.setAdapterIdentityState(
+            session.id,
+            context.runtimeEpoch,
+            childIdentityState,
+          );
       }
     });
     const events: AnalyticsEvent[] = [];
@@ -293,5 +313,26 @@ describe("SubsessionCoordinator", () => {
     );
     unsubscribe();
     expect(manager.list()).toHaveLength(1);
+  });
+
+  it("writes no kickoff when adapter identity correlation is ambiguous", async () => {
+    const { coordinator, caller, spawned, unsubscribe } = await fixture(
+      false,
+      "ambiguous",
+    );
+    const result = await coordinator.execute(caller, request);
+    unsubscribe();
+
+    expect(result.results[0]).toMatchObject({
+      outcome: "failed",
+      sessionState: "awaiting-ready",
+      kickoffState: "pending",
+      error: {
+        code: "adapter_identity_ambiguous",
+        retryable: false,
+        recovery: "inspect_session",
+      },
+    });
+    expect(spawned[1]!.writes).toEqual([]);
   });
 });

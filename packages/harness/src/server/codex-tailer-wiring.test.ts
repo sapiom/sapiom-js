@@ -13,10 +13,10 @@ import { join } from "node:path";
 
 vi.mock("../core/collector/codex-tailer.js", () => ({
   tailCodexRollout: vi.fn(),
-  findRolloutFile: vi.fn(),
+  findRolloutCandidates: vi.fn(),
 }));
 
-import { tailCodexRollout, findRolloutFile, type CodexEventListener } from "../core/collector/codex-tailer.js";
+import { tailCodexRollout, findRolloutCandidates, type CodexEventListener } from "../core/collector/codex-tailer.js";
 import { startServer, type HarnessServer } from "./index.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 
@@ -74,7 +74,12 @@ describe("codex tailer lifecycle wiring", () => {
       tailerEvents.push(opts.onEvent);
       return fakeHandle;
     });
-    vi.mocked(findRolloutFile).mockReset().mockResolvedValue("/fake/rollout/path.jsonl");
+    vi.mocked(findRolloutCandidates).mockReset().mockResolvedValue([{
+      path: "/fake/rollout/path.jsonl",
+      agentSessionId: "agent-fixture",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    }]);
   });
 
   afterEach(async () => {
@@ -106,16 +111,16 @@ describe("codex tailer lifecycle wiring", () => {
     expect(session.status).toBe("running");
 
     await vi.waitFor(() => {
-      expect(findRolloutFile).toHaveBeenCalled();
+      expect(findRolloutCandidates).toHaveBeenCalled();
       expect(tailCodexRollout).toHaveBeenCalledWith(
         expect.objectContaining({ rolloutPath: "/fake/rollout/path.jsonl" }),
       );
     });
 
-    // findRolloutFile should have been asked for this session's cwd, and (a
+    // Rollout discovery should have been asked for this session's cwd, and (a
     // fresh launch has no agentSessionId yet) bounded by sinceMs rather than
     // an exact id.
-    expect(findRolloutFile).toHaveBeenCalledWith(
+    expect(findRolloutCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ cwd, sinceMs: expect.any(Number) }),
     );
 
@@ -165,7 +170,7 @@ describe("codex tailer lifecycle wiring", () => {
     const resumed = await server.sessionManager.resume(historical.id);
 
     await vi.waitFor(() => {
-      expect(findRolloutFile).toHaveBeenCalledWith(
+      expect(findRolloutCandidates).toHaveBeenCalledWith(
         expect.objectContaining({ cwd, agentSessionId: "agent-resumed" }),
       );
     });
@@ -263,7 +268,7 @@ describe("codex tailer lifecycle wiring", () => {
 
     // Give any (incorrect) codex wiring a chance to fire before asserting it didn't.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(findRolloutFile).not.toHaveBeenCalled();
+    expect(findRolloutCandidates).not.toHaveBeenCalled();
     expect(tailCodexRollout).not.toHaveBeenCalled();
 
     // See the first test's comment: wait for the real spawned process to

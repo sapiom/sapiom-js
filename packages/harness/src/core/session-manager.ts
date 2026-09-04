@@ -629,6 +629,13 @@ export interface SessionStatusContext {
   runtimeEpoch: string | null;
 }
 
+export type AdapterIdentityState =
+  | "not-required"
+  | "pending"
+  | "ready"
+  | "ambiguous"
+  | "unavailable";
+
 export type SessionStatusListener = (
   session: HarnessSession,
   context: SessionStatusContext,
@@ -950,6 +957,13 @@ export class SessionManager {
   /** Last cleanly retired PTY generation. It may finish already-admitted ingest
    * work while the session is exited, but loses immediately to a replacement. */
   private readonly retiredRuntimeEpochs = new Map<string, string>();
+  /** Adapter-owned correlation for transcript-backed runtimes. This is kept
+   * separate from terminal readiness: a TUI can be interactive before its
+   * exact vendor transcript has been identified. */
+  private readonly adapterIdentityStates = new Map<
+    string,
+    { runtimeEpoch: string; state: AdapterIdentityState }
+  >();
   /** Monotonic raw-input observations used to preempt background injection. */
   private readonly terminalInputEpochs = new Map<string, number>();
   /** One text→Enter transaction may be staged per session. */
@@ -1141,6 +1155,26 @@ export class SessionManager {
   /** Opaque identity for the exact live PTY generation behind `id`. */
   getRuntimeEpoch(id: string): string | null {
     return this.ptys.get(id)?.runtimeEpoch ?? null;
+  }
+
+  /** Exact-runtime adapter identity used by trusted background delivery. */
+  getAdapterIdentityState(id: string, runtimeEpoch: string): AdapterIdentityState {
+    const state = this.adapterIdentityStates.get(id);
+    if (!state || state.runtimeEpoch !== runtimeEpoch) return "pending";
+    return state.state;
+  }
+
+  /** Server-only acknowledgement from an adapter-owned identity broker. */
+  setAdapterIdentityState(
+    id: string,
+    runtimeEpoch: string,
+    state: Exclude<AdapterIdentityState, "not-required" | "pending">,
+  ): boolean {
+    const current = this.adapterIdentityStates.get(id);
+    if (!current || current.runtimeEpoch !== runtimeEpoch ||
+        !this.isCurrentRuntimeEpoch(id, runtimeEpoch)) return false;
+    current.state = state;
+    return true;
   }
 
   /** True only for the exact PTY generation that is live right now. */
@@ -3093,6 +3127,10 @@ export class SessionManager {
     env.COLORTERM = "truecolor";
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
     const ingestCredential = this.issueIngestCredential(session.id);
+    this.adapterIdentityStates.set(session.id, {
+      runtimeEpoch: ingestCredential.runtimeEpoch,
+      state: adapter.eventSource === "transcript-tail" ? "pending" : "not-required",
+    });
     env[ENV.ingestToken] = ingestCredential.token;
     env[ENV.sessionId] = session.id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
@@ -3134,6 +3172,9 @@ export class SessionManager {
       });
     } catch (error) {
       this.revokeIngestToken(session.id);
+      const identityState = this.adapterIdentityStates.get(session.id);
+      if (identityState?.runtimeEpoch === ingestCredential.runtimeEpoch)
+        this.adapterIdentityStates.delete(session.id);
       if (epochTransitioned) {
         await Promise.resolve(
           this.onRuntimeEpochTransition?.({ ...session }, null),
@@ -3312,6 +3353,9 @@ export class SessionManager {
         ? sanitizeExitTail(handle.buffer)
         : null;
     this.ptys.delete(id);
+    const identityState = this.adapterIdentityStates.get(id);
+    if (identityState?.runtimeEpoch === handle.runtimeEpoch)
+      this.adapterIdentityStates.delete(id);
     this.retiredRuntimeEpochs.set(id, handle.runtimeEpoch);
     this.lastActivityBroadcast.delete(id);
     // Resolve after the pty map is cleaned up. transitionExited runs
