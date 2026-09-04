@@ -386,8 +386,8 @@ export function ProjectRow({
   ) => void;
   focusedAgentPath: string | null;
   onFocusAgent: (path: string) => void;
-  /** Row-end slot for state that belongs to the project itself (the
-   *  mid-creation spinner). Never a deploy glyph — see below. */
+  /** Row-end slot for project-owned state and actions: creation progress,
+   *  map/session shortcuts, and the overflow menu. Never a deploy glyph. */
   trailing?: ReactNode;
   /** A project with no agents of its own but a live session in it, or one
    *  mid-creation: the row itself is the focus target so those sessions can

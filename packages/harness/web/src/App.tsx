@@ -227,6 +227,8 @@ const HELD_PROMPT_HINT_DELAY_MS = 4_000;
 interface CreateSessionAtOptions {
   /** Keep the create-new queue mounted while inline files are materialized. */
   keepComposerOpen?: boolean;
+  /** Keep an explicit new-agent builder active when its root joins Studio. */
+  standaloneBuilder?: boolean;
 }
 
 /**
@@ -293,6 +295,14 @@ export const App = (): JSX.Element => {
   );
   const [studioSelection, setStudioSelection] =
     useState<StudioWorkspaceSelection | null>(null);
+  // A global create-new submit is a request to BUILD in a generic session,
+  // not a project visit whose saved/default workspace should be restored. The
+  // session id is null until createSession() selects the new session; binding
+  // it then prevents a later, unrelated visit to the same root from consuming
+  // stale intent when catalog refresh fails or the user switches away.
+  const pendingStandaloneBuilderSessionsRef = useRef(
+    new Map<string, string | null>(),
+  );
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
   const plannerProjectId =
@@ -353,6 +363,33 @@ export const App = (): JSX.Element => {
     const active = state?.sessions.find(
       (session) => session.id === harness.activeSessionId,
     );
+
+    // Bind the intent as soon as createSession() selects its session — before
+    // that call's slower recent-directory/catalog refresh finishes. Once
+    // bound, the session id makes the intent safe to retain across focus
+    // changes; only that session disappearing or exiting expires it.
+    for (const [
+      root,
+      sessionId,
+    ] of pendingStandaloneBuilderSessionsRef.current) {
+      if (sessionId === null) {
+        if (
+          active &&
+          active.status !== "exited" &&
+          samePath(root, active.cwd)
+        ) {
+          pendingStandaloneBuilderSessionsRef.current.set(root, active.id);
+        }
+        continue;
+      }
+      const builder = state?.sessions.find(
+        (session) => session.id === sessionId,
+      );
+      if (!builder || builder.status === "exited") {
+        pendingStandaloneBuilderSessionsRef.current.delete(root);
+      }
+    }
+
     if (!state?.studioProjects || !active) return;
     const scope = mostSpecificStudioScope(
       active.boundWorkflowPath ?? active.cwd,
@@ -362,12 +399,27 @@ export const App = (): JSX.Element => {
     const project = state.studioProjects.find(
       (candidate) => candidate.projectId === scope?.projectId,
     );
-    if (
-      !scope?.projectId ||
-      !project ||
-      restoredStudioProjectsRef.current.has(project.projectId)
-    )
+    if (!scope?.projectId || !project) return;
+    const standaloneBuilderRoot = [
+      ...pendingStandaloneBuilderSessionsRef.current,
+    ].find(
+      ([root, sessionId]) =>
+        sessionId === active.id && isWithinDir(scope.cwd, root),
+    )?.[0];
+    if (standaloneBuilderRoot) {
+      // Before the new root has a durable Studio identity, its containing
+      // parent is the most-specific scope. Suppress that restore without
+      // consuming the intent; only the exact-root identity completes it.
+      if (samePath(standaloneBuilderRoot, scope.cwd)) {
+        pendingStandaloneBuilderSessionsRef.current.delete(
+          standaloneBuilderRoot,
+        );
+        restoredStudioProjectsRef.current.add(project.projectId);
+        studioRestoreGenerationRef.current += 1;
+      }
       return;
+    }
+    if (restoredStudioProjectsRef.current.has(project.projectId)) return;
     restoredStudioProjectsRef.current.add(project.projectId);
     const generation = ++studioRestoreGenerationRef.current;
     void harness.api
@@ -1644,7 +1696,7 @@ export const App = (): JSX.Element => {
         harness.setActiveSessionId(decision.to.id);
       return;
     }
-    void startProjectSession(root, label);
+    void startProjectSession(root, label, preferredHarness());
   };
   selectProjectRef.current = handleSelectWorkspace;
 
@@ -1659,16 +1711,19 @@ export const App = (): JSX.Element => {
   const startProjectSession = async (
     root: string,
     label: string,
-  ): Promise<void> => {
-    if (startingProjectRootsRef.current.has(root)) return;
+    agentHarness: HarnessKind,
+  ): Promise<boolean> => {
+    if (startingProjectRootsRef.current.has(root)) return false;
     startingProjectRootsRef.current.add(root);
     setStartingProject({ root, label });
     try {
-      await createSessionAt(root, "claude-code");
+      await createSessionAt(root, agentHarness);
+      return true;
     } catch (err) {
       harness.showToast(
         (err as Error).message || `Couldn't start a session in ${label}.`,
       );
+      return false;
     } finally {
       startingProjectRootsRef.current.delete(root);
       setStartingProject((current) =>
@@ -1682,8 +1737,11 @@ export const App = (): JSX.Element => {
    * preference the rail used to read before it dispatched. It moved here with
    * the create itself; the rail no longer starts sessions.
    */
-  const preferredHarness = (): HarnessKind =>
-    loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
+  function preferredHarness(): HarnessKind {
+    return loadUiPrefs().preferredHarness === "codex"
+      ? "codex"
+      : "claude-code";
+  }
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -1724,11 +1782,23 @@ export const App = (): JSX.Element => {
     // the real session/agent lands (see the store's pruning effect).
     harness.addPendingWorkspace(cwd);
     closeMobileDrawer();
+    if (options.standaloneBuilder) {
+      pendingStandaloneBuilderSessionsRef.current.set(cwd, null);
+      // Explicit create-new intent supersedes any preference read still in
+      // flight for the session/project the user just left.
+      studioRestoreGenerationRef.current += 1;
+    }
     try {
       const session = await harness.createSession({
         cwd,
         harness: agentHarness,
       });
+      if (
+        options.standaloneBuilder &&
+        pendingStandaloneBuilderSessionsRef.current.get(cwd) === null
+      ) {
+        pendingStandaloneBuilderSessionsRef.current.set(cwd, session.id);
+      }
       track("session.created");
       trackProduct("session.started", {
         harness_kind: agentHarness,
@@ -1736,6 +1806,9 @@ export const App = (): JSX.Element => {
       });
       return session;
     } catch (err) {
+      if (options.standaloneBuilder) {
+        pendingStandaloneBuilderSessionsRef.current.delete(cwd);
+      }
       harness.removePendingWorkspace(cwd);
       throw err;
     }
@@ -2096,6 +2169,7 @@ export const App = (): JSX.Element => {
     setRightCollapsed(true);
     const session = await createSessionAt(cwd, agentHarness, {
       keepComposerOpen: true,
+      standaloneBuilder: true,
     });
     try {
       const resolved = await materializeAttachments(
@@ -2116,6 +2190,7 @@ export const App = (): JSX.Element => {
       await harness.closeSession(session.id).catch((rollbackError: unknown) => {
         console.error("[harness] attachment rollback failed:", rollbackError);
       });
+      pendingStandaloneBuilderSessionsRef.current.delete(cwd);
       harness.removePendingWorkspace(cwd);
       throw error;
     }
@@ -2775,7 +2850,21 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onCreateSession={handleCreateSession}
+            onStartProjectSession={async (root, label) => {
+              // A project-row `+` explicitly asks to see a fresh coding
+              // session, even when Plan Agents or a legacy project map is the
+              // current altitude. Change views only after creation succeeds so
+              // a failed launch leaves the planner in place and resumable.
+              const started = await startProjectSession(
+                root,
+                label,
+                preferredHarness(),
+              );
+              if (!started) return;
+              studioRestoreGenerationRef.current += 1;
+              setStudioSelection(null);
+              setSelectedProject(null);
+            }}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}

@@ -177,7 +177,8 @@ interface WorkflowsRailProps {
   onOpenProject: (root: string) => Promise<unknown>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
+  /** Starts a coding-agent session and owns its failure feedback. */
+  onStartProjectSession: (root: string, label: string) => Promise<void>;
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /**
@@ -262,13 +263,12 @@ const SORT_LABELS: Record<RailSort, string> = {
 };
 
 /**
- * The project row's ONE trailing action control.
+ * The project row's overflow menu.
  *
- * A `⋮` rather than a row of glyphs, because the actions a project row offers
- * do not share a subject: creating an agent acts on an AGENT inside the
- * project, removing acts on the PROJECT. Two adjacent 13px marks cannot say
- * which noun they take, and side by side they claimed a symmetry that was not
- * there — see the call site for the pair this replaces.
+ * The adjacent `+` has one stable meaning: start a coding-agent session at this
+ * project's root. This menu keeps the lower-frequency, explicitly named
+ * project actions. On legacy servers that includes scaffolding a Sapiom agent;
+ * on current plan-first projects, agent creation remains owned by Plan Agents.
  *
  * Named items say it instead. Each carries the project's own label, so the
  * subject is read rather than inferred, and the destructive one is last and
@@ -488,7 +488,7 @@ export function WorkflowsRail({
   onOpenProject,
   launchDir,
   listDir,
-  onCreateSession,
+  onStartProjectSession,
   listHarnesses,
   onCreateAgent,
   onScaffoldInSession,
@@ -952,9 +952,9 @@ export function WorkflowsRail({
               The label owns the leading edge: putting a control there made the
               header read as one more nav button in the stack above it — same
               icon slot, same indent — rather than as the title of the tree
-              below. FOLDER-with-plus, because what it adds is a folder. One `+`
-              per question: this one opens a project; starting another session
-              is the tab strip's trailing `+`, and project rows carry none. */}
+              below. FOLDER-with-plus, because what it adds is a folder. The
+              project-row `+` starts a session at that root; the tab-strip `+`
+              starts a sibling of the session already in view. */}
           <button
             type="button"
             className="theme-toggle rail-header-btn"
@@ -1382,28 +1382,33 @@ export function WorkflowsRail({
                             <Icon name="Waypoints" size={13} />
                           </button>
                         )}
-                      {/* ONE CONTROL, and it opens a menu of NAMED actions.
-                          `+` and `×` used to sit here side by side: same size,
-                          same hover-reveal, adjacent — so they read as a
-                          matched pair operating on one subject. They never
-                          were. `+` created an AGENT inside the project; `×`
-                          removed the PROJECT from the rail. The pair made `+`
-                          read as "add project", and the `×` next to it
-                          confirmed the misreading rather than correcting it.
-                          The same defect had a second form on a bare project,
-                          where a Sparkles "scaffold an agent" glyph sat beside
-                          the same `×`.
-
-                          A menu fixes the grammar rather than re-tuning the
-                          glyphs, because the ambiguity was never in the icons:
-                          it was in asking a 13px mark to carry a noun. Every
-                          item here states its own subject in words — "Create an
-                          agent in acme-app", "Remove acme-app from the rail"
-                          — so there is nothing left to infer from adjacency.
-
-                          What is left on the row is a `⋮` and, on a merged
-                          root-agent row, the map. Both speak for the project,
-                          so no pair on this row spans two nouns any more. */}
+                      {/* START A SESSION HERE. This is the frequent project-row
+                          action and therefore stays one click away, immediately
+                          before the overflow menu. Its accessible name supplies
+                          the noun the glyph cannot: this starts a coding-agent
+                          SESSION at the project root. It does not scaffold a
+                          Sapiom agent or bypass Plan Agents. */}
+                      {!pending && (
+                        <button
+                          type="button"
+                          className="workspace-row-action"
+                          data-testid={`project-start-session-${project.label}`}
+                          aria-label={`Start a session in ${project.label}`}
+                          data-tooltip="Start a session here"
+                          onClick={() =>
+                            void onStartProjectSession(
+                              project.root,
+                              project.label,
+                            )
+                          }
+                        >
+                          <Icon name="Plus" size={13} />
+                        </button>
+                      )}
+                      {/* NAMED PROJECT ACTIONS. The destructive action stays in
+                          this menu instead of masquerading as a peer of the
+                          session shortcut. Legacy-only agent creation also
+                          remains spelled out here rather than sharing the `+`. */}
                       <ProjectRowMenu
                         label={project.label}
                         create={

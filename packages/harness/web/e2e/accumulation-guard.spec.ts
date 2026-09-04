@@ -104,25 +104,42 @@ test.describe("Remove project", () => {
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
-  test("the control is hover-revealed on the row, and reachable by keyboard", async ({ page }) => {
+  test("the controls are hover-revealed on the row, and reachable by keyboard", async ({ page }) => {
     // A destructive action standing at full strength on every project row
     // would be the loudest thing in the rail; invisible even to the keyboard
     // would be worse. Both halves are CSS, so both are asserted on screen.
-    // The control is now the row's ⋮ — Remove lives inside it (SAP-2982) — and
-    // the reveal contract it has to keep is the row's, unchanged.
-    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row:not(.is-nested)");
-    const menu = page.getByTestId("project-menu-acme-app");
-    const opacity = (): Promise<string> =>
-      menu.evaluate((element) => getComputedStyle(element).opacity);
+    // Remove lives inside the row's ⋮ (SAP-2982); the session shortcut sits
+    // beside that menu and shares the same row-owned reveal contract.
+    // `:not(.is-nested)` because a plan-first group has a SECOND direct
+    // `.workspace-row` child, the pinned Agent Map row — unqualified this is a
+    // strict-mode violation there rather than the project header.
+    const row = page
+      .getByTestId("workspace-group-acme-app")
+      .locator(":scope > .workspace-row:not(.is-nested)");
+    const actions = row.locator(":scope > .workspace-row-action");
+    const opacities = (): Promise<string[]> =>
+      actions.evaluateAll((elements) =>
+        elements.map((element) => getComputedStyle(element).opacity),
+      );
 
-    expect(await opacity()).toBe("0");
+    expect(await opacities()).toEqual(["0", "0"]);
     await row.hover();
-    await expect.poll(opacity).toBe("1");
+    await expect.poll(opacities).toEqual(["1", "1"]);
 
     await page.mouse.move(0, 0);
-    await expect.poll(opacity).toBe("0");
-    await menu.focus();
-    await expect.poll(opacity).toBe("1");
+    await expect.poll(opacities).toEqual(["0", "0"]);
+    await actions.first().focus();
+    await expect
+      .poll(() =>
+        actions.first().evaluate((element) => getComputedStyle(element).opacity),
+      )
+      .toBe("1");
+    await actions.nth(1).focus();
+    await expect
+      .poll(() =>
+        actions.nth(1).evaluate((element) => getComputedStyle(element).opacity),
+      )
+      .toBe("1");
   });
 
   test("an OPEN menu holds its trigger on screen after the pointer leaves", async ({ page }) => {

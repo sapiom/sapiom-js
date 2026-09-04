@@ -1,17 +1,16 @@
 /**
  * SAP-2982 — the rail's grammar, and the card that names the two nouns.
  *
- * Three defects, one theme: the rail was built on a Project/Agent distinction
- * that it never said out loud.
+ * The rail must keep four different actions legible:
  *
- *   1. `+` and `×` sat adjacent on a project row — same size, same
- *      hover-reveal — while acting on different nouns. `+` created an AGENT
- *      inside the project; `×` removed the PROJECT. The pair made `+` read as
- *      "add project", and the `×` beside it confirmed the misreading.
- *   2. Only the chevron folded a project. Double-clicking the label, the
+ *   1. The project-row `+` starts a coding-agent SESSION at that root. It is a
+ *      frequent shortcut, not another way to scaffold a Sapiom agent.
+ *   2. The `⋮` holds explicitly named PROJECT management actions and the
+ *      legacy-server create-agent compatibility action.
+ *   3. Only the chevron folded a project. Double-clicking the label, the
  *      platform convention for a disclosure row, did nothing — which reads as
  *      a row that has stopped responding, not as a feature that is absent.
- *   3. The taxonomy itself lived only in commit messages.
+ *   4. The taxonomy itself lived only in commit messages.
  *
  * These specs assert COMPUTED state, not presence: the reveal contract and the
  * fold are both CSS, and a control that renders at opacity 0 forever passes
@@ -38,16 +37,24 @@ test.describe("legacy-server project row grammar", () => {
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
-  test("the row carries ONE action control, not a pair acting on two nouns", async ({
+  test("a session shortcut sits immediately before the named project menu", async ({
     page,
   }) => {
     const row = ROW(page, "acme-app");
-    // Every trailing action button on the row. The defect was never "there is
-    // a `+`" — it was two same-sized adjacent glyphs whose subjects differ, so
-    // the assertion is on the SET of controls the row offers at once.
+    // The frequent session action is one click away. Destructive project
+    // management remains behind the named overflow menu instead of returning
+    // as an adjacent `×`.
     const actions = row.locator(".workspace-row-action");
-    await expect(actions).toHaveCount(1);
-    await expect(actions.first()).toHaveAttribute(
+    await expect(actions).toHaveCount(2);
+    await expect(actions.nth(0)).toHaveAttribute(
+      "data-testid",
+      "project-start-session-acme-app",
+    );
+    await expect(actions.nth(0)).toHaveAttribute(
+      "aria-label",
+      "Start a session in acme-app",
+    );
+    await expect(actions.nth(1)).toHaveAttribute(
       "data-testid",
       "project-menu-acme-app",
     );
@@ -62,14 +69,17 @@ test.describe("legacy-server project row grammar", () => {
     );
   });
 
-  test("a bare project's scaffold action is in the same menu, not beside the ×", async ({
+  test("a bare project's session shortcut stays distinct from scaffolding", async ({
     page,
   }) => {
-    // `scratch` has live sessions and no agent. Its create affordance used to
-    // be a Sparkles glyph on the row — an AGENT action sitting next to the
-    // PROJECT's `×`, which is the same defect in its second costume.
+    // `scratch` has live sessions and no Sapiom agent. The row `+` can start
+    // another coding session; the legacy scaffold operation remains named in
+    // the menu so the two operations do not masquerade as one another.
     const row = ROW(page, "scratch");
-    await expect(row.locator(".workspace-row-action")).toHaveCount(1);
+    await expect(row.locator(".workspace-row-action")).toHaveCount(2);
+    await expect(
+      page.getByTestId("project-start-session-scratch"),
+    ).toBeVisible();
     await openProjectMenu(page, "scratch");
     await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveText(
       "Scaffold an agent in scratch",
