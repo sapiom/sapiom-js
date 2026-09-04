@@ -48,6 +48,7 @@ export type SubsessionCoordinatorStoreErrorCode =
   | "live_session_limit_reached"
   | "delegation_depth_exceeded"
   | "request_key_reused"
+  | "request_key_expired"
   | "delegation_key_reused"
   | "binding_not_found"
   | "binding_scope_mismatch"
@@ -621,10 +622,10 @@ export function parseSubsessionCoordinatorAggregate(
     throw new SubsessionCoordinatorStoreError("malformed_state");
   }
   if (
-    [...requestReceipts, ...requestTombstones].some(({ bindingIds: ids }) =>
+    requestReceipts.some(({ bindingIds: ids }) =>
       ids.some(
         (bindingId) =>
-          !allBindings.some((binding) => binding.bindingId === bindingId),
+          !bindings.some((binding) => binding.bindingId === bindingId),
       ),
     )
   ) {
@@ -638,7 +639,8 @@ export function parseSubsessionCoordinatorAggregate(
       if (binding.parentBindingId === null)
         return binding.delegationDepth !== 1;
       const parent = bindingsById.get(binding.parentBindingId);
-      return !parent || binding.delegationDepth !== parent.delegationDepth + 1;
+      return parent !== undefined &&
+        binding.delegationDepth !== parent.delegationDepth + 1;
     })
   ) {
     throw new SubsessionCoordinatorStoreError("malformed_state");
@@ -718,12 +720,6 @@ export class SubsessionCoordinatorStore {
       ),
     );
     const expiring = Math.max(0, aggregate.requestReceipts.length - retention);
-    if (
-      aggregate.requestTombstones.length + expiring >
-      historyLimit
-    ) {
-      throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
-    }
     for (let count = 0; count < expiring; count += 1) {
       const expired = aggregate.requestReceipts.shift();
       if (expired) {
@@ -737,6 +733,12 @@ export class SubsessionCoordinatorStore {
         });
       }
     }
+    if (aggregate.requestTombstones.length > historyLimit) {
+      aggregate.requestTombstones.splice(
+        0,
+        aggregate.requestTombstones.length - historyLimit,
+      );
+    }
 
     const referenced = new Set(
       aggregate.requestReceipts.flatMap(({ bindingIds }) => bindingIds),
@@ -745,12 +747,6 @@ export class SubsessionCoordinatorStore {
       (binding) =>
         binding.sessionState === "closed" && !referenced.has(binding.bindingId),
     );
-    if (
-      aggregate.bindingTombstones.length + reclaimable.length >
-      historyLimit
-    ) {
-      throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
-    }
     for (const binding of reclaimable) {
       aggregate.bindingTombstones.push({
         bindingId: binding.bindingId,
@@ -762,6 +758,12 @@ export class SubsessionCoordinatorStore {
         sessionId: binding.sessionId,
         closedAt: binding.updatedAt,
       });
+    }
+    if (aggregate.bindingTombstones.length > historyLimit) {
+      aggregate.bindingTombstones.splice(
+        0,
+        aggregate.bindingTombstones.length - historyLimit,
+      );
     }
     if (reclaimable.length > 0) {
       const reclaimed = new Set(reclaimable.map(({ bindingId }) => bindingId));
@@ -1040,9 +1042,7 @@ export class SubsessionCoordinatorStore {
       ) =>
         receipt.parentSessionId === identity.sessionId &&
         receipt.requestKey === request.requestKey;
-      const previous =
-        aggregate.requestReceipts.find(sameRequest) ??
-        aggregate.requestTombstones.find(sameRequest);
+      const previous = aggregate.requestReceipts.find(sameRequest);
       if (previous) {
         if (
           previous.requestDigest !== requestDigest ||
@@ -1063,6 +1063,8 @@ export class SubsessionCoordinatorStore {
           throw new SubsessionCoordinatorStoreError("malformed_state");
         return { value: { replayed: true, requestDigest, binding } };
       }
+      if (aggregate.requestTombstones.some(sameRequest))
+        throw new SubsessionCoordinatorStoreError("request_key_expired");
       const target =
         targetSelector.kind === "self"
           ? aggregate.bindings.find(
@@ -1084,8 +1086,16 @@ export class SubsessionCoordinatorStore {
       const currentDelivery = target.deliveries.find(
         ({ contextEpoch }) => contextEpoch === target.contextEpoch,
       );
-      if (currentDelivery?.state === "uncertain")
+      if (
+        currentDelivery &&
+        ["claimed", "submitted-unacknowledged", "uncertain"].includes(
+          currentDelivery.state,
+        )
+      )
         throw new SubsessionCoordinatorStoreError("claim_conflict");
+      target.deliveries = target.deliveries.filter(({ state }) =>
+        ["claimed", "submitted-unacknowledged", "uncertain"].includes(state),
+      );
       if (target.deliveries.length >= SUBSESSION_COORDINATOR_DELIVERY_LIMIT)
         throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
 
@@ -1155,9 +1165,7 @@ export class SubsessionCoordinatorStore {
       ): boolean =>
         receipt.parentSessionId === identity.sessionId &&
         receipt.requestKey === request.requestKey;
-      const previous =
-        aggregate.requestReceipts.find(sameRequest) ??
-        aggregate.requestTombstones.find(sameRequest);
+      const previous = aggregate.requestReceipts.find(sameRequest);
       if (previous) {
         if (
           previous.requestDigest !== requestDigest ||
@@ -1187,6 +1195,8 @@ export class SubsessionCoordinatorStore {
           value: { replayed: true, requestDigest, bindings },
         };
       }
+      if (aggregate.requestTombstones.some(sameRequest))
+        throw new SubsessionCoordinatorStoreError("request_key_expired");
       const now = this.now();
       const bindings: SubsessionBindingRecord[] = [];
       let created = 0;

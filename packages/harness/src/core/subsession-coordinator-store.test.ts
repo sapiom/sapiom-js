@@ -145,7 +145,8 @@ describe("SubsessionCoordinatorStore", () => {
     expect(first.replayed).toBe(false);
     expect(replay.replayed).toBe(true);
     expect(first.binding.contextEpoch).toBe(2);
-    expect(first.binding.deliveries).toHaveLength(2);
+    expect(first.binding.deliveries).toHaveLength(1);
+    expect(first.binding.deliveries[0]!.contextEpoch).toBe(2);
     expect(replay.binding).toEqual(first.binding);
     await expect(
       store.refreshFocusedContext(identity, {
@@ -510,7 +511,7 @@ describe("SubsessionCoordinatorStore", () => {
     );
     await expect(
       store.reserveDelegations(identity, delegate(), target),
-    ).rejects.toMatchObject({ code: "session_closed" });
+    ).rejects.toMatchObject({ code: "request_key_expired" });
     await expect(
       store.reserveDelegations(
         identity,
@@ -522,22 +523,72 @@ describe("SubsessionCoordinatorStore", () => {
     ).rejects.toMatchObject({ code: "session_closed" });
   });
 
-  it("reports exhausted permanent tombstone history as a terminal quota", async () => {
+  it("expires oldest key and ownership tombstones instead of dead-ending the project", async () => {
     const root = await fixture();
     const store = new SubsessionCoordinatorStore(root, {
       receiptRetentionLimit: 1,
       historyTombstoneLimit: 1,
     });
-    await store.reserveDelegations(identity, delegate("request-1"), target);
-    await store.reserveDelegations(identity, delegate("request-2"), target);
+    const first = (
+      await store.reserveDelegations(identity, delegate("request-1"), target)
+    ).bindings[0]!;
+    await store.closeBinding(identity, first.bindingId, first.sessionId);
+    const second = (
+      await store.reserveDelegations(
+        identity,
+        delegate("request-2", [
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        target,
+      )
+    ).bindings[0]!;
+    await store.closeBinding(identity, second.bindingId, second.sessionId);
     await expect(
       store.reserveDelegations(identity, delegate("request-1"), target),
-    ).resolves.toMatchObject({ replayed: true });
-    const before = await store.read(projectId);
+    ).rejects.toMatchObject({ code: "request_key_expired" });
+    await store.reserveDelegations(
+      identity,
+      delegate("request-3", [
+        { delegationKey: "writer", outcome: "Write evidence" },
+      ]),
+      target,
+    );
 
-    await expect(
-      store.reserveDelegations(identity, delegate("request-3"), target),
-    ).rejects.toMatchObject({ code: "history_quota_exceeded" });
-    expect(await store.read(projectId)).toEqual(before);
+    const aggregate = await store.read(projectId);
+    expect(aggregate.requestTombstones).toHaveLength(1);
+    expect(aggregate.requestTombstones[0]!.requestKey).toBe("request-2");
+    expect(aggregate.bindingTombstones).toHaveLength(1);
+    expect(aggregate.bindingTombstones[0]!.bindingId).toBe(second.bindingId);
+  });
+
+  it("prunes proven terminal deliveries so long-lived focused refresh stays writable", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      receiptRetentionLimit: 1,
+      historyTombstoneLimit: 2,
+    });
+    let binding = (
+      await store.reserveDelegations(identity, delegate(), target)
+    ).bindings[0]!;
+
+    for (let index = 1; index <= 70; index += 1) {
+      binding = (
+        await store.refreshFocusedContext(identity, {
+          schemaVersion: 1,
+          requestKey: `refresh-${index}`,
+          operation: {
+            kind: "refresh-focused-context",
+            target: { kind: "child", delegationKey: "research" },
+            expectedContextEpoch: binding.contextEpoch,
+            expectedContextDigest: binding.contextDigest,
+            focus: null,
+          },
+        })
+      ).binding;
+    }
+
+    expect(binding.contextEpoch).toBe(71);
+    expect(binding.deliveries).toHaveLength(1);
+    expect(binding.deliveries[0]!.contextEpoch).toBe(71);
   });
 });

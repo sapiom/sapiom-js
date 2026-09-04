@@ -510,7 +510,7 @@ describe("SubsessionCoordinator", () => {
     unsubscribe();
   });
 
-  it("does not advise retry or request reduction for permanent history exhaustion", async () => {
+  it("does not advise retry for unreclaimable active history exhaustion", async () => {
     const { coordinator, caller, store, unsubscribe } = await fixture();
     vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
       new SubsessionCoordinatorStoreError("history_quota_exceeded"),
@@ -520,6 +520,21 @@ describe("SubsessionCoordinator", () => {
         code: "capacity_exceeded",
         retryable: false,
         recovery: "none",
+      },
+    });
+    unsubscribe();
+  });
+
+  it("requires a fresh request key after its bounded receipt window expires", async () => {
+    const { coordinator, caller, store, unsubscribe } = await fixture();
+    vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
+      new SubsessionCoordinatorStoreError("request_key_expired"),
+    );
+    await expect(coordinator.execute(caller, request)).rejects.toMatchObject({
+      detail: {
+        code: "request_key_reused",
+        retryable: false,
+        recovery: "new_request_key",
       },
     });
     unsubscribe();

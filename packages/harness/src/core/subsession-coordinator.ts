@@ -1142,7 +1142,10 @@ export class SubsessionCoordinator {
   private wholeCallError(cause: unknown, refresh = false): SubsessionCoordinatorError {
     if (cause instanceof SubsessionCoordinatorError) return cause;
     if (cause instanceof SubsessionCoordinatorStoreError) {
-      if (cause.code === "request_key_reused")
+      if (
+        cause.code === "request_key_reused" ||
+        cause.code === "request_key_expired"
+      )
         return new SubsessionCoordinatorError(
           error("request_key_reused", false, "new_request_key"),
         );
