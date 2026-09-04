@@ -13,8 +13,6 @@ const acceptedAt = "2026-09-02T12:00:00.000Z";
 const actor = {
   userId: "user-1",
   sessionId: "session-1",
-  role: "map-planner",
-  assignment: null,
 };
 const operation = {
   kind: "add-node",
@@ -69,9 +67,9 @@ describe("Agent Map persisted/public codecs", () => {
       (value: any) => (value.history[0].operation.kind = "execute"),
     ],
     [
-      "spoofed assignment",
+      "spoofed role",
       (value: any) =>
-        (value.history[0].actor.assignment = { kind: "unplanned" }),
+        (value.history[0].actor.role = "map-planner"),
     ],
     [
       "nested extra field",

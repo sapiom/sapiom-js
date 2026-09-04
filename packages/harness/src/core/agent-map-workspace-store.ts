@@ -4,30 +4,39 @@ import * as path from "node:path";
 
 import {
   AGENT_MAP_INITIAL_RECORD_VERSION,
+  AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
   AGENT_MAP_WORKSPACE_SCHEMA_VERSION,
   type AgentMapErrorCode,
   type AgentMapWorkspaceState,
   type MapChangeProposal,
+  type MapProposalId,
   type StudioProjectId,
 } from "../shared/agent-map.js";
+import type {
+  AgentBriefHistoryPointer,
+  AgentBriefVersion,
+  AgentBriefVersionRef,
+  ProjectMutationReceipt,
+} from "../shared/build-plan.js";
+import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
 import {
-  parseAgentMapProposalReceipt,
-  parseMapChangeProposal,
-  type PersistedAgentMapProposalReceipt,
-} from "../shared/agent-map-codec.js";
+  AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
+  AgentMapAggregateError,
+  computeProjectPlanningAggregateDigest,
+  createEmptyProjectPlanningAggregate,
+  migrateProjectPlanningAggregate,
+  parseLegacyWorkspaceState,
+  parseProjectPlanningAggregate,
+  type AgentMapProjectAggregate,
+} from "./agent-map-aggregate-migration.js";
+import { deterministicVersionId } from "./agent-map-version.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 
-export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = 1;
-
-export type AgentMapProposalReceipt = PersistedAgentMapProposalReceipt;
-
-export interface AgentMapProjectAggregate {
-  storageSchemaVersion: typeof AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION;
-  workspace: AgentMapWorkspaceState;
-  proposal: MapChangeProposal | null;
-  receipts: AgentMapProposalReceipt[];
-}
+export {
+  AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
+  type AgentMapProjectAggregate,
+};
 
 export interface AgentMapStoreSnapshot {
   workspace: AgentMapWorkspaceState;
@@ -36,6 +45,7 @@ export interface AgentMapStoreSnapshot {
 
 export type AgentMapWorkspaceStoreEvent =
   | { name: "agent_map.workspace_initialized"; projectId: StudioProjectId }
+  | { name: "agent_map.workspace_migrated"; projectId: StudioProjectId; fromSchemaVersion: 0 | 1 }
   | {
       name: "agent_map.workspace_read_failed";
       projectId: StudioProjectId;
@@ -48,195 +58,89 @@ export class AgentMapWorkspaceStoreError extends Error {
     readonly code: Exclude<AgentMapErrorCode, "project_not_found">,
     readonly schemaVersion?: number,
   ) {
-    super(
-      code === "unsupported_schema"
-        ? "Agent Map state uses an unsupported schema"
-        : code === "malformed_state"
-          ? "Agent Map state is malformed"
-          : "Agent Map storage is unavailable",
-    );
+    super(code === "unsupported_schema" ? "Agent Map state uses an unsupported schema" :
+      code === "malformed_state" ? "Agent Map state is malformed" : "Agent Map storage is unavailable");
     this.name = "AgentMapWorkspaceStoreError";
   }
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const storageError = () => new AgentMapWorkspaceStoreError("storage_unavailable");
 
-const hasExactKeys = (
-  value: Record<string, unknown>,
-  keys: readonly string[],
-) => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return (
-    actual.length === expected.length &&
-    actual.every((key, index) => key === expected[index])
-  );
-};
-
-const isTimestamp = (value: unknown): value is string => {
-  if (typeof value !== "string") return false;
-  try {
-    return new Date(value).toISOString() === value;
-  } catch {
-    return false;
-  }
-};
-
-const isOpaqueId = (value: unknown): value is string =>
-  typeof value === "string" &&
-  value.length > 0 &&
-  value === value.trim() &&
-  !value.includes("/") &&
-  !value.includes("\\") &&
-  !value.includes(":") &&
-  ![...value].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || codePoint === 0x7f;
-  });
-
-const nullableOpaqueId = (value: unknown): value is string | null =>
-  value === null || isOpaqueId(value);
-
+/** Compatibility parser for callers that still inspect the deployed E1 shape. */
 export function parseAgentMapWorkspaceState(
   value: unknown,
   expectedProjectId: StudioProjectId,
 ): AgentMapWorkspaceState {
-  const schemaVersion =
-    isRecord(value) && Number.isSafeInteger(value.schemaVersion)
-      ? (value.schemaVersion as number)
-      : undefined;
-  if (
-    schemaVersion !== undefined &&
-    schemaVersion > AGENT_MAP_WORKSPACE_SCHEMA_VERSION
-  ) {
-    throw new AgentMapWorkspaceStoreError("unsupported_schema", schemaVersion);
+  try {
+    return parseLegacyWorkspaceState(value, expectedProjectId) as AgentMapWorkspaceState;
+  } catch (error) {
+    if (error instanceof AgentMapAggregateError)
+      throw new AgentMapWorkspaceStoreError(error.code, error.schemaVersion);
+    throw new AgentMapWorkspaceStoreError("malformed_state");
   }
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "projectId",
-      "schemaVersion",
-      "recordVersion",
-      "confirmedRevisionId",
-      "activeProposalId",
-      "projectBuildPlanId",
-      "createdAt",
-      "updatedAt",
-    ]) ||
-    value.projectId !== expectedProjectId ||
-    !isStudioProjectId(value.projectId) ||
-    value.schemaVersion !== AGENT_MAP_WORKSPACE_SCHEMA_VERSION ||
-    !Number.isSafeInteger(value.recordVersion) ||
-    (value.recordVersion as number) < 1 ||
-    !nullableOpaqueId(value.confirmedRevisionId) ||
-    !nullableOpaqueId(value.activeProposalId) ||
-    !nullableOpaqueId(value.projectBuildPlanId) ||
-    !isTimestamp(value.createdAt) ||
-    !isTimestamp(value.updatedAt)
-  )
-    throw new AgentMapWorkspaceStoreError("malformed_state", schemaVersion);
-  return value as unknown as AgentMapWorkspaceState;
 }
 
-const storageError = () =>
-  new AgentMapWorkspaceStoreError("storage_unavailable");
+export function projectProposalId(aggregate: AgentMapProjectAggregate): MapProposalId {
+  for (const version of aggregate.mapVersions) {
+    if (version.origin.kind === "migration" && version.origin.legacyProposalId)
+      return version.origin.legacyProposalId;
+  }
+  return deterministicVersionId("proposal", [aggregate.projectId, "role-neutral-map-stream-v1"]) as MapProposalId;
+}
 
-function parseAggregate(
-  value: unknown,
-  projectId: StudioProjectId,
-): AgentMapProjectAggregate {
-  if (
-    isRecord(value) &&
-    Number.isSafeInteger(value.storageSchemaVersion) &&
-    (value.storageSchemaVersion as number) >
-      AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION
-  )
-    throw new AgentMapWorkspaceStoreError(
-      "unsupported_schema",
-      value.storageSchemaVersion as number,
-    );
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "storageSchemaVersion",
-      "workspace",
-      "proposal",
-      "receipts",
-    ]) ||
-    value.storageSchemaVersion !== AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION ||
-    !Array.isArray(value.receipts)
-  )
-    throw new AgentMapWorkspaceStoreError("malformed_state");
-  const workspace = parseAgentMapWorkspaceState(value.workspace, projectId);
-  let proposal: MapChangeProposal | null = null;
-  if ((value.proposal === null) !== (workspace.activeProposalId === null))
-    throw new AgentMapWorkspaceStoreError("malformed_state");
-  if (value.proposal !== null && workspace.activeProposalId !== null) {
-    try {
-      proposal = parseMapChangeProposal(
-        value.proposal,
-        projectId,
-        workspace.activeProposalId,
-      );
-    } catch {
-      throw new AgentMapWorkspaceStoreError("malformed_state");
-    }
-  }
-  const receipts: AgentMapProposalReceipt[] = [];
-  for (const receipt of value.receipts) {
-    let parsed: AgentMapProposalReceipt;
-    try {
-      parsed = parseAgentMapProposalReceipt(receipt);
-    } catch {
-      throw new AgentMapWorkspaceStoreError("malformed_state");
-    }
-    const records =
-      proposal?.history.filter(
-        ({ acceptedVersion }) => acceptedVersion === parsed.version,
-      ) ?? [];
-    const actor = records[0]?.actor;
-    const acceptedAt = records[0]?.acceptedAt;
-    const allocatedNodeIds = records.flatMap(({ operation }) =>
-      operation.kind === "add-node" ? [operation.node.id] : [],
-    );
-    const allocatedRelationshipIds = records.flatMap(({ operation }) =>
-      operation.kind === "add-relationship" ? [operation.relationship.id] : [],
-    );
-    if (
-      proposal === null ||
-      parsed.version > proposal.version ||
-      records.length === 0 ||
-      records.some(
-        (record) =>
-          record.requestId !== parsed.requestId ||
-          record.actor.sessionId !== parsed.sessionId ||
-          JSON.stringify(record.actor) !== JSON.stringify(actor) ||
-          record.acceptedAt !== acceptedAt,
-      ) ||
-      JSON.stringify(Object.values(parsed.allocatedNodeIds).sort()) !==
-        JSON.stringify(allocatedNodeIds.sort()) ||
-      JSON.stringify(Object.values(parsed.allocatedRelationshipIds).sort()) !==
-        JSON.stringify(allocatedRelationshipIds.sort())
-    )
-      throw new AgentMapWorkspaceStoreError("malformed_state");
-    receipts.push(parsed);
-  }
-  if (
-    new Set(
-      receipts.map(({ sessionId, requestId }) => `${sessionId}\0${requestId}`),
-    ).size !== receipts.length
-  )
-    throw new AgentMapWorkspaceStoreError("malformed_state");
-  return structuredClone({
-    storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
-    workspace,
+export function projectCompatibilitySnapshot(
+  aggregate: AgentMapProjectAggregate,
+): AgentMapStoreSnapshot {
+  const history = structuredClone(aggregate.mapOperationHistory);
+  const currentMap = aggregate.mapVersions.at(-1);
+  const hasProposal = history.length > 0 || currentMap !== undefined;
+  const proposalId = projectProposalId(aggregate);
+  const proposal: MapChangeProposal | null = hasProposal ? {
+    schemaVersion: AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
+    id: proposalId,
+    projectId: aggregate.projectId,
+    baseRevisionId: null,
+    version: history.at(-1)?.acceptedVersion ?? 0,
+    nodes: structuredClone(currentMap?.graph.nodes ?? []),
+    relationships: structuredClone(currentMap?.graph.relationships ?? []),
+    history,
+    createdAt: history[0]?.acceptedAt ?? aggregate.createdAt,
+    updatedAt: history.at(-1)?.acceptedAt ?? aggregate.updatedAt,
+  } : null;
+  return {
+    workspace: {
+      projectId: aggregate.projectId,
+      schemaVersion: AGENT_MAP_WORKSPACE_SCHEMA_VERSION,
+      recordVersion: aggregate.recordVersion,
+      confirmedRevisionId: aggregate.current.map?.versionId ?? null,
+      activeProposalId: proposal?.id ?? null,
+      projectBuildPlanId: aggregate.current.buildPlan?.planId ?? null,
+      createdAt: aggregate.createdAt,
+      updatedAt: aggregate.updatedAt,
+    },
     proposal,
-    receipts,
-  }) as AgentMapProjectAggregate;
+  };
 }
 
-/** Crash-atomic owner of workspace, active proposal, history, and private receipts. */
+export interface AppendBriefVersionsRequest {
+  actor: { userId: string; sessionId: string };
+  requestId: string;
+  requestDigest: string;
+  expectedMap: NonNullable<AgentMapProjectAggregate["current"]["map"]>;
+  expectedPlan: NonNullable<AgentMapProjectAggregate["current"]["buildPlan"]>;
+  entries: readonly Readonly<{
+    version: AgentBriefVersion;
+    status: AgentBriefHistoryPointer["status"];
+  }>[];
+  createdAt: string;
+}
+
+export interface AppendBriefVersionsResult {
+  replayed: boolean;
+  versions: readonly AgentBriefVersionRef[];
+}
+
+/** Crash-atomic owner of the one final project planning aggregate. */
 export class AgentMapWorkspaceStore {
   private readonly queues = new Map<StudioProjectId, Promise<void>>();
 
@@ -245,98 +149,54 @@ export class AgentMapWorkspaceStore {
     private readonly options: {
       now?: () => Date;
       onEvent?: (event: AgentMapWorkspaceStoreEvent) => void | Promise<void>;
-      /** Deterministic crash-boundary seam for storage fault tests. */
-      beforePersistStep?: (
-        step: "write" | "file-sync" | "rename" | "directory-sync",
-      ) => void | Promise<void>;
+      beforePersistStep?: (step: "write" | "file-sync" | "rename" | "directory-sync") => void | Promise<void>;
     } = {},
   ) {}
 
   private workspacePath(projectId: StudioProjectId) {
-    return path.join(
-      this.agentMapRoot,
-      "projects",
-      projectId,
-      "workspace.json",
-    );
+    return path.join(this.agentMapRoot, "projects", projectId, "workspace.json");
   }
 
   private emit(event: AgentMapWorkspaceStoreEvent): void {
-    try {
-      void Promise.resolve(this.options.onEvent?.(event)).catch(() => {});
-    } catch {
-      // Observability cannot change durable state semantics.
-    }
+    try { void Promise.resolve(this.options.onEvent?.(event)).catch(() => {}); } catch { /* telemetry cannot alter storage */ }
   }
 
   private initial(projectId: StudioProjectId): AgentMapProjectAggregate {
-    const timestamp = (this.options.now?.() ?? new Date()).toISOString();
-    return {
-      storageSchemaVersion: AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
-      workspace: {
-        projectId,
-        schemaVersion: AGENT_MAP_WORKSPACE_SCHEMA_VERSION,
-        recordVersion: AGENT_MAP_INITIAL_RECORD_VERSION,
-        confirmedRevisionId: null,
-        activeProposalId: null,
-        projectBuildPlanId: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-      proposal: null,
-      receipts: [],
-    };
+    return createEmptyProjectPlanningAggregate(
+      projectId,
+      (this.options.now?.() ?? new Date()).toISOString(),
+      AGENT_MAP_INITIAL_RECORD_VERSION,
+    );
   }
 
   private async readDisk(projectId: StudioProjectId): Promise<{
     aggregate: AgentMapProjectAggregate;
     needsWrite: boolean;
     created: boolean;
+    migratedFrom?: 0 | 1;
   }> {
     const file = this.workspacePath(projectId);
     let decoded: unknown;
-    try {
-      decoded = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
-    } catch (error) {
+    try { decoded = JSON.parse(await fs.readFile(file, "utf8")) as unknown; }
+    catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT")
-        return {
-          aggregate: this.initial(projectId),
-          needsWrite: true,
-          created: true,
-        };
-      if (error instanceof SyntaxError)
-        throw new AgentMapWorkspaceStoreError("malformed_state");
+        return { aggregate: this.initial(projectId), needsWrite: true, created: true };
+      if (error instanceof SyntaxError) throw new AgentMapWorkspaceStoreError("malformed_state");
       throw storageError();
     }
-    // Exact E1 record: migrate under the same lock and atomic rename.
     try {
-      const workspace = parseAgentMapWorkspaceState(decoded, projectId);
-      return {
-        aggregate: {
-          storageSchemaVersion: 1,
-          workspace,
-          proposal: null,
-          receipts: [],
-        },
-        needsWrite: true,
-        created: false,
-      };
+      const migrated = migrateProjectPlanningAggregate(decoded, projectId);
+      const from = typeof decoded === "object" && decoded !== null && "storageSchemaVersion" in decoded ? 1 : 0;
+      return { aggregate: migrated.aggregate, needsWrite: migrated.migrated, created: false,
+        ...(migrated.migrated ? { migratedFrom: from as 0 | 1 } : {}) };
     } catch (error) {
-      if (isRecord(decoded) && "storageSchemaVersion" in decoded) {
-        return {
-          aggregate: parseAggregate(decoded, projectId),
-          needsWrite: false,
-          created: false,
-        };
-      }
+      if (error instanceof AgentMapAggregateError)
+        throw new AgentMapWorkspaceStoreError(error.code, error.schemaVersion);
       throw error;
     }
   }
 
-  private async persist(
-    projectId: StudioProjectId,
-    aggregate: AgentMapProjectAggregate,
-  ): Promise<void> {
+  private async persist(projectId: StudioProjectId, aggregate: AgentMapProjectAggregate): Promise<void> {
     const file = this.workspacePath(projectId);
     const directory = path.dirname(file);
     const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
@@ -353,106 +213,108 @@ export class AgentMapWorkspaceStore {
       await this.options.beforePersistStep?.("rename");
       await fs.rename(temporary, file);
       const directoryHandle = await fs.open(directory, "r");
-      try {
-        await this.options.beforePersistStep?.("directory-sync");
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
-    } catch {
-      throw storageError();
-    } finally {
-      await handle?.close().catch(() => {});
-      await fs.rm(temporary, { force: true }).catch(() => {});
-    }
+      try { await this.options.beforePersistStep?.("directory-sync"); await directoryHandle.sync(); }
+      finally { await directoryHandle.close(); }
+    } catch { throw storageError(); }
+    finally { await handle?.close().catch(() => {}); await fs.rm(temporary, { force: true }).catch(() => {}); }
   }
 
-  private enqueue<T>(
-    projectId: StudioProjectId,
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  private enqueue<T>(projectId: StudioProjectId, operation: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(projectId) ?? Promise.resolve();
     const result = previous.then(operation, operation);
-    const tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
+    const tail = result.then(() => undefined, () => undefined);
     this.queues.set(projectId, tail);
-    void tail.finally(() => {
-      if (this.queues.get(projectId) === tail) this.queues.delete(projectId);
-    });
+    void tail.finally(() => { if (this.queues.get(projectId) === tail) this.queues.delete(projectId); });
     return result;
   }
 
-  private async locked<T>(
-    projectId: StudioProjectId,
-    operation: (
-      aggregate: AgentMapProjectAggregate,
-    ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>,
-  ): Promise<T> {
-    if (!isStudioProjectId(projectId))
-      throw new AgentMapWorkspaceStoreError("malformed_state");
+  private async locked<T>(projectId: StudioProjectId, operation: (
+    aggregate: AgentMapProjectAggregate,
+  ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>): Promise<T> {
+    if (!isStudioProjectId(projectId)) throw new AgentMapWorkspaceStoreError("malformed_state");
     return this.enqueue(projectId, async () => {
-      const release = await new DurableFileLock(this.workspacePath(projectId), {
-        storageError,
-      }).acquire();
+      const release = await new DurableFileLock(this.workspacePath(projectId), { storageError }).acquire();
       try {
         const loaded = await this.readDisk(projectId);
         const outcome = await operation(structuredClone(loaded.aggregate));
         if (loaded.needsWrite || outcome.next) {
-          const next = outcome.next
-            ? parseAggregate(outcome.next, projectId)
-            : loaded.aggregate;
+          const candidate = outcome.next ?? loaded.aggregate;
+          const next = parseProjectPlanningAggregate({ ...candidate,
+            aggregateDigest: computeProjectPlanningAggregateDigest(candidate) }, projectId);
           await this.persist(projectId, next);
         }
-        if (loaded.created)
-          this.emit({ name: "agent_map.workspace_initialized", projectId });
+        if (loaded.created) this.emit({ name: "agent_map.workspace_initialized", projectId });
+        if (loaded.migratedFrom !== undefined)
+          this.emit({ name: "agent_map.workspace_migrated", projectId, fromSchemaVersion: loaded.migratedFrom });
         return structuredClone(outcome.value);
-      } finally {
-        await release();
-      }
+      } finally { await release(); }
     });
   }
 
-  async readAggregate(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapProjectAggregate> {
-    try {
-      return await this.locked(projectId, async (aggregate) => ({
-        value: aggregate,
-      }));
-    } catch (error) {
-      const bounded =
-        error instanceof AgentMapWorkspaceStoreError ? error : storageError();
-      this.emit({
-        name: "agent_map.workspace_read_failed",
-        projectId,
-        ...(bounded.schemaVersion === undefined
-          ? {}
-          : { schemaVersion: bounded.schemaVersion }),
-        errorCode: bounded.code,
-      });
+  async readAggregate(projectId: StudioProjectId): Promise<AgentMapProjectAggregate> {
+    try { return await this.locked(projectId, async (aggregate) => ({ value: aggregate })); }
+    catch (error) {
+      const bounded = error instanceof AgentMapWorkspaceStoreError ? error : storageError();
+      this.emit({ name: "agent_map.workspace_read_failed", projectId,
+        ...(bounded.schemaVersion === undefined ? {} : { schemaVersion: bounded.schemaVersion }), errorCode: bounded.code });
       throw bounded;
     }
   }
 
-  async readSnapshot(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapStoreSnapshot> {
-    const aggregate = await this.readAggregate(projectId);
-    return { workspace: aggregate.workspace, proposal: aggregate.proposal };
+  async readSnapshot(projectId: StudioProjectId): Promise<AgentMapStoreSnapshot> {
+    return projectCompatibilitySnapshot(await this.readAggregate(projectId));
   }
 
   readOrCreate(projectId: StudioProjectId): Promise<AgentMapWorkspaceState> {
     return this.readSnapshot(projectId).then(({ workspace }) => workspace);
   }
 
-  transact<T>(
-    projectId: StudioProjectId,
-    operation: (
-      aggregate: AgentMapProjectAggregate,
-    ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>,
-  ): Promise<T> {
+  transact<T>(projectId: StudioProjectId, operation: (
+    aggregate: AgentMapProjectAggregate,
+  ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>): Promise<T> {
     return this.locked(projectId, operation);
+  }
+
+  /** Reserved exact-source, idempotent append seam. SAP-3149 has no caller. */
+  appendBriefVersions(projectId: StudioProjectId, request: AppendBriefVersionsRequest): Promise<AppendBriefVersionsResult> {
+    return this.transact<AppendBriefVersionsResult>(projectId, async (aggregate) => {
+      const keyMatches = (entry: { userId: string; sessionId: string; requestId: string }) =>
+        entry.userId === request.actor.userId && entry.sessionId === request.actor.sessionId && entry.requestId === request.requestId;
+      const receipt = aggregate.requestReceipts.find(keyMatches);
+      if (receipt) {
+        if (receipt.operation !== "brief_append" || receipt.requestDigest !== request.requestDigest)
+          throw new AgentMapWorkspaceStoreError("malformed_state");
+        return { value: { ...(structuredClone(receipt.result) as AppendBriefVersionsResult), replayed: true } };
+      }
+      if (aggregate.requestTombstones.some(keyMatches)) throw new AgentMapWorkspaceStoreError("malformed_state");
+      if (JSON.stringify(aggregate.current.map) !== JSON.stringify(request.expectedMap) ||
+        JSON.stringify(aggregate.current.buildPlan) !== JSON.stringify(request.expectedPlan))
+        throw new AgentMapWorkspaceStoreError("malformed_state");
+      const next = structuredClone(aggregate);
+      const versions: AgentBriefVersionRef[] = [];
+      for (const entry of request.entries) {
+        const parsed = parseAgentBriefVersion(entry.version, projectId);
+        if (JSON.stringify(parsed.map) !== JSON.stringify(request.expectedMap) ||
+          JSON.stringify(parsed.plan) !== JSON.stringify(request.expectedPlan))
+          throw new AgentMapWorkspaceStoreError("malformed_state");
+        const history = next.briefVersionsById[parsed.briefId] ?? [];
+        const pointer = next.current.briefsByScope[parsed.scopeKey];
+        if (parsed.version !== history.length + 1 || parsed.parentVersionId !== (history.at(-1)?.versionId ?? null) ||
+          (pointer !== undefined && pointer.briefId !== parsed.briefId)) throw new AgentMapWorkspaceStoreError("malformed_state");
+        next.briefVersionsById[parsed.briefId] = [...history, parsed];
+        const ref = { projectId, briefId: parsed.briefId, versionId: parsed.versionId, semanticDigest: parsed.semanticDigest };
+        next.current.briefsByScope[parsed.scopeKey] = { scopeKey: parsed.scopeKey, focusScope: parsed.focusScope,
+          briefId: parsed.briefId, status: entry.status, version: ref };
+        versions.push(ref);
+      }
+      const result: AppendBriefVersionsResult = { replayed: false, versions };
+      const receiptRecord: ProjectMutationReceipt<AppendBriefVersionsResult> = { projectId, ...request.actor,
+        requestId: request.requestId, requestDigest: request.requestDigest, operation: "brief_append", result,
+        createdAt: request.createdAt };
+      next.requestReceipts.push(receiptRecord);
+      next.recordVersion += 1;
+      next.updatedAt = request.createdAt;
+      return { value: result, next };
+    });
   }
 }

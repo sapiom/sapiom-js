@@ -248,8 +248,6 @@ describe("Agent Map proposal caller schema", () => {
       actor: {
         userId: "user_1",
         sessionId: "session_1",
-        role: "map-planner",
-        assignment: null,
       },
       acceptedAt: "2026-09-02T00:00:00.000Z",
     } satisfies AcceptedProposalDelta;

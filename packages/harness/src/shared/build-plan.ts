@@ -233,7 +233,6 @@ export interface ProjectMutationTombstone {
   userId: string;
   sessionId: string;
   requestId: string;
-  requestDigest: string;
   operation: ProjectMutationReceipt["operation"];
   createdAt: string;
 }

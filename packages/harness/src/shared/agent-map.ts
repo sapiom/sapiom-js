@@ -290,12 +290,21 @@ export type AgentMapVersionRef = Readonly<{
 
 export type ProjectVersionChangeKind = "created" | "edited" | "rebased" | "restored" | "migrated";
 
-export type ProjectMutationOrigin = Readonly<{
-  kind: "request" | "migration";
-  requestDigest: string;
-  operationIds: readonly ProposalOperationId[];
-  touchKeys: readonly string[];
-}>;
+export type ProjectMutationOrigin =
+  | Readonly<{
+      kind: "request";
+      requestDigest: string;
+      operationIds: readonly ProposalOperationId[];
+      touchKeys: readonly string[];
+    }>
+  | Readonly<{
+      kind: "migration";
+      requestDigest: string;
+      operationIds: readonly ProposalOperationId[];
+      touchKeys: readonly string[];
+      legacyProposalId: MapProposalId | null;
+      legacyAcceptedVersion: number | null;
+    }>;
 
 /** One immutable entry in the sole project Agent Map history. */
 export type AgentMapVersion = Readonly<{
@@ -340,20 +349,8 @@ export type PlanningSessionIdentity =
       assignment: { kind: "unplanned" };
     });
 
-/**
- * Legacy E2 persisted attribution shape. SAP-3148 keeps the codec stable while
- * live authority moves to ProjectAgentSession; SAP-3149 owns its durable
- * role-neutral replacement.
- */
-export interface ProposalActor {
-  userId: string;
-  sessionId: string;
-  role: "map-planner" | "agent-builder";
-  assignment:
-    | { kind: "planned"; agentId: string }
-    | { kind: "unplanned" }
-    | null;
-}
+/** Live proposal attribution is the same role-neutral project actor vocabulary. */
+export type ProposalActor = ProjectAgentActorRef;
 
 export interface ProposalOperationRecord {
   id: ProposalOperationId;

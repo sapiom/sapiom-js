@@ -119,8 +119,6 @@ describe("AgentMapProposalService", () => {
     expect(snapshot.proposal?.history[0]?.actor).toEqual({
       userId: "user-1",
       sessionId: "session-1",
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
     });
     expect(accepted).toHaveBeenCalledOnce();
   });
@@ -152,6 +150,33 @@ describe("AgentMapProposalService", () => {
     ]);
   });
 
+  it("records an accepted semantic no-op for replay without appending a duplicate map version", async () => {
+    const { root, service, accepted } = await fixture();
+    const first = await service.propose(identity("session-1"), addNode("request-1", 0, null));
+    const nodeId = Object.values(first.allocatedNodeIds)[0]!;
+    const noOp = await service.propose(identity("session-1"), {
+      schemaVersion: 1,
+      proposalId: first.proposalId,
+      expectedVersion: 1,
+      requestId: "request-no-op",
+      operations: [{ kind: "update-node", nodeId, changes: { name: "request-1" } }],
+    });
+    const aggregate = await new AgentMapWorkspaceStore(root).readAggregate(projectId);
+
+    expect(noOp.version).toBe(2);
+    expect(aggregate.mapOperationHistory).toHaveLength(2);
+    expect(aggregate.mapVersions).toHaveLength(1);
+    expect(aggregate.requestReceipts).toHaveLength(2);
+    await expect(service.propose(identity("session-1"), {
+      schemaVersion: 1,
+      proposalId: first.proposalId,
+      expectedVersion: 1,
+      requestId: "request-no-op",
+      operations: [{ kind: "update-node", nodeId, changes: { name: "request-1" } }],
+    })).resolves.toEqual(noOp);
+    expect(accepted).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds compact receipts and fails closed after exact replay retention", async () => {
     const { root, service, accepted } = await fixture(1);
     const firstRequest = addNode("request-1", 0, null);
@@ -162,15 +187,18 @@ describe("AgentMapProposalService", () => {
       projectId,
     );
 
-    expect(aggregate.receipts).toEqual([
+    expect(aggregate.requestReceipts).toEqual([
       expect.objectContaining({
+        userId: "user-1",
         sessionId: "session-1",
         requestId: "request-2",
-        version: 2,
+        operation: "map",
+        result: expect.objectContaining({ version: 2 }),
       }),
     ]);
-    expect(JSON.stringify(aggregate.receipts)).not.toContain('"delta"');
-    expect(JSON.stringify(aggregate.receipts)).not.toContain('"touchSet"');
+    expect(aggregate.requestTombstones).toEqual([
+      expect.objectContaining({ requestId: "request-1", operation: "map" }),
+    ]);
     await expect(
       service.propose(identity("session-1"), firstRequest),
     ).rejects.toMatchObject({
@@ -353,20 +381,14 @@ describe("AgentMapProposalService", () => {
       {
         userId: "user-1",
         sessionId: "planner",
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
       },
       {
         userId: "user-1",
         sessionId: "assigned",
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
       },
       {
         userId: "user-1",
         sessionId: "unplanned",
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
       },
     ]);
   });
@@ -502,7 +524,7 @@ describe("AgentMapProposalService", () => {
     expect((await service.read(projectId)).proposal?.version).toBe(1);
   });
 
-  it("fails closed when a confirmed base revision cannot be supplied", async () => {
+  it("rejects dangling E1 pointers instead of synthesizing incomplete state", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-proposal-"),
     );
@@ -527,7 +549,7 @@ describe("AgentMapProposalService", () => {
     );
     await expect(
       service.propose(identity("session-1"), addNode("request-1", 0, null)),
-    ).rejects.toMatchObject({ code: "validation_failed" });
-    expect(await service.read(projectId)).toMatchObject({ proposal: null });
+    ).rejects.toMatchObject({ code: "malformed_state" });
+    await expect(service.read(projectId)).rejects.toMatchObject({ code: "malformed_state" });
   });
 });

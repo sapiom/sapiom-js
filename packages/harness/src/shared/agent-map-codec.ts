@@ -177,15 +177,16 @@ export function parseProjectAgentActorRef(
 export function parseProjectMutationOrigin(
   value: unknown,
 ): ProjectMutationOrigin {
+  const requestKeys = ["kind", "requestDigest", "operationIds", "touchKeys"];
+  const migrationKeys = [
+    ...requestKeys,
+    "legacyProposalId",
+    "legacyAcceptedVersion",
+  ];
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
-      "kind",
-      "requestDigest",
-      "operationIds",
-      "touchKeys",
-    ]) ||
     !["request", "migration"].includes(String(value.kind)) ||
+    !hasExactKeys(value, value.kind === "migration" ? migrationKeys : requestKeys) ||
     typeof value.requestDigest !== "string" ||
     !/^sha256:[0-9a-f]{64}$/u.test(value.requestDigest) ||
     !Array.isArray(value.operationIds) ||
@@ -196,6 +197,14 @@ export function parseProjectMutationOrigin(
     value.touchKeys.length > 16_384 ||
     !value.touchKeys.every((key) => isAgentMapBoundedText(key, 512)) ||
     new Set(value.touchKeys).size !== value.touchKeys.length
+  )
+    throw new Error("invalid project mutation origin");
+  if (
+    value.kind === "migration" &&
+    ((value.legacyProposalId !== null && !isPlanId(value.legacyProposalId, "proposal")) ||
+      (value.legacyAcceptedVersion !== null &&
+        (!Number.isSafeInteger(value.legacyAcceptedVersion) ||
+          (value.legacyAcceptedVersion as number) < 1)))
   )
     throw new Error("invalid project mutation origin");
   return structuredClone(value) as unknown as ProjectMutationOrigin;
@@ -408,24 +417,37 @@ export function parseAcceptedProposalDelta(
 export function parseProposalActor(value: unknown): ProposalActor {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["userId", "sessionId", "role", "assignment"]) ||
+    !hasExactKeys(value, ["userId", "sessionId"]) ||
     !isAgentMapBoundedText(value.userId, 256) ||
     !isAgentMapBoundedText(value.sessionId, 256)
   )
     throw new Error("invalid Agent Map actor");
+  return { userId: value.userId, sessionId: value.sessionId };
+}
+
+export interface LegacyE2ProposalActor {
+  userId: string;
+  sessionId: string;
+  role: "map-planner" | "agent-builder";
+  assignment:
+    | { kind: "planned"; agentId: string }
+    | { kind: "unplanned" }
+    | null;
+}
+
+/** Frozen decoder used only by the direct deployed-E2 migration. */
+export function parseLegacyE2ProposalActor(value: unknown): LegacyE2ProposalActor {
+  if (!isRecord(value) || !hasExactKeys(value, ["userId", "sessionId", "role", "assignment"]) ||
+    !isAgentMapBoundedText(value.userId, 256) || !isAgentMapBoundedText(value.sessionId, 256))
+    throw new Error("invalid legacy Agent Map actor");
   if (value.role === "map-planner" && value.assignment === null)
-    return structuredClone(value) as unknown as ProposalActor;
-  if (
-    value.role !== "agent-builder" ||
-    !isRecord(value.assignment) ||
+    return structuredClone(value) as unknown as LegacyE2ProposalActor;
+  if (value.role !== "agent-builder" || !isRecord(value.assignment) ||
     (value.assignment.kind === "planned"
-      ? !hasExactKeys(value.assignment, ["kind", "agentId"]) ||
-        !isAgentMapBoundedText(value.assignment.agentId, 256)
-      : value.assignment.kind !== "unplanned" ||
-        !hasExactKeys(value.assignment, ["kind"]))
-  )
-    throw new Error("invalid Agent Map actor");
-  return structuredClone(value) as unknown as ProposalActor;
+      ? !hasExactKeys(value.assignment, ["kind", "agentId"]) || !isAgentMapBoundedText(value.assignment.agentId, 256)
+      : value.assignment.kind !== "unplanned" || !hasExactKeys(value.assignment, ["kind"])))
+    throw new Error("invalid legacy Agent Map actor");
+  return structuredClone(value) as unknown as LegacyE2ProposalActor;
 }
 
 export function parseMapChangeProposal(
