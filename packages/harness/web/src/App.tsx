@@ -227,6 +227,8 @@ const HELD_PROMPT_HINT_DELAY_MS = 4_000;
 interface CreateSessionAtOptions {
   /** Keep the create-new queue mounted while inline files are materialized. */
   keepComposerOpen?: boolean;
+  /** Keep an explicit new-agent builder active when its root joins Studio. */
+  standaloneBuilder?: boolean;
 }
 
 /**
@@ -293,6 +295,11 @@ export const App = (): JSX.Element => {
   );
   const [studioSelection, setStudioSelection] =
     useState<StudioWorkspaceSelection | null>(null);
+  // A global create-new submit is a request to BUILD in a generic session,
+  // not a project visit whose saved/default workspace should be restored.
+  // Key by root because createSession() refreshes Studio's project catalog
+  // before it returns the session to this component.
+  const pendingStandaloneBuilderRootsRef = useRef(new Set<string>());
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
   const plannerProjectId =
@@ -368,6 +375,19 @@ export const App = (): JSX.Element => {
       restoredStudioProjectsRef.current.has(project.projectId)
     )
       return;
+    // Only consume the intent once Studio has issued an identity for the
+    // exact new root. A parent project can temporarily be the best scope while
+    // createSession() is still refreshing the catalog; consuming it there
+    // would let the later exact project fall through to its Agent Map default.
+    const standaloneBuilderRoot = [
+      ...pendingStandaloneBuilderRootsRef.current,
+    ].find((root) => samePath(root, active.cwd) && samePath(root, scope.cwd));
+    if (standaloneBuilderRoot) {
+      pendingStandaloneBuilderRootsRef.current.delete(standaloneBuilderRoot);
+      restoredStudioProjectsRef.current.add(project.projectId);
+      studioRestoreGenerationRef.current += 1;
+      return;
+    }
     restoredStudioProjectsRef.current.add(project.projectId);
     const generation = ++studioRestoreGenerationRef.current;
     void harness.api
@@ -1730,6 +1750,9 @@ export const App = (): JSX.Element => {
     // the real session/agent lands (see the store's pruning effect).
     harness.addPendingWorkspace(cwd);
     closeMobileDrawer();
+    if (options.standaloneBuilder) {
+      pendingStandaloneBuilderRootsRef.current.add(cwd);
+    }
     try {
       const session = await harness.createSession({
         cwd,
@@ -1742,6 +1765,9 @@ export const App = (): JSX.Element => {
       });
       return session;
     } catch (err) {
+      if (options.standaloneBuilder) {
+        pendingStandaloneBuilderRootsRef.current.delete(cwd);
+      }
       harness.removePendingWorkspace(cwd);
       throw err;
     }
@@ -2102,6 +2128,7 @@ export const App = (): JSX.Element => {
     setRightCollapsed(true);
     const session = await createSessionAt(cwd, agentHarness, {
       keepComposerOpen: true,
+      standaloneBuilder: true,
     });
     try {
       const resolved = await materializeAttachments(
@@ -2122,6 +2149,7 @@ export const App = (): JSX.Element => {
       await harness.closeSession(session.id).catch((rollbackError: unknown) => {
         console.error("[harness] attachment rollback failed:", rollbackError);
       });
+      pendingStandaloneBuilderRootsRef.current.delete(cwd);
       harness.removePendingWorkspace(cwd);
       throw error;
     }
