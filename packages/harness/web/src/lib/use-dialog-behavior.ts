@@ -63,8 +63,9 @@ function focusablesIn(container: HTMLElement): HTMLElement[] {
   ).filter(
     // `offsetParent` is null for anything `display: none` (and for a
     // `position: fixed` element, which a dialog's own children never are).
-    // A trap that counted hidden controls would park focus on nothing.
-    (element) => element.offsetParent !== null || element === document.activeElement,
+    // A trap that counted hidden controls would park focus on nothing, and the
+    // browser would disagree with it about where Tab goes next.
+    (element) => element.offsetParent !== null,
   );
 }
 
