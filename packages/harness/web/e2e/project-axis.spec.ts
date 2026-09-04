@@ -484,19 +484,28 @@ test.describe("row chrome", () => {
     // Folding it hid the only thing the rail is for and left a header sitting
     // on nothing.
     await expect(page.locator(".rail-header-label")).toHaveText("Projects");
-    await expect(page.locator(".rail-header [aria-expanded]")).toHaveCount(1); // the sliders popover
+    // Two now: the create verb's own menu and the settings popover. Both are
+    // menus the header OWNS; neither folds the tree, which is the claim.
+    await expect(page.locator(".rail-header [aria-expanded]")).toHaveCount(2);
     await expect(page.locator(".rail-header .row-disclosure")).toHaveCount(0);
-    await expect(
-      page.locator(".rail-header button[aria-expanded]"),
-    ).toHaveAttribute("data-testid", "history-trigger");
+    const expandables = await page
+      .locator(".rail-header button[aria-expanded]")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+    expect(expandables).toEqual(["rail-create-new", "history-trigger"]);
   });
 
-  test("the header's + sits LEFT OF the settings ellipsis, and adds a PROJECT", async ({
+  test("the header's + sits LEFT OF the settings ellipsis, and is THE create verb", async ({
     page,
   }) => {
-    await expect(page.getByTestId("rail-add-project")).toHaveAttribute(
+    // It used to be "Add a project" and it opened a folder dialog. It is the
+    // one create verb now: IA-REVIEW's rule is "One create verb, `New agent`,
+    // as the rail header's `+`. Not a row among places" — so the black CTA that
+    // sat in the nav above, and the nav's own "Add existing agents" row, are
+    // both gone from that list. A folder is something this verb's first step
+    // collects, not the thing it makes.
+    await expect(page.getByTestId("rail-create-new")).toHaveAttribute(
       "aria-label",
-      "Add a project",
+      "New agent",
     );
 
     // ORDER, asserted from the live DOM rather than from CSS: the LABEL owns the
@@ -512,7 +521,7 @@ test.describe("row chrome", () => {
       );
     expect(headerOrder).toEqual([
       "label",
-      "rail-add-project",
+      "rail-create-new",
       "history-trigger",
     ]);
 
@@ -523,16 +532,19 @@ test.describe("row chrome", () => {
         document.querySelector(".rail-header-label")!.getBoundingClientRect()
           .left,
       ),
+      // Any surviving nav row does; they all share the one icon slot. Search is
+      // the one that cannot be removed by an IA change, so it is the measure.
       navRow: Math.round(
         document
-          .querySelector('[data-testid="add-existing-agents"] span')!
+          .querySelector('[data-testid="palette-trigger"] span')!
           .getBoundingClientRect().left,
       ),
     }));
     expect(indents.header).toBeLessThan(indents.navRow);
 
-    await page.getByTestId("rail-add-project").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
+    // The verb's first step is a choice of place, not a folder dialog.
+    await page.getByTestId("rail-create-new").click();
+    await expect(page.getByTestId("new-agent-menu")).toBeVisible();
     await page.keyboard.press("Escape");
 
     // AN ELLIPSIS, reversing the design doc's "sliders, not an ellipsis". That

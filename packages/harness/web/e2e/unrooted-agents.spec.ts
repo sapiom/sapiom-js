@@ -21,7 +21,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
+import { openProjectMenu, openFolderStep } from "./mock-navigation";
 
 const ORCHESTRATION = "/Users/demo/design-eng/ari/orchestration";
 const FIX_ORCHESTRATION = "/Users/demo/design-eng-fix/ari/orchestration";
@@ -439,7 +439,7 @@ test.describe("(c) there is a way OUT", () => {
     // This is the assertion that matters most: `hiddenByClosedProject` refuses
     // to let an EQUAL open entry un-close a root, so without a deliberate
     // reopen path the project could never come back at all.
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await page.getByTestId("folder-field-input").fill("/Users/demo/design-eng");
     await page.getByTestId("open-project").click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();

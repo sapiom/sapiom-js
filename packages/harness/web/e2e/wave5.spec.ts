@@ -12,6 +12,7 @@
  *   - overview mode shows the fresh-install canvas state
  */
 import { expect, test } from "@playwright/test";
+import { openAddExistingAgents } from "./mock-navigation";
 
 // COMPATIBILITY PAYLOAD, said out loud.
 //
@@ -79,7 +80,7 @@ test.describe("command palette sections and highlighting", () => {
 
 test.describe("add existing agents (detection-driven)", () => {
   test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
-    await page.getByTestId("add-existing-agents").click();
+    await openAddExistingAgents(page);
     const modal = page.locator(".modal-start");
     await modal.getByTestId("folder-field-input").fill("/Users/demo");
 
@@ -173,7 +174,7 @@ test("a folder that cannot be read says so, and the field stays the way out", as
   await page.goto("/?mockError=listDir&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   const modal = page.locator(".modal-start");
 
   const err = modal.locator(".modal-error");

@@ -21,7 +21,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
+import { openProjectMenu, openAddExistingAgents, openFolderStep } from "./mock-navigation";
 
 /* A folder that is NOTHING yet: no agent, no session, no recentDirs entry.
    `scratch` cannot play this part — it is the fixture's bare-session project,
@@ -48,7 +48,7 @@ test.describe("the header + opens a project", () => {
   }) => {
     await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
 
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await expect(page.locator(".modal-start-title")).toHaveText(
       "Add a project",
     );
@@ -91,7 +91,11 @@ test.describe("the header + opens a project", () => {
   test("a planning project keeps sessions direct while hiding standalone agent creation", async ({
     page,
   }) => {
-    await page.getByTestId("rail-add-project").click();
+    // Through the ⋮, not the create verb. The verb's folder step CONTINUES into
+    // the new agent screen once the folder is named — that is the flow it
+    // exists for — and this spec's subject is what a planning project offers
+    // afterwards, which needs the folder registered and nothing else.
+    await openAddExistingAgents(page);
     await page.getByTestId("folder-field-input").fill(BLANK);
     await page.getByTestId("open-project").click();
 
@@ -149,7 +153,7 @@ test.describe("the header + opens a project", () => {
   }) => {
     // One press, because "open this folder" and "show me what's in it" is not
     // a decision worth asking twice.
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await page
       .getByTestId("folder-field-input")
       .fill("/Users/demo/acme-app/leasing");
@@ -178,7 +182,7 @@ test.describe("the two questions stay two controls", () => {
   test("the nav row still asks the DETECTION question, with its own primary", async ({
     page,
   }) => {
-    await page.getByTestId("add-existing-agents").click();
+    await openAddExistingAgents(page);
     await expect(page.locator(".modal-start-title")).toHaveText(
       "Add existing agents",
     );
@@ -191,7 +195,7 @@ test.describe("the two questions stay two controls", () => {
   test("a no-agent folder in the detection flow is no longer a dead end", async ({
     page,
   }) => {
-    await page.getByTestId("add-existing-agents").click();
+    await openAddExistingAgents(page);
     await page.getByTestId("folder-field-input").fill(BLANK);
     // The immediate-child probe has nothing to register, so its button is gone
     // rather than sitting there disabled.
@@ -216,7 +220,7 @@ test.describe("the two questions stay two controls", () => {
   test("Add a project offers ONE action, and it still brings the agents", async ({
     page,
   }) => {
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await page.getByTestId("folder-field-input").fill("/Users/demo/acme-app");
     await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
     await expect(page.getByTestId("aw-add")).toHaveCount(0);
@@ -250,7 +254,7 @@ test.describe("round trip: removed, then back", () => {
     // Removal takes the SUBTREE, agents included — it is not a relocation.
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
 
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await page.getByTestId("folder-field-input").fill("/Users/demo/acme-app");
     await page.getByTestId("open-project").click();
 
@@ -290,7 +294,7 @@ test.describe("round trip: removed, then back", () => {
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
 
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await page.getByTestId("folder-field-input").fill("/Users/demo");
     await page.getByTestId("open-project").click();
 

@@ -56,3 +56,31 @@ export async function openProjectMenu(page: Page, label: string): Promise<void> 
   await page.getByTestId(`project-menu-${label}`).click();
   await expect(page.getByTestId(`project-menu-card-${label}`)).toBeVisible();
 }
+
+/**
+ * Open "Add existing agents".
+ *
+ * It used to be a row in the rail's nav, beside Search and Templates. There is
+ * ONE create verb now — the rail header's `+` — and a nav row that also took a
+ * folder read as a second one, so registering what a folder already holds moved
+ * into the rail's own ⋮ settings menu. Same dialog, same question, one level
+ * deeper and no longer competing with the verb.
+ */
+export async function openAddExistingAgents(page: Page): Promise<void> {
+  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-existing-agents").click();
+}
+
+/**
+ * Open the create verb's FOLDER step on a browser host.
+ *
+ * The header `+` no longer opens a folder dialog directly: its first step asks
+ * WHERE the agent lives, offering the projects that already exist plus a way
+ * out to a folder that does not. On desktop that way out is the OS folder
+ * browser and no dialog opens at all (`lib/folder-step.ts`); in Playwright,
+ * which is the browser host by definition, it is this dialog.
+ */
+export async function openFolderStep(page: Page): Promise<void> {
+  await page.getByTestId("rail-create-new").click();
+  await page.getByTestId("new-agent-choose-folder").click();
+}

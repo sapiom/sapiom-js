@@ -14,8 +14,7 @@ import type { Page } from "@playwright/test";
 import {
   focusRfqAgent,
   openProjectMenu,
-  selectMockSessionFromPalette,
-} from "./mock-navigation";
+  selectMockSessionFromPalette, openAddExistingAgents } from "./mock-navigation";
 
 // COMPATIBILITY PAYLOAD, said out loud.
 //
@@ -131,20 +130,25 @@ test.describe("theme — defaults to light until the user chooses", () => {
   });
 });
 
-test("rail: the Create-new CTA sits below Search and opens the composer", async ({
+test("rail: the create verb is the header's +, and it asks WHERE first", async ({
   page,
 }) => {
+  // It used to be a row IN the nav, above Search, reading "Create new agent" —
+  // a verb in a list of destinations, which is the confusion IA-REVIEW names.
+  // It is the Projects header's `+` now, and the nav holds only places.
+  await expect(page.locator(".rail-nav").getByTestId("rail-create-new")).toHaveCount(0);
   const cta = page.getByTestId("rail-create-new");
   await expect(cta).toBeVisible();
-  // Says WHAT it creates. Bare "Create new" named nothing, and "project" would
-  // be false — this opens the composer, which scaffolds an agent.
-  await expect(cta).toContainText("Create new agent");
+  await expect(cta).toHaveAttribute("aria-label", "New agent");
 
-  // It opens the composer-first "new session" home — the primary creative
-  // action, reachable straight from the nav.
   await cta.click();
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-input")).toBeVisible();
+  // The first step is WHERE it lives: the projects the rail already shows, plus
+  // a way out to a folder it does not. Nothing is created until that is
+  // answered, which is the whole change — the old CTA went straight to a
+  // composer that invented a folder from whatever you typed into it.
+  await expect(page.getByTestId("new-agent-menu")).toBeVisible();
+  await expect(page.getByTestId("new-agent-in-acme-app")).toBeVisible();
+  await expect(page.getByTestId("new-agent-choose-folder")).toBeVisible();
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({
@@ -198,7 +202,7 @@ test("session header: compact identity (name only; path in the tooltip); New ses
 
   await page.screenshot({ path: "web/e2e/screenshots/session-header.png" });
 
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   await expect(page.locator(".modal-start")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 });
@@ -288,7 +292,7 @@ test("creation IA: Add existing agents opens detection; the tab + starts a sibli
 }) => {
   // Adding what already exists is ONE detection-driven dialog — no doors, no
   // modes, no agent picker.
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   const modal = page.locator(".modal-start");
   await expect(modal).toBeVisible();
   await expect(page.getByTestId("add-menu")).toHaveCount(0);
@@ -1363,7 +1367,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
 test("Add existing agents: the folder field seeds itself and drives the action", async ({
   page,
 }) => {
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   const modal = page.locator(".modal-start");
   await expect(modal).toBeVisible();
 
@@ -1405,7 +1409,7 @@ test("Add existing agents: a failed directory read is reported, not swallowed", 
   await page.goto("/?mockError=listDir&seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   const modal = page.locator(".modal-start");
   await expect(modal).toBeVisible();
 
@@ -2857,7 +2861,7 @@ test("folder field: Enter fires the dialog's primary action", async ({
   // The in-app listing's arrow-key navigation went with the listing; Enter is
   // no longer "drill into the highlighted row", it is "do the one thing this
   // dialog is for".
-  await page.getByTestId("add-existing-agents").click();
+  await openAddExistingAgents(page);
   const input = page.getByTestId("folder-field-input");
   await input.fill("/Users/demo/rfq-agent");
   await expect(page.getByTestId("aw-add")).toBeEnabled();

@@ -196,8 +196,10 @@ test.describe("UI event tracking (track() calls)", () => {
   });
 
   test("new session creation emits track('session.created')", async ({ page }) => {
-    // Creating a new agent starts a session from the composer.
-    await page.getByTestId("rail-create-new").click();
+    // The composer is the app's home screen — what it shows with no session, no
+    // agent and nothing selected — rather than something the rail opens. The
+    // rail's create verb goes to a project's Agent Map instead.
+    await page.goto("/?mockState=fresh&mockStudioProjects=absent");
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await page.getByTestId("composer-input").fill("Summarize new issues each morning.");
     await page.getByTestId("composer-send").click();

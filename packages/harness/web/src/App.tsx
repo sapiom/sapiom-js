@@ -56,10 +56,14 @@ import type {
   WorkflowInfo,
   WorkflowInputContractResponse,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type {
+  WorkspaceKey,
+  WorkspaceScopeSummary,
+} from "@shared/system-graph";
 import type {
   PlannerSessionRequest,
   StudioProjectId,
+  StudioProjectSummary,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
 
@@ -208,12 +212,41 @@ const knownRootsOf = (
 ): string[] => [...(recentDirs ?? []), ...(launchDir ? [launchDir] : [])];
 
 /**
+ * A layer the COMMAND PALETTE must not open on top of.
+ *
+ * `.modal-backdrop` leads because it is the one thing every overlay in this app
+ * actually has, and because `CommandPalette` itself carries no `role` — a
+ * role-only selector (the shape the Escape handler below uses) cannot see it,
+ * so a guard written that way looks correct and detects nothing.
+ *
+ * THE OVERVIEW IS CARVED OUT, and it is not an oversight: the palette is
+ * deliberately reachable by shortcut while the Overview is up, and navigating
+ * from it dismisses the Overview rather than stacking behind it. That is a
+ * written contract with a spec behind it — `welcome.spec.ts`'s "the palette's
+ * Browse templates, opened over the Overview, leaves it (never stacks)". The
+ * Overview wears both `role="dialog"` and `aria-modal="true"`, so excluding it
+ * has to be done on each clause rather than by dropping a class from the list.
+ *
+ * DELIBERATELY NOT the dialog shell's `DIALOG_LAYER_SELECTOR` (#800). That one
+ * answers "which layer owns Tab", where the Overview IS a layer and belongs in
+ * the list. This one answers "may ⌘K open here", where it does not. Same shape,
+ * different question; collapsing them would break the contract above.
+ */
+const PALETTE_BLOCKING_LAYER_SELECTOR = [
+  ".modal-backdrop",
+  '[role="dialog"]:not(.overview-modal)',
+  '[role="alertdialog"]:not(.overview-modal)',
+  '[aria-modal="true"]:not(.overview-modal)',
+].join(",");
+
+/**
  * How long a held initial prompt waits for the coding agent to become ready
  * (i.e. the user to finish any sign-in, trust, or onboarding step) before we
  * give up and surface the failure. The normal end of a hold is the session
  * going ready (prompt sent) or exiting — this is only a leak-guard for setup
  * the user walks away from.
  */
+
 const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
 
 /**
@@ -274,6 +307,19 @@ export const App = (): JSX.Element => {
   // Create-new intent; the workbench tab + starts a sibling directly instead.
   // The home also shows whenever nothing else claims the centre pane.
   const [composing, setComposing] = useState(false);
+  /**
+   * THE PROJECT THE NEW AGENT SCREEN IS SCOPED TO, or null for the home screen.
+   *
+   * Creating an agent leads to one screen whichever entrance you came through —
+   * a folder you just picked, or a project you already have — and this is what
+   * makes the second entrance possible. It is deliberately NOT `studioSelection`:
+   * the Agent Map row still opens the map, and only the create verb lands here,
+   * so the two must be able to differ.
+   */
+  const [composingProject, setComposingProject] = useState<{
+    projectId: StudioProjectId;
+    label: string;
+  } | null>(null);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
   // pending affordance; the ref closes React's same-frame double-click window.
   const [siblingSessionPending, setSiblingSessionPending] = useState(false);
@@ -849,6 +895,29 @@ export const App = (): JSX.Element => {
         return;
       }
       if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "p")) {
+        // ALREADY OPEN IS NOT A REASON TO OPEN IT AGAIN, and the palette is
+        // itself a modal layer, so this is answered before the guard below.
+        if (paletteOpen) {
+          e.preventDefault();
+          return;
+        }
+        // A LAYER ON TOP SWALLOWS THE SHORTCUT. Unguarded, ⌘K stacked the
+        // palette over an open dialog and native Tab then walked out of the
+        // palette into the dialog behind it. A surface cannot contain focus for
+        // a surface it does not own, so the fix is here rather than in either.
+        // Found by the dialog-shell work (#800), which stopped at this file
+        // rather than reaching into it. See the selector for what it excludes
+        // and why it is not that branch's list.
+        //
+        // PREVENTED, THEN DROPPED — never returned unhandled. This handler owns
+        // ⌘P as well as ⌘K, and ⌘P is the browser's PRINT shortcut: returning
+        // early without preventing it opened a native print preview over the
+        // dialog, which is worse than the stacking it was added to stop. The
+        // shortcut does nothing here, exactly as it did nothing before.
+        if (document.querySelector(PALETTE_BLOCKING_LAYER_SELECTOR)) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         setPaletteOpen(true);
         return;
@@ -1488,9 +1557,14 @@ export const App = (): JSX.Element => {
   const showComposer =
     !showReview &&
     !showDead &&
-    !planningWorkspace &&
+    // A SCOPED COMPOSER OUTRANKS THE MAP. Landing on a project's map is what
+    // selecting the project does; landing on this screen is what CREATING in it
+    // does, and the create verb sets both (the map so the rail reads right, the
+    // scope so the screen knows where it is building). Without this the map's
+    // chat pane would win and the entrance would go nowhere.
+    (composingProject !== null || !planningWorkspace) &&
     !showProjectStarting &&
-    (composing || (!showAgentEmpty && !showWorkbench));
+    (composing || composingProject !== null || (!showAgentEmpty && !showWorkbench));
   /** The project a board can cut UP to — derived, so the way back is the same
    *  door whether the agent was reached from the rail or from the map. */
   const upToProject = atMapAltitude
@@ -1644,6 +1718,10 @@ export const App = (): JSX.Element => {
     label: string,
   ): void => {
     studioRestoreGenerationRef.current += 1;
+    // Selecting a project is a different question from creating in one, and
+    // the create scope outranks the map — so it has to be dropped here or
+    // selecting would land back on the screen you just left.
+    setComposingProject(null);
     const studioProjectId = workspaceScopes.find(
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
@@ -1879,6 +1957,134 @@ export const App = (): JSX.Element => {
    */
   const handleCreateAgentInProject = (root: string, label: string): void => {
     setCreatingAgent({ root, label });
+  };
+
+  /**
+   * THE ONE CREATE VERB'S SECOND STEP — and it never types English at anyone.
+   *
+   * The rail's create control used to call `onNewSession`, which set
+   * `composing` and ended at `sendScaffoldPrompt`: a session at a folder
+   * invented from a slug of the user's sentence, then an English request that
+   * the coding agent please call `sapiom_dev_agents_scaffold`. That is the
+   * mechanism SAP-2981 set out to remove, still wired to the most prominent
+   * control in the product, and it failed the way a prompt fails — a create
+   * that did not happen arrived as a confused model rather than an error.
+   *
+   * `aaf721bb` (#790) had already fixed the project-row doors, and the fix is
+   * the same one: WHEN A PROJECT HAS A DURABLE STUDIO PROJECT, ITS AGENT MAP
+   * OWNS CREATION. So this resolves the folder to a project and hands over to
+   * the map, exactly as selecting the project does — `handleSelectWorkspace`'s
+   * map branch, run against the state that comes back from opening the folder
+   * rather than the render's own copy of it, which is one refresh stale here.
+   *
+   * The folder does not have to be a project yet. `openProject` is what makes
+   * it one (and resolves an agent's own folder to the folder that HOLDS it),
+   * and after PR "one definition of what a project is" the server issues a
+   * durable Studio project for exactly that root, so the map is there when we
+   * ask for it.
+   *
+   * A payload with no Studio project catalog is the one case the map cannot
+   * serve. That is not a reason to keep the injection: it falls through to
+   * `handleCreateAgentInProject`, the dialog whose endpoint creates the agent
+   * on disk and rescans before any session starts. Still the harness creating
+   * the agent; still no sentence sent to a model.
+   */
+  /**
+   * OPEN A FOLDER AS A PROJECT AND SAY WHAT IT RESOLVED TO — once.
+   *
+   * Two handlers need exactly this prefix and had a line-for-line copy of it
+   * each: the rail's "add a project" route (which then restores whatever
+   * workspace that project remembers) and the create verb (which then goes to
+   * the map, because you are making something). They differ only in what they
+   * do with the answer, so the answer is computed here and the difference stays
+   * in the callers. Two copies of a four-call sequence over the settings API is
+   * how they come to disagree, and on the web folder fallback it was worse than
+   * drift: the verb ran the whole sequence twice per click, two
+   * `rememberProjectDir` writes and two registry sweeps of the same root.
+   *
+   * `openProject` resolves an agent's OWN folder to the folder that holds it,
+   * so `root` is what came back, never what was asked for.
+   */
+  const openProjectAndResolve = async (
+    requestedRoot: string,
+  ): Promise<
+    { root: string; workflows: WorkflowInfo[] } & (
+      | { scope: WorkspaceScopeSummary; project: StudioProjectSummary }
+      | { scope: null; project: null }
+    )
+  > => {
+    const root = await harness.openProject(requestedRoot);
+    const refreshed = await harness.api.getState();
+    const workflows = refreshed.workflows;
+    const scope = refreshed.workspaceScopes?.find((candidate) =>
+      samePath(candidate.cwd, root),
+    );
+    const project = refreshed.studioProjects?.find(
+      (candidate) => candidate.projectId === scope?.projectId,
+    );
+    return scope?.projectId && project
+      ? { root, workflows, scope, project }
+      : { root, workflows, scope: null, project: null };
+  };
+
+  const handleNewAgentIn = async (
+    root: string,
+    label?: string,
+  ): Promise<void> => {
+    let openedRoot = root;
+    try {
+      // NOTHING HERE IS ALLOWED TO FAIL SILENTLY. Both call sites are
+      // `void onNewAgentIn(...)` from a control that has already closed its
+      // popover, and `openProject` writes settings over the API while
+      // `getState` re-reads it — either can reject. The verb this replaced was
+      // synchronous and could not fail, so an unhandled rejection here would be
+      // a new failure mode whose only symptom is the most prominent control in
+      // the product doing nothing at all.
+      const opened = await openProjectAndResolve(root);
+      openedRoot = opened.root;
+      const { scope, project } = opened;
+      const name = label ?? basenameOf(openedRoot);
+      if (!scope || !project) {
+        handleCreateAgentInProject(openedRoot, name);
+        return;
+      }
+      studioRestoreGenerationRef.current += 1;
+      restoredStudioProjectsRef.current.add(project.projectId);
+      const selection: StudioWorkspaceSelection = {
+        kind: "agent-map",
+        projectId: project.projectId,
+      };
+      setStudioSelection(selection);
+      // BOTH ENTRANCES LAND ON THE NEW AGENT SCREEN, scoped to this project.
+      // A folder you just picked and a project you already have differ only in
+      // how the project was resolved, and by here they have both resolved to
+      // one, so from this line the two flows are the same flow. The map
+      // selection above rides along so the rail reads right underneath it.
+      setComposingProject({ projectId: project.projectId, label: name });
+      setSelectedProject(null);
+      setFocusedAgentPath(scope.cwd);
+      setComposing(false);
+      setReviewSummary(null);
+      setTemplatesOpen(false);
+      setOverviewOpen(false);
+      closeMobileDrawer();
+      if (isMobile) setRightCollapsed(true);
+      await harness.api
+        .putStudioCurrentWorkspace(project.projectId, selection)
+        .catch(() => {
+          // The map is already selected. Remembering it is best effort and must
+          // not turn a completed navigation into a failure.
+        });
+    } catch (error) {
+      // The folder may already be open even though resolving it failed, so the
+      // message names what could not be done rather than claiming nothing
+      // happened.
+      harness.showToast(
+        error instanceof Error && error.message
+          ? `Couldn't open ${basenameOf(openedRoot)} to create an agent in. ${error.message}`
+          : `Couldn't open ${basenameOf(openedRoot)} to create an agent in.`,
+      );
+    }
   };
 
   const createAgentInProject = async (input: {
@@ -2154,17 +2360,85 @@ export const App = (): JSX.Element => {
     );
   };
 
+  /**
+   * SUBMITTING THE NEW AGENT SCREEN, in a project, through the real path.
+   *
+   * This is the swap the whole PR exists for. The other branch below still
+   * invents a folder and injects `composerScaffoldPrompt` — English typed at the
+   * coding agent, hoping it calls the scaffold tool — because with no project
+   * there is nothing to dispatch to. With one, there is: the map planner, which
+   * is the same conversation this screen opens, held by something that can
+   * actually build.
+   *
+   * `resume-or-create` rather than `fresh`, matching the map row, because a
+   * project may already have a planning conversation in progress and dropping
+   * the user into an empty planner would strand it.
+   *
+   * The idea itself rides in as the first message. Not as a prompt asking for a
+   * tool call — as the answer to the question the planner's opening turn asks.
+   */
+  const handleComposerSubmitInProject = async (
+    project: { projectId: StudioProjectId; label: string },
+    idea: string,
+    agentHarness: HarnessKind,
+  ): Promise<void> => {
+    setRightCollapsed(true);
+    // TWO CALLS, ONE SESSION, and that is what the mode is for. This dispatch
+    // is the deterministic one — it has the session id the first message needs
+    // — and `useAgentMapEntry`'s own effect fires a second time once
+    // `studioSelection` becomes this project's map. `resume-or-create` makes
+    // the second one resume rather than open a rival planner: measured against
+    // the mock rail, two open calls and one created session.
+    const opened = await harness.openPlannerSession(project.projectId, {
+      mode: "resume-or-create",
+      harness: agentHarness,
+      theme: getTheme(),
+    });
+    harness.setActiveSessionId(opened.session.id);
+    // The screen has done its job; the planner owns the conversation now.
+    setComposingProject(null);
+    setStudioSelection({ kind: "agent-map", projectId: project.projectId });
+    const text = idea.trim();
+    if (!text) return;
+    try {
+      await harness.api.sendPlannerMessage(
+        project.projectId,
+        opened.session.id,
+        { text },
+      );
+    } catch {
+      // The planner is open and the user can retype. Reporting a failed first
+      // message as a failed CREATE would be the same lie the injected prompt
+      // told, in the other direction.
+      harness.showToast(
+        "Couldn't send that to the planner — it's open, try sending again.",
+      );
+    }
+  };
+
   const handleComposerSubmitIdea = async (
     idea: string,
     agentHarness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ): Promise<void> => {
+    if (composingProject) {
+      await handleComposerSubmitInProject(composingProject, idea, agentHarness);
+      return;
+    }
     const cwd = uniqueProjectDir(
       idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
     );
     if (!cwd) {
       throw new Error("Set a project folder first — use the + to open one.");
     }
+    // SAY IT, don't infer it. `composing` used to be set by the rail control
+    // that opened this, and holding it true is what keeps the composer MOUNTED
+    // across the session that is about to be created and, on a failed upload,
+    // closed again. The composer is now the home screen — shown because
+    // nothing else is — so without this the workbench appears for the life of
+    // that provisional session, the composer unmounts, and the attachment queue
+    // a rollback is supposed to retain goes with it.
+    setComposing(true);
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
     const session = await createSessionAt(cwd, agentHarness, {
@@ -2291,6 +2565,7 @@ export const App = (): JSX.Element => {
   const reviewPastSession = (summary: SessionSummary): void => {
     studioRestoreGenerationRef.current += 1;
     setStudioSelection(null);
+    setComposingProject(null);
     setComposing(false);
     setReviewSummary(summary);
     setTemplatesOpen(false);
@@ -2386,6 +2661,7 @@ export const App = (): JSX.Element => {
     preferredStudioBinding?: { projectId: string; agentId: string },
   ): void => {
     studioRestoreGenerationRef.current += 1;
+    setComposingProject(null);
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
@@ -2722,6 +2998,10 @@ export const App = (): JSX.Element => {
             selectedWorkspaceKey={selectedProject?.workspaceKey ?? null}
             onSelectWorkspace={handleSelectWorkspace}
             onSelectAgentMap={(projectId, root, label) => {
+              // The map row opens the MAP, never the create screen — the two
+              // are different questions about the same project and the create
+              // scope has to be dropped or it would win over the map.
+              setComposingProject(null);
               const scope = workspaceScopes.find(
                 (candidate) => candidate.projectId === projectId,
               );
@@ -2745,6 +3025,7 @@ export const App = (): JSX.Element => {
             onSelectOverview={() => {
               studioRestoreGenerationRef.current += 1;
               setStudioSelection(null);
+              setComposingProject(null);
               setSelectedProject(null);
               setOverviewOpen(true);
               setComposing(false);
@@ -2752,14 +3033,7 @@ export const App = (): JSX.Element => {
               setTemplatesOpen(false);
               closeMobileDrawer();
             }}
-            onNewSession={() => {
-              studioRestoreGenerationRef.current += 1;
-              setStudioSelection(null);
-              setSelectedProject(null);
-              setComposing(true);
-              setTemplatesOpen(false);
-              setOverviewOpen(false);
-            }}
+            onNewAgentIn={handleNewAgentIn}
             onReviewSummary={reviewPastSession}
             history={harness.history}
             historyLoading={harness.historyLoading}
@@ -2784,20 +3058,18 @@ export const App = (): JSX.Element => {
               await harness.removeProject(root);
             }}
             onOpenProject={async (requestedRoot) => {
-              const openedRoot = await harness.openProject(requestedRoot);
               let restoringProject: {
                 projectId: StudioProjectId;
                 cwd: string;
               } | null = null;
               try {
-                const refreshed = await harness.api.getState();
-                const scope = refreshed.workspaceScopes?.find((candidate) =>
-                  samePath(candidate.cwd, openedRoot),
-                );
-                const project = refreshed.studioProjects?.find(
-                  (candidate) => candidate.projectId === scope?.projectId,
-                );
-                if (!scope?.projectId || !project) return;
+                // The same four calls the create verb makes, made once — see
+                // `openProjectAndResolve`. What differs is only what happens
+                // next: this route restores whatever workspace the project
+                // REMEMBERS, the verb goes to the map because it is creating.
+                const { scope, project, workflows } =
+                  await openProjectAndResolve(requestedRoot);
+                if (!scope || !project) return;
                 restoringProject = {
                   projectId: project.projectId,
                   cwd: scope.cwd,
@@ -2810,7 +3082,7 @@ export const App = (): JSX.Element => {
                 if (generation !== studioRestoreGenerationRef.current) return;
                 const restoredSelection = current.selection;
                 if (restoredSelection.kind === "agent") {
-                  const workflow = refreshed.workflows.find((candidate) =>
+                  const workflow = workflows.find((candidate) =>
                     candidate.studioBindings?.some(
                       (binding) =>
                         binding.projectId === restoredSelection.projectId &&
@@ -3162,7 +3434,14 @@ export const App = (): JSX.Element => {
                     </button>
                   }
                 />
-              ) : planningWorkspace ? (
+              ) : /* THE CREATE SCREEN COMES FIRST when it is scoped to this
+                     project. Both are "about" the same project and both are
+                     driven by `planningWorkspace`, so without this the map's
+                     chat pane wins the chain and the create entrance renders
+                     nothing — the state was right and the JSX never reached it.
+                     `showComposer` already encodes the precedence; this is the
+                     same rule, said where the branch is taken. */
+              planningWorkspace && !showComposer ? (
                 agentMapEntry.state.planner.status === "error" ? (
                   <EmptyState
                     className="terminal-empty"
@@ -3302,13 +3581,15 @@ export const App = (): JSX.Element => {
                    screen gives way to the terminal (createSessionAt clears
                    `composing`), and the canvas reveals itself once populated. */
                 <NewSessionComposer
-                  firstRun={state.firstRun === true}
+                  project={composingProject}
+                  firstRun={composingProject === null && state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
                   onUseTemplate={handleComposerUseTemplate}
                   onBrowseTemplates={() => {
                     studioRestoreGenerationRef.current += 1;
                     setStudioSelection(null);
+                    setComposingProject(null);
                     setSelectedProject(null);
                     setTemplatesOpen(true);
                   }}

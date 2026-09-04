@@ -7,6 +7,8 @@ import {
   type TemplateListResponse,
 } from "@shared/types";
 
+import type { StudioProjectId } from "@shared/agent-map";
+
 import type { FsListResponse } from "../lib/api";
 import {
   FALLBACK_HARNESSES,
@@ -30,12 +32,31 @@ import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
- * The composer-first "new session" home. It stands in the centre pane whenever
- * there is no active session (first run, after closing sessions) and when the
- * user asks to start a new one — no terminal, no canvas yet. Describing an
- * outcome and sending starts a session and hands the agent that outcome (the
- * same create+inject path the "start from an idea" door uses); the screen then
- * gives way to the terminal. Templates are the other on-ramp.
+ * THE NEW AGENT SCREEN. One screen, two entrances.
+ *
+ * "What should your agent do?", the chips, the outcome box and the template
+ * cards are where creating an agent leads — from a folder you just picked, or
+ * from a project you already have. It also still stands in the centre pane when
+ * there is no active session at all, which is the same screen arrived at from a
+ * third direction rather than a different one.
+ *
+ * IT USED TO BE HALF OF A SPLIT, and closing that split is why it now takes a
+ * project. There were two implementations of one idea: this screen, with the
+ * good surface and the wrong plumbing — it invented a folder from a slug of what
+ * you typed and then asked the coding agent, in English, to please scaffold
+ * something in it — and the Agent Map planner, with the right plumbing and no
+ * landing screen at all. Both ask the same question; `plannerGreetingPrompt`
+ * instructs the planner's opening turn to "ask exactly one open-ended question
+ * about what kind of agent architecture the user wants to build", which is this
+ * screen's heading in other words.
+ *
+ * So the surface stayed and the plumbing was replaced: `project` scopes it, and
+ * submitting dispatches the planner for that project instead of typing English
+ * at a terminal.
+ *
+ * `project === null` is the no-project home — a first run, or every session
+ * closed — where there is nothing to scope to yet and the folder is still the
+ * first thing the flow has to establish.
  */
 
 /** Quick-start prompts. Net-new — the catalog has no "starter idea" list — so a
@@ -79,8 +100,18 @@ function chipSlug(label: string): string {
 }
 
 interface NewSessionComposerProps {
+  /**
+   * The project this screen is creating IN, or null for the no-project home.
+   *
+   * Present, the screen says which project it is about and submitting dispatches
+   * that project's planner. Absent, it is the home screen and submitting has to
+   * establish a folder first. The two entrances differ only in whether this is
+   * set — the screen itself is one screen.
+   */
+  project: { projectId: StudioProjectId; label: string } | null;
   /** Genuine first run (AppState.firstRun): changes the greeting and shows the
-   *  one-time telemetry opt-in + docs footer. */
+   *  one-time telemetry opt-in + docs footer. Never true when `project` is set:
+   *  a project you already have is not a first run. */
   firstRun: boolean;
   /** Start a session and hand the agent this outcome (empty → default starter).
    *  App derives the folder and runs the scaffold+inject path. */
@@ -114,6 +145,7 @@ interface NewSessionComposerProps {
 }
 
 export function NewSessionComposer({
+  project,
   firstRun,
   onSubmitIdea,
   onAttachmentError,
@@ -311,7 +343,15 @@ export function NewSessionComposer({
       <div className="composer-hero">
         <p className="composer-greeting" data-testid="composer-greeting">
           {timeGreeting(new Date())}{" "}
-          {firstRun ? "Let's build your first agent." : "Let's build a new agent."}
+          {/* NAME THE PROJECT when there is one. The screen is reached from two
+              entrances and only one of them stated where the agent will live;
+              arriving from the other with no mention of it is how you end up
+              building in a folder you did not mean. */}
+          {project
+            ? `Let's build a new agent in ${project.label}.`
+            : firstRun
+              ? "Let's build your first agent."
+              : "Let's build a new agent."}
         </p>
         <h1 className="composer-heading">What should your agent do?</h1>
 

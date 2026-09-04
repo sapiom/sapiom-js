@@ -12,6 +12,7 @@
  * reaches — the one that now carries the whole picker.
  */
 import { expect, test } from "@playwright/test";
+import { openAddExistingAgents, openFolderStep } from "./mock-navigation";
 
 /** Mirrors the preload's bridge, recording what the SPA asked for. */
 const installDesktopBridge = async (
@@ -42,7 +43,7 @@ test.describe("browser host (npx)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-add-project").click();
+    await openFolderStep(page);
     await expect(page.locator(".modal-start")).toBeVisible();
   });
 
@@ -71,13 +72,19 @@ test.describe("browser host (npx)", () => {
 });
 
 test.describe("desktop host", () => {
+  /* REACHED THROUGH THE ⋮, not the create verb. The verb's folder step now
+     goes STRAIGHT to the OS folder browser when the bridge is there and opens
+     no dialog at all (`lib/folder-step.ts`, unit-tested — Electron cannot run
+     here). The detection dialog behind "Add existing agents" is a different
+     question and still asks it in a panel, which is where `FolderField`'s own
+     desktop behaviour — a Choose button and no datalist — still shows. */
   test("Choose opens the OS folder browser at the current folder, and takes its answer", async ({
     page,
   }) => {
     await installDesktopBridge(page, "/Users/demo/blank-slate");
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-add-project").click();
+    await openAddExistingAgents(page);
 
     const input = page.getByTestId("folder-field-input");
     await expect(input).toHaveValue("/Users/demo/acme-app/projects");
@@ -102,7 +109,7 @@ test.describe("desktop host", () => {
     await installDesktopBridge(page, null);
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-add-project").click();
+    await openAddExistingAgents(page);
 
     const input = page.getByTestId("folder-field-input");
     await page.getByTestId("folder-field-choose").click();

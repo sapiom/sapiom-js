@@ -424,7 +424,10 @@ test("the rail navigates away from templates: another nav row dismisses the brow
   await expect(page.getByTestId("templates-panel")).toBeVisible();
   await expect(page.locator(".center-pane")).toBeHidden();
 
+  // The create verb's first step is a choice of PLACE, so leaving the templates
+  // destination happens when that choice is made, not when the verb is pressed.
   await page.getByTestId("rail-create-new").click();
+  await page.getByTestId("new-agent-in-acme-app").click();
 
   // The template destination is gone and the workbench is back — you actually
   // navigated, rather than staying stranded on the browser.

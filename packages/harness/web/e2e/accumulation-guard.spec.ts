@@ -22,7 +22,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
+import { openProjectMenu, openAddExistingAgents } from "./mock-navigation";
 
 const ACME = "/Users/demo/acme-app";
 
@@ -356,7 +356,7 @@ test.describe("Remove project", () => {
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
 
-    await page.getByTestId("add-existing-agents").click();
+    await openAddExistingAgents(page);
     await page.getByTestId("folder-field-input").fill(`${ACME}/leasing`);
     await page.getByTestId("aw-add").click();
 
