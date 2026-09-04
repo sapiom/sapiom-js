@@ -214,6 +214,19 @@ const knownRootsOf = (
  * going ready (prompt sent) or exiting — this is only a leak-guard for setup
  * the user walks away from.
  */
+/**
+ * What counts as a separate overlay LAYER, for hotkeys that must not fire over
+ * one. See the ⌘K guard for why `.modal-backdrop` leads and why this is, for
+ * now, a second copy of the dialog shell's `DIALOG_LAYER_SELECTOR`.
+ */
+const DIALOG_LAYER_SELECTOR = [
+  ".modal-backdrop",
+  ".overview-modal",
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[aria-modal="true"]',
+].join(",");
+
 const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
 
 /**
@@ -797,6 +810,29 @@ export const App = (): JSX.Element => {
         return;
       }
       if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "p")) {
+        // ALREADY OPEN IS NOT A REASON TO OPEN IT AGAIN, and the palette is
+        // itself a modal layer, so this is answered before the guard below.
+        if (paletteOpen) {
+          e.preventDefault();
+          return;
+        }
+        // A LAYER ON TOP KEEPS THE SHORTCUT — the rule the Escape handler above
+        // already follows, and this handler did not. Unguarded, ⌘K stacked the
+        // palette over an open dialog and native Tab then walked out of the
+        // palette into the dialog behind it. A surface cannot contain focus for
+        // a surface it does not own, so the fix is here rather than in either.
+        //
+        // `.modal-backdrop` LEADS, and that is the whole reason this is not the
+        // selector 20 lines above: `CommandPalette` carries no `role` at all, so
+        // a role-only selector cannot see it, and a guard copied from there
+        // would look correct and detect nothing. The roles follow for surfaces
+        // that build their own scrim (`OverviewModal`, `HelpOverlay`).
+        //
+        // Found by the dialog-shell work (#800), which stopped at this file
+        // rather than reaching into it; `DIALOG_LAYER_SELECTOR` here is a
+        // deliberate second copy of that branch's, and whichever lands second
+        // should delete one and import the other.
+        if (document.querySelector(DIALOG_LAYER_SELECTOR)) return;
         e.preventDefault();
         setPaletteOpen(true);
         return;
@@ -1842,40 +1878,59 @@ export const App = (): JSX.Element => {
     root: string,
     label?: string,
   ): Promise<void> => {
-    const openedRoot = await harness.openProject(root);
-    const refreshed = await harness.api.getState();
-    const scope = refreshed.workspaceScopes?.find((candidate) =>
-      samePath(candidate.cwd, openedRoot),
-    );
-    const project = refreshed.studioProjects?.find(
-      (candidate) => candidate.projectId === scope?.projectId,
-    );
-    const name = label ?? basenameOf(openedRoot);
-    if (!scope || !project) {
-      handleCreateAgentInProject(openedRoot, name);
-      return;
+    let openedRoot = root;
+    try {
+      // NOTHING HERE IS ALLOWED TO FAIL SILENTLY. Both call sites are
+      // `void onNewAgentIn(...)` from a control that has already closed its
+      // popover, and `openProject` writes settings over the API while
+      // `getState` re-reads it — either can reject. The verb this replaced was
+      // synchronous and could not fail, so an unhandled rejection here would be
+      // a new failure mode whose only symptom is the most prominent control in
+      // the product doing nothing at all.
+      openedRoot = await harness.openProject(root);
+      const refreshed = await harness.api.getState();
+      const scope = refreshed.workspaceScopes?.find((candidate) =>
+        samePath(candidate.cwd, openedRoot),
+      );
+      const project = refreshed.studioProjects?.find(
+        (candidate) => candidate.projectId === scope?.projectId,
+      );
+      const name = label ?? basenameOf(openedRoot);
+      if (!scope || !project) {
+        handleCreateAgentInProject(openedRoot, name);
+        return;
+      }
+      studioRestoreGenerationRef.current += 1;
+      restoredStudioProjectsRef.current.add(project.projectId);
+      const selection: StudioWorkspaceSelection = {
+        kind: "agent-map",
+        projectId: project.projectId,
+      };
+      setStudioSelection(selection);
+      setSelectedProject(null);
+      setFocusedAgentPath(scope.cwd);
+      setComposing(false);
+      setReviewSummary(null);
+      setTemplatesOpen(false);
+      setOverviewOpen(false);
+      closeMobileDrawer();
+      if (isMobile) setRightCollapsed(true);
+      await harness.api
+        .putStudioCurrentWorkspace(project.projectId, selection)
+        .catch(() => {
+          // The map is already selected. Remembering it is best effort and must
+          // not turn a completed navigation into a failure.
+        });
+    } catch (error) {
+      // The folder may already be open even though resolving it failed, so the
+      // message names what could not be done rather than claiming nothing
+      // happened.
+      harness.showToast(
+        error instanceof Error && error.message
+          ? `Couldn't open ${basenameOf(openedRoot)} to create an agent in. ${error.message}`
+          : `Couldn't open ${basenameOf(openedRoot)} to create an agent in.`,
+      );
     }
-    studioRestoreGenerationRef.current += 1;
-    restoredStudioProjectsRef.current.add(project.projectId);
-    const selection: StudioWorkspaceSelection = {
-      kind: "agent-map",
-      projectId: project.projectId,
-    };
-    setStudioSelection(selection);
-    setSelectedProject(null);
-    setFocusedAgentPath(scope.cwd);
-    setComposing(false);
-    setReviewSummary(null);
-    setTemplatesOpen(false);
-    setOverviewOpen(false);
-    closeMobileDrawer();
-    if (isMobile) setRightCollapsed(true);
-    await harness.api
-      .putStudioCurrentWorkspace(project.projectId, selection)
-      .catch(() => {
-        // The map is already selected. Remembering it is best effort and must
-        // not turn a completed navigation into a failure.
-      });
   };
 
   const createAgentInProject = async (input: {

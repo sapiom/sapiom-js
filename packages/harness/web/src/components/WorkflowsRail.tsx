@@ -1841,8 +1841,14 @@ export function WorkflowsRail({
           onClose={() => setStartMode(null)}
           onConnect={onConnect}
           onOpenProject={async (root) => {
-            await onOpenProject(root);
+            // ONE OPEN PER CLICK. `onNewAgentIn` opens the folder itself — it
+            // has to, since the create verb can be pointed at a folder that is
+            // not a project yet — so calling `onOpenProject` first as well ran
+            // two `rememberProjectDir` writes and two registry sweeps of the
+            // same root, and let the remembered workspace be restored and then
+            // immediately overwritten.
             if (startIntent === "create") await onNewAgentIn(root);
+            else await onOpenProject(root);
           }}
           onScan={onScanWorkflows}
           /* Escape returns focus to a control that is still MOUNTED. The
