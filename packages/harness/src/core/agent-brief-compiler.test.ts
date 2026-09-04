@@ -20,6 +20,7 @@ import type {
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
 } from "../shared/build-plan.js";
+import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
@@ -159,6 +160,20 @@ describe("deterministic focused brief compiler", () => {
     const result = compileCanonicalWorkstreamBriefs({ projectId, map, plan, mapHistory: [map], planHistory: [plan], previousBriefs: [] });
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "unknown-node-reference" }));
     expect(result.briefs).toHaveLength(2);
+  });
+
+  it("diagnoses undeclared contracts and truncates oversized relationship prose into valid records", () => {
+    const value = graph();
+    value.nodes.forEach((node) => { node.contractRefs = []; });
+    value.relationships[0] = { ...value.relationships[0]!, description: "detail ".repeat(700) };
+    const map = mapVersion(value);
+    const plan = planVersion(map, content(assignments()));
+    const result = compileCanonicalWorkstreamBriefs({ projectId, map, plan,
+      mapHistory: [map], planHistory: [plan], previousBriefs: [] });
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "invalid-dependency",
+      path: expect.stringContaining("contractRef") }));
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "context-truncated" }));
+    result.briefs.forEach(({ brief }) => expect(parseAgentBriefVersion(brief, projectId)).toEqual(brief));
   });
 
   it("versions only an affected workstream when global exact plan binding changes", () => {

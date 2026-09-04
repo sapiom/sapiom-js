@@ -43,7 +43,7 @@ const focusedBriefSelectionSchema = z.object({
     delegationKey: opaque,
     parentScopeKey: digest.nullable(),
   }).strict(),
-  nodeIds: unique(generatedId("node"), (value) => value),
+  nodeIds: unique(generatedId("node"), (value) => value).optional(),
   assignmentId: generatedId("work").optional(),
   mission: text(4_096).optional(),
   scope: strings(2_000).optional(),

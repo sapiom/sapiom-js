@@ -418,6 +418,34 @@ describe("Agent Map Streamable HTTP MCP", () => {
     expect(Object.values(afterRebase.current.briefsByScope)
       .find(({ focusScope }) => focusScope.family === "ad-hoc-delegation"))
       .toMatchObject({ status: "active", version: { versionId: focusedVersionId } });
+
+    await client.callTool({ name: "agent_map_propose", arguments: {
+      ...mapRequest,
+      proposalId: (proposed.structuredContent as { proposalId: string }).proposalId,
+      expectedVersion: 2,
+      requestId: "remove-workstream",
+      operations: [{ kind: "remove-node", nodeId: researchNodeId }],
+    } });
+    const removedMap = (await workspaceStore.readAggregate(projectId)).current.map!;
+    const currentPlan = afterRebase.current.buildPlan!;
+    const retired = await client.callTool({ name: "build_plan_rebase", arguments: {
+      schemaVersion: 1,
+      requestId: "retire-workstream-plan",
+      expectedPlan: { planId: currentPlan.planId, versionId: currentPlan.versionId,
+        semanticDigest: currentPlan.semanticDigest },
+      fromMap: { versionId: secondMap.versionId, contentDigest: secondMap.contentDigest },
+      toMap: { versionId: removedMap.versionId, contentDigest: removedMap.contentDigest },
+      resolutions: [{ kind: "remove-assignment", assignmentId: firstPlanRecord.content.assignments[0]!.id }],
+    } });
+    expect(retired).toMatchObject({ structuredContent: { briefRefresh: {
+      persisted: true,
+      briefs: [expect.objectContaining({ disposition: "retired", status: "retired", version: 2 })],
+    } } });
+    const afterRetirement = await workspaceStore.readAggregate(projectId);
+    const canonicalPointer = Object.values(afterRetirement.current.briefsByScope)
+      .find(({ focusScope }) => focusScope.family === "canonical-workstream")!;
+    expect(canonicalPointer.status).toBe("retired");
+    expect(afterRetirement.briefVersionsById[canonicalPointer.briefId]).toHaveLength(2);
   });
 
   it("commits a plan when the separately retryable brief compiler fails", async () => {

@@ -49,6 +49,7 @@ import {
 import { evaluateAgentBriefImpact } from "./build-plan-impact-evaluator.js";
 
 export const AGENT_BRIEF_COMPILER_DIAGNOSTIC_LIMIT = 64;
+export const AGENT_BRIEF_TEXT_LIMIT = 2_000;
 
 const unique = <T extends string>(values: readonly T[]): T[] =>
   [...new Set(values)].sort(compareCanonicalStrings);
@@ -134,6 +135,7 @@ function indexGraph(graph: AgentMapGraph, diagnostics: BuildPlanDiagnostic[]): G
   rootByNodeId.forEach((root, nodeId) => ownedByRoot.set(root, [...(ownedByRoot.get(root) ?? []), nodeId]));
   ownedByRoot.forEach((ids) => ids.sort(compareCanonicalStrings));
   const relationshipIds = new Set<string>();
+  const declaredContracts = new Set([...nodes.values()].flatMap(({ contractRefs }) => contractRefs));
   const relationships = sorted(graph.relationships, (entry) => entry.id).filter((relationship, index) => {
     if (relationshipIds.has(relationship.id)) {
       diagnostics.push(diagnostic("invalid-dependency", `map.graph.relationships[${index}].id`, [relationship.id]));
@@ -145,6 +147,9 @@ function indexGraph(graph: AgentMapGraph, diagnostics: BuildPlanDiagnostic[]): G
         [relationship.id, relationship.fromNodeId, relationship.toNodeId]));
       return false;
     }
+    if (relationship.contractRef && !declaredContracts.has(relationship.contractRef))
+      diagnostics.push(diagnostic("invalid-dependency", `map.graph.relationships[${index}].contractRef`,
+        [relationship.id, relationship.contractRef]));
     return true;
   });
   return {
@@ -409,8 +414,15 @@ function projectScope(
     const kind = index.nodes.get(id)?.kind;
     return kind === "resource" || kind === "connector" || kind === "artifact";
   }));
-  return { root, assignment, ownedNodeIds, relevantNodeIds, relationships, inputs: unique(inputs),
-    outputs: unique(outputs), dependencies: unique(dependencies), resources };
+  const bounded = (values: readonly string[], path: string) => unique(values).map((value) => {
+    if ([...value].length <= AGENT_BRIEF_TEXT_LIMIT) return value;
+    diagnostics.push(diagnostic("context-truncated", path, [root], "warning"));
+    return `${[...value].slice(0, AGENT_BRIEF_TEXT_LIMIT - 1).join("")}…`;
+  });
+  return { root, assignment, ownedNodeIds, relevantNodeIds, relationships,
+    inputs: bounded(inputs, "brief.content.inputs"),
+    outputs: bounded(outputs, "brief.content.outputs"),
+    dependencies: bounded(dependencies, "brief.content.dependencies"), resources };
 }
 
 function fingerprints(
@@ -472,9 +484,18 @@ function compile(
   const previousByScope = new Map(request.previousBriefs.map((entry) => [entry.pointer.scopeKey, entry]));
   const candidates: CompiledAgentBriefCandidate[] = [];
   const currentFingerprints = new Map<string, readonly AgentBriefDependencyFingerprint[]>();
+  const selectionCounts = new Map<string, number>();
+  request.selections.forEach(({ focusScope }) => {
+    const scopeKey = computeAgentBriefScopeKey(request.projectId, focusScope);
+    selectionCounts.set(scopeKey, (selectionCounts.get(scopeKey) ?? 0) + 1);
+  });
   for (const [selectionIndex, selection] of sorted(request.selections, (entry) =>
     computeAgentBriefScopeKey(request.projectId, entry.focusScope)).entries()) {
     const scopeKey = computeAgentBriefScopeKey(request.projectId, selection.focusScope);
+    if ((selectionCounts.get(scopeKey) ?? 0) > 1) {
+      diagnostics.push(diagnostic("invalid-dependency", `selections[${selectionIndex}].focusScope`, [scopeKey]));
+      continue;
+    }
     const projection = projectScope(selection, request.plan, index, diagnostics);
     if (!projection) continue;
     const previous = previousByScope.get(scopeKey) ?? null;

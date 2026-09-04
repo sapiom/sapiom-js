@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseAgentBriefRefreshRequest,
   parseBuildPlanApplyRequest,
   parseBuildPlanReadRequest,
   parseBuildPlanRebaseRequest,
@@ -61,5 +62,17 @@ describe("build plan tool schemas", () => {
     expect(() => parseBuildPlanApplyRequest(request)).toThrow();
     expect(() => parseBuildPlanApplyRequest({ ...request,
       operations: [{ op: "replace-content", content, privatePath: "/secret" }] })).toThrow();
+  });
+
+  it("accepts exact canonical refresh and assignment-only nested focus", () => {
+    const canonical = { schemaVersion: 1, requestId: "refresh", expectedMap: map, expectedPlan: plan,
+      focus: { mode: "canonical" } };
+    expect(parseAgentBriefRefreshRequest(canonical)).toEqual(canonical);
+    const focused = { ...canonical, requestId: "focused", focus: { mode: "focused", selections: [{
+      focusScope: { family: "ad-hoc-delegation", delegationKey: "review", parentScopeKey: null },
+      assignmentId: "work_018f0000-0000-7000-8000-000000000004",
+      mission: "Review the contract",
+    }] } };
+    expect(parseAgentBriefRefreshRequest(focused)).toEqual(focused);
   });
 });
