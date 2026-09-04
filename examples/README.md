@@ -36,13 +36,13 @@ SAPIOM_API_KEY=your-key-from-step-1
 SAPIOM_API_URL=https://api.sapiom.ai
 
 # For axios/fetch/node-http examples:
-DUMMY_SERVER_URL=https://x402-demo.sapiom.ai
+DUMMY_SERVER_URL=http://localhost:3101
 
 # For langchain examples only:
 ANTHROPIC_API_KEY=sk-ant-your-key
 ```
 
-> **Note:** The `DUMMY_SERVER_URL` points to a public demo server that simulates paid API endpoints. The default URL in `.env.example` is ready to use.
+> **Note:** `npm start`, `npm run free`, and `npm run full` for the axios, fetch, and node-http examples automatically start a local demo server at `http://localhost:3101`. Override `DUMMY_SERVER_URL` only when you want to point the examples at another compatible server.
 
 ### 3. Run an example
 
@@ -56,6 +56,7 @@ npm run full    # All endpoints (requires Sapiom balance for payments)
 ```
 
 **Start with `npm start`** - this uses free endpoints and doesn't require a balance. You can test:
+
 - Basic SDK integration
 - Authorization tracking
 - Usage rules
@@ -90,11 +91,11 @@ On the second request, you should see an `AuthorizationDeniedError` - this means
 
 ## Available Examples
 
-| Example | Package | Best for |
-|---------|---------|----------|
-| `axios/` | `@sapiom/axios` | Existing Axios codebases |
-| `fetch/` | `@sapiom/fetch` | Native fetch API users |
-| `node-http/` | `@sapiom/node-http` | Raw Node.js HTTP |
+| Example              | Package                     | Best for                            |
+| -------------------- | --------------------------- | ----------------------------------- |
+| `axios/`             | `@sapiom/axios`             | Existing Axios codebases            |
+| `fetch/`             | `@sapiom/fetch`             | Native fetch API users              |
+| `node-http/`         | `@sapiom/node-http`         | Raw Node.js HTTP                    |
 | `langchain-classic/` | `@sapiom/langchain-classic` | LangChain v0.3.x with tool wrappers |
 
 > **Note:** The `langchain/` example is for LangChain v1.x. Use `langchain-classic/` if you're on LangChain v0.3.x.
@@ -103,7 +104,9 @@ Start with `axios/` or `fetch/` - they're the simplest to understand.
 
 ## About the Demo Server
 
-The examples connect to a demo server that simulates real-world APIs with payment requirements. This server implements the [x402 payment protocol](https://www.x402.org/) - an HTTP standard where APIs can require micropayments.
+The axios, fetch, and node-http examples connect to a demo server that simulates real-world API endpoints. `npm start`, `npm run free`, and `npm run full` start the local demo server automatically, so the examples do not depend on the public `x402-demo.sapiom.ai` host being reachable.
+
+The optional paid flow (`npm run full`) exercises the same endpoint shapes locally. To test against a live compatible x402 server instead, set `DUMMY_SERVER_URL` before running the example. x402 is an HTTP standard where APIs can require micropayments.
 
 **How it works:**
 
@@ -115,6 +118,7 @@ The examples connect to a demo server that simulates real-world APIs with paymen
 You don't need to understand the x402 protocol - the Sapiom SDK handles it transparently. Your code just makes normal HTTP requests.
 
 The demo server simulates a marketing platform with:
+
 - **CRM endpoints** - Customer data (free, but requires authorization)
 - **SMS endpoints** - Send messages (paid per message)
 - **Analytics endpoints** - Campaign metrics (paid + authorization)
@@ -125,18 +129,18 @@ The demo server (`DUMMY_SERVER_URL`) provides these endpoints:
 
 ### Free endpoints (no balance required)
 
-| Endpoint | Auth | Payment | Description |
-|----------|------|---------|-------------|
-| `GET /api/public/time` | No | No | Current server time |
-| `GET /api/public/status` | No | No | Server health check |
-| `GET /api/crm/customers` | Yes | No | Fetch customer list |
+| Endpoint                 | Auth | Payment | Description         |
+| ------------------------ | ---- | ------- | ------------------- |
+| `GET /api/public/time`   | No   | No      | Current server time |
+| `GET /api/public/status` | No   | No      | Server health check |
+| `GET /api/crm/customers` | Yes  | No      | Fetch customer list |
 
 ### Paid endpoints (require balance)
 
-| Endpoint | Auth | Payment | Description |
-|----------|------|---------|-------------|
-| `POST /api/sms` | No | $0.0075 | Send SMS message |
-| `POST /api/campaigns/analytics` | Yes | $0.05 | Get campaign analytics |
+| Endpoint                        | Auth | Payment | Description            |
+| ------------------------------- | ---- | ------- | ---------------------- |
+| `POST /api/sms`                 | No   | $0.0075 | Send SMS message       |
+| `POST /api/campaigns/analytics` | Yes  | $0.05   | Get campaign analytics |
 
 The Sapiom SDK handles all authorization and payment automatically - your code just makes normal HTTP requests.
 
@@ -145,15 +149,24 @@ The Sapiom SDK handles all authorization and payment automatically - your code j
 ## Troubleshooting
 
 **"SAPIOM_API_KEY environment variable is required"**
+
 - Make sure you copied `.env.example` to `.env` and filled in your API key
 
 **Connection refused / timeout**
-- Check that `DUMMY_SERVER_URL` is correct and the test server is running
+
+- For `npm start`, `npm run free`, and `npm run full`, check that port `3101` is available; those scripts start the local demo server automatically.
+- If you override `DUMMY_SERVER_URL`, check that the server is reachable and implements the demo endpoints listed above.
+
+**403 from x402-demo.sapiom.ai**
+
+- The public demo host can be blocked by Cloudflare or unavailable from some environments. Use the default local demo server for free examples, or point `DUMMY_SERVER_URL` at another compatible demo server.
 
 **AuthorizationDeniedError on first request**
+
 - Check your Rules in the dashboard - you may have a restrictive policy
 
 **Nothing showing in dashboard**
+
 - Verify your `SAPIOM_API_KEY` is correct
 - Check the console output for errors
 
