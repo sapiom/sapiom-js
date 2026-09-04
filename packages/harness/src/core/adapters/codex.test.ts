@@ -358,6 +358,21 @@ describe("CodexAdapter", () => {
             "\x1b[14;3Hgpt-next medium · C:\\work\\project\x1b[?2026l",
         ),
       ).toBe(true);
+      expect(
+        adapter.detectStructuralReadyPrompt(
+          "\x1b[?2026h\x1b[12;3H› A future placeholder\r\n" +
+            "\x1b[14;3Hgpt-next medium · C:\\work\\project\x1b[?2026l",
+        ),
+      ).toBe(false);
+    });
+
+    it("recognizes a narrow-width composer without a cwd footer via structural proof", () => {
+      const adapter = new CodexAdapter();
+      const frame =
+        "\x1b[?2026h\x1b[12;3H› Some unknown placeholder copy\r\n" +
+        "\x1b[14;3Hgpt-next medium\x1b[?2026l";
+      expect(adapter.detectReadyPrompt(frame)).toBe(true);
+      expect(adapter.detectStructuralReadyPrompt(frame)).toBe(true);
     });
 
     it("does not treat a selection marker without the cwd footer as a composer", () => {

@@ -421,6 +421,15 @@ export interface HarnessAdapter {
    */
   detectReadyPrompt?(terminalOutput: string): boolean;
   /**
+   * When true, `detectReadyPrompt` matched via a copy-/footer-independent
+   * structural proof (active input widget without modal selection rows).
+   * SessionManager then requires consecutive clean frames before clearing a
+   * latched blocker. Strong proofs (known placeholder copy / cwd footer) omit
+   * this and clear on the first clean frame. Optional; adapters without a
+   * structural path behave as before.
+   */
+  detectStructuralReadyPrompt?(terminalOutput: string): boolean;
+  /**
    * How SessionManager may proactively mark this harness ready WITHOUT its
    * real readiness signal (SessionStart hook / tailer equivalent). Absent =
    * never publish fallback readiness; detect-only legacy adapters retain only

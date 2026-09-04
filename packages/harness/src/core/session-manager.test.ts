@@ -144,7 +144,11 @@ describe("SessionManager", () => {
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
       isPidAlive: opts.isPidAlive,
-      platform: opts.platform,
+      // Default off process.platform so Windows runners can exercise the
+      // non-Windows spawn path without installing fake CLI shims for every
+      // unit test. Tests that need ConPTY / win32 paste semantics pass
+      // `platform: "win32"` explicitly.
+      platform: opts.platform ?? "linux",
       writeSessionRegistry: opts.writeSessionRegistry,
       writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
     });
@@ -792,6 +796,65 @@ describe("SessionManager", () => {
       await vi.advanceTimersByTimeAsync(600);
       expect(manager.get(session.id)?.ready).toBe(true);
       expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+    });
+
+    it("clears a trust latch via consecutive structural composer frames without copy or footer", async () => {
+      const { manager, spawns } = makeManager({
+        adapter: new CodexAdapter({ binary: "fake-codex" }),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1HDo you trust the contents of this directory?\r\n" +
+          "\x1b[6;1H1. Yes, continue\r\n\x1b[7;1H2. No, quit\x1b[?2026l",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      // Narrow terminal: no cwd footer, unknown placeholder. One structural
+      // frame is not enough after a latched blocker.
+      const structuralFrame =
+        "\x1b[?2026h\x1b[12;1H› A brand-new Codex placeholder\r\n" +
+        "\x1b[14;1Hgpt-next medium\x1b[?2026l";
+      spawns[0]?.emitData(structuralFrame);
+      await vi.advanceTimersByTimeAsync(800);
+      expect(manager.get(session.id)?.ready).toBe(false);
+
+      // A second consecutive clean structural frame proves the composer.
+      spawns[0]?.emitData(structuralFrame);
+      await vi.advanceTimersByTimeAsync(800);
+      expect(manager.get(session.id)?.ready).toBe(true);
+    });
+
+    it("keeps the trust latch closed when a modal fragment rides under a retained footer", async () => {
+      const { manager, spawns } = makeManager({
+        adapter: new CodexAdapter({ binary: "fake-codex" }),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+
+      spawns[0]?.emitData(
+        "\x1b[?2026h\x1b[1;1HDo you trust the contents of this directory?\r\n" +
+          "\x1b[6;1H1. Yes, continue\r\n\x1b[7;1H2. No, quit\x1b[?2026l",
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Full then partial Ratatui repaints: selection moves while the
+      // underlying footer stays visible beneath the modal.
+      for (let i = 0; i < 3; i += 1) {
+        spawns[0]?.emitData(
+          "\x1b[?2026h\x1b[6;1H  1. Yes, continue\r\n" +
+            "\x1b[7;1H› 2. No, quit\r\n" +
+            "\x1b[14;1Hgpt-5.5 default · /tmp/proj\x1b[?2026l",
+        );
+        await vi.advanceTimersByTimeAsync(400);
+      }
+      expect(manager.get(session.id)?.ready).toBe(false);
     });
 
     it("retains a blocking screen across partial synchronized diff repaints until the composer is proven", async () => {

@@ -175,6 +175,14 @@ const READY_SETTLE_MS = 700;
  * win, so this is a liveness ceiling, not a safety bypass.
  */
 const READY_SETTLE_CEILING_MS = 5_000;
+/**
+ * After a blocking screen has been latched, a copy-/footer-independent
+ * structural composer proof must appear in this many consecutive content-
+ * bearing frames before the latch clears. Strong proofs (known placeholder
+ * copy or cwd footer) still clear on the first clean frame. This is not a
+ * time-only escape: recognized modal fragments continue to veto every frame.
+ */
+const READY_STRUCTURAL_PROOF_FRAMES = 2;
 /** Codex/Ratatui brackets each atomic terminal repaint in synchronized-output
  *  mode. Treat one such repaint as the readiness frame even when node-pty
  *  splits it across chunks. Pure cursor/style repaints are intentionally
@@ -426,6 +434,9 @@ interface PtyHandle {
   /** A detected blocking screen remains latched across partial repaints until
    * the adapter positively identifies its empty interactive composer. */
   blockingPromptSeen: boolean;
+  /** Consecutive content-bearing frames that passed a structural (not strong)
+   * ready proof while a blocker latch is held. Reset on any non-ready frame. */
+  consecutiveReadyProofFrames: number;
   /** Possible beginning of a synchronized-output marker split across chunks. */
   pendingReadinessPrefix: string;
   /** Synchronized repaint being assembled across node-pty chunks. */
@@ -1664,7 +1675,8 @@ export class SessionManager {
   /** Preserve a recognized blocker across Ratatui's partial row repaints. The
    * latch is cleared only by a positive empty-composer match in a clean current
    * frame; merely failing to re-render every phrase is not evidence that the
-   * screen was dismissed. */
+   * screen was dismissed. Strong proofs (known copy / cwd footer) clear on the
+   * first clean frame; structural proofs require consecutive clean frames. */
   private refreshImmediatePromptState(
     adapter: HarnessAdapter,
     handle: PtyHandle,
@@ -1680,22 +1692,39 @@ export class SessionManager {
     const current = this.currentReadinessOutput(handle);
     const recent = this.recentReadinessOutput(handle);
     if (adapter.detectBlockingPrompt(recent)) handle.blockingPromptSeen = true;
-    if (!handle.blockingPromptSeen) return;
+    if (!handle.blockingPromptSeen) {
+      handle.consecutiveReadyProofFrames = 0;
+      return;
+    }
     // The ceiling applies only to a continuously non-blocking candidate. If a
     // user leaves onboarding open for a minute, that elapsed minute must not
     // make the first clean repaint after dismissal ready immediately.
     handle.readinessCandidateAt = null;
 
-    if (
+    const ready =
       adapter.detectReadyPrompt(current) &&
-      !adapter.detectBlockingPrompt(current)
-    ) {
-      handle.blockingPromptSeen = false;
-      handle.readinessCandidateAt = handle.lastOutputAt ?? Date.now();
-      // Once the real composer is visible, older onboarding frames are no
-      // longer part of the current screen and must not be re-latched later.
-      handle.readinessHistory = current;
+      !adapter.detectBlockingPrompt(current);
+    if (!ready) {
+      handle.consecutiveReadyProofFrames = 0;
+      return;
     }
+
+    const structuralOnly =
+      adapter.detectStructuralReadyPrompt?.(current) === true;
+    handle.consecutiveReadyProofFrames += 1;
+    if (
+      structuralOnly &&
+      handle.consecutiveReadyProofFrames < READY_STRUCTURAL_PROOF_FRAMES
+    ) {
+      return;
+    }
+
+    handle.blockingPromptSeen = false;
+    handle.consecutiveReadyProofFrames = 0;
+    handle.readinessCandidateAt = handle.lastOutputAt ?? Date.now();
+    // Once the real composer is visible, older onboarding frames are no
+    // longer part of the current screen and must not be re-latched later.
+    handle.readinessHistory = current;
   }
 
   private hasImmediateBlockingPrompt(
@@ -1816,8 +1845,11 @@ export class SessionManager {
     // PATHEXT resolution and can't execute a .cmd. resolveSpawnTarget RESOLVES the
     // shim to its real target — deliberately NOT via cmd.exe, which would expose
     // these arguments to shell parsing (command injection; see that module).
-    // No-op on POSIX.
-    const target = resolveSpawnTarget(spec.command, spec.args);
+    // No-op on POSIX. Honor the injectable host platform so tests can exercise
+    // non-Windows spawn semantics on a Windows runner.
+    const target = resolveSpawnTarget(spec.command, spec.args, {
+      platform: this.platform,
+    });
 
     // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
     // node-pty prebuild surfaces there, not at import time) — propagates to
@@ -1843,6 +1875,7 @@ export class SessionManager {
       readinessBuffer: "",
       readinessHistory: "",
       blockingPromptSeen: false,
+      consecutiveReadyProofFrames: 0,
       pendingReadinessPrefix: "",
       pendingReadinessFrame: null,
       pendingReadinessFrameHasContent: false,
