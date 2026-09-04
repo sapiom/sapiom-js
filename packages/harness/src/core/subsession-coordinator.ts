@@ -43,6 +43,7 @@ import type {
 import {
   SubsessionCoordinatorStore,
   SubsessionCoordinatorStoreError,
+  type ReservedReleases,
 } from "./subsession-coordinator-store.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 30_000;
@@ -109,6 +110,13 @@ type ReleaseRequest = Omit<ProjectSubsessionRequest, "operation"> &
     operation: Extract<
       ProjectSubsessionRequest["operation"],
       { kind: "release" }
+    >;
+  }>;
+type DormantReleaseRequest = Omit<ProjectSubsessionRequest, "operation"> &
+  Readonly<{
+    operation: Extract<
+      ProjectSubsessionRequest["operation"],
+      { kind: "release-dormant" }
     >;
   }>;
 
@@ -205,6 +213,8 @@ export class SubsessionCoordinator {
       return this.refresh(identity, request as RefreshRequest);
     if (request.operation.kind === "release")
       return this.release(identity, request as ReleaseRequest);
+    if (request.operation.kind === "release-dormant")
+      return this.releaseDormant(identity, request as DormantReleaseRequest);
     return this.delegate(identity, request as DelegateRequest);
   }
 
@@ -287,6 +297,46 @@ export class SubsessionCoordinator {
     } catch (cause) {
       throw this.wholeCallError(cause);
     }
+    return this.releaseReserved(identity, request.requestKey, reserved);
+  }
+
+  private async releaseDormant(
+    identity: ProjectAgentSession,
+    request: DormantReleaseRequest,
+  ): Promise<ProjectSubsessionResult> {
+    let reserved;
+    try {
+      const aggregate = await this.options.store.read(identity.projectId);
+      const candidateBindingIds = aggregate.bindings
+        .filter(({ sessionState }) =>
+          ["exited", "failed"].includes(sessionState),
+        )
+        .filter(({ parentSessionId }) => {
+          const parent = this.options.sessionManager.get(parentSessionId);
+          return !parent || parent.status === "exited";
+        })
+        .sort((left, right) =>
+          left.updatedAt.localeCompare(right.updatedAt) ||
+          left.bindingId.localeCompare(right.bindingId),
+        )
+        .slice(0, request.operation.limit)
+        .map(({ bindingId }) => bindingId);
+      reserved = await this.options.store.reserveDormantReleases(
+        identity,
+        request,
+        candidateBindingIds,
+      );
+    } catch (cause) {
+      throw this.wholeCallError(cause);
+    }
+    return this.releaseReserved(identity, request.requestKey, reserved);
+  }
+
+  private async releaseReserved(
+    identity: ProjectAgentSession,
+    requestKey: string,
+    reserved: ReservedReleases,
+  ): Promise<ProjectSubsessionResult> {
     const results: DelegationItemResult[] = [];
     for (const target of reserved.bindings) {
       if (target.state === "absent") {
@@ -373,7 +423,12 @@ export class SubsessionCoordinator {
             "inspect_session",
           );
         }
-        const closed = await this.options.store.closeBinding(
+        await this.options.store.closeBinding(
+          scopedIdentity,
+          binding.bindingId,
+          binding.sessionId,
+        );
+        const closed = await this.options.store.finalizeReleasedBinding(
           scopedIdentity,
           binding.bindingId,
           binding.sessionId,
@@ -400,7 +455,7 @@ export class SubsessionCoordinator {
     }
     return {
       schemaVersion: 1,
-      requestKey: request.requestKey,
+      requestKey,
       requestDigest: reserved.requestDigest,
       replayed: reserved.replayed,
       results: results.sort((left, right) =>
@@ -727,7 +782,8 @@ export class SubsessionCoordinator {
 
     let claim =
       binding.sessionState === "spawn-claimed" &&
-      binding.spawnClaim?.ownerId === this.ownerId
+      binding.spawnClaim?.ownerId === this.ownerId &&
+      binding.spawnClaim.expiresAt > new Date().toISOString()
         ? { claimed: true as const, binding }
         : await this.options.store.claimSpawn(
             identity,
@@ -841,7 +897,10 @@ export class SubsessionCoordinator {
     }
     let claim;
     if (binding.sessionState === "spawn-claimed" && binding.spawnClaim) {
-      if (binding.spawnClaim.ownerId === this.ownerId) {
+      if (
+        binding.spawnClaim.ownerId === this.ownerId &&
+        binding.spawnClaim.expiresAt > new Date().toISOString()
+      ) {
         claim = { claimed: true as const, binding };
       } else {
         if (binding.spawnClaim.expiresAt > new Date().toISOString()) return binding;

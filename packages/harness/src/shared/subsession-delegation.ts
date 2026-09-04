@@ -76,6 +76,15 @@ export type ProjectSubsessionRequest = Readonly<{
     | Readonly<{
         kind: "release";
         delegationKeys: readonly string[];
+      }>
+    | Readonly<{
+        /**
+         * Explicitly releases at most `limit` dormant coordinator bindings
+         * whose original parent session is no longer reachable. Selection is
+         * server-side and project-scoped; callers never provide session IDs.
+         */
+        kind: "release-dormant";
+        limit: number;
       }>;
 }>;
 

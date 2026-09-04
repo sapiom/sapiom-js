@@ -180,6 +180,9 @@ describe("SubsessionCoordinator", () => {
       ConstructorParameters<typeof SessionManager>[0],
       "writeSubsessionBindingRegistry"
     > = {},
+    storeOptions: NonNullable<
+      ConstructorParameters<typeof SubsessionCoordinatorStore>[1]
+    > = {},
   ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
@@ -278,6 +281,7 @@ describe("SubsessionCoordinator", () => {
     };
     const store = new SubsessionCoordinatorStore(
       path.join(root, "agent-map"),
+      storeOptions,
     );
     closeStore.current = store;
     const telemetry: unknown[] = [];
@@ -334,6 +338,11 @@ describe("SubsessionCoordinator", () => {
       kind: "release",
       delegationKeys: ["research"],
     },
+  } as const;
+  const dormantReleaseRequest = {
+    schemaVersion: 1,
+    requestKey: "release-dormant-1",
+    operation: { kind: "release-dormant", limit: 1 },
   } as const;
 
   it("creates one ordinary writable child and reuses it on retry", async () => {
@@ -400,9 +409,8 @@ describe("SubsessionCoordinator", () => {
     });
     expect(manager.get(childId)).toMatchObject({ status: "exited" });
     expect(manager.getSubsessionBinding(childId)).toBeNull();
-    expect(aggregate.bindings[0]).toMatchObject({
+    expect(aggregate.bindingTombstones[0]).toMatchObject({
       sessionId: childId,
-      sessionState: "closed",
     });
     expect(telemetry).toContainEqual(
       expect.objectContaining({
@@ -496,6 +504,107 @@ describe("SubsessionCoordinator", () => {
     });
   });
 
+  it("lets a new project agent reclaim a dead parent's dormant child at history capacity", async () => {
+    const { coordinator, caller, manager, store, spawned, unsubscribe } =
+      await fixture(false, undefined, {}, { bindingLimit: 1 });
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+    spawned[1]!.emitExit(0);
+    await manager.flush();
+    const binding = (await store.read(projectId)).bindings[0]!;
+    await store.transitionSession(caller, binding.bindingId, {
+      expectedLifecycleEpoch: binding.lifecycleEpoch,
+      expectedSpawnEpoch: binding.spawnEpoch,
+      expectedRuntimeToken: binding.runtime?.runtimeToken ?? null,
+      state: "exited",
+    });
+
+    const closingParent = manager.close(caller.sessionId);
+    spawned[0]!.emitExit(0);
+    await closingParent;
+    const manual = await manager.create({
+      cwd: "/tmp/manual-dormant-session",
+      harness: "claude-code",
+    });
+    spawned[2]!.emitExit(0);
+    await manager.flush();
+    const nextParent = await manager.create(
+      { cwd: manager.get(caller.sessionId)!.cwd, harness: "claude-code" },
+      {
+        agentMapIdentity: (sessionId) => ({
+          projectId,
+          userId: caller.userId,
+          sessionId,
+        }),
+      },
+    );
+    manager.setReady(nextParent.id, manager.getRuntimeEpoch(nextParent.id)!);
+    const nextCaller = nextParent.agentMapIdentity!;
+    await expect(
+      coordinator.execute(nextCaller, {
+        ...request,
+        requestKey: "blocked-before-dormant-release",
+        operation: {
+          ...request.operation,
+          delegations: [{
+            delegationKey: "writer",
+            outcome: "Write evidence",
+          }],
+        },
+      }),
+    ).rejects.toMatchObject({
+      detail: { code: "capacity_exceeded", retryable: false },
+    });
+
+    const released = await coordinator.execute(
+      nextCaller,
+      dormantReleaseRequest,
+    );
+    const replay = await coordinator.execute(nextCaller, dormantReleaseRequest);
+    expect(released.results).toEqual([
+      expect.objectContaining({
+        delegationKey: "research",
+        sessionId: childId,
+        outcome: "released",
+      }),
+    ]);
+    expect(replay).toMatchObject({
+      replayed: true,
+      results: [{ sessionId: childId, outcome: "released" }],
+    });
+    expect(manager.get(childId)).toMatchObject({ status: "exited" });
+    expect(manager.getSubsessionBinding(childId)).toBeNull();
+    expect(manager.get(manual.id)).toMatchObject({ status: "exited" });
+    expect(manager.getSubsessionBinding(manual.id)).toBeNull();
+    await expect(
+      coordinator.execute(
+        { ...nextCaller, projectId: "project_foreign" },
+        { ...dormantReleaseRequest, requestKey: "foreign-sweep" },
+      ),
+    ).rejects.toMatchObject({
+      detail: { code: "capability_scope_mismatch" },
+    });
+
+    const next = await coordinator.execute(nextCaller, {
+      ...request,
+      requestKey: "after-dormant-release",
+      operation: {
+        ...request.operation,
+        delegations: [{
+          delegationKey: "writer",
+          outcome: "Write evidence",
+        }],
+      },
+    });
+    unsubscribe();
+
+    expect(next.results[0]).toMatchObject({
+      delegationKey: "writer",
+      outcome: "created",
+    });
+    expect((await store.read(projectId)).bindings).toHaveLength(1);
+  });
+
   it.each(["exited", "failed"] as const)(
     "releases an already-%s child without spawning or resuming it",
     async (terminalState) => {
@@ -586,6 +695,49 @@ describe("SubsessionCoordinator", () => {
     );
     expect(manager.list()).toHaveLength(2);
     expect(spawnPty).toHaveBeenCalledTimes(2);
+  });
+
+  it("atomically renews an expired self-owned spawn claim across coordinators", async () => {
+    const {
+      newCoordinator,
+      caller,
+      manager,
+      store,
+      spawnPty,
+      unsubscribe,
+    } = await fixture(false, undefined, {}, { claimTtlMs: 500 });
+    const parent = manager.get(caller.sessionId)!;
+    const binding = (
+      await store.reserveDelegations(caller, request, {
+        harness: parent.harness,
+        projectRoot: parent.cwd,
+        ownerId: "coordinator-self",
+      })
+    ).bindings[0]!;
+    const original = await store.claimSpawn(caller, binding.bindingId, {
+      ownerId: "coordinator-self",
+      expectedLifecycleEpoch: binding.lifecycleEpoch,
+      expectedSpawnEpoch: binding.spawnEpoch,
+    });
+    if (!original.claimed) throw new Error("spawn claim was not acquired");
+    await new Promise((resolve) => setTimeout(resolve, 550));
+
+    const self = newCoordinator("coordinator-self");
+    const other = newCoordinator("coordinator-other");
+    const [first, second] = await Promise.all([
+      self.execute(caller, request),
+      other.execute(caller, request),
+    ]);
+    const aggregate = await store.read(projectId);
+    unsubscribe();
+
+    expect(first.results[0]!.sessionId).toBe(second.results[0]!.sessionId);
+    expect(spawnPty).toHaveBeenCalledTimes(2);
+    expect(aggregate.bindings[0]).toMatchObject({
+      bindingId: binding.bindingId,
+      spawnEpoch: 2,
+      sessionState: "ready",
+    });
   });
 
   it("acknowledges only the exact persisted kickoff marker", async () => {

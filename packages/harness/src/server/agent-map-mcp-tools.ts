@@ -113,6 +113,10 @@ const projectSubsessionRequestSchema = z.object({
       kind: z.literal("release"),
       delegationKeys: z.array(delegationKey).min(1).max(16),
     }).strict(),
+    z.object({
+      kind: z.literal("release-dormant"),
+      limit: z.number().int().min(1).max(16),
+    }).strict(),
   ]),
 }).strict();
 
@@ -389,7 +393,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "project_subsession_delegate",
     {
-      description: "Create, reuse, or release a bounded batch of ordinary writable project subsessions, or refresh exact focused context, using caller-owned idempotency keys.",
+      description: "Create, reuse, or release a bounded batch of ordinary writable project subsessions, reclaim bounded dormant bindings whose parents are unreachable, or refresh exact focused context, using caller-owned idempotency keys.",
       inputSchema: projectSubsessionRequestSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },

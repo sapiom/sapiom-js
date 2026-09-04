@@ -151,6 +151,20 @@ describe("Agent Map Streamable HTTP MCP", () => {
         replayed: false,
       },
     });
+    await expect(client.callTool({
+      name: "project_subsession_delegate",
+      arguments: {
+        schemaVersion: 1,
+        requestKey: "release-dormant-one",
+        operation: { kind: "release-dormant", limit: 1 },
+      },
+    })).resolves.toMatchObject({
+      structuredContent: {
+        schemaVersion: 1,
+        requestKey: "release-dormant-one",
+        results: [],
+      },
+    });
     const validate = tools.tools.find(
       ({ name }) => name === "agent_map_validate",
     )!;

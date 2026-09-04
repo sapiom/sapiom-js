@@ -221,4 +221,41 @@ describe("subsession delegation codec", () => {
       issues: [{ code: "duplicate_delegation_key" }],
     });
   });
+
+  it("accepts only a bounded server-selected dormant release", () => {
+    expect(
+      parseProjectSubsessionRequest(
+        {
+          schemaVersion: 1,
+          requestKey: "release-dormant-1",
+          operation: { kind: "release-dormant", limit: 16 },
+        },
+        projectId,
+      ).operation,
+    ).toEqual({ kind: "release-dormant", limit: 16 });
+    expect(() =>
+      parseProjectSubsessionRequest(
+        {
+          schemaVersion: 1,
+          requestKey: "release-dormant-2",
+          operation: {
+            kind: "release-dormant",
+            limit: 1,
+            sessionIds: ["manual-session"],
+          },
+        },
+        projectId,
+      ),
+    ).toThrowError(SubsessionDelegationValidationError);
+    expect(() =>
+      parseProjectSubsessionRequest(
+        {
+          schemaVersion: 1,
+          requestKey: "release-dormant-3",
+          operation: { kind: "release-dormant", limit: 17 },
+        },
+        projectId,
+      ),
+    ).toThrowError(SubsessionDelegationValidationError);
+  });
 });

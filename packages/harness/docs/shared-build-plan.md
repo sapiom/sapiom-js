@@ -115,18 +115,28 @@ Identical retries converge on the same durable binding and real Harness session
 ID; changing canonical request or binding content under an existing key fails
 explicitly. All binding IDs and session IDs for a bounded batch are reserved in
 one durable transaction before the first process is spawned.
-Older request receipts compact into bounded key tombstones, and explicitly
-closed bindings compact into bounded ownership tombstones once no retained
-receipt references them. Exited and failed bindings remain available for the
-coordinator's ordinary resume and recovery paths until explicitly released.
-Release receipts make partial retries converge before the closed binding is
-compacted. Once the durable coordinator close succeeds, SessionManager prunes
-the exact private ownership marker and close tombstone; a failed final cleanup
-retains that proof for the next idempotent retry. The oldest tombstones expire
-as the retention window advances, so routine delegation, release, and
-focused-context refreshes cannot permanently exhaust a project.
+Older request receipts compact into bounded key tombstones. User-closed
+bindings compact into bounded ownership tombstones once no retained receipt
+references them; an explicit release finalizes immediately to the same
+tombstone while its receipt retains deterministic replay. Exited and failed
+bindings remain available for the coordinator's ordinary resume and recovery
+paths until explicitly released. Once the durable coordinator close succeeds,
+SessionManager prunes the exact private ownership marker and close tombstone; a
+failed final cleanup retains that proof for the next idempotent retry. The
+oldest tombstones expire as the retention window advances, so routine
+delegation, release, and focused-context refreshes cannot permanently exhaust a
+project.
 Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
 focused-context delivery replaces them; ambiguous delivery evidence is retained.
+
+If exited or failed bindings outlive a dead or unreachable original parent and
+fill durable binding history, any current project session may explicitly invoke
+the bounded `release-dormant` operation. The coordinator selects at most sixteen
+eligible records inside the capability-derived project; the request accepts no
+session IDs and never selects active bindings or manual sessions. This operation
+is destructive: it retains the ordinary Harness conversation/session history,
+but compacts the coordinator binding and ends automatic resume through that
+binding. Request receipts make the sweep idempotent and restart-safe.
 
 The coordinator waits for canonical adapter readiness and exact transcript
 identity, then uses fenced spawn and delivery epochs to submit one kickoff.

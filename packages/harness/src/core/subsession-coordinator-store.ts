@@ -520,7 +520,12 @@ function parseReceipt(
     !identifier(value.parentSessionId) ||
     !identifier(value.requestKey) ||
     !digest(value.requestDigest) ||
-    !["delegate", "refresh-focused-context", "release"].includes(
+    ![
+      "delegate",
+      "refresh-focused-context",
+      "release",
+      "release-dormant",
+    ].includes(
       String(value.operation),
     ) ||
     !Array.isArray(value.bindingIds) ||
@@ -644,14 +649,13 @@ export function parseSubsessionCoordinatorAggregate(
     throw new SubsessionCoordinatorStoreError("malformed_state");
   }
   if (
-    requestReceipts.some(({ operation, bindingIds: ids }) =>
+    requestReceipts.some(({ bindingIds: ids }) =>
       ids.some(
         (bindingId) =>
           !bindings.some((binding) => binding.bindingId === bindingId) &&
-          (operation !== "release" ||
-            !bindingTombstones.some(
-              (binding) => binding.bindingId === bindingId,
-            )),
+          !bindingTombstones.some(
+            (binding) => binding.bindingId === bindingId,
+          ),
       ),
     )
   ) {
@@ -703,6 +707,7 @@ export class SubsessionCoordinatorStore {
       claimTtlMs?: number;
       receiptRetentionLimit?: number;
       historyTombstoneLimit?: number;
+      bindingLimit?: number;
       liveSessionLimit?: number;
       maxDelegationDepth?: number;
       onEvent?: (event: SubsessionCoordinatorStoreEvent) => void | Promise<void>;
@@ -727,6 +732,16 @@ export class SubsessionCoordinatorStore {
 
   private id(): string {
     return (this.options.generateId ?? randomUUID)();
+  }
+
+  private bindingLimit(): number {
+    return Math.max(
+      1,
+      Math.min(
+        this.options.bindingLimit ?? SUBSESSION_COORDINATOR_BINDING_LIMIT,
+        SUBSESSION_COORDINATOR_BINDING_LIMIT,
+      ),
+    );
   }
 
   private compactTerminalHistory(aggregate: MutableAggregate): void {
@@ -1038,6 +1053,51 @@ export class SubsessionCoordinatorStore {
     });
   }
 
+  /** Compacts an exact durably closed binding while release receipts retain replay. */
+  finalizeReleasedBinding(
+    identity: ProjectAgentSession,
+    bindingId: SubsessionBindingId,
+    expectedSessionId: string,
+  ): Promise<SubsessionCoordinatorBindingTombstone> {
+    return this.transact(identity.projectId, async (aggregate) => {
+      const existing = aggregate.bindingTombstones.find(
+        (entry) => entry.bindingId === bindingId,
+      );
+      if (existing) {
+        if (
+          existing.parentSessionId !== identity.sessionId ||
+          existing.sessionId !== expectedSessionId
+        ) {
+          throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+        }
+        return { value: existing };
+      }
+      const binding = this.scopedBinding(aggregate, identity, bindingId);
+      if (binding.sessionId !== expectedSessionId)
+        throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+      if (binding.sessionState !== "closed")
+        throw new SubsessionCoordinatorStoreError("lifecycle_conflict");
+      const tombstone: SubsessionCoordinatorBindingTombstone = {
+        bindingId: binding.bindingId,
+        parentSessionId: binding.parentSessionId,
+        parentBindingId: binding.parentBindingId,
+        delegationDepth: binding.delegationDepth,
+        delegationKey: binding.delegationKey,
+        bindingDigest: binding.bindingDigest,
+        sessionId: binding.sessionId,
+        closedAt: binding.updatedAt,
+      };
+      aggregate.bindings = aggregate.bindings.filter(
+        (entry) => entry.bindingId !== bindingId,
+      );
+      aggregate.bindingTombstones.push(tombstone);
+      this.compactTerminalHistory(aggregate);
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = this.now();
+      return { value: tombstone, next: aggregate };
+    });
+  }
+
   reserveReleases(
     identity: ProjectAgentSession,
     rawRequest: unknown,
@@ -1118,6 +1178,113 @@ export class SubsessionCoordinatorStore {
         requestKey: request.requestKey,
         requestDigest,
         operation: "release",
+        bindingIds: bindings.flatMap((entry) =>
+          entry.state === "absent" ? [] : [entry.binding.bindingId],
+        ),
+        createdAt: now,
+      });
+      this.compactTerminalHistory(aggregate);
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = now;
+      return {
+        value: { replayed: false, requestDigest, bindings },
+        next: aggregate,
+      };
+    });
+  }
+
+  /**
+   * Reserves an explicit project-scoped cleanup of dormant coordinator-owned
+   * bindings. Candidate IDs are selected by the trusted coordinator after it
+   * proves each original parent is absent or exited; they are never accepted
+   * from the public request.
+   */
+  reserveDormantReleases(
+    identity: ProjectAgentSession,
+    rawRequest: unknown,
+    candidateBindingIds: readonly SubsessionBindingId[],
+  ): Promise<ReservedReleases> {
+    const request = parseProjectSubsessionRequest(rawRequest, identity.projectId);
+    if (request.operation.kind !== "release-dormant")
+      throw new SubsessionCoordinatorStoreError("malformed_state");
+    if (
+      candidateBindingIds.length > request.operation.limit ||
+      new Set(candidateBindingIds).size !== candidateBindingIds.length ||
+      !candidateBindingIds.every((bindingId) =>
+        identifier(bindingId, "binding"),
+      )
+    ) {
+      throw new SubsessionCoordinatorStoreError("malformed_state");
+    }
+    const requestDigest = computeCanonicalDelegationRequestDigest(request);
+    return this.transact<ReservedReleases>(identity.projectId, async (aggregate) => {
+      const sameRequest = (
+        receipt: Pick<SubsessionCoordinatorRequestReceipt, "parentSessionId" | "requestKey">,
+      ) =>
+        receipt.parentSessionId === identity.sessionId &&
+        receipt.requestKey === request.requestKey;
+      const resolve = (
+        bindingId: SubsessionBindingId,
+      ): ReleasableSubsessionBinding => {
+        const binding = aggregate.bindings.find(
+          (entry) => entry.bindingId === bindingId,
+        );
+        if (binding) return { state: "bound", binding };
+        const released = aggregate.bindingTombstones.find(
+          (entry) => entry.bindingId === bindingId,
+        );
+        if (released) return { state: "released", binding: released };
+        throw new SubsessionCoordinatorStoreError("malformed_state");
+      };
+      const previous = aggregate.requestReceipts.find(sameRequest);
+      if (previous) {
+        if (
+          previous.requestDigest !== requestDigest ||
+          previous.operation !== "release-dormant"
+        ) {
+          throw new SubsessionCoordinatorStoreError("request_key_reused");
+        }
+        return {
+          value: {
+            replayed: true,
+            requestDigest,
+            bindings: previous.bindingIds.map(resolve),
+          },
+        };
+      }
+      if (aggregate.requestTombstones.some(sameRequest))
+        throw new SubsessionCoordinatorStoreError("request_key_expired");
+      this.compactTerminalHistory(aggregate);
+      const now = this.now();
+      const bindings: ReleasableSubsessionBinding[] = [];
+      for (const bindingId of candidateBindingIds) {
+        const binding = aggregate.bindings.find(
+          (entry) => entry.bindingId === bindingId,
+        );
+        if (binding) {
+          if (["exited", "failed"].includes(binding.sessionState)) {
+            // The explicit destructive boundary and request receipt commit in
+            // the same transaction. A concurrent resume must lose this fence
+            // before any exact private ownership marker is removed.
+            binding.sessionState = "closed";
+            binding.lifecycleEpoch += 1;
+            binding.spawnClaim = null;
+            binding.runtime = null;
+            binding.updatedAt = now;
+            bindings.push({ state: "bound", binding });
+          }
+          continue;
+        }
+        const released = aggregate.bindingTombstones.find(
+          (entry) => entry.bindingId === bindingId,
+        );
+        if (released) bindings.push({ state: "released", binding: released });
+      }
+      aggregate.requestReceipts.push({
+        parentSessionId: identity.sessionId,
+        requestKey: request.requestKey,
+        requestDigest,
+        operation: "release-dormant",
         bindingIds: bindings.flatMap((entry) =>
           entry.state === "absent" ? [] : [entry.binding.bindingId],
         ),
@@ -1433,9 +1600,7 @@ export class SubsessionCoordinatorStore {
             throw new SubsessionCoordinatorStoreError("delegation_key_reused");
           throw new SubsessionCoordinatorStoreError("session_closed");
         }
-        if (
-          aggregate.bindings.length >= SUBSESSION_COORDINATOR_BINDING_LIMIT
-        ) {
+        if (aggregate.bindings.length >= this.bindingLimit()) {
           throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
         }
         additionalLive += 1;

@@ -42,6 +42,11 @@ const release = (
   requestKey,
   operation: { kind: "release", delegationKeys },
 });
+const releaseDormant = (requestKey = "release-dormant-1", limit = 16) => ({
+  schemaVersion: 1,
+  requestKey,
+  operation: { kind: "release-dormant", limit },
+});
 describe("SubsessionCoordinatorStore", () => {
   const roots: string[] = [];
 
@@ -972,6 +977,115 @@ describe("SubsessionCoordinatorStore", () => {
     ).toHaveLength(1);
     expect(aggregate.bindings).toContainEqual(
       expect.objectContaining({ bindingId: dormant.bindingId }),
+    );
+  });
+
+  it("reclaims a bounded dormant binding at history capacity and preserves replay", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      bindingLimit: 2,
+      liveSessionLimit: 2,
+    });
+    const dormant = (
+      await store.reserveDelegations(
+        identity,
+        delegate("old-request", [
+          { delegationKey: "research", outcome: "Collect evidence" },
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        target,
+      )
+    ).bindings;
+    for (const [index, binding] of dormant.entries()) {
+      const claim = await store.claimSpawn(identity, binding.bindingId, {
+        ownerId: "coordinator-1",
+        expectedLifecycleEpoch: binding.lifecycleEpoch,
+        expectedSpawnEpoch: binding.spawnEpoch,
+      });
+      if (!claim.claimed || !claim.binding.spawnClaim)
+        throw new Error("spawn claim was not acquired");
+      const starting = await store.attachSpawnedRuntime(
+        identity,
+        binding.bindingId,
+        {
+          claimId: claim.binding.spawnClaim.claimId,
+          spawnEpoch: claim.binding.spawnEpoch,
+          runtimeToken: `runtime-history-${index}`,
+          incarnation: 1,
+        },
+      );
+      await store.transitionSession(identity, binding.bindingId, {
+        expectedLifecycleEpoch: starting.lifecycleEpoch,
+        expectedSpawnEpoch: starting.spawnEpoch,
+        expectedRuntimeToken: `runtime-history-${index}`,
+        state: index === 0 ? "exited" : "failed",
+      });
+    }
+
+    const newParent = { ...identity, sessionId: "parent-session-2" };
+    await expect(
+      store.reserveDelegations(
+        newParent,
+        delegate("new-request", [
+          { delegationKey: "writer", outcome: "Write evidence" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "history_quota_exceeded" });
+
+    const request = releaseDormant("sweep-at-cap", 1);
+    const reserved = await store.reserveDormantReleases(
+      newParent,
+      request,
+      [dormant[0]!.bindingId],
+    );
+    expect(reserved.bindings).toEqual([
+      {
+        state: "bound",
+        binding: expect.objectContaining({
+          bindingId: dormant[0]!.bindingId,
+          sessionState: "closed",
+        }),
+      },
+    ]);
+    await store.closeBinding(
+      identity,
+      dormant[0]!.bindingId,
+      dormant[0]!.sessionId,
+    );
+    await store.finalizeReleasedBinding(
+      identity,
+      dormant[0]!.bindingId,
+      dormant[0]!.sessionId,
+    );
+    const replay = await store.reserveDormantReleases(
+      newParent,
+      request,
+      [],
+    );
+    expect(replay).toMatchObject({
+      replayed: true,
+      bindings: [
+        {
+          state: "released",
+          binding: { bindingId: dormant[0]!.bindingId },
+        },
+      ],
+    });
+
+    const created = await store.reserveDelegations(
+      newParent,
+      delegate("new-request", [
+        { delegationKey: "writer", outcome: "Write evidence" },
+      ]),
+      target,
+    );
+    expect(created.bindings[0]).toMatchObject({ delegationKey: "writer" });
+    expect((await store.read(projectId)).bindings).toContainEqual(
+      expect.objectContaining({
+        bindingId: dormant[1]!.bindingId,
+        sessionState: "failed",
+      }),
     );
   });
 

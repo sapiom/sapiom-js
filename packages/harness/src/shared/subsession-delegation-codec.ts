@@ -302,6 +302,17 @@ export function parseProjectSubsessionRequest(
     if (new Set(delegationKeys).size !== delegationKeys.length)
       return invalid("operation.delegationKeys", "duplicate_delegation_key");
     operation = { kind: "release", delegationKeys };
+  } else if (
+    value.operation.kind === "release-dormant" &&
+    hasExactKeys(value.operation, ["kind", "limit"]) &&
+    Number.isSafeInteger(value.operation.limit) &&
+    (value.operation.limit as number) >= 1 &&
+    (value.operation.limit as number) <= PROJECT_SUBSESSION_DELEGATION_LIMIT
+  ) {
+    operation = {
+      kind: "release-dormant",
+      limit: value.operation.limit as number,
+    };
   } else {
     return invalid("operation", "invalid_operation");
   }
