@@ -281,6 +281,27 @@ export function parseProjectSubsessionRequest(
               "operation.focus",
             ),
     };
+  } else if (
+    value.operation.kind === "release" &&
+    hasExactKeys(value.operation, ["kind", "delegationKeys"]) &&
+    Array.isArray(value.operation.delegationKeys)
+  ) {
+    if (
+      value.operation.delegationKeys.length < 1 ||
+      value.operation.delegationKeys.length > PROJECT_SUBSESSION_DELEGATION_LIMIT
+    ) {
+      throw new SubsessionDelegationValidationError("capacity_exceeded", [
+        { path: "operation.delegationKeys", code: "delegation_count" },
+      ]);
+    }
+    if (!value.operation.delegationKeys.every(isKey))
+      return invalid("operation.delegationKeys", "invalid_delegation_key");
+    const delegationKeys = value.operation.delegationKeys
+      .map(normalizeText)
+      .sort((left, right) => left.localeCompare(right));
+    if (new Set(delegationKeys).size !== delegationKeys.length)
+      return invalid("operation.delegationKeys", "duplicate_delegation_key");
+    operation = { kind: "release", delegationKeys };
   } else {
     return invalid("operation", "invalid_operation");
   }
@@ -324,4 +345,3 @@ export function computeSubsessionContextDigest(
     focus,
   ) as SubsessionContextDigest;
 }
-

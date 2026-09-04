@@ -72,6 +72,10 @@ export type ProjectSubsessionRequest = Readonly<{
         expectedContextEpoch: number;
         expectedContextDigest: SubsessionContextDigest;
         focus: DelegationFocusRef | null;
+      }>
+    | Readonly<{
+        kind: "release";
+        delegationKeys: readonly string[];
       }>;
 }>;
 
@@ -147,6 +151,7 @@ export type DelegationItemOutcome =
   | "created"
   | "reused"
   | "already-running"
+  | "released"
   | "failed";
 
 export type DelegationItemResult = Readonly<{

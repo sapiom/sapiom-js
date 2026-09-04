@@ -114,6 +114,7 @@ export interface SubsessionCoordinatorStoreEvent {
     | "subsession.binding_reserved"
     | "subsession.duplicate_prevented"
     | "subsession.spawn_claimed"
+    | "subsession.released"
     | "subsession.kickoff_claimed"
     | "subsession.kickoff_uncertain";
   projectId: StudioProjectId;
@@ -124,6 +125,22 @@ export interface ReservedDelegations {
   replayed: boolean;
   requestDigest: CanonicalDelegationRequestDigest;
   bindings: readonly SubsessionBindingRecord[];
+}
+
+export type ReleasableSubsessionBinding =
+  | Readonly<{
+      state: "bound";
+      binding: SubsessionBindingRecord;
+    }>
+  | Readonly<{
+      state: "released";
+      binding: SubsessionCoordinatorBindingTombstone;
+    }>;
+
+export interface ReservedReleases {
+  replayed: boolean;
+  requestDigest: CanonicalDelegationRequestDigest;
+  bindings: readonly ReleasableSubsessionBinding[];
 }
 
 export type SpawnClaimResult =
@@ -500,7 +517,9 @@ function parseReceipt(
     !identifier(value.parentSessionId) ||
     !identifier(value.requestKey) ||
     !digest(value.requestDigest) ||
-    !["delegate", "refresh-focused-context"].includes(String(value.operation)) ||
+    !["delegate", "refresh-focused-context", "release"].includes(
+      String(value.operation),
+    ) ||
     !Array.isArray(value.bindingIds) ||
     value.bindingIds.length > 16 ||
     !value.bindingIds.every((entry) => identifier(entry, "binding")) ||
@@ -622,10 +641,14 @@ export function parseSubsessionCoordinatorAggregate(
     throw new SubsessionCoordinatorStoreError("malformed_state");
   }
   if (
-    requestReceipts.some(({ bindingIds: ids }) =>
+    requestReceipts.some(({ operation, bindingIds: ids }) =>
       ids.some(
         (bindingId) =>
-          !bindings.some((binding) => binding.bindingId === bindingId),
+          !bindings.some((binding) => binding.bindingId === bindingId) &&
+          (operation !== "release" ||
+            !bindingTombstones.some(
+              (binding) => binding.bindingId === bindingId,
+            )),
       ),
     )
   ) {
@@ -760,9 +783,13 @@ export class SubsessionCoordinatorStore {
       });
     }
     if (aggregate.bindingTombstones.length > historyLimit) {
-      aggregate.bindingTombstones.splice(
-        0,
-        aggregate.bindingTombstones.length - historyLimit,
+      let remaining = aggregate.bindingTombstones.length - historyLimit;
+      aggregate.bindingTombstones = aggregate.bindingTombstones.filter(
+        ({ bindingId }) => {
+          if (remaining === 0 || referenced.has(bindingId)) return true;
+          remaining -= 1;
+          return false;
+        },
       );
     }
     if (reclaimable.length > 0) {
@@ -1005,6 +1032,91 @@ export class SubsessionCoordinatorStore {
       aggregate.recordVersion += 1;
       aggregate.updatedAt = now;
       return { value: binding, next: aggregate };
+    });
+  }
+
+  reserveReleases(
+    identity: ProjectAgentSession,
+    rawRequest: unknown,
+  ): Promise<ReservedReleases> {
+    const request = parseProjectSubsessionRequest(rawRequest, identity.projectId);
+    if (request.operation.kind !== "release")
+      throw new SubsessionCoordinatorStoreError("malformed_state");
+    const operation = request.operation;
+    const requestDigest = computeCanonicalDelegationRequestDigest(request);
+    return this.transact<ReservedReleases>(identity.projectId, async (aggregate) => {
+      const sameRequest = (
+        receipt: Pick<SubsessionCoordinatorRequestReceipt, "parentSessionId" | "requestKey">,
+      ) =>
+        receipt.parentSessionId === identity.sessionId &&
+        receipt.requestKey === request.requestKey;
+      const resolve = (bindingId: SubsessionBindingId): ReleasableSubsessionBinding => {
+        const binding = aggregate.bindings.find(
+          (entry) => entry.bindingId === bindingId,
+        );
+        if (binding) {
+          if (binding.parentSessionId !== identity.sessionId)
+            throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+          return { state: "bound", binding };
+        }
+        const released = aggregate.bindingTombstones.find(
+          (entry) => entry.bindingId === bindingId,
+        );
+        if (!released || released.parentSessionId !== identity.sessionId)
+          throw new SubsessionCoordinatorStoreError("malformed_state");
+        return { state: "released", binding: released };
+      };
+      const previous = aggregate.requestReceipts.find(sameRequest);
+      if (previous) {
+        if (
+          previous.requestDigest !== requestDigest ||
+          previous.operation !== "release"
+        ) {
+          throw new SubsessionCoordinatorStoreError("request_key_reused");
+        }
+        return {
+          value: {
+            replayed: true,
+            requestDigest,
+            bindings: previous.bindingIds.map(resolve),
+          },
+        };
+      }
+      if (aggregate.requestTombstones.some(sameRequest))
+        throw new SubsessionCoordinatorStoreError("request_key_expired");
+      const bindings = operation.delegationKeys.map(
+        (delegationKey): ReleasableSubsessionBinding => {
+          const binding = aggregate.bindings.find(
+            (entry) =>
+              entry.parentSessionId === identity.sessionId &&
+              entry.delegationKey === delegationKey,
+          );
+          if (binding) return { state: "bound", binding };
+          const released = aggregate.bindingTombstones.find(
+            (entry) =>
+              entry.parentSessionId === identity.sessionId &&
+              entry.delegationKey === delegationKey,
+          );
+          if (released) return { state: "released", binding: released };
+          throw new SubsessionCoordinatorStoreError("binding_not_found");
+        },
+      );
+      const now = this.now();
+      aggregate.requestReceipts.push({
+        parentSessionId: identity.sessionId,
+        requestKey: request.requestKey,
+        requestDigest,
+        operation: "release",
+        bindingIds: bindings.map(({ binding }) => binding.bindingId),
+        createdAt: now,
+      });
+      this.compactTerminalHistory(aggregate);
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = now;
+      return {
+        value: { replayed: false, requestDigest, bindings },
+        next: aggregate,
+      };
     });
   }
 

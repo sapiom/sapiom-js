@@ -54,6 +54,7 @@ export interface SubsessionCoordinatorEvent {
     | "subsession.requested"
     | "subsession.created"
     | "subsession.reused"
+    | "subsession.released"
     | "subsession.ready"
     | "subsession.failed"
     | "subsession.kickoff_submitted"
@@ -101,6 +102,13 @@ type RefreshRequest = Omit<ProjectSubsessionRequest, "operation"> &
     operation: Extract<
       ProjectSubsessionRequest["operation"],
       { kind: "refresh-focused-context" }
+    >;
+  }>;
+type ReleaseRequest = Omit<ProjectSubsessionRequest, "operation"> &
+  Readonly<{
+    operation: Extract<
+      ProjectSubsessionRequest["operation"],
+      { kind: "release" }
     >;
   }>;
 
@@ -195,6 +203,8 @@ export class SubsessionCoordinator {
     this.emit({ name: "subsession.requested", projectId: identity.projectId });
     if (request.operation.kind === "refresh-focused-context")
       return this.refresh(identity, request as RefreshRequest);
+    if (request.operation.kind === "release")
+      return this.release(identity, request as ReleaseRequest);
     return this.delegate(identity, request as DelegateRequest);
   }
 
@@ -263,6 +273,88 @@ export class SubsessionCoordinator {
       requestDigest: refreshed.requestDigest,
       replayed: refreshed.replayed,
       results: [result],
+    };
+  }
+
+  private async release(
+    identity: ProjectAgentSession,
+    request: ReleaseRequest,
+  ): Promise<ProjectSubsessionResult> {
+    let reserved;
+    try {
+      reserved = await this.options.store.reserveReleases(identity, request);
+    } catch (cause) {
+      throw this.wholeCallError(cause);
+    }
+    const results: DelegationItemResult[] = [];
+    for (const target of reserved.bindings) {
+      if (target.state === "released") {
+        results.push(this.releasedResult(target.binding));
+        continue;
+      }
+      const binding = target.binding;
+      const scopedIdentity = bindingIdentity(identity, binding);
+      try {
+        const privateMarker = this.options.sessionManager.getSubsessionBinding(
+          binding.sessionId,
+        );
+        const session = this.options.sessionManager.get(binding.sessionId);
+        if (privateMarker) {
+          const expected = markerFor(
+            binding,
+            binding.runtime?.incarnation ?? privateMarker.incarnation,
+          );
+          if (!this.options.sessionManager.matchesSubsessionBinding(expected))
+            throw error(
+              "binding_session_mismatch",
+              false,
+              "inspect_session",
+            );
+          await this.options.sessionManager.closeBound(expected);
+        } else if (
+          session ||
+          binding.runtime !== null ||
+          !["reserved", "spawn-claimed"].includes(binding.sessionState)
+        ) {
+          throw error(
+            "binding_session_mismatch",
+            false,
+            "inspect_session",
+          );
+        }
+        const closed = await this.options.store.closeBinding(
+          scopedIdentity,
+          binding.bindingId,
+          binding.sessionId,
+        );
+        this.emit({
+          name: "subsession.released",
+          projectId: binding.projectId,
+          sessionId: binding.sessionId,
+        });
+        results.push(this.releasedResult(closed));
+      } catch (cause) {
+        const detail = this.itemError(cause);
+        this.emit({
+          name:
+            detail.code === "binding_session_mismatch"
+              ? "subsession.manual_session_protected"
+              : "subsession.failed",
+          projectId: binding.projectId,
+          sessionId: binding.sessionId,
+          code: detail.code,
+        });
+        results.push(this.failedResult(binding, detail));
+      }
+    }
+    return {
+      schemaVersion: 1,
+      requestKey: request.requestKey,
+      requestDigest: reserved.requestDigest,
+      replayed: reserved.replayed,
+      results: results.sort((left, right) =>
+        left.delegationKey.localeCompare(right.delegationKey),
+      ),
     };
   }
 
@@ -1132,6 +1224,23 @@ export class SubsessionCoordinator {
     };
   }
 
+  private releasedResult(
+    binding: Pick<
+      SubsessionBindingRecord,
+      "delegationKey" | "bindingId" | "sessionId"
+    >,
+  ): DelegationItemResult {
+    return {
+      delegationKey: binding.delegationKey,
+      bindingId: binding.bindingId,
+      sessionId: binding.sessionId,
+      outcome: "released",
+      sessionState: "closed",
+      contextState: "none",
+      kickoffState: "pending",
+    };
+  }
+
   private failedResult(
     binding: SubsessionBindingRecord,
     detail: DelegationError,
@@ -1183,6 +1292,10 @@ export class SubsessionCoordinator {
       if (refresh && cause.code === "binding_not_found")
         return new SubsessionCoordinatorError(
           error("context_not_found", false, "reread"),
+        );
+      if (cause.code === "binding_not_found")
+        return new SubsessionCoordinatorError(
+          error("session_closed", false, "inspect_session"),
         );
       if (refresh && cause.code === "lifecycle_conflict")
         return new SubsessionCoordinatorError(

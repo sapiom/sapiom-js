@@ -95,14 +95,16 @@ path.
 ## Writable project subsessions
 
 Every ordinary project session discovers `project_subsession_delegate` beside
-the shared map, plan, and brief tools. The operation creates or reuses one to
-sixteen ordinary writable sessions. Each child receives the same common
+the shared map, plan, and brief tools. The operation creates, reuses, or
+releases one to sixteen ordinary writable sessions. Each child receives the same common
 project-agent prompt, coding capabilities, project tools, and delegation tool,
 so nested delegation follows the same path. An exact assignment, map node, or
 brief may focus the child, but focus never changes its tools or authority.
 Delegation is bounded to four levels and 64 live or resumable
-coordinator-owned sessions per project. Reaching that bound directs the caller
-to inspect and close sessions; blind retry cannot allocate another session.
+coordinator-owned sessions per project. A parent can idempotently release its
+own child bindings by delegation key to close their real Harness sessions and
+recover capacity; it cannot name arbitrary session IDs or release another
+parent's or a manual session.
 
 Callers provide both a request key and a delegation key. Identity is scoped by
 the private session capability to the trusted project and parent session.
@@ -113,9 +115,11 @@ one durable transaction before the first process is spawned.
 Older request receipts compact into bounded key tombstones, and explicitly
 closed bindings compact into bounded ownership tombstones once no retained
 receipt references them. Exited and failed bindings remain available for the
-coordinator's ordinary resume and recovery paths. The oldest tombstones expire
-as the retention window advances, so routine delegation and focused-context
-refreshes cannot permanently exhaust a project.
+coordinator's ordinary resume and recovery paths until explicitly released.
+Release receipts make partial retries converge before the closed binding is
+compacted. The oldest tombstones expire as the retention window advances, so
+routine delegation, release, and focused-context refreshes cannot permanently
+exhaust a project.
 Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
 focused-context delivery replaces them; ambiguous delivery evidence is retained.
 

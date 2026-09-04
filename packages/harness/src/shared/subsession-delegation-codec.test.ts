@@ -182,5 +182,43 @@ describe("subsession delegation codec", () => {
       },
     });
   });
-});
 
+  it("canonicalizes a bounded release without accepting session ids", () => {
+    const release = parseProjectSubsessionRequest(
+      {
+        schemaVersion: 1,
+        requestKey: "release-1",
+        operation: {
+          kind: "release",
+          delegationKeys: ["writer", "research"],
+        },
+      },
+      projectId,
+    );
+
+    expect(release.operation).toEqual({
+      kind: "release",
+      delegationKeys: ["research", "writer"],
+    });
+    let duplicateError: unknown;
+    try {
+      parseProjectSubsessionRequest(
+        {
+          schemaVersion: 1,
+          requestKey: "release-2",
+          operation: {
+            kind: "release",
+            delegationKeys: ["research", "research"],
+          },
+        },
+        projectId,
+      );
+    } catch (error) {
+      duplicateError = error;
+    }
+    expect(duplicateError).toMatchObject({
+      code: "invalid_request",
+      issues: [{ code: "duplicate_delegation_key" }],
+    });
+  });
+});

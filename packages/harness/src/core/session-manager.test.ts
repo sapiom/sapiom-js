@@ -459,6 +459,32 @@ describe("SessionManager", () => {
     expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
   });
 
+  it("closes only an exact coordinator-owned binding through the trusted path", async () => {
+    const { manager, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000116";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+
+    await expect(
+      manager.closeBound({ ...marker(sessionId), bindingId: "binding_foreign" }),
+    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    const closing = manager.closeBound(marker(sessionId));
+    await vi.waitFor(() =>
+      expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1),
+    );
+    spawns[0]!.emitExit(0);
+    await expect(closing).resolves.toBe(true);
+    await expect(manager.closeBound(marker(sessionId))).resolves.toBe(false);
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+  });
+
   it("reports exact input write phases and kills only an exact runtime", async () => {
     const { manager, spawns } = makeManager();
     const session = await manager.create({

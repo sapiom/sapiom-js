@@ -1918,6 +1918,27 @@ export class SessionManager {
     return killed;
   }
 
+  /** Close only when the caller proves the exact coordinator-owned binding. */
+  async closeBound(expected: TrustedSubsessionBindingMarker): Promise<boolean> {
+    const parsed = parseTrustedSubsessionBindingMarker(
+      expected,
+      expected.sessionId,
+    );
+    if (!parsed) throw new SubsessionBindingMismatchError();
+    const operation = async (): Promise<boolean> => {
+      const current = this.subsessionBindings.get(parsed.sessionId);
+      if (!current || !sameSubsessionBinding(current, parsed))
+        throw new SubsessionBindingMismatchError();
+      return this.close(parsed.sessionId);
+    };
+    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
+    this.subsessionBindingQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   kill(id: string): Promise<boolean> {
     const handle = this.ptys.get(id);
     if (!handle) {

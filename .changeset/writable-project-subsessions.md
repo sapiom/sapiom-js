@@ -2,8 +2,8 @@
 "@sapiom/harness": minor
 ---
 
-Add capability-scoped `project_subsession_delegate` support for creating or
-reusing bounded batches of ordinary writable project sessions. Delegations use
+Add capability-scoped `project_subsession_delegate` support for creating,
+reusing, or releasing bounded batches of ordinary writable project sessions. Delegations use
 durable parent/key bindings, canonical request digests, transactional spawn and
 kickoff claims, exact focused-context references, readiness-gated delivery,
 restart recovery, nested common-tool composition, and real session IDs.
@@ -19,11 +19,11 @@ Manual sessions remain outside coordinator ownership. Consumers should treat
 `uncertain` kickoff delivery as terminal until an exact persisted
 acknowledgement arrives, and should use a new request/delegation key when the
 corresponding canonical content changes. Nested delegation is bounded to four
-levels and 64 live or resumable coordinator-owned sessions per project; callers
-inspect and close sessions instead of blindly retrying when that bound is met.
-Closing a delegated tab starts PTY termination before its private user-close
-tombstone is persisted, so a storage error cannot leave the process running.
-Request, binding, and acknowledged-delivery history use bounded retention so
-long-lived projects do not dead-end on routine delegation or context refreshes.
-Exited and failed bindings remain durable so their real Harness sessions can
-still resume or recover.
+levels and 64 live or resumable coordinator-owned sessions per project. A
+parent can idempotently release its own child bindings by delegation key,
+closing the exact coordinator-owned Harness session and recovering capacity
+without granting access to manual or foreign sessions. Request, binding, and
+acknowledged-delivery history use bounded retention so long-lived projects do
+not dead-end on routine delegation, release, or context refreshes. Exited and
+failed bindings remain durable for resume or recovery until explicitly
+released.

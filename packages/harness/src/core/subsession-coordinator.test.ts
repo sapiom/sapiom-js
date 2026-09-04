@@ -322,6 +322,14 @@ describe("SubsessionCoordinator", () => {
       ],
     },
   } as const;
+  const releaseRequest = {
+    schemaVersion: 1,
+    requestKey: "release-1",
+    operation: {
+      kind: "release",
+      delegationKeys: ["research"],
+    },
+  } as const;
 
   it("creates one ordinary writable child and reuses it on retry", async () => {
     const { coordinator, caller, manager, spawnPty, telemetry, unsubscribe } =
@@ -356,6 +364,120 @@ describe("SubsessionCoordinator", () => {
     ]));
     expect(JSON.stringify(telemetry)).not.toContain("Implement the research slice");
     expect(JSON.stringify(telemetry)).not.toContain("Run the focused tests");
+  });
+
+  it("idempotently releases and closes the exact real child session", async () => {
+    const { coordinator, caller, manager, store, spawned, telemetry, unsubscribe } =
+      await fixture();
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+
+    const releasing = coordinator.execute(caller, releaseRequest);
+    await vi.waitFor(() => expect(spawned[1]!.pty.kill).toHaveBeenCalledTimes(1));
+    spawned[1]!.emitExit(0);
+    const released = await releasing;
+    const replay = await coordinator.execute(caller, releaseRequest);
+    const aggregate = await store.read(projectId);
+    unsubscribe();
+
+    expect(released).toMatchObject({
+      replayed: false,
+      results: [{
+        delegationKey: "research",
+        sessionId: childId,
+        outcome: "released",
+        sessionState: "closed",
+      }],
+    });
+    expect(replay).toMatchObject({
+      replayed: true,
+      results: [{ sessionId: childId, outcome: "released" }],
+    });
+    expect(manager.get(childId)).toMatchObject({ status: "exited" });
+    expect(aggregate.bindings[0]).toMatchObject({
+      sessionId: childId,
+      sessionState: "closed",
+    });
+    expect(telemetry).toContainEqual(
+      expect.objectContaining({
+        name: "subsession.released",
+        projectId,
+        sessionId: childId,
+      }),
+    );
+  });
+
+  it.each(["exited", "failed"] as const)(
+    "releases an already-%s child without spawning or resuming it",
+    async (terminalState) => {
+      const {
+        coordinator,
+        caller,
+        manager,
+        store,
+        spawned,
+        spawnPty,
+        unsubscribe,
+      } = await fixture();
+      const created = await coordinator.execute(caller, request);
+      const childId = created.results[0]!.sessionId!;
+      spawned[1]!.emitExit(0);
+      await manager.flush();
+      const binding = (await store.read(projectId)).bindings[0]!;
+      await store.transitionSession(caller, binding.bindingId, {
+        expectedLifecycleEpoch: binding.lifecycleEpoch,
+        expectedSpawnEpoch: binding.spawnEpoch,
+        expectedRuntimeToken: binding.runtime?.runtimeToken ?? null,
+        state: terminalState,
+      });
+
+      const released = await coordinator.execute(caller, releaseRequest);
+      unsubscribe();
+
+      expect(released.results[0]).toMatchObject({
+        sessionId: childId,
+        outcome: "released",
+        sessionState: "closed",
+      });
+      expect(spawnPty).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("fails closed instead of releasing or killing a manual session", async () => {
+    const { coordinator, caller, manager, store, spawned, unsubscribe } =
+      await fixture();
+    const manual = await manager.create({
+      cwd: "/tmp/manual-project-session",
+      harness: "claude-code",
+    });
+    const reserved = await store.reserveDelegations(caller, request, {
+      harness: "claude-code",
+      projectRoot: "/tmp/delegated-project-session",
+    });
+    const release = await store.reserveReleases(caller, releaseRequest);
+    vi.spyOn(store, "reserveReleases").mockResolvedValueOnce({
+      ...release,
+      bindings: [{
+        state: "bound",
+        binding: { ...reserved.bindings[0]!, sessionId: manual.id },
+      }],
+    });
+
+    const result = await coordinator.execute(caller, releaseRequest);
+    unsubscribe();
+
+    expect(result.results[0]).toMatchObject({
+      outcome: "failed",
+      error: {
+        code: "binding_session_mismatch",
+        retryable: false,
+      },
+    });
+    expect(manager.get(manual.id)).toMatchObject({ status: "running" });
+    expect(spawned[1]!.pty.kill).not.toHaveBeenCalled();
+    expect((await store.read(projectId)).bindings[0]).toMatchObject({
+      sessionState: "reserved",
+    });
   });
 
   it("converges independent coordinator instances on one child process", async () => {

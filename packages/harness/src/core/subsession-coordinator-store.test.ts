@@ -30,6 +30,14 @@ const delegate = (
   requestKey,
   operation: { kind: "delegate", delegations },
 });
+const release = (
+  requestKey = "release-1",
+  delegationKeys = ["research"],
+) => ({
+  schemaVersion: 1,
+  requestKey,
+  operation: { kind: "release", delegationKeys },
+});
 describe("SubsessionCoordinatorStore", () => {
   const roots: string[] = [];
 
@@ -116,6 +124,82 @@ describe("SubsessionCoordinatorStore", () => {
     const aggregate = await store.read(projectId);
     expect(aggregate.requestReceipts).toHaveLength(1);
     expect(aggregate.bindings).toEqual(original.bindings);
+  });
+
+  it("reserves idempotent releases only for the trusted parent binding", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root);
+    const binding = (
+      await store.reserveDelegations(identity, delegate(), target)
+    ).bindings[0]!;
+
+    const first = await store.reserveReleases(identity, release());
+    const replay = await store.reserveReleases(identity, release());
+    expect(first).toMatchObject({
+      replayed: false,
+      bindings: [{ state: "bound", binding: { bindingId: binding.bindingId } }],
+    });
+    expect(replay).toEqual({ ...first, replayed: true });
+
+    const foreign = { ...identity, sessionId: "manual-session" };
+    await expect(
+      store.reserveReleases(foreign, release("foreign-release")),
+    ).rejects.toMatchObject({ code: "binding_not_found" });
+    expect((await store.read(projectId)).requestReceipts).toHaveLength(2);
+  });
+
+  it("retains a released binding tombstone while an active release receipt references it", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      receiptRetentionLimit: 2,
+      historyTombstoneLimit: 1,
+    });
+    const first = (
+      await store.reserveDelegations(identity, delegate("request-1"), target)
+    ).bindings[0]!;
+    await store.closeBinding(identity, first.bindingId, first.sessionId);
+    const second = (
+      await store.reserveDelegations(
+        identity,
+        delegate("request-2", [
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        target,
+      )
+    ).bindings[0]!;
+    await store.reserveDelegations(
+      identity,
+      delegate("request-3", [
+        { delegationKey: "writer", outcome: "Write evidence" },
+      ]),
+      target,
+    );
+    const releaseRequest = release("release-first");
+    const released = await store.reserveReleases(identity, releaseRequest);
+    expect(released.bindings[0]).toMatchObject({
+      state: "released",
+      binding: { bindingId: first.bindingId },
+    });
+
+    await store.closeBinding(identity, second.bindingId, second.sessionId);
+    await store.reserveDelegations(
+      identity,
+      delegate("request-4", [
+        { delegationKey: "editor", outcome: "Edit evidence" },
+      ]),
+      target,
+    );
+
+    const aggregate = await store.read(projectId);
+    expect(aggregate.bindingTombstones).toContainEqual(
+      expect.objectContaining({ bindingId: first.bindingId }),
+    );
+    expect(await store.reserveReleases(identity, releaseRequest)).toMatchObject({
+      replayed: true,
+      bindings: [
+        { state: "released", binding: { bindingId: first.bindingId } },
+      ],
+    });
   });
 
   it("refreshes child context with an idempotent receipt and a new delivery epoch", async () => {
@@ -698,8 +782,77 @@ describe("SubsessionCoordinatorStore", () => {
         ),
       ).rejects.toMatchObject({ code: "live_session_limit_reached" });
       expect((await store.read(projectId)).bindings).toHaveLength(2);
+      await store.reserveReleases(
+        identity,
+        release(`release-${sessionState}`),
+      );
+      const closed = await store.closeBinding(
+        identity,
+        first.bindingId,
+        first.sessionId,
+      );
+      expect(closed.sessionState).toBe("closed");
     },
   );
+
+  it("reclaims released capacity so a sixty-fifth delegation can be reserved", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      receiptRetentionLimit: 1,
+    });
+    const bindings = [];
+    for (let batch = 0; batch < 4; batch += 1) {
+      const reserved = await store.reserveDelegations(
+        identity,
+        delegate(
+          `capacity-${batch}`,
+          Array.from({ length: 16 }, (_, index) => ({
+            delegationKey: `child-${batch * 16 + index + 1}`,
+            outcome: `Task ${batch * 16 + index + 1}`,
+          })),
+        ),
+        target,
+      );
+      bindings.push(...reserved.bindings);
+    }
+    await expect(
+      store.reserveDelegations(
+        identity,
+        delegate("capacity-65", [
+          { delegationKey: "child-65", outcome: "Task 65" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "live_session_limit_reached" });
+
+    const released = await store.reserveReleases(
+      identity,
+      release("release-capacity", ["child-1"]),
+    );
+    expect(released.bindings[0]).toMatchObject({
+      state: "bound",
+      binding: { bindingId: bindings[0]!.bindingId },
+    });
+    await store.closeBinding(
+      identity,
+      bindings[0]!.bindingId,
+      bindings[0]!.sessionId,
+    );
+    const sixtyFifth = await store.reserveDelegations(
+      identity,
+      delegate("capacity-65", [
+        { delegationKey: "child-65", outcome: "Task 65" },
+      ]),
+      target,
+    );
+
+    expect(sixtyFifth.bindings[0]!.delegationKey).toBe("child-65");
+    const aggregate = await store.read(projectId);
+    expect(aggregate.bindings).toHaveLength(64);
+    expect(aggregate.bindingTombstones).toContainEqual(
+      expect.objectContaining({ bindingId: bindings[0]!.bindingId }),
+    );
+  });
 
   it("prunes proven terminal deliveries so long-lived focused refresh stays writable", async () => {
     const root = await fixture();

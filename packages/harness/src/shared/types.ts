@@ -844,6 +844,7 @@ export type AnalyticsEventType =
   | "subsession.requested"
   | "subsession.created"
   | "subsession.reused"
+  | "subsession.released"
   | "subsession.ready"
   | "subsession.failed"
   | "subsession.kickoff_claimed"
