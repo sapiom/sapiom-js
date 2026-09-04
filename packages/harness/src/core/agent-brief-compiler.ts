@@ -100,6 +100,10 @@ function indexGraph(graph: AgentMapGraph, diagnostics: BuildPlanDiagnostic[]): G
   });
   const rootByNodeId = new Map<PlanNodeId, PlanNodeId>();
   const resolveRoot = (node: PlanNode): PlanNodeId | null => {
+    if (node.kind !== "subagent" && node.ownerAgentId !== null) {
+      diagnostics.push(diagnostic("invalid-dependency", "map.graph.nodes.ownerAgentId", [node.id, node.ownerAgentId]));
+      return null;
+    }
     const seen = new Set<PlanNodeId>();
     let current: PlanNode | undefined = node;
     while (current) {
@@ -109,7 +113,12 @@ function indexGraph(graph: AgentMapGraph, diagnostics: BuildPlanDiagnostic[]): G
       }
       seen.add(current.id);
       if (current.ownerAgentId === null) return current.kind === "agent" ? current.id : null;
-      current = nodes.get(current.ownerAgentId);
+      const owner = nodes.get(current.ownerAgentId);
+      if (current.kind === "subagent" && owner && (owner.kind !== "agent" || owner.ownerAgentId !== null)) {
+        diagnostics.push(diagnostic("invalid-dependency", "map.graph.nodes.ownerAgentId", [node.id, owner.id]));
+        return null;
+      }
+      current = owner;
       if (!current) {
         diagnostics.push(diagnostic("unknown-node-reference", "map.graph.nodes.ownerAgentId", [node.id]));
         return null;
@@ -155,29 +164,36 @@ function verifyExactSources(request: CompileAgentBriefsRequest, diagnostics: Bui
   if (!agentMapVersionRefsEqual(plan.map, {
     projectId: map.projectId, versionId: map.versionId, contentDigest: map.contentDigest,
   })) diagnostics.push(diagnostic("source-mismatch", "plan.map", [map.versionId, plan.map.versionId]));
-  if (computeGraphContentDigest(map.graph) !== map.contentDigest)
+  const matches = (compute: () => string, expected: string): boolean => {
+    try { return compute() === expected; } catch { return false; }
+  };
+  if (!matches(() => computeGraphContentDigest(map.graph), map.contentDigest))
     diagnostics.push(diagnostic("source-mismatch", "map.contentDigest", [map.versionId]));
-  if (computeAgentMapVersionRecordDigest(map) !== map.recordDigest)
+  if (!matches(() => computeAgentMapVersionRecordDigest(map), map.recordDigest))
     diagnostics.push(diagnostic("source-mismatch", "map.recordDigest", [map.versionId]));
-  if (computeBuildPlanSemanticDigest(plan) !== plan.semanticDigest)
+  if (!matches(() => computeBuildPlanSemanticDigest(plan), plan.semanticDigest))
     diagnostics.push(diagnostic("source-mismatch", "plan.semanticDigest", [plan.versionId]));
-  if (computeBuildPlanRecordDigest(plan) !== plan.recordDigest)
+  if (!matches(() => computeBuildPlanRecordDigest(plan), plan.recordDigest))
     diagnostics.push(diagnostic("source-mismatch", "plan.recordDigest", [plan.versionId]));
 
-  const maps = sorted(request.mapHistory, (entry) => String(entry.version).padStart(16, "0"));
+  const maps = sorted(request.mapHistory, (entry) => `${String(entry.version).padStart(16, "0")}\0${entry.versionId}`);
   maps.forEach((entry, index) => {
     if (entry.projectId !== projectId || entry.version !== index + 1 ||
       entry.parentVersionId !== (maps[index - 1]?.versionId ?? null) ||
-      computeGraphContentDigest(entry.graph) !== entry.contentDigest ||
-      computeAgentMapVersionRecordDigest(entry) !== entry.recordDigest)
+      !matches(() => computeGraphContentDigest(entry.graph), entry.contentDigest) ||
+      !matches(() => computeAgentMapVersionRecordDigest(entry), entry.recordDigest))
       diagnostics.push(diagnostic("source-lineage-mismatch", `mapHistory[${index}]`, [entry.versionId]));
   });
-  const plans = sorted(request.planHistory, (entry) => String(entry.version).padStart(16, "0"));
+  const plans = sorted(request.planHistory, (entry) => `${String(entry.version).padStart(16, "0")}\0${entry.versionId}`);
   plans.forEach((entry, index) => {
+    const historicalMap = maps.find(({ versionId }) => versionId === entry.map.versionId);
     if (entry.projectId !== projectId || entry.version !== index + 1 ||
       entry.parentVersionId !== (plans[index - 1]?.versionId ?? null) ||
-      computeBuildPlanSemanticDigest(entry) !== entry.semanticDigest ||
-      computeBuildPlanRecordDigest(entry) !== entry.recordDigest)
+      !historicalMap || !agentMapVersionRefsEqual(entry.map, {
+        projectId: historicalMap.projectId, versionId: historicalMap.versionId,
+        contentDigest: historicalMap.contentDigest,
+      }) || !matches(() => computeBuildPlanSemanticDigest(entry), entry.semanticDigest) ||
+      !matches(() => computeBuildPlanRecordDigest(entry), entry.recordDigest))
       diagnostics.push(diagnostic("source-lineage-mismatch", `planHistory[${index}]`, [entry.versionId]));
   });
   if (!maps.some((entry) => entry.versionId === map.versionId && entry.contentDigest === map.contentDigest))
@@ -191,11 +207,14 @@ function verifyExactSources(request: CompileAgentBriefsRequest, diagnostics: Bui
     const historicalMap = mapById.get(version.map.versionId);
     const historicalPlan = planById.get(version.plan.versionId);
     if (pointer.briefId !== version.briefId || pointer.scopeKey !== version.scopeKey ||
-      pointer.version.versionId !== version.versionId ||
+      pointer.focusScope.family !== version.focusScope.family ||
+      canonicalJson(pointer.focusScope) !== canonicalJson(version.focusScope) ||
+      pointer.version.projectId !== version.projectId || pointer.version.briefId !== version.briefId ||
+      pointer.version.versionId !== version.versionId || pointer.version.semanticDigest !== version.semanticDigest ||
       !historicalMap || historicalMap.contentDigest !== version.map.contentDigest ||
       !historicalPlan || !projectBuildPlanVersionRefsEqual(versionRef(historicalPlan), version.plan) ||
-      computeAgentBriefSemanticDigest(version) !== version.semanticDigest ||
-      computeAgentBriefRecordDigest(version) !== version.recordDigest)
+      !matches(() => computeAgentBriefSemanticDigest(version), version.semanticDigest) ||
+      !matches(() => computeAgentBriefRecordDigest(version), version.recordDigest))
       diagnostics.push(diagnostic("source-lineage-mismatch", `previousBriefs[${index}]`, [version.briefId]));
   });
   return diagnostics.every(({ code }) => code !== "source-mismatch" && code !== "source-lineage-mismatch");
@@ -262,12 +281,24 @@ function effectiveFlow(relationship: PlanRelationship, index: GraphIndex): Flow 
     toRoot: index.rootByNodeId.get(toNodeId) ?? null };
 }
 
-function connectedContractRoots(
+function actorRoot(nodeId: PlanNodeId, index: GraphIndex): PlanNodeId | null {
+  const node = index.nodes.get(nodeId);
+  return node?.kind === "agent" || node?.kind === "subagent"
+    ? index.rootByNodeId.get(nodeId) ?? null
+    : null;
+}
+
+function connectedFlowEvidence(
   flows: readonly Flow[],
-  root: PlanNodeId,
-): Array<Readonly<{ direction: "upstream" | "downstream"; counterpart: PlanNodeId; relationshipIds: string[] }>> {
-  const starts = new Set(flows.filter(({ fromRoot }) => fromRoot === root).map(({ fromNodeId }) => fromNodeId));
-  const targets = new Set(flows.filter(({ toRoot }) => toRoot === root).map(({ toNodeId }) => toNodeId));
+  provider: PlanNodeId,
+  consumer: PlanNodeId,
+  index: GraphIndex,
+): Flow[] | null {
+  const starts = new Set(flows.flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId])
+    .filter((nodeId) => actorRoot(nodeId, index) === provider));
+  const targets = new Set(flows.flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId])
+    .filter((nodeId) => actorRoot(nodeId, index) === consumer));
+  if (starts.size === 0 || targets.size === 0) return null;
   const walk = (initial: ReadonlySet<PlanNodeId>, reverse: boolean) => {
     const reached = new Set(initial);
     const queue = [...initial];
@@ -281,18 +312,10 @@ function connectedContractRoots(
     }
     return reached;
   };
-  const downstream = walk(starts, false);
-  const upstream = walk(targets, true);
-  const result: Array<Readonly<{ direction: "upstream" | "downstream"; counterpart: PlanNodeId; relationshipIds: string[] }>> = [];
-  for (const counterpart of unique(flows.flatMap(({ fromRoot, toRoot }) => [fromRoot, toRoot]
-    .filter((entry): entry is PlanNodeId => entry !== null)))) {
-    if (counterpart === root) continue;
-    const downstreamMatch = flows.some(({ toRoot, toNodeId }) => toRoot === counterpart && downstream.has(toNodeId));
-    const upstreamMatch = flows.some(({ fromRoot, fromNodeId }) => fromRoot === counterpart && upstream.has(fromNodeId));
-    if (downstreamMatch || upstreamMatch) result.push({ direction: downstreamMatch ? "downstream" : "upstream",
-      counterpart, relationshipIds: unique(flows.map(({ relationship }) => relationship.id)) });
-  }
-  return result;
+  const forward = walk(starts, false);
+  if (![...targets].some((target) => forward.has(target))) return null;
+  const backward = walk(targets, true);
+  return flows.filter(({ fromNodeId, toNodeId }) => forward.has(fromNodeId) && backward.has(toNodeId));
 }
 
 function projectScope(
@@ -328,18 +351,19 @@ function projectScope(
   }
   const ownedNodeIds = unique(valid.length > 0 ? valid : [root]);
   const owned = new Set(ownedNodeIds);
-  const relationships = index.relationships.filter((entry) => owned.has(entry.fromNodeId) || owned.has(entry.toNodeId));
-  const relevantNodeIds = unique(relationships.flatMap((entry) => [entry.fromNodeId, entry.toNodeId])
+  const boundaryRelationships = index.relationships.filter((entry) => owned.has(entry.fromNodeId) || owned.has(entry.toNodeId));
+  const relevant = new Set(boundaryRelationships.flatMap((entry) => [entry.fromNodeId, entry.toNodeId])
     .filter((id) => !owned.has(id)));
+  const relevantRelationships = new Map(boundaryRelationships.map((entry) => [entry.id, entry]));
   const format = (entry: PlanRelationship, direction: "input" | "output") =>
     canonicalJson({ direction, relationshipId: entry.id, kind: entry.kind, executionMode: entry.executionMode,
       contractRef: entry.contractRef, fromNodeId: entry.fromNodeId, toNodeId: entry.toNodeId, description: entry.description });
-  const flows = relationships.map((entry) => effectiveFlow(entry, index)).filter((entry): entry is Flow => entry !== null);
+  const flows = boundaryRelationships.map((entry) => effectiveFlow(entry, index)).filter((entry): entry is Flow => entry !== null);
   const inputs = flows.filter((entry) => owned.has(entry.toNodeId) && !owned.has(entry.fromNodeId))
     .map(({ relationship }) => format(relationship, "input"));
   const outputs = flows.filter((entry) => owned.has(entry.fromNodeId) && !owned.has(entry.toNodeId))
     .map(({ relationship }) => format(relationship, "output"));
-  const dependencies = relationships.filter((entry) => owned.has(entry.fromNodeId) !== owned.has(entry.toNodeId)).map((entry) =>
+  const dependencies = boundaryRelationships.filter((entry) => owned.has(entry.fromNodeId) !== owned.has(entry.toNodeId)).map((entry) =>
     canonicalJson({ relationshipId: entry.id, kind: entry.kind,
       direction: owned.has(entry.fromNodeId) ? "downstream" : "upstream",
       counterpartNodeId: owned.has(entry.fromNodeId) ? entry.toNodeId : entry.fromNodeId,
@@ -351,15 +375,36 @@ function projectScope(
     if (flow) contractGroups.set(relationship.contractRef, [...(contractGroups.get(relationship.contractRef) ?? []), flow]);
   });
   for (const [contractRef, contractFlows] of [...contractGroups].sort(([left], [right]) => compareCanonicalStrings(left, right))) {
-    for (const connection of connectedContractRoots(contractFlows, root)) dependencies.push(canonicalJson({
-      kind: connection.direction === "downstream" ? "provides-input" : "consumes-output",
-      direction: connection.direction,
-      counterpartAgentId: connection.counterpart,
-      relationshipIds: connection.relationshipIds,
-      contractRef,
-      blocking: true,
+    const providers = unique(contractFlows.flatMap(({ fromNodeId }) => {
+      const value = actorRoot(fromNodeId, index);
+      return value ? [value] : [];
     }));
+    const consumers = unique(contractFlows.flatMap(({ toNodeId }) => {
+      const value = actorRoot(toNodeId, index);
+      return value ? [value] : [];
+    }));
+    for (const provider of providers) for (const consumer of consumers) {
+      if (provider === consumer || (provider !== root && consumer !== root)) continue;
+      const evidence = connectedFlowEvidence(contractFlows, provider, consumer, index);
+      if (!evidence) continue;
+      evidence.forEach(({ relationship }) => {
+        relevantRelationships.set(relationship.id, relationship);
+        if (!owned.has(relationship.fromNodeId)) relevant.add(relationship.fromNodeId);
+        if (!owned.has(relationship.toNodeId)) relevant.add(relationship.toNodeId);
+      });
+      const direction = provider === root ? "downstream" as const : "upstream" as const;
+      dependencies.push(canonicalJson({
+        kind: direction === "downstream" ? "provides-input" : "consumes-output",
+        direction,
+        counterpartAgentId: direction === "downstream" ? consumer : provider,
+        relationshipIds: unique(evidence.map(({ relationship }) => relationship.id)),
+        contractRef,
+        blocking: true,
+      }));
+    }
   }
+  const relationships = sorted([...relevantRelationships.values()], (entry) => entry.id);
+  const relevantNodeIds = unique([...relevant]);
   const resources = unique(relevantNodeIds.filter((id) => {
     const kind = index.nodes.get(id)?.kind;
     return kind === "resource" || kind === "connector" || kind === "artifact";
@@ -490,8 +535,8 @@ function compile(
   }
 
   if (retireMissingCanonical) {
-    const active = new Set(candidates.filter(({ focusScope }) => focusScope.family === "canonical-workstream")
-      .map(({ scopeKey }) => scopeKey));
+    const active = new Set(canonicalWorkstreamScopes(index.topLevelAgents.map(({ id }) => id))
+      .map((scope) => computeAgentBriefScopeKey(request.projectId, scope)));
     for (const previous of sorted(request.previousBriefs, (entry) => entry.pointer.scopeKey)) {
       if (previous.pointer.focusScope.family !== "canonical-workstream" || active.has(previous.pointer.scopeKey) ||
         previous.pointer.status === "retired") continue;

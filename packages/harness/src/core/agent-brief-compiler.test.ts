@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -43,6 +44,7 @@ const researchWork = "work_018f0000-0000-7000-8000-000000000020" as BuildPlanAss
 const publishingWork = "work_018f0000-0000-7000-8000-000000000021" as BuildPlanAssignmentIntent["id"];
 const actor = { userId: "user", sessionId: "session" };
 const origin = { kind: "request" as const, requestDigest: `sha256:${"1".repeat(64)}`, operationIds: [], touchKeys: [] };
+const golden = JSON.parse(readFileSync(new URL("./fixtures/stock-research-compile.golden.json", import.meta.url), "utf8"));
 
 const graph = (): AgentMapGraph => ({
   nodes: [
@@ -126,9 +128,15 @@ describe("deterministic focused brief compiler", () => {
     expect(second).toEqual(first);
     expect(first.diagnostics).toEqual([]);
     expect(first.briefs).toHaveLength(2);
+    expect({ compilerVersion: first.briefs[0]!.brief.compilerVersion,
+      mapDigest: first.map, planDigest: first.plan, impactDigest: first.impact.digest,
+      briefs: first.briefs.map(({ scopeKey, brief, fingerprints }) => ({ scopeKey, briefId: brief.briefId,
+        versionId: brief.versionId, semanticDigest: brief.semanticDigest, recordDigest: brief.recordDigest,
+        fingerprints: fingerprints.map(({ kind, digest }) => ({ kind, digest })) })) }).toEqual(golden);
     expect(first.briefs[0]!.fingerprints.map(({ kind }) => kind)).toHaveLength(9);
     const researchBrief = first.briefs.find(({ brief }) => brief.plannedAgentId === research)!.brief;
     expect(researchBrief.content.sharedResourceNodeIds).toContain(database);
+    expect(researchBrief.content.relevantNodeIds).toContain(publishing);
     expect(researchBrief.content.dependencies.some((entry) => entry.includes(publishing))).toBe(true);
   });
 
@@ -172,6 +180,45 @@ describe("deterministic focused brief compiler", () => {
     expect(next.impact.entries.find(({ briefId }) => briefId === preserved.brief.briefId)?.reasons).toEqual([]);
   });
 
+  it("preserves every workstream version across an unrelated exact map rebind", () => {
+    const map1 = mapVersion(graph());
+    const plan1 = planVersion(map1, content(assignments()));
+    const first = compileCanonicalWorkstreamBriefs({ projectId, map: map1, plan: plan1,
+      mapHistory: [map1], planHistory: [plan1], previousBriefs: [] });
+    const nextGraph = graph();
+    nextGraph.nodes.push({ id: "node_018f0000-0000-7000-8000-000000000099" as PlanNodeId,
+      kind: "resource", name: "Unrelated cache", purpose: "Unrelated", ownerAgentId: null, contractRefs: [] });
+    const map2 = mapVersion(nextGraph, 2, map1);
+    const plan2 = planVersion(map2, content(assignments()), 2, plan1);
+    const next = compileCanonicalWorkstreamBriefs({ projectId, map: map2, plan: plan2,
+      mapHistory: [map1, map2], planHistory: [plan1, plan2], previousBriefs: prior(first) });
+    expect(next.briefs.map(({ disposition, brief }) => [disposition, brief.version])).toEqual([
+      ["unchanged", 1], ["unchanged", 1],
+    ]);
+    expect(next.impact.staleBriefIds).toEqual([]);
+  });
+
+  it("reports shared decisions and relationship contracts in their precise impact categories", () => {
+    const map1 = mapVersion(graph());
+    const plan1 = planVersion(map1, content(assignments()));
+    const first = compileCanonicalWorkstreamBriefs({ projectId, map: map1, plan: plan1,
+      mapHistory: [map1], planHistory: [plan1], previousBriefs: [] });
+    const changedGraph = graph();
+    changedGraph.relationships[1] = { ...changedGraph.relationships[1]!, description: "Feeds reviewed publishing input" };
+    const map2 = mapVersion(changedGraph, 2, map1);
+    const changedContent = content(assignments());
+    changedContent.unresolvedDecisions = [{ id: "decision_018f0000-0000-7000-8000-000000000060" as never,
+      question: "Who approves the report?", resolution: "", status: "open" }];
+    const plan2 = planVersion(map2, changedContent, 2, plan1);
+    const next = compileCanonicalWorkstreamBriefs({ projectId, map: map2, plan: plan2,
+      mapHistory: [map1, map2], planHistory: [plan1, plan2], previousBriefs: prior(first) });
+    const reasonCodes = new Set(next.impact.entries.flatMap(({ reasons }) => reasons.map(({ code }) => code)));
+    expect(reasonCodes).toContain("relationship-changed");
+    expect(reasonCodes).toContain("contract-changed");
+    expect(reasonCodes).toContain("shared-plan-content-changed");
+    expect(next.briefs.every(({ disposition }) => disposition === "new-version")).toBe(true);
+  });
+
   it("retains identity and appends history through retirement and reactivation", () => {
     const map1 = mapVersion(graph());
     const plan1 = planVersion(map1, content(assignments()));
@@ -196,6 +243,48 @@ describe("deterministic focused brief compiler", () => {
     expect(publisher.brief.briefId).toBe(retiredPublisher.brief.briefId);
     expect(publisher.brief.version).toBe(3);
     expect(publisher.brief.parentVersionId).toBe(retiredPublisher.brief.versionId);
+  });
+
+  it("does not retire a still-present workstream when only its assignment is missing", () => {
+    const map = mapVersion(graph());
+    const plan1 = planVersion(map, content(assignments()));
+    const first = compileCanonicalWorkstreamBriefs({ projectId, map, plan: plan1,
+      mapHistory: [map], planHistory: [plan1], previousBriefs: [] });
+    const plan2 = planVersion(map, content(assignments().filter(({ plannedAgentId }) => plannedAgentId !== publishing)), 2, plan1);
+    const next = compileCanonicalWorkstreamBriefs({ projectId, map, plan: plan2,
+      mapHistory: [map], planHistory: [plan1, plan2], previousBriefs: prior(first) });
+    expect(next.diagnostics).toContainEqual(expect.objectContaining({ code: "missing-assignment", relatedIds: [publishing] }));
+    expect(next.briefs.some(({ disposition }) => disposition === "retired")).toBe(false);
+  });
+
+  it("uses only connected relationship evidence for same-named contract relays", () => {
+    const isolatedProvider = "node_018f0000-0000-7000-8000-000000000070" as PlanNodeId;
+    const isolatedConsumer = "node_018f0000-0000-7000-8000-000000000071" as PlanNodeId;
+    const isolatedArtifact = "node_018f0000-0000-7000-8000-000000000072" as PlanNodeId;
+    const value = graph();
+    value.nodes.push(
+      { id: isolatedProvider, kind: "agent", name: "Other producer", purpose: "Other", ownerAgentId: null, contractRefs: [] },
+      { id: isolatedConsumer, kind: "agent", name: "Other consumer", purpose: "Other", ownerAgentId: null, contractRefs: [] },
+      { id: isolatedArtifact, kind: "artifact", name: "Other report", purpose: "Other", ownerAgentId: null,
+        contractRefs: ["ResearchReport"] },
+    );
+    const unrelatedIds = [
+      "rel_018f0000-0000-7000-8000-000000000073",
+      "rel_018f0000-0000-7000-8000-000000000074",
+    ];
+    value.relationships.push(
+      { id: unrelatedIds[0] as never, fromNodeId: isolatedProvider, toNodeId: isolatedArtifact,
+        kind: "writes", executionMode: null, contractRef: "ResearchReport", description: "Disconnected output" },
+      { id: unrelatedIds[1] as never, fromNodeId: isolatedArtifact, toNodeId: isolatedConsumer,
+        kind: "feeds", executionMode: null, contractRef: "ResearchReport", description: "Disconnected input" },
+    );
+    const map = mapVersion(value);
+    const plan = planVersion(map, content(assignments()));
+    const result = projectFocusedBriefs({ projectId, map, plan, mapHistory: [map], planHistory: [plan], previousBriefs: [],
+      selections: [{ focusScope: { family: "canonical-workstream", plannedAgentId: research } }] });
+    const dependencies = result.briefs[0]!.brief.content.dependencies.join("\n");
+    unrelatedIds.forEach((id) => expect(dependencies).not.toContain(id));
+    expect(dependencies).toContain(publishing);
   });
 
   it("compiles a nested delegation without sweeping canonical pointers", () => {

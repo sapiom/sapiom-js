@@ -74,6 +74,13 @@ const emptyImpact = (): AgentBriefImpact => evaluateAgentBriefImpact({
   previousFingerprints: new Map(),
   candidates: [],
 });
+const boundedDiagnostics = (values: readonly BuildPlanDiagnostic[]): BuildPlanDiagnostic[] =>
+  [...new Map(values.map((value) => [canonicalDigest("sapiom.agent-brief.diagnostic.v1", value), value])).values()]
+    .sort((left, right) => compareCanonicalStrings(
+      `${left.path}\0${left.code}\0${left.relatedIds.join("\0")}`,
+      `${right.path}\0${right.code}\0${right.relatedIds.join("\0")}`,
+    ))
+    .slice(0, 64);
 
 function currentSources(
   aggregate: ProjectPlanningAggregateV2,
@@ -153,14 +160,17 @@ export class AgentBriefService {
                 path: "focusedContext.references", relatedIds: [brief.briefId] }] };
       });
     compiled = { ...compiled,
-      diagnostics: [...compiled.diagnostics, ...projectionOutcomes.flatMap(({ diagnostics }) => diagnostics)] };
+      diagnostics: boundedDiagnostics([
+        ...compiled.diagnostics,
+        ...projectionOutcomes.flatMap(({ diagnostics }) => diagnostics),
+      ]) };
     const entries = compiled.briefs.filter(({ disposition }) => disposition !== "unchanged")
       .map(({ brief, disposition }) => ({ version: brief,
         status: disposition === "retired" ? "retired" as const : "active" as const }));
     if (entries.length > 128) {
-      const result = this.diagnosticResult(map, plan, [...compiled.diagnostics, {
+      const result = this.diagnosticResult(map, plan, boundedDiagnostics([...compiled.diagnostics, {
         code: "brief-limit-exceeded", severity: "error", path: "briefs", relatedIds: [],
-      }]);
+      }]));
       this.emit(identity, result, "diagnostic", projectionOutcomes);
       return result;
     }
