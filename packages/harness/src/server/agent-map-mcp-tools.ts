@@ -163,7 +163,8 @@ function errorResult(error: unknown) {
                 ? { code: error.code,
                     recovery: error.code === "request_id_reused" || error.code === "request_id_expired"
                       ? "new_request" : error.code === "source_mismatch" ? "reread"
-                        : error.code === "malformed_input" ? "correct" : "retry" }
+                        : error.code === "malformed_input" ? "correct"
+                          : error.code === "quota_exceeded" ? "manual_intervention" : "retry" }
               : error instanceof SubsessionCoordinatorError
                 ? error.detail
               : error instanceof AgentMapWorkspaceStoreError
@@ -180,6 +181,14 @@ function toolResult(value: object, message: string) {
   return {
     content: [{ type: "text" as const, text: message }],
     structuredContent: value as Record<string, unknown>,
+  };
+}
+
+function briefRefreshFailure(error: unknown) {
+  const errorCode = error instanceof AgentBriefServiceError ? error.code : "storage_unavailable";
+  return {
+    outcome: errorCode === "quota_exceeded" ? "manual_intervention" as const : "retryable" as const,
+    errorCode,
   };
 }
 
@@ -334,8 +343,7 @@ export function createAgentMapToolServer(
         expectedPlan: { planId: result.plan.planId, versionId: result.plan.versionId,
           semanticDigest: result.plan.semanticDigest },
         focus: { mode: "canonical" },
-      }).catch((error: unknown) => ({ outcome: "retryable" as const,
-        errorCode: error instanceof AgentBriefServiceError ? error.code : "storage_unavailable" }));
+      }).catch(briefRefreshFailure);
       return toolResult({ ...result, briefRefresh }, result.created ? "Build plan version created." : "Build plan is unchanged.");
     }),
   );
@@ -356,8 +364,7 @@ export function createAgentMapToolServer(
         expectedPlan: { planId: result.plan.planId, versionId: result.plan.versionId,
           semanticDigest: result.plan.semanticDigest },
         focus: { mode: "canonical" },
-      }).catch((error: unknown) => ({ outcome: "retryable" as const,
-        errorCode: error instanceof AgentBriefServiceError ? error.code : "storage_unavailable" }));
+      }).catch(briefRefreshFailure);
       return toolResult({ ...result, briefRefresh }, result.created ? "Build plan rebased." : "Build plan rebase is unchanged.");
     }),
   );

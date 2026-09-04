@@ -28,6 +28,7 @@ import {
   type TrustedSubsessionBindingMarker,
 } from "./session-manager.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -3354,6 +3355,34 @@ describe("SessionManager", () => {
       expect(spawns).toEqual([]);
     },
   );
+
+  it("rejects a focused overlay when no project-agent identity resolves", async () => {
+    const adapter = createFakeAdapter();
+    const { manager, spawns } = makeManager({ adapter });
+
+    await expect(manager.create(
+      { cwd: "/tmp/proj", harness: "claude-code" },
+      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
+    )).rejects.toThrow("Focused project context requires a project-agent identity");
+    expect(adapter.launch).not.toHaveBeenCalled();
+    expect(spawns).toEqual([]);
+    expect(manager.list()).toEqual([]);
+  });
+
+  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
+    const adapter = createFakeAdapter();
+    const { manager, spawns } = makeManager({ adapter });
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    await manager.setAgentSessionId(session.id, "provider-session");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resume(session.id, {
+      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
+    })).rejects.toThrow("Focused project context requires a project-agent identity");
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(manager.get(session.id)?.status).toBe("exited");
+  });
 
   it.each(["buildLaunchOpts", "adapter.resume"] as const)(
     "releases project launch authority when resume setup fails in $stage",

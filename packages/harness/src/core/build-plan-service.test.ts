@@ -35,11 +35,16 @@ describe("BuildPlanService", () => {
   const roots: string[] = [];
   afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))));
 
-  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number) {
+  async function fixture(
+    receiptRetentionLimit?: number,
+    versionHistoryLimit?: number,
+    briefReceiptRetentionLimit?: number,
+  ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "build-plan-service-"));
     roots.push(root);
     const aggregateStore = new AgentMapWorkspaceStore(root, {
       now: () => new Date("2026-01-02T03:04:05.000Z"),
+      ...(briefReceiptRetentionLimit === undefined ? {} : { briefReceiptRetentionLimit }),
     });
     const mapService = new AgentMapProposalService(aggregateStore, {
       now: () => new Date("2026-01-02T03:04:06.000Z"),
@@ -425,7 +430,7 @@ describe("BuildPlanService", () => {
   });
 
   it("reserves append-only active, retired, reactivated, and nested brief histories by neutral scope", async () => {
-    const { aggregateStore, service, refs } = await fixture();
+    const { aggregateStore, service, refs } = await fixture(undefined, undefined, 2);
     const applied = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
       expectedMap: toolMapRef(refs.map), expectedPlan: null,
       operations: [{ op: "replace-content", content: content(refs) }] });
@@ -465,17 +470,29 @@ describe("BuildPlanService", () => {
       const withSemantic = { ...base, semanticDigest: computeAgentBriefSemanticDigest(base) };
       return { ...withSemantic, recordDigest: computeAgentBriefRecordDigest(withSemantic) };
     };
+    const receipt = (value: AgentBriefVersion, status: "active" | "retired") => ({
+      map: refs.map,
+      plan: applied.plan,
+      briefs: [{ scopeKey: value.scopeKey, briefId: value.briefId, versionId: value.versionId,
+        version: value.version, disposition: value.version === 1 ? "created" as const : "new-version" as const,
+        status }],
+      impact: { affectedWorkstreamCount: 0, entries: [], staleBriefIds: [], preservedBriefIds: [],
+        changedNodeIds: [], changedRelationshipIds: [], changedContractRefs: [], digest: `sha256:${"d".repeat(64)}` },
+      diagnostics: [],
+    });
     const first = brief(1, null);
     await briefStore.appendBriefVersions(projectId, { actor: first.authoredBy, requestId: "brief-retire",
       requestDigest: `sha256:${"a".repeat(64)}`, expectedMap: refs.map, expectedPlan: applied.plan,
-      entries: [{ version: first, status: "retired" }], createdAt: first.createdAt });
+      entries: [{ version: first, status: "retired" }], receipt: receipt(first, "retired"), createdAt: first.createdAt });
     const second = brief(2, first.versionId);
     const reactivated = await briefStore.appendBriefVersions(projectId, { actor: second.authoredBy,
       requestId: "brief-reactivate", requestDigest: `sha256:${"b".repeat(64)}`, expectedMap: refs.map,
-      expectedPlan: applied.plan, entries: [{ version: second, status: "active" }], createdAt: second.createdAt });
+      expectedPlan: applied.plan, entries: [{ version: second, status: "active" }], receipt: receipt(second, "active"),
+      createdAt: second.createdAt });
     await expect(briefStore.appendBriefVersions(projectId, { actor: second.authoredBy,
       requestId: "brief-reactivate", requestDigest: `sha256:${"b".repeat(64)}`, expectedMap: refs.map,
-      expectedPlan: applied.plan, entries: [{ version: second, status: "active" }], createdAt: second.createdAt }))
+      expectedPlan: applied.plan, entries: [{ version: second, status: "active" }], receipt: receipt(second, "active"),
+      createdAt: second.createdAt }))
       .resolves.toEqual({ ...reactivated, replayed: true });
     const nestedBriefId = "brief_018f0000-0000-7000-8000-000000000060" as AgentBriefId;
     const nestedScopeKey = "scope_research_analysis" as AgentBriefScopeKey;
@@ -488,7 +505,7 @@ describe("BuildPlanService", () => {
     const nested = { ...nestedWithSemantic, recordDigest: computeAgentBriefRecordDigest(nestedWithSemantic) };
     await briefStore.appendBriefVersions(projectId, { actor: nested.authoredBy, requestId: "brief-nested",
       requestDigest: `sha256:${"c".repeat(64)}`, expectedMap: refs.map, expectedPlan: applied.plan,
-      entries: [{ version: nested, status: "active" }], createdAt: nested.createdAt });
+      entries: [{ version: nested, status: "active" }], receipt: receipt(nested, "active"), createdAt: nested.createdAt });
     const aggregate = await aggregateStore.readAggregate(projectId);
     expect(aggregate.briefVersionsById[briefId]).toHaveLength(2);
     expect(aggregate.current.briefsByScope[scopeKey]).toMatchObject({
@@ -501,5 +518,11 @@ describe("BuildPlanService", () => {
       status: "active",
       focusScope: { family: "ad-hoc-delegation", delegationKey: "analysis", parentScopeKey: scopeKey },
     });
+    expect(aggregate.requestReceipts.filter(({ operation }) => operation === "brief_append")
+      .map(({ requestId }) => requestId)).toEqual(["brief-reactivate", "brief-nested"]);
+    expect(aggregate.requestTombstones).toContainEqual(expect.objectContaining({
+      requestId: "brief-retire",
+      operation: "brief_append",
+    }));
   });
 });

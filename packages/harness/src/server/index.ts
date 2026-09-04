@@ -634,6 +634,8 @@ function createDefaultBuildLaunchOpts(
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
+    if (context?.focusedContext && !context.agentMapIdentity)
+      throw new Error("Focused project context requires a project-agent identity");
     const appendices = [
       viaSystemPrompt ? brief : null,
       context?.agentMapIdentity

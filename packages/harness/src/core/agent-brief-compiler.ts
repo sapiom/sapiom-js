@@ -18,6 +18,7 @@ import type {
   CompileAgentBriefsRequest,
   CompileAgentBriefsResult,
   CompiledAgentBriefCandidate,
+  PreviousAgentBrief,
 } from "../shared/agent-brief.js";
 import {
   canonicalWorkstreamScopes,
@@ -182,23 +183,42 @@ function verifyExactSources(request: CompileAgentBriefsRequest, diagnostics: Bui
     diagnostics.push(diagnostic("source-mismatch", "plan.recordDigest", [plan.versionId]));
 
   const maps = sorted(request.mapHistory, (entry) => `${String(entry.version).padStart(16, "0")}\0${entry.versionId}`);
+  const plans = sorted(request.planHistory, (entry) => `${String(entry.version).padStart(16, "0")}\0${entry.versionId}`);
+  const mapById = new Map(maps.map((entry) => [entry.versionId, entry]));
+  const planById = new Map(plans.map((entry) => [entry.versionId, entry]));
+  const previousPlan = [...plans]
+    .filter(({ versionId }) => versionId !== plan.versionId)
+    .sort((left, right) => right.version - left.version)[0];
+  const requiredPlanIds = new Set([
+    plan.versionId,
+    ...(previousPlan ? [previousPlan.versionId] : []),
+    ...request.previousBriefs.map(({ version }) => version.plan.versionId),
+  ]);
+  const requiredMapIds = new Set([
+    map.versionId,
+    ...request.previousBriefs.map(({ version }) => version.map.versionId),
+    ...plans.filter(({ versionId }) => requiredPlanIds.has(versionId)).map((entry) => entry.map.versionId),
+  ]);
+  // Preserve a linear proof of the complete immutable chain, but only repeat
+  // canonical hashing for exact versions that can affect this compilation.
   maps.forEach((entry, index) => {
     if (entry.projectId !== projectId || entry.version !== index + 1 ||
       entry.parentVersionId !== (maps[index - 1]?.versionId ?? null) ||
-      !matches(() => computeGraphContentDigest(entry.graph), entry.contentDigest) ||
-      !matches(() => computeAgentMapVersionRecordDigest(entry), entry.recordDigest))
+      (requiredMapIds.has(entry.versionId) &&
+        (!matches(() => computeGraphContentDigest(entry.graph), entry.contentDigest) ||
+          !matches(() => computeAgentMapVersionRecordDigest(entry), entry.recordDigest))))
       diagnostics.push(diagnostic("source-lineage-mismatch", `mapHistory[${index}]`, [entry.versionId]));
   });
-  const plans = sorted(request.planHistory, (entry) => `${String(entry.version).padStart(16, "0")}\0${entry.versionId}`);
   plans.forEach((entry, index) => {
-    const historicalMap = maps.find(({ versionId }) => versionId === entry.map.versionId);
+    const historicalMap = mapById.get(entry.map.versionId);
     if (entry.projectId !== projectId || entry.version !== index + 1 ||
       entry.parentVersionId !== (plans[index - 1]?.versionId ?? null) ||
       !historicalMap || !agentMapVersionRefsEqual(entry.map, {
         projectId: historicalMap.projectId, versionId: historicalMap.versionId,
         contentDigest: historicalMap.contentDigest,
-      }) || !matches(() => computeBuildPlanSemanticDigest(entry), entry.semanticDigest) ||
-      !matches(() => computeBuildPlanRecordDigest(entry), entry.recordDigest))
+      }) || (requiredPlanIds.has(entry.versionId) &&
+        (!matches(() => computeBuildPlanSemanticDigest(entry), entry.semanticDigest) ||
+          !matches(() => computeBuildPlanRecordDigest(entry), entry.recordDigest))))
       diagnostics.push(diagnostic("source-lineage-mismatch", `planHistory[${index}]`, [entry.versionId]));
   });
   if (!maps.some((entry) => entry.versionId === map.versionId && entry.contentDigest === map.contentDigest))
@@ -206,8 +226,6 @@ function verifyExactSources(request: CompileAgentBriefsRequest, diagnostics: Bui
   if (!plans.some((entry) => projectBuildPlanVersionRefsEqual(versionRef(entry), versionRef(plan))))
     diagnostics.push(diagnostic("source-lineage-mismatch", "planHistory", [plan.versionId]));
 
-  const mapById = new Map(maps.map((entry) => [entry.versionId, entry]));
-  const planById = new Map(plans.map((entry) => [entry.versionId, entry]));
   request.previousBriefs.forEach(({ pointer, version }, index) => {
     const historicalMap = mapById.get(version.map.versionId);
     const historicalPlan = planById.get(version.plan.versionId);
@@ -223,6 +241,59 @@ function verifyExactSources(request: CompileAgentBriefsRequest, diagnostics: Bui
       diagnostics.push(diagnostic("source-lineage-mismatch", `previousBriefs[${index}]`, [version.briefId]));
   });
   return diagnostics.every(({ code }) => code !== "source-mismatch" && code !== "source-lineage-mismatch");
+}
+
+function utf16Prefix(value: string, length: number): string {
+  let end = Math.max(0, Math.min(length, value.length));
+  if (end > 0 && end < value.length && /[\uD800-\uDBFF]/u.test(value[end - 1]!)) end -= 1;
+  return value.slice(0, end);
+}
+
+function boundedText(
+  value: string,
+  path: string,
+  root: PlanNodeId,
+  diagnostics: BuildPlanDiagnostic[],
+): string {
+  if (value.length <= AGENT_BRIEF_TEXT_LIMIT) return value;
+  diagnostics.push(diagnostic("context-truncated", path, [root], "warning"));
+  return `${utf16Prefix(value, AGENT_BRIEF_TEXT_LIMIT - 1)}…`;
+}
+
+function boundedCanonicalRecord(
+  value: Readonly<Record<string, unknown>>,
+  path: string,
+  root: PlanNodeId,
+  diagnostics: BuildPlanDiagnostic[],
+): string {
+  const serialized = canonicalJson(value);
+  if (serialized.length <= AGENT_BRIEF_TEXT_LIMIT) return serialized;
+  diagnostics.push(diagnostic("context-truncated", path, [root], "warning"));
+  if (typeof value.description === "string") {
+    let low = 0;
+    let high = Math.min(value.description.length, AGENT_BRIEF_TEXT_LIMIT);
+    let best = "";
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = canonicalJson({ ...value, description: `${utf16Prefix(value.description, middle)}…`, truncated: true });
+      if (candidate.length <= AGENT_BRIEF_TEXT_LIMIT) {
+        best = candidate;
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    if (best) return best;
+  }
+  const summary = canonicalJson({
+    truncated: true,
+    digest: canonicalDigest("sapiom.agent-brief.bounded-record.v1", value),
+    ...(typeof value.relationshipId === "string" ? { relationshipId: value.relationshipId } : {}),
+    ...(typeof value.kind === "string" ? { kind: value.kind } : {}),
+    ...(typeof value.direction === "string" ? { direction: value.direction } : {}),
+    ...(typeof value.contractRef === "string" ? { contractRef: value.contractRef } : {}),
+  });
+  return summary.length <= AGENT_BRIEF_TEXT_LIMIT
+    ? summary
+    : canonicalJson({ truncated: true, digest: canonicalDigest("sapiom.agent-brief.bounded-record.v1", value) });
 }
 
 const relationshipProjection = (relationship: PlanRelationship) => ({
@@ -328,6 +399,7 @@ function projectScope(
   plan: ProjectBuildPlanVersion,
   index: GraphIndex,
   diagnostics: BuildPlanDiagnostic[],
+  parent: PreviousAgentBrief | null = null,
 ): ScopeProjection | null {
   const selected = selection.focusScope.family === "canonical-workstream"
     ? [...(index.ownedByRoot.get(selection.focusScope.plannedAgentId) ?? [])]
@@ -345,7 +417,7 @@ function projectScope(
   const root = selection.focusScope.family === "canonical-workstream"
     ? selection.focusScope.plannedAgentId
     : requestedAssignment?.plannedAgentId ?? (roots.length === 1 ? roots[0] : undefined);
-  if (!root || (roots.length > 1 && !requestedAssignment)) {
+  if (!root || roots.length > 1 || (roots.length === 1 && roots[0] !== root)) {
     diagnostics.push(diagnostic("ambiguous-focus-owner", "selections.focusScope", roots));
     return null;
   }
@@ -355,24 +427,39 @@ function projectScope(
     return null;
   }
   const ownedNodeIds = unique(valid.length > 0 ? valid : [root]);
+  if (selection.focusScope.family === "ad-hoc-delegation" && selection.focusScope.parentScopeKey !== null) {
+    if (!parent || parent.pointer.status !== "active") {
+      diagnostics.push(diagnostic("missing-focus-node", "selections.focusScope.parentScopeKey",
+        [selection.focusScope.parentScopeKey]));
+      return null;
+    }
+    const parentNodes = new Set([...parent.version.content.ownedNodeIds, ...parent.version.content.relevantNodeIds]);
+    if (parent.version.plannedAgentId !== root || ownedNodeIds.some((id) => !parentNodes.has(id))) {
+      diagnostics.push(diagnostic("ambiguous-focus-owner", "selections.focusScope.parentScopeKey",
+        [selection.focusScope.parentScopeKey, root]));
+      return null;
+    }
+  }
   const owned = new Set(ownedNodeIds);
   const boundaryRelationships = index.relationships.filter((entry) => owned.has(entry.fromNodeId) || owned.has(entry.toNodeId));
   const relevant = new Set(boundaryRelationships.flatMap((entry) => [entry.fromNodeId, entry.toNodeId])
     .filter((id) => !owned.has(id)));
   const relevantRelationships = new Map(boundaryRelationships.map((entry) => [entry.id, entry]));
   const format = (entry: PlanRelationship, direction: "input" | "output") =>
-    canonicalJson({ direction, relationshipId: entry.id, kind: entry.kind, executionMode: entry.executionMode,
-      contractRef: entry.contractRef, fromNodeId: entry.fromNodeId, toNodeId: entry.toNodeId, description: entry.description });
+    boundedCanonicalRecord({ direction, relationshipId: entry.id, kind: entry.kind,
+      executionMode: entry.executionMode, contractRef: entry.contractRef, fromNodeId: entry.fromNodeId,
+      toNodeId: entry.toNodeId, description: entry.description }, `brief.content.${direction}s`, root, diagnostics);
   const flows = boundaryRelationships.map((entry) => effectiveFlow(entry, index)).filter((entry): entry is Flow => entry !== null);
   const inputs = flows.filter((entry) => owned.has(entry.toNodeId) && !owned.has(entry.fromNodeId))
     .map(({ relationship }) => format(relationship, "input"));
   const outputs = flows.filter((entry) => owned.has(entry.fromNodeId) && !owned.has(entry.toNodeId))
     .map(({ relationship }) => format(relationship, "output"));
   const dependencies = boundaryRelationships.filter((entry) => owned.has(entry.fromNodeId) !== owned.has(entry.toNodeId)).map((entry) =>
-    canonicalJson({ relationshipId: entry.id, kind: entry.kind,
+    boundedCanonicalRecord({ relationshipId: entry.id, kind: entry.kind,
       direction: owned.has(entry.fromNodeId) ? "downstream" : "upstream",
       counterpartNodeId: owned.has(entry.fromNodeId) ? entry.toNodeId : entry.fromNodeId,
-      contractRef: entry.contractRef, executionMode: entry.executionMode, description: entry.description }));
+      contractRef: entry.contractRef, executionMode: entry.executionMode, description: entry.description },
+    "brief.content.dependencies", root, diagnostics));
   const contractGroups = new Map<string, Flow[]>();
   index.relationships.forEach((relationship) => {
     if (!relationship.contractRef) return;
@@ -398,14 +485,14 @@ function projectScope(
         if (!owned.has(relationship.toNodeId)) relevant.add(relationship.toNodeId);
       });
       const direction = provider === root ? "downstream" as const : "upstream" as const;
-      dependencies.push(canonicalJson({
+      dependencies.push(boundedCanonicalRecord({
         kind: direction === "downstream" ? "provides-input" : "consumes-output",
         direction,
         counterpartAgentId: direction === "downstream" ? consumer : provider,
         relationshipIds: unique(evidence.map(({ relationship }) => relationship.id)),
         contractRef,
         blocking: true,
-      }));
+      }, "brief.content.dependencies", root, diagnostics));
     }
   }
   const relationships = sorted([...relevantRelationships.values()], (entry) => entry.id);
@@ -414,15 +501,8 @@ function projectScope(
     const kind = index.nodes.get(id)?.kind;
     return kind === "resource" || kind === "connector" || kind === "artifact";
   }));
-  const bounded = (values: readonly string[], path: string) => unique(values).map((value) => {
-    if ([...value].length <= AGENT_BRIEF_TEXT_LIMIT) return value;
-    diagnostics.push(diagnostic("context-truncated", path, [root], "warning"));
-    return `${[...value].slice(0, AGENT_BRIEF_TEXT_LIMIT - 1).join("")}…`;
-  });
   return { root, assignment, ownedNodeIds, relevantNodeIds, relationships,
-    inputs: bounded(inputs, "brief.content.inputs"),
-    outputs: bounded(outputs, "brief.content.outputs"),
-    dependencies: bounded(dependencies, "brief.content.dependencies"), resources };
+    inputs: unique(inputs), outputs: unique(outputs), dependencies: unique(dependencies), resources };
 }
 
 function fingerprints(
@@ -496,7 +576,10 @@ function compile(
       diagnostics.push(diagnostic("invalid-dependency", `selections[${selectionIndex}].focusScope`, [scopeKey]));
       continue;
     }
-    const projection = projectScope(selection, request.plan, index, diagnostics);
+    const parent = selection.focusScope.family === "ad-hoc-delegation" && selection.focusScope.parentScopeKey !== null
+      ? previousByScope.get(selection.focusScope.parentScopeKey) ?? null
+      : null;
+    const projection = projectScope(selection, request.plan, index, diagnostics, parent);
     if (!projection) continue;
     const previous = previousByScope.get(scopeKey) ?? null;
     const dependencyFingerprints = fingerprints(projection, selection, request.plan, index);
@@ -517,7 +600,8 @@ function compile(
       sequenceGateIds: request.plan.content.sequenceGates.map(({ id }) => id),
       deliverables: unique(projection.outputs.length > 0
         ? projection.outputs
-        : [selection.mission ?? projection.assignment.mission]),
+        : [boundedText(selection.mission ?? projection.assignment.mission,
+            "brief.content.deliverables", projection.root, diagnostics)]),
       acceptanceCriteria: unique([...request.plan.content.acceptanceCriteria, ...request.plan.content.integrationCriteria]),
       constraints: unique(request.plan.content.sharedConstraints),
       milestoneIds: request.plan.content.milestones.map(({ id }) => id),
@@ -577,24 +661,30 @@ function compile(
   const previousPlan = [...request.planHistory]
     .filter(({ versionId }) => versionId !== request.plan.versionId)
     .sort((left, right) => right.version - left.version)[0];
-  const previousMap = previousPlan
-    ? request.mapHistory.find(({ versionId }) => versionId === previousPlan.map.versionId)
-    : undefined;
+  const historicalMaps = new Map(request.mapHistory.map((entry) => [entry.versionId, entry]));
+  const historicalPlans = new Map(request.planHistory.map((entry) => [entry.versionId, entry]));
+  const previousMap = previousPlan ? historicalMaps.get(previousPlan.map.versionId) : undefined;
   const previousFingerprints = new Map<string, readonly AgentBriefDependencyFingerprint[]>();
+  const historicalIndexes = new Map<string, GraphIndex>();
   for (const { pointer, version } of request.previousBriefs) {
-    const historicalPlan = request.planHistory.find(({ versionId }) => version.plan.versionId === versionId);
-    const historicalMap = request.mapHistory.find(({ versionId }) => version.map.versionId === versionId);
+    const historicalPlan = historicalPlans.get(version.plan.versionId);
+    const historicalMap = historicalMaps.get(version.map.versionId);
     if (!historicalPlan || !historicalMap) {
       previousFingerprints.set(pointer.scopeKey, []);
       continue;
     }
-    const historicalIndex = indexGraph(historicalMap.graph, []);
+    const historicalIndex = historicalIndexes.get(historicalMap.versionId) ?? indexGraph(historicalMap.graph, []);
+    historicalIndexes.set(historicalMap.versionId, historicalIndex);
     const historicalSelection: AgentBriefFocusSelection = pointer.focusScope.family === "canonical-workstream"
       ? { focusScope: pointer.focusScope }
       : { focusScope: pointer.focusScope, nodeIds: version.content.ownedNodeIds,
           assignmentId: version.assignmentId, mission: version.content.mission,
           scope: version.content.scope, nonGoals: version.content.nonGoals };
-    const historicalProjection = projectScope(historicalSelection, historicalPlan, historicalIndex, []);
+    const historicalParent = pointer.focusScope.family === "ad-hoc-delegation" &&
+      pointer.focusScope.parentScopeKey !== null
+      ? previousByScope.get(pointer.focusScope.parentScopeKey) ?? null
+      : null;
+    const historicalProjection = projectScope(historicalSelection, historicalPlan, historicalIndex, [], historicalParent);
     previousFingerprints.set(pointer.scopeKey, historicalProjection
       ? fingerprints(historicalProjection, historicalSelection, historicalPlan, historicalIndex)
       : []);
