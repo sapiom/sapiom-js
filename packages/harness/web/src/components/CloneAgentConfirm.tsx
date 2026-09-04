@@ -1,8 +1,7 @@
 import { useRef } from "react";
 import type { JSX } from "react";
 
-import { useDismissable } from "../lib/use-dismissable";
-import { Icon } from "./Icon";
+import { Dialog } from "./Dialog";
 
 /**
  * Confirm before cloning a deep-linked agent that isn't on this machine. Opening
@@ -10,8 +9,9 @@ import { Icon } from "./Icon";
  * clone it — a real git clone + npm install the coding agent runs — so it takes a
  * deliberate click rather than happening silently from a link.
  *
- * Dismisses like the other modals: Escape and a backdrop click both cancel; only
- * the explicit button clones.
+ * Dismisses like every other dialog, because it dismisses through the same
+ * shell: Escape and a backdrop click both cancel; only the explicit button
+ * clones.
  */
 export function CloneAgentConfirm({
   agentLabel,
@@ -22,41 +22,35 @@ export function CloneAgentConfirm({
   onCancel: () => void;
   onConfirm: () => void;
 }): JSX.Element {
-  const confirmRef = useRef<HTMLDivElement>(null);
-  useDismissable(true, { onDismiss: onCancel, containerRef: confirmRef });
+  // Initial focus lands on the safe action; cloning takes a deliberate Tab or
+  // click.
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div
-        ref={confirmRef}
-        className="modal modal-confirm"
-        role="alertdialog"
-        aria-label="Clone agent"
-        data-testid="clone-agent-confirm"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          Clone this agent?
-          <button className="theme-toggle modal-close" aria-label="Close" title="Close" onClick={onCancel}>
-            <Icon name="X" size={14} />
-          </button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-copy">
-            {agentLabel} isn’t on this machine yet. Cloning checks it out locally — a git clone and
-            npm install the coding agent runs — then opens it here.
-          </p>
-        </div>
-        <div className="modal-actions">
-          {/* Initial focus lands on the safe action; cloning takes a deliberate Tab or click. */}
-          <button className="btn-ghost" autoFocus onClick={onCancel}>
+    <Dialog
+      role="alertdialog"
+      className="modal-confirm"
+      testId="clone-agent-confirm"
+      title="Clone this agent?"
+      onClose={onCancel}
+      initialFocusRef={cancelRef}
+      /* NO `triggerRef`: this one is opened by a deep link, not by a control
+         on screen, so there is nothing to hand focus back to. */
+      actions={
+        <>
+          <button className="btn-ghost" ref={cancelRef} onClick={onCancel}>
             Cancel
           </button>
           <button className="btn-primary" data-testid="clone-agent-confirm-btn" onClick={onConfirm}>
             Clone locally
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <p className="modal-copy">
+        {agentLabel} isn’t on this machine yet. Cloning checks it out locally — a git clone and
+        npm install the coding agent runs — then opens it here.
+      </p>
+    </Dialog>
   );
 }

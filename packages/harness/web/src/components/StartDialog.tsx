@@ -3,10 +3,8 @@ import type { JSX, RefObject } from "react";
 
 import type { FsListResponse } from "../lib/api";
 import { classifyFolder, type FolderOutcome } from "../lib/detect-folder";
-import { useDismissable } from "../lib/use-dismissable";
+import { Dialog } from "./Dialog";
 import { FolderField } from "./FolderField";
-import { Icon } from "./Icon";
-import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
  * One folder dialog, TWO questions.
@@ -88,9 +86,6 @@ export function StartDialog({
   const [error, setError] = useState<string | null>(null);
   /** Whether the bulk scan has been armed — see `armAddAll`. */
   const [armed, setArmed] = useState(false);
-
-  const panelRef = useRef<HTMLDivElement>(null);
-  useDismissable(true, { onDismiss: onClose, containerRef: panelRef, triggerRef });
 
   /**
    * Classify the typed folder, debounced.
@@ -218,57 +213,22 @@ export function StartDialog({
     else if (canScan) armAddAll();
   };
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      submitPrimary();
-    }
-  };
+  const title = mode === "open" ? "Add a project" : "Add existing agents";
 
   return (
-    <div className="modal-backdrop">
-      <div
-        className="modal modal-start"
-        role="dialog"
-        aria-label={mode === "open" ? "Add a project" : "Add existing agents"}
-        ref={panelRef}
-        onKeyDown={onKeyDown}
-        {...trackingAttrs({ dialog: "add_agents" })}
-      >
-        <div className="modal-header modal-start-header">
-          <span className="modal-start-title">
-            {mode === "open" ? "Add a project" : "Add existing agents"}
-          </span>
-          <button className="theme-toggle modal-close" aria-label="Close" title="Close" onClick={onClose}>
-            <Icon name="X" size={14} />
-          </button>
-        </div>
-
-        <div className="modal-body">
-          {/* ONE LINE, and it is the only body copy — a title, a line of
-              guidance, a folder, one action. What was here before spent three
-              sentences on how the scanner works (one level down versus the whole
-              tree) to justify a warning nobody could act on. */}
-          <p className="modal-field-hint" data-testid="start-hint" aria-live="polite">
-            {hintFor({ mode, outcome, checking, armed })}
-          </p>
-
-          <section className="modal-section">
-            <FolderField
-              value={cwd}
-              onChange={setCwd}
-              onSubmit={submitPrimary}
-              /* No chips here: this dialog names a folder to ADD, and the
-                 recents are the folders it has already been given. */
-              recentDirs={[]}
-              listDir={listDir}
-            />
-          </section>
-
-          {error && <div className="modal-error">{error}</div>}
-        </div>
-
-        <div className="modal-actions modal-start-actions">
+    <Dialog
+      className="modal-start"
+      title={title}
+      onClose={onClose}
+      /* Enter (from the field) and ⌘↵ both fire the PRIMARY — which is the
+         whole point of `mode`: the control the user reached for decides what
+         they meant. The rule itself is the shell's, shared with every other
+         dialog. */
+      onSubmit={submitPrimary}
+      triggerRef={triggerRef}
+      tracking={{ dialog: "add_agents" }}
+      actions={
+        <>
           <button className="btn-ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
@@ -284,9 +244,31 @@ export function StartDialog({
             onScan={armAddAll}
             onOpen={openProject}
           />
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {/* ONE LINE, and it is the only body copy — a title, a line of guidance,
+          a folder, one action. What was here before spent three sentences on
+          how the scanner works (one level down versus the whole tree) to
+          justify a warning nobody could act on. */}
+      <p className="modal-field-hint" data-testid="start-hint" aria-live="polite">
+        {hintFor({ mode, outcome, checking, armed })}
+      </p>
+
+      <section className="modal-section">
+        <FolderField
+          value={cwd}
+          onChange={setCwd}
+          onSubmit={submitPrimary}
+          /* No chips here: this dialog names a folder to ADD, and the
+             recents are the folders it has already been given. */
+          recentDirs={[]}
+          listDir={listDir}
+        />
+      </section>
+
+      {error && <div className="modal-error">{error}</div>}
+    </Dialog>
   );
 }
 
