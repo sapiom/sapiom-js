@@ -24,6 +24,7 @@ import type { AgentBriefRefreshReceipt } from "../shared/agent-brief.js";
 import {
   AGENT_BRIEF_VERSION_HISTORY_LIMIT,
   PROJECT_MUTATION_RECEIPT_LIMIT,
+  PROJECT_MUTATION_TOMBSTONE_LIMIT,
 } from "../shared/build-plan.js";
 import { parseAgentBriefVersion, parseAgentMapVersionRef, parseProjectBuildPlanVersionRef } from "../shared/build-plan-codec.js";
 import {
@@ -72,6 +73,17 @@ export class AgentMapWorkspaceStoreError extends Error {
 }
 
 const storageError = () => new AgentMapWorkspaceStoreError("storage_unavailable");
+
+export const AGENT_BRIEF_RECEIPT_RETENTION_LIMIT = 256;
+
+export class AgentBriefAppendQuotaError extends Error {
+  readonly code = "quota_exceeded" as const;
+
+  constructor(readonly resource: "brief_versions" | "request_receipts" | "request_tombstones") {
+    super(`Agent brief ${resource.replace(/_/gu, " ")} quota is exhausted`);
+    this.name = "AgentBriefAppendQuotaError";
+  }
+}
 
 /** Compatibility parser for callers that still inspect the deployed E1 shape. */
 export function parseAgentMapWorkspaceState(
@@ -152,6 +164,8 @@ export interface AppendBriefVersionsResult {
 /** Crash-atomic owner of the one final project planning aggregate. */
 export class AgentMapWorkspaceStore {
   private readonly queues = new Map<StudioProjectId, Promise<void>>();
+  private readonly briefReceiptRetentionLimit: number;
+  private readonly briefVersionHistoryLimit: number;
 
   constructor(
     private readonly agentMapRoot: string,
@@ -159,8 +173,19 @@ export class AgentMapWorkspaceStore {
       now?: () => Date;
       onEvent?: (event: AgentMapWorkspaceStoreEvent) => void | Promise<void>;
       beforePersistStep?: (step: "write" | "file-sync" | "rename" | "directory-sync") => void | Promise<void>;
+      briefReceiptRetentionLimit?: number;
+      briefVersionHistoryLimit?: number;
     } = {},
-  ) {}
+  ) {
+    this.briefReceiptRetentionLimit = options.briefReceiptRetentionLimit ?? AGENT_BRIEF_RECEIPT_RETENTION_LIMIT;
+    this.briefVersionHistoryLimit = options.briefVersionHistoryLimit ?? AGENT_BRIEF_VERSION_HISTORY_LIMIT;
+    if (!Number.isSafeInteger(this.briefReceiptRetentionLimit) || this.briefReceiptRetentionLimit < 1 ||
+      this.briefReceiptRetentionLimit > PROJECT_MUTATION_RECEIPT_LIMIT)
+      throw new RangeError("briefReceiptRetentionLimit must be a positive safe integer within the receipt quota");
+    if (!Number.isSafeInteger(this.briefVersionHistoryLimit) || this.briefVersionHistoryLimit < 1 ||
+      this.briefVersionHistoryLimit > AGENT_BRIEF_VERSION_HISTORY_LIMIT)
+      throw new RangeError("briefVersionHistoryLimit must be a positive safe integer within the history quota");
+  }
 
   private workspacePath(projectId: StudioProjectId) {
     return path.join(this.agentMapRoot, "projects", projectId, "workspace.json");
@@ -322,8 +347,8 @@ export class AgentMapWorkspaceStore {
           JSON.stringify(parsed.plan) !== JSON.stringify(request.expectedPlan))
           throw new AgentMapWorkspaceStoreError("malformed_state");
         const history = next.briefVersionsById[parsed.briefId] ?? [];
-        if (history.length >= AGENT_BRIEF_VERSION_HISTORY_LIMIT)
-          throw new AgentMapWorkspaceStoreError("storage_unavailable");
+        if (history.length >= this.briefVersionHistoryLimit)
+          throw new AgentBriefAppendQuotaError("brief_versions");
         const pointer = next.current.briefsByScope[parsed.scopeKey];
         if (parsed.version !== history.length + 1 || parsed.parentVersionId !== (history.at(-1)?.versionId ?? null) ||
           (pointer !== undefined && pointer.briefId !== parsed.briefId)) throw new AgentMapWorkspaceStoreError("malformed_state");
@@ -335,12 +360,23 @@ export class AgentMapWorkspaceStore {
       }
       const result: AppendBriefVersionsResult = { replayed: false, versions,
         receipt: structuredClone(request.receipt) };
-      if (next.requestReceipts.length >= PROJECT_MUTATION_RECEIPT_LIMIT)
-        throw new AgentMapWorkspaceStoreError("storage_unavailable");
       const receiptRecord: ProjectMutationReceipt<AppendBriefVersionsResult> = { projectId, ...actor,
         requestId: request.requestId, requestDigest: request.requestDigest, operation: "brief_append", result,
         createdAt: request.createdAt };
       next.requestReceipts.push(receiptRecord);
+      const briefReceipts = () => next.requestReceipts.filter(({ operation }) => operation === "brief_append");
+      const expiring = Math.max(0, briefReceipts().length - this.briefReceiptRetentionLimit);
+      if (next.requestTombstones.length + expiring > PROJECT_MUTATION_TOMBSTONE_LIMIT)
+        throw new AgentBriefAppendQuotaError("request_tombstones");
+      if (next.requestReceipts.length - expiring > PROJECT_MUTATION_RECEIPT_LIMIT)
+        throw new AgentBriefAppendQuotaError("request_receipts");
+      for (let count = 0; count < expiring; count += 1) {
+        const expiredIndex = next.requestReceipts.findIndex(({ operation }) => operation === "brief_append");
+        const [expired] = next.requestReceipts.splice(expiredIndex, 1);
+        if (expired) next.requestTombstones.push({ projectId: expired.projectId, userId: expired.userId,
+          sessionId: expired.sessionId, requestId: expired.requestId, operation: expired.operation,
+          createdAt: expired.createdAt });
+      }
       next.recordVersion += 1;
       next.updatedAt = request.createdAt;
       return { value: result, next };

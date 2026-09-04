@@ -35,11 +35,16 @@ describe("BuildPlanService", () => {
   const roots: string[] = [];
   afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))));
 
-  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number) {
+  async function fixture(
+    receiptRetentionLimit?: number,
+    versionHistoryLimit?: number,
+    briefReceiptRetentionLimit?: number,
+  ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "build-plan-service-"));
     roots.push(root);
     const aggregateStore = new AgentMapWorkspaceStore(root, {
       now: () => new Date("2026-01-02T03:04:05.000Z"),
+      ...(briefReceiptRetentionLimit === undefined ? {} : { briefReceiptRetentionLimit }),
     });
     const mapService = new AgentMapProposalService(aggregateStore, {
       now: () => new Date("2026-01-02T03:04:06.000Z"),
@@ -425,7 +430,7 @@ describe("BuildPlanService", () => {
   });
 
   it("reserves append-only active, retired, reactivated, and nested brief histories by neutral scope", async () => {
-    const { aggregateStore, service, refs } = await fixture();
+    const { aggregateStore, service, refs } = await fixture(undefined, undefined, 2);
     const applied = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
       expectedMap: toolMapRef(refs.map), expectedPlan: null,
       operations: [{ op: "replace-content", content: content(refs) }] });
@@ -513,5 +518,11 @@ describe("BuildPlanService", () => {
       status: "active",
       focusScope: { family: "ad-hoc-delegation", delegationKey: "analysis", parentScopeKey: scopeKey },
     });
+    expect(aggregate.requestReceipts.filter(({ operation }) => operation === "brief_append")
+      .map(({ requestId }) => requestId)).toEqual(["brief-reactivate", "brief-nested"]);
+    expect(aggregate.requestTombstones).toContainEqual(expect.objectContaining({
+      requestId: "brief-retire",
+      operation: "brief_append",
+    }));
   });
 });

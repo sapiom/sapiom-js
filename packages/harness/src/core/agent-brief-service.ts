@@ -15,7 +15,7 @@ import type {
 import { agentMapVersionRefsEqual, projectBuildPlanVersionRefsEqual } from "../shared/build-plan.js";
 import { compileCanonicalWorkstreamBriefs, projectFocusedBriefs } from "./agent-brief-compiler.js";
 import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration.js";
-import { AgentMapWorkspaceStoreError } from "./agent-map-workspace-store.js";
+import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "./agent-map-workspace-store.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import { parseAgentBriefRefreshRequest } from "./build-plan-schema.js";
 import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
@@ -30,6 +30,7 @@ export type AgentBriefServiceErrorCode =
   | "source_mismatch"
   | "request_id_reused"
   | "request_id_expired"
+  | "quota_exceeded"
   | "storage_unavailable";
 
 export class AgentBriefServiceError extends Error {
@@ -210,6 +211,8 @@ export class AgentBriefService {
       return result;
     } catch (error) {
       this.emit(identity, this.diagnosticResult(map, plan, []), "failed");
+      if (error instanceof AgentBriefAppendQuotaError)
+        throw new AgentBriefServiceError("quota_exceeded");
       if (error instanceof AgentMapWorkspaceStoreError) {
         if (error.code === "storage_unavailable") throw new AgentBriefServiceError("storage_unavailable");
         throw new AgentBriefServiceError("source_mismatch");

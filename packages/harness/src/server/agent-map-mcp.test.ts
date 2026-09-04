@@ -44,12 +44,15 @@ async function fixture(
   > & {
     createAgentBriefService?: (store: BuildPlanStore) => AgentBriefService;
     mapVersionHistoryLimit?: number;
+    briefVersionHistoryLimit?: number;
   } = {},
 ) {
-  const { createAgentBriefService, mapVersionHistoryLimit, ...routerOptions } = options;
+  const { createAgentBriefService, mapVersionHistoryLimit, briefVersionHistoryLimit, ...routerOptions } = options;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-mcp-"));
   const capabilities = new AgentMapCapabilityRegistry();
-  const workspaceStore = new AgentMapWorkspaceStore(root);
+  const workspaceStore = new AgentMapWorkspaceStore(root, {
+    ...(briefVersionHistoryLimit === undefined ? {} : { briefVersionHistoryLimit }),
+  });
   const service = new AgentMapProposalService(workspaceStore, {
     ...(mapVersionHistoryLimit === undefined ? {} : { versionHistoryLimit: mapVersionHistoryLimit }),
   });
@@ -482,6 +485,69 @@ describe("Agent Map Streamable HTTP MCP", () => {
       diagnostics: [{ code: "brief-compilation-failed" }],
     } } });
     expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions).toHaveLength(1);
+  });
+
+  it("keeps a committed plan and reports manual intervention when brief history is exhausted", async () => {
+    const { capabilities, url, workspaceStore } = await fixture({ briefVersionHistoryLimit: 1 });
+    const identity: ProjectAgentSession = { projectId, sessionId: "brief-quota", userId: "user" };
+    const client = await connect(url, capabilities.issue(identity).token);
+    const proposed = await client.callTool({ name: "agent_map_propose", arguments: {
+      schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "brief-quota-map",
+      operations: [{ kind: "add-node", draftRef: "worker", node: {
+        kind: "agent", name: "Worker", purpose: "Own the outcome", ownerAgent: null, contractRefs: [],
+      } }],
+    } });
+    const nodeId = (proposed.structuredContent as { allocatedNodeIds: { worker: string } }).allocatedNodeIds.worker;
+    const map = (await workspaceStore.readAggregate(projectId)).current.map!;
+    const first = await client.callTool({ name: "build_plan_apply", arguments: {
+      schemaVersion: 1, requestId: "brief-quota-plan-1",
+      expectedMap: { versionId: map.versionId, contentDigest: map.contentDigest }, expectedPlan: null,
+      operations: [{ op: "replace-content", content: {
+        outcome: "Deliver the first outcome", nonGoals: [], milestones: [], sequenceGates: [],
+        sharedConstraints: [], repositoryIntents: [], integrationCriteria: [], acceptanceCriteria: [], decisions: [],
+        assignments: [{ id: { clientRef: "worker-assignment" }, plannedAgentId: nodeId, briefId: null,
+          mission: "Deliver version one", scope: ["Worker outcome"], nonGoals: [], dependencies: [] }],
+        unresolvedDecisions: [], risks: [],
+      } }],
+    } });
+    expect(first).toMatchObject({ structuredContent: { created: true,
+      briefRefresh: { persisted: true, briefs: [{ version: 1 }] } } });
+    const firstPlanRef = (first.structuredContent as { plan: {
+      planId: string; versionId: string; semanticDigest: string;
+    } }).plan;
+    const firstPlan = (await workspaceStore.readAggregate(projectId)).buildPlanVersions.at(-1)!;
+    const second = await client.callTool({ name: "build_plan_apply", arguments: {
+      schemaVersion: 1, requestId: "brief-quota-plan-2",
+      expectedMap: { versionId: map.versionId, contentDigest: map.contentDigest },
+      expectedPlan: { planId: firstPlanRef.planId, versionId: firstPlanRef.versionId,
+        semanticDigest: firstPlanRef.semanticDigest },
+      operations: [{ op: "replace-content", content: {
+        ...firstPlan.content,
+        assignments: firstPlan.content.assignments.map((assignment) => ({
+          ...assignment,
+          mission: "Deliver version two",
+        })),
+      } }],
+    } });
+    expect(second).toMatchObject({ structuredContent: { created: true, briefRefresh: {
+      outcome: "manual_intervention",
+      errorCode: "quota_exceeded",
+    } } });
+    const aggregate = await workspaceStore.readAggregate(projectId);
+    expect(aggregate.buildPlanVersions).toHaveLength(2);
+    expect(Object.values(aggregate.briefVersionsById)[0]).toHaveLength(1);
+    const secondPlan = aggregate.current.buildPlan!;
+    const explicitRefresh = await client.callTool({ name: "build_plan_brief_refresh", arguments: {
+      schemaVersion: 1, requestId: "brief-quota-explicit",
+      expectedMap: { versionId: map.versionId, contentDigest: map.contentDigest },
+      expectedPlan: { planId: secondPlan.planId, versionId: secondPlan.versionId,
+        semanticDigest: secondPlan.semanticDigest },
+      focus: { mode: "canonical" },
+    } });
+    expect(explicitRefresh).toMatchObject({ isError: true, structuredContent: {
+      code: "quota_exceeded",
+      recovery: "manual_intervention",
+    } });
   });
 
   it("returns bounded recovery for request-local and durable map quotas", async () => {

@@ -3119,6 +3119,21 @@ describe("SessionManager", () => {
     expect(manager.list()).toEqual([]);
   });
 
+  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
+    const adapter = createFakeAdapter();
+    const { manager, spawns } = makeManager({ adapter });
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    await manager.setAgentSessionId(session.id, "provider-session");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resume(session.id, {
+      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
+    })).rejects.toThrow("Focused project context requires a project-agent identity");
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(manager.get(session.id)?.status).toBe("exited");
+  });
+
   it.each(["buildLaunchOpts", "adapter.resume"] as const)(
     "releases project launch authority when resume setup fails in $stage",
     async (stage) => {
