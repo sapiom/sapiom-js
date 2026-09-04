@@ -55,6 +55,12 @@ export {
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,
 } from "./shared/build-plan.js";
+export {
+  canonicalWorkstreamScopes,
+  canonicalizeAgentBriefFocusScope,
+  computeAgentBriefId,
+  computeAgentBriefScopeKey,
+} from "./shared/agent-brief.js";
 export type {
   AgentBriefContent,
   AgentBriefFocusScope,
