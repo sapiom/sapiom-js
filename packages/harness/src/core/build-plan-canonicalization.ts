@@ -118,22 +118,28 @@ const briefStrings = (content: AgentBriefVersion["content"]) => ({
 
 export type AgentBriefSemanticInput = Pick<
   AgentBriefVersion,
-  "assignmentId" | "plannedAgentId" | "map" | "plan" | "content"
+  | "scopeKey"
+  | "focusScope"
+  | "assignmentId"
+  | "plannedAgentId"
+  | "content"
+  | "compilerInputFingerprint"
 >;
 
 export const agentBriefSemanticProjection = (brief: AgentBriefSemanticInput) => ({
+  scopeKey: brief.scopeKey,
+  focusScope: brief.focusScope,
   assignmentId: brief.assignmentId,
   plannedAgentId: brief.plannedAgentId,
-  mapContentDigest: brief.map.contentDigest,
-  planSemanticDigest: brief.plan.semanticDigest,
   content: briefStrings(brief.content),
+  compilerInputFingerprint: brief.compilerInputFingerprint,
 });
 
 export const computeAgentBriefSemanticDigest = (
   brief: AgentBriefSemanticInput,
 ): AgentBriefSemanticDigest =>
   canonicalDigest(
-    "sapiom.agent-brief.semantic.v1",
+    "sapiom.agent-brief.semantic.v2",
     agentBriefSemanticProjection(brief),
   ) as AgentBriefSemanticDigest;
 

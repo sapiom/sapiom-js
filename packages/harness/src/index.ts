@@ -138,6 +138,18 @@ export {
   computeBuildPlanRequestDigest,
   computeBuildPlanSemanticDigest,
 } from "./core/build-plan-canonicalization.js";
+export {
+  AGENT_BRIEF_COMPILER_DIAGNOSTIC_LIMIT,
+  DeterministicAgentBriefCompiler,
+  compileAgentBriefs,
+  compileCanonicalWorkstreamBriefs,
+  projectFocusedBriefs,
+} from "./core/agent-brief-compiler.js";
+export {
+  AGENT_BRIEF_IMPACT_ENTRY_LIMIT,
+  AGENT_BRIEF_IMPACT_EVIDENCE_LIMIT,
+  evaluateAgentBriefImpact,
+} from "./core/build-plan-impact-evaluator.js";
 export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {

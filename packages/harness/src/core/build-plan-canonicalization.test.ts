@@ -90,6 +90,8 @@ describe("neutral map/plan digest protocol", () => {
     );
 
     const brief = {
+      scopeKey: "scope_research" as AgentBriefVersion["scopeKey"],
+      focusScope: { family: "canonical-workstream" as const, plannedAgentId: nodeId },
       assignmentId,
       plannedAgentId: nodeId,
       map: { projectId, versionId: mapVersionId, contentDigest: mapDigest },
@@ -116,9 +118,10 @@ describe("neutral map/plan digest protocol", () => {
         milestoneIds: [],
         unresolvedDecisionIds: [],
       },
-    } satisfies Pick<AgentBriefVersion, "assignmentId" | "plannedAgentId" | "map" | "plan" | "content">;
+      compilerInputFingerprint: `sha256:${"3".repeat(64)}`,
+    } satisfies Pick<AgentBriefVersion, "scopeKey" | "focusScope" | "assignmentId" | "plannedAgentId" | "map" | "plan" | "content" | "compilerInputFingerprint">;
     expect(computeAgentBriefSemanticDigest(brief)).toBe(
-      "sha256:e1b304271db17e8b8164e193a6ae41d82c0864ff593c02c3e3169de205c26b0a",
+      "sha256:ac5ab8530a271c57115f43b498750d1ff7b5d7bd8bb70aac42428cdde6ae7dac",
     );
   });
 
@@ -198,7 +201,7 @@ describe("neutral map/plan digest protocol", () => {
       semanticDigest: computeAgentBriefSemanticDigest(briefBase),
     };
     expect(computeAgentBriefRecordDigest(brief)).toBe(
-      "sha256:49f7f41ab2483d9ac7c4ffa1a9929a069afc4b8abe72b404b3f1b4f3a5121f0f",
+      "sha256:8b2175ab4265b38ccb2aed918eaa595fc7eb424db970a6a0739514b3a05217d9",
     );
     expect(computeBuildPlanSemanticDigest({ ...planContent, nonGoals: [...planContent.nonGoals] })).toBe(plan.semanticDigest);
     expect(computeBuildPlanSemanticDigest({ content: plan.content })).toBe(plan.semanticDigest);
