@@ -30,10 +30,7 @@ import {
   serializeFocusedSessionContext,
   type FocusedSessionContextProjection,
 } from "./focused-session-context.js";
-import {
-  SessionNotReadyError,
-  SubsessionBindingMismatchError,
-} from "./errors.js";
+import { SessionNotReadyError, SubsessionBindingMismatchError } from "./errors.js";
 import type {
   SessionManager,
   TrustedSubsessionBindingMarker,
@@ -537,6 +534,16 @@ export class SubsessionCoordinator {
         }
         throw error("binding_session_mismatch", false, "inspect_session");
       }
+      if (existing.status === "exited") {
+        binding = await this.recoverExitedSession(
+          caller,
+          identity,
+          binding,
+          privateMarker,
+          projection,
+        );
+        return { binding, created: false, reused: true };
+      }
       throw error("session_unreachable", true, "inspect_session");
     }
 
@@ -619,6 +626,109 @@ export class SubsessionCoordinator {
     );
     binding = await this.advanceToReady(identity, binding, runtimeToken);
     return { binding, created: true, reused: false };
+  }
+
+  private async recoverExitedSession(
+    caller: ProjectAgentSession,
+    identity: ProjectAgentSession,
+    initial: SubsessionBindingRecord,
+    currentMarker: TrustedSubsessionBindingMarker,
+    projection: FocusedSessionContextProjection | null,
+  ): Promise<SubsessionBindingRecord> {
+    let binding = initial;
+    if (
+      binding.runtime &&
+      ["starting", "awaiting-ready", "ready"].includes(binding.sessionState)
+    ) {
+      binding = await this.options.store.transitionSession(
+        identity,
+        binding.bindingId,
+        {
+          expectedLifecycleEpoch: binding.lifecycleEpoch,
+          expectedSpawnEpoch: binding.spawnEpoch,
+          expectedRuntimeToken: binding.runtime.runtimeToken,
+          state: "exited",
+        },
+      );
+    }
+    const resumable = await this.options.sessionManager.canResumeSession(
+      binding.sessionId,
+    );
+    if (!resumable && currentDelivery(binding).state !== "pending") {
+      throw error("session_unreachable", false, "inspect_session");
+    }
+    let claim;
+    if (binding.sessionState === "spawn-claimed" && binding.spawnClaim) {
+      if (binding.spawnClaim.expiresAt > new Date().toISOString()) return binding;
+      claim = await this.options.store.takeoverExpiredSpawnClaim(
+        identity,
+        binding.bindingId,
+        {
+          ownerId: this.ownerId,
+          expiredClaimId: binding.spawnClaim.claimId,
+          expectedLifecycleEpoch: binding.lifecycleEpoch,
+          expectedSpawnEpoch: binding.spawnEpoch,
+        },
+      );
+    } else {
+      claim = await this.options.store.claimSpawn(
+        identity,
+        binding.bindingId,
+        {
+          ownerId: this.ownerId,
+          expectedLifecycleEpoch: binding.lifecycleEpoch,
+          expectedSpawnEpoch: binding.spawnEpoch,
+        },
+      );
+    }
+    if (!claim.claimed) return claim.binding;
+    binding = claim.binding;
+    const spawnClaim = binding.spawnClaim!;
+    const nextMarker = markerFor(binding, currentMarker.incarnation + 1);
+    const trusted = projection ? { focusedContext: projection } : {};
+    if (resumable) {
+      await this.options.sessionManager.resumeBound(
+        binding.sessionId,
+        currentMarker,
+        nextMarker,
+        trusted,
+      );
+    } else {
+      const index = await this.options.eventReader.index();
+      const hasRecordedTurns = async () =>
+        (index.bySession.get(binding.sessionId)?.turnCount ?? 0) > 0;
+      await this.options.sessionManager.restartFreshBound(
+        binding.sessionId,
+        currentMarker,
+        nextMarker,
+        {
+          agentMapIdentity: (sessionId) => ({
+            projectId: binding.projectId,
+            userId: caller.userId,
+            sessionId,
+          }),
+          initialTitle: this.title(binding.outcome),
+          ...(projection ? { focusedContext: () => projection } : {}),
+        },
+        hasRecordedTurns,
+      );
+    }
+    const runtimeToken = this.options.sessionManager.getRuntimeEpoch(
+      binding.sessionId,
+    );
+    if (!runtimeToken)
+      throw error("session_restart_failed", true, "retry");
+    binding = await this.options.store.attachSpawnedRuntime(
+      identity,
+      binding.bindingId,
+      {
+        claimId: spawnClaim.claimId,
+        spawnEpoch: binding.spawnEpoch,
+        runtimeToken,
+        incarnation: nextMarker.incarnation,
+      },
+    );
+    return this.advanceToReady(identity, binding, runtimeToken);
   }
 
   private async advanceToReady(

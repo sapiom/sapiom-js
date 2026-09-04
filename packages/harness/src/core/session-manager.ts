@@ -805,6 +805,11 @@ export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
   focusedContext?: FocusedSessionContextProjection;
+  /** Private two-sided coordinator transition, never accepted by REST. */
+  subsessionBindingTransition?: Readonly<{
+    expected: TrustedSubsessionBindingMarker;
+    next: TrustedSubsessionBindingMarker;
+  }>;
 }
 
 interface PtyHandle {
@@ -1116,6 +1121,16 @@ export class SessionManager {
 
   get(id: string): HarnessSession | undefined {
     return this.sessions.get(id);
+  }
+
+  /** Read-only vendor-history probe used before a coordinator claims recovery. */
+  async canResumeSession(id: string): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (!session?.agentSessionId) return false;
+    return this.getAdapter(session.harness).canResume(
+      session.agentSessionId,
+      session.cwd,
+    );
   }
 
   /** True only when this process owns the live PTY behind the record. */
@@ -1637,6 +1652,33 @@ export class SessionManager {
     if (this.rejectedProjectSessionMetadata.has(id)) {
       throw new ProjectSessionScopeUnavailableError(id);
     }
+    const bindingTransition = trusted.subsessionBindingTransition;
+    if (bindingTransition) {
+      const expected = parseTrustedSubsessionBindingMarker(
+        bindingTransition.expected,
+        id,
+      );
+      const next = parseTrustedSubsessionBindingMarker(
+        bindingTransition.next,
+        id,
+      );
+      const current = this.subsessionBindings.get(id);
+      if (
+        !expected ||
+        !next ||
+        !current ||
+        !sameSubsessionBinding(current, expected) ||
+        next.projectId !== expected.projectId ||
+        next.parentSessionId !== expected.parentSessionId ||
+        next.bindingId !== expected.bindingId ||
+        next.sessionId !== expected.sessionId ||
+        next.incarnation !== expected.incarnation + 1 ||
+        next.spawnEpoch <= expected.spawnEpoch ||
+        this.userClosedSubsessions.has(id)
+      ) {
+        throw new SubsessionBindingMismatchError();
+      }
+    }
     const adapter = this.getAdapter(session.harness);
     // Pre-flight against the agent's OWN store before touching the record.
     // Holding an agentSessionId only means our SessionStart hook fired once;
@@ -1654,6 +1696,16 @@ export class SessionManager {
         `${label} no longer has the conversation for this session (${session.agentSessionId}) in ${session.cwd}. ` +
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
+    }
+    if (bindingTransition) {
+      const current = this.subsessionBindings.get(id)!;
+      this.subsessionBindings.set(id, bindingTransition.next);
+      try {
+        await this.persistSubsessionBindings();
+      } catch (error) {
+        this.subsessionBindings.set(id, current);
+        throw error;
+      }
     }
     const trustedIdentity = session.agentMapIdentity;
     const agentMapIdentity = this.resolveAgentMapIdentity
@@ -1755,6 +1807,19 @@ export class SessionManager {
       throw err;
     }
     return session;
+  }
+
+  /** Server-only same-ID resume fenced by the coordinator's private marker. */
+  resumeBound(
+    id: string,
+    expected: TrustedSubsessionBindingMarker,
+    next: TrustedSubsessionBindingMarker,
+    trusted: Omit<TrustedSessionResumeOptions, "subsessionBindingTransition"> = {},
+  ): Promise<HarnessSession> {
+    return this.resume(id, {
+      ...trusted,
+      subsessionBindingTransition: { expected, next },
+    });
   }
 
   /**

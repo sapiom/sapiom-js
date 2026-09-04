@@ -27,7 +27,7 @@ const identity: ProjectAgentSession = {
   sessionId: parentId,
 };
 
-function adapter(): HarnessAdapter {
+function adapter(resumable = false): HarnessAdapter {
   const spec = (cwd: string): SpawnSpec => ({
     command: "fake-claude",
     args: [],
@@ -41,7 +41,7 @@ function adapter(): HarnessAdapter {
     resume: (_id, { cwd }) => spec(cwd),
     doctor: async () => [],
     listPastSessions: async () => [],
-    canResume: async () => false,
+    canResume: async () => resumable,
   };
 }
 
@@ -64,6 +64,8 @@ function fakePty() {
       },
     } as unknown as ReturnType<PtySpawnFn>,
     writes,
+    emitExit: (exitCode = 0) =>
+      exits.forEach((listener) => listener({ exitCode })),
   };
 }
 
@@ -79,7 +81,7 @@ describe("SubsessionCoordinator", () => {
     );
   });
 
-  async function fixture() {
+  async function fixture(resumable = false) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
     const spawned: ReturnType<typeof fakePty>[] = [];
@@ -89,7 +91,7 @@ describe("SubsessionCoordinator", () => {
       return spawnedPty.pty;
     });
     const manager = new SessionManager({
-      adapters: { "claude-code": adapter() },
+      adapters: { "claude-code": adapter(resumable) },
       ingestUrl: "http://127.0.0.1:4100/ingest",
       ingestCredentials: new IngestCredentialRegistry(),
       sessionsPath: path.join(root, "sessions.json"),
@@ -233,6 +235,51 @@ describe("SubsessionCoordinator", () => {
     unsubscribe();
 
     expect(aggregate.bindings[0]!.deliveries[0]!.state).toBe("acknowledged");
+  });
+
+  it("never fresh-restarts an exited child after kickoff delivery becomes uncertain", async () => {
+    const { coordinator, caller, manager, store, spawned, spawnPty, unsubscribe } =
+      await fixture();
+    const first = await coordinator.execute(caller, request);
+    const childId = first.results[0]!.sessionId!;
+    spawned[1]!.emitExit(1);
+    await manager.flush();
+
+    const retried = await coordinator.execute(caller, request);
+    const aggregate = await store.read(projectId);
+    unsubscribe();
+
+    expect(retried.results[0]).toMatchObject({
+      outcome: "failed",
+      sessionId: childId,
+      kickoffState: "uncertain",
+      error: { code: "session_unreachable", retryable: false },
+    });
+    expect(spawnPty).toHaveBeenCalledTimes(2);
+    expect(aggregate.bindings[0]!.deliveries[0]!.state).toBe("uncertain");
+  });
+
+  it("resumes an exited coordinator-owned vendor conversation under the same Harness id", async () => {
+    const { coordinator, caller, manager, spawned, spawnPty, unsubscribe } =
+      await fixture(true);
+    const first = await coordinator.execute(caller, request);
+    const childId = first.results[0]!.sessionId!;
+    const runtime = manager.getRuntimeEpoch(childId)!;
+    await manager.setAgentSessionId(childId, "agent-child-1", "startup", runtime);
+    spawned[1]!.emitExit(0);
+    await manager.flush();
+
+    const retried = await coordinator.execute(caller, request);
+    unsubscribe();
+
+    expect(retried.results[0]).toMatchObject({
+      outcome: "reused",
+      sessionId: childId,
+      sessionState: "ready",
+      kickoffState: "uncertain",
+    });
+    expect(manager.list().filter(({ id }) => id === childId)).toHaveLength(1);
+    expect(spawnPty).toHaveBeenCalledTimes(3);
   });
 
   it("fails closed when the caller identity is not its trusted session scope", async () => {

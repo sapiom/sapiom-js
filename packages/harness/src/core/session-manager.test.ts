@@ -330,6 +330,43 @@ describe("SessionManager", () => {
     expect(adapter.launch).toHaveBeenCalledTimes(2);
   });
 
+  it("resumes an exact coordinator-owned conversation under an advanced marker", async () => {
+    const { manager, adapter, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000115";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    const firstRuntime = manager.getRuntimeEpoch(sessionId)!;
+    await manager.setAgentSessionId(
+      sessionId,
+      "agent-session-1",
+      "startup",
+      firstRuntime,
+    );
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+
+    const resumed = await manager.resumeBound(
+      sessionId,
+      marker(sessionId),
+      marker(sessionId, 2, 2),
+    );
+
+    expect(resumed).toMatchObject({ id: sessionId, status: "running" });
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(
+      marker(sessionId, 2, 2),
+    );
+    expect(adapter.resume).toHaveBeenCalledWith(
+      "agent-session-1",
+      expect.objectContaining({ harnessSessionId: sessionId }),
+    );
+    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
+  });
+
   it("refuses a fresh bound restart when any recorded turn exists", async () => {
     const { manager, spawns } = makeManager();
     const sessionId = "00000000-0000-4000-8000-000000000113";
