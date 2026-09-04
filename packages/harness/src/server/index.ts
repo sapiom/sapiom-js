@@ -13,6 +13,7 @@ import {
 } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
@@ -129,6 +130,9 @@ import {
   StaticSystemGraphBuilder,
   type WorkspaceScope,
 } from "../core/system-graph.js";
+// One definition of what a project is, shared with the SPA's rail — see the
+// comment on `workspaceScopeCatalog` below.
+import { projectRoots } from "../shared/project-roots.js";
 import {
   canonicalGraphPath,
   dirtyGraphSourceRoots,
@@ -1206,10 +1210,89 @@ export const startServer = async (
   });
   await sessionManager.init();
 
-  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () => [
-    ...(await loadSettings(statePaths.settings)).recentDirs,
-    ...sessionManager.list().map((session) => session.cwd),
-  ]);
+  // THE SAME ANSWER THE RAIL DRAWS, because this catalog is what mints a
+  // durable Studio project per scope and the rail joins its row root to a
+  // scope cwd. Handing it the raw candidates instead — every recentDir plus
+  // every session cwd — was a SECOND definition of "project", and the two
+  // disagreed on the commonest shape there is. `projectRoots`' rule 1 replaces
+  // an agent's OWN directory with the folder that HOLDS it, and that folder
+  // was never a recentDir and never a session cwd. Launch Studio at
+  // `…/property-ops/tenant-screening` and the rail drew `…/property-ops` while
+  // the only registered scope was the agent folder one level down: the join
+  // found nothing, `mapOwnsCreation` went false, and a real install rendered
+  // the RETIRED direct-creation UI instead of the Agent Map that replaced it.
+  //
+  // Deriving here rather than widening the join keeps one source of truth:
+  // `shared/project-roots.ts` decides what a project is, and both hosts read
+  // it. A tolerant join would have been a second, weaker rule that also bound
+  // a row to a project whose root is not that row's root.
+  //
+  // `pendingCwds` is empty on purpose — a folder mid-creation is a browser-only
+  // fact with nothing on disk yet — and `sort` only orders the result, which
+  // `LocalWorkspaceScopeCatalog` re-sorts by canonical path anyway.
+  /**
+   * AN AGENT'S OWN FOLDER IS ONE WHETHER OR NOT THE SCAN HAS RUN.
+   *
+   * `projectRoots` decides what a project is by asking which candidates are
+   * REGISTERED agent directories, and at boot `workflowsCache` is the persisted
+   * registry — empty on a first run against a fresh state root. With no agents
+   * known, rule 1 cannot fire: the agent's own folder is not an agent dir, so it
+   * survives as a root of its own, and `autoCreateSession` puts a live session
+   * in it that `wasChosen` keeps even with no recentDir.
+   *
+   * That would be harmless if scopes were only rendered. They are not:
+   * `studioProjectCatalog.reconcile` MINTS AND PERSISTS a durable project per
+   * scope. The boot state would write one for the agent folder; when the scan
+   * landed the scope would vanish, the binding would flip to "missing", and the
+   * row would sit in `studio-projects.json` forever — the exact stray this fix
+   * exists to remove, made permanent by the fix. "The scan usually wins" is not
+   * an answer: that is a filesystem walk racing a browser load.
+   *
+   * SO ASK THE DISK, DON'T WAIT FOR THE WALK. Awaiting the boot scan here was
+   * the first attempt and it broke a contract this suite states by name —
+   * "serves persisted cold inventory without awaiting discovery". A candidate is
+   * an agent directory if it holds a `sapiom.json`, which is one `stat` per
+   * candidate over a list capped at a handful of recentDirs plus live session
+   * cwds. Bounded, synchronous in effect, and it needs no discovery at all.
+   *
+   * Registry paths still lead: this only ADDS the candidates the registry has
+   * not heard of yet, and drops back to exactly the registry once it has.
+   */
+  const agentDirectoryCandidates = async (
+    candidates: readonly string[],
+  ): Promise<string[]> => {
+    const found = await Promise.all(
+      candidates.map(async (dir) => {
+        try {
+          await access(join(dir, "sapiom.json"));
+          return dir;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return found.filter((dir): dir is string => dir !== null);
+  };
+
+  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () => {
+    const recentDirs = (await loadSettings(statePaths.settings)).recentDirs;
+    const sessions = sessionManager.list();
+    const candidates = [...recentDirs, ...sessions.map((s) => s.cwd)];
+    return projectRoots({
+      recentDirs,
+      sessions: sessions.map((session) => ({
+        cwd: session.cwd,
+        createdAt: session.createdAt,
+        status: session.status,
+      })),
+      pendingCwds: [],
+      agentPaths: [
+        ...workflowsCache.map((workflow) => workflow.path),
+        ...(await agentDirectoryCandidates(candidates)),
+      ],
+      sort: "recent",
+    });
+  });
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),

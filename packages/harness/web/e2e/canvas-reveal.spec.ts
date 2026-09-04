@@ -9,6 +9,16 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+// COMPATIBILITY PAYLOAD, said out loud.
+//
+// Before the mock's `studioProjects` default was flipped, EVERY spec ran on this
+// payload without knowing it: `mockStudioProjects` returned undefined unless a
+// spec opted in, so the whole suite exercised the retired direct-creation rail
+// and never the shipped plan-first one. Pinning this file takes nothing away,
+// it is the payload these tests already ran on; it only stops that being an
+// accident. Their plan-first equivalents are covered in `project-axis.spec.ts`
+// and `agent-map-planning.spec.ts`, not here.
+
 // The mock bus test hook: simulate the server's canvas.reload for a session,
 // the same event a finished render/build broadcasts.
 const publishReload = (page: Page, sessionId: string): Promise<void> =>
@@ -19,7 +29,7 @@ const publishReload = (page: Page, sessionId: string): Promise<void> =>
   }, sessionId);
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 

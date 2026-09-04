@@ -28,12 +28,15 @@ const ACME = "/Users/demo/acme-app";
 
 /** Every fixture the mock can serve, so "across every fixture" is literal. */
 const FIXTURES = [
-  { name: "default", url: "/" },
-  { name: "deep rail tree", url: "/?mockFixtures=deep" },
-  { name: "search shapes", url: "/?mockFixtures=search" },
+  // `mockStudioProjects=absent` on every one: this sweep is the COMPATIBILITY
+  // rail's, where a root agent is merged into its project row. The shipped
+  // plan-first rail renders three rows instead and has its own sweep below.
+  { name: "default", url: "/?mockStudioProjects=absent" },
+  { name: "deep rail tree", url: "/?mockFixtures=deep&mockStudioProjects=absent" },
+  { name: "search shapes", url: "/?mockFixtures=search&mockStudioProjects=absent" },
   // A brand-new install: the empty case, kept in the sweep so the guard is
   // known to hold at zero rows rather than assumed to.
-  { name: "fresh install", url: "/?mockState=fresh" },
+  { name: "fresh install", url: "/?mockState=fresh&mockStudioProjects=absent" },
 ];
 
 /**
@@ -54,7 +57,8 @@ async function stutteringRows(page: Page): Promise<string[]> {
       // (`polsia/services/workers`); what a stutter would repeat is its last
       // segment.
       const leaf = label.split("/").pop() ?? label;
-      const header = group.querySelector(":scope > .workspace-row");
+      // The pinned Agent Map row is also a direct `.workspace-row` child.
+      const header = group.querySelector(":scope > .workspace-row:not(.is-nested)");
       return Array.from(group.querySelectorAll("[data-testid^='workflow-']"))
         .filter((row) => row !== header && row.classList.contains("workflow-item"))
         .map((row) => (row.getAttribute("data-testid") ?? "").replace(/^workflow-/, ""))
@@ -63,6 +67,101 @@ async function stutteringRows(page: Page): Promise<string[]> {
     }),
   );
 }
+
+/**
+ * The same symptom, asked of the SHIPPED plan-first rail.
+ *
+ * WHY THE SWEEP EXISTS AT ALL, because a rule without its reason gets simplified
+ * back: on one real install 15 of 40 rows were a project row that was a single
+ * agent wearing its own folder's name — the folder said `dashboard-keeper` and
+ * the only thing in it said `dashboard-keeper` again.
+ *
+ * WHY PLAN-FIRST NEEDS ITS OWN VERSION. A plan-first project renders three rows
+ * — the project header, the pinned Agent Map, and the agent — so a project whose
+ * root IS an agent legitimately shows that agent's name twice. That is the
+ * design `project-axis.spec.ts` specifies ("a root agent is a separate target
+ * below the pinned Agent Map"), and the compatibility sweep above would forbid
+ * it. Reading the compatibility rule onto this rail is what made the two specs
+ * look like they contradicted each other.
+ *
+ * SO THE EXEMPTION IS EXACTLY ONE ROW WIDE: a header plus its OWN root agent is
+ * fine; a header plus a DIFFERENT agent wearing the folder's name is not. The
+ * project's own root agent is identified by path, not by name — its
+ * `data-agent-path` IS the project root, which is the row's `title`. Anything
+ * else repeating the folder's name is the original defect and still fails.
+ *
+ * NOT COVERED, deliberately: whether printing the root agent's name on both the
+ * header and the row is itself the stutter those 15 rows were. It reads as one
+ * on a plan-first rail too, and it is filed as SAP-3154 for a later decision.
+ * Known, not missed.
+ */
+async function planFirstStutteringRows(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll(".rail-list > .workspace-group")).flatMap((group) => {
+      const testid = group.getAttribute("data-testid") ?? "";
+      const label = testid.replace(/^workspace-group-/, "");
+      const leaf = label.split("/").pop() ?? label;
+      const header = group.querySelector(":scope > .workspace-row:not(.is-nested)");
+      // The project's own root: what the header's select control points at.
+      const root =
+        header?.querySelector("[data-testid^='project-select-']")?.getAttribute("title") ??
+        header?.querySelector("[data-testid^='workspace-']")?.getAttribute("title") ??
+        null;
+      return Array.from(group.querySelectorAll("[data-testid^='workflow-']"))
+        .filter((row) => row !== header && row.classList.contains("workflow-item"))
+        .filter((row) => {
+          const name = (row.getAttribute("data-testid") ?? "").replace(/^workflow-/, "");
+          if (name !== leaf) return false;
+          // THE ONE EXEMPTION. This agent lives AT the project root, so it is
+          // the project's own root agent and its name is not a stutter.
+          return row.getAttribute("data-agent-path") !== root;
+        })
+        .map((row) => `${label} > ${(row.getAttribute("data-testid") ?? "").replace(/^workflow-/, "")}`);
+    }),
+  );
+}
+
+test.describe("SYMPTOM, plan-first: only the project's OWN agent may wear its name", () => {
+  for (const fixture of [
+    { name: "default", url: "/" },
+    { name: "deep rail tree", url: "/?mockFixtures=deep" },
+    { name: "search shapes", url: "/?mockFixtures=search" },
+    { name: "fresh install", url: "/?mockState=fresh" },
+  ]) {
+    test(`holds across the ${fixture.name} fixture`, async ({ page }) => {
+      await page.goto(fixture.url);
+      await expect(page.locator(".rail-workflows")).toBeVisible();
+      expect(await planFirstStutteringRows(page)).toEqual([]);
+    });
+  }
+
+  test("and it still catches a different agent wearing the folder's name", async ({
+    page,
+  }) => {
+    // THE POSITIVE HALF. An empty result is also what a rail with no rows
+    // returns, and the exemption above is wide enough to hide the defect if it
+    // is wrong — so this puts the defect on screen and checks the sweep sees it.
+    // A row bearing the folder's name whose path is NOT the project root is
+    // precisely the shape those 15 real rows had.
+    await page.goto("/?mockFixtures=deep");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    const group = page.getByTestId("workspace-group-dashboard-keeper");
+    await expect(group).toBeVisible();
+    expect(await planFirstStutteringRows(page)).toEqual([]);
+
+    await group.evaluate((element) => {
+      const row = document.createElement("div");
+      row.className = "workflow-item";
+      row.setAttribute("data-testid", "workflow-dashboard-keeper");
+      row.setAttribute("data-agent-path", "/Users/demo/somewhere-else/dashboard-keeper");
+      element.appendChild(row);
+    });
+
+    expect(await planFirstStutteringRows(page)).toEqual([
+      "dashboard-keeper > dashboard-keeper",
+    ]);
+  });
+});
 
 test.describe("SYMPTOM: no project row is a single agent wearing its own folder's name", () => {
   for (const fixture of FIXTURES) {
@@ -78,7 +177,7 @@ test.describe("SYMPTOM: no project row is a single agent wearing its own folder'
     // rail with no rows at all returns, so this pins the mechanism that
     // actually prevents the stutter: the root agent is MERGED into the project
     // row, which then carries its testid and its focus behaviour.
-    await page.goto("/?mockFixtures=deep");
+    await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     await expect(group).toBeVisible();
     await expect(group.getByTestId("workflow-dashboard-keeper")).toHaveCount(1);
@@ -90,7 +189,7 @@ test.describe("SYMPTOM: no project row is a single agent wearing its own folder'
 
 test.describe("Remove project", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/?mockStudioProjects=absent");
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
@@ -100,7 +199,12 @@ test.describe("Remove project", () => {
     // would be worse. Both halves are CSS, so both are asserted on screen.
     // Remove lives inside the row's ⋮ (SAP-2982); the session shortcut sits
     // beside that menu and shares the same row-owned reveal contract.
-    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row");
+    // `:not(.is-nested)` because a plan-first group has a SECOND direct
+    // `.workspace-row` child, the pinned Agent Map row — unqualified this is a
+    // strict-mode violation there rather than the project header.
+    const row = page
+      .getByTestId("workspace-group-acme-app")
+      .locator(":scope > .workspace-row:not(.is-nested)");
     const actions = row.locator(":scope > .workspace-row-action");
     const opacities = (): Promise<string[]> =>
       actions.evaluateAll((elements) =>
@@ -147,7 +251,7 @@ test.describe("Remove project", () => {
     // wore a permanent ⋮, which is exactly the standing control the rail's
     // hover-reveal exists to avoid.
     await page.getByTestId("project-disclosure-acme-app").click();
-    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row");
+    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row:not(.is-nested)");
     await expect(row).toHaveClass(/is-collapsed/);
     await page.mouse.move(0, 0);
     await expect
@@ -265,7 +369,7 @@ test.describe("Remove project", () => {
   test("a project opened INSIDE the removed one survives, with its agents", async ({ page }) => {
     // `~/polsia` and `~/polsia/services/workers` are two real contexts. The
     // inner one is not what the user closed.
-    await page.goto("/?mockFixtures=deep");
+    await page.goto("/?mockFixtures=deep&mockStudioProjects=absent");
     await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
     // Labelled by its path from the parent project while that parent is open,
     // so it cannot be confused with the `workers` subdirectory row inside it.

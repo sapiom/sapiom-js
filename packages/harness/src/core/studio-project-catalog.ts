@@ -65,6 +65,17 @@ export class StudioProjectCatalogError extends Error {
   }
 }
 
+/**
+ * Whether `inner` sits strictly BELOW `outer`. Both are already canonical
+ * (`canonicalGraphPath`), so this is a segment-boundary string test — never a
+ * bare prefix, or `/a/scratch-2` would read as inside `/a/scratch`.
+ */
+function isStrictlyUnder(inner: string, outer: string): boolean {
+  if (inner === outer) return false;
+  const parent = outer.endsWith(path.sep) ? outer : outer + path.sep;
+  return inner.startsWith(parent);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -558,6 +569,21 @@ export class StudioProjectCatalog {
 
       const activeRoots = new Set(dedupedScopes.keys());
       let changed = false;
+      /**
+       * Bindings THIS pass just took away, and only those.
+       *
+       * The adoption below re-points one of these when its root moved up. The
+       * pool has to be this narrow: "any project whose bindings are all
+       * missing" is unbounded in time, because nothing ever deletes a project
+       * and every folder that aged out of the capped `recentDirs` leaves one
+       * behind. A new root appearing months later would then adopt a stranger's
+       * identity — the same durable, silent, un-undoable write this migration
+       * exists to prevent, arriving by the migration itself.
+       */
+      const newlyMissing: Array<{
+        project: StudioProjectIdentity;
+        binding: ProjectRootBinding;
+      }> = [];
       for (const project of next) {
         let projectChanged = false;
         for (const binding of project.rootBindings) {
@@ -565,6 +591,7 @@ export class StudioProjectCatalog {
             ? "active"
             : "missing";
           if (binding.status !== status) {
+            if (status === "missing") newlyMissing.push({ project, binding });
             binding.status = status;
             projectChanged = true;
           }
@@ -589,6 +616,64 @@ export class StudioProjectCatalog {
           throw new StudioProjectCatalogError("malformed_state");
         }
         let project = matchingProjects[0];
+        // A ROOT THAT MOVED UP IS THE SAME PROJECT, not a new one.
+        //
+        // The rail's rule replaces an agent's own directory with the folder that
+        // HOLDS it, so a scope can legitimately be replaced by an ancestor.
+        // Minting for the ancestor and leaving the old entry with a "missing"
+        // binding splits one project in two, and everything durable is keyed to
+        // the projectId that got left behind: the Agent Map aggregate under
+        // `<state>/agent-map/`, `studioBindings` on every agent, and persisted
+        // planner identities (a resumed agent-builder session whose projectId no
+        // longer matches silently re-issues as unplanned). `moveRootBinding`
+        // exists for exactly this churn; this is the automatic case of it.
+        //
+        // ONLY WHEN IT IS UNAMBIGUOUS. The candidate must have no active binding
+        // left of its own, and exactly one candidate may claim this root — two
+        // agent folders promoted to one holding root would otherwise merge two
+        // identities into one, which is worse than the split it fixes and is not
+        // reversible. Ambiguity mints fresh.
+        if (!project) {
+          // THE NEAREST ROOT ADOPTS, not the first one that contains it.
+          // Scopes arrive sorted by canonical path, so `/w` reaches an orphan
+          // under `/w/team/a2` before `/w/team` does; letting it claim would
+          // land the identity on the wrong folder and leave the right one
+          // minting fresh. A root may only adopt what no deeper new root also
+          // contains.
+          const deeperRootExists = (oldRoot: string): boolean =>
+            [...dedupedScopes.keys()].some(
+              (other) =>
+                other !== canonical &&
+                isStrictlyUnder(oldRoot, other) &&
+                // Both contain `oldRoot`, so one is an ancestor of the other
+                // and the longer path is the nearer one.
+                other.length > canonical.length,
+            );
+          const orphans = newlyMissing.filter(
+            ({ project: candidate, binding }) =>
+              isStrictlyUnder(binding.localRootRef, canonical) &&
+              !deeperRootExists(binding.localRootRef) &&
+              candidate.rootBindings.every(
+                (entry) => entry.status === "missing",
+              ),
+          );
+          const moved = orphans.length === 1 ? orphans[0] : undefined;
+          if (moved) {
+            moved.binding.localRootRef = canonical;
+            moved.binding.status = "active";
+            if (!moved.project.legacyWorkspaceKeys.includes(scope.workspaceKey)) {
+              moved.project.legacyWorkspaceKeys.push(scope.workspaceKey);
+            }
+            // `displayName` is NOT rewritten, matching `moveRootBinding`, which
+            // deliberately leaves it alone: the folder moved, the project the
+            // user named did not.
+            moved.project.identityVersion += 1;
+            moved.project.updatedAt = this.timestamp();
+            changed = true;
+            reconciledScopes.push({ ...scope, projectId: moved.project.projectId });
+            continue;
+          }
+        }
         if (!project) {
           const timestamp = this.timestamp();
           project = {

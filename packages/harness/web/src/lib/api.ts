@@ -63,6 +63,7 @@ import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
 import { refuseAgentName } from "@shared/agent-name";
+import { projectRoots } from "@shared/project-roots";
 import {
   parseSystemGraphNavigation,
   parseSystemGraphSnapshot,
@@ -2219,11 +2220,24 @@ export class MockApi implements HarnessApi {
   }
 
   private workspaceScopes(): WorkspaceScopeSummary[] {
-    const roots = new Set([
-      ...this.settings.recentDirs,
-      ...this.sessions.map((session) => session.cwd),
-    ]);
-    return [...roots]
+    // The same derivation the real server runs (`shared/project-roots.ts`).
+    // A mock that unioned recentDirs with session cwds registered a scope for
+    // an agent's own folder and none for the folder the rail promotes it to,
+    // so mock mode could not reproduce the join failure it was supposed to
+    // cover — the fixtures silently disagreed with the server about what a
+    // project is.
+    const roots = projectRoots({
+      recentDirs: this.settings.recentDirs,
+      sessions: this.sessions.map((session) => ({
+        cwd: session.cwd,
+        createdAt: session.createdAt,
+        status: session.status,
+      })),
+      pendingCwds: [],
+      agentPaths: this.workflows.map((workflow) => workflow.path),
+      sort: "recent",
+    });
+    return [...new Set(roots)]
       .sort((left, right) => left.localeCompare(right))
       .map((cwd) => ({
         cwd,
@@ -2233,18 +2247,24 @@ export class MockApi implements HarnessApi {
   }
 
   private studioProjects(): StudioProjectSummary[] | undefined {
-    // Production authority is determined by the server response and always
-    // uses durable Studio project summaries. Mock mode keeps the historical
-    // fixtures stable unless a plan-first scenario opts in explicitly; the
-    // dedicated agent-map fixture is also an opt-in. `absent` names the
-    // legacy-server compatibility contract exercised by the remaining direct
-    // creation specs. This is test data selection, not a product feature flag.
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const mode = params.get("mockStudioProjects");
-      const fixture = params.get("mockFixtures");
-      if (mode === "absent") return undefined;
-      if (mode !== "present" && fixture !== "agent-map") return undefined;
+    // MOCK MODE RENDERS THE SHIPPED PATH BY DEFAULT.
+    //
+    // It used to return undefined unless a spec opted in, so every UI test
+    // that did not think about this exercised the RETIRED direct-creation
+    // branch and none of them ever rendered the Agent Map that replaced it.
+    // A green suite was evidence about the wrong branch — which is why the
+    // gate could be false on every real install without one test noticing.
+    //
+    // The legacy-server compatibility contract is still covered, but only
+    // where a spec ASKS for it with `mockStudioProjects=absent`. Deliberate,
+    // not by default: that is the difference between a covered path and an
+    // accident. This is test data selection, not a product feature flag.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockStudioProjects") ===
+        "absent"
+    ) {
+      return undefined;
     }
     const timestamp = "2026-01-01T00:00:00.000Z";
     return this.workspaceScopes().map((scope, index) => ({
@@ -2454,6 +2474,50 @@ export class MockApi implements HarnessApi {
     );
   }
 
+  /**
+   * WHAT THIS MOCK PROJECT REMEMBERS LOOKING AT, when no spec has said.
+   *
+   * The server's own default for a project with nothing stored is the Agent
+   * Map, and `?mockStudioProjects=present` still produces exactly that. But
+   * the fixture the whole suite loads is a RETURNING user — a live session
+   * bound to an agent — and for that user the remembered workspace is that
+   * agent. Defaulting every project to the map instead put the map in front of
+   * ~190 specs whose subject is the canvas, the inspector or a macro strip,
+   * none of which are about which altitude a boot lands at. Altitude is
+   * asserted where it IS the subject: `agent-map-planning.spec.ts` opts in with
+   * `mockStudioProjects=present` and gets the map.
+   */
+  private rememberedWorkspace(
+    projectId: StudioProjectId,
+  ): StudioWorkspaceSelection | undefined {
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockStudioProjects") ===
+        "present"
+    ) {
+      return undefined;
+    }
+    const boundPaths = new Set(
+      this.sessions
+        .map((session) => session.boundWorkflowPath)
+        .filter((path): path is string => Boolean(path)),
+    );
+    for (const workflow of this.studioWorkflows()) {
+      if (!boundPaths.has(workflow.path)) continue;
+      const binding = workflow.studioBindings?.find(
+        (candidate) => candidate.projectId === projectId,
+      );
+      if (binding) {
+        return {
+          kind: "agent",
+          projectId,
+          agentId: binding.agentId,
+        };
+      }
+    }
+    return undefined;
+  }
+
   async getStudioCurrentWorkspace(
     projectId: StudioProjectId,
   ): Promise<StudioCurrentWorkspaceResponse> {
@@ -2485,7 +2549,7 @@ export class MockApi implements HarnessApi {
           ]
         : [];
     });
-    const requested = this.studioPreferences.get(projectId);
+    const requested = this.studioPreferences.get(projectId) ?? this.rememberedWorkspace(projectId);
     const valid =
       requested?.kind !== "agent" ||
       agents.some((agent) => agent.agentId === requested.agentId);

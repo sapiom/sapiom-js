@@ -107,6 +107,17 @@ export default defineConfig({
       "@shared/agent-name": fileURLToPath(
         new URL("../src/shared/agent-name.ts", import.meta.url),
       ),
+      // Which folders are PROJECTS, and the path comparisons that decide it.
+      // The server derives its workspace scopes from the same functions the
+      // rail renders from: a second definition on either side is what left a
+      // promoted project root with no durable Studio project (see the module
+      // header). Pure string operations, so no node:path enters the bundle.
+      "@shared/paths": fileURLToPath(
+        new URL("../src/shared/paths.ts", import.meta.url),
+      ),
+      "@shared/project-roots": fileURLToPath(
+        new URL("../src/shared/project-roots.ts", import.meta.url),
+      ),
       // The local-run mapper is a pure fn shared with the server (its canonical
       // home is src/core/render-local-run.ts, per the ticket). The SPA imports
       // the SAME implementation to map an offline stub run's NDJSON traces into
