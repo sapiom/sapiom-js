@@ -1,11 +1,23 @@
 import { createHash } from "node:crypto";
 
-import type { PlanNodeId, StudioProjectId } from "./agent-map.js";
+import type {
+  AgentMapVersion,
+  PlanNodeId,
+  StudioProjectId,
+} from "./agent-map.js";
 import { canonicalDigest, compareCanonicalStrings } from "./agent-map-canonical.js";
 import type {
+  AgentBriefDependencyFingerprint,
+  AgentBriefDisposition,
   AgentBriefFocusScope,
+  AgentBriefHistoryPointer,
   AgentBriefId,
+  AgentBriefImpact,
   AgentBriefScopeKey,
+  AgentBriefVersion,
+  BuildPlanDiagnostic,
+  PlanningAssignmentId,
+  ProjectBuildPlanVersion,
 } from "./build-plan.js";
 
 const deterministicId = (prefix: "brief", seed: string): string => {
@@ -64,3 +76,46 @@ export function canonicalWorkstreamScopes(
       plannedAgentId,
     }));
 }
+
+export type AgentBriefFocusSelection = Readonly<{
+  focusScope: AgentBriefFocusScope;
+  /** Explicit narrowing for ad-hoc or nested delegation. */
+  nodeIds?: readonly PlanNodeId[];
+  /** Optional authored assignment to use as the mission/scope source. */
+  assignmentId?: PlanningAssignmentId;
+  mission?: string;
+  scope?: readonly string[];
+  nonGoals?: readonly string[];
+}>;
+
+export type PreviousAgentBrief = Readonly<{
+  pointer: AgentBriefHistoryPointer;
+  version: AgentBriefVersion;
+}>;
+
+export type CompileAgentBriefsRequest = Readonly<{
+  projectId: StudioProjectId;
+  map: AgentMapVersion;
+  plan: ProjectBuildPlanVersion;
+  mapHistory: readonly AgentMapVersion[];
+  planHistory: readonly ProjectBuildPlanVersion[];
+  previousBriefs: readonly PreviousAgentBrief[];
+  selections: readonly AgentBriefFocusSelection[];
+}>;
+
+export type CompiledAgentBriefCandidate = Readonly<{
+  scopeKey: AgentBriefScopeKey;
+  focusScope: AgentBriefFocusScope;
+  disposition: AgentBriefDisposition;
+  previous: AgentBriefVersion | null;
+  brief: AgentBriefVersion;
+  fingerprints: readonly AgentBriefDependencyFingerprint[];
+}>;
+
+export type CompileAgentBriefsResult = Readonly<{
+  map: AgentMapVersion["contentDigest"];
+  plan: ProjectBuildPlanVersion["semanticDigest"];
+  briefs: readonly CompiledAgentBriefCandidate[];
+  impact: AgentBriefImpact;
+  diagnostics: readonly BuildPlanDiagnostic[];
+}>;

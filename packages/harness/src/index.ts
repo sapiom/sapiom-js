@@ -49,6 +49,8 @@ export {
   computeGraphContentDigest,
 } from "./shared/agent-map-canonical.js";
 export {
+  AGENT_BRIEF_COMPILER_VERSION,
+  AGENT_BRIEF_FINGERPRINT_KINDS,
   BUILD_PLAN_SCHEMA_VERSION,
   PROJECT_PLANNING_STORAGE_SCHEMA_VERSION,
   emptyProjectBuildPlanContent,
@@ -62,12 +64,26 @@ export {
   computeAgentBriefScopeKey,
 } from "./shared/agent-brief.js";
 export type {
+  AgentBriefFocusSelection,
+  CompileAgentBriefsRequest,
+  CompileAgentBriefsResult,
+  CompiledAgentBriefCandidate,
+  PreviousAgentBrief,
+} from "./shared/agent-brief.js";
+export type {
   AgentBriefContent,
+  AgentBriefDependencyFingerprint,
+  AgentBriefDisposition,
+  AgentBriefFingerprintKind,
   AgentBriefFocusScope,
   AgentBriefHistoryPointer,
   AgentBriefId,
+  AgentBriefImpact,
+  AgentBriefImpactEntry,
   AgentBriefScopeKey,
   AgentBriefSemanticDigest,
+  AgentBriefStaleReason,
+  AgentBriefStaleReasonCode,
   AgentBriefVersion,
   AgentBriefVersionRecord,
   AgentBriefVersionId,

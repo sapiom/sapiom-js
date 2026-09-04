@@ -174,6 +174,75 @@ export interface AgentBriefContent {
   unresolvedDecisionIds: readonly PlanDecisionId[];
 }
 
+export const AGENT_BRIEF_COMPILER_VERSION = "1.0.0";
+
+export const AGENT_BRIEF_FINGERPRINT_KINDS = [
+  "owned-nodes",
+  "relevant-nodes",
+  "input-contracts",
+  "output-contracts",
+  "relationships",
+  "resources",
+  "milestones",
+  "shared-plan-content",
+  "assignment-content",
+] as const;
+export type AgentBriefFingerprintKind =
+  (typeof AGENT_BRIEF_FINGERPRINT_KINDS)[number];
+
+export type AgentBriefDependencyFingerprint = Readonly<{
+  kind: AgentBriefFingerprintKind;
+  digest: string;
+  nodeIds: readonly PlanNodeId[];
+  relationshipIds: readonly string[];
+  contractRefs: readonly string[];
+}>;
+
+export type AgentBriefDisposition =
+  | "created"
+  | "new-version"
+  | "unchanged"
+  | "retired";
+
+export type AgentBriefStaleReasonCode =
+  | "agent-added"
+  | "agent-removed"
+  | "ownership-changed"
+  | "relevant-node-changed"
+  | "contract-changed"
+  | "relationship-changed"
+  | "resource-changed"
+  | "milestone-changed"
+  | "shared-plan-content-changed"
+  | "assignment-content-changed";
+
+export type AgentBriefStaleReason = Readonly<{
+  code: AgentBriefStaleReasonCode;
+  affectedNodeIds: readonly PlanNodeId[];
+  affectedRelationshipIds: readonly string[];
+  affectedContractRefs: readonly string[];
+  previousFingerprint?: string;
+  currentFingerprint?: string;
+}>;
+
+export type AgentBriefImpactEntry = Readonly<{
+  scopeKey: AgentBriefScopeKey;
+  briefId: AgentBriefId;
+  disposition: "added" | "removed" | "stale" | "preserved";
+  reasons: readonly AgentBriefStaleReason[];
+}>;
+
+export type AgentBriefImpact = Readonly<{
+  affectedWorkstreamCount: number;
+  entries: readonly AgentBriefImpactEntry[];
+  staleBriefIds: readonly AgentBriefId[];
+  preservedBriefIds: readonly AgentBriefId[];
+  changedNodeIds: readonly PlanNodeId[];
+  changedRelationshipIds: readonly string[];
+  changedContractRefs: readonly string[];
+  digest: string;
+}>;
+
 /**
  * Reserved exact-source history seam for SAP-3150. SAP-3149 persists and
  * validates these records but has no compiler/runtime producer.
@@ -216,7 +285,11 @@ export interface BuildPlanDiagnostic {
     | "invalid-dependency"
     | "duplicate-ordinal"
     | "unresolved-decision"
-    | "source-mismatch";
+    | "source-mismatch"
+    | "source-lineage-mismatch"
+    | "ambiguous-focus-owner"
+    | "missing-focus-node"
+    | "context-truncated";
   severity: "error" | "warning";
   path: string;
   relatedIds: readonly string[];
