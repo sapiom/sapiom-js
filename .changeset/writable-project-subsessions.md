@@ -19,10 +19,11 @@ Manual sessions remain outside coordinator ownership. Consumers should treat
 `uncertain` kickoff delivery as terminal until an exact persisted
 acknowledgement arrives, and should use a new request/delegation key when the
 corresponding canonical content changes. Nested delegation is bounded to four
-levels and 64 concurrently live coordinator-owned sessions per project. Closing
-a delegated tab starts PTY termination before its private user-close tombstone
-is persisted, so a storage error cannot leave the process running. Request,
-binding, and acknowledged-delivery history use bounded retention so long-lived
-projects do not dead-end on routine delegation or context refreshes. Exited and
-failed bindings remain durable so their real Harness sessions can still resume
-or recover.
+levels and 64 live or resumable coordinator-owned sessions per project; callers
+inspect and close sessions instead of blindly retrying when that bound is met.
+Closing a delegated tab starts PTY termination before its private user-close
+tombstone is persisted, so a storage error cannot leave the process running.
+Request, binding, and acknowledged-delivery history use bounded retention so
+long-lived projects do not dead-end on routine delegation or context refreshes.
+Exited and failed bindings remain durable so their real Harness sessions can
+still resume or recover.

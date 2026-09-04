@@ -100,8 +100,9 @@ sixteen ordinary writable sessions. Each child receives the same common
 project-agent prompt, coding capabilities, project tools, and delegation tool,
 so nested delegation follows the same path. An exact assignment, map node, or
 brief may focus the child, but focus never changes its tools or authority.
-Delegation is bounded to four levels and 64 concurrently live
-coordinator-owned sessions per project.
+Delegation is bounded to four levels and 64 live or resumable
+coordinator-owned sessions per project. Reaching that bound directs the caller
+to inspect and close sessions; blind retry cannot allocate another session.
 
 Callers provide both a request key and a delegation key. Identity is scoped by
 the private session capability to the trusted project and parent session.

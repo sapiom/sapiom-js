@@ -1162,7 +1162,7 @@ export class SubsessionCoordinator {
         );
       if (cause.code === "live_session_limit_reached")
         return new SubsessionCoordinatorError(
-          error("capacity_exceeded", true, "retry"),
+          error("capacity_exceeded", false, "inspect_session"),
         );
       if (
         cause.code === "delegation_depth_exceeded" ||

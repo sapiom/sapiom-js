@@ -525,6 +525,21 @@ describe("SubsessionCoordinator", () => {
     unsubscribe();
   });
 
+  it("directs resumable-session capacity exhaustion to session inspection", async () => {
+    const { coordinator, caller, store, unsubscribe } = await fixture();
+    vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
+      new SubsessionCoordinatorStoreError("live_session_limit_reached"),
+    );
+    await expect(coordinator.execute(caller, request)).rejects.toMatchObject({
+      detail: {
+        code: "capacity_exceeded",
+        retryable: false,
+        recovery: "inspect_session",
+      },
+    });
+    unsubscribe();
+  });
+
   it("requires a fresh request key after its bounded receipt window expires", async () => {
     const { coordinator, caller, store, unsubscribe } = await fixture();
     vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
