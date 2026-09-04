@@ -56,3 +56,25 @@ pointer. Retirement preserves history, and reactivation appends the next
 version against that retained history. New and migrated aggregates start with
 empty brief histories; plan apply and rebase never invoke a compiler or mutate
 brief pointers.
+
+## Focused brief compilation and refresh
+
+`build_plan_brief_refresh` deterministically joins one exact current map version
+and one exact current plan version. It compiles either the canonical top-level
+workstreams or explicit ad-hoc/nested delegation scopes, appends only changed
+brief versions, and retains explicit retired pointers and immutable history.
+Plan apply and rebase commit before their best-effort canonical refresh, so a
+bounded compiler diagnostic never rolls back accepted plan intent; the refresh
+tool can be retried independently and idempotently.
+
+Brief fingerprints separate owned nodes, relevant nodes, input/output
+contracts, relationships, resources, milestones, shared plan content, and
+assignment content. Impact and freshness are diagnostic only. They never
+change tools, session writability, or implementation authority.
+
+The optional focused-session prompt overlay is an allowlisted, deterministic,
+size-bounded projection. Authored strings are delimited as untrusted data,
+delimiter-shaped and Unicode format characters are escaped, sensitive/path-like
+values are redacted, and oversized collections are truncated with a diagnostic.
+A project session without an overlay receives the common project-agent prompt
+byte-for-byte unchanged and keeps the same tool surface.

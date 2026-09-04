@@ -43,7 +43,7 @@ export type FocusedSessionContextResult =
     }>;
 
 const sensitivePath = /(?:^|[\s"'])(?:[a-zA-Z]:\\|\/(?:home|Users|tmp|private|var\/folders)\/|~\/|file:\/\/)/u;
-const secretLike = /(?:sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._~-]{12,}|(?:password|secret|token|credential)\s*[:=]\s*\S+)/iu;
+const secretLike = /(?:sk-[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._~-]{12,}|(?:api[-_ ]?key|password|secret|token|credential)\s*[:=]\s*\S+)/iu;
 const unsafeFormat = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/gu;
 
 function graphemes(value: string): string[] {
@@ -102,12 +102,17 @@ function buildProjection(input: Readonly<{
   const milestoneIds = new Set(input.brief.content.milestoneIds);
   const gateIds = new Set(input.brief.content.sequenceGateIds);
   const decisionIds = new Set(input.brief.content.unresolvedDecisionIds);
+  const focusScope = input.brief.focusScope.family === "canonical-workstream"
+    ? { family: input.brief.focusScope.family, plannedAgentId: input.brief.focusScope.plannedAgentId }
+    : { family: input.brief.focusScope.family,
+        delegationKey: boundedString(input.brief.focusScope.delegationKey, stringLimit, truncated),
+        parentScopeKey: input.brief.focusScope.parentScopeKey };
   return {
     schemaVersion: 1,
     trust: "untrusted-authored-data",
     references: {
       projectId: input.brief.projectId,
-      focusScope: input.brief.focusScope,
+      focusScope,
       scopeKey: input.brief.scopeKey,
       map: input.brief.map,
       plan: input.brief.plan,
