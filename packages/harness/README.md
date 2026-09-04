@@ -34,6 +34,16 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+Codex receives the generated remote Sapiom, local `sapiom-dev`, and optional
+Agent Map MCP configuration on every session launch and resume. Studio uses session-specific
+server names such as `sapiom-dev-<session suffix>` and identifies them in the
+agent's instructions. This keeps existing Codex MCP registrations intact and
+avoids inheriting old credentials or conflicting transports from a server with
+the same name. Credentials are passed through the child environment, not command
+arguments; Studio does not write to your Codex `config.toml`. If a generated MCP
+file cannot be read or parsed, the session reports an error so you can start a
+new session to regenerate it. Codex background tasks remain unsupported.
+
 ## Telemetry
 
 With explicit opt-in, Agent Studio collects usage events (prompts, tool calls,
@@ -83,6 +93,20 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+### Codex MCP validation
+
+The ordinary unit and server tests cover launch/resume conversion, login and
+credential refresh, logout, and error reporting. To verify actual tool discovery
+with an installed Codex CLI, first build the workspace dependencies, then run:
+
+```bash
+RUN_CODEX_MCP_INTEGRATION=1 pnpm --filter @sapiom/harness exec vitest run src/core/adapters/codex-mcp.integration.test.ts
+```
+
+This test uses a temporary Codex home, the built `sapiom-dev` server, and local
+HTTP fixtures. It requires no Codex login or model request and checks both a
+fresh home and an existing configuration with conflicting server registrations.
 
 ### Agent Map planner sessions
 

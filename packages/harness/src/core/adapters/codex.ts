@@ -33,6 +33,7 @@ import type {
   SpawnSpec,
 } from "../../shared/types.js";
 import { stripAnsi } from "../strip-ansi.js";
+import { buildCodexMcpConfig } from "./codex-mcp.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -300,25 +301,21 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   launch(opts: LaunchOpts): SpawnSpec {
+    const mcp = buildCodexMcpConfig(opts);
     return {
       command: this.binary,
-      args: buildConfigArgs(opts),
-      // Codex has no analog to Claude's CLAUDECODE nested-agent guard; no env
-      // overrides are needed for a fresh launch.
-      env: opts.agentMapMcp
-        ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
-        : {},
+      args: [...buildConfigArgs(opts, mcp.instructions), ...mcp.args],
+      env: mcp.env,
       cwd: opts.cwd,
     };
   }
 
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec {
+    const mcp = buildCodexMcpConfig(opts);
     return {
       command: this.binary,
-      args: ["resume", agentSessionId, ...buildConfigArgs(opts)],
-      env: opts.agentMapMcp
-        ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
-        : {},
+      args: ["resume", agentSessionId, ...buildConfigArgs(opts, mcp.instructions), ...mcp.args],
+      env: mcp.env,
       cwd: opts.cwd,
     };
   }
@@ -420,12 +417,9 @@ export class CodexAdapter implements HarnessAdapter {
 }
 
 /**
- * Codex has no single-flag equivalent to Claude's `--append-system-prompt` /
- * `--mcp-config` — MCP servers are registered globally via `codex mcp add`
- * (a persistent config.toml mutation, which the harness's "zero config
- * mutation" design deliberately avoids), so `opts.mcpConfigFile` /
- * `opts.settingsFile` are intentionally unused here. System-prompt injection
- * uses the generic `-c key=value` override mechanism instead.
+ * System-prompt injection uses Codex's generic `-c key=value` overrides.
+ * The MCP overrides are built separately by buildCodexMcpConfig; the
+ * Claude-only hook settings in opts.settingsFile remain unused.
  *
  * Confirmed against a locally installed codex-cli 0.134.0: `-c
  * model_instructions_file=<path>` is a real, recognized key — but if that
@@ -446,7 +440,7 @@ export class CodexAdapter implements HarnessAdapter {
  * one rather than passing a broken reference that's guaranteed to kill the
  * process on startup.
  */
-function buildConfigArgs(opts: LaunchOpts): string[] {
+function buildConfigArgs(opts: LaunchOpts, mcpInstructions?: string): string[] {
   const args = [
     "-c",
     "check_for_update_on_startup=false",
@@ -466,23 +460,20 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
     "-c",
     'sandbox_mode="workspace-write"',
   ];
-  if (opts.agentMapMcp) {
-    args.push(
-      "-c",
-      `mcp_servers.agent-map.url=${JSON.stringify(opts.agentMapMcp.url)}`,
-      "-c",
-      'mcp_servers.agent-map.bearer_token_env_var="SAPIOM_AGENT_MAP_CAPABILITY"',
-    );
-  }
+  const instructions: string[] = [];
   if (opts.systemPromptFile) {
     try {
       const prompt = readFileSync(opts.systemPromptFile, "utf8");
-      args.push("-c", `developer_instructions=${JSON.stringify(prompt)}`);
+      instructions.push(prompt);
     } catch (err) {
       console.error(
         `[codex adapter] could not read systemPromptFile "${opts.systemPromptFile}" — launching without an injected system prompt: ${(err as Error).message}`,
       );
     }
+  }
+  if (mcpInstructions) instructions.push(mcpInstructions);
+  if (instructions.length > 0) {
+    args.push("-c", `developer_instructions=${JSON.stringify(instructions.join("\n\n"))}`);
   }
   return args;
 }
