@@ -91,7 +91,11 @@ test.describe("the header + opens a project", () => {
   test("a planning project keeps sessions direct while hiding standalone agent creation", async ({
     page,
   }) => {
-    await openFolderStep(page);
+    // Through the ⋮, not the create verb. The verb's folder step CONTINUES into
+    // the new agent screen once the folder is named — that is the flow it
+    // exists for — and this spec's subject is what a planning project offers
+    // afterwards, which needs the folder registered and nothing else.
+    await openAddExistingAgents(page);
     await page.getByTestId("folder-field-input").fill(BLANK);
     await page.getByTestId("open-project").click();
 

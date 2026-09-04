@@ -131,39 +131,36 @@ test("describing an outcome starts a session and hands the agent that outcome", 
     .toContain("Diff our competitors' pricing pages");
 });
 
-/* HELD: these two reach the composer through a door this branch removes.
+/* THE STANDALONE BUILDER, on the branch that still creates one.
  *
- * #802 shipped the standalone-builder intent — a create-new submit is a request
- * to BUILD in a generic session, not a project visit whose saved workspace
- * should be restored — and both specs open the composer with `rail-create-new`
- * on a fixture that HAS projects (`seed=0`). On this branch that control is the
- * create verb: it opens the "where does it live" step, and creation goes to the
- * project's Agent Map. The composer survives only as the home screen, which by
- * definition is the state with no session, no agent and nothing selected, so it
- * is not reachable in a fixture whose whole point is that a parent project
- * already exists. Measured: the composer renders 0 times at both of their URLs.
+ * #802 shipped this: an explicit create-new submit is a request to BUILD in a
+ * generic session, not a project visit whose saved workspace should be restored.
+ * Both specs reached it by pressing the rail's create control on a fixture that
+ * HAS projects. That control is the create verb now, and on a project it lands
+ * on the new agent screen scoped to that project, where submitting dispatches
+ * the planner — so the in-project half of the original scenario is not merely
+ * unreachable, it is deliberately the opposite of what this PR now does there.
  *
- * The BEHAVIOUR they cover is untouched — #802's `App.tsx` changes merged
- * cleanly and are still here. What is gone is the door, and choosing whether
- * the composer keeps one is a product decision on top of two PRs that landed
- * hours apart, not a test edit. Escalated; held rather than deleted so the
- * question is visible in the run rather than absent from it.
+ * WHAT STILL HOLDS, and it is the half these specs are really about: with NO
+ * project there is nothing to dispatch to, so the home screen still creates a
+ * standalone builder, and it still must not be replaced by a Plan Agents
+ * restore when its folder later joins Studio. `mockState=fresh` is that state.
+ * Every assertion below is #802's, unchanged; what moved is the fixture and the
+ * door. The parent-project precondition went with it, because a fixture whose
+ * premise is an existing parent is the in-project case by definition.
+ *
+ * #802's `App.tsx` changes are untouched and still carry this.
  */
-test.fixme("Enter keeps a new-agent prompt in its standalone builder until Plan Agents is explicitly selected", async ({
+test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents is explicitly selected", async ({
   page,
 }) => {
-  await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  // The parent project exists, but with no live session it has never restored
-  // its default Plan Agents workspace. Creating beneath it must not give that
-  // parent restore a head start over the explicit standalone builder intent.
-  await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
+  await page.goto("/?mockState=fresh&mockStudioProjects=present");
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
   const before = await sessionEvidence(page);
   expect(before.activeSessionId).toBeNull();
   expect(before.createSessionCalls).toBe(0);
   expect(before.openPlannerSessionCalls).toBe(0);
 
-  await page.getByTestId("rail-create-new").click();
   const idea = "Build a sales outreach agent.";
   await page.getByTestId("composer-input").fill(idea);
   await page.getByTestId("composer-input").press("Enter");
@@ -181,10 +178,15 @@ test.fixme("Enter keeps a new-agent prompt in its standalone builder until Plan 
   expect(evidence.activeSessionId).not.toBe(before.activeSessionId);
   expect(evidence.injectInputCalls).toBe(before.injectInputCalls + 1);
 
-  const project = page.getByTestId(
-    "workspace-group-acme-app/projects/build-sales-outreach",
-  );
-  const planAgents = project.getByTestId("agent-map-select");
+  // The builder's own folder joined the rail and its Plan Agents is NOT
+  // pressed: #802's claim, that an explicit create-new is a request to build
+  // rather than a project visit whose workspace should be restored. Located by
+  // "the one project that just appeared" instead of by the seeded fixture's
+  // folder path, which the no-project home does not produce.
+  const planAgents = page
+    .locator('[data-testid^="workspace-group-"]')
+    .last()
+    .getByTestId("agent-map-select");
   await expect(planAgents).toHaveAttribute("aria-pressed", "false");
 
   await planAgents.click();
@@ -194,23 +196,27 @@ test.fixme("Enter keeps a new-agent prompt in its standalone builder until Plan 
   await expect(planAgents).toHaveAttribute("aria-pressed", "true");
 });
 
+/* STILL HELD, and this one cannot be adjusted without lying.
+ *
+ * It needs BOTH a parent project and the composer as the home screen, and those
+ * two states are mutually exclusive in the product: `App.tsx`'s initial-focus
+ * effect always focuses an agent when any project has one, so the composer is
+ * the home only when there is nothing to focus. It then navigates AWAY to a
+ * second session (`scratch`) to prove the builder's intent survives, which the
+ * no-project fixture has none of.
+ *
+ * Making it pass would mean inventing a mock flag for a state users never
+ * reach — projects present, nothing focused — which would be a spec that is
+ * green against something that cannot happen. Left held with the reason instead,
+ * for Yash to re-aim at the flow that replaced it.
+ */
 test.fixme("returning to an in-progress standalone builder does not restore Plan Agents", async ({
   page,
 }) => {
-  await page.goto("/?seed=0&mockStudioProjects=present");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect
-    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
-    .toBeGreaterThan(0);
-  await expect
-    .poll(async () => {
-      const evidence = await sessionEvidence(page);
-      return evidence.createSessionCalls - evidence.openPlannerSessionCalls;
-    })
-    .toBe(0);
+  await page.goto("/?mockState=fresh&mockStudioProjects=present");
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
   const before = await sessionEvidence(page);
 
-  await page.getByTestId("rail-create-new").click();
   const idea = "Build a revisit guard agent.";
   await page.getByTestId("composer-input").fill(idea);
   await page.getByTestId("composer-input").press("Enter");

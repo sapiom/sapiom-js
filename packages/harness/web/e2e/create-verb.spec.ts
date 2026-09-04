@@ -47,6 +47,79 @@ const lastInjectText = (page: Page): Promise<string> =>
   );
 
 test.describe("the create verb lands somewhere", () => {
+  test("both entrances land on the new agent screen, scoped to the project", async ({
+    page,
+  }) => {
+    // THE SWAP THIS PR EXISTS FOR, asserted on both entrances.
+    //
+    // The screen with the good surface had the wrong plumbing (it invented a
+    // folder from a slug and typed English at the coding agent); the path with
+    // the right plumbing had no surface. One screen now, two ways in.
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    // ENTRANCE ONE: a project you already have.
+    await page.getByTestId("rail-create-new").click();
+    await page.getByTestId("new-agent-in-acme-app").click();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    // It NAMES the project, so the second entrance cannot leave you guessing
+    // where the agent will live.
+    await expect(page.getByTestId("composer-greeting")).toContainText(
+      "in acme-app",
+    );
+
+    // ENTRANCE TWO: a folder that is not a project yet. On the browser host the
+    // folder step falls back to the dialog; on desktop it is the OS picker and
+    // no dialog opens (`folder-step.test.ts` covers that half).
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("rail-create-new").click();
+    await page.getByTestId("new-agent-choose-folder").click();
+    await page
+      .getByTestId("folder-field-input")
+      .fill("/Users/demo/blank-slate");
+    await page.getByTestId("open-project").click();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("composer-greeting")).toContainText(
+      "in blank-slate",
+    );
+  });
+
+  test("submitting in a project dispatches the planner and types no English", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("rail-create-new").click();
+    await page.getByTestId("new-agent-in-acme-app").click();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+
+    const before = await page.evaluate(
+      () =>
+        ((window as unknown as { __HARNESS_TEST__?: { openPlannerSessionCalls?: unknown[] } })
+          .__HARNESS_TEST__?.openPlannerSessionCalls ?? []).length,
+    );
+    const idea = "Diff our competitors' pricing pages weekly.";
+    await page.getByTestId("composer-input").fill(idea);
+    await page.getByTestId("composer-send").click();
+
+    // The planner opened for this project...
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            ((window as unknown as { __HARNESS_TEST__?: { openPlannerSessionCalls?: unknown[] } })
+              .__HARNESS_TEST__?.openPlannerSessionCalls ?? []).length,
+        ),
+      )
+      .toBeGreaterThan(before);
+    // ...and what reached it is the user's own sentence, not a request that the
+    // coding agent please call a scaffold tool. `composerScaffoldPrompt` names
+    // the tool explicitly, so its absence is checkable rather than inferred.
+    await expect.poll(() => lastInjectText(page)).toContain(idea);
+    expect(await lastInjectText(page)).not.toContain("sapiom_dev_agents");
+  });
+
   test("a project with an Agent Map: the verb opens that map", async ({
     page,
   }) => {
