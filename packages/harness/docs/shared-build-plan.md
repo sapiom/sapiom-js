@@ -100,6 +100,8 @@ sixteen ordinary writable sessions. Each child receives the same common
 project-agent prompt, coding capabilities, project tools, and delegation tool,
 so nested delegation follows the same path. An exact assignment, map node, or
 brief may focus the child, but focus never changes its tools or authority.
+Delegation is bounded to four levels and 64 concurrently live
+coordinator-owned sessions per project.
 
 Callers provide both a request key and a delegation key. Identity is scoped by
 the private session capability to the trusted project and parent session.
@@ -107,6 +109,10 @@ Identical retries converge on the same durable binding and real Harness session
 ID; changing canonical request or binding content under an existing key fails
 explicitly. All binding IDs and session IDs for a bounded batch are reserved in
 one durable transaction before the first process is spawned.
+Older request receipts compact into permanent key tombstones, and closed
+bindings compact into ownership tombstones once no retained receipt references
+them. Exhausted permanent history is a terminal capacity condition rather than
+a retryable request-size error.
 
 The coordinator waits for canonical adapter readiness and exact transcript
 identity, then uses fenced spawn and delivery epochs to submit one kickoff.

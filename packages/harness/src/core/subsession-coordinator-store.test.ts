@@ -424,4 +424,120 @@ describe("SubsessionCoordinatorStore", () => {
     ).rejects.toMatchObject({ code: "binding_scope_mismatch" });
     expect((await store.read(projectId)).bindings[0]).toEqual(binding);
   });
+
+  it("bounds nested delegation depth and concurrently live coordinator sessions", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      maxDelegationDepth: 2,
+      liveSessionLimit: 2,
+    });
+    const first = (
+      await store.reserveDelegations(identity, delegate(), target)
+    ).bindings[0]!;
+    const child: ProjectAgentSession = {
+      ...identity,
+      sessionId: first.sessionId,
+    };
+    const second = (
+      await store.reserveDelegations(
+        child,
+        delegate("nested-1", [
+          { delegationKey: "nested", outcome: "Nested task" },
+        ]),
+        target,
+      )
+    ).bindings[0]!;
+
+    expect(first).toMatchObject({ parentBindingId: null, delegationDepth: 1 });
+    expect(second).toMatchObject({
+      parentBindingId: first.bindingId,
+      delegationDepth: 2,
+    });
+    await expect(
+      store.reserveDelegations(
+        { ...identity, sessionId: second.sessionId },
+        delegate("too-deep", [
+          { delegationKey: "third", outcome: "Too deep" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "delegation_depth_exceeded" });
+    await expect(
+      store.reserveDelegations(
+        identity,
+        delegate("over-live-limit", [
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "live_session_limit_reached" });
+    expect((await store.read(projectId)).bindings).toHaveLength(2);
+  });
+
+  it("expires receipts into tombstones and reclaims closed bindings without reopening their keys", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      receiptRetentionLimit: 1,
+    });
+    const first = (
+      await store.reserveDelegations(identity, delegate(), target)
+    ).bindings[0]!;
+    await store.closeBinding(identity, first.bindingId, first.sessionId);
+    await store.reserveDelegations(
+      identity,
+      delegate("request-2", [
+        { delegationKey: "publisher", outcome: "Publish evidence" },
+      ]),
+      target,
+    );
+
+    const aggregate = await store.read(projectId);
+    expect(aggregate.requestReceipts.map(({ requestKey }) => requestKey)).toEqual([
+      "request-2",
+    ]);
+    expect(aggregate.requestTombstones).toContainEqual(
+      expect.objectContaining({ requestKey: "request-1" }),
+    );
+    expect(aggregate.bindings.map(({ delegationKey }) => delegationKey)).toEqual([
+      "publisher",
+    ]);
+    expect(aggregate.bindingTombstones).toContainEqual(
+      expect.objectContaining({
+        bindingId: first.bindingId,
+        delegationKey: "research",
+        sessionId: first.sessionId,
+      }),
+    );
+    await expect(
+      store.reserveDelegations(identity, delegate(), target),
+    ).rejects.toMatchObject({ code: "session_closed" });
+    await expect(
+      store.reserveDelegations(
+        identity,
+        delegate("request-3", [
+          { delegationKey: "research", outcome: "Collect evidence" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "session_closed" });
+  });
+
+  it("reports exhausted permanent tombstone history as a terminal quota", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      receiptRetentionLimit: 1,
+      historyTombstoneLimit: 1,
+    });
+    await store.reserveDelegations(identity, delegate("request-1"), target);
+    await store.reserveDelegations(identity, delegate("request-2"), target);
+    await expect(
+      store.reserveDelegations(identity, delegate("request-1"), target),
+    ).resolves.toMatchObject({ replayed: true });
+    const before = await store.read(projectId);
+
+    await expect(
+      store.reserveDelegations(identity, delegate("request-3"), target),
+    ).rejects.toMatchObject({ code: "history_quota_exceeded" });
+    expect(await store.read(projectId)).toEqual(before);
+  });
 });

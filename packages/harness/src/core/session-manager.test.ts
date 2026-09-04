@@ -135,6 +135,7 @@ describe("SessionManager", () => {
       onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
       onProjectBootstrapSession?: SessionManagerOptions["onProjectBootstrapSession"];
       onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
+      onSubsessionUserClosed?: SessionManagerOptions["onSubsessionUserClosed"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -177,6 +178,7 @@ describe("SessionManager", () => {
       onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
       onProjectBootstrapSession: opts.onProjectBootstrapSession,
       onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
+      onSubsessionUserClosed: opts.onSubsessionUserClosed,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -402,9 +404,10 @@ describe("SessionManager", () => {
       marker(sessionId),
       input.trusted,
     );
-    await manager.close(sessionId);
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+    const closing = manager.close(sessionId);
     spawns[0]!.emitExit(0);
+    await closing;
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
     await manager.flush();
     await expect(
       manager.restartFreshBound(
@@ -420,6 +423,40 @@ describe("SessionManager", () => {
         await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
       ),
     ).toMatchObject({ closedSessionIds: [sessionId] });
+  });
+
+  it("terminates a delegated PTY even when its user-close tombstone cannot persist", async () => {
+    let failCloseWrite = false;
+    const writeSubsessionBindingRegistry = vi.fn(async () => {
+      if (failCloseWrite) throw new Error("injected close persistence failure");
+    });
+    const onSubsessionUserClosed = vi.fn(async () => {});
+    const { manager, spawns } = makeManager({
+      writeSubsessionBindingRegistry,
+      onSubsessionUserClosed,
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000115";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    failCloseWrite = true;
+
+    const closing = manager.close(sessionId);
+    expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1);
+    spawns[0]!.emitExit(0);
+    await expect(closing).rejects.toThrow("injected close persistence failure");
+    expect(manager.get(sessionId)).toMatchObject({ status: "exited" });
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+    expect(onSubsessionUserClosed).toHaveBeenCalledWith(marker(sessionId));
+
+    failCloseWrite = false;
+    await expect(manager.close(sessionId)).resolves.toBe(false);
+    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(3);
+    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
   });
 
   it("reports exact input write phases and kills only an exact runtime", async () => {

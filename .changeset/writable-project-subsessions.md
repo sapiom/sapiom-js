@@ -18,4 +18,7 @@ selector is added.
 Manual sessions remain outside coordinator ownership. Consumers should treat
 `uncertain` kickoff delivery as terminal until an exact persisted
 acknowledgement arrives, and should use a new request/delegation key when the
-corresponding canonical content changes.
+corresponding canonical content changes. Nested delegation is bounded to four
+levels and 64 concurrently live coordinator-owned sessions per project. Closing
+a delegated tab starts PTY termination before its private user-close tombstone
+is persisted, so a storage error cannot leave the process running.

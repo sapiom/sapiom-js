@@ -17,6 +17,8 @@ import {
 } from "../shared/subsession-delegation-codec.js";
 import {
   PROJECT_SUBSESSION_CLAIM_TTL_MS,
+  PROJECT_SUBSESSION_LIVE_SESSION_LIMIT,
+  PROJECT_SUBSESSION_MAX_DEPTH,
   PROJECT_SUBSESSION_SCHEMA_VERSION,
   SUBSESSION_COORDINATOR_STORAGE_SCHEMA_VERSION,
   type CanonicalDelegationRequestDigest,
@@ -34,6 +36,7 @@ import { isStudioProjectId } from "./studio-project-catalog.js";
 
 export const SUBSESSION_COORDINATOR_BINDING_LIMIT = 8_192;
 export const SUBSESSION_COORDINATOR_RECEIPT_LIMIT = 8_192;
+export const SUBSESSION_COORDINATOR_RECEIPT_RETENTION_LIMIT = 1_024;
 export const SUBSESSION_COORDINATOR_DELIVERY_LIMIT = 64;
 
 export type SubsessionCoordinatorStoreErrorCode =
@@ -41,6 +44,9 @@ export type SubsessionCoordinatorStoreErrorCode =
   | "unsupported_schema"
   | "storage_unavailable"
   | "capacity_exceeded"
+  | "history_quota_exceeded"
+  | "live_session_limit_reached"
+  | "delegation_depth_exceeded"
   | "request_key_reused"
   | "delegation_key_reused"
   | "binding_not_found"
@@ -77,12 +83,24 @@ export type SubsessionCoordinatorRequestReceipt = Readonly<{
 export type SubsessionCoordinatorRequestTombstone =
   SubsessionCoordinatorRequestReceipt;
 
+export type SubsessionCoordinatorBindingTombstone = Readonly<{
+  bindingId: SubsessionBindingId;
+  parentSessionId: string;
+  parentBindingId: SubsessionBindingId | null;
+  delegationDepth: number;
+  delegationKey: string;
+  bindingDigest: string;
+  sessionId: string;
+  closedAt: string;
+}>;
+
 export type SubsessionCoordinatorAggregate = Readonly<{
   schemaVersion: typeof SUBSESSION_COORDINATOR_STORAGE_SCHEMA_VERSION;
   recordVersion: number;
   projectId: StudioProjectId;
   requestReceipts: readonly SubsessionCoordinatorRequestReceipt[];
   requestTombstones: readonly SubsessionCoordinatorRequestTombstone[];
+  bindingTombstones: readonly SubsessionCoordinatorBindingTombstone[];
   bindings: readonly SubsessionBindingRecord[];
   createdAt: string;
   updatedAt: string;
@@ -149,10 +167,11 @@ type MutableBinding = Omit<
 };
 type MutableAggregate = Omit<
   ShallowMutable<SubsessionCoordinatorAggregate>,
-  "requestReceipts" | "requestTombstones" | "bindings"
+  "requestReceipts" | "requestTombstones" | "bindingTombstones" | "bindings"
 > & {
   requestReceipts: SubsessionCoordinatorRequestReceipt[];
   requestTombstones: SubsessionCoordinatorRequestTombstone[];
+  bindingTombstones: SubsessionCoordinatorBindingTombstone[];
   bindings: MutableBinding[];
 };
 
@@ -293,6 +312,8 @@ function parseBinding(
       "bindingId",
       "projectId",
       "parentSessionId",
+      "parentBindingId",
+      "delegationDepth",
       "delegationKey",
       "bindingDigest",
       "outcome",
@@ -319,6 +340,11 @@ function parseBinding(
     value.projectId !== projectId ||
     !identifier(value.bindingId, "binding") ||
     !identifier(value.parentSessionId) ||
+    (value.parentBindingId !== null &&
+      !identifier(value.parentBindingId, "binding")) ||
+    !Number.isSafeInteger(value.delegationDepth) ||
+    (value.delegationDepth as number) < 1 ||
+    (value.delegationDepth as number) > PROJECT_SUBSESSION_MAX_DEPTH ||
     !identifier(value.sessionId) ||
     !["claude-code", "codex"].includes(String(value.harness)) ||
     typeof value.projectRoot !== "string" ||
@@ -485,6 +511,38 @@ function parseReceipt(
   return structuredClone(value) as unknown as SubsessionCoordinatorRequestReceipt;
 }
 
+function parseBindingTombstone(
+  value: unknown,
+): SubsessionCoordinatorBindingTombstone {
+  if (
+    !isRecord(value) ||
+    !exact(value, [
+      "bindingId",
+      "parentSessionId",
+      "parentBindingId",
+      "delegationDepth",
+      "delegationKey",
+      "bindingDigest",
+      "sessionId",
+      "closedAt",
+    ]) ||
+    !identifier(value.bindingId, "binding") ||
+    !identifier(value.parentSessionId) ||
+    (value.parentBindingId !== null &&
+      !identifier(value.parentBindingId, "binding")) ||
+    !Number.isSafeInteger(value.delegationDepth) ||
+    (value.delegationDepth as number) < 1 ||
+    (value.delegationDepth as number) > PROJECT_SUBSESSION_MAX_DEPTH ||
+    !identifier(value.delegationKey) ||
+    !digest(value.bindingDigest) ||
+    !identifier(value.sessionId) ||
+    !timestamp(value.closedAt)
+  ) {
+    throw new SubsessionCoordinatorStoreError("malformed_state");
+  }
+  return structuredClone(value) as unknown as SubsessionCoordinatorBindingTombstone;
+}
+
 export function parseSubsessionCoordinatorAggregate(
   value: unknown,
   expectedProjectId: StudioProjectId,
@@ -506,6 +564,7 @@ export function parseSubsessionCoordinatorAggregate(
       "projectId",
       "requestReceipts",
       "requestTombstones",
+      "bindingTombstones",
       "bindings",
       "createdAt",
       "updatedAt",
@@ -518,6 +577,8 @@ export function parseSubsessionCoordinatorAggregate(
     value.requestReceipts.length > SUBSESSION_COORDINATOR_RECEIPT_LIMIT ||
     !Array.isArray(value.requestTombstones) ||
     value.requestTombstones.length > SUBSESSION_COORDINATOR_RECEIPT_LIMIT ||
+    !Array.isArray(value.bindingTombstones) ||
+    value.bindingTombstones.length > SUBSESSION_COORDINATOR_BINDING_LIMIT ||
     !Array.isArray(value.bindings) ||
     value.bindings.length > SUBSESSION_COORDINATOR_BINDING_LIMIT ||
     !timestamp(value.createdAt) ||
@@ -530,6 +591,7 @@ export function parseSubsessionCoordinatorAggregate(
   }
   const requestReceipts = value.requestReceipts.map(parseReceipt);
   const requestTombstones = value.requestTombstones.map(parseReceipt);
+  const bindingTombstones = value.bindingTombstones.map(parseBindingTombstone);
   const bindings = value.bindings.map((entry) =>
     parseBinding(entry, expectedProjectId),
   );
@@ -540,20 +602,44 @@ export function parseSubsessionCoordinatorAggregate(
     ({ parentSessionId, delegationKey }) =>
       `${parentSessionId}\0${delegationKey}`,
   );
+  const allBindings = [...bindings, ...bindingTombstones];
+  const allBindingKeys = [
+    ...bindingKeys,
+    ...bindingTombstones.map(
+      ({ parentSessionId, delegationKey }) =>
+        `${parentSessionId}\0${delegationKey}`,
+    ),
+  ];
   if (
     new Set(requestKeys).size !== requestKeys.length ||
-    new Set(bindingKeys).size !== bindingKeys.length ||
-    new Set(bindings.map(({ bindingId }) => bindingId)).size !==
-      bindings.length ||
-    new Set(bindings.map(({ sessionId }) => sessionId)).size !== bindings.length
+    new Set(allBindingKeys).size !== allBindings.length ||
+    new Set(allBindings.map(({ bindingId }) => bindingId)).size !==
+      allBindings.length ||
+    new Set(allBindings.map(({ sessionId }) => sessionId)).size !==
+      allBindings.length
   ) {
     throw new SubsessionCoordinatorStoreError("malformed_state");
   }
-  const bindingIds = new Set(bindings.map(({ bindingId }) => bindingId));
   if (
     [...requestReceipts, ...requestTombstones].some(({ bindingIds: ids }) =>
-      ids.some((bindingId) => !bindingIds.has(bindingId)),
+      ids.some(
+        (bindingId) =>
+          !allBindings.some((binding) => binding.bindingId === bindingId),
+      ),
     )
+  ) {
+    throw new SubsessionCoordinatorStoreError("malformed_state");
+  }
+  const bindingsById = new Map(
+    allBindings.map((binding) => [binding.bindingId, binding]),
+  );
+  if (
+    allBindings.some((binding) => {
+      if (binding.parentBindingId === null)
+        return binding.delegationDepth !== 1;
+      const parent = bindingsById.get(binding.parentBindingId);
+      return !parent || binding.delegationDepth !== parent.delegationDepth + 1;
+    })
   ) {
     throw new SubsessionCoordinatorStoreError("malformed_state");
   }
@@ -561,6 +647,7 @@ export function parseSubsessionCoordinatorAggregate(
     ...structuredClone(value),
     requestReceipts,
     requestTombstones,
+    bindingTombstones,
     bindings,
   } as unknown as SubsessionCoordinatorAggregate;
 }
@@ -586,6 +673,10 @@ export class SubsessionCoordinatorStore {
       generateId?: () => string;
       generateSessionId?: () => string;
       claimTtlMs?: number;
+      receiptRetentionLimit?: number;
+      historyTombstoneLimit?: number;
+      liveSessionLimit?: number;
+      maxDelegationDepth?: number;
       onEvent?: (event: SubsessionCoordinatorStoreEvent) => void | Promise<void>;
       beforePersistStep?: (
         step: "write" | "file-sync" | "rename" | "directory-sync",
@@ -610,6 +701,76 @@ export class SubsessionCoordinatorStore {
     return (this.options.generateId ?? randomUUID)();
   }
 
+  private compactTerminalHistory(aggregate: MutableAggregate): void {
+    const historyLimit = Math.max(
+      1,
+      Math.min(
+        this.options.historyTombstoneLimit ?? SUBSESSION_COORDINATOR_RECEIPT_LIMIT,
+        SUBSESSION_COORDINATOR_RECEIPT_LIMIT,
+      ),
+    );
+    const retention = Math.max(
+      1,
+      Math.min(
+        this.options.receiptRetentionLimit ??
+          SUBSESSION_COORDINATOR_RECEIPT_RETENTION_LIMIT,
+        SUBSESSION_COORDINATOR_RECEIPT_LIMIT,
+      ),
+    );
+    const expiring = Math.max(0, aggregate.requestReceipts.length - retention);
+    if (
+      aggregate.requestTombstones.length + expiring >
+      historyLimit
+    ) {
+      throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
+    }
+    for (let count = 0; count < expiring; count += 1) {
+      const expired = aggregate.requestReceipts.shift();
+      if (expired) {
+        aggregate.requestTombstones.push({
+          parentSessionId: expired.parentSessionId,
+          requestKey: expired.requestKey,
+          requestDigest: expired.requestDigest,
+          operation: expired.operation,
+          bindingIds: expired.bindingIds,
+          createdAt: expired.createdAt,
+        });
+      }
+    }
+
+    const referenced = new Set(
+      aggregate.requestReceipts.flatMap(({ bindingIds }) => bindingIds),
+    );
+    const reclaimable = aggregate.bindings.filter(
+      (binding) =>
+        binding.sessionState === "closed" && !referenced.has(binding.bindingId),
+    );
+    if (
+      aggregate.bindingTombstones.length + reclaimable.length >
+      historyLimit
+    ) {
+      throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
+    }
+    for (const binding of reclaimable) {
+      aggregate.bindingTombstones.push({
+        bindingId: binding.bindingId,
+        parentSessionId: binding.parentSessionId,
+        parentBindingId: binding.parentBindingId,
+        delegationDepth: binding.delegationDepth,
+        delegationKey: binding.delegationKey,
+        bindingDigest: binding.bindingDigest,
+        sessionId: binding.sessionId,
+        closedAt: binding.updatedAt,
+      });
+    }
+    if (reclaimable.length > 0) {
+      const reclaimed = new Set(reclaimable.map(({ bindingId }) => bindingId));
+      aggregate.bindings = aggregate.bindings.filter(
+        ({ bindingId }) => !reclaimed.has(bindingId),
+      );
+    }
+  }
+
   private emit(event: SubsessionCoordinatorStoreEvent): void {
     try {
       void Promise.resolve(this.options.onEvent?.(event)).catch(() => {});
@@ -626,6 +787,7 @@ export class SubsessionCoordinatorStore {
       projectId,
       requestReceipts: [],
       requestTombstones: [],
+      bindingTombstones: [],
       bindings: [],
       createdAt: now,
       updatedAt: now,
@@ -821,6 +983,47 @@ export class SubsessionCoordinatorStore {
     });
   }
 
+  closeBinding(
+    identity: ProjectAgentSession,
+    bindingId: SubsessionBindingId,
+    expectedSessionId: string,
+  ): Promise<SubsessionBindingRecord> {
+    return this.transact(identity.projectId, async (aggregate) => {
+      const binding = this.scopedBinding(aggregate, identity, bindingId);
+      if (binding.sessionId !== expectedSessionId)
+        throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+      if (binding.sessionState === "closed") return { value: binding };
+      const now = this.now();
+      binding.sessionState = "closed";
+      binding.lifecycleEpoch += 1;
+      binding.spawnClaim = null;
+      binding.runtime = null;
+      binding.updatedAt = now;
+      this.compactTerminalHistory(aggregate);
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = now;
+      return { value: binding, next: aggregate };
+    });
+  }
+
+  /** Server-only bridge from SessionManager's private two-sided marker. */
+  closeOwnedBinding(marker: Readonly<{
+    projectId: StudioProjectId;
+    parentSessionId: string;
+    bindingId: string;
+    sessionId: string;
+  }>): Promise<SubsessionBindingRecord> {
+    return this.closeBinding(
+      {
+        projectId: marker.projectId,
+        userId: "studio-subsession-coordinator",
+        sessionId: marker.parentSessionId,
+      },
+      marker.bindingId as SubsessionBindingId,
+      marker.sessionId,
+    );
+  }
+
   refreshFocusedContext(
     identity: ProjectAgentSession,
     rawRequest: unknown,
@@ -832,7 +1035,9 @@ export class SubsessionCoordinatorStore {
     const targetSelector = operation.target;
     const requestDigest = computeCanonicalDelegationRequestDigest(request);
     return this.transact<FocusedContextRefreshResult>(identity.projectId, async (aggregate) => {
-      const sameRequest = (receipt: SubsessionCoordinatorRequestReceipt) =>
+      const sameRequest = (
+        receipt: Pick<SubsessionCoordinatorRequestReceipt, "parentSessionId" | "requestKey">,
+      ) =>
         receipt.parentSessionId === identity.sessionId &&
         receipt.requestKey === request.requestKey;
       const previous =
@@ -849,15 +1054,14 @@ export class SubsessionCoordinatorStore {
         const binding = aggregate.bindings.find(
           ({ bindingId }) => bindingId === previous.bindingIds[0],
         );
+        if (!binding && aggregate.bindingTombstones.some(
+          ({ bindingId }) => bindingId === previous.bindingIds[0],
+        )) {
+          throw new SubsessionCoordinatorStoreError("session_closed");
+        }
         if (!binding)
           throw new SubsessionCoordinatorStoreError("malformed_state");
         return { value: { replayed: true, requestDigest, binding } };
-      }
-      if (
-        aggregate.requestReceipts.length >=
-        SUBSESSION_COORDINATOR_RECEIPT_LIMIT
-      ) {
-        throw new SubsessionCoordinatorStoreError("capacity_exceeded");
       }
       const target =
         targetSelector.kind === "self"
@@ -883,7 +1087,7 @@ export class SubsessionCoordinatorStore {
       if (currentDelivery?.state === "uncertain")
         throw new SubsessionCoordinatorStoreError("claim_conflict");
       if (target.deliveries.length >= SUBSESSION_COORDINATOR_DELIVERY_LIMIT)
-        throw new SubsessionCoordinatorStoreError("capacity_exceeded");
+        throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
 
       const now = this.now();
       target.contextEpoch += 1;
@@ -914,6 +1118,7 @@ export class SubsessionCoordinatorStore {
         bindingIds: [target.bindingId],
         createdAt: now,
       });
+      this.compactTerminalHistory(aggregate);
       aggregate.recordVersion += 1;
       aggregate.updatedAt = now;
       return {
@@ -946,7 +1151,7 @@ export class SubsessionCoordinatorStore {
     const operation = request.operation;
     return this.transact<ReservedDelegations>(identity.projectId, async (aggregate) => {
       const sameRequest = (
-        receipt: SubsessionCoordinatorRequestReceipt,
+        receipt: Pick<SubsessionCoordinatorRequestReceipt, "parentSessionId" | "requestKey">,
       ): boolean =>
         receipt.parentSessionId === identity.sessionId &&
         receipt.requestKey === request.requestKey;
@@ -964,6 +1169,11 @@ export class SubsessionCoordinatorStore {
           const binding = aggregate.bindings.find(
             (entry) => entry.bindingId === bindingId,
           );
+          if (!binding && aggregate.bindingTombstones.some(
+            (entry) => entry.bindingId === bindingId,
+          )) {
+            throw new SubsessionCoordinatorStoreError("session_closed");
+          }
           if (!binding)
             throw new SubsessionCoordinatorStoreError("malformed_state");
           return binding;
@@ -977,16 +1187,28 @@ export class SubsessionCoordinatorStore {
           value: { replayed: true, requestDigest, bindings },
         };
       }
-      if (
-        aggregate.requestReceipts.length >=
-        SUBSESSION_COORDINATOR_RECEIPT_LIMIT
-      ) {
-        throw new SubsessionCoordinatorStoreError("capacity_exceeded");
-      }
-
       const now = this.now();
       const bindings: SubsessionBindingRecord[] = [];
       let created = 0;
+      const live = aggregate.bindings.filter(({ sessionState }) =>
+        ["reserved", "spawn-claimed", "starting", "awaiting-ready", "ready"].includes(
+          sessionState,
+        ),
+      ).length;
+      const parentBinding = aggregate.bindings.find(
+        ({ sessionId }) => sessionId === identity.sessionId,
+      );
+      const delegationDepth = (parentBinding?.delegationDepth ?? 0) + 1;
+      if (
+        delegationDepth >
+        Math.min(
+          this.options.maxDelegationDepth ?? PROJECT_SUBSESSION_MAX_DEPTH,
+          PROJECT_SUBSESSION_MAX_DEPTH,
+        )
+      ) {
+        throw new SubsessionCoordinatorStoreError("delegation_depth_exceeded");
+      }
+      let additionalLive = 0;
       for (const delegation of operation.delegations) {
         const bindingDigest =
           computeCanonicalDelegationBindingDigest(delegation);
@@ -1000,21 +1222,37 @@ export class SubsessionCoordinatorStore {
             throw new SubsessionCoordinatorStoreError(
               "delegation_key_reused",
             );
+          if (existing.sessionState === "closed")
+            throw new SubsessionCoordinatorStoreError("session_closed");
+          if (["exited", "failed"].includes(existing.sessionState))
+            additionalLive += 1;
           bindings.push(existing);
           continue;
         }
-        if (
-          aggregate.bindings.length + created >=
-          SUBSESSION_COORDINATOR_BINDING_LIMIT
-        ) {
-          throw new SubsessionCoordinatorStoreError("capacity_exceeded");
+        const terminal = aggregate.bindingTombstones.find(
+          (entry) =>
+            entry.parentSessionId === identity.sessionId &&
+            entry.delegationKey === delegation.delegationKey,
+        );
+        if (terminal) {
+          if (terminal.bindingDigest !== bindingDigest)
+            throw new SubsessionCoordinatorStoreError("delegation_key_reused");
+          throw new SubsessionCoordinatorStoreError("session_closed");
         }
+        if (
+          aggregate.bindings.length >= SUBSESSION_COORDINATOR_BINDING_LIMIT
+        ) {
+          throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
+        }
+        additionalLive += 1;
         const contextFocus = delegation.focus ?? null;
         const contextEpoch = 1;
         const binding: SubsessionBindingRecord = {
           bindingId: `binding_${this.id()}` as SubsessionBindingId,
           projectId: identity.projectId,
           parentSessionId: identity.sessionId,
+          parentBindingId: parentBinding?.bindingId ?? null,
+          delegationDepth,
           delegationKey: delegation.delegationKey,
           bindingDigest,
           outcome: delegation.outcome,
@@ -1054,6 +1292,12 @@ export class SubsessionCoordinatorStore {
         bindings.push(binding);
         created += 1;
       }
+      if (
+        live + additionalLive >
+        (this.options.liveSessionLimit ?? PROJECT_SUBSESSION_LIVE_SESSION_LIMIT)
+      ) {
+        throw new SubsessionCoordinatorStoreError("live_session_limit_reached");
+      }
       const receipt: SubsessionCoordinatorRequestReceipt = {
         parentSessionId: identity.sessionId,
         requestKey: request.requestKey,
@@ -1063,6 +1307,7 @@ export class SubsessionCoordinatorStore {
         createdAt: now,
       };
       aggregate.requestReceipts.push(receipt);
+      this.compactTerminalHistory(aggregate);
       aggregate.recordVersion += 1;
       aggregate.updatedAt = now;
       this.emit({

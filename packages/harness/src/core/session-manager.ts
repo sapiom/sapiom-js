@@ -728,6 +728,10 @@ export interface SessionManagerOptions {
     session: HarnessSession,
     runtimeEpoch: string | null,
   ) => Promise<void> | void;
+  /** Mirrors an explicit user close into the coordinator-owned aggregate. */
+  onSubsessionUserClosed?: (
+    marker: TrustedSubsessionBindingMarker,
+  ) => Promise<void> | void;
   /** Revokes launch capabilities/transports after every exit path. */
   onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
   now?: () => string;
@@ -928,6 +932,7 @@ export class SessionManager {
   private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
   private readonly onProjectBootstrapSession: SessionManagerOptions["onProjectBootstrapSession"];
   private readonly onRuntimeEpochTransition: SessionManagerOptions["onRuntimeEpochTransition"];
+  private readonly onSubsessionUserClosed: SessionManagerOptions["onSubsessionUserClosed"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -1038,6 +1043,7 @@ export class SessionManager {
       options.onProjectAgentIdentityMigration;
     this.onProjectBootstrapSession = options.onProjectBootstrapSession;
     this.onRuntimeEpochTransition = options.onRuntimeEpochTransition;
+    this.onSubsessionUserClosed = options.onSubsessionUserClosed;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
@@ -1886,18 +1892,30 @@ export class SessionManager {
    * Returns true (resolved on actual death) when a pty was signalled.
    */
   async close(id: string): Promise<boolean> {
-    if (this.subsessionBindings.has(id) && !this.userClosedSubsessions.has(id)) {
+    const binding = this.subsessionBindings.get(id);
+    if (binding) {
       this.userClosedSubsessions.add(id);
+    }
+    // Start termination before persistence so a sidecar fsync failure cannot
+    // leave a delegated PTY running after the user closes its tab. Keep the
+    // in-memory tombstone on failure and let a later close retry persistence.
+    const termination = this.kill(id);
+    let persistenceError: unknown;
+    if (binding) {
       try {
         await this.persistSubsessionBindings();
       } catch (error) {
-        this.userClosedSubsessions.delete(id);
-        throw error;
+        persistenceError = error;
+      }
+      try {
+        await this.onSubsessionUserClosed?.(binding);
+      } catch (error) {
+        persistenceError ??= error;
       }
     }
-    const live = this.ptys.has(id);
-    void this.kill(id).catch(() => {});
-    return live;
+    const killed = await termination;
+    if (persistenceError !== undefined) throw persistenceError;
+    return killed;
   }
 
   kill(id: string): Promise<boolean> {

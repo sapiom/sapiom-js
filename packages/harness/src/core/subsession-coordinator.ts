@@ -12,6 +12,7 @@ import {
 } from "../shared/build-plan.js";
 import {
   parseProjectSubsessionRequest,
+  SubsessionDelegationValidationError,
 } from "../shared/subsession-delegation-codec.js";
 import type {
   DelegationError,
@@ -30,7 +31,11 @@ import {
   serializeFocusedSessionContext,
   type FocusedSessionContextProjection,
 } from "./focused-session-context.js";
-import { SessionNotReadyError, SubsessionBindingMismatchError } from "./errors.js";
+import {
+  SessionNotReadyError,
+  SubsessionBindingMismatchError,
+  SubsessionFreshRestartForbiddenError,
+} from "./errors.js";
 import type {
   SessionManager,
   TrustedSubsessionBindingMarker,
@@ -103,7 +108,13 @@ const error = (
   code: DelegationError["code"],
   retryable: boolean,
   recovery: DelegationError["recovery"],
-): DelegationError => ({ code, retryable, recovery });
+  issues?: DelegationError["issues"],
+): DelegationError => ({
+  code,
+  retryable,
+  recovery,
+  ...(issues === undefined ? {} : { issues }),
+});
 
 const currentDelivery = (binding: SubsessionBindingRecord) =>
   binding.deliveries.find(
@@ -165,7 +176,17 @@ export class SubsessionCoordinator {
     let request: ProjectSubsessionRequest;
     try {
       request = parseProjectSubsessionRequest(rawRequest, identity.projectId);
-    } catch {
+    } catch (cause) {
+      if (cause instanceof SubsessionDelegationValidationError) {
+        throw new SubsessionCoordinatorError(
+          error(
+            cause.code,
+            false,
+            cause.code === "capacity_exceeded" ? "reduce_request" : "correct",
+            cause.issues,
+          ),
+        );
+      }
       throw new SubsessionCoordinatorError(
         error("invalid_request", false, "correct"),
       );
@@ -515,8 +536,14 @@ export class SubsessionCoordinator {
         binding = await this.advanceToReady(identity, binding, runtimeToken);
         return { binding, created: false, reused: true };
       }
-      if (this.options.sessionManager.wasSubsessionClosedByUser(expected))
+      if (this.options.sessionManager.wasSubsessionClosedByUser(expected)) {
+        await this.options.store.closeBinding(
+          identity,
+          binding.bindingId,
+          binding.sessionId,
+        );
         throw error("session_closed", false, "inspect_session");
+      }
       if (this.options.sessionManager.isLive(binding.sessionId)) {
         const runtimeToken =
           this.options.sessionManager.getRuntimeEpoch(binding.sessionId)!;
@@ -1127,6 +1154,22 @@ export class SubsessionCoordinator {
         return new SubsessionCoordinatorError(
           error("capacity_exceeded", false, "reduce_request"),
         );
+      if (cause.code === "live_session_limit_reached")
+        return new SubsessionCoordinatorError(
+          error("capacity_exceeded", true, "retry"),
+        );
+      if (
+        cause.code === "delegation_depth_exceeded" ||
+        cause.code === "history_quota_exceeded"
+      ) {
+        return new SubsessionCoordinatorError(
+          error("capacity_exceeded", false, "none"),
+        );
+      }
+      if (cause.code === "session_closed")
+        return new SubsessionCoordinatorError(
+          error("session_closed", false, "inspect_session"),
+        );
       if (cause.code === "storage_unavailable")
         return new SubsessionCoordinatorError(
           error("storage_unavailable", true, "retry"),
@@ -1162,6 +1205,8 @@ export class SubsessionCoordinator {
     }
     if (cause instanceof SubsessionBindingMismatchError)
       return error("binding_session_mismatch", false, "inspect_session");
+    if (cause instanceof SubsessionFreshRestartForbiddenError)
+      return error("session_restart_failed", false, "inspect_session");
     if (cause instanceof SessionNotReadyError)
       return error("readiness_timeout", true, "retry");
     if (cause instanceof SubsessionCoordinatorStoreError) {

@@ -18,6 +18,8 @@ export const PROJECT_SUBSESSION_OUTCOME_BYTES = 4 * 1_024;
 export const PROJECT_SUBSESSION_KICKOFF_CONTEXT_BYTES = 16 * 1_024;
 export const PROJECT_SUBSESSION_REQUEST_BYTES = 64 * 1_024;
 export const PROJECT_SUBSESSION_CLAIM_TTL_MS = 120_000;
+export const PROJECT_SUBSESSION_MAX_DEPTH = 4;
+export const PROJECT_SUBSESSION_LIVE_SESSION_LIMIT = 64;
 
 type Brand<TBrand extends string> = string & { readonly __brand: TBrand };
 
@@ -199,6 +201,8 @@ export type SubsessionBindingRecord = Readonly<{
   bindingId: SubsessionBindingId;
   projectId: StudioProjectId;
   parentSessionId: string;
+  parentBindingId: SubsessionBindingId | null;
+  delegationDepth: number;
   delegationKey: string;
   bindingDigest: CanonicalDelegationBindingDigest;
   outcome: string;
@@ -222,4 +226,3 @@ export type SubsessionBindingRecord = Readonly<{
   createdAt: string;
   updatedAt: string;
 }>;
-

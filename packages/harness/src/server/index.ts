@@ -1372,6 +1372,14 @@ export const startServer = async (
   // any not-yet-scheduled project IDs in memory so a retry can converge on the
   // same project instead of creating another one after a transient failure.
   const projectsAwaitingBootstrapSchedule = new Set<string>();
+  const closeCoordinatorOwnedSubsession: {
+    current?: (marker: {
+      projectId: string;
+      parentSessionId: string;
+      bindingId: string;
+      sessionId: string;
+    }) => Promise<void>;
+  } = {};
   const scheduleBootstrapProjects = async (
     projectIds: Iterable<string>,
     userId: string,
@@ -1404,6 +1412,9 @@ export const startServer = async (
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
+    onSubsessionUserClosed: async (marker) => {
+      await closeCoordinatorOwnedSubsession.current?.(marker);
+    },
     buildLaunchOpts,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
       const userId = localProjectPrincipal(projectUserId, machineId);
@@ -3181,6 +3192,9 @@ export const startServer = async (
     statePaths.agentMap,
     { onEvent: emitSubsessionEvent },
   );
+  closeCoordinatorOwnedSubsession.current = async (marker) => {
+    await subsessionCoordinatorStore.closeOwnedBinding(marker);
+  };
   const subsessionCoordinator = new SubsessionCoordinator({
     store: subsessionCoordinatorStore,
     sessionManager,

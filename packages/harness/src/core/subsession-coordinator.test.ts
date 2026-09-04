@@ -34,7 +34,10 @@ import {
   SubsessionCoordinator,
   SubsessionCoordinatorError,
 } from "./subsession-coordinator.js";
-import { SubsessionCoordinatorStore } from "./subsession-coordinator-store.js";
+import {
+  SubsessionCoordinatorStore,
+  SubsessionCoordinatorStoreError,
+} from "./subsession-coordinator-store.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 const parentId = "parent-session-1";
@@ -183,6 +186,7 @@ describe("SubsessionCoordinator", () => {
       spawned.push(spawnedPty);
       return spawnedPty.pty;
     });
+    const closeStore: { current?: SubsessionCoordinatorStore } = {};
     const manager = new SessionManager({
       adapters: {
         "claude-code": adapter(
@@ -197,6 +201,9 @@ describe("SubsessionCoordinator", () => {
       buildLaunchOpts: (_sessionId, _request, context) => {
         launchContexts.push(context);
         return {};
+      },
+      onSubsessionUserClosed: async (marker) => {
+        await closeStore.current?.closeOwnedBinding(marker);
       },
       resolveAgentMapIdentity: async (_sessionId, _cwd, persisted) => persisted,
     });
@@ -231,6 +238,7 @@ describe("SubsessionCoordinator", () => {
       }
     });
     const events: AnalyticsEvent[] = [];
+    const recordedTurnSessionIds = new Set<string>();
     const eventReader: EventReader = {
       async *read(filter) {
         const ids = filter?.harnessSessionId;
@@ -244,11 +252,29 @@ describe("SubsessionCoordinator", () => {
           yield event;
         }
       },
-      index: async () => ({ bySession: new Map(), byAgentSession: new Map() }),
+      index: async () => ({
+        bySession: new Map(
+          [...recordedTurnSessionIds].map((sessionId) => [
+            sessionId,
+            {
+              harnessSessionId: sessionId,
+              spans: [],
+              eventCount: 1,
+              turnCount: 1,
+              agentSessionIds: [],
+              harness: "claude-code" as const,
+              firstTs: null,
+              lastTs: null,
+            },
+          ]),
+        ),
+        byAgentSession: new Map(),
+      }),
     };
     const store = new SubsessionCoordinatorStore(
       path.join(root, "agent-map"),
     );
+    closeStore.current = store;
     const telemetry: unknown[] = [];
     const planningStore = {
       read: vi.fn(async () => {
@@ -273,6 +299,7 @@ describe("SubsessionCoordinator", () => {
       newCoordinator,
       planningStore,
       events,
+      recordedTurnSessionIds,
       spawnPty,
       spawned,
       launchContexts,
@@ -437,6 +464,67 @@ describe("SubsessionCoordinator", () => {
     expect(manager.list()).toHaveLength(1);
   });
 
+  it("preserves bounded codec codes and issues for callers", async () => {
+    const { coordinator, caller, unsubscribe } = await fixture();
+    await expect(
+      coordinator.execute(caller, {
+        schemaVersion: 2,
+        requestKey: "unsupported",
+        operation: { kind: "delegate", delegations: [] },
+      }),
+    ).rejects.toMatchObject({
+      detail: {
+        code: "unsupported_schema",
+        retryable: false,
+        recovery: "correct",
+        issues: [{ path: "schemaVersion", code: "unsupported_schema" }],
+      },
+    });
+    await expect(
+      coordinator.execute(caller, {
+        schemaVersion: 1,
+        requestKey: "utf8-overflow",
+        operation: {
+          kind: "delegate",
+          delegations: [
+            {
+              delegationKey: "research",
+              outcome: "界".repeat(2_000),
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({
+      detail: {
+        code: "invalid_request",
+        retryable: false,
+        recovery: "correct",
+        issues: [
+          {
+            path: "operation.delegations[0]",
+            code: "invalid_delegation",
+          },
+        ],
+      },
+    });
+    unsubscribe();
+  });
+
+  it("does not advise retry or request reduction for permanent history exhaustion", async () => {
+    const { coordinator, caller, store, unsubscribe } = await fixture();
+    vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
+      new SubsessionCoordinatorStoreError("history_quota_exceeded"),
+    );
+    await expect(coordinator.execute(caller, request)).rejects.toMatchObject({
+      detail: {
+        code: "capacity_exceeded",
+        retryable: false,
+        recovery: "none",
+      },
+    });
+    unsubscribe();
+  });
+
   it("writes no kickoff when adapter identity correlation is ambiguous", async () => {
     const { coordinator, caller, spawned, unsubscribe } = await fixture(
       false,
@@ -456,6 +544,55 @@ describe("SubsessionCoordinator", () => {
       },
     });
     expect(spawned[1]!.writes).toEqual([]);
+  });
+
+  it("reports recorded-turn fresh restart rejection as terminal", async () => {
+    const {
+      coordinator,
+      caller,
+      manager,
+      recordedTurnSessionIds,
+      spawned,
+      unsubscribe,
+    } = await fixture(false, "ambiguous");
+    const first = await coordinator.execute(caller, request);
+    const childId = first.results[0]!.sessionId!;
+    recordedTurnSessionIds.add(childId);
+    spawned[1]!.emitExit(1);
+    await manager.flush();
+
+    const retried = await coordinator.execute(caller, request);
+    unsubscribe();
+
+    expect(retried.results[0]).toMatchObject({
+      outcome: "failed",
+      sessionId: childId,
+      kickoffState: "pending",
+      error: {
+        code: "session_restart_failed",
+        retryable: false,
+        recovery: "inspect_session",
+      },
+    });
+  });
+
+  it("removes a user-closed child from live coordinator capacity", async () => {
+    const { coordinator, caller, manager, store, spawned, unsubscribe } =
+      await fixture();
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+
+    const closing = manager.close(childId);
+    spawned[1]!.emitExit(0);
+    await closing;
+    const aggregate = await store.read(projectId);
+    unsubscribe();
+
+    expect(aggregate.bindings[0]).toMatchObject({
+      sessionId: childId,
+      sessionState: "closed",
+      runtime: null,
+    });
   });
 
   it("delivers one exact brief overlay and surfaces later staleness without restricting the child", async () => {
