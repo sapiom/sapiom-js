@@ -532,7 +532,7 @@ describe("SubsessionCoordinator", () => {
     );
     await expect(coordinator.execute(caller, request)).rejects.toMatchObject({
       detail: {
-        code: "request_key_reused",
+        code: "request_key_expired",
         retryable: false,
         recovery: "new_request_key",
       },

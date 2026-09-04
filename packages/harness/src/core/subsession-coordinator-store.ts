@@ -36,7 +36,7 @@ import { isStudioProjectId } from "./studio-project-catalog.js";
 
 export const SUBSESSION_COORDINATOR_BINDING_LIMIT = 8_192;
 export const SUBSESSION_COORDINATOR_RECEIPT_LIMIT = 8_192;
-export const SUBSESSION_COORDINATOR_RECEIPT_RETENTION_LIMIT = 1_024;
+export const SUBSESSION_COORDINATOR_RECEIPT_RETENTION_LIMIT = 256;
 export const SUBSESSION_COORDINATOR_DELIVERY_LIMIT = 64;
 
 export type SubsessionCoordinatorStoreErrorCode =
@@ -745,7 +745,8 @@ export class SubsessionCoordinatorStore {
     );
     const reclaimable = aggregate.bindings.filter(
       (binding) =>
-        binding.sessionState === "closed" && !referenced.has(binding.bindingId),
+        ["closed", "exited", "failed"].includes(binding.sessionState) &&
+        !referenced.has(binding.bindingId),
     );
     for (const binding of reclaimable) {
       aggregate.bindingTombstones.push({
@@ -1086,12 +1087,7 @@ export class SubsessionCoordinatorStore {
       const currentDelivery = target.deliveries.find(
         ({ contextEpoch }) => contextEpoch === target.contextEpoch,
       );
-      if (
-        currentDelivery &&
-        ["claimed", "submitted-unacknowledged", "uncertain"].includes(
-          currentDelivery.state,
-        )
-      )
+      if (currentDelivery?.state === "uncertain")
         throw new SubsessionCoordinatorStoreError("claim_conflict");
       target.deliveries = target.deliveries.filter(({ state }) =>
         ["claimed", "submitted-unacknowledged", "uncertain"].includes(state),
@@ -1197,6 +1193,7 @@ export class SubsessionCoordinatorStore {
       }
       if (aggregate.requestTombstones.some(sameRequest))
         throw new SubsessionCoordinatorStoreError("request_key_expired");
+      this.compactTerminalHistory(aggregate);
       const now = this.now();
       const bindings: SubsessionBindingRecord[] = [];
       let created = 0;

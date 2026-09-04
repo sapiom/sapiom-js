@@ -1143,11 +1143,14 @@ export class SubsessionCoordinator {
     if (cause instanceof SubsessionCoordinatorError) return cause;
     if (cause instanceof SubsessionCoordinatorStoreError) {
       if (
-        cause.code === "request_key_reused" ||
-        cause.code === "request_key_expired"
+        cause.code === "request_key_reused"
       )
         return new SubsessionCoordinatorError(
           error("request_key_reused", false, "new_request_key"),
+        );
+      if (cause.code === "request_key_expired")
+        return new SubsessionCoordinatorError(
+          error("request_key_expired", false, "new_request_key"),
         );
       if (cause.code === "delegation_key_reused")
         return new SubsessionCoordinatorError(

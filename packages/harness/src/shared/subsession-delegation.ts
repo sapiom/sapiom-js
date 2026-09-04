@@ -84,6 +84,7 @@ export type DelegationErrorCode =
   | "unsupported_schema"
   | "capacity_exceeded"
   | "request_key_reused"
+  | "request_key_expired"
   | "storage_unavailable"
   | "internal_error"
   | "delegation_key_reused"

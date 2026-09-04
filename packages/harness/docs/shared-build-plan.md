@@ -109,10 +109,11 @@ Identical retries converge on the same durable binding and real Harness session
 ID; changing canonical request or binding content under an existing key fails
 explicitly. All binding IDs and session IDs for a bounded batch are reserved in
 one durable transaction before the first process is spawned.
-Older request receipts compact into bounded key tombstones, and closed bindings
-compact into bounded ownership tombstones once no retained receipt references
-them. The oldest tombstones expire as the retention window advances, so routine
-delegation and focused-context refreshes cannot permanently exhaust a project.
+Older request receipts compact into bounded key tombstones, and closed, exited,
+or failed bindings compact into bounded ownership tombstones once no retained
+receipt references them. The oldest tombstones expire as the retention window
+advances, so routine delegation and focused-context refreshes cannot permanently
+exhaust a project.
 Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
 focused-context delivery replaces them; ambiguous delivery evidence is retained.
 

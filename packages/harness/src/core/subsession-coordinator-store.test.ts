@@ -406,6 +406,75 @@ describe("SubsessionCoordinatorStore", () => {
     ).rejects.toBeInstanceOf(SubsessionCoordinatorStoreError);
   });
 
+  it("queues a refresh while the prior delivery awaits acknowledgement", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root);
+    const binding = (
+      await store.reserveDelegations(identity, delegate(), target)
+    ).bindings[0]!;
+    const spawn = await store.claimSpawn(identity, binding.bindingId, {
+      ownerId: "coordinator-1",
+      expectedLifecycleEpoch: binding.lifecycleEpoch,
+      expectedSpawnEpoch: binding.spawnEpoch,
+    });
+    if (!spawn.claimed || !spawn.binding.spawnClaim)
+      throw new Error("spawn claim was not acquired");
+    const starting = await store.attachSpawnedRuntime(
+      identity,
+      binding.bindingId,
+      {
+        claimId: spawn.binding.spawnClaim.claimId,
+        spawnEpoch: spawn.binding.spawnEpoch,
+        runtimeToken: "runtime-refresh",
+        incarnation: 1,
+      },
+    );
+    const ready = await store.transitionSession(identity, binding.bindingId, {
+      expectedLifecycleEpoch: starting.lifecycleEpoch,
+      expectedSpawnEpoch: starting.spawnEpoch,
+      expectedRuntimeToken: "runtime-refresh",
+      state: "ready",
+    });
+    const claimed = await store.claimKickoff(identity, binding.bindingId, {
+      ownerId: "sender-1",
+      expectedLifecycleEpoch: ready.lifecycleEpoch,
+      expectedSpawnEpoch: ready.spawnEpoch,
+      expectedContextEpoch: ready.contextEpoch,
+      eventWatermark: "event-10",
+    });
+    if (!claimed.claimed || !claimed.binding.deliveries[0]!.claim)
+      throw new Error("kickoff claim was not acquired");
+    const submitted = await store.recordKickoffWrite(
+      identity,
+      binding.bindingId,
+      {
+        contextEpoch: claimed.binding.contextEpoch,
+        deliveryId: claimed.binding.deliveries[0]!.deliveryId,
+        inputId: claimed.binding.deliveries[0]!.inputId,
+        claimId: claimed.binding.deliveries[0]!.claim!.claimId,
+        phase: "enter-written",
+      },
+    );
+
+    const refreshed = await store.refreshFocusedContext(identity, {
+      schemaVersion: 1,
+      requestKey: "refresh-while-awaiting-ack",
+      operation: {
+        kind: "refresh-focused-context",
+        target: { kind: "child", delegationKey: "research" },
+        expectedContextEpoch: submitted.contextEpoch,
+        expectedContextDigest: submitted.contextDigest,
+        focus: null,
+      },
+    });
+
+    expect(refreshed.binding.deliveries).toHaveLength(2);
+    expect(refreshed.binding.deliveries.map(({ state }) => state)).toEqual([
+      "submitted-unacknowledged",
+      "pending",
+    ]);
+  });
+
   it("scopes mutations to the trusted parent and never adopts a foreign binding", async () => {
     const root = await fixture();
     const store = new SubsessionCoordinatorStore(root);
@@ -559,6 +628,58 @@ describe("SubsessionCoordinatorStore", () => {
     expect(aggregate.requestTombstones[0]!.requestKey).toBe("request-2");
     expect(aggregate.bindingTombstones).toHaveLength(1);
     expect(aggregate.bindingTombstones[0]!.bindingId).toBe(second.bindingId);
+  });
+
+  it("compacts an exited binding after its replay receipt expires", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root, {
+      receiptRetentionLimit: 1,
+    });
+    const first = (
+      await store.reserveDelegations(identity, delegate("request-1"), target)
+    ).bindings[0]!;
+    const claim = await store.claimSpawn(identity, first.bindingId, {
+      ownerId: "coordinator-1",
+      expectedLifecycleEpoch: first.lifecycleEpoch,
+      expectedSpawnEpoch: first.spawnEpoch,
+    });
+    if (!claim.claimed || !claim.binding.spawnClaim)
+      throw new Error("spawn claim was not acquired");
+    const starting = await store.attachSpawnedRuntime(
+      identity,
+      first.bindingId,
+      {
+        claimId: claim.binding.spawnClaim.claimId,
+        spawnEpoch: claim.binding.spawnEpoch,
+        runtimeToken: "runtime-exited",
+        incarnation: 1,
+      },
+    );
+    await store.transitionSession(identity, first.bindingId, {
+      expectedLifecycleEpoch: starting.lifecycleEpoch,
+      expectedSpawnEpoch: starting.spawnEpoch,
+      expectedRuntimeToken: "runtime-exited",
+      state: "exited",
+    });
+
+    await store.reserveDelegations(
+      identity,
+      delegate("request-2", [
+        { delegationKey: "publisher", outcome: "Publish evidence" },
+      ]),
+      target,
+    );
+
+    const aggregate = await store.read(projectId);
+    expect(aggregate.bindings.map(({ bindingId }) => bindingId)).not.toContain(
+      first.bindingId,
+    );
+    expect(aggregate.bindingTombstones).toContainEqual(
+      expect.objectContaining({
+        bindingId: first.bindingId,
+        sessionId: first.sessionId,
+      }),
+    );
   });
 
   it("prunes proven terminal deliveries so long-lived focused refresh stays writable", async () => {
