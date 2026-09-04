@@ -2056,13 +2056,13 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
       },
     },
-    withAttribution: () => guarded,
+    withAttribution: () => guarded.value!,
     // The stub makes no HTTP calls and creates no analytics emitter — nothing
     // to release, so shutdown matches the real client's "resolve immediately".
     shutdown: () => Promise.resolve(),
   };
 
-  let guarded!: Sapiom;
-  guarded = guardMissingCapabilities(client);
-  return guarded;
+  const guarded: { value?: Sapiom } = {};
+  guarded.value = guardMissingCapabilities(client);
+  return guarded.value;
 }
