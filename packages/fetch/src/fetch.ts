@@ -42,7 +42,7 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
  * const fetch = createFetch();
  *
  * // Works exactly like native fetch!
- * const response = await fetch('https://api.example.com/premium-endpoint');
+ * const response = await fetch('[https://api.example.com/premium-endpoint](https://api.example.com/premium-endpoint)');
  * const data = await response.json();
  * ```
  *
@@ -57,7 +57,7 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
  *   serviceName: 'my-service'
  * });
  *
- * const response = await fetch('https://api.example.com/data');
+ * const response = await fetch('[https://api.example.com/data](https://api.example.com/data)');
  * ```
  *
  * @example
@@ -102,7 +102,10 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
   if (config?.integration) defaultMetadata.integration = config.integration;
   if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  const failureMode = config?.failureMode ?? "open";
+  // SECURITY FIX: SDK Authorization Fail-Open Prevention.
+  // Default failureMode changed from "open" to "closed" to ensure governance boundaries
+  // are strictly enforced by default during control-plane outages.
+  const failureMode = config?.failureMode ?? "closed";
 
   const authConfig: AuthorizationConfig = {
     sapiomClient,
