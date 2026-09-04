@@ -147,6 +147,9 @@ describe("langchain-classic usage analytics", () => {
 
   beforeEach(async () => {
     jest.restoreAllMocks();
+    jest
+      .spyOn(SapiomChatOpenAI.prototype, "getNumTokens")
+      .mockResolvedValue(1);
     for (const key of ENV_KEYS) {
       savedEnv[key] = process.env[key];
       delete process.env[key];

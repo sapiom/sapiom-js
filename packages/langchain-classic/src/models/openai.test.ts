@@ -34,6 +34,9 @@ describe("SapiomChatOpenAI", () => {
   let mockClient: SapiomClient;
 
   beforeEach(() => {
+    jest
+      .spyOn(SapiomChatOpenAI.prototype, "getNumTokens")
+      .mockResolvedValue(1);
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
