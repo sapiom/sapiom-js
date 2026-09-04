@@ -1089,6 +1089,33 @@ describe("SubsessionCoordinatorStore", () => {
     );
   });
 
+  it("atomically excludes an active child from project-wide dormant release", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root);
+    const binding = (
+      await store.reserveDelegations(
+        identity,
+        delegate("parent-race", [
+          { delegationKey: "research", outcome: "Collect evidence" },
+        ]),
+        target,
+      )
+    ).bindings[0]!;
+    const reserved = await store.reserveDormantReleases(
+      { ...identity, sessionId: "new-parent" },
+      releaseDormant("active-child", 1),
+      [binding.bindingId],
+    );
+
+    expect(reserved.bindings).toEqual([]);
+    expect((await store.read(projectId)).bindings).toContainEqual(
+      expect.objectContaining({
+        bindingId: binding.bindingId,
+        sessionState: "reserved",
+      }),
+    );
+  });
+
   it("reclaims released capacity so a sixty-fifth delegation can be reserved", async () => {
     const root = await fixture();
     const store = new SubsessionCoordinatorStore(root, {

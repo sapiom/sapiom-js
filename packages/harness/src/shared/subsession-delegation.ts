@@ -79,9 +79,9 @@ export type ProjectSubsessionRequest = Readonly<{
       }>
     | Readonly<{
         /**
-         * Explicitly releases at most `limit` dormant coordinator bindings
-         * whose original parent session is no longer reachable. Selection is
-         * server-side and project-scoped; callers never provide session IDs.
+         * Explicitly releases at most `limit` dormant coordinator bindings in
+         * the current project. Selection is server-side; callers never provide
+         * session IDs.
          */
         kind: "release-dormant";
         limit: number;
@@ -124,6 +124,7 @@ export type DelegationRecovery =
   | "inspect_session"
   | "new_request_key"
   | "new_delegation_key"
+  | "release_dormant"
   | "reduce_request";
 
 export type DelegationError = Readonly<{

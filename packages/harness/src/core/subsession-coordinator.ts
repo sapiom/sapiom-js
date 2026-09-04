@@ -311,10 +311,6 @@ export class SubsessionCoordinator {
         .filter(({ sessionState }) =>
           ["exited", "failed"].includes(sessionState),
         )
-        .filter(({ parentSessionId }) => {
-          const parent = this.options.sessionManager.get(parentSessionId);
-          return !parent || parent.status === "exited";
-        })
         .sort((left, right) =>
           left.updatedAt.localeCompare(right.updatedAt) ||
           left.bindingId.localeCompare(right.bindingId),
@@ -1391,10 +1387,11 @@ export class SubsessionCoordinator {
         return new SubsessionCoordinatorError(
           error("capacity_exceeded", false, "inspect_session"),
         );
-      if (
-        cause.code === "delegation_depth_exceeded" ||
-        cause.code === "history_quota_exceeded"
-      ) {
+      if (cause.code === "history_quota_exceeded")
+        return new SubsessionCoordinatorError(
+          error("capacity_exceeded", false, "release_dormant"),
+        );
+      if (cause.code === "delegation_depth_exceeded") {
         return new SubsessionCoordinatorError(
           error("capacity_exceeded", false, "none"),
         );

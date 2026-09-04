@@ -504,7 +504,7 @@ describe("SubsessionCoordinator", () => {
     });
   });
 
-  it("lets a new project agent reclaim a dead parent's dormant child at history capacity", async () => {
+  it("lets a new project agent reclaim a dormant child of an active parent at history capacity", async () => {
     const { coordinator, caller, manager, store, spawned, unsubscribe } =
       await fixture(false, undefined, {}, { bindingLimit: 1 });
     const created = await coordinator.execute(caller, request);
@@ -519,9 +519,6 @@ describe("SubsessionCoordinator", () => {
       state: "exited",
     });
 
-    const closingParent = manager.close(caller.sessionId);
-    spawned[0]!.emitExit(0);
-    await closingParent;
     const manual = await manager.create({
       cwd: "/tmp/manual-dormant-session",
       harness: "claude-code",
@@ -553,7 +550,11 @@ describe("SubsessionCoordinator", () => {
         },
       }),
     ).rejects.toMatchObject({
-      detail: { code: "capacity_exceeded", retryable: false },
+      detail: {
+        code: "capacity_exceeded",
+        retryable: false,
+        recovery: "release_dormant",
+      },
     });
 
     const released = await coordinator.execute(
@@ -574,6 +575,7 @@ describe("SubsessionCoordinator", () => {
     });
     expect(manager.get(childId)).toMatchObject({ status: "exited" });
     expect(manager.getSubsessionBinding(childId)).toBeNull();
+    expect(manager.get(caller.sessionId)?.status).not.toBe("exited");
     expect(manager.get(manual.id)).toMatchObject({ status: "exited" });
     expect(manager.getSubsessionBinding(manual.id)).toBeNull();
     await expect(
@@ -596,12 +598,19 @@ describe("SubsessionCoordinator", () => {
         }],
       },
     });
+    const activeSweep = await coordinator.execute(nextCaller, {
+      ...dormantReleaseRequest,
+      requestKey: "active-and-manual-exclusion",
+    });
     unsubscribe();
 
     expect(next.results[0]).toMatchObject({
       delegationKey: "writer",
       outcome: "created",
     });
+    expect(activeSweep.results).toEqual([]);
+    expect(manager.get(next.results[0]!.sessionId!)?.status).not.toBe("exited");
+    expect(manager.get(manual.id)).toMatchObject({ status: "exited" });
     expect((await store.read(projectId)).bindings).toHaveLength(1);
   });
 
@@ -874,7 +883,7 @@ describe("SubsessionCoordinator", () => {
     unsubscribe();
   });
 
-  it("does not advise retry for unreclaimable active history exhaustion", async () => {
+  it("directs dormant history exhaustion to bounded dormant release", async () => {
     const { coordinator, caller, store, unsubscribe } = await fixture();
     vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
       new SubsessionCoordinatorStoreError("history_quota_exceeded"),
@@ -883,13 +892,13 @@ describe("SubsessionCoordinator", () => {
       detail: {
         code: "capacity_exceeded",
         retryable: false,
-        recovery: "none",
+        recovery: "release_dormant",
       },
     });
     unsubscribe();
   });
 
-  it("directs resumable-session capacity exhaustion to session inspection", async () => {
+  it("directs genuinely live-session capacity exhaustion to session inspection", async () => {
     const { coordinator, caller, store, unsubscribe } = await fixture();
     vi.spyOn(store, "reserveDelegations").mockRejectedValueOnce(
       new SubsessionCoordinatorStoreError("live_session_limit_reached"),

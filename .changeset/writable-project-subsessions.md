@@ -30,7 +30,10 @@ retention so long-lived projects do not dead-end on routine delegation, release,
 or context refreshes. Exited and failed bindings remain durable for resume or
 recovery without holding an active slot until re-referenced, or until explicitly
 released. Any current project agent may explicitly reclaim up to sixteen dormant
-coordinator-owned bindings whose original parent is absent or exited, without
-supplying raw session IDs. This destructive recovery compacts coordinator and
+coordinator-owned bindings in its project without supplying raw session IDs.
+Each child is atomically rechecked as exited or failed; parent liveness is
+intentionally irrelevant. This destructive recovery compacts coordinator and
 private ownership state while retaining the ordinary Harness session history;
-the released binding is no longer automatically resumable.
+the released binding is no longer automatically resumable. Durable-history
+capacity failures identify `release_dormant` in their recovery field, while an
+all-active live cap does not suggest dormant cleanup.

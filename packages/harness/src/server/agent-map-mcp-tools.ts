@@ -393,7 +393,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "project_subsession_delegate",
     {
-      description: "Create, reuse, or release a bounded batch of ordinary writable project subsessions, reclaim bounded dormant bindings whose parents are unreachable, or refresh exact focused context, using caller-owned idempotency keys.",
+      description: "Create, reuse, or release a bounded batch of ordinary writable project subsessions, reclaim a bounded project-wide set of coordinator-owned dormant bindings, or refresh exact focused context, using caller-owned idempotency keys.",
       inputSchema: projectSubsessionRequestSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },

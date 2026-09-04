@@ -129,14 +129,18 @@ project.
 Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
 focused-context delivery replaces them; ambiguous delivery evidence is retained.
 
-If exited or failed bindings outlive a dead or unreachable original parent and
-fill durable binding history, any current project session may explicitly invoke
-the bounded `release-dormant` operation. The coordinator selects at most sixteen
-eligible records inside the capability-derived project; the request accepts no
-session IDs and never selects active bindings or manual sessions. This operation
-is destructive: it retains the ordinary Harness conversation/session history,
-but compacts the coordinator binding and ends automatic resume through that
-binding. Request receipts make the sweep idempotent and restart-safe.
+If exited or failed bindings fill durable binding history, any current project
+session may explicitly invoke the bounded `release-dormant` operation. The
+coordinator selects at most sixteen eligible records inside the
+capability-derived project; the request accepts no session IDs and never selects
+active bindings or manual sessions. Parent liveness is intentionally irrelevant:
+this explicit project-wide destructive operation relinquishes dormant delegation
+resume identity even when the original parent is active. It retains the ordinary
+Harness conversation/session history, but compacts the coordinator binding and
+ends automatic resume through that binding. Request receipts make the sweep
+idempotent and restart-safe. Durable-history capacity errors expose the explicit
+`release_dormant` recovery code; an all-active live cap continues to require
+session inspection instead of suggesting an inapplicable dormant cleanup.
 
 The coordinator waits for canonical adapter readiness and exact transcript
 identity, then uses fenced spawn and delivery epochs to submit one kickoff.

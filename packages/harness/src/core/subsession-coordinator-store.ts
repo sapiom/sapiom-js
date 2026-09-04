@@ -1195,9 +1195,10 @@ export class SubsessionCoordinatorStore {
 
   /**
    * Reserves an explicit project-scoped cleanup of dormant coordinator-owned
-   * bindings. Candidate IDs are selected by the trusted coordinator after it
-   * proves each original parent is absent or exited; they are never accepted
-   * from the public request.
+   * bindings. Candidate IDs are selected by the trusted coordinator and never
+   * accepted from the public request. The transaction rechecks the child state;
+   * parent liveness is intentionally irrelevant to this explicit project-wide
+   * destructive operation.
    */
   reserveDormantReleases(
     identity: ProjectAgentSession,
