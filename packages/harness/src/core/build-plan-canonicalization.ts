@@ -63,6 +63,10 @@ export function canonicalizeProjectBuildPlanContent(
       ...assignment,
       scope: strings(assignment.scope),
       nonGoals: strings(assignment.nonGoals),
+      dependencies: byId(assignment.dependencies).map((dependency) => ({
+        ...dependency,
+        relationshipIds: strings(dependency.relationshipIds),
+      })),
     })),
     unresolvedDecisions: byId(content.unresolvedDecisions),
     risks: byId(content.risks),

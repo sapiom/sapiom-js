@@ -140,12 +140,21 @@ function parseRisk(value: unknown) {
 }
 
 function parseAssignment(value: unknown) {
-  if (!isRecord(value) || !exact(value, ["id", "plannedAgentId", "briefId", "mission", "scope", "nonGoals"]) ||
+  if (!isRecord(value) || !exact(value, ["id", "plannedAgentId", "briefId", "mission", "scope", "nonGoals", "dependencies"]) ||
     !id(value.id, "work") || !id(value.plannedAgentId, "node") ||
     (value.briefId !== null && !id(value.briefId, "brief")) ||
     !isAgentMapBoundedText(value.mission, 4_096) || !boundedStrings(value.scope, 2_000) ||
-    !boundedStrings(value.nonGoals, 2_000))
+    !boundedStrings(value.nonGoals, 2_000) || !Array.isArray(value.dependencies) ||
+    value.dependencies.length > 4_096 || !value.dependencies.every((dependency) =>
+      isRecord(dependency) && exact(dependency, ["id", "kind", "nodeId", "relationshipIds", "contractRef"]) &&
+      id(dependency.id, "dependency") && ["input", "output", "shared-resource", "depends-on"].includes(String(dependency.kind)) &&
+      id(dependency.nodeId, "node") && Array.isArray(dependency.relationshipIds) &&
+      dependency.relationshipIds.every((relationshipId) => id(relationshipId, "rel")) &&
+      new Set(dependency.relationshipIds).size === dependency.relationshipIds.length &&
+      (dependency.contractRef === null || isAgentMapBoundedText(dependency.contractRef, 256))))
     throw new Error("invalid plan assignment");
+  if (new Set(value.dependencies.map((dependency) => (dependency as { id: string }).id)).size !== value.dependencies.length)
+    throw new Error("duplicate plan dependency");
   return structuredClone(value);
 }
 

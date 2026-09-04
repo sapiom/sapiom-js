@@ -20,7 +20,12 @@ import {
 } from "../shared/agent-map.js";
 import { canonicalDigest, computeGraphContentDigest } from "../shared/agent-map-canonical.js";
 import { parseProjectAgentActorRef } from "../shared/agent-map-codec.js";
-import type { ProjectMutationReceipt } from "../shared/build-plan.js";
+import {
+  BUILD_PLAN_VERSION_HISTORY_LIMIT,
+  PROJECT_MUTATION_RECEIPT_LIMIT,
+  PROJECT_MUTATION_TOMBSTONE_LIMIT,
+  type ProjectMutationReceipt,
+} from "../shared/build-plan.js";
 import { parseProposalBatchRequest } from "./agent-map-proposal-schema.js";
 import {
   derivePersistedMapOperationTouchSet,
@@ -171,7 +176,7 @@ function receiptFor(
   identity: ProjectAgentSession,
   requestId: string,
 ): ProjectMutationReceipt | undefined {
-  return aggregate.requestReceipts.find((candidate) => candidate.operation === "map" &&
+  return aggregate.requestReceipts.find((candidate) =>
     candidate.userId === identity.userId && candidate.sessionId === identity.sessionId && candidate.requestId === requestId);
 }
 
@@ -234,12 +239,12 @@ export class AgentMapProposalService {
         const digest = requestDigest(request);
         const receipt = receiptFor(aggregate, identity, request.requestId);
         if (receipt) {
-          if (receipt.requestDigest !== digest) throw new AgentMapProposalConflictError({ code: "request_id_reused",
+          if (receipt.operation !== "map" || receipt.requestDigest !== digest) throw new AgentMapProposalConflictError({ code: "request_id_reused",
             currentVersion: version, affectedNodeIds: [], affectedRelationshipIds: [], recovery: "new_request" });
           replayed = true;
           return { value: structuredClone(receipt.result) as ProposalBatchResult };
         }
-        if (aggregate.requestTombstones.some((candidate) => candidate.operation === "map" &&
+        if (aggregate.requestTombstones.some((candidate) =>
           candidate.userId === identity.userId && candidate.sessionId === identity.sessionId && candidate.requestId === request.requestId))
           throw new AgentMapProposalConflictError({ code: "request_id_expired", currentVersion: version,
             affectedNodeIds: [], affectedRelationshipIds: [], recovery: "new_request" });
@@ -286,6 +291,8 @@ export class AgentMapProposalService {
         })));
         const previousGraph = currentGraph(aggregate);
         if (computeGraphContentDigest(previousGraph) !== computeGraphContentDigest(materialized.graph)) {
+          if (next.mapVersions.length >= BUILD_PLAN_VERSION_HISTORY_LIMIT)
+            throw new AgentMapWorkspaceStoreError("storage_unavailable");
           const mapVersion = createAgentMapVersion({ projectId: identity.projectId,
             versionId: this.allocator.allocateMapVersionId?.() ?? `mapv_${uuidv7()}` as AgentMapVersionId,
             version: next.mapVersions.length + 1, parentVersionId: next.mapVersions.at(-1)?.versionId ?? null,
@@ -304,9 +311,15 @@ export class AgentMapProposalService {
         while (next.requestReceipts.filter(({ operation }) => operation === "map").length > this.receiptRetentionLimit) {
           const expiredIndex = next.requestReceipts.findIndex(({ operation }) => operation === "map");
           const [expired] = next.requestReceipts.splice(expiredIndex, 1);
-          if (expired) next.requestTombstones.push({ projectId: expired.projectId, userId: expired.userId,
+          if (expired) {
+            if (next.requestTombstones.length >= PROJECT_MUTATION_TOMBSTONE_LIMIT)
+              throw new AgentMapWorkspaceStoreError("storage_unavailable");
+            next.requestTombstones.push({ projectId: expired.projectId, userId: expired.userId,
             sessionId: expired.sessionId, requestId: expired.requestId, operation: "map", createdAt: expired.createdAt });
+          }
         }
+        if (next.requestReceipts.length > PROJECT_MUTATION_RECEIPT_LIMIT)
+          throw new AgentMapWorkspaceStoreError("storage_unavailable");
         next.recordVersion += 1;
         next.updatedAt = acceptedAt;
         acceptedDelta = delta;

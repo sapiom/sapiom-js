@@ -12,13 +12,19 @@ import {
   type MapProposalId,
   type StudioProjectId,
 } from "../shared/agent-map.js";
+import { parseProjectAgentActorRef } from "../shared/agent-map-codec.js";
+import { canonicalJson } from "../shared/agent-map-canonical.js";
 import type {
   AgentBriefHistoryPointer,
   AgentBriefVersion,
   AgentBriefVersionRef,
   ProjectMutationReceipt,
 } from "../shared/build-plan.js";
-import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
+import {
+  AGENT_BRIEF_VERSION_HISTORY_LIMIT,
+  PROJECT_MUTATION_RECEIPT_LIMIT,
+} from "../shared/build-plan.js";
+import { parseAgentBriefVersion, parseAgentMapVersionRef, parseProjectBuildPlanVersionRef } from "../shared/build-plan-codec.js";
 import {
   AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
   AgentMapAggregateError,
@@ -277,6 +283,17 @@ export class AgentMapWorkspaceStore {
 
   /** Reserved exact-source, idempotent append seam. SAP-3149 has no caller. */
   appendBriefVersions(projectId: StudioProjectId, request: AppendBriefVersionsRequest): Promise<AppendBriefVersionsResult> {
+    let actor: AppendBriefVersionsRequest["actor"];
+    try {
+      actor = parseProjectAgentActorRef(request.actor);
+      parseAgentMapVersionRef(request.expectedMap, projectId);
+      parseProjectBuildPlanVersionRef(request.expectedPlan, projectId);
+      if (!/^sha256:[0-9a-f]{64}$/u.test(request.requestDigest) || request.requestId.length === 0 ||
+        request.requestId.length > 128 || request.entries.length === 0 || request.entries.length > 128 ||
+        new Date(request.createdAt).toISOString() !== request.createdAt) throw new Error("invalid brief append request");
+    } catch {
+      throw new AgentMapWorkspaceStoreError("malformed_state");
+    }
     return this.transact<AppendBriefVersionsResult>(projectId, async (aggregate) => {
       const keyMatches = (entry: { userId: string; sessionId: string; requestId: string }) =>
         entry.userId === request.actor.userId && entry.sessionId === request.actor.sessionId && entry.requestId === request.requestId;
@@ -287,8 +304,8 @@ export class AgentMapWorkspaceStore {
         return { value: { ...(structuredClone(receipt.result) as AppendBriefVersionsResult), replayed: true } };
       }
       if (aggregate.requestTombstones.some(keyMatches)) throw new AgentMapWorkspaceStoreError("malformed_state");
-      if (JSON.stringify(aggregate.current.map) !== JSON.stringify(request.expectedMap) ||
-        JSON.stringify(aggregate.current.buildPlan) !== JSON.stringify(request.expectedPlan))
+      if (canonicalJson(aggregate.current.map) !== canonicalJson(request.expectedMap) ||
+        canonicalJson(aggregate.current.buildPlan) !== canonicalJson(request.expectedPlan))
         throw new AgentMapWorkspaceStoreError("malformed_state");
       const next = structuredClone(aggregate);
       const versions: AgentBriefVersionRef[] = [];
@@ -298,6 +315,8 @@ export class AgentMapWorkspaceStore {
           JSON.stringify(parsed.plan) !== JSON.stringify(request.expectedPlan))
           throw new AgentMapWorkspaceStoreError("malformed_state");
         const history = next.briefVersionsById[parsed.briefId] ?? [];
+        if (history.length >= AGENT_BRIEF_VERSION_HISTORY_LIMIT)
+          throw new AgentMapWorkspaceStoreError("storage_unavailable");
         const pointer = next.current.briefsByScope[parsed.scopeKey];
         if (parsed.version !== history.length + 1 || parsed.parentVersionId !== (history.at(-1)?.versionId ?? null) ||
           (pointer !== undefined && pointer.briefId !== parsed.briefId)) throw new AgentMapWorkspaceStoreError("malformed_state");
@@ -308,7 +327,9 @@ export class AgentMapWorkspaceStore {
         versions.push(ref);
       }
       const result: AppendBriefVersionsResult = { replayed: false, versions };
-      const receiptRecord: ProjectMutationReceipt<AppendBriefVersionsResult> = { projectId, ...request.actor,
+      if (next.requestReceipts.length >= PROJECT_MUTATION_RECEIPT_LIMIT)
+        throw new AgentMapWorkspaceStoreError("storage_unavailable");
+      const receiptRecord: ProjectMutationReceipt<AppendBriefVersionsResult> = { projectId, ...actor,
         requestId: request.requestId, requestDigest: request.requestDigest, operation: "brief_append", result,
         createdAt: request.createdAt };
       next.requestReceipts.push(receiptRecord);

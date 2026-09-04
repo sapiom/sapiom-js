@@ -46,7 +46,7 @@ const graphDigest = computeGraphContentDigest({
 const content: ProjectBuildPlanContent = {
   outcome: "Ship research.", nonGoals: [], milestones: [], sequenceGates: [], sharedConstraints: [],
   repositoryIntents: [], integrationCriteria: [], acceptanceCriteria: [], decisions: [],
-  assignments: [{ id: assignmentId, plannedAgentId: nodeId, briefId: null, mission: "Research", scope: [], nonGoals: [] }],
+  assignments: [{ id: assignmentId, plannedAgentId: nodeId, briefId: null, mission: "Research", scope: [], nonGoals: [], dependencies: [] }],
   unresolvedDecisions: [], risks: [],
 };
 

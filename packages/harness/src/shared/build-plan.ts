@@ -32,6 +32,7 @@ export type MilestoneId = Brand<"MilestoneId">;
 export type SequenceGateId = Brand<"SequenceGateId">;
 export type PlanDecisionId = Brand<"PlanDecisionId">;
 export type PlanRiskId = Brand<"PlanRiskId">;
+export type BuildPlanDependencyId = Brand<"BuildPlanDependencyId">;
 
 export type ProjectBuildPlanVersionRef = Readonly<{
   projectId: StudioProjectId;
@@ -111,6 +112,15 @@ export interface BuildPlanAssignmentIntent {
   mission: string;
   scope: readonly string[];
   nonGoals: readonly string[];
+  dependencies: readonly BuildPlanDependencyIntent[];
+}
+
+export interface BuildPlanDependencyIntent {
+  id: BuildPlanDependencyId;
+  kind: "input" | "output" | "shared-resource" | "depends-on";
+  nodeId: PlanNodeId;
+  relationshipIds: readonly string[];
+  contractRef: string | null;
 }
 
 export interface ProjectBuildPlanContent {
@@ -203,6 +213,7 @@ export interface BuildPlanDiagnostic {
     | "unknown-node-reference"
     | "invalid-repository-owner"
     | "invalid-milestone-dependency"
+    | "invalid-dependency"
     | "duplicate-ordinal"
     | "unresolved-decision"
     | "source-mismatch";
@@ -212,7 +223,8 @@ export interface BuildPlanDiagnostic {
 }
 
 export interface BuildPlanIdMapping {
-  kind: "plan" | "assignment" | "milestone" | "sequence-gate" | "decision" | "risk" | "brief";
+  kind: "plan" | "assignment" | "milestone" | "sequence-gate" | "repository-intent" |
+    "dependency" | "decision" | "risk" | "brief";
   clientRef: string;
   id: string;
 }

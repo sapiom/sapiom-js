@@ -69,6 +69,7 @@ const planContent: ProjectBuildPlanContent = {
     mission: "Produce ResearchReport.",
     scope: ["Market research"],
     nonGoals: ["Video publishing"],
+    dependencies: [],
   }],
   unresolvedDecisions: [],
   risks: [],
@@ -85,7 +86,7 @@ describe("neutral map/plan digest protocol", () => {
     const mapDigest = computeGraphContentDigest(graph);
     expect(mapDigest).toBe("sha256:1659273be855864c82005f6291ae61bc2256f1d114e7c391aedd4f37d0191000");
     expect(computeBuildPlanSemanticDigest(planContent)).toBe(
-      "sha256:9ac4f4540f2148952f6ac2d36833a1d20f1ec91f710788c454a7be423fa39d3b",
+      "sha256:0a038f176b4ae7e0a9bd43c50a5e64caf29e0381dee5d9470bf319d7098af7eb",
     );
 
     const brief = {
@@ -117,7 +118,7 @@ describe("neutral map/plan digest protocol", () => {
       },
     } satisfies Pick<AgentBriefVersion, "assignmentId" | "plannedAgentId" | "map" | "plan" | "content">;
     expect(computeAgentBriefSemanticDigest(brief)).toBe(
-      "sha256:0ba6ca9fc9eb0a430e28ef7db0a73a28a087e65dfdbb332781ac2dcf8fdcc269",
+      "sha256:e1b304271db17e8b8164e193a6ae41d82c0864ff593c02c3e3169de205c26b0a",
     );
   });
 
@@ -159,7 +160,7 @@ describe("neutral map/plan digest protocol", () => {
       "sha256:fe263ae9ba6982d03931743ac2737a60cf28288caba2ce141916cbea18813cdd",
     );
     expect(computeBuildPlanRecordDigest(plan)).toBe(
-      "sha256:83e12964df428046b7beeb5a6625e5554340e2e765d088748dcd573444c9e855",
+      "sha256:9046540f87c7d07625fb96f6b77853b2cd0ec907c7296b836590757b8af7ba61",
     );
 
     const briefBase = {
@@ -197,7 +198,7 @@ describe("neutral map/plan digest protocol", () => {
       semanticDigest: computeAgentBriefSemanticDigest(briefBase),
     };
     expect(computeAgentBriefRecordDigest(brief)).toBe(
-      "sha256:281553164cf056bd61fdf0419bc3575a09cae91224eff3250620f1fa26b9b125",
+      "sha256:49f7f41ab2483d9ac7c4ffa1a9929a069afc4b8abe72b404b3f1b4f3a5121f0f",
     );
     expect(computeBuildPlanSemanticDigest({ ...planContent, nonGoals: [...planContent.nonGoals] })).toBe(plan.semanticDigest);
     expect(computeBuildPlanSemanticDigest({ content: plan.content })).toBe(plan.semanticDigest);
