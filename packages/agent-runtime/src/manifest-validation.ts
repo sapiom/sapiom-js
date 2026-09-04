@@ -29,7 +29,9 @@ export function validateManifestStepInput(
     return;
   }
 
-  const validate = ajv.compile(relaxAdditionalProperties(schema) as Record<string, unknown>);
+  const validate = ajv.compile(
+    relaxAdditionalProperties(dropDefaultedFromRequired(schema)) as Record<string, unknown>,
+  );
   const valid = validate(input);
   if (!valid) {
     const issues = mapAjvErrors(validate.errors ?? []);
@@ -61,6 +63,50 @@ function relaxAdditionalProperties(value: unknown): unknown {
         continue;
       }
       out[key] = relaxAdditionalProperties(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Recursively drop from every object schema's `required` array any key whose
+ * `properties` entry declares a `default`.
+ *
+ * `z.toJSONSchema()` marks a defaulted field required at every level, but the
+ * authoritative Zod parse supplies the default when the caller omits it — so a
+ * pre-gate that keeps the field required would be stricter than the parse it
+ * fronts (rejecting input the step would happily run). We relax the pre-gate to
+ * match, at every level, for the same reason `relaxAdditionalProperties` does.
+ *
+ * Applied here (not only in `buildManifest`) so a manifest built by an older SDK
+ * — which relaxed only the top level — is still corrected at validation time.
+ */
+function dropDefaultedFromRequired(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(dropDefaultedFromRequired);
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const required = obj.required;
+    const properties = obj.properties;
+    const defaultedHere =
+      Array.isArray(required) && properties && typeof properties === 'object'
+        ? new Set(
+            required.filter((key) => {
+              if (typeof key !== 'string') return false;
+              const prop = (properties as Record<string, unknown>)[key];
+              return prop && typeof prop === 'object' && 'default' in prop;
+            }),
+          )
+        : null;
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(obj)) {
+      if (key === 'required' && defaultedHere) {
+        out[key] = (v as unknown[]).filter((k) => !defaultedHere.has(k));
+      } else {
+        out[key] = dropDefaultedFromRequired(v);
+      }
     }
     return out;
   }

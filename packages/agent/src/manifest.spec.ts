@@ -306,6 +306,37 @@ describe("buildManifest", () => {
     expect(required).not.toContain("count");
   });
 
+  it("defaulted field NESTED in an object is NOT in that object's required (AJV pre-check must not be stricter than Zod)", () => {
+    // A default on a nested field makes it optional to Zod exactly as a top-level
+    // default does — `z.object({ options: { tone } }).parse({ options: {} })`
+    // supplies `tone`. But zod.toJSONSchema marks the nested field required, and
+    // the manifest's AJV pre-check runs without useDefaults, so leaving it in
+    // `required` rejects an input the authoritative Zod parse accepts.
+    const schema = z.object({
+      title: z.string(),
+      options: z.object({
+        tone: z.string().default("formal"),
+      }),
+    });
+    const def = defineAgent({
+      name: "wf",
+      entry: "step",
+      steps: { step: makeStep("step", { inputSchema: schema }) },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    const stepSchema = manifest.steps.step.inputSchema!;
+    const props = stepSchema.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const nestedRequired = props.options.required as string[] | undefined;
+    // `tone` (has a default) must not be reported as missing on the nested object.
+    expect(nestedRequired ?? []).not.toContain("tone");
+  });
+
   it("strips additionalProperties:false from the schema (top-level AND nested) so inputs with extra fields are accepted", () => {
     // z.toJSONSchema marks every object as closed (additionalProperties:false).
     // A plain z.object() parse ignores extra keys rather than rejecting them, so
