@@ -449,12 +449,9 @@ function compile(
       dependencies: projection.dependencies,
       sharedResourceNodeIds: projection.resources,
       sequenceGateIds: request.plan.content.sequenceGates.map(({ id }) => id),
-      deliverables: unique([
-        ...projection.outputs,
-        ...request.plan.content.repositoryIntents.filter(({ plannedAgentId }) => plannedAgentId === projection.root)
-          .map((intent) => canonicalJson({ repository: intent.repository, packages: intent.packages,
-            ownershipBoundaries: intent.ownershipBoundaries })),
-      ]),
+      deliverables: unique(projection.outputs.length > 0
+        ? projection.outputs
+        : [selection.mission ?? projection.assignment.mission]),
       acceptanceCriteria: unique([...request.plan.content.acceptanceCriteria, ...request.plan.content.integrationCriteria]),
       constraints: unique(request.plan.content.sharedConstraints),
       milestoneIds: request.plan.content.milestones.map(({ id }) => id),

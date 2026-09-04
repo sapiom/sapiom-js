@@ -150,6 +150,20 @@ export {
   AGENT_BRIEF_IMPACT_EVIDENCE_LIMIT,
   evaluateAgentBriefImpact,
 } from "./core/build-plan-impact-evaluator.js";
+export {
+  FOCUSED_SESSION_CONTEXT_MAX_BYTES,
+  FOCUSED_SESSION_CONTEXT_MAX_LIST_LENGTH,
+  FOCUSED_SESSION_CONTEXT_MAX_STRING_LENGTH,
+  serializeFocusedSessionContext,
+} from "./core/focused-session-context.js";
+export type {
+  FocusedSessionContextProjection,
+  FocusedSessionContextResult,
+} from "./core/focused-session-context.js";
+export {
+  PROJECT_AGENT_PROMPT_APPENDIX,
+  projectAgentPromptAppendix,
+} from "./profiles/project-agent.js";
 export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {

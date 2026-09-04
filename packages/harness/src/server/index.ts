@@ -114,7 +114,7 @@ import {
   sweepGeneratedDirs,
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
-import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
+import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -630,7 +630,9 @@ function createDefaultBuildLaunchOpts(
     ]);
     const appendices = [
       viaSystemPrompt ? brief : null,
-      context?.agentMapIdentity ? PROJECT_AGENT_PROMPT_APPENDIX : null,
+      context?.agentMapIdentity
+        ? projectAgentPromptAppendix(context.focusedContext)
+        : null,
       context?.promptAppendix,
     ]
       .filter(

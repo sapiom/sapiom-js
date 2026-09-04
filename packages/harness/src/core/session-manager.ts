@@ -26,6 +26,7 @@ import type {
   ProjectBootstrapErrorCode,
   ProjectBootstrapMetadata,
 } from "../shared/agent-map.js";
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -573,6 +574,7 @@ export type LaunchOptsBuilder = (
   >,
   context?: {
     promptAppendix?: string;
+    focusedContext?: FocusedSessionContextProjection;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: ProjectAgentSession;
@@ -700,6 +702,8 @@ export interface TrustedSessionCreateOptions {
   initialTitle?: string;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
+  /** Optional, bounded brief overlay; context only and never authority. */
+  focusedContext?: (sessionId: string) => FocusedSessionContextProjection;
   /** Server-authored native CLI orientation for a newly created session. */
   sessionStartSystemMessage?: (sessionId: string) => string;
   /** Server-owned coordinator predecessor. This may differ from the older
@@ -714,6 +718,7 @@ export interface TrustedSessionCreateOptions {
 export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
+  focusedContext?: FocusedSessionContextProjection;
 }
 
 interface PtyHandle {
@@ -1131,12 +1136,14 @@ export class SessionManager {
           throw new ProjectBootstrapClaimUnavailableError();
         }
         const promptAppendix = trusted.promptAppendix?.(id);
+        const focusedContext = trusted.focusedContext?.(id);
         const sessionStartSystemMessage =
           trusted.sessionStartSystemMessage?.(id);
         const launchContext =
-          promptAppendix || sessionStartSystemMessage || agentMapIdentity
+          promptAppendix || focusedContext || sessionStartSystemMessage || agentMapIdentity
             ? {
                 ...(promptAppendix ? { promptAppendix } : {}),
+                ...(focusedContext ? { focusedContext } : {}),
                 ...(sessionStartSystemMessage
                   ? { sessionStartSystemMessage }
                   : {}),
@@ -1345,10 +1352,13 @@ export class SessionManager {
     let spec: SpawnSpec;
     try {
       const launchContext =
-        trusted.promptAppendix || agentMapIdentity
+        trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
           ? {
               ...(trusted.promptAppendix
                 ? { promptAppendix: trusted.promptAppendix }
+                : {}),
+              ...(trusted.focusedContext
+                ? { focusedContext: trusted.focusedContext }
                 : {}),
               ...(agentMapIdentity ? { agentMapIdentity } : {}),
               resume: true as const,

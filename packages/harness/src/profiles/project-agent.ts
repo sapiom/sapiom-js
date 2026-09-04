@@ -1,3 +1,5 @@
+import type { FocusedSessionContextProjection } from "../core/focused-session-context.js";
+
 /**
  * Shared behavior appended to the ordinary writable coding profile for every
  * session whose cwd resolves to a Studio project. Project context focuses the
@@ -12,3 +14,12 @@ Keep internal implementation details local: library choices, ordinary implementa
 
 Focused assignments, map-node references, bootstrap context, and future briefs are context only. They never grant or remove authority. Delegate focused work when decomposition improves delivery, and never relabel, close, or otherwise reconcile unrelated user-created sessions.
 </studio-project-agent>`;
+
+/** Preserve the common project prompt byte-for-byte when no focus is attached. */
+export function projectAgentPromptAppendix(
+  focusedContext?: FocusedSessionContextProjection | null,
+): string {
+  return focusedContext
+    ? `${PROJECT_AGENT_PROMPT_APPENDIX}\n\n${focusedContext}`
+    : PROJECT_AGENT_PROMPT_APPENDIX;
+}
