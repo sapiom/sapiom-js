@@ -92,6 +92,7 @@ export type SubsessionCoordinatorBindingTombstone = Readonly<{
   delegationKey: string;
   bindingDigest: string;
   sessionId: string;
+  disposition: "terminal" | "dormant-evicted";
   closedAt: string;
 }>;
 
@@ -552,6 +553,7 @@ function parseBindingTombstone(
       "delegationKey",
       "bindingDigest",
       "sessionId",
+      "disposition",
       "closedAt",
     ]) ||
     !identifier(value.bindingId, "binding") ||
@@ -564,6 +566,7 @@ function parseBindingTombstone(
     !identifier(value.delegationKey) ||
     !digest(value.bindingDigest) ||
     !identifier(value.sessionId) ||
+    !["terminal", "dormant-evicted"].includes(String(value.disposition)) ||
     !timestamp(value.closedAt)
   ) {
     throw new SubsessionCoordinatorStoreError("malformed_state");
@@ -631,16 +634,18 @@ export function parseSubsessionCoordinatorAggregate(
       `${parentSessionId}\0${delegationKey}`,
   );
   const allBindings = [...bindings, ...bindingTombstones];
-  const allBindingKeys = [
+  const terminalBindingKeys = [
     ...bindingKeys,
     ...bindingTombstones.map(
-      ({ parentSessionId, delegationKey }) =>
-        `${parentSessionId}\0${delegationKey}`,
+      ({ disposition, parentSessionId, delegationKey }) =>
+        disposition === "terminal"
+          ? `${parentSessionId}\0${delegationKey}`
+          : null,
     ),
-  ];
+  ].filter((key): key is string => key !== null);
   if (
     new Set(requestKeys).size !== requestKeys.length ||
-    new Set(allBindingKeys).size !== allBindings.length ||
+    new Set(terminalBindingKeys).size !== terminalBindingKeys.length ||
     new Set(allBindings.map(({ bindingId }) => bindingId)).size !==
       allBindings.length ||
     new Set(allBindings.map(({ sessionId }) => sessionId)).size !==
@@ -797,6 +802,7 @@ export class SubsessionCoordinatorStore {
         delegationKey: binding.delegationKey,
         bindingDigest: binding.bindingDigest,
         sessionId: binding.sessionId,
+        disposition: "terminal",
         closedAt: binding.updatedAt,
       });
     }
@@ -1085,6 +1091,7 @@ export class SubsessionCoordinatorStore {
         delegationKey: binding.delegationKey,
         bindingDigest: binding.bindingDigest,
         sessionId: binding.sessionId,
+        disposition: "terminal",
         closedAt: binding.updatedAt,
       };
       aggregate.bindings = aggregate.bindings.filter(
@@ -1258,6 +1265,7 @@ export class SubsessionCoordinatorStore {
       this.compactTerminalHistory(aggregate);
       const now = this.now();
       const bindings: ReleasableSubsessionBinding[] = [];
+      const evictedBindingIds = new Set<SubsessionBindingId>();
       for (const bindingId of candidateBindingIds) {
         const binding = aggregate.bindings.find(
           (entry) => entry.bindingId === bindingId,
@@ -1267,12 +1275,20 @@ export class SubsessionCoordinatorStore {
             // The explicit destructive boundary and request receipt commit in
             // the same transaction. A concurrent resume must lose this fence
             // before any exact private ownership marker is removed.
-            binding.sessionState = "closed";
-            binding.lifecycleEpoch += 1;
-            binding.spawnClaim = null;
-            binding.runtime = null;
-            binding.updatedAt = now;
-            bindings.push({ state: "bound", binding });
+            const tombstone: SubsessionCoordinatorBindingTombstone = {
+              bindingId: binding.bindingId,
+              parentSessionId: binding.parentSessionId,
+              parentBindingId: binding.parentBindingId,
+              delegationDepth: binding.delegationDepth,
+              delegationKey: binding.delegationKey,
+              bindingDigest: binding.bindingDigest,
+              sessionId: binding.sessionId,
+              disposition: "dormant-evicted",
+              closedAt: now,
+            };
+            aggregate.bindingTombstones.push(tombstone);
+            evictedBindingIds.add(binding.bindingId);
+            bindings.push({ state: "released", binding: tombstone });
           }
           continue;
         }
@@ -1280,6 +1296,25 @@ export class SubsessionCoordinatorStore {
           (entry) => entry.bindingId === bindingId,
         );
         if (released) bindings.push({ state: "released", binding: released });
+      }
+      if (evictedBindingIds.size > 0) {
+        const retainedReceipts: SubsessionCoordinatorRequestReceipt[] = [];
+        for (const receipt of aggregate.requestReceipts) {
+          if (
+            receipt.operation !== "release-dormant" &&
+            receipt.bindingIds.some((bindingId) =>
+              evictedBindingIds.has(bindingId),
+            )
+          ) {
+            aggregate.requestTombstones.push(receipt);
+          } else {
+            retainedReceipts.push(receipt);
+          }
+        }
+        aggregate.requestReceipts = retainedReceipts;
+        aggregate.bindings = aggregate.bindings.filter(
+          ({ bindingId }) => !evictedBindingIds.has(bindingId),
+        );
       }
       aggregate.requestReceipts.push({
         parentSessionId: identity.sessionId,
@@ -1594,7 +1629,8 @@ export class SubsessionCoordinatorStore {
         const terminal = aggregate.bindingTombstones.find(
           (entry) =>
             entry.parentSessionId === identity.sessionId &&
-            entry.delegationKey === delegation.delegationKey,
+            entry.delegationKey === delegation.delegationKey &&
+            entry.disposition === "terminal",
         );
         if (terminal) {
           if (terminal.bindingDigest !== bindingDigest)

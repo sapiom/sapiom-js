@@ -112,9 +112,10 @@ a session identity.
 Callers provide both a request key and a delegation key. Identity is scoped by
 the private session capability to the trusted project and parent session.
 Identical retries converge on the same durable binding and real Harness session
-ID; changing canonical request or binding content under an existing key fails
-explicitly. All binding IDs and session IDs for a bounded batch are reserved in
-one durable transaction before the first process is spawned.
+ID until an explicit project-wide dormant eviction; changing canonical request
+or binding content under an existing key otherwise fails explicitly. All binding
+IDs and session IDs for a bounded batch are reserved in one durable transaction
+before the first process is spawned.
 Older request receipts compact into bounded key tombstones. User-closed
 bindings compact into bounded ownership tombstones once no retained receipt
 references them; an explicit release finalizes immediately to the same
@@ -137,10 +138,14 @@ active bindings or manual sessions. Parent liveness is intentionally irrelevant:
 this explicit project-wide destructive operation relinquishes dormant delegation
 resume identity even when the original parent is active. It retains the ordinary
 Harness conversation/session history, but compacts the coordinator binding and
-ends automatic resume through that binding. Request receipts make the sweep
-idempotent and restart-safe. Durable-history capacity errors expose the explicit
-`release_dormant` recovery code; an all-active live cap continues to require
-session inspection instead of suggesting an inapplicable dormant cleanup.
+ends automatic resume through that binding. The sweep remains idempotent and
+restart-safe, while prior request receipts referencing an evicted binding become
+bounded expiry tombstones. Retrying one of those keys returns
+`request_key_expired` with `new_request_key`; a fresh request key may atomically
+create one new binding/session for the same delegation key. Durable-history
+capacity errors expose the explicit `release_dormant` recovery code; an
+all-active live cap continues to require session inspection instead of suggesting
+an inapplicable dormant cleanup.
 
 The coordinator waits for canonical adapter readiness and exact transcript
 identity, then uses fenced spawn and delivery epochs to submit one kickoff.

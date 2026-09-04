@@ -36,4 +36,8 @@ intentionally irrelevant. This destructive recovery compacts coordinator and
 private ownership state while retaining the ordinary Harness session history;
 the released binding is no longer automatically resumable. Durable-history
 capacity failures identify `release_dormant` in their recovery field, while an
-all-active live cap does not suggest dormant cleanup.
+all-active live cap does not suggest dormant cleanup. Delegation retries converge
+until this explicit project-wide eviction boundary. Eviction expires request
+receipts that referenced the released binding, so an old retry returns bounded
+`request_key_expired` / `new_request_key` recovery; a fresh request key may
+atomically create one new binding and real session for the same delegation key.

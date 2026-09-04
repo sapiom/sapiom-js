@@ -1041,23 +1041,23 @@ describe("SubsessionCoordinatorStore", () => {
     );
     expect(reserved.bindings).toEqual([
       {
-        state: "bound",
+        state: "released",
         binding: expect.objectContaining({
           bindingId: dormant[0]!.bindingId,
-          sessionState: "closed",
+          disposition: "dormant-evicted",
         }),
       },
     ]);
-    await store.closeBinding(
-      identity,
-      dormant[0]!.bindingId,
-      dormant[0]!.sessionId,
-    );
-    await store.finalizeReleasedBinding(
-      identity,
-      dormant[0]!.bindingId,
-      dormant[0]!.sessionId,
-    );
+    await expect(
+      store.reserveDelegations(
+        identity,
+        delegate("old-request", [
+          { delegationKey: "research", outcome: "Collect evidence" },
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        target,
+      ),
+    ).rejects.toMatchObject({ code: "request_key_expired" });
     const replay = await store.reserveDormantReleases(
       newParent,
       request,

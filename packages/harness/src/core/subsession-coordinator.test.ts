@@ -504,8 +504,16 @@ describe("SubsessionCoordinator", () => {
     });
   });
 
-  it("lets a new project agent reclaim a dormant child of an active parent at history capacity", async () => {
-    const { coordinator, caller, manager, store, spawned, unsubscribe } =
+  it("expires the old request and lets an active parent recreate a sibling-evicted dormant child", async () => {
+    const {
+      coordinator,
+      caller,
+      manager,
+      store,
+      spawned,
+      spawnPty,
+      unsubscribe,
+    } =
       await fixture(false, undefined, {}, { bindingLimit: 1 });
     const created = await coordinator.execute(caller, request);
     const childId = created.results[0]!.sessionId!;
@@ -587,17 +595,19 @@ describe("SubsessionCoordinator", () => {
       detail: { code: "capability_scope_mismatch" },
     });
 
-    const next = await coordinator.execute(nextCaller, {
-      ...request,
-      requestKey: "after-dormant-release",
-      operation: {
-        ...request.operation,
-        delegations: [{
-          delegationKey: "writer",
-          outcome: "Write evidence",
-        }],
+    await expect(coordinator.execute(caller, request)).rejects.toMatchObject({
+      detail: {
+        code: "request_key_expired",
+        retryable: false,
+        recovery: "new_request_key",
       },
     });
+    const recreatedRequest = {
+      ...request,
+      requestKey: "after-dormant-release",
+    } as const;
+    const next = await coordinator.execute(caller, recreatedRequest);
+    const nextReplay = await coordinator.execute(caller, recreatedRequest);
     const activeSweep = await coordinator.execute(nextCaller, {
       ...dormantReleaseRequest,
       requestKey: "active-and-manual-exclusion",
@@ -605,10 +615,21 @@ describe("SubsessionCoordinator", () => {
     unsubscribe();
 
     expect(next.results[0]).toMatchObject({
-      delegationKey: "writer",
+      delegationKey: "research",
       outcome: "created",
     });
+    expect(next.results[0]!.sessionId).not.toBe(childId);
+    expect(nextReplay).toMatchObject({
+      replayed: true,
+      results: [{
+        delegationKey: "research",
+        sessionId: next.results[0]!.sessionId,
+        outcome: "reused",
+      }],
+    });
     expect(activeSweep.results).toEqual([]);
+    expect(spawnPty).toHaveBeenCalledTimes(5);
+    expect(manager.get(caller.sessionId)?.status).not.toBe("exited");
     expect(manager.get(next.results[0]!.sessionId!)?.status).not.toBe("exited");
     expect(manager.get(manual.id)).toMatchObject({ status: "exited" });
     expect((await store.read(projectId)).bindings).toHaveLength(1);
