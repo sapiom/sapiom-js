@@ -56,10 +56,14 @@ import type {
   WorkflowInfo,
   WorkflowInputContractResponse,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type {
+  WorkspaceKey,
+  WorkspaceScopeSummary,
+} from "@shared/system-graph";
 import type {
   PlannerSessionRequest,
   StudioProjectId,
+  StudioProjectSummary,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
 
@@ -215,16 +219,31 @@ const knownRootsOf = (
  * the user walks away from.
  */
 /**
- * What counts as a separate overlay LAYER, for hotkeys that must not fire over
- * one. See the ⌘K guard for why `.modal-backdrop` leads and why this is, for
- * now, a second copy of the dialog shell's `DIALOG_LAYER_SELECTOR`.
+ * A layer the COMMAND PALETTE must not open on top of.
+ *
+ * `.modal-backdrop` leads because it is the one thing every overlay in this app
+ * actually has, and because `CommandPalette` itself carries no `role` — a
+ * role-only selector (the shape the Escape handler below uses) cannot see it,
+ * so a guard written that way looks correct and detects nothing.
+ *
+ * THE OVERVIEW IS CARVED OUT, and it is not an oversight: the palette is
+ * deliberately reachable by shortcut while the Overview is up, and navigating
+ * from it dismisses the Overview rather than stacking behind it. That is a
+ * written contract with a spec behind it — `welcome.spec.ts`'s "the palette's
+ * Browse templates, opened over the Overview, leaves it (never stacks)". The
+ * Overview wears both `role="dialog"` and `aria-modal="true"`, so excluding it
+ * has to be done on each clause rather than by dropping a class from the list.
+ *
+ * DELIBERATELY NOT the dialog shell's `DIALOG_LAYER_SELECTOR` (#800). That one
+ * answers "which layer owns Tab", where the Overview IS a layer and belongs in
+ * the list. This one answers "may ⌘K open here", where it does not. Same shape,
+ * different question; collapsing them would break the contract above.
  */
-const DIALOG_LAYER_SELECTOR = [
+const PALETTE_BLOCKING_LAYER_SELECTOR = [
   ".modal-backdrop",
-  ".overview-modal",
-  '[role="dialog"]',
-  '[role="alertdialog"]',
-  '[aria-modal="true"]',
+  '[role="dialog"]:not(.overview-modal)',
+  '[role="alertdialog"]:not(.overview-modal)',
+  '[aria-modal="true"]:not(.overview-modal)',
 ].join(",");
 
 const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
@@ -821,18 +840,10 @@ export const App = (): JSX.Element => {
         // palette over an open dialog and native Tab then walked out of the
         // palette into the dialog behind it. A surface cannot contain focus for
         // a surface it does not own, so the fix is here rather than in either.
-        //
-        // `.modal-backdrop` LEADS, and that is the whole reason this is not the
-        // selector 20 lines above: `CommandPalette` carries no `role` at all, so
-        // a role-only selector cannot see it, and a guard copied from there
-        // would look correct and detect nothing. The roles follow for surfaces
-        // that build their own scrim (`OverviewModal`, `HelpOverlay`).
-        //
         // Found by the dialog-shell work (#800), which stopped at this file
-        // rather than reaching into it; `DIALOG_LAYER_SELECTOR` here is a
-        // deliberate second copy of that branch's, and whichever lands second
-        // should delete one and import the other.
-        if (document.querySelector(DIALOG_LAYER_SELECTOR)) return;
+        // rather than reaching into it. See the selector for what it excludes
+        // and why it is not that branch's list.
+        if (document.querySelector(PALETTE_BLOCKING_LAYER_SELECTOR)) return;
         e.preventDefault();
         setPaletteOpen(true);
         return;
@@ -1874,6 +1885,44 @@ export const App = (): JSX.Element => {
    * on disk and rescans before any session starts. Still the harness creating
    * the agent; still no sentence sent to a model.
    */
+  /**
+   * OPEN A FOLDER AS A PROJECT AND SAY WHAT IT RESOLVED TO — once.
+   *
+   * Two handlers need exactly this prefix and had a line-for-line copy of it
+   * each: the rail's "add a project" route (which then restores whatever
+   * workspace that project remembers) and the create verb (which then goes to
+   * the map, because you are making something). They differ only in what they
+   * do with the answer, so the answer is computed here and the difference stays
+   * in the callers. Two copies of a four-call sequence over the settings API is
+   * how they come to disagree, and on the web folder fallback it was worse than
+   * drift: the verb ran the whole sequence twice per click, two
+   * `rememberProjectDir` writes and two registry sweeps of the same root.
+   *
+   * `openProject` resolves an agent's OWN folder to the folder that holds it,
+   * so `root` is what came back, never what was asked for.
+   */
+  const openProjectAndResolve = async (
+    requestedRoot: string,
+  ): Promise<
+    { root: string; workflows: WorkflowInfo[] } & (
+      | { scope: WorkspaceScopeSummary; project: StudioProjectSummary }
+      | { scope: null; project: null }
+    )
+  > => {
+    const root = await harness.openProject(requestedRoot);
+    const refreshed = await harness.api.getState();
+    const workflows = refreshed.workflows;
+    const scope = refreshed.workspaceScopes?.find((candidate) =>
+      samePath(candidate.cwd, root),
+    );
+    const project = refreshed.studioProjects?.find(
+      (candidate) => candidate.projectId === scope?.projectId,
+    );
+    return scope?.projectId && project
+      ? { root, workflows, scope, project }
+      : { root, workflows, scope: null, project: null };
+  };
+
   const handleNewAgentIn = async (
     root: string,
     label?: string,
@@ -1887,14 +1936,9 @@ export const App = (): JSX.Element => {
       // synchronous and could not fail, so an unhandled rejection here would be
       // a new failure mode whose only symptom is the most prominent control in
       // the product doing nothing at all.
-      openedRoot = await harness.openProject(root);
-      const refreshed = await harness.api.getState();
-      const scope = refreshed.workspaceScopes?.find((candidate) =>
-        samePath(candidate.cwd, openedRoot),
-      );
-      const project = refreshed.studioProjects?.find(
-        (candidate) => candidate.projectId === scope?.projectId,
-      );
+      const opened = await openProjectAndResolve(root);
+      openedRoot = opened.root;
+      const { scope, project } = opened;
       const name = label ?? basenameOf(openedRoot);
       if (!scope || !project) {
         handleCreateAgentInProject(openedRoot, name);
@@ -2835,20 +2879,18 @@ export const App = (): JSX.Element => {
               await harness.removeProject(root);
             }}
             onOpenProject={async (requestedRoot) => {
-              const openedRoot = await harness.openProject(requestedRoot);
               let restoringProject: {
                 projectId: StudioProjectId;
                 cwd: string;
               } | null = null;
               try {
-                const refreshed = await harness.api.getState();
-                const scope = refreshed.workspaceScopes?.find((candidate) =>
-                  samePath(candidate.cwd, openedRoot),
-                );
-                const project = refreshed.studioProjects?.find(
-                  (candidate) => candidate.projectId === scope?.projectId,
-                );
-                if (!scope?.projectId || !project) return;
+                // The same four calls the create verb makes, made once — see
+                // `openProjectAndResolve`. What differs is only what happens
+                // next: this route restores whatever workspace the project
+                // REMEMBERS, the verb goes to the map because it is creating.
+                const { scope, project, workflows } =
+                  await openProjectAndResolve(requestedRoot);
+                if (!scope || !project) return;
                 restoringProject = {
                   projectId: project.projectId,
                   cwd: scope.cwd,
@@ -2861,7 +2903,7 @@ export const App = (): JSX.Element => {
                 if (generation !== studioRestoreGenerationRef.current) return;
                 const restoredSelection = current.selection;
                 if (restoredSelection.kind === "agent") {
-                  const workflow = refreshed.workflows.find((candidate) =>
+                  const workflow = workflows.find((candidate) =>
                     candidate.studioBindings?.some(
                       (binding) =>
                         binding.projectId === restoredSelection.projectId &&

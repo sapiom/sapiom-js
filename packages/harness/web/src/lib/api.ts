@@ -219,7 +219,8 @@ export function isDemoSeedEnabled(): boolean {
 }
 
 /**
- * Mock mode only: `?mockError=listDir` forces the named operations to
+ * Mock mode only: `?mockError=listDir` (or `settings`, `deploy`, …) forces the
+ * named operations to
  * reject, so Playwright can exercise the error states of surfaces that talk to
  * the filesystem API (directory picker, command-palette path mode) without a
  * real server. Comma-separated; unknown names ignored.
@@ -2334,6 +2335,27 @@ export class MockApi implements HarnessApi {
             "credential rejected",
           );
         }
+      }
+    }
+    // `?mockError=stateRefresh` — every getState AFTER the boot pair rejects.
+    // The boot itself has to succeed or there is no shell to press anything in,
+    // and StrictMode double-invokes it, hence the counter rather than a flag.
+    //
+    // This is the honest injection point for the create verb's failure path:
+    // `rememberProjectDir` already swallows a settings 500 of its own accord
+    // (`use-harness-state.ts:1503-1513`, "whatever the caller was really doing
+    // already succeeded"), so `openProject` does not reject. The refreshed read
+    // that follows it does, and that is the one the handler has to survive.
+    if (typeof window !== "undefined" && mockErrorTargets().has("stateRefresh")) {
+      const win = window as unknown as { __MOCK_STATE_CALL_COUNT__?: number };
+      const count = (win.__MOCK_STATE_CALL_COUNT__ ?? 0) + 1;
+      win.__MOCK_STATE_CALL_COUNT__ = count;
+      if (count > 2) {
+        throw new ApiError(
+          500,
+          "GET /api/state → 500 (mock)",
+          "Could not read the workspace",
+        );
       }
     }
     // mockConsentSource query param lets Playwright exercise all chip states:
