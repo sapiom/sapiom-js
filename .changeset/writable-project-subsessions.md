@@ -23,5 +23,6 @@ levels and 64 concurrently live coordinator-owned sessions per project. Closing
 a delegated tab starts PTY termination before its private user-close tombstone
 is persisted, so a storage error cannot leave the process running. Request,
 binding, and acknowledged-delivery history use bounded retention so long-lived
-projects do not dead-end on routine delegation, ordinary session exit, or
-context refreshes.
+projects do not dead-end on routine delegation or context refreshes. Exited and
+failed bindings remain durable so their real Harness sessions can still resume
+or recover.

@@ -745,8 +745,7 @@ export class SubsessionCoordinatorStore {
     );
     const reclaimable = aggregate.bindings.filter(
       (binding) =>
-        ["closed", "exited", "failed"].includes(binding.sessionState) &&
-        !referenced.has(binding.bindingId),
+        binding.sessionState === "closed" && !referenced.has(binding.bindingId),
     );
     for (const binding of reclaimable) {
       aggregate.bindingTombstones.push({
@@ -1198,9 +1197,15 @@ export class SubsessionCoordinatorStore {
       const bindings: SubsessionBindingRecord[] = [];
       let created = 0;
       const live = aggregate.bindings.filter(({ sessionState }) =>
-        ["reserved", "spawn-claimed", "starting", "awaiting-ready", "ready"].includes(
-          sessionState,
-        ),
+        [
+          "reserved",
+          "spawn-claimed",
+          "starting",
+          "awaiting-ready",
+          "ready",
+          "exited",
+          "failed",
+        ].includes(sessionState),
       ).length;
       const parentBinding = aggregate.bindings.find(
         ({ sessionId }) => sessionId === identity.sessionId,
@@ -1231,8 +1236,6 @@ export class SubsessionCoordinatorStore {
             );
           if (existing.sessionState === "closed")
             throw new SubsessionCoordinatorStoreError("session_closed");
-          if (["exited", "failed"].includes(existing.sessionState))
-            additionalLive += 1;
           bindings.push(existing);
           continue;
         }

@@ -630,57 +630,76 @@ describe("SubsessionCoordinatorStore", () => {
     expect(aggregate.bindingTombstones[0]!.bindingId).toBe(second.bindingId);
   });
 
-  it("compacts an exited binding after its replay receipt expires", async () => {
-    const root = await fixture();
-    const store = new SubsessionCoordinatorStore(root, {
-      receiptRetentionLimit: 1,
-    });
-    const first = (
-      await store.reserveDelegations(identity, delegate("request-1"), target)
-    ).bindings[0]!;
-    const claim = await store.claimSpawn(identity, first.bindingId, {
-      ownerId: "coordinator-1",
-      expectedLifecycleEpoch: first.lifecycleEpoch,
-      expectedSpawnEpoch: first.spawnEpoch,
-    });
-    if (!claim.claimed || !claim.binding.spawnClaim)
-      throw new Error("spawn claim was not acquired");
-    const starting = await store.attachSpawnedRuntime(
-      identity,
-      first.bindingId,
-      {
-        claimId: claim.binding.spawnClaim.claimId,
-        spawnEpoch: claim.binding.spawnEpoch,
-        runtimeToken: "runtime-exited",
-        incarnation: 1,
-      },
-    );
-    await store.transitionSession(identity, first.bindingId, {
-      expectedLifecycleEpoch: starting.lifecycleEpoch,
-      expectedSpawnEpoch: starting.spawnEpoch,
-      expectedRuntimeToken: "runtime-exited",
-      state: "exited",
-    });
+  it.each(["exited", "failed"] as const)(
+    "keeps a %s binding resumable and counted toward live capacity after receipt churn",
+    async (sessionState) => {
+      const root = await fixture();
+      const store = new SubsessionCoordinatorStore(root, {
+        receiptRetentionLimit: 1,
+        liveSessionLimit: 2,
+      });
+      const first = (
+        await store.reserveDelegations(identity, delegate("request-1"), target)
+      ).bindings[0]!;
+      const claim = await store.claimSpawn(identity, first.bindingId, {
+        ownerId: "coordinator-1",
+        expectedLifecycleEpoch: first.lifecycleEpoch,
+        expectedSpawnEpoch: first.spawnEpoch,
+      });
+      if (!claim.claimed || !claim.binding.spawnClaim)
+        throw new Error("spawn claim was not acquired");
+      const starting = await store.attachSpawnedRuntime(
+        identity,
+        first.bindingId,
+        {
+          claimId: claim.binding.spawnClaim.claimId,
+          spawnEpoch: claim.binding.spawnEpoch,
+          runtimeToken: "runtime-exited",
+          incarnation: 1,
+        },
+      );
+      await store.transitionSession(identity, first.bindingId, {
+        expectedLifecycleEpoch: starting.lifecycleEpoch,
+        expectedSpawnEpoch: starting.spawnEpoch,
+        expectedRuntimeToken: "runtime-exited",
+        state: sessionState,
+      });
 
-    await store.reserveDelegations(
-      identity,
-      delegate("request-2", [
-        { delegationKey: "publisher", outcome: "Publish evidence" },
-      ]),
-      target,
-    );
+      await store.reserveDelegations(
+        identity,
+        delegate("request-2", [
+          { delegationKey: "publisher", outcome: "Publish evidence" },
+        ]),
+        target,
+      );
+      const replay = await store.reserveDelegations(
+        identity,
+        delegate("request-3"),
+        target,
+      );
 
-    const aggregate = await store.read(projectId);
-    expect(aggregate.bindings.map(({ bindingId }) => bindingId)).not.toContain(
-      first.bindingId,
-    );
-    expect(aggregate.bindingTombstones).toContainEqual(
-      expect.objectContaining({
+      const aggregate = await store.read(projectId);
+      expect(replay.bindings[0]).toMatchObject({
         bindingId: first.bindingId,
         sessionId: first.sessionId,
-      }),
-    );
-  });
+        sessionState,
+      });
+      expect(aggregate.bindings).toContainEqual(replay.bindings[0]);
+      expect(aggregate.bindingTombstones).not.toContainEqual(
+        expect.objectContaining({ bindingId: first.bindingId }),
+      );
+      await expect(
+        store.reserveDelegations(
+          identity,
+          delegate("request-4", [
+            { delegationKey: "writer", outcome: "Write evidence" },
+          ]),
+          target,
+        ),
+      ).rejects.toMatchObject({ code: "live_session_limit_reached" });
+      expect((await store.read(projectId)).bindings).toHaveLength(2);
+    },
+  );
 
   it("prunes proven terminal deliveries so long-lived focused refresh stays writable", async () => {
     const root = await fixture();
