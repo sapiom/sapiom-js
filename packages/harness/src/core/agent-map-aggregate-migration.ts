@@ -7,13 +7,13 @@ import type {
 } from "../shared/agent-map.js";
 import {
   parseAgentMapProposalReceipt,
-  parseAgentMapVersion,
   parseMapChangeProposal,
   parseMapOperation,
   parseLegacyE2ProposalActor,
   parseProjectAgentActorRef,
   type PersistedAgentMapProposalReceipt,
 } from "../shared/agent-map-codec.js";
+import { parseAgentMapVersion } from "../shared/agent-map-version-codec.js";
 import { canonicalDigest, canonicalJson } from "../shared/agent-map-canonical.js";
 import type {
   AgentBriefVersion,

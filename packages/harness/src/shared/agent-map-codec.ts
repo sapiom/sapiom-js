@@ -14,14 +14,9 @@ import {
   type ProposalActor,
   type ProposalBatchResult,
   type AgentMapGraph,
-  type AgentMapVersion,
   type ProjectAgentActorRef,
   type ProjectMutationOrigin,
 } from "./agent-map.js";
-import {
-  computeAgentMapVersionRecordDigest,
-  computeGraphContentDigest,
-} from "./agent-map-canonical.js";
 
 export const AGENT_MAP_UUID_V7_PATTERN =
   "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -208,62 +203,6 @@ export function parseProjectMutationOrigin(
   )
     throw new Error("invalid project mutation origin");
   return structuredClone(value) as unknown as ProjectMutationOrigin;
-}
-
-export function parseAgentMapVersion(
-  value: unknown,
-  expectedProjectId?: string,
-): AgentMapVersion {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "schemaVersion",
-      "projectId",
-      "versionId",
-      "version",
-      "parentVersionId",
-      "changeKind",
-      "restoredFromVersionId",
-      "graph",
-      "contentDigest",
-      "authoredBy",
-      "createdAt",
-      "origin",
-      "recordDigest",
-    ]) ||
-    value.schemaVersion !== 1 ||
-    !isAgentMapBoundedText(value.projectId, 128) ||
-    (expectedProjectId !== undefined && value.projectId !== expectedProjectId) ||
-    !isPlanId(value.versionId, "mapv") ||
-    !Number.isSafeInteger(value.version) ||
-    (value.version as number) < 1 ||
-    (value.parentVersionId !== null && !isPlanId(value.parentVersionId, "mapv")) ||
-    !["created", "edited", "rebased", "restored", "migrated"].includes(
-      String(value.changeKind),
-    ) ||
-    (value.restoredFromVersionId !== null &&
-      !isPlanId(value.restoredFromVersionId, "mapv")) ||
-    (value.changeKind === "restored") !==
-      (value.restoredFromVersionId !== null) ||
-    typeof value.contentDigest !== "string" ||
-    !/^sha256:[0-9a-f]{64}$/u.test(value.contentDigest) ||
-    !isTimestamp(value.createdAt) ||
-    typeof value.recordDigest !== "string" ||
-    !/^sha256:[0-9a-f]{64}$/u.test(value.recordDigest)
-  )
-    throw new Error("invalid Agent Map version");
-  const parsed = {
-    ...structuredClone(value),
-    graph: parseAgentMapGraph(value.graph),
-    authoredBy: parseProjectAgentActorRef(value.authoredBy),
-    origin: parseProjectMutationOrigin(value.origin),
-  } as unknown as AgentMapVersion;
-  if (
-    computeGraphContentDigest(parsed.graph) !== parsed.contentDigest ||
-    computeAgentMapVersionRecordDigest(parsed) !== parsed.recordDigest
-  )
-    throw new Error("Agent Map version digest mismatch");
-  return parsed;
 }
 
 function parseNodeChanges(value: unknown) {
