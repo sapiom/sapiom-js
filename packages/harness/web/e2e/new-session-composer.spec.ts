@@ -54,7 +54,7 @@ const sessionEvidence = (
       activeSessionId:
         document
           .querySelector('[data-testid="session-context"]')
-          ?.getAttribute("data-session-id") ?? null,
+          ?.getAttribute("data-session-id") || null,
       createSessionCalls: testState?.createSessionCalls?.length ?? 0,
       injectInputCalls: testState?.injectInputCalls?.length ?? 0,
       injectedSessionId: testState?.lastInjectInput?.id ?? null,
@@ -108,20 +108,18 @@ test("describing an outcome starts a session and hands the agent that outcome", 
 test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents is explicitly selected", async ({
   page,
 }) => {
-  await page.goto("/?seed=0&mockStudioProjects=present");
+  await page.goto(
+    "/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present",
+  );
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  // Let the existing project's default Plan Agents workspace settle first.
-  // The regression was a SECOND planner opened for the new builder's root.
-  await expect
-    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
-    .toBeGreaterThan(0);
-  await expect
-    .poll(async () => {
-      const evidence = await sessionEvidence(page);
-      return evidence.createSessionCalls - evidence.openPlannerSessionCalls;
-    })
-    .toBe(0);
+  // The parent project exists, but with no live session it has never restored
+  // its default Plan Agents workspace. Creating beneath it must not give that
+  // parent restore a head start over the explicit standalone builder intent.
+  await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   const before = await sessionEvidence(page);
+  expect(before.activeSessionId).toBeNull();
+  expect(before.createSessionCalls).toBe(0);
+  expect(before.openPlannerSessionCalls).toBe(0);
 
   await page.getByTestId("rail-create-new").click();
   const idea = "Build a sales outreach agent.";

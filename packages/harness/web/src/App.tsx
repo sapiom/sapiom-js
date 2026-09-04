@@ -296,10 +296,13 @@ export const App = (): JSX.Element => {
   const [studioSelection, setStudioSelection] =
     useState<StudioWorkspaceSelection | null>(null);
   // A global create-new submit is a request to BUILD in a generic session,
-  // not a project visit whose saved/default workspace should be restored.
-  // Key by root because createSession() refreshes Studio's project catalog
-  // before it returns the session to this component.
-  const pendingStandaloneBuilderRootsRef = useRef(new Set<string>());
+  // not a project visit whose saved/default workspace should be restored. The
+  // session id is null until createSession() selects the new session; binding
+  // it then prevents a later, unrelated visit to the same root from consuming
+  // stale intent when catalog refresh fails or the user switches away.
+  const pendingStandaloneBuilderSessionsRef = useRef(
+    new Map<string, string | null>(),
+  );
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
   const plannerProjectId =
@@ -360,6 +363,36 @@ export const App = (): JSX.Element => {
     const active = state?.sessions.find(
       (session) => session.id === harness.activeSessionId,
     );
+
+    // Bind the intent as soon as createSession() selects its session — before
+    // that call's slower recent-directory/catalog refresh finishes. Once
+    // bound, leaving or exiting that session expires the one-shot intent.
+    for (const [
+      root,
+      sessionId,
+    ] of pendingStandaloneBuilderSessionsRef.current) {
+      if (sessionId === null) {
+        if (
+          active &&
+          active.status !== "exited" &&
+          samePath(root, active.cwd)
+        ) {
+          pendingStandaloneBuilderSessionsRef.current.set(root, active.id);
+        }
+        continue;
+      }
+      const builder = state?.sessions.find(
+        (session) => session.id === sessionId,
+      );
+      if (
+        !builder ||
+        builder.status === "exited" ||
+        harness.activeSessionId !== sessionId
+      ) {
+        pendingStandaloneBuilderSessionsRef.current.delete(root);
+      }
+    }
+
     if (!state?.studioProjects || !active) return;
     const scope = mostSpecificStudioScope(
       active.boundWorkflowPath ?? active.cwd,
@@ -369,25 +402,27 @@ export const App = (): JSX.Element => {
     const project = state.studioProjects.find(
       (candidate) => candidate.projectId === scope?.projectId,
     );
-    if (
-      !scope?.projectId ||
-      !project ||
-      restoredStudioProjectsRef.current.has(project.projectId)
-    )
-      return;
-    // Only consume the intent once Studio has issued an identity for the
-    // exact new root. A parent project can temporarily be the best scope while
-    // createSession() is still refreshing the catalog; consuming it there
-    // would let the later exact project fall through to its Agent Map default.
+    if (!scope?.projectId || !project) return;
     const standaloneBuilderRoot = [
-      ...pendingStandaloneBuilderRootsRef.current,
-    ].find((root) => samePath(root, active.cwd) && samePath(root, scope.cwd));
+      ...pendingStandaloneBuilderSessionsRef.current,
+    ].find(
+      ([root, sessionId]) =>
+        sessionId === active.id && isWithinDir(scope.cwd, root),
+    )?.[0];
     if (standaloneBuilderRoot) {
-      pendingStandaloneBuilderRootsRef.current.delete(standaloneBuilderRoot);
-      restoredStudioProjectsRef.current.add(project.projectId);
-      studioRestoreGenerationRef.current += 1;
+      // Before the new root has a durable Studio identity, its containing
+      // parent is the most-specific scope. Suppress that restore without
+      // consuming the intent; only the exact-root identity completes it.
+      if (samePath(standaloneBuilderRoot, scope.cwd)) {
+        pendingStandaloneBuilderSessionsRef.current.delete(
+          standaloneBuilderRoot,
+        );
+        restoredStudioProjectsRef.current.add(project.projectId);
+        studioRestoreGenerationRef.current += 1;
+      }
       return;
     }
+    if (restoredStudioProjectsRef.current.has(project.projectId)) return;
     restoredStudioProjectsRef.current.add(project.projectId);
     const generation = ++studioRestoreGenerationRef.current;
     void harness.api
@@ -1751,13 +1786,22 @@ export const App = (): JSX.Element => {
     harness.addPendingWorkspace(cwd);
     closeMobileDrawer();
     if (options.standaloneBuilder) {
-      pendingStandaloneBuilderRootsRef.current.add(cwd);
+      pendingStandaloneBuilderSessionsRef.current.set(cwd, null);
+      // Explicit create-new intent supersedes any preference read still in
+      // flight for the session/project the user just left.
+      studioRestoreGenerationRef.current += 1;
     }
     try {
       const session = await harness.createSession({
         cwd,
         harness: agentHarness,
       });
+      if (
+        options.standaloneBuilder &&
+        pendingStandaloneBuilderSessionsRef.current.get(cwd) === null
+      ) {
+        pendingStandaloneBuilderSessionsRef.current.set(cwd, session.id);
+      }
       track("session.created");
       trackProduct("session.started", {
         harness_kind: agentHarness,
@@ -1766,7 +1810,7 @@ export const App = (): JSX.Element => {
       return session;
     } catch (err) {
       if (options.standaloneBuilder) {
-        pendingStandaloneBuilderRootsRef.current.delete(cwd);
+        pendingStandaloneBuilderSessionsRef.current.delete(cwd);
       }
       harness.removePendingWorkspace(cwd);
       throw err;
@@ -2149,7 +2193,7 @@ export const App = (): JSX.Element => {
       await harness.closeSession(session.id).catch((rollbackError: unknown) => {
         console.error("[harness] attachment rollback failed:", rollbackError);
       });
-      pendingStandaloneBuilderRootsRef.current.delete(cwd);
+      pendingStandaloneBuilderSessionsRef.current.delete(cwd);
       harness.removePendingWorkspace(cwd);
       throw error;
     }
