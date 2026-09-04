@@ -118,6 +118,43 @@ describe("SubsessionCoordinatorStore", () => {
     expect(aggregate.bindings).toEqual(original.bindings);
   });
 
+  it("refreshes child context with an idempotent receipt and a new delivery epoch", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root);
+    const reserved = await store.reserveDelegations(
+      identity,
+      delegate(),
+      target,
+    );
+    const binding = reserved.bindings[0]!;
+    const request = {
+      schemaVersion: 1,
+      requestKey: "refresh-1",
+      operation: {
+        kind: "refresh-focused-context",
+        target: { kind: "child", delegationKey: "research" },
+        expectedContextEpoch: binding.contextEpoch,
+        expectedContextDigest: binding.contextDigest,
+        focus: null,
+      },
+    } as const;
+
+    const first = await store.refreshFocusedContext(identity, request);
+    const replay = await store.refreshFocusedContext(identity, request);
+
+    expect(first.replayed).toBe(false);
+    expect(replay.replayed).toBe(true);
+    expect(first.binding.contextEpoch).toBe(2);
+    expect(first.binding.deliveries).toHaveLength(2);
+    expect(replay.binding).toEqual(first.binding);
+    await expect(
+      store.refreshFocusedContext(identity, {
+        ...request,
+        operation: { ...request.operation, expectedContextEpoch: 7 },
+      }),
+    ).rejects.toMatchObject({ code: "request_key_reused" });
+  });
+
   it("reuses a compatible binding across request keys and reserves a batch atomically", async () => {
     const root = await fixture();
     const store = new SubsessionCoordinatorStore(root);

@@ -27,6 +27,7 @@ import {
   type SubsessionBindingRecord,
   type SubsessionClaim,
   type SubsessionKickoffDelivery,
+  type SubsessionProjectionDigest,
 } from "../shared/subsession-delegation.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
@@ -121,6 +122,12 @@ export type KickoffClaimResult =
       reason: "already-claimed" | "expired-requires-reconciliation" | "terminal";
       binding: SubsessionBindingRecord;
     }>;
+
+export type FocusedContextRefreshResult = Readonly<{
+  replayed: boolean;
+  requestDigest: CanonicalDelegationRequestDigest;
+  binding: SubsessionBindingRecord;
+}>;
 
 type ShallowMutable<T> = { -readonly [K in keyof T]: T[K] };
 type MutableClaim = ShallowMutable<SubsessionClaim>;
@@ -745,6 +752,175 @@ export class SubsessionCoordinatorStore {
 
   read(projectId: StudioProjectId): Promise<SubsessionCoordinatorAggregate> {
     return this.transact(projectId, async (aggregate) => ({ value: aggregate }));
+  }
+
+  readBinding(
+    identity: ProjectAgentSession,
+    selector: Readonly<
+      | { kind: "binding-id"; bindingId: SubsessionBindingId }
+      | { kind: "child"; delegationKey: string }
+      | { kind: "self" }
+    >,
+  ): Promise<SubsessionBindingRecord> {
+    return this.transact(identity.projectId, async (aggregate) => {
+      const binding =
+        selector.kind === "binding-id"
+          ? aggregate.bindings.find(
+              (entry) =>
+                entry.bindingId === selector.bindingId &&
+                entry.parentSessionId === identity.sessionId,
+            )
+          : selector.kind === "child"
+            ? aggregate.bindings.find(
+                (entry) =>
+                  entry.parentSessionId === identity.sessionId &&
+                  entry.delegationKey === selector.delegationKey,
+              )
+            : aggregate.bindings.find(
+                (entry) => entry.sessionId === identity.sessionId,
+              );
+      if (!binding)
+        throw new SubsessionCoordinatorStoreError("binding_not_found");
+      if (binding.projectId !== identity.projectId)
+        throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+      return { value: binding };
+    });
+  }
+
+  setFocusedContextState(
+    identity: ProjectAgentSession,
+    bindingId: SubsessionBindingId,
+    request: Readonly<{
+      expectedContextEpoch: number;
+      expectedContextDigest: string;
+      state: "none" | "current" | "stale";
+      projectionDigest: SubsessionProjectionDigest | null;
+    }>,
+  ): Promise<SubsessionBindingRecord> {
+    return this.transact(identity.projectId, async (aggregate) => {
+      const binding = this.scopedBinding(aggregate, identity, bindingId);
+      if (
+        binding.contextEpoch !== request.expectedContextEpoch ||
+        binding.contextDigest !== request.expectedContextDigest
+      ) {
+        throw new SubsessionCoordinatorStoreError("lifecycle_conflict");
+      }
+      if (
+        binding.contextState === request.state &&
+        binding.projectionDigest === request.projectionDigest
+      ) {
+        return { value: binding };
+      }
+      const now = this.now();
+      binding.contextState = request.state;
+      binding.projectionDigest = request.projectionDigest;
+      binding.updatedAt = now;
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = now;
+      return { value: binding, next: aggregate };
+    });
+  }
+
+  refreshFocusedContext(
+    identity: ProjectAgentSession,
+    rawRequest: unknown,
+  ): Promise<FocusedContextRefreshResult> {
+    const request = parseProjectSubsessionRequest(rawRequest, identity.projectId);
+    if (request.operation.kind !== "refresh-focused-context")
+      throw new SubsessionCoordinatorStoreError("malformed_state");
+    const operation = request.operation;
+    const targetSelector = operation.target;
+    const requestDigest = computeCanonicalDelegationRequestDigest(request);
+    return this.transact<FocusedContextRefreshResult>(identity.projectId, async (aggregate) => {
+      const sameRequest = (receipt: SubsessionCoordinatorRequestReceipt) =>
+        receipt.parentSessionId === identity.sessionId &&
+        receipt.requestKey === request.requestKey;
+      const previous =
+        aggregate.requestReceipts.find(sameRequest) ??
+        aggregate.requestTombstones.find(sameRequest);
+      if (previous) {
+        if (
+          previous.requestDigest !== requestDigest ||
+          previous.operation !== "refresh-focused-context" ||
+          previous.bindingIds.length !== 1
+        ) {
+          throw new SubsessionCoordinatorStoreError("request_key_reused");
+        }
+        const binding = aggregate.bindings.find(
+          ({ bindingId }) => bindingId === previous.bindingIds[0],
+        );
+        if (!binding)
+          throw new SubsessionCoordinatorStoreError("malformed_state");
+        return { value: { replayed: true, requestDigest, binding } };
+      }
+      if (
+        aggregate.requestReceipts.length >=
+        SUBSESSION_COORDINATOR_RECEIPT_LIMIT
+      ) {
+        throw new SubsessionCoordinatorStoreError("capacity_exceeded");
+      }
+      const target =
+        targetSelector.kind === "self"
+          ? aggregate.bindings.find(
+              ({ sessionId }) => sessionId === identity.sessionId,
+            )
+          : aggregate.bindings.find(
+              ({ parentSessionId, delegationKey }) =>
+                parentSessionId === identity.sessionId &&
+                delegationKey === targetSelector.delegationKey,
+            );
+      if (!target)
+        throw new SubsessionCoordinatorStoreError("binding_not_found");
+      if (
+        target.contextEpoch !== operation.expectedContextEpoch ||
+        target.contextDigest !== operation.expectedContextDigest
+      ) {
+        throw new SubsessionCoordinatorStoreError("lifecycle_conflict");
+      }
+      const currentDelivery = target.deliveries.find(
+        ({ contextEpoch }) => contextEpoch === target.contextEpoch,
+      );
+      if (currentDelivery?.state === "uncertain")
+        throw new SubsessionCoordinatorStoreError("claim_conflict");
+      if (target.deliveries.length >= SUBSESSION_COORDINATOR_DELIVERY_LIMIT)
+        throw new SubsessionCoordinatorStoreError("capacity_exceeded");
+
+      const now = this.now();
+      target.contextEpoch += 1;
+      target.contextDigest = computeSubsessionContextDigest(
+        operation.focus,
+      );
+      target.contextState =
+        operation.focus === null ? "none" : "refreshing";
+      target.currentFocus = operation.focus;
+      target.projectionDigest = null;
+      target.deliveries.push({
+        contextEpoch: target.contextEpoch,
+        deliveryId: `delivery_${this.id()}`,
+        inputId: `input_${this.id()}`,
+        eventWatermark: null,
+        state: "pending",
+        attempt: 0,
+        claim: null,
+        submittedAt: null,
+        acknowledgedAt: null,
+      });
+      target.updatedAt = now;
+      aggregate.requestReceipts.push({
+        parentSessionId: identity.sessionId,
+        requestKey: request.requestKey,
+        requestDigest,
+        operation: "refresh-focused-context",
+        bindingIds: [target.bindingId],
+        createdAt: now,
+      });
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = now;
+      return {
+        value: { replayed: false, requestDigest, binding: target },
+        next: aggregate,
+      };
+    });
   }
 
   async reserveDelegations(
