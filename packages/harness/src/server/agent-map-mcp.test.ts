@@ -101,6 +101,11 @@ describe("Agent Map Streamable HTTP MCP", () => {
     expect(nonStrict).toEqual([]);
     await expect(client.callTool({ name: "build_plan_read", arguments: { kind: "current" } }))
       .resolves.toMatchObject({ structuredContent: { plan: null, history: [] } });
+    await expect(client.callTool({ name: "build_plan_read", arguments: { kind: "exact" } }))
+      .resolves.toMatchObject({
+        isError: true,
+        structuredContent: { code: "malformed_input", recovery: "correct" },
+      });
     const validate = tools.tools.find(
       ({ name }) => name === "agent_map_validate",
     )!;

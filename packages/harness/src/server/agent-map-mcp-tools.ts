@@ -15,7 +15,6 @@ import {
   buildPlanApplyRequestSchema,
   buildPlanReadToolInputSchema,
   buildPlanRebaseRequestSchema,
-  parseBuildPlanReadRequest,
 } from "../core/build-plan-schema.js";
 
 /**
@@ -91,9 +90,12 @@ function errorResult(error: unknown) {
             : error instanceof BuildPlanServiceError
               ? { code: error.code, ...error.details,
                   recovery: error.code === "request_id_reused" || error.code === "request_id_expired"
-                    ? "new_request" : error.code.includes("conflict") || error.code.includes("source")
+                    ? "new_request" : error.code.includes("conflict") || error.code.includes("source") ||
+                        error.code === "plan_not_found"
                       ? "reread" : error.code.includes("validation") || error.code.includes("resolution")
-                        ? "correct" : "retry" }
+                          || error.code === "malformed_input"
+                        ? "correct" : error.code === "quota_exceeded"
+                          ? "manual_intervention" : "retry" }
               : error instanceof AgentMapWorkspaceStoreError
                 ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "reread" }
               : { code: "internal_error", recovery: "retry" };
@@ -226,7 +228,7 @@ export function createAgentMapToolServer(
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (request) => instrument("build_plan_read", async () => {
-      const result = await buildPlanService.read(identity, parseBuildPlanReadRequest(request));
+      const result = await buildPlanService.read(identity, request);
       return toolResult(result, result.plan ? `Build plan version ${result.plan.version}.` : "No build plan exists.");
     }),
   );

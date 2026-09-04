@@ -90,6 +90,7 @@ export interface BuildPlanValidationResult extends BuildPlanMutationResult {
 export interface BuildPlanServiceOptions {
   now?: () => Date;
   receiptRetentionLimit?: number;
+  versionHistoryLimit?: number;
   onOutcome?: (event: Readonly<{
     operation: "read" | "validate" | "apply" | "rebase";
     outcome: "succeeded" | "replayed" | "no_op" | "conflict" | "failed";
@@ -302,6 +303,7 @@ interface PreparedMutation {
 export class BuildPlanService {
   private readonly now: () => Date;
   private readonly receiptRetentionLimit: number;
+  private readonly versionHistoryLimit: number;
 
   constructor(private readonly store: BuildPlanStore, private readonly options: BuildPlanServiceOptions = {}) {
     this.now = options.now ?? (() => new Date());
@@ -309,6 +311,10 @@ export class BuildPlanService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > PROJECT_MUTATION_RECEIPT_LIMIT)
       throw new RangeError("invalid build-plan receipt retention limit");
     this.receiptRetentionLimit = limit;
+    const historyLimit = options.versionHistoryLimit ?? BUILD_PLAN_VERSION_HISTORY_LIMIT;
+    if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > BUILD_PLAN_VERSION_HISTORY_LIMIT)
+      throw new RangeError("invalid build-plan version history limit");
+    this.versionHistoryLimit = historyLimit;
   }
 
   async read(identity: ProjectAgentSession, input: unknown): Promise<BuildPlanReadResult> {
@@ -504,27 +510,46 @@ export class BuildPlanService {
       used.add(index);
     });
     const interim = validateProjectBuildPlanContent(content, targetGraph, activeBriefIds(aggregate));
+    const invalidAssignmentIds = new Set<string>();
+    const invalidRepositoryIntentIds = new Set<string>();
+    const invalidDependencyKeys = new Set<string>();
+    interim.filter(({ severity }) => severity === "error").forEach(({ path }) => {
+      const assignment = /^assignments\[(\d+)\]/u.exec(path);
+      if (assignment) {
+        const assignmentIndex = Number(assignment[1]);
+        const assignmentId = content.assignments[assignmentIndex]?.id;
+        if (assignmentId) invalidAssignmentIds.add(assignmentId);
+        const dependency = /^assignments\[\d+\]\.dependencies\[(\d+)\]$/u.exec(path);
+        const dependencyId = dependency
+          ? content.assignments[assignmentIndex]?.dependencies[Number(dependency[1])]?.id
+          : undefined;
+        if (assignmentId && dependencyId)
+          invalidDependencyKeys.add(`${assignmentId}:${dependencyId}`);
+      }
+      const repository = /^repositoryIntents\[(\d+)\]/u.exec(path);
+      const repositoryId = repository
+        ? content.repositoryIntents[Number(repository[1])]?.id
+        : undefined;
+      if (repositoryId) invalidRepositoryIntentIds.add(repositoryId);
+    });
     request.resolutions.forEach((resolution, index) => {
       if (used.has(index) || resolution.kind === "remap-node") return;
       if (resolution.kind === "remove-assignment") {
         const assignmentIndex = content.assignments.findIndex(({ id }) => id === resolution.assignmentId);
-        const relevant = interim.some(({ severity, path }) => severity === "error" && path.startsWith(`assignments[${assignmentIndex}]`));
-        if (assignmentIndex >= 0 && relevant) {
+        if (assignmentIndex >= 0 && invalidAssignmentIds.has(resolution.assignmentId)) {
           content = { ...content, assignments: content.assignments.filter((_, item) => item !== assignmentIndex) };
           used.add(index);
         }
       } else if (resolution.kind === "remove-repository-intent") {
         const intentIndex = content.repositoryIntents.findIndex(({ id }) => id === resolution.repositoryIntentId);
-        const relevant = interim.some(({ severity, path }) => severity === "error" && path.startsWith(`repositoryIntents[${intentIndex}]`));
-        if (intentIndex >= 0 && relevant) {
+        if (intentIndex >= 0 && invalidRepositoryIntentIds.has(resolution.repositoryIntentId)) {
           content = { ...content, repositoryIntents: content.repositoryIntents.filter((_, item) => item !== intentIndex) };
           used.add(index);
         }
       } else {
         const assignmentIndex = content.assignments.findIndex(({ id }) => id === resolution.assignmentId);
         const dependencyIndex = content.assignments[assignmentIndex]?.dependencies.findIndex(({ id }) => id === resolution.dependencyId) ?? -1;
-        const relevant = interim.some(({ severity, path }) => severity === "error" &&
-          path === `assignments[${assignmentIndex}].dependencies[${dependencyIndex}]`);
+        const relevant = invalidDependencyKeys.has(`${resolution.assignmentId}:${resolution.dependencyId}`);
         if (assignmentIndex >= 0 && dependencyIndex >= 0 && relevant) {
           content = { ...content, assignments: content.assignments.map((assignment, item) => item === assignmentIndex
             ? { ...assignment, dependencies: assignment.dependencies.filter((_, dependencyItem) => dependencyItem !== dependencyIndex) }
@@ -565,7 +590,7 @@ export class BuildPlanService {
     operation: "build_plan_apply" | "build_plan_rebase",
     prepared: PreparedMutation,
   ): Promise<{ value: BuildPlanMutationResult; next: ProjectPlanningAggregateV2 }> {
-    if (!prepared.noOp && aggregate.buildPlanVersions.length >= BUILD_PLAN_VERSION_HISTORY_LIMIT)
+    if (!prepared.noOp && aggregate.buildPlanVersions.length >= this.versionHistoryLimit)
       throw new BuildPlanServiceError("quota_exceeded");
     const next = structuredClone(aggregate);
     if (!prepared.noOp) {
