@@ -172,3 +172,18 @@ export { VaultHttpError } from "./vault/index.js";
 export * as keys from "./keys/index.js";
 export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
+
+export * as google from "./google/index.js";
+export type {
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  GmailAttachment,
+  LiveCredential,
+  SendEmailArgs,
+  SendEmailResult,
+} from "./google/index.js";
+
+export * as github from "./github/index.js";
+export type { ListReposArgs, GitHubRepo } from "./github/index.js";
