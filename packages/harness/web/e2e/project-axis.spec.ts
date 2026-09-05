@@ -164,7 +164,7 @@ test.describe("ordering", () => {
   });
 });
 
-test.describe("the plan-first project children", () => {
+test.describe("durable Studio project navigation", () => {
   test("the project plus starts a coding session at its root without creating an agent", async ({
     page,
   }) => {
@@ -199,14 +199,12 @@ test.describe("the plan-first project children", () => {
       "project-menu-dashboard-keeper",
     ]);
 
-    // Prove the shortcut also works from map altitude: the new generic session
-    // becomes the visible workbench, while the planner remains resumable from
-    // Plan Agents and no scaffold request is made.
-    await group.getByTestId("agent-map-select").click();
-    await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    // The ordinary project action also works while its read-only map is open.
+    // A successful create selects the exact new conversation and no scaffold
+    // operation is smuggled into that session action.
+    const map = group.getByTestId("project-select-dashboard-keeper");
+    await map.click();
+    await expect(map).toHaveAttribute("aria-pressed", "true");
     await start.click();
     await expect
       .poll(() =>
@@ -232,10 +230,7 @@ test.describe("the plan-first project children", () => {
           },
         },
       });
-    await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    await expect(map).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByTestId("session-context-title")).toContainText(
       "dashboard-keeper",
     );
@@ -252,78 +247,87 @@ test.describe("the plan-first project children", () => {
     ).not.toContain("scaffold:/Users/demo/dashboard-keeper");
   });
 
-  test("a failed project session keeps Plan Agents selected", async ({
+  test("a failed project session keeps the map and active conversation intact", async ({
     page,
   }) => {
     const group = page.getByTestId("workspace-group-dashboard-keeper");
-    const map = group.getByTestId("agent-map-select");
+    const map = group.getByTestId("project-select-dashboard-keeper");
+    const start = group.getByTestId("project-start-session-dashboard-keeper");
+
+    // Establish a real conversation in this project first. Cross-project map
+    // navigation deliberately clears an unrelated active session, so it cannot
+    // supply the conversation whose preservation this scenario verifies. Open
+    // the map first so its true -> false transition is also the completion
+    // signal for the asynchronous successful create.
+    await map.click();
+    await expect(map).toHaveAttribute("aria-pressed", "true");
+    await start.click();
+    await expect(map).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByTestId("session-context-title")).toContainText(
+      "dashboard-keeper",
+    );
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await map.click();
     await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".harness-terminal")).toBeVisible();
+    const activeBefore = await page
+      .getByTestId("session-context")
+      .getAttribute("data-session-id");
     await page.evaluate(() => {
       (
         window as unknown as { __MOCK_CREATE_SESSION_FAIL_ONCE__?: boolean }
       ).__MOCK_CREATE_SESSION_FAIL_ONCE__ = true;
     });
 
-    await group.getByTestId("project-start-session-dashboard-keeper").click();
+    await start.click();
     await expect(page.getByTestId("toast")).toContainText(
       "mock: couldn't create session",
     );
     await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      activeBefore ?? "",
+    );
   });
 
-  test("a root agent is a separate target below the pinned Agent Map", async ({
+  test("the project label and its disclosure are separate from the root agent", async ({
     page,
   }) => {
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const project = group.getByTestId("project-row-dashboard-keeper");
-    const map = group.getByTestId("agent-map-row");
+    const map = group.getByTestId("project-select-dashboard-keeper");
     const agent = group.getByTestId("workflow-dashboard-keeper");
     await expect(project).toBeVisible();
-    await expect(map).toBeVisible();
-    await expect(map.getByTestId("agent-map-select")).toHaveText("Plan Agents");
-    await expect(map.getByTestId("agent-map-select")).toHaveAttribute(
-      "data-tooltip",
-      "Open Plan Agents",
+    await expect(group.getByTestId("agent-map-row")).toHaveCount(0);
+    await expect(map).toHaveAccessibleName(
+      "Open Agent Map for dashboard-keeper",
     );
     await expect(agent).toBeVisible();
-    await expect(group.locator(":scope > *")).toHaveCount(3);
+    await expect(group.locator(":scope > *")).toHaveCount(2);
 
-    // The project label is disclosure-only; the two children remain distinct.
-    await page.getByTestId("project-select-dashboard-keeper").click();
-    await expect(map).toBeHidden();
-    await expect(agent).toBeHidden();
-    await page.getByTestId("project-select-dashboard-keeper").click();
-    await expect(map).toBeVisible();
-
-    await group.getByTestId("agent-map-select").click();
-    await expect(map).toHaveClass(/is-selected/);
-    await expect(map.getByTestId("agent-map-select")).toHaveAttribute(
-      "data-tooltip",
-      "Plan Agents selected",
-    );
+    // The label selects the map and does not fold the root-agent child.
+    await map.click();
+    await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+    await expect(agent).toBeVisible();
 
-    // A selected child expands on selection, but an intentional disclosure
-    // click stays collapsed until the user expands it again.
-    await page.getByTestId("project-select-dashboard-keeper").click();
-    await expect(map).toBeHidden();
-    await expect(
-      page.getByTestId("project-disclosure-dashboard-keeper"),
-    ).toHaveAttribute("aria-expanded", "false");
-    await page.getByTestId("project-select-dashboard-keeper").click();
-    await expect(map).toBeVisible();
-    await expect(map).toHaveClass(/is-selected/);
+    // Only the chevron owns collapse; the selected map remains mounted.
+    const disclosure = page.getByTestId("project-disclosure-dashboard-keeper");
+    await disclosure.click();
+    await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    await expect(agent).toBeHidden();
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+    await map.click();
+    await expect(agent).toBeHidden();
+    await disclosure.click();
+    await expect(agent).toBeVisible();
 
-    await agent.locator("button").click();
+    await agent.locator(".workflow-item-trigger").click();
     await expect(agent).toHaveClass(/is-focused/);
-    // Every durable project has at least the Agent Map child to disclose.
-    await expect(
-      page.getByTestId("project-disclosure-dashboard-keeper"),
-    ).toHaveCount(1);
-    await expect(page.getByTestId("project-disclosure-polsia")).toHaveCount(1);
+    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+    await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
+    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
   });
 
   test("the project row carries no deploy glyph; the agent child does", async ({
@@ -340,7 +344,10 @@ test.describe("the plan-first project children", () => {
         .getByTestId("workflow-dashboard-keeper")
         .locator(".workflow-status"),
     ).toHaveCount(1);
-    // The rail also offers no per-project `+`.
+    await expect(
+      group.getByTestId("project-start-session-dashboard-keeper"),
+    ).toBeVisible();
+    // The removed legacy shortcut is not a second project-level `+`.
     await expect(
       page.locator('.rail-list [data-testid^="workspace-new-session-"]'),
     ).toHaveCount(0);
@@ -351,14 +358,14 @@ test.describe("the plan-first project children", () => {
   }) => {
     const map = page
       .getByTestId("workspace-group-dashboard-keeper")
-      .getByTestId("agent-map-row");
-    await map.getByTestId("agent-map-select").click();
-    await expect(map).toHaveClass(/is-selected/);
+      .getByTestId("project-select-dashboard-keeper");
+    await map.click();
+    await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-empty")).toBeVisible();
 
     await page.getByTestId("rail-templates").click();
     await expect(page.getByTestId("templates-panel")).toBeVisible();
-    await expect(map).not.toHaveClass(/is-selected/);
+    await expect(map).toHaveAttribute("aria-pressed", "false");
   });
 });
 
