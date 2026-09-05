@@ -185,7 +185,7 @@ describe("server instructions", () => {
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "9bfbdecb99ede92bd53c20d77f5ccd380260e06ed4d2b71400c4b7e20c5a674d",
+      "31da1821424850487a975153d3b9da38c2bdc5e3d0a9d7f2c76e055600a9679e",
     );
   });
 });
