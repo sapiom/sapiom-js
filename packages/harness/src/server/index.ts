@@ -1,3 +1,5 @@
+import { projectRoots, projectSessionRoot } from "../shared/project-roots.js";
+import { samePath } from "../shared/paths.js";
 /**
  * Harness server — integration point for every workstream.
  *
@@ -1210,6 +1212,113 @@ export const startServer = async (
     ...(await loadSettings(statePaths.settings)).recentDirs,
     ...sessionManager.list().map((session) => session.cwd),
   ]);
+  const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
+    async () => {
+      const settings = await loadSettings(statePaths.settings);
+      const durableProjects = await studioProjectCatalog.list();
+      const durableIdentities = (
+        await Promise.all(
+          durableProjects.map((project) =>
+            studioProjectCatalog.resolveIdentity(project.projectId),
+          ),
+        )
+      ).filter((project) => project !== null);
+      const durableRoots = durableIdentities.flatMap((project) =>
+        project.rootBindings.map((binding) => binding.localRootRef),
+      );
+      const durableRootCandidates = durableIdentities.flatMap((project) =>
+        project.rootBindings
+          .filter((binding) => binding.status === "active")
+          .map((binding) => ({
+            projectId: project.projectId,
+            cwd: binding.localRootRef,
+          })),
+      );
+      const retainedProjectSessionRoots = new Set<string>();
+      // Pending launches contribute their trusted PROJECT root just like live
+      // sessions, not a descendant cwd that would mint a competing project.
+      const pendingCwds: string[] = [];
+      const sessions = sessionManager
+        ? sessionManager.list().flatMap((session) => {
+            if (!session.agentMapIdentity) {
+              return [
+                {
+                  cwd: session.cwd,
+                  createdAt: session.lastActiveAt,
+                  status: session.status,
+                },
+              ];
+            }
+            const root = projectSessionRoot(
+              {
+                cwd: session.cwd,
+                projectId: session.agentMapIdentity.projectId,
+              },
+              durableRootCandidates,
+            );
+            // A neutral project session contributes its trusted project root,
+            // never its descendant cwd. If its binding is stale, omit it from
+            // discovery rather than minting a replacement authority from the
+            // untrusted path.
+            if (root) {
+              retainedProjectSessionRoots.add(root);
+              return [
+                {
+                  cwd: root,
+                  createdAt: session.lastActiveAt,
+                  status: session.status,
+                },
+              ];
+            }
+            return [];
+          })
+        : [];
+      const candidates = [
+        ...pendingCwds,
+        ...settings.recentDirs,
+        ...sessions.map((session) => session.cwd),
+      ];
+      // Root identity must be final before launch, even when the asynchronous
+      // workflow scan has not populated its cache yet. Probe only the candidate
+      // roots themselves; deeper discovery remains the registry's job.
+      const directlyMarked = (
+        await Promise.all(
+          candidates.map(async (candidate) => ({
+            candidate,
+            marker: await inspectAgentProjectMarker(candidate),
+          })),
+        )
+      )
+        .filter(({ marker }) => marker.status === "valid")
+        .map(({ candidate }) => candidate);
+      const visibleRoots = projectRoots({
+        recentDirs: settings.recentDirs,
+        sessions,
+        pendingCwds,
+        pinnedRoots: durableRoots,
+        agentPaths: [
+          ...workflowsCache.map((workflow) => workflow.path),
+          ...directlyMarked,
+        ],
+        sort: "recent",
+      });
+      // MRU/rail visibility is not an authority revocation mechanism. An
+      // existing project session must remain resumable after its recent-dir
+      // entry is evicted, including an otherwise empty project whose session
+      // cwd is below the durable root. The browser may still hide an explicitly
+      // removed project through its local closed-project projection.
+      return [
+        ...visibleRoots,
+        ...[...retainedProjectSessionRoots].filter(
+          (root) =>
+            !visibleRoots.some((visible) =>
+              samePath(canonicalGraphPath(visible), canonicalGraphPath(root)),
+            ),
+        ),
+      ];
+    },
+  );
+
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
@@ -2394,7 +2503,13 @@ export const startServer = async (
       }
     }
     try {
-      return (await studioProjectCatalog.reconcile(scopes)).workspaceScopes;
+      const studioScopes = await studioWorkspaceScopeCatalog.list();
+      const reconciled = (await studioProjectCatalog.reconcile(studioScopes)).workspaceScopes;
+      const byRoot = new Map(reconciled.map((scope) => [resolve(scope.cwd), scope]));
+      for (const scope of scopes) {
+        if (!byRoot.has(resolve(scope.cwd))) byRoot.set(resolve(scope.cwd), scope);
+      }
+      return [...byRoot.values()].sort((left, right) => left.cwd.localeCompare(right.cwd));
     } catch {
       // Agent Map is additive in E1. A bad/unavailable new catalog cannot
       // strand the legacy rail or System Graph during coexistence.
@@ -2780,7 +2895,7 @@ export const startServer = async (
   const annotateStudioSelections = async (
     workflows: readonly RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
-    const scopes = await workspaceScopeCatalog.list();
+    const scopes = await studioWorkspaceScopeCatalog.list();
     const reconciled = await studioProjectCatalog.reconcile(scopes);
     const projects = reconciled.projects;
     const annotations = new Map<
@@ -2990,7 +3105,7 @@ export const startServer = async (
       currentUserId: () => localPlanningPrincipal(planningUserId, machineId),
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
-      listWorkspaceScopes: () => workspaceScopeCatalog.list(),
+      listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
       planningSessions,
       plannerGreeting,
     }),
