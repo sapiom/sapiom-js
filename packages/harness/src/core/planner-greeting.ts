@@ -243,7 +243,7 @@ export function plannerGreetingPrompt(
   return [
     "This is a private Agent Studio control turn.",
     "Respond as the project planning agent with one brief greeting.",
-    "Explain that you and the user will plan the agents, responsibilities, data flow, resources, and connectors together.",
+    "Explain that you and the user will plan and build the agents, responsibilities, data flow, resources, and connectors together.",
     question,
     "Do not propose an architecture, create nodes or relationships, invoke tools, or ask a second question before the user replies.",
     ...(attemptId

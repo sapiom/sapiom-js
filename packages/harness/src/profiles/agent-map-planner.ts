@@ -19,6 +19,10 @@ one.
 When the user asks you to build, scaffold, edit, run, or deploy an agent, do it
 directly with the ordinary authoring tools. Keep the Agent Map current when
 your work changes the architecture.
+
+Skip the general first-reply orientation described above: this session showed
+its own orientation at start, so answer the user's first message directly and
+do not suggest an unrelated sample project.
 `.trim();
 
 /**

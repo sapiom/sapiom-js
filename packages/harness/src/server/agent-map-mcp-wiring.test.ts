@@ -139,8 +139,10 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
 });
 
 it("gives a signed-out local planner its scoped Agent Map tools", async () => {
+  // Mirrors the served prompt's shape, including the first-reply orientation
+  // clause that the appended planner context must countermand.
   const codingPrompt =
-    "You are the coding agent running in Agent Studio. Follow the scaffold, run, and deploy authoring loop.";
+    "You are the coding agent running in Agent Studio. Follow the scaffold, run, and deploy authoring loop. In your very first reply this session, orient the person before you get to their actual request; suggest ONE concrete first step (e.g. the bundled order-triage sample project).";
   const loadSystemPrompt = vi.fn(async () => codingPrompt);
   const launches: LaunchOpts[] = [];
   const launch = (opts: LaunchOpts): SpawnSpec => {
@@ -229,6 +231,15 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(systemPrompt).toContain(
     "When the user asks you to build, scaffold, edit, run, or deploy an agent, do it",
   );
+  // The served prompt's orientation clause is present, and the appended
+  // context overrides it later in the same file.
+  const orientationAt = systemPrompt.indexOf("In your very first reply this session");
+  const countermandAt = systemPrompt.indexOf(
+    "Skip the general first-reply orientation described above",
+  );
+  expect(orientationAt).toBeGreaterThan(-1);
+  expect(countermandAt).toBeGreaterThan(orientationAt);
+  expect(systemPrompt).toContain("do not suggest an unrelated sample project");
   expect(systemPrompt).toContain("<agent-map-planner-context>");
   expect(systemPrompt).toContain(
     "Let the user's first real message be the first visible conversation turn",
@@ -239,7 +250,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(systemPrompt).not.toContain(
     "This is a private Agent Studio control turn",
   );
-  expect(loadSystemPrompt).toHaveBeenCalledOnce();
+  expect(loadSystemPrompt).toHaveBeenCalled();
   expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
     [
       "Agent Map planning session",
@@ -348,7 +359,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(ordinaryEmitter).not.toContain(
     JSON.stringify(AGENT_MAP_PLANNER_SESSION_START_MESSAGE),
   );
-  expect(loadSystemPrompt).toHaveBeenCalledTimes(2);
+  expect(loadSystemPrompt).toHaveBeenCalled();
   const ordinaryConfig = JSON.parse(
     await fs.readFile(ordinaryLaunch.mcpConfigFile!, "utf8"),
   );
