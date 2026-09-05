@@ -176,8 +176,9 @@ body {
    own Render-failed card (short claim, one-line reason, actions, full reason
    behind Details) as a transparent layer directly over this document, so the
    document's copy of the reason drew straight through it (SAP-3199). Embedded,
-   the card is the one message and this prose steps aside; opened standalone
-   there is no card, so it stays and is the only message. */
+   the card is the one message and this prose steps aside; opened standalone,
+   or embedded in a frame that never took the message over, it stays and is the
+   only message. See EMBED_SCRIPT for how the flag is withdrawn in that case. */
 :root[data-canvas-embedded] .canvas-render-error-note { display: none; }
 .canvas-interconnections { display: flex; flex-direction: column; gap: 12px; }
 .canvas-panel-title { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--canvas-text-dim); }
@@ -268,17 +269,34 @@ template { display: none; }
 }
 
 /** Marks the document as embedded so the stylesheet can stand down the chrome
- *  the SPA already draws around the iframe. Its own head script, not a branch
- *  inside the run-state bundle, so a parse error in that much larger script
- *  can never leave the flag unset, and in the head, so the flag is on the
- *  root element before the body paints and nothing flashes.
+ *  the SPA already draws around the iframe. In the head, so the flag is on the
+ *  root element before the body paints and the prose never flashes.
+ *
+ *  The flag is OPTIMISTIC, and withdrawn if it turns out to be wrong. The prose
+ *  may only stand down if something stands up in its place, and the thing that
+ *  stands up is the SPA's card, which only appears if `bootCanvasError` posts
+ *  the reason to the parent. That runs from the much larger run-state script,
+ *  which can fail to post (a hand-authored document with a malformed
+ *  `#sapiom-render-error` payload, or no payload at all) or abort as a whole
+ *  before it is ever called. So `bootCanvasError` marks a successful post, and
+ *  at load, with the DOM and every deferred boot done, an unmarked document
+ *  takes its flag back and shows its own prose. Hiding it in that case would
+ *  leave an empty board and no message anywhere, which is worse than the
+ *  overlap SAP-3199 fixed.
  *
  *  `window.parent` is readable from a sandboxed frame and comparing the two
  *  references is not a cross-origin access, so this is safe under the
  *  `allow-scripts`-only sandbox the SPA loads the board with. */
 const EMBED_SCRIPT = `
 (function () {
-  if (window.parent !== window) document.documentElement.setAttribute("data-canvas-embedded", "");
+  if (window.parent === window) return;
+  var root = document.documentElement;
+  root.setAttribute("data-canvas-embedded", "");
+  function withdrawUnlessTaken() {
+    if (!root.hasAttribute("data-canvas-error-posted")) root.removeAttribute("data-canvas-embedded");
+  }
+  if (document.readyState === "complete") withdrawUnlessTaken();
+  else window.addEventListener("load", withdrawUnlessTaken);
 })();
 `.trim();
 

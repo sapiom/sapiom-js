@@ -198,8 +198,9 @@ test("an embedded failed render shows one error message, not two drawn through e
   // children inside it keep their full-size rects even though the parent clips
   // every pixel of them away. Asking the document what is actually at the
   // element's centre point is the question a reader asks.
-  const painted = await frame.locator("body").evaluate((body) => {
-    const shown: string[] = [];
+  const { painted, offscreen } = await frame.locator("body").evaluate((body) => {
+    const painted: string[] = [];
+    const offscreen: string[] = [];
     for (const el of Array.from(body.querySelectorAll<HTMLElement>("p, h1, span, div"))) {
       const own = Array.from(el.childNodes)
         .filter((n) => n.nodeType === Node.TEXT_NODE)
@@ -208,13 +209,52 @@ test("an embedded failed render shows one error message, not two drawn through e
         .trim();
       if (!own) continue;
       const box = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-      if (hit && (hit === el || el.contains(hit))) shown.push(own);
+      if (box.width === 0 && box.height === 0) continue; // display:none paints nothing
+      // A box wholly outside the frame is reported separately rather than
+      // counted clear: `elementFromPoint` answers null out there, so a second
+      // message below the fold would otherwise pass as "not painted".
+      if (box.right <= 0 || box.bottom <= 0 || box.left >= innerWidth || box.top >= innerHeight) {
+        offscreen.push(own);
+        continue;
+      }
+      // Probe inside the element AND inside the frame, for a box that straddles
+      // the edge.
+      const x = Math.min(Math.max(box.left + box.width / 2, 1), innerWidth - 1);
+      const y = Math.min(Math.max(box.top + box.height / 2, 1), innerHeight - 1);
+      const hit = document.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) painted.push(own);
     }
-    return shown;
+    return { painted, offscreen };
   });
   expect(painted).toEqual([]);
+  expect(offscreen).toEqual([]);
   expect(errors).toEqual([]);
+});
+
+test("an embedded failed render whose payload will not parse keeps its own prose", async ({
+  page,
+}) => {
+  const { url, file } = await renderToFileUrl(NO_DEFINITION, "no-definition");
+
+  // Corrupt the payload the boot script reads. A hand-authored document can
+  // carry a malformed `#sapiom-render-error` block, and the renderer's own
+  // classes are a documented contract for those. Nothing posts, so the SPA
+  // shows no card, so the document's prose has to come back: hiding it here
+  // would leave an empty board and no message at all, which is worse than the
+  // overlap this pair of specs exists to prevent.
+  const html = await fs.readFile(file, "utf8");
+  const corrupt = html.replace(
+    /(<script type="application\/json" id="sapiom-render-error">)[^<]*/,
+    "$1{ not json",
+  );
+  expect(corrupt).not.toBe(html);
+  await fs.writeFile(file, corrupt, "utf8");
+
+  const frame = await embedInParentShell(page, url, file);
+
+  await expect(frame.getByText(REASON_TEXT)).toBeVisible();
+  const posted = await page.evaluate(() => (window as unknown as { __posted: unknown[] }).__posted.length);
+  expect(posted).toBe(0);
 });
 
 test("a failed render opened on its own keeps its prose as the only message", async ({ page }) => {
