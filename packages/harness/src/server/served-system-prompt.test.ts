@@ -84,7 +84,7 @@ describe("served system prompt reaches the launched session", () => {
       bootToken: "test-token",
       telemetryOptIn: false,
       autoCreateSession: false,
-      adapters: { "claude-code": fakeAdapter("claude-code") },
+      adapters: { "claude-code": fakeAdapter("claude-code"), codex: fakeAdapter("codex") },
       stateRoot: dir,
       loadSystemPrompt,
     });
@@ -109,6 +109,23 @@ describe("served system prompt reaches the launched session", () => {
     expect(prompt).toContain(SERVED_PROMPT);
     expect(prompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
   });
+
+  it.each<HarnessKind>(["claude-code", "codex"])(
+    "upgrades the known stale served orientation at the %s launch boundary",
+    async (harness) => {
+      const legacy = (await readFile(new URL("../profiles/fixtures/legacy-system-prompt.md", import.meta.url), "utf8")).trim();
+      server = await boot(async () => legacy);
+      const session = await server.sessionManager.create({ cwd, harness });
+      const prompt = await systemPromptFile(session.id);
+      expect(prompt).toContain(DEFAULT_SYSTEM_PROMPT);
+      expect(prompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
+      expect(prompt).not.toContain("two Sapiom MCP servers");
+      expect(prompt).not.toContain("then stop");
+      expect(prompt).toContain("ctx.sapiom.llm.run");
+      expect(prompt).toContain("sapiom_dev_agents_*");
+      expect(prompt).toContain("build_plan_rebase");
+    },
+  );
 
   it("adds an optional focused overlay after the unchanged common project prompt", async () => {
     server = await boot(async () => SERVED_PROMPT);

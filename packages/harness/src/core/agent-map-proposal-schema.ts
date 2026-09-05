@@ -54,7 +54,7 @@ const stripUndefinedProperties = <T extends Record<string, unknown>>(
 export const nodeRefSchema = z.union([
   z.object({ nodeId: planNodeIdSchema }).strict(),
   z.object({ draftRef: draftRefSchema }).strict(),
-]);
+]).describe("Use nodeId from a prior read/propose for existing nodes; draftRef points to a node added in this same atomic batch.");
 
 const nodeChangesSchema = z
   .object({
@@ -79,14 +79,14 @@ const relationshipChangesSchema = z
 const addNodeSchema = z
   .object({
     kind: z.literal("add-node"),
-    draftRef: draftRefSchema,
+    draftRef: draftRefSchema.describe("Caller-chosen local name for this new node; use the returned allocated node ID in later batches."),
     node: z
       .object({
-        kind: z.enum(PLAN_NODE_KINDS),
+        kind: z.enum(PLAN_NODE_KINDS).describe("Architectural role: deployable agent, meaningful subagent, shared resource, connector, or input/output artifact. Not every internal function or file is a node."),
         name: boundedText(160),
         purpose: boundedText(2_000),
-        ownerAgent: nodeRefSchema.nullable(),
-        contractRefs: contractRefsSchema,
+        ownerAgent: nodeRefSchema.nullable().describe("Semantic owning agent when applicable; this does not grant coding authority or bind a runtime session."),
+        contractRefs: contractRefsSchema.describe("Relevant input/output/interface contracts; [] when none are established."),
       })
       .strict(),
   })
@@ -113,7 +113,7 @@ const addRelationshipSchema = z
         from: nodeRefSchema,
         to: nodeRefSchema,
         kind: z.enum(RELATIONSHIP_KINDS),
-        executionMode: z.enum(EXECUTION_MODES).nullable(),
+        executionMode: z.enum(EXECUTION_MODES).nullable().describe("Actual sequencing when applicable; use human-triggered for a manual handoff, not an invented automatic pipeline. null for non-execution relationships."),
         contractRef: contractRefSchema.nullable(),
         description: boundedText(2_000, true),
       })

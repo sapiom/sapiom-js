@@ -46,16 +46,16 @@ const batchSchema = z
     ),
     proposalId: preserveInvalidForService(
       proposalBatchRequestSchema.shape.proposalId,
-    ),
+    ).describe("Copy proposal.id from agent_map_read; null only when its proposal is null."),
     expectedVersion: preserveInvalidForService(
       proposalBatchRequestSchema.shape.expectedVersion,
-    ),
+    ).describe("Copy proposal.version from the read; 0 only for an empty proposal. Re-read after a conflict."),
     requestId: preserveInvalidForService(
       proposalBatchRequestSchema.shape.requestId,
-    ),
+    ).describe("Caller-chosen retry identity. Reuse for an identical batch; use a fresh ID when the batch changes."),
     operations: preserveInvalidForService(
       proposalBatchRequestSchema.shape.operations,
-    ),
+    ).describe("Complete atomic batch. New nodes use draftRef; existing nodes use IDs from the read. Preserve unrelated architecture."),
   })
   .strict();
 
@@ -84,18 +84,18 @@ const delegationFocusSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("map-node"), map: mapVersionRefSchema,
     plan: planVersionRefSchema.nullable(), nodeId: versionId }).strict(),
   z.object({ kind: z.literal("brief"), brief: briefVersionRefSchema }).strict(),
-]);
+]).describe("Optional exact context, not permission. Unlike build_plan_* input refs, these refs include projectId; copy real returned IDs/digests.");
 const delegationKey = z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/u);
 const projectSubsessionRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestKey: delegationKey,
+  requestKey: delegationKey.describe("Stable caller-owned key for identical retries of this operation; changed operation content needs a fresh key."),
   operation: z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("delegate"),
       delegations: z.array(z.object({
-        delegationKey,
-        outcome: z.string().min(1).max(4_096),
-        kickoffContext: z.string().min(1).max(16_384).optional(),
+        delegationKey: delegationKey.describe("Stable child-task identity within this parent. Identical content reuses its session; different work needs a new key."),
+        outcome: z.string().min(1).max(4_096).describe("Concrete implementation outcome; the child is an ordinary writable coding session."),
+        kickoffContext: z.string().min(1).max(16_384).optional().describe("Owned files, boundaries, non-goals, written deliverables, and verification. Children share the parent's cwd, not isolated worktrees."),
         focus: delegationFocusSchema.optional(),
       }).strict()).min(1).max(16),
     }).strict(),
@@ -105,17 +105,17 @@ const projectSubsessionRequestSchema = z.object({
         z.object({ kind: z.literal("self") }).strict(),
         z.object({ kind: z.literal("child"), delegationKey }).strict(),
       ]),
-      expectedContextEpoch: z.number().int().positive(),
-      expectedContextDigest: digest,
+      expectedContextEpoch: z.number().int().positive().describe("Exact epoch from the current focused-context result; never guess."),
+      expectedContextDigest: digest.describe("Exact digest paired with expectedContextEpoch."),
       focus: delegationFocusSchema.nullable(),
     }).strict(),
     z.object({
       kind: z.literal("release"),
-      delegationKeys: z.array(delegationKey).min(1).max(16),
+      delegationKeys: z.array(delegationKey).min(1).max(16).describe("Only this parent's owned children. Release closes their real sessions; do not release useful active work."),
     }).strict(),
     z.object({
       kind: z.literal("release-dormant"),
-      limit: z.number().int().min(1).max(16),
+      limit: z.number().int().min(1).max(16).describe("Maximum exited/failed coordinator bindings to evict project-wide. Preserves conversation history but forfeits automatic resume identity."),
     }).strict(),
   ]),
 }).strict();
@@ -250,7 +250,7 @@ export function createAgentMapToolServer(
     "agent_map_read",
     {
       description:
-        "Read the current confirmed workspace and shared Agent Map proposal.",
+        "Read shared project architecture before creating or changing agents, responsibilities, contracts, resources, artifacts, or data flow. Returns workspace and proposal (null if empty), including stable IDs and the numeric proposal version for validate/propose. This is not the automatic per-agent Canvas. For exact map/plan digests use build_plan_read({kind:'current'}).",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -273,7 +273,7 @@ export function createAgentMapToolServer(
     "agent_map_validate",
     {
       description:
-        "Validate a complete proposal batch without mutating shared state or allocating IDs.",
+        "Preview a complete Agent Map change batch without persisting it or allocating IDs. First agent_map_read; use its proposal ID/version, or null/0 when empty. Use draftRef for new nodes and their relationships. Correct reported issues, then pass the same valid batch to agent_map_propose. Validation alone never updates the visible map.",
       inputSchema: batchSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -291,7 +291,7 @@ export function createAgentMapToolServer(
     "agent_map_propose",
     {
       description:
-        "Atomically apply an idempotent batch to the shared Proposed Agent Map.",
+        "Persist an atomic, idempotent Agent Map batch and update the shared visible graph; this is not an approval request or code execution. Read then validate first. Reuse the request ID only for an identical retry; re-read/reconcile stale versions without overwriting unrelated work. Record meaningful artifact/contract changes, not just new agents, and confirm persisted state with agent_map_read.",
       inputSchema: batchSchema,
       annotations: {
         readOnlyHint: false,
@@ -312,7 +312,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "build_plan_read",
     {
-      description: "Read the current shared build plan or one exact immutable historical version.",
+      description: "Read with {kind:'current'} for the shared build plan (possibly null), current exact map/plan references, history, and diagnostics. Use these IDs/digests for plan authoring; agent_map_read does not provide map digests. Read {kind:'exact',planId,versionId,semanticDigest} for one immutable historical plan. An absent plan does not block coding or delegation.",
       inputSchema: buildPlanReadToolInputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -325,7 +325,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "build_plan_validate",
     {
-      description: "Preview and validate an exact-source build plan replacement without changing durable state.",
+      description: "Validate a complete build-plan replacement without changing durable state. Read current references first; a map must exist. Supply all content collections, preserve unrelated intent, and use clientRef for new plan-owned IDs. expectedPlan is null only for the first plan. Rebase an existing plan after any map-version change, then validate and apply the identical request.",
       inputSchema: buildPlanApplyRequestSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -338,7 +338,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "build_plan_apply",
     {
-      description: "Atomically append an idempotent shared build plan version using exact map and plan expectations.",
+      description: "Persist a validated complete build-plan replacement for substantial coordinated work, not every small edit. Use exact references from build_plan_read; replacements must preserve unrelated content. Identical request-ID retries are idempotent. The plan commits before best-effort canonical briefRefresh: inspect that separate result and retry failed refresh independently. This does not launch sessions or execute code.",
       inputSchema: buildPlanApplyRequestSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -359,7 +359,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "build_plan_rebase",
     {
-      description: "Rebase the exact current build plan to the exact current map with explicit remap or removal resolutions.",
+      description: "Rebind the current build plan after any map-version change before further plan edits. Read current state: fromMap is plan.map, toMap is current.map, expectedPlan is current.buildPlan; input refs omit projectId. Use resolutions:[] if all references remain valid, otherwise explicitly remap/remove invalidated references without silently dropping intent. Commits before best-effort canonical brief refresh.",
       inputSchema: buildPlanRebaseRequestSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -380,7 +380,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "build_plan_brief_refresh",
     {
-      description: "Compile or refresh exact-source canonical or focused briefs without changing plan-authoring results.",
+      description: "Compile context briefs from exact current matching map and plan versions. Use canonical focus for workstreams or focused selections for bounded ad-hoc assignments. Apply/rebase already attempt canonical refresh; retry this tool independently if that refresh failed. Refresh does not change plan intent, launch a session, or grant implementation authority; a running child's context refresh is a delegation operation.",
       inputSchema: agentBriefRefreshRequestSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -393,7 +393,7 @@ export function createAgentMapToolServer(
   server.registerTool(
     "project_subsession_delegate",
     {
-      description: "Create, reuse, or release a bounded batch of ordinary writable project subsessions, reclaim a bounded project-wide set of coordinator-owned dormant bindings, or refresh exact focused context, using caller-owned idempotency keys.",
+      description: "Delegate bounded implementation work to ordinary writable children when parallel work or focused context helps. operation.kind='delegate' uses stable requestKey and per-child delegationKey, outcome, and optional kickoffContext/focus; no map or plan is required. Children share cwd, so specify non-overlapping ownership and written deliverables. Ready/acknowledged is kickoff state, not completed work; inspect and test deliverables. Other operations refresh exact focused context, release owned children (closing sessions), or release-dormant project-wide (forfeiting dormant resume bindings, preserving history). Never reconcile unrelated user sessions.",
       inputSchema: projectSubsessionRequestSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
