@@ -13,7 +13,6 @@ import type { Page } from "@playwright/test";
 
 import {
   focusRfqAgent,
-  openProjectMenu,
   selectMockSessionFromPalette,
 } from "./mock-navigation";
 
@@ -392,6 +391,10 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     ).toHaveCount(0);
 
     await expect(page.getByTestId("project-select-scratch")).toBeVisible();
+    // The scaffold action is a hover action on the row (D33), not a menu item:
+    // a Sparkles glyph acting on an AGENT beside an `×` acting on the PROJECT,
+    // same size, same reveal.
+    await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
 
     // Exactly one filled selection: the focused agent (leasing on load).
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(

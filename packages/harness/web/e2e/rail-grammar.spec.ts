@@ -19,7 +19,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
 
 const ROW = (page: Page, label: string) =>
   page
@@ -34,15 +33,16 @@ test.describe("legacy-server project row grammar", () => {
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
-  test("a session shortcut sits immediately before the named project menu", async ({
+  test("the row's verbs are hover actions, each naming its own subject", async ({
     page,
   }) => {
     const row = ROW(page, "acme-app");
-    // The frequent session action is one click away. Destructive project
-    // management remains behind the named overflow menu instead of returning
-    // as an adjacent `×`.
+    // Hover actions, not an overflow menu (design-eng D33). The frequent
+    // session action leads; the destructive one is last. The adjacency SAP-2982
+    // worried about is answered by the accessible name and the confirmation,
+    // not by hiding one verb behind a popover.
     const actions = row.locator(".workspace-row-action");
-    await expect(actions).toHaveCount(2);
+    await expect(actions).toHaveCount(3);
     await expect(actions.nth(0)).toHaveAttribute(
       "data-testid",
       "project-start-session-acme-app",
@@ -53,15 +53,19 @@ test.describe("legacy-server project row grammar", () => {
     );
     await expect(actions.nth(1)).toHaveAttribute(
       "data-testid",
-      "project-menu-acme-app",
+      "project-create-agent-acme-app",
+    );
+    await expect(actions.nth(2)).toHaveAttribute(
+      "data-testid",
+      "project-remove-acme-app",
     );
 
-    // And the actions themselves state their subject in words.
-    await openProjectMenu(page, "acme-app");
-    await expect(page.getByTestId("project-create-agent-acme-app")).toHaveText(
-      "Create an agent in acme-app",
-    );
-    await expect(page.getByTestId("project-remove-acme-app")).toHaveText(
+    // Each states its subject where a glyph cannot: the accessible name.
+    await expect(
+      page.getByTestId("project-create-agent-acme-app"),
+    ).toHaveAttribute("aria-label", "Create an agent in acme-app");
+    await expect(page.getByTestId("project-remove-acme-app")).toHaveAttribute(
+      "aria-label",
       "Remove acme-app from the rail",
     );
   });
@@ -70,21 +74,20 @@ test.describe("legacy-server project row grammar", () => {
     page,
   }) => {
     // `scratch` has live sessions and no Sapiom agent. The row `+` can start
-    // another coding session; the legacy scaffold operation remains named in
-    // the menu so the two operations do not masquerade as one another.
+    // another coding session; the legacy scaffold operation keeps its own glyph
+    // and its own name so the two operations do not masquerade as one another.
     const row = ROW(page, "scratch");
-    await expect(row.locator(".workspace-row-action")).toHaveCount(2);
+    await expect(row.locator(".workspace-row-action")).toHaveCount(3);
     await expect(
       page.getByTestId("project-start-session-scratch"),
     ).toBeVisible();
-    await openProjectMenu(page, "scratch");
-    await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveText(
-      "Scaffold an agent in scratch",
-    );
+    await expect(
+      page.getByTestId("workspace-scaffold-scratch"),
+    ).toHaveAttribute("aria-label", "Scaffold an agent in scratch");
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
   });
 
-  test("creating from the menu creates IN that project, and only then talks", async ({
+  test("creating from the row creates IN that project, and only then talks", async ({
     page,
   }) => {
     // The menu changed what the control SAYS; SAP-2981 changed what it does —
@@ -108,9 +111,7 @@ test.describe("legacy-server project row grammar", () => {
           ).__HARNESS_TEST__?.createOrder ?? []) as string[],
       );
 
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
-    await expect(page.getByTestId("project-menu-card-acme-app")).toHaveCount(0);
     await expect(page.getByTestId("create-agent-project")).toHaveText(
       "acme-app",
     );
