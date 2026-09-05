@@ -158,13 +158,25 @@ renews its inactivity lease, while session exit, resume rotation, signed-in
 principal changes, and server shutdown revoke it. Consumers should not copy,
 persist, log, or reuse the capability outside the launched session.
 
-Every trusted project session receives the same three project-wide tools:
+Every trusted project session receives the same nine project-wide tools:
 
 - `agent_map_read` reads the current confirmed workspace and shared proposal.
 - `agent_map_validate` validates one complete operation batch without mutating
   shared state or allocating permanent IDs.
 - `agent_map_propose` atomically and idempotently applies one validated batch
   to the shared Proposed map.
+- `build_plan_read` reads the current plan or an exact historical version.
+- `build_plan_validate` previews a plan replacement without writing it.
+- `build_plan_apply` commits an idempotent plan replacement.
+- `build_plan_rebase` reconciles the current plan against an exact map version.
+- `build_plan_brief_refresh` refreshes canonical or focused context from exact sources.
+- `project_subsession_delegate` creates or reuses writable child sessions,
+  refreshes focused context, releases owned children, or reclaims dormant bindings.
+
+Delegation accepts up to 16 children per batch, four nesting levels and 64 active
+or explicitly re-referenced coordinator-owned sessions per project. Readiness
+waits share a 30-second batch budget; partial `readiness_timeout` results can be
+retried explicitly with the same request key and durable session identities.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 

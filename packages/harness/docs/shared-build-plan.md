@@ -103,3 +103,89 @@ prefix; existing `brief-planv_*` caller IDs remain valid. Automatic failure resu
 use the same recovery advice as explicit refresh: correct input, reread sources,
 use a new explicit refresh request, retry transient storage, or request manual
 intervention for permanent limits.
+
+## Writable project subsessions
+
+Every ordinary project session discovers `project_subsession_delegate` beside
+the shared map, plan, and brief tools. The operation creates, reuses, or
+releases one to sixteen ordinary writable sessions. Each child receives the same common
+project-agent prompt, coding capabilities, project tools, and delegation tool,
+so nested delegation follows the same path. An exact assignment, map node, or
+brief may focus the child, but focus never changes its tools or authority.
+Delegation is bounded to four levels and 64 active or explicitly re-referenced
+coordinator-owned sessions per project. Dormant exited or failed bindings retain
+their exact resume identity without holding an active slot until they are
+re-referenced. A parent can idempotently release its own child bindings by
+delegation key to close their real Harness sessions and recover capacity; it
+cannot name arbitrary session IDs or release another parent's or a manual
+session. Unknown or expired keys converge as already released without exposing
+a session identity.
+
+Callers provide both a request key and a delegation key. Identity is scoped by
+the private session capability to the trusted project and parent session.
+Identical retries converge on the same durable binding and real Harness session
+ID until an explicit project-wide dormant eviction; changing canonical request
+or binding content under an existing key otherwise fails explicitly. All binding
+IDs and session IDs for a bounded batch are reserved in one durable transaction
+before the first process is spawned.
+Older request receipts compact into bounded key tombstones. User-closed
+bindings compact into bounded ownership tombstones once no retained receipt
+references them; an explicit release finalizes immediately to the same
+tombstone while its receipt retains deterministic replay. Exited and failed
+bindings remain available for the coordinator's ordinary resume and recovery
+paths until explicitly released. Once the durable coordinator close succeeds,
+SessionManager prunes the exact private ownership marker and close tombstone; a
+failed final cleanup retains that proof for the next idempotent retry. The
+oldest tombstones expire as the retention window advances, so routine
+delegation, release, and focused-context refreshes cannot permanently exhaust a
+project.
+Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
+focused-context delivery replaces them; ambiguous delivery evidence is retained.
+
+If exited or failed bindings fill durable binding history, any current project
+session may explicitly invoke the bounded `release-dormant` operation. The
+coordinator selects at most sixteen eligible records inside the
+capability-derived project; the request accepts no session IDs and never selects
+active bindings or manual sessions. Parent liveness is intentionally irrelevant:
+this explicit project-wide destructive operation relinquishes dormant delegation
+resume identity even when the original parent is active. It retains the ordinary
+Harness conversation/session history, but compacts the coordinator binding and
+ends automatic resume through that binding. The sweep remains idempotent and
+restart-safe, while prior request receipts referencing an evicted binding become
+bounded expiry tombstones. Retrying one of those keys returns
+`request_key_expired` with `new_request_key`; a fresh request key may atomically
+create one new binding/session for the same delegation key. Durable-history
+capacity errors expose the explicit `release_dormant` recovery code; an
+all-active live cap continues to require session inspection instead of suggesting
+an inapplicable dormant cleanup. A bounded private-marker cleanup error may
+accompany an already-`released` result because eviction is durable first. Exact
+cleanup proof remains available until the private close completes. After the
+original sweep receipt expires, a fresh bounded `release-dormant` request also
+retries unfinished cleanup without changing the release outcome or emitting a
+second release event.
+
+The coordinator shares a 30-second readiness wait budget across a whole delegation
+batch and both readiness and adapter-identity phases. On exhaustion it returns
+partial `readiness_timeout` / `retry` results, retaining completed children and
+reserved IDs for the rest. It stops processing later items and starts no background
+continuation; an explicit retry of the same request reconciles the same bindings.
+The budget bounds readiness waiting; in-flight durable writes and process creation
+finish before their result is reported. Trusted tests or hosts can lower the budget
+with `batchWaitTimeoutMs`, but cannot increase it beyond 30 seconds.
+
+The coordinator waits for canonical adapter readiness and exact transcript
+identity, then uses fenced spawn and delivery epochs to submit one kickoff.
+Delivery states distinguish pending, claimed, submitted without acknowledgement,
+acknowledged, and uncertain. An uncertain delivery is never resent blindly.
+Exact focused references are checked before delivery, and stale context returns
+an explicit refresh path without closing the session or changing writability.
+
+Coordinator recovery starts from its own two-sided private binding marker. It
+does not infer ownership from cwd, title, assignment, map membership, or process
+similarity, and it never adopts, renames, resumes, closes, or removes an
+unrelated manual session. Tabs remain projections of ordinary live sessions,
+deduplicated by the real session ID and exact server-derived project identity.
+
+Delegation telemetry contains only event names, project/session identifiers,
+and bounded error codes. Task text, kickoff context, focused prose, source,
+paths, secrets, credentials, and raw adapter output are excluded.
