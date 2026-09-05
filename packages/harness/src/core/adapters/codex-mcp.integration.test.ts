@@ -25,7 +25,13 @@ interface McpStatus {
   tools: Record<string, unknown>;
 }
 
-async function discover(spec: SpawnSpec, home: string): Promise<McpStatus[]> {
+async function discover(
+  spec: SpawnSpec,
+  home: string,
+): Promise<{
+  servers: McpStatus[];
+  commandEnv: Record<string, string | null>;
+}> {
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     HOME: home,
@@ -33,6 +39,7 @@ async function discover(spec: SpawnSpec, home: string): Promise<McpStatus[]> {
     TMPDIR: process.env.TMPDIR,
     SAPIOM_TELEMETRY_DISABLED: "1",
     DO_NOT_TRACK: "1",
+    SAPIOM_REVIEW_EXCLUDED: "must-not-reach-commands",
     // No vendor network is needed. Prevent optional Codex metadata fetches.
     HTTP_PROXY: "http://127.0.0.1:9",
     HTTPS_PROXY: "http://127.0.0.1:9",
@@ -108,7 +115,24 @@ async function discover(spec: SpawnSpec, home: string): Promise<McpStatus[]> {
     })) as {
       data: McpStatus[];
     };
-    return result.data;
+    const names = [
+      ...Object.keys(spec.env),
+      "ELECTRON_RUN_AS_NODE",
+      "SAPIOM_REVIEW_USER_SETTING",
+      "SAPIOM_REVIEW_EXCLUDED",
+    ];
+    const command = (await request("command/exec", {
+      command: [
+        process.execPath,
+        "-e",
+        `process.stdout.write(JSON.stringify(Object.fromEntries(${JSON.stringify(names)}.map(name => [name, process.env[name] ?? null]))))`,
+      ],
+      cwd: home,
+      timeoutMs: 5_000,
+    })) as { exitCode: number; stdout: string };
+    if (command.exitCode !== 0)
+      throw new Error("Codex command environment probe failed.");
+    return { servers: result.data, commandEnv: JSON.parse(command.stdout) };
   } finally {
     clearTimeout(timeout);
     lines.close();
@@ -214,6 +238,10 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
           'base_url = "http://127.0.0.1:9/v1"',
           'wire_api = "responses"',
           "requires_openai_auth = false",
+          "[shell_environment_policy]",
+          'exclude = ["SAPIOM_REVIEW_EXCLUDED"]',
+          "[shell_environment_policy.set]",
+          'SAPIOM_REVIEW_USER_SETTING = "preserved"',
           ...(existingRegistrations
             ? [
                 // Opposite transport and stale auth must not contaminate Studio's
@@ -242,9 +270,8 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
               ),
             ],
             env: {
-              HOME: root,
-              SAPIOM_TELEMETRY_DISABLED: "1",
-              DO_NOT_TRACK: "1",
+              ELECTRON_RUN_AS_NODE: "1",
+              SAPIOM_REVIEW_STDIO_SECRET: "synthetic-stdio-secret",
             },
           },
         });
@@ -257,7 +284,12 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
         const spec = adapter.launch(opts);
         authenticated = false;
         expect(spec.args.join(" ").includes(fixtureKey)).toBe(false);
-        const servers = await discover(spec, root);
+        const { servers, commandEnv } = await discover(spec, root);
+        expect(commandEnv.ELECTRON_RUN_AS_NODE).toBeNull();
+        for (const name of Object.keys(spec.env))
+          expect(commandEnv[name]).toBe("");
+        expect(commandEnv.SAPIOM_REVIEW_USER_SETTING).toBe("preserved");
+        expect(commandEnv.SAPIOM_REVIEW_EXCLUDED).toBeNull();
         const authoring = servers.find(
           (server) => server.serverInfo?.name === "sapiom-dev",
         );
@@ -278,8 +310,8 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
           );
           expect(
             Object.keys(
-              servers.find((server) => server.name === "user-server")
-                ?.tools ?? {},
+              servers.find((server) => server.name === "user-server")?.tools ??
+                {},
             ),
           ).toContain("local_capability_probe");
         }

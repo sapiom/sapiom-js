@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CodexAdapter } from "./codex.js";
 import type { SpawnSpec } from "../../shared/types.js";
@@ -85,15 +85,19 @@ describe("Codex per-session MCP configuration", () => {
       expect(local).toContain(
         '"args" = ["/Applications/Agent Studio.app/Contents/Resources/mcp.js"]',
       );
+      expect(local).toContain('"env_vars" = ["SAPIOM_API_KEY"]');
       expect(local).toContain(
-        '"env_vars" = ["ELECTRON_RUN_AS_NODE", "SAPIOM_ENVIRONMENT", "SAPIOM_HARNESS_VERSION", "SAPIOM_API_KEY"]',
+        '"env" = { "ELECTRON_RUN_AS_NODE" = "1", "SAPIOM_ENVIRONMENT" = "staging", "SAPIOM_HARNESS_VERSION" = "0.14.0" }',
       );
-      expect(spec.env).toMatchObject({
-        ELECTRON_RUN_AS_NODE: "1",
-        SAPIOM_ENVIRONMENT: "staging",
-        SAPIOM_HARNESS_VERSION: "0.14.0",
-        SAPIOM_API_KEY: "private-stdio-api-key",
-      });
+      expect(spec.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      expect(spec.env.SAPIOM_ENVIRONMENT).toBeUndefined();
+      expect(spec.env.SAPIOM_HARNESS_VERSION).toBeUndefined();
+      expect(spec.env.SAPIOM_API_KEY).toBe("private-stdio-api-key");
+      for (const variable of Object.keys(spec.env)) {
+        expect(spec.args).toContain(
+          `shell_environment_policy.set.${variable}=""`,
+        );
+      }
 
       const agentMap = serverArg(spec, "agent-map");
       expect(agentMap).toContain(
@@ -157,7 +161,8 @@ describe("Codex per-session MCP configuration", () => {
       expect(prompt).toContain(
         "Build useful agents.\nKeep the user's constraints.",
       );
-      expect(prompt).toContain(alias);
+      expect(prompt).toContain(`sapiom-dev is registered as ${alias}`);
+      expect(prompt).toContain("References to the original server names");
     }
   });
 
@@ -278,6 +283,7 @@ describe("Codex per-session MCP configuration", () => {
   );
 
   it("does not expose JSON parser snippets or file paths when a credential-bearing file is malformed", async () => {
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
     await writeFile(mcpConfigFile, 'private-api-key: "broken JSON"');
     expect(() => adapter.launch(options())).toThrow(
       /^Could not load the generated Codex MCP configuration\./,
@@ -288,6 +294,12 @@ describe("Codex per-session MCP configuration", () => {
       expect(String(error)).not.toContain("private-api-key");
       expect(String(error)).not.toContain(mcpConfigFile);
     }
+    expect(diagnostic.mock.calls.flat().join(" ")).toContain("Invalid JSON");
+    expect(diagnostic.mock.calls.flat().join(" ")).not.toContain(
+      "private-api-key",
+    );
+    expect(diagnostic.mock.calls.flat().join(" ")).not.toContain(mcpConfigFile);
+    diagnostic.mockRestore();
   });
 
   it("fails visibly when the generated MCP file is unavailable", () => {

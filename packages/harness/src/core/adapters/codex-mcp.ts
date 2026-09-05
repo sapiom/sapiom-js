@@ -5,6 +5,16 @@ import type { LaunchOpts, SpawnSpec } from "../../shared/types.js";
 
 type TomlValue = string | string[] | { [key: string]: TomlValue };
 
+class InvalidMcpConfigError extends Error {}
+
+// Studio emits these non-secret values to configure the authoring process.
+// They belong on that server, especially Electron's process-mode flag.
+const STDIO_SETTINGS = new Set([
+  "ELECTRON_RUN_AS_NODE",
+  "SAPIOM_ENVIRONMENT",
+  "SAPIOM_HARNESS_VERSION",
+]);
+
 /** JSON string escaping also works for TOML basic strings, except that TOML
  * requires DEL to be escaped as well. Inline-table keys are always quoted. */
 function toml(value: TomlValue): string {
@@ -25,7 +35,7 @@ function stringRecord(value: unknown): Record<string, string> {
     !isRecord(value) ||
     Object.values(value).some((item) => typeof item !== "string")
   ) {
-    throw new Error("Invalid string map");
+    throw new InvalidMcpConfigError("Invalid string map");
   }
   return value as Record<string, string>;
 }
@@ -37,9 +47,10 @@ function stringRecord(value: unknown): Record<string, string> {
  * bleeding into Studio's servers. All user servers remain unchanged and no
  * config.toml is written. The prompt identifies Studio's aliases explicitly.
  *
- * Header/stdio environment values stay in the child environment, never argv.
- * `env_http_headers` and stdio `env_vars` are Codex config keys; neither needs
- * persistent `codex mcp add` registration.
+ * Known stdio settings stay on the MCP server. Credentials and other stdio
+ * values reach Codex through its environment, never argv, and are cleared
+ * from shell-tool environments. Per-variable overrides preserve the user's
+ * other shell settings. No persistent `codex mcp add` registration is needed.
  */
 export function buildCodexMcpConfig(
   opts: Pick<LaunchOpts, "harnessSessionId" | "mcpConfigFile" | "agentMapMcp">,
@@ -53,22 +64,23 @@ export function buildCodexMcpConfig(
   const env: Record<string, string> = {};
   const bindEnv = (name: string, value: string): void => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || name === "__proto__") {
-      throw new Error("Invalid environment name");
+      throw new InvalidMcpConfigError("Invalid environment name");
     }
     if (
       Object.prototype.hasOwnProperty.call(env, name) &&
       env[name] !== value
     ) {
-      throw new Error("Conflicting environment values");
+      throw new InvalidMcpConfigError("Conflicting environment values");
     }
     env[name] = value;
   };
   const addServer = (name: string, config: Record<string, TomlValue>): void => {
     // Codex -c paths split on dots; restricting generated server names also
     // prevents a name from addressing another part of the user's config.
-    if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error("Invalid server name");
+    if (!/^[A-Za-z0-9_-]+$/.test(name))
+      throw new InvalidMcpConfigError("Invalid server name");
     const alias = `${name}-${suffix}`;
-    aliases.push(alias);
+    aliases.push(`${name} is registered as ${alias}`);
     args.push("-c", `mcp_servers.${alias}=${toml(config)}`);
   };
 
@@ -78,7 +90,7 @@ export function buildCodexMcpConfig(
         readFileSync(opts.mcpConfigFile, "utf8"),
       );
       if (!isRecord(parsed) || !isRecord(parsed.mcpServers)) {
-        throw new Error("Invalid MCP configuration");
+        throw new InvalidMcpConfigError("Invalid MCP configuration");
       }
       for (const [index, [name, server]] of Object.entries(
         parsed.mcpServers,
@@ -87,20 +99,21 @@ export function buildCodexMcpConfig(
         // in the generated file. Keep compatibility with callers using only
         // agentMapMcp as well.
         if (name === "agent-map" && opts.agentMapMcp) continue;
-        if (!isRecord(server)) throw new Error("Invalid server");
+        if (!isRecord(server))
+          throw new InvalidMcpConfigError("Invalid server");
         if (server.type === "http") {
           if (
             typeof server.url !== "string" ||
             !/^https?:\/\//.test(server.url)
           ) {
-            throw new Error("Invalid HTTP URL");
+            throw new InvalidMcpConfigError("Invalid HTTP URL");
           }
           if (
             Object.keys(server).some(
               (key) => !["type", "url", "headers"].includes(key),
             )
           ) {
-            throw new Error("Unsupported HTTP configuration");
+            throw new InvalidMcpConfigError("Unsupported HTTP configuration");
           }
           const config: Record<string, TomlValue> = { url: server.url };
           if (server.headers !== undefined) {
@@ -126,7 +139,7 @@ export function buildCodexMcpConfig(
               (key) => !["type", "command", "args", "env"].includes(key),
             )
           ) {
-            throw new Error("Invalid stdio configuration");
+            throw new InvalidMcpConfigError("Invalid stdio configuration");
           }
           const config: Record<string, TomlValue> = {
             command: server.command,
@@ -136,9 +149,17 @@ export function buildCodexMcpConfig(
           };
           if (server.env !== undefined) {
             const values = stringRecord(server.env);
-            for (const [variable, value] of Object.entries(values))
-              bindEnv(variable, value);
-            config.env_vars = Object.keys(values);
+            const local: Record<string, string> = {};
+            const forwarded: string[] = [];
+            for (const [variable, value] of Object.entries(values)) {
+              if (STDIO_SETTINGS.has(variable)) local[variable] = value;
+              else {
+                bindEnv(variable, value);
+                forwarded.push(variable);
+              }
+            }
+            if (Object.keys(local).length > 0) config.env = local;
+            if (forwarded.length > 0) config.env_vars = forwarded;
           }
           addServer(name, config);
         }
@@ -151,19 +172,34 @@ export function buildCodexMcpConfig(
         bearer_token_env_var: "SAPIOM_AGENT_MAP_CAPABILITY",
       });
     }
-  } catch {
-    // JSON parser errors can include fragments of the file, which carries
-    // credentials. Fail the launch visibly without exposing raw contents.
+  } catch (error) {
+    // Parser and filesystem messages can contain credentials or private paths.
+    const reason =
+      error instanceof InvalidMcpConfigError
+        ? error.message
+        : error instanceof SyntaxError
+          ? "Invalid JSON"
+          : isRecord(error) &&
+              ["ENOENT", "EACCES", "EPERM"].includes(String(error.code))
+            ? String(error.code)
+            : "Read failure";
+    console.error(`[codex adapter] generated MCP configuration: ${reason}`);
     throw new Error(
       "Could not load the generated Codex MCP configuration. Start a new session to regenerate it.",
     );
+  }
+  // Codex's MCP clients read its process env; shell tools use a separate
+  // policy. Blank only our forwarded values there, without replacing any
+  // existing exclusions or unrelated user-provided environment settings.
+  for (const variable of Object.keys(env)) {
+    args.push("-c", `shell_environment_policy.set.${variable}=""`);
   }
   return {
     args,
     env,
     ...(aliases.length > 0
       ? {
-          instructions: `Studio's per-session Sapiom MCP servers are: ${aliases.join(", ")}. Use these session-specific servers for Sapiom tools; they carry this session's configuration and credentials.`,
+          instructions: `Studio MCP server names for this session: ${aliases.join("; ")}. References to the original server names in your other instructions mean these session-specific registrations. Use their Sapiom tools; they carry this session's configuration and credentials.`,
         }
       : {}),
   };
