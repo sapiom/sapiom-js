@@ -632,7 +632,11 @@ export interface LlmSession {
   state: LlmSessionState;
   /** USER-FACING label (e.g. `"smart"`) — the serving provider is never disclosed. */
   model?: string;
-  /** Present from READY on: the drop-in base URLs scoped under the session. */
+  /**
+   * The drop-in base URLs scoped under the session, once it is READY and the
+   * gateway reports them. `callSession` does not need them (it builds the URL
+   * from `sessionId`).
+   */
   baseUrls?: { anthropic: string; openai: string };
   expiresAtMs?: number;
   budget?: { maxTokens: number | null; usedTokens?: number; ttlMinutes?: number | null };
@@ -651,6 +655,75 @@ export interface LlmSessionHandle extends DispatchHandle {
   /** Poll until the session leaves `pending`; resolves the session (check `state`). */
   wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<LlmSession>;
 }
+
+/**
+ * The session's settled result as it arrives at a step **resumed** from
+ * `pauseUntilSignal(sessionHandle, { resumeStep })` — the
+ * {@link LLM_SESSION_READY_SIGNAL} payload delivered as that step's `input`.
+ * An {@link LlmSession} narrowed to the two shapes the engine's resume
+ * forwarder delivers — the signal fires once, when the session leaves
+ * `pending`, and the forwarder folds any non-ready outcome into `"failed"`
+ * with the outcome as the reason, so no other `state` arrives here. Branch on
+ * `state`:
+ *
+ * - `"ready"` — hand the payload to `callSession` (it needs only
+ *   `sessionId`). `baseUrls` carries the session-scoped drop-in URLs when the
+ *   gateway reported them.
+ * - `"failed"` — `error` carries the gateway's structured reason
+ *   (`deadline_exhausted`, `grant_mint_failed`, `session_ready_failed`,
+ *   `session_unsupported`; `session_ready_incomplete` when the forwarder
+ *   received a ready body it could not use).
+ *
+ * Annotate the resumed step's input with this. The async-lane counterpart is
+ * {@link LlmRouteResultPayload}.
+ */
+export type LlmSessionReadyPayload =
+  | (LlmSession & { state: "ready" })
+  | (LlmSession & { state: "failed"; error: string });
+
+/**
+ * The wire-shape keys of `LlmSession.baseUrls` — the same vocabulary as
+ * `callSession`'s `shape` option; when present, `baseUrls` carries one URL per
+ * shape.
+ */
+const SESSION_BASE_URL_SHAPES = ["anthropic", "openai"] as const;
+
+/** Thrown by {@link llmSessionReadySchema}.parse on a malformed resume payload. */
+export class LlmSessionReadySchemaError extends Error {}
+
+/** Runtime validator for {@link LlmSessionReadyPayload}. */
+export const llmSessionReadySchema = {
+  parse(value: unknown): LlmSessionReadyPayload {
+    const fail = (msg: string): never => {
+      throw new LlmSessionReadySchemaError(
+        `invalid llm session ready payload: ${msg}`,
+      );
+    };
+    if (!value || typeof value !== "object") fail("not an object");
+    const v = value as Record<string, unknown>;
+    if (typeof v.sessionId !== "string") fail("sessionId must be a string");
+    if (v.state !== "ready" && v.state !== "failed")
+      fail('state must be "ready" or "failed"');
+    if (v.model !== undefined && typeof v.model !== "string")
+      fail("model must be a string when present");
+    if (v.expiresAtMs !== undefined && typeof v.expiresAtMs !== "number")
+      fail("expiresAtMs must be a number when present");
+    if (v.state === "failed" && (typeof v.error !== "string" || !v.error)) {
+      fail("error must be a non-empty string when failed");
+    }
+    // Optional on the payload (as on `LlmSession`) — `callSession` needs only
+    // `sessionId` — but when present it must be the complete, well-typed pair.
+    if (v.baseUrls !== undefined) {
+      const urls = v.baseUrls as Record<string, unknown> | null;
+      if (!urls || typeof urls !== "object") fail("baseUrls must be an object");
+      for (const shape of SESSION_BASE_URL_SHAPES) {
+        if (typeof urls![shape] !== "string")
+          fail(`baseUrls.${shape} must be a string`);
+      }
+    }
+    return value as LlmSessionReadyPayload;
+  },
+};
 
 // --- wire shapes (snake_case, as served by the gateway) ---
 
