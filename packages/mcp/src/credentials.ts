@@ -104,6 +104,12 @@ async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(file, null, 2) + "\n", {
     mode: 0o600,
   });
+  try {
+    // `mode` only applies on creation; keep pre-existing files private too.
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // Best effort.
+  }
 }
 
 /**
