@@ -21,7 +21,6 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
 
 /* A folder that is NOTHING yet: no agent, no session, no recentDirs entry.
    `scratch` cannot play this part — it is the fixture's bare-session project,
@@ -165,8 +164,8 @@ test.describe("the header + opens a project", () => {
     ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
     // The map is a view, not an authorization gate. Both direct agent creation
-    // and project removal remain ordinary project-level actions.
-    await openProjectMenu(page, "blank-slate");
+    // and project removal remain ordinary project-level actions, and both are
+    // now row actions rather than items behind a popover.
     await expect(
       page.getByTestId("project-create-agent-blank-slate"),
     ).toBeVisible();
@@ -175,7 +174,6 @@ test.describe("the header + opens a project", () => {
 
     // A bare project with an existing ordinary session retains its scaffold
     // action too.
-    await openProjectMenu(page, "scratch");
     await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
 
@@ -283,7 +281,6 @@ test.describe("round trip: removed, then back", () => {
     const before = await projectRows(page);
     expect(before).toContain("project-row-acme-app");
 
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("project-row-acme-app")).toHaveCount(0);
@@ -325,7 +322,6 @@ test.describe("round trip: removed, then back", () => {
   test("opening a folder ABOVE a removed project un-hides what is inside it", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);

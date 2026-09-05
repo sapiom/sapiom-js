@@ -196,7 +196,7 @@ test.describe("durable Studio project navigation", () => {
         ),
     ).toEqual([
       "project-start-session-dashboard-keeper",
-      "project-menu-dashboard-keeper",
+      "project-remove-dashboard-keeper",
     ]);
 
     // The ordinary project action also works while its read-only map is open.
