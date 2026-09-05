@@ -50,8 +50,10 @@ hosted capability server or the TypeScript SDK for a single action.
    definition, then validates its graph; top-level author code can execute) →
    \`sapiom_dev_agents_run_local\` (Sapiom capabilities are stubbed with no Sapiom
    capability spend; authored code and its ordinary side effects still execute).
-3. Before the first cloud action, call \`sapiom_authenticate\`; browser login caches the shared
-   credential required by link/deploy/run. Confirm with \`sapiom_status\`.
+3. Before the first cloud action, call this server's \`sapiom_authenticate\` — the one alongside
+   the \`sapiom_dev_agents_*\` tools; the hosted server's same-named tool only describes the auth
+   flows. Browser login caches the shared credential required by link/deploy/run. Confirm with
+   this server's \`sapiom_status\`.
 4. Ship: \`sapiom_dev_agents_link\` → \`_deploy\` → \`_run\` (real cloud execution; costs
    depend on the work performed) → \`_inspect\`.
 

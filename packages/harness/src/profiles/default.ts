@@ -20,7 +20,9 @@ active for the whole session. Follow them.
   the developer surface for this session. Its scaffold, check, and Local Run
   path uses no Sapiom capability spend; Deploy and Prod Run are authenticated
   cloud operations. Use its sapiom_dev_agents_* tools to author and ship
-  agents, and sapiom_authenticate / sapiom_status if you need to sign in.
+  agents. To sign in, call the sapiom_authenticate / sapiom_status pair that
+  sits alongside those sapiom_dev_agents_* tools — the hosted server offers
+  same-named tools that only describe the auth flows and cache nothing.
 
 **Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
 platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a

@@ -182,7 +182,7 @@ describe("server instructions", () => {
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "55e0e1d6dd6189024da4bd08e9cd86e6cdef63134f07cea542b0fc342af66f1d",
+      "5e9e2d2ac724c0a34c46e96f2092c5d0788929ada9ffadc236e6a0decabde211",
     );
   });
 });
