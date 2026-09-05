@@ -58,7 +58,8 @@ export function setHeader(
   // Copy all headers except case variants of the one we're setting
   for (const [key, val] of Object.entries(headers)) {
     if (key.toLowerCase() !== lowerHeaderName) {
-      newHeaders[key] = Array.isArray(val) ? val[0] || "" : val || "";
+      const headerValue = normalizeHeaderValue(val);
+      if (headerValue !== undefined) newHeaders[key] = headerValue;
     }
   }
 
@@ -84,9 +85,17 @@ export function removeHeader(
 
   for (const [key, val] of Object.entries(headers)) {
     if (key.toLowerCase() !== lowerHeaderName) {
-      newHeaders[key] = Array.isArray(val) ? val[0] || "" : val || "";
+      const headerValue = normalizeHeaderValue(val);
+      if (headerValue !== undefined) newHeaders[key] = headerValue;
     }
   }
 
   return newHeaders;
+}
+
+function normalizeHeaderValue(
+  value: string | string[] | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value[0] || "" : value;
 }
