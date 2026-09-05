@@ -9,6 +9,7 @@ import type { WorkspaceKey } from "@shared/system-graph";
 
 import { Icon } from "./Icon";
 import { WorkflowRow } from "./WorkflowRow";
+import { liveSessionsLabel } from "../lib/project-live";
 import { projectInitial } from "../lib/project-tree";
 import type { AgentNode, DirNode } from "../lib/project-tree";
 import { DRAG_MOVE_TYPE } from "../lib/agent-move";
@@ -214,6 +215,45 @@ function ProjectMark({ root }: { root: string }): JSX.Element {
     <span className="project-mark" aria-hidden="true">
       {projectInitial(root)}
     </span>
+  );
+}
+
+/**
+ * A project's (or a group's) LIVE mark (SAP-3200, design-eng DECISIONS D37):
+ * at least one of its agents has a running session.
+ *
+ * The session bar's own dot recipe in its running state, reused rather than
+ * redrawn: one dot means one thing across the app, and a second recipe here
+ * would be a second thing that looks the same. It carries no colour of its
+ * own: `.session-dot[data-status="running"]` already reads `var(--green)`.
+ *
+ * STANDING, not hover-revealed, because "is anything running here" is the
+ * question the rail is being asked at a glance; and FIRST in the trailing
+ * cluster, so the actions that fade in on hover appear beside it rather than
+ * pushing it along the row.
+ *
+ * Present when at least one session is live, absent otherwise. There is no
+ * grey dot for "nothing running": a row that is quiet says so by carrying
+ * nothing, the way an undeployed agent does.
+ */
+export function LiveMark({
+  count,
+  testId,
+}: {
+  count: number;
+  testId: string;
+}): JSX.Element | null {
+  if (count <= 0) return null;
+  const label = liveSessionsLabel(count);
+  return (
+    <span
+      className="session-dot project-live-dot"
+      data-status="running"
+      data-testid={testId}
+      role="img"
+      aria-label={label}
+      data-tooltip={label}
+    />
   );
 }
 

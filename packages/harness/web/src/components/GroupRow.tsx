@@ -3,10 +3,12 @@ import type { CSSProperties, DOMAttributes, JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
-import { RowDisclosure } from "./ProjectTreeRows";
+import { LiveMark, RowDisclosure } from "./ProjectTreeRows";
 import { WorkflowRow } from "./WorkflowRow";
 import type { GroupNode } from "../lib/agent-groups";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+import { liveSessionsOnAgents } from "../lib/project-live";
+import type { ScopedSession } from "../lib/session-scope";
 
 /**
  * The drag payload rides in `dataTransfer`, NOT in component state.
@@ -35,6 +37,12 @@ export interface GroupRowProps {
    * greyed-out control still says "this is a thing you could do here".
    */
   isUngrouped?: boolean;
+  /** How many live sessions this group's members hold, for the standing live
+   *  mark (SAP-3200). A group header is a header like the project row is, and it
+   *  answers the same at-a-glance question about the agents under it. Counted by
+   *  the SECTION rather than here: the row has no sessions of its own, and the
+   *  membership rule belongs with the model. */
+  liveCount?: number;
   /** True while this row is the drop target. Owned by the section, not the row:
    *  rows that each track their own hover disagree mid-drag. */
   isDropTarget?: boolean;
@@ -77,6 +85,7 @@ export function GroupRow({
   collapsed,
   onToggleCollapsed,
   isUngrouped = false,
+  liveCount = 0,
   isDropTarget = false,
   onRename,
   onDelete,
@@ -214,6 +223,12 @@ export function GroupRow({
         </button>
       )}
 
+      {/* LIVE, at a glance (SAP-3200, D37): a member has a running session.
+          Ahead of the hover actions, and outside the editing guard below, so the
+          fact stays true while the row is being renamed; it is not an action a
+          stray click could fire. */}
+      <LiveMark count={liveCount} testId={`group-live-${label}`} />
+
       {/* Hidden while editing: the input owns the row's width, and clicking an
           action would blur-commit and act in one gesture. */}
       {canRename && !editing && (
@@ -345,6 +360,7 @@ export function GroupSections({
   onToggleCollapsed,
   focusedAgentPath,
   onFocusAgent,
+  sessions,
   onCreate,
   onRename,
   onDelete,
@@ -375,6 +391,10 @@ export function GroupSections({
   onToggleCollapsed: (key: string) => void;
   focusedAgentPath: string | null;
   onFocusAgent: (path: string) => void;
+  /** Every session the rail knows about, so each header can count its own live
+   *  ones. Structurally typed (`ScopedSession`), like the rules in
+   *  `session-scope.ts`, so a test can pin a header with an object literal. */
+  sessions: readonly ScopedSession[];
   onCreate: () => void;
   onRename: (groupId: string, label: string) => void;
   onDelete: (groupId: string) => void;
@@ -443,6 +463,12 @@ export function GroupSections({
               collapsed={collapsed}
               onToggleCollapsed={() => onToggleCollapsed(group.id)}
               isUngrouped={group.isUngrouped}
+              liveCount={
+                liveSessionsOnAgents(
+                  sessions,
+                  group.agents.map((agent) => agent.workflow.path),
+                ).length
+              }
               isDropTarget={dropTarget === group.id}
               startRenaming={fresh}
               /* The launch claim is only true of a DETECTED group. Once the
