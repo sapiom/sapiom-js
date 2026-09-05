@@ -11,7 +11,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "ad6683561332324585cf474636859fa78cdc4a96677a09d5f9ae2772572da4b9";
+  "a32a1d00c56287c96bfcbf2b1dd78e2b7b278fbaa0fd1997df8567d0c5bc4d27";
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("stays byte-identical to the copy the backend serves (cross-repo pin, SAP-2810)", () => {
@@ -47,10 +47,11 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
       "agent code cannot write the Vault",
     );
     expect(DEFAULT_SYSTEM_PROMPT).toContain("ctx.sapiom.agents.launch");
-    // Routes are named without their REST prefix: this prompt is Agent Studio visible
-    // text and subject to scripts/agent-studio-terminology-check.mjs.
-    expect(DEFAULT_SYSTEM_PROMPT).toContain("GET …/receipts");
-    expect(DEFAULT_SYSTEM_PROMPT).toContain("/replay");
+    // The routes are named by what they do and deferred to the sapiom-dev primer, never
+    // spelled with their REST prefix: this prompt is Agent Studio visible text and subject
+    // to scripts/agent-studio-terminology-check.mjs.
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("receipts REST routes");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("replay a receipt or a fire");
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/workflows?/i);
     expect(DEFAULT_SYSTEM_PROMPT).toContain("webhooksEnabled");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("/hook/<path>");

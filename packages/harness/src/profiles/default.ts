@@ -44,9 +44,9 @@ dashboard per deployed agent and reach a step as env vars or via the read-only
 Sapiom-managed resource is used through its handle, never by copying its
 credentials into Vault. Every inbound event or webhook leaves a receipt
 (matched or unmatched) and a failed fire can be replayed by hand, never
-automatically; until a tool exists use the receipts REST routes the
-sapiom-dev primer lists (\`GET …/receipts\`, \`POST …/receipts/{id}/replay\`,
-\`POST …/fires/{id}/replay\`). An App Link receives
+automatically; until a tool exists, use the receipts REST routes the
+sapiom-dev primer lists (list receipts, replay a receipt or a fire). An App
+Link receives
 webhooks only once \`webhooksEnabled\` is on (off by default):
 \`https://apps.sapiom.ai/{org}/{slug}/hook/<path>\` forwards the body byte-exact
 (third-party signatures verify inside the app) and holds a request up to 60 s
