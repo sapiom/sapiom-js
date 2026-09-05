@@ -87,6 +87,22 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
+  it("teaches App Link management from this server, version-gated (SAP-3178)", () => {
+    // 2.8 taught publishing and nothing else about a link, so an offline session
+    // could not learn that webhooks are off by default, how to turn them on, or
+    // that `/hook/*` is the receiver. The three management tools ship in 0.15;
+    // the gate is the same one `_publish` carries, for the same reason.
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_list");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_settings");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_delete");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
+    expect(AUTHORING_INSTRUCTIONS).toContain("Webhooks are OFF by default");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("settings need `org.write`");
+  });
+
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
     // The primer is the only always-in-context surface, so authors learn the entry
     // contract here. Kept byte-identical to the backend DEFAULT_MCP_INSTRUCTIONS copy.
@@ -164,12 +180,12 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.8 (App Links + `sapiom_dev_app_publish`).
+    // Current release: 2.9 (App Link management tools + webhook receiver, SAP-3178).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "7f518d9c4a80122e51d45e9e28dc5f6cacfd3b05f4101aa1a5b8ae5d4494c0df",
+      "31da1821424850487a975153d3b9da38c2bdc5e3d0a9d7f2c76e055600a9679e",
     );
   });
 });
