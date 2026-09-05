@@ -63,8 +63,6 @@ export function proposalSnapshot(
           actor: {
             userId: "user",
             sessionId: "planner",
-            role: "map-planner",
-            assignment: null,
           },
           acceptedAt: at,
         },
@@ -98,8 +96,6 @@ export function renameDelta(
     actor: {
       userId: "user",
       sessionId: "builder",
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
     },
     acceptedAt: "2026-09-02T10:00:01.000Z",
   };

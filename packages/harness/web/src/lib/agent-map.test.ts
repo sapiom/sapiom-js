@@ -85,8 +85,6 @@ describe("parseAgentMapWorkspaceResponse", () => {
           actor: {
             userId: "user-1",
             sessionId: "session-1",
-            role: "map-planner",
-            assignment: null,
           },
           acceptedAt: timestamp,
         },
@@ -172,8 +170,6 @@ describe("parseAcceptedProposalDelta", () => {
       actor: {
         userId: "user-1",
         sessionId: "session-1",
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
       },
       acceptedAt: timestamp,
     };

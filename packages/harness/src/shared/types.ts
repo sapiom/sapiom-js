@@ -826,6 +826,7 @@ export type AnalyticsEventType =
   | "agent_map.proposal_visible"
   | "agent_map.validation_failed"
   | "agent_map.workspace_initialized"
+  | "agent_map.workspace_migrated"
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
   | "agent_map.capability"
