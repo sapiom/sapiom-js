@@ -27,7 +27,6 @@ export function AgentMapInspector({
       relationship.fromNodeId === node.id || relationship.toNodeId === node.id,
   );
   const latest = latestNodeAttribution(snapshot, node.id);
-  const assignment = latest?.actor.assignment;
   // Plan-node names are user-authored across every kind; `agent` is the
   // USER_NAMED_OBJECTS privacy marker, not a claim about node.kind.
   return (
@@ -104,14 +103,7 @@ export function AgentMapInspector({
         <section data-testid="agent-map-latest-attribution">
           <h4>Latest change</h4>
           <p>
-            {latest.actor.role === "map-planner"
-              ? "Map planner"
-              : "Agent builder"}
-            {assignment?.kind === "planned"
-              ? " · planned assignment"
-              : assignment?.kind === "unplanned"
-                ? " · unplanned"
-                : ""}
+            Project agent
             {` · ${new Date(latest.acceptedAt).toLocaleString()}`}
           </p>
         </section>

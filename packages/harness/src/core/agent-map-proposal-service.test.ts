@@ -8,11 +8,12 @@ import type {
   MapProposalId,
   PlanNodeId,
   PlanRelationshipId,
-  PlanningSessionIdentity,
+  ProjectAgentSession,
   ProposalBatchRequest,
   ProposalOperationId,
 } from "../shared/agent-map.js";
 import {
+  AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
   type AgentMapPermanentIdAllocator,
@@ -32,11 +33,10 @@ class Ids implements AgentMapPermanentIdAllocator {
   allocateOperationId = () => this.next("operation") as ProposalOperationId;
 }
 
-const identity = (sessionId: string): PlanningSessionIdentity => ({
+const identity = (sessionId: string): ProjectAgentSession => ({
   projectId,
   userId: "user-1",
   sessionId,
-  role: "map-planner",
 });
 
 const addNode = (
@@ -74,7 +74,7 @@ describe("AgentMapProposalService", () => {
     ),
   );
 
-  async function fixture(receiptRetentionLimit?: number) {
+  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number, operationHistoryLimit?: number) {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-proposal-"),
     );
@@ -93,6 +93,10 @@ describe("AgentMapProposalService", () => {
         ...(receiptRetentionLimit === undefined
           ? {}
           : { receiptRetentionLimit }),
+        ...(versionHistoryLimit === undefined
+          ? {}
+          : { versionHistoryLimit }),
+        ...(operationHistoryLimit === undefined ? {} : { operationHistoryLimit }),
       }),
     };
   }
@@ -119,8 +123,6 @@ describe("AgentMapProposalService", () => {
     expect(snapshot.proposal?.history[0]?.actor).toEqual({
       userId: "user-1",
       sessionId: "session-1",
-      role: "map-planner",
-      assignment: null,
     });
     expect(accepted).toHaveBeenCalledOnce();
   });
@@ -148,9 +150,65 @@ describe("AgentMapProposalService", () => {
       "name",
       "operationCount",
       "projectId",
-      "role",
       "sessionId",
     ]);
+  });
+
+  it("records an accepted semantic no-op for replay without appending a duplicate map version", async () => {
+    const { root, service, accepted } = await fixture();
+    const first = await service.propose(identity("session-1"), addNode("request-1", 0, null));
+    const nodeId = Object.values(first.allocatedNodeIds)[0]!;
+    const noOp = await service.propose(identity("session-1"), {
+      schemaVersion: 1,
+      proposalId: first.proposalId,
+      expectedVersion: 1,
+      requestId: "request-no-op",
+      operations: [{ kind: "update-node", nodeId, changes: { name: "request-1" } }],
+    });
+    const aggregate = await new AgentMapWorkspaceStore(root).readAggregate(projectId);
+
+    expect(noOp.version).toBe(2);
+    expect(aggregate.mapOperationHistory).toHaveLength(2);
+    expect(aggregate.mapVersions).toHaveLength(1);
+    expect(aggregate.requestReceipts).toHaveLength(2);
+    await expect(service.propose(identity("session-1"), {
+      schemaVersion: 1,
+      proposalId: first.proposalId,
+      expectedVersion: 1,
+      requestId: "request-no-op",
+      operations: [{ kind: "update-node", nodeId, changes: { name: "request-1" } }],
+    })).resolves.toEqual(noOp);
+    expect(accepted).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails map history quota before mutation with a bounded terminal error", async () => {
+    const { root, service, accepted, outcomes } = await fixture(undefined, 1);
+    const first = await service.propose(identity("session-1"), addNode("request-1", 0, null));
+    const before = await new AgentMapWorkspaceStore(root).readAggregate(projectId);
+
+    await expect(service.propose(identity("session-1"), addNode("request-2", 1, first.proposalId)))
+      .rejects.toBeInstanceOf(AgentMapProposalQuotaError);
+    expect(await new AgentMapWorkspaceStore(root).readAggregate(projectId)).toEqual(before);
+    expect(accepted).toHaveBeenCalledOnce();
+    expect(outcomes.mock.calls.at(-1)?.[0]).toMatchObject({
+      name: "agent_map.proposal.quota_exceeded",
+      operationCount: 1,
+    });
+  });
+
+  it("rejects batches that exceed the operation history quota without losing existing replays", async () => {
+    const { root, service, accepted } = await fixture(undefined, undefined, 2);
+    const firstRequest = addNode("request-1", 0, null);
+    const first = await service.propose(identity("session-1"), firstRequest);
+    const before = await new AgentMapWorkspaceStore(root).readAggregate(projectId);
+    const next = addNode("request-2", 1, first.proposalId);
+    next.operations.push(...addNode("request-3", 1, first.proposalId).operations);
+    await expect(service.propose(identity("session-1"), next)).rejects.toMatchObject({
+      code: "quota_exceeded", resource: "map_operations",
+    });
+    expect(await new AgentMapWorkspaceStore(root).readAggregate(projectId)).toEqual(before);
+    await expect(service.propose(identity("session-1"), firstRequest)).resolves.toEqual(first);
+    expect(accepted).toHaveBeenCalledOnce();
   });
 
   it("bounds compact receipts and fails closed after exact replay retention", async () => {
@@ -163,15 +221,18 @@ describe("AgentMapProposalService", () => {
       projectId,
     );
 
-    expect(aggregate.receipts).toEqual([
+    expect(aggregate.requestReceipts).toEqual([
       expect.objectContaining({
+        userId: "user-1",
         sessionId: "session-1",
         requestId: "request-2",
-        version: 2,
+        operation: "map",
+        result: expect.objectContaining({ version: 2 }),
       }),
     ]);
-    expect(JSON.stringify(aggregate.receipts)).not.toContain('"delta"');
-    expect(JSON.stringify(aggregate.receipts)).not.toContain('"touchSet"');
+    expect(aggregate.requestTombstones).toEqual([
+      expect.objectContaining({ requestId: "request-1", operation: "map" }),
+    ]);
     await expect(
       service.propose(identity("session-1"), firstRequest),
     ).rejects.toMatchObject({
@@ -323,28 +384,11 @@ describe("AgentMapProposalService", () => {
     });
   });
 
-  it("uses the same write path for planner, assigned, and unplanned builders", async () => {
+  it("uses one neutral write authority for every ordinary project session", async () => {
     const { service } = await fixture();
-    const first = await service.propose(
-      identity("planner"),
-      addNode("planner", 0, null),
-    );
-    const assigned: PlanningSessionIdentity = {
-      projectId,
-      userId: "user-1",
-      sessionId: "assigned",
-      role: "agent-builder",
-      assignment: { kind: "planned", agentId: "planned-agent" },
-    };
-    await service.propose(assigned, addNode("assigned", 1, first.proposalId));
-    const unplanned: PlanningSessionIdentity = {
-      projectId,
-      userId: "user-1",
-      sessionId: "unplanned",
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
-    };
-    await service.propose(unplanned, addNode("unplanned", 2, first.proposalId));
+    const first = await service.propose(identity("session-one"), addNode("one", 0, null));
+    await service.propose(identity("session-two"), addNode("two", 1, first.proposalId));
+    await service.propose(identity("session-three"), addNode("three", 2, first.proposalId));
     expect(
       (await service.read(projectId)).proposal?.history.map(
         ({ actor }) => actor,
@@ -352,21 +396,15 @@ describe("AgentMapProposalService", () => {
     ).toEqual([
       {
         userId: "user-1",
-        sessionId: "planner",
-        role: "map-planner",
-        assignment: null,
+        sessionId: "session-one",
       },
       {
         userId: "user-1",
-        sessionId: "assigned",
-        role: "agent-builder",
-        assignment: { kind: "planned", agentId: "planned-agent" },
+        sessionId: "session-two",
       },
       {
         userId: "user-1",
-        sessionId: "unplanned",
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
+        sessionId: "session-three",
       },
     ]);
   });
@@ -502,7 +540,7 @@ describe("AgentMapProposalService", () => {
     expect((await service.read(projectId)).proposal?.version).toBe(1);
   });
 
-  it("fails closed when a confirmed base revision cannot be supplied", async () => {
+  it("rejects dangling E1 pointers instead of synthesizing incomplete state", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-proposal-"),
     );
@@ -527,7 +565,7 @@ describe("AgentMapProposalService", () => {
     );
     await expect(
       service.propose(identity("session-1"), addNode("request-1", 0, null)),
-    ).rejects.toMatchObject({ code: "validation_failed" });
-    expect(await service.read(projectId)).toMatchObject({ proposal: null });
+    ).rejects.toMatchObject({ code: "malformed_state" });
+    await expect(service.read(projectId)).rejects.toMatchObject({ code: "malformed_state" });
   });
 });

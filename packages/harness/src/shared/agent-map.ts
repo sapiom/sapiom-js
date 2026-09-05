@@ -266,20 +266,14 @@ export interface SessionPrincipal {
   userId: string;
 }
 
-/** Server-derived authority shared by every ordinary project session. */
+/**
+ * Server-derived authority for an ordinary session inside a Studio project.
+ *
+ * Optional assignment, bootstrap, and focused-context metadata deliberately
+ * live outside this principal: they may describe why a session exists, but
+ * they cannot change which project tools or execution policy it receives.
+ */
 export type ProjectAgentSession = Readonly<SessionPrincipal>;
-
-/** Private compatibility contract retained while the old startup is retired. */
-export type PlanningSessionIdentity =
-  | (SessionPrincipal & { role: "map-planner" })
-  | (SessionPrincipal & {
-      role: "agent-builder";
-      assignment: { kind: "planned"; agentId: string };
-    })
-  | (SessionPrincipal & {
-      role: "agent-builder";
-      assignment: { kind: "unplanned" };
-    });
 
 /** Trusted, role-neutral attribution stored on immutable project records. */
 export type ProjectAgentActorRef = Readonly<{
@@ -339,15 +333,8 @@ export type RoleNeutralMapOperationRecord = Readonly<{
   acceptedAt: string;
 }>;
 
-export interface ProposalActor {
-  userId: string;
-  sessionId: string;
-  role: "map-planner" | "agent-builder";
-  assignment:
-    | { kind: "planned"; agentId: string }
-    | { kind: "unplanned" }
-    | null;
-}
+/** Live proposal attribution is the same role-neutral project actor vocabulary. */
+export type ProposalActor = ProjectAgentActorRef;
 
 export interface ProposalOperationRecord {
   id: ProposalOperationId;
@@ -435,16 +422,12 @@ export interface ProjectBootstrapMetadata {
   queuedInputIds: string[];
 }
 
-
-
 export interface ProjectBootstrapQueuedInput {
   id: string;
   sessionId: string;
   text: string;
   acceptedAt: string;
 }
-
-
 
 /**
  * Content-free receipt for input accepted by the durable bootstrap FIFO.
@@ -458,15 +441,11 @@ export interface ProjectBootstrapInputReceipt {
   acceptedAt: string;
 }
 
-
-
 export type ProjectBootstrapRegistrationMode =
   | "boot"
   | "created"
   | "live"
   | "resumed";
-
-
 
 /** Content-free lifecycle telemetry for project bootstrap reliability. */
 export type ProjectBootstrapLifecycleEvent =

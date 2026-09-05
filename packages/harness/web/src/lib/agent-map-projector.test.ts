@@ -52,8 +52,8 @@ describe("applyAcceptedProposalDelta", () => {
     });
     expect(
       latestNodeAttribution(result.snapshot, firstOperation.operation.node.id)
-        ?.actor.role,
-    ).toBe("map-planner");
+        ?.actor,
+    ).toEqual({ userId: "user", sessionId: "planner" });
   });
 
   it("refetches rather than bootstrapping an empty proposal with a mutation", () => {
@@ -105,9 +105,10 @@ describe("applyAcceptedProposalDelta", () => {
     expect(result.snapshot.proposal?.version).toBe(2);
     expect(result.snapshot.proposal?.nodes[0]?.name).toBe("Market Research");
     expect(result.selection).toBe(nodeId);
-    expect(latestNodeAttribution(result.snapshot, nodeId)?.actor.role).toBe(
-      "agent-builder",
-    );
+    expect(latestNodeAttribution(result.snapshot, nodeId)?.actor).toEqual({
+      userId: "user",
+      sessionId: "builder",
+    });
   });
 
   it("retains earlier node attribution after a later delta touches another node", () => {
@@ -135,8 +136,6 @@ describe("applyAcceptedProposalDelta", () => {
       actor: {
         userId: "user",
         sessionId: "planner",
-        role: "map-planner",
-        assignment: null,
       },
       acceptedAt: "2026-09-02T10:00:02.000Z",
     };
@@ -144,9 +143,10 @@ describe("applyAcceptedProposalDelta", () => {
     expect(projected.status).toBe("applied");
     if (projected.status !== "applied") return;
     expect(projected.snapshot.proposal?.history).toHaveLength(3);
-    expect(latestNodeAttribution(projected.snapshot, nodeId)?.actor.role).toBe(
-      "agent-builder",
-    );
+    expect(latestNodeAttribution(projected.snapshot, nodeId)?.actor).toEqual({
+      userId: "user",
+      sessionId: "builder",
+    });
   });
 
   it("rejects gaps atomically without changing the prior snapshot", () => {
