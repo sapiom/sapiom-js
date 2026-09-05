@@ -1246,6 +1246,27 @@ export const MOCK_FLOOD_WORKFLOWS: WorkflowInfo[] = [
   ),
 ];
 
+/**
+ * One live session BOUND to `gateway`, the head of the deep fixture's biggest
+ * derived group. Seeded only behind `?mockBoundSession=1` (see
+ * `isBoundSessionFixture`), so the `gateway` group header carries a live mark
+ * and its neighbours do not.
+ */
+export const MOCK_BOUND_SESSION: HarnessSession = {
+  id: "sess-gateway",
+  agentSessionId: null,
+  boundWorkflowPath: `${DEEP_ROOT}/services/gateway`,
+  harness: "claude-code",
+  // At the PROJECT root, like every session since SAP-2927. The binding, not
+  // the cwd, is what puts it in a group.
+  cwd: DEEP_ROOT,
+  title: "polsia",
+  status: "running",
+  createdAt: minutesAgo(2),
+  lastActiveAt: minutesAgo(2),
+  ready: true,
+};
+
 /** Roots the deep fixture opens, appended to `recentDirs`. */
 export const MOCK_DEEP_ROOTS: string[] = [
   DEEP_ROOT,
@@ -1261,6 +1282,26 @@ export function isDeepRailFixture(): boolean {
   if (typeof window === "undefined") return false;
   return (
     new URLSearchParams(window.location.search).get("mockFixtures") === "deep"
+  );
+}
+
+/**
+ * Whether the BOUND-SESSION fixture is seeded (`?mockFixtures=deep&mockBoundSession=1`).
+ *
+ * Opt-in, and separate from `deep`, for one reason: every spec that already
+ * runs against `deep` counts sessions, tabs and rows, and a session added to
+ * that fixture unconditionally would move numbers in files this has nothing to
+ * do with. Behind its own parameter it is invisible until a spec asks for it.
+ *
+ * It exists because the group-axis live mark (SAP-3200) needs a session BOUND
+ * to a group member, and no other fixture has one: the default fixture's live
+ * sessions belong to `acme-app`, which has a single agent and so renders no
+ * group sections at all, while `deep` has the groups and no live sessions.
+ */
+export function isBoundSessionFixture(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    new URLSearchParams(window.location.search).get("mockBoundSession") === "1"
   );
 }
 

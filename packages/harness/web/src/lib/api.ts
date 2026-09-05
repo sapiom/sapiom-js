@@ -74,7 +74,9 @@ import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
 import type { CanvasGraph, CanvasGraphNode } from "./canvas-graph";
 import {
+  isBoundSessionFixture,
   MOCK_ACCOUNT_PLAN,
+  MOCK_BOUND_SESSION,
   MOCK_FS_TREE,
   MOCK_HARNESSES,
   MOCK_HISTORY,
@@ -2041,7 +2043,10 @@ export class MockApi implements HarnessApi {
   private sessionsStore: HarnessSession[] =
     this.fresh || this.noLiveSessions
       ? []
-      : MOCK_SESSIONS.map((session) => ({
+      : [
+          ...MOCK_SESSIONS,
+          ...(isBoundSessionFixture() ? [MOCK_BOUND_SESSION] : []),
+        ].map((session) => ({
           ...session,
           ...(this.restoredSessions
             ? { status: "exited" as const, ready: false }

@@ -51,10 +51,27 @@ test("the mark STANDS: it is on screen without hovering the row", async ({
   // The `+` and the ⋮ beside it are hover-revealed (`.workspace-row-action`,
   // opacity 0 at rest). The mark answers a question asked at a glance, so it
   // must not be.
-  const opacity = await page
+  //
+  // The element's own opacity is not enough on its own: it would still read 1
+  // inside a faded ancestor. So walk the chain to the row and multiply, which
+  // catches the mark being nested into a hover-revealed cluster as well as the
+  // mark being given `opacity: 0` directly.
+  const effective = await page
     .getByTestId("project-live-acme-app")
-    .evaluate((element) => getComputedStyle(element).opacity);
-  expect(Number(opacity)).toBe(1);
+    .evaluate((element) => {
+      let node: HTMLElement | null = element as HTMLElement;
+      let opacity = 1;
+      let insideHoverAction = false;
+      while (node && !node.classList.contains("workspace-row")) {
+        opacity *= Number(getComputedStyle(node).opacity);
+        if (node.classList.contains("workspace-row-action")) {
+          insideHoverAction = true;
+        }
+        node = node.parentElement;
+      }
+      return { opacity, insideHoverAction };
+    });
+  expect(effective).toEqual({ opacity: 1, insideHoverAction: false });
 });
 
 test("a project whose only session has exited carries no mark", async ({
@@ -106,25 +123,28 @@ test("agent rows are untouched: the mark is a fact about a project", async ({
  * `liveSessionsOnAgents` pins: bound to a member, or unbound in a member's own
  * folder.
  *
- * Only the negative is reachable from the fixtures. Every live mock session is
- * acme-app's, and acme-app has one agent, so it renders no group sections at
- * all; the deep fixture's projects have the groups and none of the sessions.
- * What this guards is the failure a positive could not catch anyway (a mark
- * that renders unconditionally), and the membership rule itself is pinned in
- * `project-live.test.ts`, both directions.
+ * The positive needs a session BOUND to a group member, which no fixture had:
+ * every live mock session belongs to `acme-app`, which has one agent and so
+ * renders no group sections, while `deep` has the groups and no sessions. So
+ * `?mockBoundSession=1` seeds exactly one, bound to `gateway`, behind its own
+ * parameter, invisible to every other spec that counts sessions on `deep`.
  */
+const openGroupAxis = async (page: Page): Promise<void> => {
+  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("filing-group-by").selectOption("group");
+  await page.keyboard.press("Escape");
+  // The create row appears only once the stored arrangement AND the launch
+  // edges have loaded, so it is the honest "the groups are drawn" signal.
+  await expect(page.getByTestId("group-create-polsia")).toBeVisible();
+};
+
 test.describe("the Group axis", () => {
   test("group headers carry no mark when nothing under them is live", async ({
     page,
   }) => {
     await page.goto("/?mockFixtures=deep");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("filing-group-by").selectOption("group");
-    await page.keyboard.press("Escape");
-    // The create row appears only once the stored arrangement AND the launch
-    // edges have loaded, so it is the honest "the groups are drawn" signal.
-    await expect(page.getByTestId("group-create-polsia")).toBeVisible();
+    await openGroupAxis(page);
 
     await expect(
       page.locator('[data-testid^="group-row-"]').first(),
@@ -136,6 +156,32 @@ test.describe("the Group axis", () => {
     await expect(page.getByTestId("project-live-acme-app")).toHaveAttribute(
       "aria-label",
       "2 live sessions",
+    );
+  });
+
+  test("the header of the group holding the bound session carries the mark, alone", async ({
+    page,
+  }) => {
+    await page.goto("/?mockFixtures=deep&mockBoundSession=1");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openGroupAxis(page);
+
+    const gateway = page.getByTestId("group-live-gateway");
+    await expect(gateway).toBeVisible();
+    await expect(gateway).toHaveAttribute("data-status", "running");
+    await expect(gateway).toHaveAttribute("aria-label", "1 live session");
+
+    // Its neighbours in the same project are unaffected: one session belongs to
+    // one group, and `mailer` holds none of it.
+    await expect(page.getByTestId("group-live-mailer")).toHaveCount(0);
+    await expect(page.getByTestId("group-live-Ungrouped")).toHaveCount(0);
+    await expect(page.locator('[data-testid^="group-live-"]')).toHaveCount(1);
+
+    // And the project row it sits under counts the same session, by
+    // containment: the session is rooted at the polsia root.
+    await expect(page.getByTestId("project-live-polsia")).toHaveAttribute(
+      "aria-label",
+      "1 live session",
     );
   });
 });
