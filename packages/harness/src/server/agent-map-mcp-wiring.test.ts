@@ -112,6 +112,10 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     "agent_map_propose",
     "agent_map_read",
     "agent_map_validate",
+    "build_plan_apply",
+    "build_plan_read",
+    "build_plan_rebase",
+    "build_plan_validate",
   ]);
   const snapshot = await client.callTool({
     name: "agent_map_read",
@@ -360,6 +364,10 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
     "agent_map_propose",
     "agent_map_read",
     "agent_map_validate",
+    "build_plan_apply",
+    "build_plan_read",
+    "build_plan_rebase",
+    "build_plan_validate",
   ]);
 
   const proposalEvents: BusMessage[] = [];
